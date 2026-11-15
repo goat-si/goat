@@ -4,7 +4,10 @@ import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { assert, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as ClaudeAdapterV2 from "./ClaudeAdapterV2.ts";
 import { layerClaudeAdapterTest } from "./ClaudeAdapterTestLayer.testkit.ts";
@@ -327,5 +330,77 @@ it.effect.each([
     );
     assert.match(undelivered ?? "", /resend|send it again|re-send/i);
     assert.include(undelivered, "PELICAN");
+  }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
+);
+
+// GOAT admits memory between the first turn check and registering the steer, so a Stop
+// that lands there must refuse the steer before it is marked pending or offered.
+it.effect("refuses a steer whose turn stops while its memory refresh is pending", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeWakeHarnessWithOptions({
+      close: (sdkMessages) => Queue.shutdown(sdkMessages),
+      freshQueueOnReopen: true,
+    });
+    const idAllocator = yield* IdAllocator.IdAllocatorV2;
+    const refreshEntered = yield* Deferred.make<void>();
+    const releaseRefresh = yield* Deferred.make<void>();
+    let steering = false;
+    const input = {
+      ...makeClaudeTestTurnInput({
+        threadId: harness.threadId,
+        providerThread: harness.providerThread,
+        now: yield* DateTime.now,
+        attemptId: RunAttemptId.make("attempt-steer-closed-during-memory"),
+        text: "Run the slow build.",
+        attachments: [],
+      }),
+      refreshMemoryContext: () =>
+        Effect.gen(function* () {
+          if (!steering) return undefined;
+          yield* Deferred.succeed(refreshEntered, undefined);
+          yield* Deferred.await(releaseRefresh);
+          return undefined;
+        }),
+    };
+    yield* harness.runtime.startTurn(input);
+    const providerTurnId = idAllocator.derive.providerTurn({
+      driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+      nativeTurnId: `turn:${input.attemptId}`,
+    });
+    const offeredBefore = harness.offeredMessages.length;
+    steering = true;
+    const steer = yield* harness.runtime
+      .steerTurn({
+        threadId: harness.threadId,
+        runId: input.runId,
+        providerThread: harness.providerThread,
+        providerTurnId,
+        message: {
+          createdBy: "user",
+          creationSource: "web",
+          messageId: MessageId.make("message-steer-during-stop"),
+          text: "Steer during stop",
+          attachments: [],
+        },
+      })
+      .pipe(Effect.exit, Effect.forkScoped);
+    yield* Deferred.await(refreshEntered);
+    yield* harness.runtime.interruptTurn({
+      providerThread: harness.providerThread,
+      providerTurnId,
+    });
+    assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "interrupted");
+    yield* Deferred.succeed(releaseRefresh, undefined);
+
+    assert.isTrue(Exit.isFailure(yield* Fiber.join(steer)));
+    assert.lengthOf(harness.offeredMessages, offeredBefore);
+    assert.deepEqual(
+      harness.events.flatMap((event) =>
+        event.type === "steer.updated" && event.messageId === "message-steer-during-stop"
+          ? [event.status]
+          : [],
+      ),
+      [],
+    );
   }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
 );
