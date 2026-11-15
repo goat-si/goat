@@ -327,7 +327,8 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
                   candidate.status = 'cancelled'
                   AND json_extract(candidate.payload_json, '$.startedAt') IS NULL
                   AND candidate.completed_at IS NOT NULL
-                  AND EXISTS (
+                  -- Walk back from the nearest earlier run: a steered run matches at once.
+                  AND (
                     SELECT 1 FROM orchestration_v2_projection_runs earlier
                     WHERE earlier.thread_id = candidate.thread_id
                       AND earlier.ordinal < candidate.ordinal
@@ -337,7 +338,9 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
                         earlier.completed_at IS NULL
                         OR julianday(earlier.completed_at) >= julianday(candidate.completed_at)
                       )
-                  )
+                    ORDER BY earlier.ordinal DESC
+                    LIMIT 1
+                  ) IS NOT NULL
                 )
                 AND NOT ${isSilentShellRun("candidate")}
               ORDER BY candidate.ordinal DESC, candidate.run_id DESC
