@@ -385,11 +385,11 @@ describe("PreviewManager guest events", () => {
         getUserAgent: () => "Electron",
         isLoadingMainFrame: () => true,
         once: vi.fn(),
-        // The manager subscribes when it prepares the guest; the host only once it attaches.
+        // The manager subscribes on prepare and on attach; the host's listener is the third.
         on: (event: string, listener: (...args: unknown[]) => void) => {
           if (event !== "did-fail-load") return;
           failListeners.push(listener);
-          if (failListeners.length === 2) hostListening.resolve();
+          if (failListeners.length === 3) hostListening.resolve();
         },
       });
       const manager = yield* PreviewManager.PreviewManager;

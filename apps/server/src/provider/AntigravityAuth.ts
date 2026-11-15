@@ -94,7 +94,7 @@ export interface AntigravityAuthOptions<
     result: AcpSessionRuntime.AcpSessionRuntimeStartResult,
     runtime: Runtime,
   ) => Effect.Effect<void>;
-  readonly onSignedOut: Effect.Effect<void>;
+  readonly onSignedOut: (runtime: Runtime) => Effect.Effect<void>;
   readonly forwardCallback?: (callback: URL) => Effect.Effect<void, ProviderSetupError>;
   readonly usesBrowser?: boolean;
 }
@@ -526,7 +526,7 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
                 );
               }
               yield* runtime.request("logout", {});
-              yield* options.onSignedOut;
+              yield* options.onSignedOut(runtime);
             }).pipe(
               Effect.scoped,
               Effect.timeoutOrElse({
