@@ -18,12 +18,14 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import * as Context from "effect/Context";
 import * as Exit from "effect/Exit";
 import * as Runtime from "effect/Runtime";
 import { makeCommandGate } from "../serverRuntimeStartup.ts";
 import * as ServerConfig from "../config.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import * as ServerOwnership from "../serverOwnership.ts";
 import * as PersistenceOwner from "./PersistenceRecoveryOwner.ts";
 import { GOAT_MIGRATION_NAMES } from "./reconcileGoatMigrationIds.ts";
@@ -478,8 +480,13 @@ it.effect("names a database file that is not SQLite", () => {
 });
 const ownGoatHome = Effect.fn(function* () {
   const { serverRuntimeStatePath } = yield* ServerConfig.ServerConfig;
-  // The lock a running server holds for as long as it runs.
-  yield* ServerOwnership.holdServerOwnershipLock(serverRuntimeStatePath);
+  // A running server's own path; an empty home, so no boot service on this machine is read.
+  const home = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
+  yield* ServerOwnership.acquireServerOwnership(serverRuntimeStatePath).pipe(
+    Effect.provide(ProcessRunner.layer),
+    Effect.provideService(HostProcess.HomeDirectory, home),
+    Effect.provideService(HostProcess.Environment, {}),
+  );
 });
 
 const onServerDatabase = <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
