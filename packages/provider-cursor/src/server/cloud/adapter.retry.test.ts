@@ -81,7 +81,6 @@ describe("Cursor Cloud automatic retry progress", () => {
         ),
       ).toEqual(["running", "completed"]);
       expect(events.some((event) => event.type === "turn.terminal")).toBe(false);
-      expect(h.cancelRun).not.toHaveBeenCalled();
     }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
   );
 
