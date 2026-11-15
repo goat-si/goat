@@ -76,6 +76,19 @@ export function routineRunState(
   return "unsettled";
 }
 
+// Building an Intl formatter is costly on Hermes and a row formats every dot each minute.
+const formatters = new Map<string, Intl.DateTimeFormat>();
+function formatter(locale: string | undefined, options: Intl.DateTimeFormatOptions) {
+  const key = `${locale ?? ""}|${JSON.stringify(options)}`;
+  let cached = formatters.get(key);
+  if (cached === undefined) {
+    if (formatters.size >= 32) formatters.clear();
+    cached = new Intl.DateTimeFormat(locale, options);
+    formatters.set(key, cached);
+  }
+  return cached;
+}
+
 /**
  * A run's time as short month, day, hour and minute, joined by a comma on every engine (some put
  * "at" between them); web passes its timestamp locale and hour form. `timeOnly` drops the date.
@@ -99,13 +112,11 @@ export function routineRunTime(
     ...zone,
   } as const;
   // A 24-hour clock reads "09:00"; a 12-hour one reads "9:00 AM".
-  const cycle = new Intl.DateTimeFormat(options.locale, {
-    ...clock,
-    hour: "numeric",
-  }).resolvedOptions().hourCycle;
+  const cycle = formatter(options.locale, { ...clock, hour: "numeric" }).resolvedOptions()
+    .hourCycle;
   const hour = cycle === "h23" || cycle === "h24" ? "2-digit" : "numeric";
-  const time = new Intl.DateTimeFormat(options.locale, { ...clock, hour }).format(at);
+  const time = formatter(options.locale, { ...clock, hour }).format(at);
   if (options.timeOnly === true) return time;
-  const day = new Intl.DateTimeFormat(options.locale, { month: "short", day: "numeric", ...zone });
+  const day = formatter(options.locale, { month: "short", day: "numeric", ...zone });
   return `${day.format(at)}, ${time}`;
 }
