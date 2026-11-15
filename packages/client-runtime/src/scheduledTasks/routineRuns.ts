@@ -89,6 +89,9 @@ export function routineRunTime(
     readonly timeOnly?: boolean;
   } = {},
 ): string {
+  const at = Date.parse(iso);
+  // A stored time is any string; Intl throws on NaN, and server text never reaches a spoken name.
+  if (Number.isNaN(at)) return "Unknown time";
   const zone = options.timeZone === undefined ? {} : { timeZone: options.timeZone };
   const clock = {
     minute: "2-digit",
@@ -101,7 +104,6 @@ export function routineRunTime(
     hour: "numeric",
   }).resolvedOptions().hourCycle;
   const hour = cycle === "h23" || cycle === "h24" ? "2-digit" : "numeric";
-  const at = Date.parse(iso);
   const time = new Intl.DateTimeFormat(options.locale, { ...clock, hour }).format(at);
   if (options.timeOnly === true) return time;
   const day = new Intl.DateTimeFormat(options.locale, { month: "short", day: "numeric", ...zone });

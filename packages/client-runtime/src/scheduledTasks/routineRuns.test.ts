@@ -116,3 +116,15 @@ it("joins the date and time with a comma on every engine, and can give the time 
     routineRunTime(at, { locale: "en-US", hour12: false, timeZone: "UTC", timeOnly: true }),
   ).toBe("21:05");
 });
+
+it("a time that cannot be read gives 'Unknown time' and does not throw", () => {
+  expect(routineRunTime("not a time", { locale: "en-US", timeZone: "UTC" })).toBe("Unknown time");
+  expect(routineRunTime("", { timeOnly: true })).toBe("Unknown time");
+  const [dot] = botRoutineRuns(
+    { recentRuns: [{ ...run(9, "completed"), requestedAt: "garbled", completedAt: "garbled" }] },
+    7,
+    routineRunTime,
+  );
+  expect(dot?.accessibleName).toBe("Run on Unknown time, completed");
+  expect(routineRunState({ status: "mystery", completedAt: "garbled" })).toBe("ended");
+});
