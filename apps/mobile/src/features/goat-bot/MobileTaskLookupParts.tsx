@@ -1,9 +1,11 @@
 import { isRetryableTaskStatus } from "@goat/client-runtime/goatBot";
 import type { BotWorkResult, EnvironmentId, ThreadId } from "@goat/contracts";
-import { Pressable, Text, View } from "react-native";
+import { Text, View } from "react-native";
 
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
 import { MobileTaskRetry } from "./MobileTaskRetry";
+import { MobileWorkThreadLink } from "./MobileWorkThreadLink";
+import { workThreadLink } from "./mobileBotWorkDetails";
 
 type Unavailable = Extract<BotWorkResult["task"], { readonly state: "unavailable" }>;
 type OpenThread = (thread: { environmentId: EnvironmentId; id: ThreadId }) => void;
@@ -29,6 +31,8 @@ export function MobileTaskLookupNotices(props: { readonly result: BotWorkResult 
 export function MobileTaskUnavailable(props: {
   readonly task: Unavailable;
   readonly result: BotWorkResult;
+  /** The title the screen shows, which names the worker to a screen reader. */
+  readonly taskTitle: string;
   readonly environmentId: EnvironmentId | null;
   readonly enabled: boolean;
   readonly canRetry: boolean;
@@ -56,20 +60,20 @@ export function MobileTaskUnavailable(props: {
           />
         ) : null}
         {[...threads].map(([key, thread]) => (
-          <Pressable
+          <MobileWorkThreadLink
             key={key}
-            accessibilityRole="button"
-            accessibilityState={{ disabled: closed }}
+            link={workThreadLink({
+              thread,
+              worker: props.task.worker,
+              rows: props.result.codingRows,
+              taskTitle: props.taskTitle,
+            })}
             disabled={closed}
-            className="min-h-[44px] justify-center"
+            mutedWhenDisabled
             onPress={() =>
               props.onOpenThread({ environmentId: thread.environmentId, id: thread.threadId })
             }
-          >
-            <Text className={closed ? "text-foreground-muted" : "text-foreground underline"}>
-              Open work thread
-            </Text>
-          </Pressable>
+          />
         ))}
         {props.result.remoteWork.map((item) => (
           <MobileBotRemoteWork
