@@ -1602,16 +1602,17 @@ export const make = Effect.gen(function* () {
       hasUpstream: boolean;
     } | null = null;
 
-    if (result.action !== "commit") {
-      const finalStatus = yield* gitCore.statusDetails(cwd);
-      if (finalStatus.branch) {
-        finalBranchContext = {
-          branch: finalStatus.branch,
-          upstreamRef: finalStatus.upstreamRef,
-          hasUpstream: finalStatus.hasUpstream,
-        };
-        currentBranchIsDefault = finalStatus.isDefaultBranch;
-      }
+    const finalStatus =
+      result.action === "commit"
+        ? null
+        : yield* gitCore.statusDetails(cwd).pipe(Effect.orElseSucceed(() => null));
+    if (finalStatus?.branch) {
+      finalBranchContext = {
+        branch: finalStatus.branch,
+        upstreamRef: finalStatus.upstreamRef,
+        hasUpstream: finalStatus.hasUpstream,
+      };
+      currentBranchIsDefault = finalStatus.isDefaultBranch;
     }
 
     const explicitResultPr =
@@ -1663,6 +1664,7 @@ export const make = Effect.gen(function* () {
             }
           : (result.action === "push" || result.action === "commit_push") &&
               result.push.status === "pushed" &&
+              finalStatus !== null &&
               !currentBranchIsDefault
             ? {
                 kind: "run_action" as const,
