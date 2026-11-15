@@ -4,6 +4,7 @@ import {
   NodeId,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2Subagent,
   ProviderTurnId,
   ThreadId,
   TurnItemId,
@@ -167,4 +168,32 @@ export const interruptResult = (threadId: ThreadId) =>
       (candidate) => candidate.type === "run_interrupt_result",
     );
     return item?.type === "run_interrupt_result" ? item.message : undefined;
+  });
+
+/** Rewrites the parent's record of a task, as a promotion or a provider-native report would. */
+export const updateTask = (
+  parentThreadId: ThreadId,
+  taskId: NodeId,
+  patch: (task: OrchestrationV2Subagent, now: DateTime.Utc) => OrchestrationV2Subagent,
+) =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const now = yield* DateTime.now;
+    const task = required(
+      (yield* orchestrator.getThreadProjection(parentThreadId)).subagents.find(
+        (candidate) => candidate.id === taskId,
+      ),
+      "the task",
+    );
+    yield* projections.apply({
+      id: EventId.make(`event:${parentThreadId}:task-patch`),
+      type: "subagent.updated",
+      threadId: parentThreadId,
+      nodeId: task.id,
+      driver: task.driver,
+      providerInstanceId: task.providerInstanceId,
+      occurredAt: now,
+      payload: patch(task, now),
+    });
   });

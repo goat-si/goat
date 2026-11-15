@@ -15,6 +15,7 @@ import {
   runStatuses,
   stopRequested,
   updateChildProviderThread,
+  updateTask,
 } from "./delegatedForceStop.testkit.ts";
 import {
   adapter,
@@ -86,6 +87,20 @@ it.effect("a grandchild is not its grandparent's to force stop", () =>
     )!.id;
     assert.equal(yield* refusal({ parentThreadId, taskId: grandTaskId }), "not_owner");
     assert.deepEqual(yield* runStatuses(grandchildThreadId), ["running"]);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect.each([
+  { name: "a child the person promoted to a top-level thread", promoted: true },
+  { name: "a provider-native subagent", promoted: false },
+])("$name is not its parent's to force stop, even after Stop went unanswered", (row) =>
+  Effect.gen(function* () {
+    const task = yield* parentWithTask(`force-unowned-${row.promoted}`, "unanswered");
+    yield* updateTask(task.parentThreadId, task.taskId, (record, now) =>
+      row.promoted ? { ...record, promotedAt: now } : { ...record, origin: "provider_native" },
+    );
+    assert.equal(yield* refusal(task), "not_owner");
+    assert.deepEqual(yield* runStatuses(task.childThreadId), ["running"]);
   }).pipe(Effect.provide(layerTest)),
 );
 

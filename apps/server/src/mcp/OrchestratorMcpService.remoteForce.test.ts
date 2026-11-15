@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import type { SshRemoteDispatchError } from "../sshRemote/SshRemoteDispatch.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as Deferred from "effect/Deferred";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
@@ -40,6 +41,27 @@ it.effect("an older host without taskForceStop refuses force and is sent nothing
       assert.equal((yield* service.taskStatus(scope, taskId)).status, "running");
     }).pipe(Effect.provide(f.layer));
   }).pipe(Effect.provide(database)),
+);
+
+it.effect(
+  "a remote task the person promoted is not its parent's to force; its host hears nothing",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      f.hostCatalog(newerHost);
+      yield* Effect.gen(function* () {
+        const { service, taskId } = yield* runningTask(f);
+        const index = f.projection.subagents.findIndex((task) => task.id === taskId);
+        f.projection.subagents[index] = {
+          ...f.projection.subagents[index]!,
+          promotedAt: yield* DateTime.now,
+        };
+        const error = yield* service.cancelTask(scope, { taskId, force: true }).pipe(Effect.flip);
+        assert.equal(error.code, "task_not_cancellable");
+        assert.match(error.message, /^not_owner: /u);
+        assert.equal(yield* Queue.size(f.calls), 0);
+      }).pipe(Effect.provide(f.layer));
+    }).pipe(Effect.provide(database)),
 );
 
 it.effect("a cancel without force, as an older caller sends, never asks the host to force", () =>

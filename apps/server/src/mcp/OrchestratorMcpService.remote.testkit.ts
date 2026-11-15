@@ -43,6 +43,7 @@ import Migration0063 from "../persistence/Migrations/092_RemoteDispatches.ts";
 import Migration0065 from "../persistence/Migrations/094_RemoteDispatchQuestions.ts";
 import Migration0068 from "../persistence/Migrations/096_RemoteReportRelay.ts";
 import Migration0073 from "../persistence/Migrations/101_MemoryTaskGrantCeiling.ts";
+import { forceStopDelegatedTask } from "../orchestration-v2/delegatedForceStop.ts";
 import { idleThreadProjection, liveThreadShell } from "./McpToolAccess.testkit.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
@@ -178,6 +179,16 @@ export const fixtureWith = Effect.fnUntraced(function* (
           ? Effect.succeed(projection)
           : Effect.die("Remote child must never load a local projection"),
       getThreadShell: () => Effect.sync(() => shell),
+      // The real ownership decision over this projection; a refused force stops nothing.
+      forceStopDelegatedTask: (input) =>
+        forceStopDelegatedTask(
+          {
+            getThreadRecords: () => Effect.succeed(projection),
+            getThreadShell: () => Effect.sync(() => shell),
+            forceStop: () => Effect.die("A refused Force stop must stop nothing"),
+          },
+          input,
+        ),
       getThreadEventSequence: () => Effect.succeed(receipts.size),
       streamStoredEventsFrom: (input) => {
         assert.equal(input?.threadId, threadId);
