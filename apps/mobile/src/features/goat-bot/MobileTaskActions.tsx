@@ -1,10 +1,18 @@
 import type { BotWorkTask } from "@goat/client-runtime/goatBot";
 import { isRetryableTaskStatus } from "@goat/client-runtime/goatBot";
-import type { ChannelUpdateTaskViewInput, EnvironmentId, ThreadId } from "@goat/contracts";
+import type {
+  BotThreadRow,
+  BotWorkResult,
+  ChannelUpdateTaskViewInput,
+  EnvironmentId,
+  ThreadId,
+} from "@goat/contracts";
 import { Pressable, Text, View } from "react-native";
 
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
 import { MobileTaskRetry } from "./MobileTaskRetry";
+import { MobileWorkThreadLink } from "./MobileWorkThreadLink";
+import { workThreadLink } from "./mobileBotWorkDetails";
 
 /**
  * A task screen's actions and the work it started. While the bot's computer is offline the task
@@ -12,6 +20,10 @@ import { MobileTaskRetry } from "./MobileTaskRetry";
  */
 export function MobileTaskActions(props: {
   readonly task: BotWorkTask;
+  /** The rows that carry the task's coding thread titles: the bot's list, or the lookup's. */
+  readonly rows: ReadonlyArray<BotThreadRow | BotWorkResult["codingRows"][number]>;
+  /** The title the screen shows, which names the worker to a screen reader. */
+  readonly taskTitle: string;
   readonly environmentId: EnvironmentId | null;
   readonly enabled: boolean;
   /** This device may change the task's view; without it Pin and Done stay closed. */
@@ -62,20 +74,20 @@ export function MobileTaskActions(props: {
         </Text>
       </Pressable>
       {task.threads.map((thread) => (
-        <Pressable
+        <MobileWorkThreadLink
           key={`${thread.environmentId}:${thread.threadId}`}
-          accessibilityRole="button"
-          accessibilityState={{ disabled: closed }}
+          link={workThreadLink({
+            thread,
+            worker: task.row.worker,
+            rows: props.rows,
+            taskTitle: props.taskTitle,
+          })}
           disabled={closed}
-          className="min-h-[44px] justify-center"
+          mutedWhenDisabled
           onPress={() =>
             props.onOpenThread({ environmentId: thread.environmentId, id: thread.threadId })
           }
-        >
-          <Text className={closed ? "text-foreground-muted" : "text-foreground underline"}>
-            Open work thread
-          </Text>
-        </Pressable>
+        />
       ))}
       {task.remote.map((item) => (
         <MobileBotRemoteWork
