@@ -3,6 +3,7 @@ import { guardArchiveDelegates } from "./goat/ArchiveDelegatedGuard.ts";
 import { isHistoryArchiveOnlyUpdate, withoutHistoryArchive } from "./goat/HistoryArchive.ts";
 import { makeReleaseFinishedDelegate } from "./goat/ReleaseFinishedDelegate.ts";
 import * as KeyedLock from "@goat/shared/KeyedLock";
+import { runsBehindSteerFollowUp, steerFollowUpQueuePosition } from "./steerFollowUpQueue.ts";
 import { usageLimitHoldsQueue } from "./usageLimitQueue.ts";
 import { wakeWorkStartedAt } from "./wakeWorkStartedAt.ts";
 import { settlementAdmission } from "./goat/ThreadSettlementAdmission.ts";
@@ -5923,35 +5924,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         command.createdBy === "agent" &&
         command.creationSource === "provider" &&
         !(yield* stopReachedRun(command, command.threadId, activeRun.id));
-      let steerFollowUpQueuePosition: number | undefined;
-      if (
-        command.steerFollowUpOfRunId !== undefined &&
-        command.steerFollowUpAfterRunOrdinal !== undefined
-      ) {
-        const afterRunOrdinal = command.steerFollowUpAfterRunOrdinal;
-        const steerOrdinal =
-          projection.turnItems.find(
-            (item) => item.type === "user_message" && item.messageId === command.messageId,
-          )?.ordinal ?? -1;
-        // Earlier declined steers have newer runs but retain their original turn-item ordinals.
-        const earlierSteerMessageIds = new Set(
-          projection.turnItems.flatMap((item) =>
-            item.type === "user_message" && item.ordinal < steerOrdinal ? [item.messageId] : [],
-          ),
-        );
-        steerFollowUpQueuePosition =
-          Math.max(
-            0,
-            ...projection.runs
-              .filter(
-                (candidate) =>
-                  candidate.status === "queued" &&
-                  (candidate.ordinal <= afterRunOrdinal ||
-                    earlierSteerMessageIds.has(candidate.userMessageId)),
-              )
-              .map((candidate) => candidate.queuePosition ?? candidate.ordinal),
-          ) + 1;
-      }
+      const steerFollowUpPosition = steerFollowUpQueuePosition(command, projection);
       const run: OrchestrationV2Run = {
         memoryGrantCeiling: command.memoryGrantCeiling ?? "none",
         id: runId,
@@ -5974,7 +5947,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         queuePosition:
           queuedRunStop !== undefined
             ? 1
-            : (steerFollowUpQueuePosition ??
+            : (steerFollowUpPosition ??
               Math.max(
                 0,
                 ...projection.runs
@@ -6067,22 +6040,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         occurredAt: now,
         payload: run,
       });
-      if (steerFollowUpQueuePosition !== undefined) {
-        for (const queued of projection.runs) {
-          if (
-            queued.status !== "queued" ||
-            (queued.queuePosition ?? queued.ordinal) < steerFollowUpQueuePosition
-          )
-            continue;
-          yield* emitEvent({
-            type: "run.updated",
-            threadId: command.threadId,
-            runId: queued.id,
-            providerInstanceId: queued.providerInstanceId,
-            occurredAt: now,
-            payload: { ...queued, queuePosition: (queued.queuePosition ?? queued.ordinal) + 1 },
-          });
-        }
+      for (const moved of runsBehindSteerFollowUp(projection.runs, steerFollowUpPosition)) {
+        yield* emitEvent({
+          type: "run.updated",
+          threadId: command.threadId,
+          runId: moved.id,
+          providerInstanceId: moved.providerInstanceId,
+          occurredAt: now,
+          payload: moved,
+        });
       }
       yield* completeSourcePlan(now);
       yield* emitEvent({
