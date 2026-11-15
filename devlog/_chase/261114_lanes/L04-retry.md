@@ -1,6 +1,6 @@
 # L04 retry (orchestrator), cycle 261114
 
-Lane branch: chase/t3-261114-orchestrator-retry. Hand-over head: d821f3d57b75406539917f5f752ffb6abbabf934 (final review: APPROVE WITH NITS). Head after the review fixes: 41992d56ef17f9e74792be9b8777c9bd047a2ea3 (see Final review delta). Draft PR #3396 was closed under the 2026-11-15 single-PR rule; this file is the record.
+Lane branch: chase/t3-261114-orchestrator-retry. Hand-over head: d821f3d57b75406539917f5f752ffb6abbabf934 (final review: APPROVE WITH NITS). Head after the review fixes: 41992d56ef17f9e74792be9b8777c9bd047a2ea3 (see Final review delta). Head after the second review: 21d4694900d42f98f328c89b075814718abd5fed (see Second review delta). Draft PR #3396 was closed under the 2026-11-15 single-PR rule; this file is the record.
 
 This retry of L04 decides 22 upstream commits (the 21 effort deferrals of #3210 plus `eeb31c11b7`, whose only blocker was one of them) and ports 19; each port names its upstream commit and decision in its message. It also closes the #3210 review items P3-1 and P3-4 and gives the reason the Missing tools example stays out.
 
@@ -30,7 +30,7 @@ Reconciling the count: the cycle card asks for 22 effort deferrals without a row
 
 #3210 review items:
 
-- **P3-1:** a replayed restart already reported its recorded delivery after the provider is disabled, because `assertProviderInstanceEnabled` skips commands that have a receipt (apps/server/src/orchestration-v2/ThreadManagementService.ts:689). `5ac0f89110` locks this in with a test. Removing the receipt skip makes it fail with `ThreadManagementProviderInstanceDisabledError`.
+- **P3-1:** a replayed restart already reported its recorded delivery after the provider is disabled, because `assertProviderInstanceEnabled` skips commands that have a receipt (apps/server/src/orchestration-v2/ThreadManagementService.ts:633). `5ac0f89110` locks this in with a test. Removing the receipt skip makes it fail with `ThreadManagementProviderInstanceDisabledError`.
 - **P3-4:** the `goat_thread_send` description gains one sentence. A provider that can stop but not restart stops the turn and queues the message first. Restart is refused when the provider cannot stop the turn, Stop already reached it, or either message is /compact or /logout (`a2f111ef0d`, packages/contracts/src/agentSurface/entries/thread.ts:242).
 - **Missing tools line:** the `mcp__goat__` example is not restored. ACP's always-injected instructions sit exactly at their 6,144 B budget, and the 25-byte example makes them 6,169 B, which `node scripts/agent-surface/context-budget.ts --check` rejects. Restoring it would mean cutting another line of guidance (packages/provider-core/src/server/orchestrationInstructions.ts:33).
 
@@ -52,7 +52,7 @@ Deferrals are tracked in #3176.
 | `7d8f6c9481` | adapt | `04d4acf491` | Resume fallback records a handoff ordered before the prompt; the replay harness gains the position store. apps/server/src/orchestration-v2/ProviderTurnStartService.ts:1015 |
 | `52c1491c8a` | adapt | `55cc418225` | A handoff completes the root run and settles native children; Stop in the same transaction is kept. apps/server/src/orchestration-v2/RunExecutionService.ts:1022 |
 | `2de337003d` | adapt | `88d9b8aea7` | A turn that starts after Stop settled is interrupted; unreadable ownership interrupts and fails visibly. apps/server/src/orchestration-v2/RunExecutionService.ts:973 |
-| `c3e5bfc027` | adapt (GOAT design) | `74bbaf4066`, `4a1482086d` | Coordinator decision 2026-11-15 changed from skip to adapt (GOAT design) after the final review. The skip assumed GOAT had no native fork fallback because upstream's (`50c1c5dc53`) was skipped; the lane built one in a GOAT module instead: after the last retry fails it starts a fresh native session with the source's history, written only while the run attempt is current, with the provider error redacted in the notice. Conditions, met in `4a1482086d` with tests first: the handoff names the source thread for omitted history (:84), and it includes what the source inherited from its own fork parents, as upstream's readForkHistoryItems does (:43). goat#3348 stays open for the real-provider reproduction (NOT RUN). apps/server/src/orchestration-v2/goat/NativeForkRecovery.ts:64 |
+| `c3e5bfc027` | adapt (GOAT design) | `74bbaf4066`, `4a1482086d`, `bb7f9a84e9` | Coordinator decision 2026-11-15 changed from skip to adapt (GOAT design) after the final review. The skip assumed GOAT had no native fork fallback because upstream's (`50c1c5dc53`) was skipped; the lane built one in a GOAT module instead: after the last retry fails it starts a fresh native session with the source's history, written only while the run attempt is current, with the provider error redacted in the notice. Conditions, met in `4a1482086d` with tests first: the handoff names the source thread for omitted history (:96), and it includes what the source inherited from its own fork parents, as upstream's readForkHistoryItems does (:55). Since `bb7f9a84e9` every segment leaves out rewound turns, as upstream's readOwnHistoryItems does (:46). goat#3348 stays open for the real-provider reproduction (NOT RUN). apps/server/src/orchestration-v2/goat/NativeForkRecovery.ts:76 |
 | `37e0fd378a` | adapt | `78985f474e` | Unreadable recovery state fails the run once retries are exhausted; the existing checkout test keeps its expectations and passes `willRetry` as upstream's does. apps/server/src/orchestration-v2/ProviderTurnStartService.ts:587 |
 | `3ffd240fc7` | adapt | `845c365a96` | Run finalization refreshes a missing repository identity. apps/server/src/orchestration-v2/RunFinalizationService.ts:103 |
 | `c833a60de2` | adapt | `0438c7c7d5` | Branch rename failure records a run notice; both launch harnesses provide EventSink. apps/server/src/orchestration-v2/ThreadLaunchService.ts:309 |
@@ -61,13 +61,13 @@ Deferrals are tracked in #3176.
 | `bd7d264401` | adapt | `92ac0f33ca` | Conversation selection skips scheduled fresh runs, including after compaction. apps/server/src/orchestration-v2/ProviderContextBoundaries.ts:174 |
 | `c2931a6e9c` | adapt | `77b42f5359` | Fallback names keep the project prefix; an unreadable settings store fails preparation visibly. apps/server/src/orchestration-v2/ThreadLaunchService.ts:466 |
 | `52ba328982` | adapt | `8d296a4a9c` | The incremental scan is stored on GOAT's bounded tracks; the first-receipt and turn modes are unchanged. apps/server/src/orchestration-v2/assistantStreaming.ts:45 |
-| `6be26850fc` | adapt | `937257f6b3` | Portable fork coverage names the source thread. The side chat divider hunk has nothing to apply to, because GOAT side chats are not forks (`50c1c5dc53` was skipped earlier). apps/server/src/orchestration-v2/ContextHandoffService.ts:459 |
+| `6be26850fc` | adapt | `937257f6b3` | Portable fork coverage names the source thread. The side chat divider hunk is not ported: GOAT does fork side chats as run forks (ThreadForkService.ts:127), but it has no "Context from" divider (upstream MessagesTimeline.tsx:1211; GOAT's timeline header only offers "Subagent of"), so hiding the fork handoff would leave a side chat with no marker of its copied context. apps/server/src/orchestration-v2/ContextHandoffService.ts:459 |
 | `c085a0aa5d` | take | `0f34bd1b44` | The baseline snapshot is bounded to 5 s while still waiting on the lock. apps/server/src/orchestration-v2/CheckpointService.ts:34 |
 | `48a56faaa2` | take | `ed7730363a` | Identical to upstream after the rename: its scenario step and fixture flag. apps/server/src/orchestration-v2/testkit/OrchestratorScenario.ts:46 |
 | `10fbff5ab6` | adapt | `d5635e64ce` | The queued cancel reads only its run's user message. GOAT has no deferred-steer reactor. apps/server/src/orchestration-v2/Orchestrator.ts:9288 |
 | `d70bfe6e97` | not attempted | - | Not reached before the READY gate; the restore path is at apps/server/src/orchestration-v2/goat/prepareTurnWorkspace.ts:27. |
 | `daed1dd327` | not attempted | - | Not reached before the READY gate. apps/server/src/orchestration-v2/RestartBackgroundNote.ts:190 |
-| `78b654f998` | not attempted | - | Not reached before the READY gate. apps/server/src/orchestration-v2/Orchestrator.ts:9883 |
+| `78b654f998` | not attempted | - | Not reached before the READY gate. apps/server/src/orchestration-v2/Orchestrator.ts:9895 |
 
 ## Known limits
 
@@ -75,13 +75,13 @@ Deferrals are tracked in #3176.
 - `15d1ef5e09` carries upstream's ProjectionControlReads and BackgroundWorkStop test edits. It does not carry its ProviderTurnControlService.test.ts and SteeringCompletion.integration.test.ts edits, whose scenarios differ in GOAT.
 - The `8d236998d0` queue-wake follow-up from #3210 is unchanged and still tracked in #3176.
 - Upstream has this too: when a turn starts after Stop landed, #34912's forked interrupt is only logged if it fails (apps/server/src/orchestration-v2/RunExecutionService.ts:1440). A provider that never confirms keeps that turn running under an interrupted run, with no Force stop offered.
-- `c3e5bfc027`: the failure was not reproduced with a real provider; goat#3348 stays open for that. The recovered history keeps rolled-back runs, as GOAT's portable fork path in Orchestrator.ts does; that path also leaves out the source's inherited history, which upstream includes.
+- `c3e5bfc027`: the failure was not reproduced with a real provider; goat#3348 stays open for that. GOAT's ordinary portable fork path (apps/server/src/orchestration-v2/Orchestrator.ts:6799) still reads only the source's own runs, without the visibility filter; upstream uses readForkHistoryItems there.
 - `af9b4e41de` waited for `52c1491c8a`, which is now ported; only its C4 question about `detachedThreadId` remains (#3176).
 
 ## Surfaces
 
 - **Server:** all changes.
-- **Web, desktop, mobile:** no client code changes, but users see new text. #35029 adds a refusal when a thread setting change would end background work ("The current session is still running background agents or commands, and this change would end them...", apps/server/src/orchestration-v2/Orchestrator.ts:3181), shown on web, desktop and mobile as a failed command. New notices: "Native fork failed" (goat/NativeForkRecovery.ts:130), "Branch not renamed" (ThreadLaunchService.ts:333), "Couldn't read thread state" (ProviderTurnStartService.ts:588) and "Recovered context" (ProviderTurnStartService.ts:1034). They render through existing rows: system notices and errors in web MessagesTimeline.logic.ts and mobile threadActivity.ts, the handoff in mobile thread-handoff-row.tsx.
+- **Web, desktop, mobile:** no client code changes, but users see new text. #35029 adds a refusal when a thread setting change would end background work ("The current session is still running background agents or commands, and this change would end them...", apps/server/src/orchestration-v2/Orchestrator.ts:3181), shown on web, desktop and mobile as a failed command. New notices: "Native fork failed" (goat/NativeForkRecovery.ts:142), "Branch not renamed" (ThreadLaunchService.ts:333), "Couldn't read thread state" (ProviderTurnStartService.ts:588) and "Recovered context" (ProviderTurnStartService.ts:1034). They render through existing rows: system notices and errors in web MessagesTimeline.logic.ts and mobile threadActivity.ts, the handoff in mobile thread-handoff-row.tsx.
 - **Agents/MCP:** `goat_thread_send` gains one description sentence; the injected instructions are unchanged. Agents changing a thread setting get the same #35029 refusal as the command error.
 - **Providers:** server-side changes in Claude background work (`805251b670`), native forks (`c3e5bfc027`) and the GitHub PR provider's `batchesReads` (`91f55d90e9`). No adapter protocol changes.
 
@@ -209,7 +209,7 @@ Budgets on `41992d56ef` (`node oxlint-plugin-goat/update-code-budgets.ts` exit 0
 | Orchestrator.ts | 13873 | 13908 |
 | EventSink.ts | 1010 | 1154 |
 | ProviderTurnStartService.ts | 1581 | 1587 |
-| ThreadManagementService.ts | 1997 | 2201 |
+| ThreadManagementService.ts | 1996 | 2201 |
 | RunExecutionService.ts | 2053 | 2172 |
 | ProviderTurnStartService.test.ts | 1257 | 1257 |
 | RunExecutionService.test.ts | 3962 | 3962 |
@@ -224,9 +224,9 @@ Gate on `41992d56ef`, run by the coordinator on pen-macbookair (cpaui-MacBookAir
 
 | Failing file | Failures | Triage |
 |---|---|---|
-| packages/ssh SshWorkspaceSync.test.ts | 44 of 84 | Full-suite load (remote_init against push, one 120 s timeout). Passes alone, 84/84, twice. |
+| apps/server/src/sshRemote/SshWorkspaceSync.test.ts | 44 of 84 | goat#3417: full-suite load (remote_init against push, one 120 s timeout); real git subprocesses inside it.effect. Passes alone, 84/84, twice. |
 | packages/ssh runtimeFactsScripts.test.ts | 1 | goat#3363: bash 3.2 on that host; same on the base tip. |
-| tunnel.client-session test | 1 | goat#3363: no node on PATH in a non-interactive shell; same on the base tip. |
+| packages/ssh tunnel.client-session.test.ts | 1 | goat#3418: "Remote host is missing node on PATH"; the test runs the runner with a temporary HOME and no PATH, so it needs node in a fixed system directory. Same on the base tip. Not goat#3363. |
 | FcmDeliveries PostgreSQL outage tests | 2 | No PostgreSQL installed on that Mac; same on the base tip. |
 
 `node scripts/goat-rename.ts --check`: 0 lines with T3 residue in 0 files, 0 dropped paths.
@@ -234,5 +234,47 @@ Gate on `41992d56ef`, run by the coordinator on pen-macbookair (cpaui-MacBookAir
 The integration tip moved to `bd69c4db0b` after the gate; the coordinator reports `41992d56ef` merges into it cleanly by merge-tree and owns that merge.
 
 NOT RUN: a real-provider reproduction for goat#3348; a real-client pass (no client code changed); a deterministic overflow test for `208994ec6a` (see above).
+
+## Second review delta
+
+The second review (APPROVE WITH NITS on `41992d56ef`, findings L04R2-P3-1 to P3-4) is closed at head `21d4694900d42f98f328c89b075814718abd5fed`. `41992d56ef` was merged into the integration branch at `49d7ad3b98` (#3397). Commits on top of `41992d56ef`:
+
+- `3e27214654` refactor(server): move the native fork recovery tests into ThreadFork.nativeRecovery.test.ts. The helper and its two tests move byte-identically (checked with `cmp`), because the new case would put ThreadFork.execution.test.ts at 1002 lines.
+- `bb7f9a84e9` fix(server): native fork recovery leaves rewound turns out of the recovered history (P3-1). Each segment, the source's own and every ancestor's, is read with its runs and attempts and filtered with `createOrchestrationV2TurnItemVisibility`, as upstream's readOwnHistoryItems does (apps/server/src/orchestration-v2/goat/NativeForkRecovery.ts:46).
+- `21d4694900` merges origin/chase/t3-261114-all `83138ac3b6` with no conflicts.
+
+Fail-first for `bb7f9a84e9`: in the new test a source and its parent each have a rolled-back run before the fork point, and the handoff history included both: `expected 'REWOUND_INHERITED_PARENT_MARKER\nINHE…' to not include 'REWOUND_'`. The fix is commented on goat#3348, which stays open for the real-provider reproduction.
+
+Record corrections: the receipt check is at ThreadManagementService.ts:633; the `78b654f998` row cites Orchestrator.ts:9895; ThreadManagementService.ts is 1996 lines; the NativeForkRecovery.ts citations follow the new lines. The `6be26850fc` row no longer says GOAT side chats are not forks (P3-4): they are run forks (ThreadForkService.ts:127), but GOAT has no "Context from" divider, so the hunk that hides the fork handoff in favour of it is not ported. The gate table above cites #3417 and #3418 (P3-2). The card marks the L04 retry rows ported in #3397 (`754b065760`), and #3176 does the same.
+
+Budgets on `21d4694900` (`node oxlint-plugin-goat/update-code-budgets.ts` exit 0, baseline left unchanged; no entry raised):
+
+| File | Lines | Budget |
+|---|---|---|
+| Orchestrator.ts | 13873 | 13908 |
+| EventSink.ts | 1010 | 1154 |
+| ProviderTurnStartService.ts | 1581 | 1587 |
+| ThreadManagementService.ts | 1996 | 2201 |
+| RunExecutionService.ts | 2053 | 2172 |
+| ProviderTurnStartService.test.ts | 1257 | 1257 |
+| RunExecutionService.test.ts | 3962 | 3962 |
+| runtimeLayer.test.ts | 10007 | 10007 |
+| ThreadFork.execution.test.ts | 699 | unlisted (1000) |
+| ThreadFork.nativeRecovery.test.ts | 325 | unlisted (1000) |
+| goat/NativeForkRecovery.ts | 201 | unlisted (1000) |
+
+Focused runs on `21d4694900`, all passing: both ThreadFork files, the ProviderTurnStartService suites, ProviderTurnControlService, BackgroundWorkStop, ProjectionControlReads, EventSink, ContextHandoff, ThreadManagementService and RunExecutionService (12 files, 250 tests). Server typecheck exit 0.
+
+Gate on `21d4694900`, run by the coordinator on pen-mac-studio (juns-Mac-Studio, 16 cores, load 4.5 to 8.5; thread mcp:f41ed35f) (GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 VITEST_MAX_WORKERS=4 vp run check:changed): every static step passes, including typecheck (42 packages). Tests: 1790 of 1800 files and 26346 of 26388 tests pass, EXIT=1. Verdict after triage: PASS; none of the failures comes from the candidate.
+
+| Failing file | Failures | Triage |
+|---|---|---|
+| GrokTextGeneration tests | 16 | goat#3425: the fake grok gets an environment without PATH (`exec: node not found`); identical on the tip. |
+| packages/ssh runtimeFactsScripts.test.ts | 1 | goat#3363 (bash 3.2); identical on the tip. |
+| OpenCodeServerLedger.test.ts | kill EPERM in group cleanup | Under load; passes alone, 9/9. |
+
+`node scripts/goat-rename.ts --check`: 0. The integration tip moved to `428af27456` after the gate (mobile i18n and five mobile and GOAT Bot files only); the coordinator keeps the gate on `83138ac3b6`.
+
+NOT RUN: the real-provider reproduction for goat#3348; a real-client pass (no client code changed).
 
 Model: anthropic/claude-opus-5-5 via Codex in GOAT on pen-mac-studio, coordinated by anthropic/claude-opus-5-5
