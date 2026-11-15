@@ -808,6 +808,9 @@ export function useMobileGoatBotSession(
     historyEnvironmentId: target?.environmentId ?? null,
     /** The conversation shown: the member's own, else the main bot's. */
     threadId: target?.threadId ?? null,
+    /** Where a message goes now; null until this connection confirms the bot, unlike the history. */
+    sendEnvironmentId: sendBot?.environmentId ?? null,
+    sendThreadId: sendBot?.threadId ?? null,
     /** Bot replies still arriving, by row id. */
     streamingReplyIds,
     replyingSince,
