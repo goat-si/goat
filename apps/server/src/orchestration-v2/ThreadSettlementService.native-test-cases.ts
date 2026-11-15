@@ -7,6 +7,7 @@ import {
   ProviderDriverKind,
   RunId,
   type OrchestrationV2AppThread,
+  type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
   type OrchestrationV2Subagent,
   type ServerSettings,
@@ -37,7 +38,10 @@ type NativeSubagentHarness = Pick<
   Pick<typeof Admission, "appThread" | "settledEvent">;
 type Fixture = Effect.Success<ReturnType<NativeSubagentHarness["makeHarness"]>>;
 
-const nativeRun = (thread: OrchestrationV2AppThread, status: "completed"): OrchestrationV2Run => ({
+const nativeRun = (
+  thread: OrchestrationV2AppThread,
+  status: "running" | "completed",
+): OrchestrationV2Run => ({
   id: RunId.make(`run:${thread.id}`),
   threadId: thread.id,
   ordinal: 1,
@@ -142,7 +146,7 @@ export function settlementNativeSubagentTests({
   });
 
   it.effect(
-    "drains provider-native children of a settled parent without PR lookups, one still working included",
+    "drains provider-native children of a settled parent without PR lookups, one still working included, and retries one a person's run keeps busy",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -162,26 +166,29 @@ export function settlementNativeSubagentTests({
           const empty = child("empty");
           const recent = child("recent");
           const working = child("working");
+          const busy = child("busy");
           const fixture = yield* storeBackedHarness(
             [
               parent,
               empty,
               recent,
               working,
+              busy,
               child("pinned", { pinnedAt: DateTime.makeUnsafe(NOW) }),
               child("opted-out", { autoSettleDisabledAt: DateTime.makeUnsafe(NOW) }),
             ],
             { settings: { ...DEFAULT_SERVER_SETTINGS, sidebarAutoSettleAfterDays: 2 } },
           );
-          // A person's own message on a native child is an app run; this one has finished.
-          const finished = nativeRun(recent, "completed");
-          yield* fixture.store.apply({
-            type: "run.created",
-            id: EventId.make(`created:${finished.id}`),
-            threadId: finished.threadId,
-            occurredAt: DateTime.makeUnsafe(NOW),
-            payload: finished,
-          });
+          // A person's own message on a native child is an app run: finished on one, running on another.
+          for (const payload of [nativeRun(recent, "completed"), nativeRun(busy, "running")]) {
+            yield* fixture.store.apply({
+              type: "run.created",
+              id: EventId.make(`created:${payload.id}`),
+              threadId: payload.threadId,
+              occurredAt: DateTime.makeUnsafe(NOW),
+              payload,
+            });
+          }
           // A native child at work has no app run: its parent records it as an active subagent.
           const task = nativeSubagent(parent, working);
           yield* fixture.store.apply({
@@ -209,6 +216,22 @@ export function settlementNativeSubagentTests({
                 (row) => row.status,
               ),
             ).toEqual(["running"]);
+            expect(yield* Ref.get(fixture.branchCalls)).toEqual([]);
+            expect(yield* Ref.get(fixture.summaryCalls)).toEqual([]);
+            const finished: OrchestrationV2DomainEvent = {
+              type: "run.updated",
+              id: EventId.make("busy:completed"),
+              threadId: busy.id,
+              occurredAt: DateTime.makeUnsafe(NOW),
+              payload: nativeRun(busy, "completed"),
+            };
+            yield* fixture.store.apply(finished);
+            yield* fixture.publishEvent(finished);
+            expect(yield* Queue.take(fixture.targetedReads)).toBe(busy.id);
+            yield* service.drain;
+            expect(
+              (yield* Ref.get(fixture.commands)).slice(3).map((command) => command.threadId),
+            ).toEqual([busy.id]);
             expect(yield* Ref.get(fixture.branchCalls)).toEqual([]);
             expect(yield* Ref.get(fixture.summaryCalls)).toEqual([]);
           }).pipe(Effect.provide(fixture.layer));

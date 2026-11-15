@@ -2,11 +2,8 @@ import { assert, describe, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
-import * as Migrator from "effect/sql/Migrator";
-import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import { DatabaseNewerThanBuildError } from "./Errors.ts";
 import {
   hasPendingMigrations,
   migrationEntries,
@@ -14,73 +11,20 @@ import {
   runMigrations,
 } from "./Migrations.ts";
 import { GOAT_MIGRATION_NAMES, reconcileGoatMigrationIds } from "./reconcileGoatMigrationIds.ts";
-
-// Builds before cycle 261114 recorded GOAT's migrations at 80-147. Upstream took 080-089, so GOAT's
-// block moved to 90-157 and older ledgers move with it.
-const UPSTREAM_80S: ReadonlyArray<readonly [number, string]> = [
-  [80, "ScheduledTaskThreadMode"],
-  [81, "ProjectionMessageSearchText"],
-  [82, "TurnItemConversationIndex"],
-  [83, "CommandReadIndexes"],
-  [84, "LastExecutedRunIndex"],
-  [85, "TurnItemCounts"],
-  [86, "QueuedTurnInputIndex"],
-  [87, "ProjectionProjectsCustomTitle"],
-  [88, "TurnItemTypeStatusIndex"],
-  [89, "ShellThreadReadIndexes"],
-];
-
-const isDatabaseNewerThanBuildError = Schema.is(DatabaseNewerThanBuildError);
-
-const goatNames = migrationEntries.flatMap(([, name]) =>
-  GOAT_MIGRATION_NAMES.has(name) ? [name] : [],
-);
-const currentRow = (name: string) => migrationManifest.find(([, entry]) => entry === name)!;
-
-const history = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  const rows = yield* sql<{ readonly migration_id: number; readonly name: string }>`
-    SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id
-  `;
-  return rows.map((row) => [row.migration_id, row.name] as const);
-});
-
-const schema = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  return yield* sql`SELECT name, sql FROM sqlite_master ORDER BY name`;
-});
-
-/** Upstream 1-79, then GOAT's migrations from 80 up to and including `oldMax`, as GOAT recorded them. */
-const seedOldGoatLedger = (oldMax: number) =>
-  Effect.gen(function* () {
-    yield* runMigrations({ toMigrationInclusive: 79 });
-    const byName = new Map(migrationEntries.map(([, name, migration]) => [name, migration]));
-    yield* Migrator.make({})({
-      loader: Migrator.fromRecord(
-        Object.fromEntries(
-          goatNames
-            .slice(0, oldMax - 79)
-            .map((name, index) => [`${80 + index}_${name}`, byName.get(name)!]),
-        ),
-      ),
-    });
-  });
-
-const seedUserData = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  yield* sql`INSERT INTO memory_payloads (space, payload_ref, memory_id, body_json, dependencies_json)
-    VALUES ('space', 'ref', 'memory', '{"text":"keep"}', '[]')`;
-  yield* sql`INSERT INTO scheduled_tasks (task_id,title,prompt,enabled,schedule_json,project_id,thread_id,workspace_strategy_json,model_selection_json,runtime_mode,interaction_mode,created_by,creation_source,created_at,updated_at,last_run_status,run_count)
-    VALUES ('task','Synthetic','Synthetic',1,'{}','project','thread','{}','{}','full-access','default','user','web','2026-11-01','2026-11-01','never',0)`;
-});
-
-const userData = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  return [
-    yield* sql`SELECT space, payload_ref, body_json FROM memory_payloads`,
-    yield* sql`SELECT task_id, thread_id, title FROM scheduled_tasks`,
-  ];
-});
+import {
+  currentRow,
+  failingAfterWork,
+  fresh,
+  goatNames,
+  history,
+  isDatabaseNewerThanBuildError,
+  schema,
+  seedOldGoatLedger,
+  seedUserData,
+  snapshot,
+  UPSTREAM_80S,
+  userData,
+} from "./reconcileGoatMigrationIds.testkit.ts";
 
 describe("GOAT migrations after upstream 080-089", () => {
   it.effect("a new database records upstream 080-089 in place and GOAT's block from 90", () =>
@@ -209,28 +153,39 @@ describe("GOAT migrations after upstream 080-089", () => {
         assert.deepStrictEqual(yield* schema, tables);
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
-  it.effect("an upgrade interrupted in the last upstream step rolls back whole and resumes", () =>
-    Effect.gen(function* () {
-      yield* seedOldGoatLedger(147);
-      yield* seedUserData;
-      const sql = yield* SqlClient.SqlClient;
-      const before = yield* history;
-      const tables = yield* schema;
-      const data = yield* userData;
-      const [lastId] = UPSTREAM_80S.at(-1)!;
-      const failing = migrationEntries.map((entry) =>
-        entry[0] === lastId
-          ? ([entry[0], entry[1], sql`SELECT * FROM missing_migration_fixture`] as const)
-          : entry,
-      );
-      const failure = yield* Effect.flip(reconcileGoatMigrationIds(failing));
-      assert.strictEqual(failure._tag, "MigrationError");
-      assert.deepStrictEqual(yield* history, before);
-      assert.deepStrictEqual(yield* schema, tables);
-      assert.deepStrictEqual(yield* runMigrations(), UPSTREAM_80S);
-      assert.deepStrictEqual(yield* history, migrationManifest);
-      assert.deepStrictEqual(yield* userData, data);
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  it.effect(
+    "an id shift failing in 080 keeps the old ledger; failing in 089 rolls back 089 alone, keeps 080-088 and resumes at 089",
+    () =>
+      Effect.gen(function* () {
+        yield* seedOldGoatLedger(147);
+        yield* seedUserData;
+        const sql = yield* SqlClient.SqlClient;
+        const data = yield* userData;
+        const before = yield* history;
+        const tables = yield* schema;
+        // The collision check, the ledger move and 080 commit together or not at all.
+        const at080 = yield* Effect.flip(reconcileGoatMigrationIds(yield* failingAfterWork(80)));
+        assert.strictEqual(at080._tag, "MigrationError");
+        assert.deepStrictEqual(yield* history, before);
+        assert.deepStrictEqual(yield* schema, tables);
+        // 089 fails after its work: that work rolls back, 080-088 stay with their ledger rows.
+        const at089 = yield* Effect.flip(reconcileGoatMigrationIds(yield* failingAfterWork(89)));
+        assert.strictEqual(at089._tag, "MigrationError");
+        assert.deepStrictEqual(
+          yield* history,
+          migrationManifest.filter(([id]) => id !== 89),
+        );
+        assert.deepStrictEqual(
+          yield* sql`SELECT name FROM sqlite_master WHERE name IN (
+            'orchestration_v2_projection_threads_worktree_path_idx',
+            'orchestration_v2_projection_threads_root_thread_idx',
+            'orchestration_v2_projection_runs_run_status_idx')`,
+          [],
+        );
+        assert.deepStrictEqual(yield* runMigrations(), UPSTREAM_80S.slice(-1));
+        assert.deepStrictEqual(yield* snapshot, yield* fresh);
+        assert.deepStrictEqual(yield* userData, data);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
   it.effect("upstream 080-089 accept schema that is already present", () =>

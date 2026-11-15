@@ -655,6 +655,7 @@ function screenFor(threadId: string, rows: ReturnType<typeof bot>[]) {
     replyingSince: null,
     activity: null,
     supportsTaskThreads: false,
+    taskChips: new Map(),
     historyEnvironmentId: EnvironmentId.make("env"),
     threadId: ThreadId.make(threadId),
     streamingReplyIds: new Set<string>(),
