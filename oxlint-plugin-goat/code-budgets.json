@@ -304,7 +304,7 @@
   "apps/server/src/orchestration-v2/ProjectionStore.ts": { "lines": 8836, "nonNull": 6 },
   "apps/server/src/orchestration-v2/ProviderEventIngestor.test.ts": { "lines": 2491 },
   "apps/server/src/orchestration-v2/ProviderRuntimeRecoveryService.test.ts": { "lines": 1364 },
-  "apps/server/src/orchestration-v2/ProviderSessionManager.test.ts": { "lines": 6096 },
+  "apps/server/src/orchestration-v2/ProviderSessionManager.test.ts": { "lines": 6098 },
   "apps/server/src/orchestration-v2/ProviderSessionManager.ts": { "lines": 3128, "nonNull": 3 },
   "apps/server/src/orchestration-v2/ProviderTurnStartService.test.ts": { "lines": 1257 },
   "apps/server/src/orchestration-v2/ProviderTurnStartService.ts": { "lines": 1587, "nonNull": 3 },
