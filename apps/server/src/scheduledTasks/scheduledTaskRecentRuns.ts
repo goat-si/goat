@@ -20,10 +20,18 @@ import type * as SqlClient from "effect/sql/SqlClient";
 
 interface RecentRunRow {
   readonly task_id: string;
-  readonly snapshot_json: string;
+  readonly snapshot_json: string | null;
   readonly input_id: string | null;
   readonly quiet: number | null;
+  readonly oversized: number;
 }
+
+/**
+ * The most characters one stored run may bring into memory: its snapshot plus its input id. A run
+ * this server writes is about 430; task ids have no length limit, and every firing id repeats one.
+ * A routine with a larger run carries no history, so the read never loads more than 350 of these.
+ */
+export const MAX_STORED_RUN_CHARS = 1024;
 
 // Only the fields the history sends, with any status: a later server may have stored one this
 // server does not know, and the wire carries it as a string.
@@ -53,6 +61,7 @@ const encodeChosen = Schema.encodeEffect(
 );
 
 function recentRun(row: RecentRunRow): ScheduledTaskRecentRun | undefined {
+  if (row.snapshot_json === null) return undefined;
   const snapshot = decodeSnapshot(row.snapshot_json);
   if (Option.isNone(snapshot)) return undefined;
   const run = snapshot.value;
@@ -70,7 +79,10 @@ function recentRun(row: RecentRunRow): ScheduledTaskRecentRun | undefined {
   };
 }
 
-/** Each routine's newest runs, newest first; a run whose snapshot cannot be read is left out. */
+/**
+ * Each routine's newest runs, newest first; a run whose snapshot cannot be read is left out. The
+ * routines with a stored run over MAX_STORED_RUN_CHARS come back in `oversized`, without runs.
+ */
 export const readRecentRuns = Effect.fn("ScheduledTaskRecentRuns.read")(function* (
   sql: SqlClient.SqlClient,
   routines: ReadonlyArray<Pick<ScheduledTask, "id" | "createdAt">>,
@@ -79,8 +91,10 @@ export const readRecentRuns = Effect.fn("ScheduledTaskRecentRuns.read")(function
   const rows = yield* sql<RecentRunRow>`
     WITH chosen AS (SELECT json_extract(value, '$[0]') AS task_id, json_extract(value, '$[1]') AS created_at
       FROM json_each(${chosen}))
-    SELECT task_id, snapshot_json, input_id, quiet FROM (
+    SELECT task_id, CASE WHEN NOT oversized THEN snapshot_json END AS snapshot_json,
+      CASE WHEN NOT oversized THEN input_id END AS input_id, quiet, oversized FROM (
       SELECT r.task_id, r.snapshot_json, l.input_id,
+        length(r.snapshot_json) + coalesce(length(l.input_id), 0) > ${MAX_STORED_RUN_CHARS} AS oversized,
         CASE WHEN json_valid(i.decision_json) THEN json_extract(i.decision_json, '$.action.type') END
           = 'no_update' AS quiet,
         ROW_NUMBER() OVER (PARTITION BY r.task_id, r.task_created_at
@@ -91,7 +105,12 @@ export const readRecentRuns = Effect.fn("ScheduledTaskRecentRuns.read")(function
       LEFT JOIN channel_inbox i ON i.input_id = l.input_id)
     WHERE position <= ${SCHEDULED_TASK_RECENT_RUNS} ORDER BY task_id, position`;
   const byTask = new Map<string, Array<ScheduledTaskRecentRun>>();
+  const oversized = new Set<string>();
   for (const row of rows) {
+    if (row.oversized === 1) {
+      oversized.add(row.task_id);
+      continue;
+    }
     const run = recentRun(row);
     if (run === undefined) {
       yield* Effect.logWarning("Skipped a routine run that could not be read", {
@@ -101,14 +120,15 @@ export const readRecentRuns = Effect.fn("ScheduledTaskRecentRuns.read")(function
     }
     byTask.set(row.task_id, [...(byTask.get(row.task_id) ?? []), run]);
   }
-  return byTask;
+  for (const taskId of oversized) byTask.delete(taskId);
+  return { byTask, oversized };
 });
 
 /**
  * Gives GOAT Bot routines, in list order, their recent runs: at most
  * SCHEDULED_TASK_RECENT_RUN_ROUTINES of them, stopping before the history would pass
  * SCHEDULED_TASK_RECENT_RUN_BYTES. Later routines and other tasks get no key, and so does every
- * task when the read fails.
+ * task when the read fails. A routine with an oversized stored run gets no key, and the next goes on.
  */
 export const withRecentRuns = Effect.fn("ScheduledTaskRecentRuns.attach")(function* (
   sql: SqlClient.SqlClient,
@@ -122,15 +142,17 @@ export const withRecentRuns = Effect.fn("ScheduledTaskRecentRuns.attach")(functi
     Effect.asSome,
     Effect.catch((cause) =>
       Effect.logWarning("Could not read routine run history", { cause }).pipe(
-        Effect.as(Option.none<Map<string, Array<ScheduledTaskRecentRun>>>()),
+        Effect.as(Option.none<Effect.Success<ReturnType<typeof readRecentRuns>>>()),
       ),
     ),
   );
   if (Option.isNone(byTask)) return tasks;
+  const { byTask: runsByTask, oversized } = byTask.value;
   const carried = new Map<string, ReadonlyArray<ScheduledTaskRecentRun>>();
   let budget = SCHEDULED_TASK_RECENT_RUN_BYTES;
   for (const task of chosen) {
-    const runs = byTask.value.get(task.id) ?? [];
+    if (oversized.has(task.id)) continue;
+    const runs = runsByTask.get(task.id) ?? [];
     const bytes = historyBytes(runs);
     if (bytes > budget) break;
     budget -= bytes;

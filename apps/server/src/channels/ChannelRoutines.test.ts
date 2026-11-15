@@ -216,7 +216,7 @@ describe("GOAT Bot routines", () => {
       const inputId = (yield* linkOf(quiet.firingId))?.input_id;
       // Its run reads as quiet in the routine's history, through the input it sent.
       const workInputId = (yield* linkOf(work.firingId))?.input_id;
-      const history = yield* readRecentRuns(yield* SqlClient.SqlClient, [
+      const { byTask: history } = yield* readRecentRuns(yield* SqlClient.SqlClient, [
         { id: work.taskId, createdAt: AT },
         { id: quiet.taskId, createdAt: AT },
       ]);

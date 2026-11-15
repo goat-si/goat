@@ -18,6 +18,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { webhookTaskInput, withWebhookService } from "./ScheduledRunFixture.testkit.ts";
+import { MAX_STORED_RUN_CHARS } from "./scheduledTaskRecentRuns.ts";
 
 type Fixture = Parameters<Parameters<typeof withWebhookService>[0]>[0];
 
@@ -367,6 +368,34 @@ it.effect("history stops at its byte budget: later routines carry none, however 
         bytes(listed.tasks) - bytes(listed.tasks.map(({ recentRuns: _recent, ...task }) => task));
       assert.isAtMost(added, SCHEDULED_TASK_RECENT_RUN_BYTES);
       assert.isAbove(added, SCHEDULED_TASK_RECENT_RUN_BYTES / 2);
+    }),
+  ),
+);
+
+it.effect("a stored run over the size cap leaves only its own routine without history", () =>
+  withWebhookService((fixture) =>
+    Effect.gen(function* () {
+      const oversized = yield* saveRoutine(fixture, "goat-bot-check-in:a");
+      const other = yield* saveRoutine(fixture, "goat-bot-check-in:b");
+      const older = yield* fire(fixture, oversized);
+      yield* refuse(fixture, older);
+      const newer = yield* fire(fixture, oversized);
+      yield* refuse(fixture, newer);
+      const kept = yield* fire(fixture, other);
+      yield* refuse(fixture, kept);
+      // A stored row larger than any run this server writes: the read leaves it in the database.
+      const padding = "x".repeat(MAX_STORED_RUN_CHARS);
+      yield* fixture.sql`UPDATE scheduled_task_runs SET snapshot_json = json_set(snapshot_json, '$.padding', ${padding})
+        WHERE firing_id = ${older}`;
+      const listed = yield* fixture.service.list();
+      assert.notProperty(
+        listed.tasks.find((task) => task.id === oversized.id),
+        "recentRuns",
+      );
+      assert.deepStrictEqual(
+        historyOf(listed, other.id)?.map((run) => run.firingId),
+        [kept],
+      );
     }),
   ),
 );
