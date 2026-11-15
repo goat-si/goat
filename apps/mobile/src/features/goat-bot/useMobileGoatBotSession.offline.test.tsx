@@ -116,3 +116,32 @@ it("offline, a card the kept list never named still shows beside the hidden one,
   expect(view.session.rows).toBe(rows);
   await botSessions.disposeMobileGoatBotEnvironment(a);
 });
+
+it("homeConnected follows the selected bot computer's connection, for the main bot and a member on it (#3427)", async () => {
+  const a = EnvironmentId.make("env");
+  harness.supportsTaskThreads = true;
+  harness.botRef = bot(a);
+  harness.environments = [environment("env")];
+  for (const member of [
+    null,
+    {
+      botId: "scout",
+      role: "member",
+      name: "Scout",
+      environmentId: a,
+      sessionThreadId: "thread-scout",
+      state: "active",
+    } as unknown as BotProfile,
+  ]) {
+    view.member = member;
+    harness.environments = [environment("env")];
+    await render();
+    expect(view.session.homeConnected).toBe(true);
+    harness.environments = [environment("env", false)];
+    await render();
+    expect(view.session.homeConnected).toBe(false);
+    harness.environments = [environment("env")];
+    await render();
+    expect(view.session.homeConnected).toBe(true);
+  }
+});
