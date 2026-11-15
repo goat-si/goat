@@ -138,7 +138,9 @@ vi.mock("./useMobileBotRowSignals", () => ({
   useMobileBotRowSignals: (input: { botId: string }) => signals.byBot[input.botId] ?? null,
 }));
 vi.mock("../../state/use-thread-detail", () => ({
-  useThreadVisibleTurnItems: () => face.items,
+  // A face asked for no conversation reads nothing, as the real read does.
+  useThreadVisibleTurnItems: (target: { environmentId: string | null }) =>
+    target.environmentId === null ? [] : face.items,
 }));
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 0 }),
@@ -720,5 +722,33 @@ it("offline, rows that show what this phone read before say it may be out of dat
     );
   } finally {
     members.status = {};
+  }
+});
+
+it("once its computer may no longer be read here, the main tile rests and says nothing it read there", async () => {
+  // The conversation still holds a waiting task from before access was refused.
+  face.items = [
+    {
+      item: {
+        type: "notification",
+        ledgerTask: { taskId: "quiet", taskVersion: 2, status: "waiting_input" },
+      },
+    },
+  ];
+  try {
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        <MobileBotRosterView
+          bots={[{ kind: "main", profile: null }]}
+          mainUnreadable
+          slackEnabled={false}
+          onOpenBot={() => {}}
+        />,
+      ),
+    );
+    expect(container.querySelector('[aria-label="GOAT Bot"]')).not.toBeNull();
+  } finally {
+    face.items = [];
   }
 });
