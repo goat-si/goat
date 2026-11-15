@@ -9,6 +9,7 @@ import type {
   OrchestrationV2TurnItem,
 } from "@goat/contracts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
+import { createOrchestrationV2TurnItemVisibility } from "@goat/shared/orchestrationV2Timeline";
 import {
   knownProviderFailureMessage,
   makeProviderFailure,
@@ -28,7 +29,7 @@ export const makeNativeForkRecovery = Effect.gen(function* () {
   const ids = yield* IdAllocator.IdAllocatorV2;
   const positions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
   const readOwnItems = (
-    source: Pick<OrchestrationV2ThreadProjection, "thread" | "runs">,
+    source: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "attempts">,
     throughOrdinal: number,
   ) =>
     store
@@ -38,7 +39,18 @@ export const makeNativeForkRecovery = Effect.gen(function* () {
           ...(source.thread.historyOrigin === "v1_import" ? [null] : []),
         ],
       })
-      .pipe(Effect.map(({ turnItems }) => turnItems));
+      .pipe(
+        // Rewound runs and cancelled queued input are not part of the conversation.
+        Effect.map(({ turnItems }) =>
+          turnItems.filter(
+            createOrchestrationV2TurnItemVisibility({
+              runs: source.runs,
+              attempts: source.attempts,
+              items: turnItems,
+            }),
+          ),
+        ),
+      );
   // The source's timeline starts with what it inherited from its own fork ancestors.
   const readInheritedItems = Effect.fn("ProviderTurnStartService.readInheritedForkItems")(
     function* (thread: OrchestrationV2ThreadProjection["thread"]) {
@@ -49,7 +61,7 @@ export const makeNativeForkRecovery = Effect.gen(function* () {
         const { threadId, runId } = forkedFrom;
         seen.add(threadId);
         const parent = yield* store
-          .getThreadRecords(threadId, ["runs"])
+          .getThreadRecords(threadId, ["runs", "attempts"])
           .pipe(
             Effect.catchTags({ ProjectionStoreThreadNotFoundError: () => Effect.succeed(null) }),
           );
@@ -63,7 +75,7 @@ export const makeNativeForkRecovery = Effect.gen(function* () {
   );
   return Effect.fn("ProviderTurnStartService.recoverNativeFork")(function* (input: {
     projection: Pick<OrchestrationV2ThreadProjection, "thread">;
-    source: Pick<OrchestrationV2ThreadProjection, "thread" | "runs">;
+    source: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "attempts">;
     sourceRun: OrchestrationV2Run;
     sourceProviderThread: OrchestrationV2ProviderThread;
     providerThread: OrchestrationV2ProviderThread;
