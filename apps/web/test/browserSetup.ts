@@ -1,5 +1,7 @@
 import { beforeEach } from "vite-plus/test";
 import { commands } from "vite-plus/test/browser";
+
+import { initializeI18n } from "../src/i18n/initializeI18n";
 import { installMockFactoryFailureReport } from "./reportMockFactoryFailure";
 
 declare module "vite-plus/test/browser" {
@@ -40,3 +42,6 @@ beforeEach(async () => {
   // next tree that mounts, including trees inside ChatView or the right panel.
   localStorage.removeItem("goat.fileTreeExpandedDirectories");
 });
+
+// The app initializes GT at startup; components using its hooks need the same here.
+initializeI18n(() => {});
