@@ -1,6 +1,6 @@
 import type { BotId, ChannelTaskId, EnvironmentId } from "@goat/contracts";
-import { useState } from "react";
-import { Pressable, Text, TextInput, View } from "react-native";
+import { useEffect, useState } from "react";
+import { Keyboard, Pressable, Text, TextInput, View } from "react-native";
 
 import { lookedUpTitle } from "./lookedUpTitle";
 import { useMobileBotTaskSearch, type MobileTaskSearchState } from "./useMobileBotTaskSearch";
@@ -50,8 +50,18 @@ export function MobileBotTaskSearch(props: {
   readonly botId: BotId;
   readonly botName: string;
   readonly onOpenTask: (id: ChannelTaskId, title: string) => void;
+  /** Makes room for the results below the field; asked on focus and again once the keyboard is up. */
+  readonly onNeedsRoom?: (() => void) | undefined;
 }) {
   const [text, setText] = useState("");
+  const [focused, setFocused] = useState(false);
+  const onNeedsRoom = props.onNeedsRoom;
+  // oxlint-disable-next-line goat/react-effect-budget -- the keyboard's own scroll lands after focus, so room is asked again once it has shown.
+  useEffect(() => {
+    if (!focused || onNeedsRoom === undefined) return;
+    const shown = Keyboard.addListener("keyboardDidShow", onNeedsRoom);
+    return () => shown.remove();
+  }, [focused, onNeedsRoom]);
   const search = useMobileBotTaskSearch({
     environmentId: props.environmentId,
     botId: props.botId,
@@ -67,6 +77,11 @@ export function MobileBotTaskSearch(props: {
         placeholderTextColorClassName="accent-placeholder"
         value={text}
         onChangeText={setText}
+        onFocus={() => {
+          setFocused(true);
+          onNeedsRoom?.();
+        }}
+        onBlur={() => setFocused(false)}
         maxLength={256}
         autoCorrect={false}
         returnKeyType="search"
