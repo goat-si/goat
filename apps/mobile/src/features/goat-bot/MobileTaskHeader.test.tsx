@@ -74,6 +74,7 @@ async function render(
     root.render(
       <MobileTaskHeader
         task={undefined}
+        rows={[]}
         chips={chips as never}
         screen={{ lookup, canUpdate: true, update: async () => true, retried: () => {} }}
         title="Old report"
@@ -221,6 +222,7 @@ it("tells the screen reader once when the lookup settles on a failure, a refusal
       root.render(
         <MobileTaskHeader
           task={undefined}
+          rows={[]}
           chips={new Map()}
           screen={{ lookup, canUpdate: true, update: async () => true, retried: () => {} }}
           title="Old report"
