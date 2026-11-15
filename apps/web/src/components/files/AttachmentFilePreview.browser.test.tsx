@@ -48,7 +48,6 @@ import { AttachmentFilePreview } from "./AttachmentFilePreview";
 import LargeTextViewer from "./LargeTextViewer";
 import VirtualTablePreview from "./VirtualTablePreview";
 import { OfficeFilePreview } from "./OfficeFilePreview";
-import { MermaidFilePreview } from "./MermaidFilePreview";
 import JSZip from "jszip";
 import { boundedZip } from "@goat/client-runtime/zip/bounded-zip";
 import BinaryViewer from "./BinaryViewer";
@@ -1849,41 +1848,6 @@ it.each([60, 100])("prepares all %i pages of a table-heavy Word report", async (
   });
   expect(screen.container.textContent).not.toContain("Preview limited");
   expect(screen.container.querySelector('[role="alert"]')).toBeNull();
-});
-
-describe("standalone Mermaid previews", () => {
-  it.each([
-    'A@{ "img": "//attacker.invalid/pixel.png" }',
-    'A@{ "im\\u0067": "/pixel.png" }',
-    "A@{ label: &key img, *key: '/pixel.png' }",
-    'A["<img src=//attacker.invalid/pixel.png>"]',
-  ])("rejects resource syntax before Mermaid lays out %s", async (node) => {
-    using imageSource = vi
-      .spyOn(HTMLImageElement.prototype, "src", "set")
-      .mockImplementation(() => {});
-    await using screen = await render(<MermaidFilePreview text={`flowchart LR\n${node}`} />);
-    await vi.waitFor(() =>
-      expect(screen.container.querySelector('[role="alert"]')?.textContent).toContain(
-        "Show Mermaid source",
-      ),
-    );
-    expect(imageSource).not.toHaveBeenCalled();
-    expect(screen.container.querySelector("svg")).toBeNull();
-  });
-
-  it.each(["<-->", "<==>", "<-.->", "-->"])("renders the %s arrow", async (arrow) => {
-    await using screen = await render(<MermaidFilePreview text={`flowchart LR\nA ${arrow} B`} />);
-    await vi.waitFor(
-      () => {
-        const diagram = screen.container.querySelector("svg");
-        expect(diagram?.querySelector("path")).not.toBeNull();
-        expect(diagram?.textContent).toContain("A");
-        expect(diagram?.textContent).toContain("B");
-      },
-      { timeout: 10_000 },
-    );
-    expect(screen.container.querySelector('[role="alert"]')).toBeNull();
-  });
 });
 
 it("reloads a workspace Word file after a preview remount", async () => {

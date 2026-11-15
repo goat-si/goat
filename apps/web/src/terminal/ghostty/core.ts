@@ -6,30 +6,16 @@ import {
   loadGhosttyKeyboardLayoutMap,
 } from "./keyCodes";
 import { GhosttyRuntime, loadGhosttyRuntime } from "./runtime";
+import { RENDER_DATA } from "./renderData";
 
 const GHOSTTY_SUCCESS = 0;
 const GHOSTTY_OUT_OF_SPACE = -3;
-const MAX_SCROLLBACK_ROWS = 10_000;
+// The pinned ABI measures max_scrollback in bytes despite its header saying lines.
+// Match Ghostty's default scrollback-limit.
+const MAX_SCROLLBACK_BYTES = 10_000_000;
 // wasm32 GhosttyTerminalSelectionFormatOptions layout at the pinned libghostty-vt revision.
 const SELECTION_FORMAT_OPTIONS_SIZE = 16;
 const PALETTE_BYTES = 256 * 3;
-
-const RENDER_DATA = {
-  cols: 1,
-  rows: 2,
-  dirty: 3,
-  rowIterator: 4,
-  background: 5,
-  foreground: 6,
-  cursor: 7,
-  cursorHasValue: 8,
-  cursorStyle: 10,
-  cursorVisible: 11,
-  cursorBlinking: 12,
-  cursorInViewport: 14,
-  cursorX: 15,
-  cursorY: 16,
-} as const;
 
 const ROW_DATA = {
   dirty: 1,
@@ -160,7 +146,7 @@ export interface GhosttyMouseInput {
   readonly anyButtonPressed: boolean;
 }
 
-const decoder = new TextDecoder();
+const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
 const encoder = new TextEncoder();
 
 function blend(foreground: GhosttyColor, background: GhosttyColor): GhosttyColor {
@@ -261,7 +247,12 @@ export class GhosttyTerminalCore {
     const options = this.runtime.alloc(optionsSize);
     this.runtime.setField(options, "GhosttyTerminalOptions", "cols", cols);
     this.runtime.setField(options, "GhosttyTerminalOptions", "rows", rows);
-    this.runtime.setField(options, "GhosttyTerminalOptions", "max_scrollback", MAX_SCROLLBACK_ROWS);
+    this.runtime.setField(
+      options,
+      "GhosttyTerminalOptions",
+      "max_scrollback",
+      MAX_SCROLLBACK_BYTES,
+    );
     this.terminalSlot = this.runtime.allocOpaque();
     const terminalResult = this.runtime.call("ghostty_terminal_new", 0, this.terminalSlot, options);
     this.runtime.free(options, optionsSize);

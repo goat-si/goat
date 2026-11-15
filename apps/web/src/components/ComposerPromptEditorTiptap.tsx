@@ -6,9 +6,7 @@ import { formatProviderSkillDisplayName } from "@goat/shared/inlineSkills";
 import {
   Extension,
   findChildren,
-  InputRule,
   Node,
-  wrappingInputRule,
   type JSONContent,
   type TiptapEditorHTMLElement,
 } from "@tiptap/core";
@@ -18,7 +16,7 @@ import { newlineInCode, splitBlockKeepMarks } from "@tiptap/pm/commands";
 import { isHistoryTransaction } from "@tiptap/pm/history";
 import { NodeSelection, TextSelection, type Transaction } from "@tiptap/pm/state";
 import type { EditorView } from "@tiptap/pm/view";
-import type { NodeType, ResolvedPos } from "@tiptap/pm/model";
+import type { ResolvedPos } from "@tiptap/pm/model";
 import type {
   AssistantCitation,
   ComposerContextClipboardFragment,
@@ -71,7 +69,6 @@ import {
   ComposerCodeBlockExtension,
   ComposerListExtensions,
   buildTiptapContent,
-  convertBulletItemToTask,
   ComposerCodeExtension,
   ComposerBoldExtension,
   ComposerItalicExtension,
@@ -91,6 +88,14 @@ import {
   type SkillMeta,
 } from "~/composer-rich-text-doc";
 import {
+  blockquoteInputRule,
+  bulletToTaskInputRule,
+  headingInputRule,
+  horizontalRuleInputRule,
+  listMarkerInputRule,
+  taskInputRule,
+} from "./composerInputRules";
+import {
   convertCodeFenceOnEnter,
   exitCodeBlockOnClosingFence,
   exitCodeBlockOnTrailingBlankLines,
@@ -106,7 +111,12 @@ import {
 } from "~/composer-undo-grouping";
 import { collectInlineContextIds } from "~/lib/composerContextReferences";
 import { resolveDiffThemeName } from "~/lib/diffRendering";
+import { isRichTextFormattingShortcut } from "~/keybindings";
 import { cn, isMacPlatform } from "~/lib/utils";
+import { isThreadNavigationShortcut } from "~/keybindings";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { primaryServerKeybindingsAtom } from "~/state/server";
+import { hasCommandForKeyDown } from "~/shortcuts/dispatcher";
 import { basenameOfPath } from "~/pierre-icons";
 import { WorkspaceEntryTooltip } from "./chat/WorkspaceEntryIcon";
 import { FileTagChipContent } from "./chat/FileTagChip";
@@ -435,7 +445,7 @@ function ComposerCitationNodeView({ node, editor, getPos }: NodeViewProps) {
 
   const removeOnCancel = commentTarget?.removeOnCancel;
   const onRemove = () => {
-    if (!editor.isEditable || !removeOnCancel) return;
+    if (!removeOnCancel) return;
     const pos = nodePos();
     if (pos === null) return;
     const { doc } = editor.state;
@@ -444,7 +454,9 @@ function ComposerCitationNodeView({ node, editor, getPos }: NodeViewProps) {
     const end = pos + current.nodeSize;
     const from = removeOnCancel.before && doc.textBetween(pos - 1, pos) === " " ? pos - 1 : pos;
     const to = removeOnCancel.after && doc.textBetween(end, end + 1) === " " ? end + 1 : end;
-    editor.chain().focus().deleteRange({ from, to }).run();
+    // A read-only composer (dictation) can still receive a new citation, so Cancel must undo it.
+    const chain = editor.chain();
+    (editor.isEditable ? chain.focus() : chain).deleteRange({ from, to }).run();
   };
 
   const sentRef = useRef(false);
@@ -553,121 +565,12 @@ function ComposerContextReferenceNodeView({ node }: NodeViewProps) {
   );
 }
 
-/** Wait for a character after '- ' so task markers reach their input rule before becoming bullets. */
-function listMarkerInputRule(find: RegExp, listType: "bulletList" | "orderedList"): InputRule {
-  return new InputRule({
-    find,
-    handler: ({ state, range, match, chain }) => {
-      const marker = match.groups?.marker ?? "-";
-      const space = match.groups?.space ?? " ";
-      const carried = match.groups?.carried ?? "";
-      // Nested lists would serialize flat, so accept only top-level paragraphs.
-      const $from = state.doc.resolve(range.from);
-      if ($from.parent.type.name !== "paragraph" || $from.depth !== 1) return null;
-      const command = chain()
-        .deleteRange(range)
-        .wrapInList(
-          listType,
-          listType === "orderedList" ? { start: Number.parseInt(marker, 10) || 1 } : {},
-        )
-        .updateAttributes("listItem", { marker, space });
-      (carried ? command.insertContent(carried) : command).run();
-      return undefined;
-    },
-  });
-}
-
-const bulletToTaskInputRule = new InputRule({
-  find: /^\[([ xX])\] $/,
-  handler: ({ state, range, match, chain }) => {
-    const $from = state.doc.resolve(range.from);
-    const item = $from.node(-1);
-    if ($from.parent.type.name !== "paragraph" || item?.type.name !== "listItem") return null;
-    if (!["-", "*", "+"].includes((item.attrs as { marker?: string }).marker ?? "")) return null;
-    const checked = (match[1] ?? " ").toLowerCase() === "x";
-    chain()
-      .command(({ tr }) => {
-        convertBulletItemToTask(tr, range.from, range.to, checked);
-        return true;
-      })
-      .run();
-    return undefined;
-  },
-});
-
-function taskInputRule(type: NodeType): InputRule {
-  const rule = wrappingInputRule({
-    find: /^- \[([ xX])\] $/,
-    type,
-    getAttributes: (match) => ({ checked: match[1]?.toLowerCase() === "x" }),
-  });
-  return new InputRule({
-    find: rule.find,
-    handler: (props) =>
-      props.state.doc.resolve(props.range.from).depth === 1 ? rule.handler(props) : null,
-  });
-}
-
 function hasAncestor($pos: ResolvedPos, name: string): boolean {
   for (let depth = $pos.depth; depth > 0; depth -= 1) {
     if ($pos.node(depth).type.name === name) return true;
   }
   return false;
 }
-
-const blockquoteInputRule = new InputRule({
-  find: /^>(\s)$/,
-  handler: ({ state, range, match, chain }) => {
-    const $from = state.doc.resolve(range.from);
-    if ($from.parent.type.name !== "paragraph" || $from.depth !== 1) return null;
-    chain()
-      .deleteRange(range)
-      .wrapIn("blockquote", { prefix: `>${match[1] ?? " "}` })
-      .run();
-    return undefined;
-  },
-});
-
-/** Require a space after *** or ___ to preserve bold typing. Lists and quotes cannot serialize rules. */
-const horizontalRuleInputRule = new InputRule({
-  find: /^(---|\*\*\*|___)\s?$/,
-  handler: ({ state, range, match, chain }) => {
-    const source = match[0] ?? "---";
-    if (!source.startsWith("---") && !/\s$/.test(source)) return null;
-    const $from = state.doc.resolve(range.from);
-    if ($from.parent.type.name !== "paragraph" || $from.depth !== 1) return null;
-    chain()
-      .deleteRange(range)
-      .setHorizontalRule()
-      .command(({ tr }) => {
-        const $pos = tr.selection.$from;
-        const index = $pos.index(0) - 1;
-        if (index < 0) return true;
-        const rulePos = $pos.posAtIndex(index, 0);
-        const rule = tr.doc.nodeAt(rulePos);
-        if (rule?.type.name === "horizontalRule") {
-          tr.setNodeMarkup(rulePos, undefined, { ...rule.attrs, source });
-        }
-        return true;
-      })
-      .run();
-    return undefined;
-  },
-});
-
-/** Require a space to preserve PR references; lists and quotes cannot serialize headings. */
-const headingInputRule = new InputRule({
-  find: /^(#{1,6})(\s)$/,
-  handler: ({ state, range, match, chain }) => {
-    const $from = state.doc.resolve(range.from);
-    if ($from.parent.type.name !== "paragraph" || $from.depth !== 1) return null;
-    chain()
-      .deleteRange(range)
-      .setNode("heading", { level: match[1]?.length ?? 1, space: match[2] ?? " " })
-      .run();
-    return undefined;
-  },
-});
 
 function isInCodeBlock(view: EditorView): boolean {
   return view.state.selection.$from.parent.type.spec.code === true;
@@ -1035,6 +938,19 @@ function ComposerPromptEditorTiptapInner(
       editable: !disabled,
       editorProps: {
         attributes: editorAttributes,
+        handleDOMEvents: {
+          // Composer commands keep precedence; otherwise true skips the editor's keymaps without
+          // preventDefault, so a bound app command still runs.
+          keydown: (_view, event) => {
+            if (!isRichTextFormattingShortcut(event)) return false;
+            if (readCallbacks().onCommandKeyDown?.(event.key, event)) {
+              event.preventDefault();
+              event.stopPropagation();
+              return true;
+            }
+            return hasCommandForKeyDown(event);
+          },
+        },
         handleKeyDown: (view, event) => {
           // In a right-to-left line the start is on the right.
           const backArrow = caretLineDirection(view.state) === "rtl" ? "ArrowRight" : "ArrowLeft";
@@ -1054,6 +970,13 @@ function ComposerPromptEditorTiptapInner(
             !event.ctrlKey &&
             !event.isComposing
           ) {
+            if (
+              isThreadNavigationShortcut(event, appAtomRegistry.get(primaryServerKeybindingsAtom), {
+                context: { editableFocus: true },
+              })
+            ) {
+              return false;
+            }
             const selection = window.getSelection();
             if (
               selection?.anchorNode &&

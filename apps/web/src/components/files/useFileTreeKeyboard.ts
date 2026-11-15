@@ -142,17 +142,32 @@ export function useFileTreeKeyboard(input: {
     focusTreeRow(treeHost(), model, path);
   });
   const handleFocusRequest = useStableCallback(() => focusTree());
+  // A pointer click that opens a file hands focus to its editor, so Cmd/Ctrl+F searches the
+  // file. Keyboard activation (detail 0) and folder rows keep focus in the tree.
+  const handleFileRowClick = useStableCallback((event: MouseEvent) => {
+    if (event.detail === 0 || event.button !== 0) return;
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const path = event
+      .composedPath()
+      .find(
+        (node): node is HTMLElement =>
+          node instanceof HTMLElement && node.dataset.itemPath !== undefined,
+      )?.dataset.itemPath;
+    if (path !== undefined && !path.endsWith("/")) focusViewer(path);
+  });
   useEffect(() => {
     const panel = panelRef.current;
     if (panel === null) return;
     panel.addEventListener("keydown", handleShortcut, true);
     panel.addEventListener("click", handleRecursiveClick, true);
+    panel.addEventListener("click", handleFileRowClick);
     panel.addEventListener(FILE_TREE_FOCUS_REQUEST, handleFocusRequest);
     return () => {
       panel.removeEventListener("keydown", handleShortcut, true);
       panel.removeEventListener("click", handleRecursiveClick, true);
+      panel.removeEventListener("click", handleFileRowClick);
       panel.removeEventListener(FILE_TREE_FOCUS_REQUEST, handleFocusRequest);
     };
-  }, [handleFocusRequest, handleRecursiveClick, handleShortcut, panelRef]);
+  }, [handleFileRowClick, handleFocusRequest, handleRecursiveClick, handleShortcut, panelRef]);
   return { searchInputRef, focusTree };
 }

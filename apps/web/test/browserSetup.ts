@@ -35,4 +35,8 @@ await Promise.all(
 // running and can move the mouse after its own afterEach.
 beforeEach(async () => {
   await commands.resetPointer();
+  // Files tree folders persist under this key (src/components/files/fileTreeExpansion.ts), and
+  // every file on a worker page shares its storage, so one test's open folders would reach the
+  // next tree that mounts, including trees inside ChatView or the right panel.
+  localStorage.removeItem("goat.fileTreeExpandedDirectories");
 });

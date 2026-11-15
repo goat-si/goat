@@ -8,6 +8,9 @@ export const ANNOTATION_VOICE_EVENT_CHANNEL = "preview:annotation-voice-event";
 export const ANNOTATION_VOICE_STATE_CHANNEL = "preview:annotation-voice-state";
 export const HUMAN_INPUT_CHANNEL = "preview:human-input";
 export const MOUSE_NAVIGATE_CHANNEL = "preview:mouse-navigate";
+// Sent to the hosting <webview> element (ipc-message). The web app mirrors this
+// literal in HostedBrowserWebview because it cannot import from the desktop app.
+export const POINTER_DOWN_HOST_CHANNEL = "preview:pointer-down";
 export const RECORDING_CURSOR_CHANNEL = "preview:recording-cursor";
 export const RECORDING_POINTER_CHANNEL = "preview:recording-pointer";
 export const RECORDING_KEY_CHANNEL = "preview:recording-key";

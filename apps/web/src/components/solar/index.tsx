@@ -132,6 +132,7 @@ export const CircleCheckIcon = /* @__PURE__ */ solarIcon(solar.checkCircle, "Cir
 export const CircleDashedIcon = /* @__PURE__ */ solarIcon(solar.circleDashed, "CircleDashedIcon");
 export const CircleDotIcon = /* @__PURE__ */ solarIcon(solar.circleDot, "CircleDotIcon");
 export const CircleSlashIcon = /* @__PURE__ */ solarIcon(solar.forbiddenCircle, "CircleSlashIcon");
+export const CircleStopIcon = /* @__PURE__ */ solarIcon(solar.stopCircle, "CircleStopIcon");
 export const CircleXIcon = /* @__PURE__ */ solarIcon(solar.closeCircle, "CircleXIcon");
 export const ClockIcon = /* @__PURE__ */ solarIcon(solar.clockCircle, "ClockIcon");
 export const CloudDownloadIcon = /* @__PURE__ */ solarIcon(

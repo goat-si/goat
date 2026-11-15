@@ -44,12 +44,13 @@ import { noteDraftWorkspacePick } from "~/lib/draftWorkspacePicks";
 import {
   buildMenuItems,
   formatGitActionElapsed,
+  getMenuActionDisabledReason,
   GIT_ACTION_SUCCESS_VISIBLE_MS,
+  hasUsableGitMenuContent,
   type GitActionProgressPresentation,
   type GitActionMenuItem,
   type DefaultBranchConfirmableAction,
   requiresDefaultBranchConfirmation,
-  resolveChangesTotals,
   resolveDefaultBranchActionDialogCopy,
   resolveFeatureBranchUnavailableReason,
   resolveGitActionProgressPresentation,
@@ -103,6 +104,8 @@ import { useQuietThreadProjection, useQuietThreadShell } from "~/state/entities"
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { useEnvironmentQuery } from "~/state/query";
 import { useThreadWorkspaceStatus, workspaceUnavailable } from "./chat/useThreadWorkspaceStatus";
+import { useChangesTotals } from "./useChangesTotals";
+import { requestVcsStatusRefresh } from "./gitStatusRefresh";
 import { serverEnvironment } from "~/state/server";
 import { sourceControlEnvironment } from "~/state/sourceControl";
 import { threadEnvironment } from "~/state/threads";
@@ -133,6 +136,7 @@ interface GitActionsControlProps {
   displayMode?: "toolbar" | "panel";
   compact?: boolean;
   onOpenChanges?: () => void;
+  workspaceMutationId?: string | null;
 }
 
 interface PendingDefaultBranchAction {
@@ -164,21 +168,6 @@ interface InlineGitActionSuccess {
 
 const GIT_STATUS_WINDOW_REFRESH_DEBOUNCE_MS = 250;
 
-type RefreshVcsStatus = (target: {
-  readonly environmentId: ScopedThreadRef["environmentId"];
-  readonly input: { readonly cwd: string };
-}) => Promise<unknown>;
-
-function requestVcsStatusRefresh(
-  refresh: RefreshVcsStatus,
-  environmentId: ScopedThreadRef["environmentId"] | null,
-  cwd: string | null,
-): void {
-  if (environmentId === null || cwd === null) {
-    return;
-  }
-  void refresh({ environmentId, input: { cwd } });
-}
 const RUNNING_SOURCE_CONTROL_ACTIONS = ["runStackedAction", "pull", "publishRepository"] as const;
 
 const PUBLISH_PROVIDER_OPTIONS = sourceControlClients.definitions.map((definition) => ({
@@ -222,67 +211,6 @@ function getPublishProviderReadiness(input: {
     };
   }
   return { ready: true, hint: null };
-}
-
-function getMenuActionDisabledReason({
-  item,
-  gitStatus,
-  isBusy,
-  hasPrimaryRemote,
-}: {
-  item: GitActionMenuItem;
-  gitStatus: VcsStatusResult | null;
-  isBusy: boolean;
-  hasPrimaryRemote: boolean;
-}): string | null {
-  if (!item.disabled) return null;
-  if (isBusy) return "Git action in progress.";
-  if (!gitStatus) return "Git status is unavailable.";
-  const hasBranch = gitStatus.refName !== null;
-  const hasChanges = gitStatus.hasWorkingTreeChanges;
-  const isAhead = gitStatus.aheadCount > 0;
-  const isBehind = gitStatus.behindCount > 0;
-  const terminology = getSourceControlPresentation(gitStatus.sourceControlProvider).terminology;
-
-  if (item.id === "commit") {
-    if (!hasChanges) {
-      return "Worktree is clean. Make changes before committing.";
-    }
-    return "Commit is currently unavailable.";
-  }
-
-  if (item.id === "push") {
-    if (!hasBranch) {
-      return "Detached HEAD: check out a branch before pushing.";
-    }
-    if (hasChanges) {
-      return "Commit or stash local changes before pushing.";
-    }
-    if (isBehind) {
-      return "Branch is behind upstream. Pull/rebase before pushing.";
-    }
-    if (!gitStatus.hasUpstream && !hasPrimaryRemote) {
-      return 'Add an "origin" remote before pushing.';
-    }
-    if (!isAhead) {
-      return "No local commits to push.";
-    }
-    return "Push is currently unavailable.";
-  }
-
-  if (!hasBranch) {
-    return `Detached HEAD: check out a branch before creating a ${terminology.singular}.`;
-  }
-  if (!gitStatus.hasUpstream && !hasPrimaryRemote) {
-    return `Add an "origin" remote before creating a ${terminology.singular}.`;
-  }
-  if ((gitStatus.aheadOfDefaultCount ?? gitStatus.aheadCount) <= 0) {
-    return `No local commits to include in a ${terminology.singular}.`;
-  }
-  if (isBehind) {
-    return `Branch is behind upstream. Pull/rebase before creating a ${terminology.singular}.`;
-  }
-  return `Create ${terminology.singular} is currently unavailable.`;
 }
 
 const COMMIT_DIALOG_TITLE = "Commit changes";
@@ -923,6 +851,7 @@ export default function GitActionsControl({
   displayMode = "toolbar",
   compact = false,
   onOpenChanges,
+  workspaceMutationId = null,
 }: GitActionsControlProps) {
   const sshFetchBack = useSshWorkspaceFetchBack(draftId === undefined ? activeThreadRef : null);
   const isPanel = displayMode === "panel";
@@ -1055,14 +984,18 @@ export default function GitActionsControl({
   const isRepo = gitStatus?.isRepo ?? true;
   const hasPrimaryRemote = gitStatus?.hasPrimaryRemote ?? false;
   const gitStatusForActions = gitStatus;
-  const changesTotals = resolveChangesTotals(gitStatusForActions) ?? {
-    baseRef: null,
-    insertions: 0,
-    deletions: 0,
-  };
+  const changesTotals = useChangesTotals({
+    activeThreadRef,
+    activeEnvironmentId,
+    gitCwd,
+    gitStatus: gitStatusForActions,
+    isPanel,
+    isRepo,
+    workspaceMutationId,
+  });
+
   const allFiles = gitStatusForActions?.workingTree.files ?? [];
-  // Changed-file paths are repository-relative, so they must resolve against
-  // the worktree root from the same status snapshot, not the project cwd.
+  // Repository-relative paths need the worktree root from this status snapshot.
   const workingTreeRoot = gitStatusForActions?.workingTree.rootPath ?? null;
   const selectedFiles = allFiles.filter((f) => !excludedFiles.has(f.path));
   const allSelected = excludedFiles.size === 0;
@@ -1198,7 +1131,7 @@ export default function GitActionsControl({
         !isLocalDraftThread &&
         !readEnvironmentScope(activeEnvironmentId, AuthOrchestrationOperateScope))
     )
-      return;
+      return false;
     const actionStatus = statusOverride ?? gitStatusForActions;
     const actionBranch = actionStatus?.refName ?? null;
     const actionIsDefaultBranch = featureBranch ? false : isDefaultRef;
@@ -1218,7 +1151,7 @@ export default function GitActionsControl({
         action !== "commit_push" &&
         action !== "commit_push_pr"
       ) {
-        return;
+        return false;
       }
       setPendingDefaultBranchAction({
         action,
@@ -1228,7 +1161,7 @@ export default function GitActionsControl({
         ...(onConfirmed ? { onConfirmed } : {}),
         ...(filePaths ? { filePaths } : {}),
       });
-      return;
+      return false;
     }
     onConfirmed?.();
     setInlineSuccess(null);
@@ -1248,7 +1181,7 @@ export default function GitActionsControl({
 
     if (result._tag === "Failure") {
       if (isAtomCommandInterrupted(result)) {
-        return;
+        return false;
       }
 
       const error = squashAtomCommandFailure(result);
@@ -1262,7 +1195,7 @@ export default function GitActionsControl({
           ...(scopedToastData !== undefined ? { data: scopedToastData } : {}),
         }),
       );
-      return;
+      return false;
     }
 
     const actionResult = result.value;
@@ -1273,7 +1206,7 @@ export default function GitActionsControl({
         description: actionResult.toast.description ?? null,
         scopeKey: successScopeKey,
       });
-      return;
+      return true;
     }
     let resultToastId: GitActionToastId | null = null;
     const closeResultToast = () => {
@@ -1335,6 +1268,7 @@ export default function GitActionsControl({
         data: successToastData,
       });
     }
+    return true;
   }
 
   const continuePendingDefaultBranchAction = (featureBranch: boolean) => {
@@ -1353,6 +1287,12 @@ export default function GitActionsControl({
     });
   };
 
+  // Keep a typed message for the retry unless the user already started a new one.
+  const restoreDialogCommitMessageOnFailure = (commitMessage: string) => (committed: boolean) => {
+    if (committed || !commitMessage) return;
+    setDialogCommitMessage((current) => current || commitMessage);
+  };
+
   const runDialogActionOnNewBranch = () => {
     if (!isCommitDialogOpen) return;
     const commitMessage = dialogCommitMessage.trim();
@@ -1368,7 +1308,7 @@ export default function GitActionsControl({
       ...(!allSelected ? { filePaths: selectedFiles.map((f) => f.path) } : {}),
       featureBranch: true,
       skipDefaultBranchPrompt: true,
-    });
+    }).then(restoreDialogCommitMessageOnFailure(commitMessage));
   };
 
   const runQuickAction = () => {
@@ -1464,7 +1404,7 @@ export default function GitActionsControl({
       action: "commit",
       ...(commitMessage ? { commitMessage } : {}),
       ...(!allSelected ? { filePaths: selectedFiles.map((f) => f.path) } : {}),
-    });
+    }).then(restoreDialogCommitMessageOnFailure(commitMessage));
   };
   const openChangedFileInEditor = (filePath: string) => {
     if (workingTreeRoot === null) {
@@ -1494,6 +1434,33 @@ export default function GitActionsControl({
   };
   const canPublishRepository =
     canWriteSourceControl && isRepo && gitStatusForActions !== null && !hasPrimaryRemote;
+  const isDetachedHead = gitStatusForActions?.refName === null;
+  const isCleanAndBehind =
+    gitStatusForActions !== null &&
+    gitStatusForActions.refName !== null &&
+    !gitStatusForActions.hasWorkingTreeChanges &&
+    gitStatusForActions.behindCount > 0 &&
+    gitStatusForActions.aheadCount === 0;
+  const showGitStatusError =
+    Boolean(gitStatusError) &&
+    !workspaceUnavailable(
+      workspaceStatus.data?.state,
+      activeServerThread?.worktreePath ?? null,
+      gitCwd,
+    );
+  const hasGitMenuContent = hasUsableGitMenuContent({
+    menuItems: gitActionMenuItems,
+    gitStatus: gitStatusForActions,
+    isBusy: isGitActionRunning,
+    hasPrimaryRemote,
+    canWriteSourceControl,
+    canPublishRepository,
+    hasNotice: isDetachedHead || isCleanAndBehind || showGitStatusError,
+    fetchBackVisible: sshFetchBack.visible,
+  });
+  // A disabled menu cannot refresh on open, and terminal edits or commits publish no status.
+  const refreshStatusForEmptyMenu = () =>
+    requestVcsStatusRefresh(refreshVcsStatus, activeEnvironmentId, gitCwd);
   const initializeGit = () => {
     void (async () => {
       const result = await initAction.run();
@@ -1599,25 +1566,18 @@ export default function GitActionsControl({
           <MenuItemLabel>Publish repository...</MenuItemLabel>
         </MenuItem>
       ) : null}
-      {gitStatusForActions?.refName === null && (
+      {isDetachedHead && (
         <p className="px-2 py-1.5 text-xs text-warning">
           Detached HEAD: create and check out a branch to enable push and{" "}
           {changeRequestTerminology.singular} actions.
         </p>
       )}
-      {gitStatusForActions &&
-        gitStatusForActions.refName !== null &&
-        !gitStatusForActions.hasWorkingTreeChanges &&
-        gitStatusForActions.behindCount > 0 &&
-        gitStatusForActions.aheadCount === 0 && (
-          <p className="px-2 py-1.5 text-xs text-warning">Behind upstream. Pull/rebase first.</p>
-        )}
-      {gitStatusError &&
-        !workspaceUnavailable(
-          workspaceStatus.data?.state,
-          activeServerThread?.worktreePath ?? null,
-          gitCwd,
-        ) && <p className="px-2 py-1.5 text-xs text-destructive">{gitStatusError}</p>}
+      {isCleanAndBehind && (
+        <p className="px-2 py-1.5 text-xs text-warning">Behind upstream. Pull/rebase first.</p>
+      )}
+      {showGitStatusError && (
+        <p className="px-2 py-1.5 text-xs text-destructive">{gitStatusError}</p>
+      )}
     </>
   );
   if (!gitCwd) return null;
@@ -1690,6 +1650,8 @@ export default function GitActionsControl({
           role="group"
           aria-label="Git actions"
           {...(isPanel ? { ref: panelAnchorRef } : {})}
+          onPointerEnter={hasGitMenuContent ? undefined : refreshStatusForEmptyMenu}
+          onFocus={hasGitMenuContent ? undefined : refreshStatusForEmptyMenu}
           className={cn(
             "shrink-0",
             isPanel && THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS,
@@ -1818,7 +1780,9 @@ export default function GitActionsControl({
                             panel={isPanel}
                           />
                         }
-                        disabled={isGitActionRunning && !sshFetchBack.visible}
+                        disabled={
+                          (isGitActionRunning && !sshFetchBack.visible) || !hasGitMenuContent
+                        }
                       />
                     }
                   >

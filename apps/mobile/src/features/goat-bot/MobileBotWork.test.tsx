@@ -161,7 +161,11 @@ vi.mock("../../lib/appState", () => ({
   useReduceMotionEnabled: () => false,
 }));
 vi.mock("@react-navigation/native", () => ({ useIsFocused: () => true }));
-vi.mock("../../state/entities", () => ({ useThreadShell: () => null }));
+vi.mock("../../state/entities", () => ({
+  useThreadShell: () => null,
+  // No config: the Machines card asks as it does on a server without bot members.
+  useEnvironmentServerConfig: () => null,
+}));
 vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
 // The header's trailing items render as buttons, so tests press Work where iOS shows it.
