@@ -3,8 +3,8 @@ import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapte
 
 export const WAKE_NATIVE_SESSION = "native-thread-claude-wake";
 export const WAKE_TASK_ID = "bdqirlcyw";
-export const WAKE_TOOL_USE_ID = "toolu_01Rs6JNNf5SqHRxpq5DeJHrW";
-export const WAKE_TASK_DESCRIPTION = "Background sleep test";
+const WAKE_TOOL_USE_ID = "toolu_01Rs6JNNf5SqHRxpq5DeJHrW";
+const WAKE_TASK_DESCRIPTION = "Background sleep test";
 export const WAKE_SUMMARY = 'Background command "Background sleep test" completed (exit code 0)';
 export const WAKE_ASSISTANT_TEXT = "WAKE_DONE";
 export const WAKE_RESULT_TEXT = "WAKE_DONE";
