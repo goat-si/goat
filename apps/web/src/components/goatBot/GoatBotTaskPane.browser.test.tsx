@@ -43,7 +43,22 @@ const state = vi.hoisted(() => ({
   baseline: new Set<string>(),
   sources: new Set<string>(),
   chips: new Map<string, unknown>(),
+  attachmentSupport: null as { readonly maxUploadBytes: number | null } | null,
+  released: [] as Array<ReadonlyArray<string>>,
 }));
+// Records which draft files the task's message box gives back.
+vi.mock("./goatBotAttachments", async (original) => {
+  const real = await original<typeof import("./goatBotAttachments")>();
+  return {
+    ...real,
+    releaseGoatBotAttachments: (
+      attachments: Parameters<typeof real.releaseGoatBotAttachments>[0],
+    ) => {
+      state.released.push(attachments.map((attachment) => attachment.name));
+      real.releaseGoatBotAttachments(attachments);
+    },
+  };
+});
 vi.mock("./useGoatBotSource", () => ({
   useGoatBotSource: () => ({ baselineIds: state.baseline, sourceIds: state.sources }),
 }));
@@ -174,7 +189,7 @@ vi.mock("./useGoatBotSession", () => ({
         state.session(id);
         return state.rows;
       },
-      attachmentSupport: null,
+      attachmentSupport: state.attachmentSupport,
       onSendToTask: state.send,
       onRetryInput: () => {},
       onDiscardInput: () => {},
@@ -552,6 +567,8 @@ function setup() {
   state.send.mockClear();
   state.update.mockClear();
   state.session.mockClear();
+  state.attachmentSupport = null;
+  state.released.length = 0;
 }
 
 it("opens the scoped task and acknowledges it, then sends and closes", async () => {
@@ -841,3 +858,51 @@ it("while open or unsaved work sits in the chat behind it, Back to Tasks says so
     .toHaveAccessibleDescription(text);
   await expect.element(screen.getByRole("status")).toHaveTextContent(text);
 });
+
+it.each([
+  { to: "another task of the same bot", member: false, box: "Message GOAT Bot" },
+  { to: "a member's task", member: true, box: "Message Research" },
+])(
+  "regression #3393: a draft and its file in a task's own message box are dropped, not sent, when $to opens in the pane",
+  async ({ member, box }) => {
+    setup();
+    state.attachmentSupport = { maxUploadBytes: 1_000_000 };
+    const research = decodeProfile({
+      botId: "research",
+      role: "member",
+      name: "Research",
+      avatar: null,
+      purpose: "",
+      defaultModelSelection: null,
+      defaultProjectId: null,
+      environmentId: "env",
+      sessionThreadId: "thread-research",
+      createdAt: "2026-11-04T10:00:00.000Z",
+      updatedAt: "2026-11-04T10:00:00.000Z",
+    });
+    // The task route keeps one pane and changes its bot and task with the URL.
+    const pane = (profile: BotProfile | null, taskId: string) => (
+      <GoatBotMemberContext value={profile}>
+        <Pane onClose={() => {}} taskId={taskId} />
+      </GoatBotMemberContext>
+    );
+    await using screen = await render(pane(null, "task-1"));
+    await userEvent.type(screen.getByRole("textbox", { name: "Message GOAT Bot" }), "ship it");
+    const input = screen.container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error("expected the file picker");
+    await userEvent.upload(input, new File(["launch"], "checklist.txt", { type: "text/plain" }));
+    await expect
+      .element(screen.getByRole("list", { name: "Attachments" }))
+      .toHaveTextContent("checklist.txt");
+    await screen.rerender(pane(member ? research : null, "task-2"));
+    const field = screen.getByRole("textbox", { name: box });
+    await expect.element(field).toHaveValue("");
+    await expect.element(screen.getByRole("list", { name: "Attachments" })).not.toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("button", { name: "Send", includeHidden: true }))
+      .toBeDisabled();
+    expect(state.released).toContainEqual(["checklist.txt"]);
+    await userEvent.type(field, "{Enter}");
+    expect(state.send).not.toHaveBeenCalled();
+  },
+);

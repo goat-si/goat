@@ -12,6 +12,7 @@ import { createModelSelection } from "@goat/shared/model";
 import { beforeEach, vi } from "vite-plus/test";
 import { makeCursorTextGeneration } from "./textGeneration.ts";
 import * as CursorSdk from "./CursorSdk.ts";
+import { loadCursorSdk, loadCursorSqlite } from "./sdk.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
@@ -200,12 +201,113 @@ beforeEach(() => {
 });
 
 describe("CursorTextGeneration", () => {
+  it.effect("refuses text generation when the Cursor agent transport setting differs", () =>
+    Effect.gen(function* () {
+      const generation = yield* makeCursorTextGeneration(cursorSettings, { CURSOR_API_KEY: "key" });
+      const input = {
+        cwd: process.cwd(),
+        branch: "test",
+        stagedSummary: "M file",
+        stagedPatch: "diff",
+        modelSelection: createModelSelection(ProviderInstanceId.make("cursor"), "auto"),
+      };
+      const error = yield* generation.generateCommitMessage(input).pipe(Effect.flip);
+      expect(error.detail).toContain("All Cursor agents share one transport");
+      expect(cursorSdkMock.create).not.toHaveBeenCalled();
+    }).pipe(
+      Effect.provide(
+        Layer.succeed(CursorSdk.CursorSdk, {
+          load: loadCursorSdk,
+          loadSqlite: loadCursorSqlite,
+          agentTransportRefusal: () =>
+            Effect.succeed(CursorSdk.CURSOR_AGENT_TRANSPORT_RESTART_MESSAGE),
+        }).pipe(Layer.provideMerge(Layer.merge(layerFs, Path.layer))),
+      ),
+    ),
+  );
+
+  it.effect("refuses text generation when the selected backend differs", () =>
+    Effect.gen(function* () {
+      const backend = process.env.CURSOR_BACKEND_URL;
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (backend === undefined) delete process.env.CURSOR_BACKEND_URL;
+          else process.env.CURSOR_BACKEND_URL = backend;
+        }),
+      );
+      process.env.CURSOR_BACKEND_URL = "https://api2.cursor.sh";
+      const environment = { CURSOR_API_KEY: "key", CURSOR_BACKEND_URL: "https://custom.invalid" };
+      const generation = yield* makeCursorTextGeneration(cursorSettings, environment);
+      const input = {
+        cwd: process.cwd(),
+        branch: "test",
+        stagedSummary: "M file",
+        stagedPatch: "diff",
+        modelSelection: createModelSelection(ProviderInstanceId.make("cursor"), "auto"),
+      };
+      expect((yield* generation.generateCommitMessage(input).pipe(Effect.result))._tag).toBe(
+        "Failure",
+      );
+      expect(cursorSdkMock.create).not.toHaveBeenCalled();
+      environment.CURSOR_BACKEND_URL = "https://api2.cursor.sh/";
+      yield* generation.generateCommitMessage(input);
+      expect(cursorSdkMock.create).toHaveBeenCalledTimes(1);
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect("a text generation request reads its environment once", () =>
+    Effect.gen(function* () {
+      // Every way to read the environment object: enumeration, a property, `in`, a descriptor.
+      let reads = 0;
+      const environment = new Proxy<NodeJS.ProcessEnv>(
+        { CURSOR_API_KEY: "key" },
+        {
+          ownKeys: (object) => {
+            reads++;
+            return Reflect.ownKeys(object);
+          },
+          get: (object, key) => {
+            reads++;
+            return Reflect.get(object, key);
+          },
+          has: (object, key) => {
+            reads++;
+            return Reflect.has(object, key);
+          },
+          getOwnPropertyDescriptor: (object, key) => {
+            reads++;
+            return Reflect.getOwnPropertyDescriptor(object, key);
+          },
+        },
+      );
+      const beforeCopy = reads;
+      void { ...environment };
+      const oneCopy = reads - beforeCopy;
+      const generation = yield* makeCursorTextGeneration(
+        cursorSettings,
+        environment,
+        undefined,
+        undefined,
+        undefined,
+        Effect.sync(() => environment),
+      );
+      const before = reads;
+      yield* generation.generateCommitMessage({
+        cwd: process.cwd(),
+        branch: "test",
+        stagedSummary: "M file",
+        stagedPatch: "diff",
+        modelSelection: createModelSelection(ProviderInstanceId.make("cursor"), "auto"),
+      });
+      // One copy gives the request its key and both backend and transport guards.
+      expect(reads - before).toBe(oneCopy);
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.effect("resolves the browser credential for every request after an account change", () =>
     Effect.gen(function* () {
       let apiKey = "first-browser-key";
-      const generation = yield* makeCursorTextGeneration(
-        cursorSettings,
-        {},
+      const generation = yield* makeCursorTextGeneration(cursorSettings, {}, () =>
         Effect.sync(() => apiKey),
       );
       const input = {

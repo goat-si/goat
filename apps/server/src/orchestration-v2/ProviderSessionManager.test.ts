@@ -5450,6 +5450,7 @@ it.effect.each(turnStartMemoryCases)(
               Layer.succeed(EventSink.EventSinkV2, sink),
               Layer.succeed(ProjectionStore.ProjectionStoreV2, projections),
               Layer.succeed(IdAllocator.IdAllocatorV2, ids),
+              Layer.mock(TurnItemPositionStore.TurnItemPositionStoreV2)({}),
               Layer.succeed(ProviderSessionManager.ProviderSessionManagerV2, manager),
               ContextHandoffService.layer.pipe(
                 Layer.provide(Layer.succeed(IdAllocator.IdAllocatorV2, ids)),
@@ -5493,6 +5494,7 @@ it.effect.each(turnStartMemoryCases)(
                     }),
                     Layer.succeed(EventSink.EventSinkV2, sink),
                     Layer.succeed(IdAllocator.IdAllocatorV2, ids),
+                    ThreadCommandExecutor.layer,
                     Layer.mock(CheckpointService.CheckpointServiceV2)({
                       captureBaseline: () => Effect.void,
                     }),

@@ -114,6 +114,11 @@ export function GoatBotTaskPane({
   });
   const memberDeleted = member?.state === "deleted";
   const canSend = !memberDeleted && canSendToGoatBot(session.availability, session.canOperate);
+  // A draft belongs to the task and bot it was written for; opening another one empties the box.
+  const destination = `${environmentId}:${
+    member?.sessionThreadId ??
+    (session.availability.kind === "ready" ? session.availability.bot.threadId : "")
+  }:${taskId}`;
   const timelineRows = session.rowsForTask(taskId);
   const sourceIdentity = session.source?.identity ?? null;
   const [local, setLocal] = useState<{
@@ -407,6 +412,7 @@ export function GoatBotTaskPane({
         </GoatBotStepsReader>
       </GoatBotStepsProvider>
       <GoatBotComposer
+        key={destination}
         disabled={!canSend}
         botName={botName}
         placeholder={

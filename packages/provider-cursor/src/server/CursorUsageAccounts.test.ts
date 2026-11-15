@@ -38,7 +38,8 @@ describe("CursorUsageAccounts", () => {
         return yield* accounts.scan({
           instances: ["one", "two", "three", "four"].map((key) => ({
             instanceId: ProviderInstanceId.make(`cursor-${key}`),
-            environment: { CURSOR_API_KEY: `${key}-key` },
+            config: {},
+            environment: [{ name: "CURSOR_API_KEY", value: `${key}-key`, sensitive: true }],
           })),
           keychainUsageEnabled: false,
           windowStartMs: 0,

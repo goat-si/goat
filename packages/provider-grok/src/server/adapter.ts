@@ -1,3 +1,5 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { resolveCommandPath } from "@goat/shared/shell";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import {
   XAiPromptFailureText,
@@ -124,6 +126,7 @@ export interface GrokAdapterV2Options {
   readonly instanceId: Parameters<typeof makeAcpAdapterV2>[0]["instanceId"];
   readonly settings: GrokSettings;
   readonly environment: NodeJS.ProcessEnv;
+  readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   /** Read at each launch so a key saved after this adapter was created reaches the CLI. */
   readonly readStoredApiKey?: Effect.Effect<string | undefined>;
   readonly hostPlatform: NodeJS.Platform;
@@ -235,6 +238,11 @@ export function grokLaunchRuntimeMode(
     : "approval-required";
 }
 
+interface GrokSessionLaunch {
+  readonly environment: NodeJS.ProcessEnv;
+  readonly executable: string;
+}
+
 /** The capability id the composer stores Grok's reasoning effort under. */
 const GROK_REASONING_EFFORT_OPTION_ID = "reasoningEffort";
 
@@ -341,12 +349,13 @@ export function makeGrokAcpAdapterFlavor(
     supportsCompaction: true,
     // Grok expands only a leading `/name`, while the `$` picker inserts `$name` from the
     // `grok inspect` catalog. Ask that catalog again so other `$` text is left alone.
-    rewriteUserText: (text, turnInput) => {
+    rewriteUserText: (text, turnInput, session) => {
       const mention = leadingGrokSkillMention(text);
       if (mention === undefined) return Effect.succeed(text);
+      const launch = session?.launch as GrokSessionLaunch | undefined;
       return discoverGrokSkills(
-        options.settings,
-        options.environment,
+        launch ? { binaryPath: launch.executable } : options.settings,
+        launch?.environment ?? session?.environment ?? options.environment,
         turnInput.runtimePolicy.cwd ?? undefined,
       ).pipe(
         Effect.map((skills) =>
@@ -373,19 +382,35 @@ export function makeGrokAcpAdapterFlavor(
     },
     applyModelSelection: applyGrokSessionModelSelection,
     ownedModelOptionIds: [GROK_REASONING_EFFORT_OPTION_ID],
+    resolveSessionLaunch: Effect.fn("GrokAdapter.resolveSessionLaunch")(function* (
+      environment,
+      sessionEnvironment = environment,
+    ) {
+      const stored = options.readStoredApiKey ? yield* options.readStoredApiKey : undefined;
+      const command = options.settings.binaryPath || "grok";
+      const executable = yield* resolveCommandPath(command, {
+        env: applyStoredGrokApiKey(environment, stored),
+      }).pipe(
+        Effect.provide(NodeServices.layer),
+        Effect.provideService(HostProcess.Platform, options.hostPlatform),
+      );
+      return {
+        environment: applyStoredGrokApiKey(sessionEnvironment, stored),
+        executable: executable ?? command,
+      };
+    }),
     makeRuntime:
       options.makeRuntime ??
-      (({ runtimePolicy, ...input }) =>
-        Effect.gen(function* () {
-          const stored = options.readStoredApiKey ? yield* options.readStoredApiKey : undefined;
-          return yield* makeGrokAcpRuntime({
-            ...input,
-            interruptPromptOnCancel: input.interruptPromptOnCancel ?? false,
-            grokSettings: options.settings,
-            environment: applyStoredGrokApiKey(options.environment, stored),
-            runtimeMode: grokLaunchRuntimeMode(runtimePolicy),
-          });
-        })),
+      (({ runtimePolicy, ...input }) => {
+        const launch = input.sessionLaunch as GrokSessionLaunch;
+        return makeGrokAcpRuntime({
+          ...input,
+          interruptPromptOnCancel: input.interruptPromptOnCancel ?? false,
+          grokSettings: { ...options.settings, binaryPath: launch.executable },
+          environment: launch.environment,
+          runtimeMode: grokLaunchRuntimeMode(runtimePolicy),
+        });
+      }),
     // Auto prompts represent classifier refusals and must reach the user.
     permissionDisposition: (policy, request) =>
       grokLaunchRuntimeMode(policy) === "auto" ? "ask" : acpPermissionDisposition(policy, request),
@@ -408,12 +433,17 @@ export function makeGrokAcpAdapterFlavor(
     extractSubagentUpdate: extractXAiAcpSubagentUpdate,
     extractSubagentEndNotice: extractXAiAcpSubagentEndNotice,
     normalizeToolCall: normalizeXAiAcpToolCallState,
-    extractProposedPlanMarkdown: (toolCall) =>
-      extractGrokPlanMarkdownFromToolCallData(toolCall.data, {
+    extractProposedPlanMarkdown: (toolCall, session) => {
+      const environment = session === undefined ? options.environment : (session.environment ?? {});
+      return extractGrokPlanMarkdownFromToolCallData(toolCall.data, {
         platform: options.hostPlatform,
-        environment: options.environment,
-        homeDirectory,
-      }),
+        environment,
+        homeDirectory:
+          session === undefined
+            ? homeDirectory
+            : (environment.HOME ?? environment.USERPROFILE ?? ""),
+      });
+    },
     extractBackgroundTaskId: extractXAiMonitorTaskId,
     isBackgroundCommandTool: (toolCall) => xAiBackgroundShellTaskId(toolCall) !== undefined,
     extractBackgroundToolMutation: extractXAiAcpBackgroundToolMutation,
@@ -436,6 +466,7 @@ export const makeGrokAdapterV2 = Effect.fn("makeGrokAdapterV2")(function* (
     instanceId: options.instanceId,
     flavor: makeGrokAcpAdapterFlavor(options, yield* HostProcess.HomeDirectory),
     selfInvocation: options.selfInvocation,
+    currentEnvironment: options.currentEnvironment ?? Effect.succeed(options.environment),
     ...(options.nativeLogging === undefined ? {} : { nativeLogging: options.nativeLogging }),
     ...(options.continuationRequests === undefined
       ? {}
@@ -461,6 +492,9 @@ export const GrokAdapterV2Driver: ProviderAdapterDriver<GrokSettings, GrokAdapte
   create: Effect.fn("GrokAdapterV2Driver.create")(
     function* (input: ProviderAdapterDriverCreateInput<GrokSettings>) {
       const hostEnvironment = yield* HostProcess.Environment;
+      const currentEnvironment = Effect.suspend(() =>
+        mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+      ).pipe(Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory));
       const hostPlatform = yield* HostProcess.Platform;
       const credentials = yield* (yield* ProviderHost.ProviderHost).credentials(
         GROK_CREDENTIAL_NAMESPACE,
@@ -473,7 +507,8 @@ export const GrokAdapterV2Driver: ProviderAdapterDriver<GrokSettings, GrokAdapte
       return yield* makeGrokAdapterV2({
         instanceId: input.instanceId,
         settings: { ...input.config, enabled: input.enabled },
-        environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+        environment: { ...(yield* currentEnvironment) },
+        currentEnvironment,
         readStoredApiKey: readStoredGrokApiKey(credentials),
         hostPlatform,
         selfInvocation,

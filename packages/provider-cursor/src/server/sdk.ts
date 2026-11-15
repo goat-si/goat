@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The SDK must load from disk beside its Webpack chunks.
 import * as NodeModule from "node:module";
+import { bindSdkBackend, currentSdkBackend } from "./sdkBackend.ts";
 
 // createRequire preserves adjacent Webpack chunks and native modules in bundled/SEA builds.
 const requireCursorSdk = NodeModule.createRequire(import.meta.url);
@@ -8,7 +9,9 @@ let sqlite: typeof import("@cursor/sdk/sqlite") | undefined;
 
 export function loadCursorSdk(): typeof import("@cursor/sdk") {
   if (sdk !== undefined) return sdk;
+  const backend = currentSdkBackend();
   sdk = requireCursorSdk("@cursor/sdk") as typeof import("@cursor/sdk");
+  bindSdkBackend(backend);
   return sdk;
 }
 

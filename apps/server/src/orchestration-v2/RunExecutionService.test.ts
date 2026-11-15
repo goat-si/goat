@@ -1,3 +1,4 @@
+import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { rootAppThread } from "./RunExecutionService.compactCases.ts";
 import { registerCompactUnsupportedCase } from "./RunExecutionService.compactCases.ts";
 import { memoryRun, memoryMessage } from "./RunMemoryFixtures.testkit.ts";
@@ -901,7 +902,7 @@ it.effect("passes the thread's MCP app context to the provider under a safe key"
             }),
             layerTurnItemPositionsTest,
             mockEventSink({}),
-            IdAllocator.layer,
+            Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
             Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
               ingestNormalized: () => Effect.succeed([]),
             }),
@@ -936,7 +937,7 @@ it.effect("fails the run when its ownership check cannot be read before calling 
                 Effect.as({ committed: true, storedEvents: [] }),
               ),
           }),
-          IdAllocator.layer,
+          Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
             ingestNormalized: () => Effect.succeed([]),
           }),
@@ -1178,7 +1179,7 @@ it.effect("starts the provider when checkpoint baseline capture fails", () =>
                 { events: input.events, effects: input.effects },
               ]).pipe(Effect.as([])),
           }),
-          IdAllocator.layer,
+          Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
             ingestNormalized: () => Effect.succeed([]),
           }),
@@ -1301,7 +1302,7 @@ it.effect.each(["failure", "interruption", "stale-attempt", "start-guard"] as co
                   return { committed: true, storedEvents: [] };
                 }),
             }),
-            IdAllocator.layer,
+            Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
             Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
               ingestNormalized: () => Effect.succeed([]),
             }),
@@ -1471,7 +1472,7 @@ it.effect("ingests new member threads of an owned child after the root turn term
               }),
             writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
           }),
-          IdAllocator.layer,
+          Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
             ingestNormalized: (input) =>
               Effect.gen(function* () {
@@ -1716,7 +1717,7 @@ it.effect("ends a nested native subagent and its thread when the root run is int
                 [],
               ),
           }),
-          IdAllocator.layer,
+          Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
             ingestNormalized: () => Effect.succeed([]),
           }),
@@ -2129,7 +2130,7 @@ it.effect(
                 }),
               writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
             }),
-            IdAllocator.layer,
+            Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
             Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
               ingestNormalized: (input) =>
                 Ref.update(ingested, (current) => [...current, input.event]).pipe(Effect.as([])),
@@ -3310,7 +3311,7 @@ export function captureRootRunTermination(input: {
                 return { committed: true, storedEvents: [] };
               }),
           }),
-          IdAllocator.layer,
+          Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
             ingestNormalized: input.ingestNormalized ?? (() => Effect.succeed([])),
           }),
@@ -3499,7 +3500,7 @@ function runBackgroundItemScenario(
               }),
             writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
           }),
-          IdAllocator.layer,
+          Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
             ingestNormalized: (input) =>
               Effect.gen(function* () {
@@ -3746,7 +3747,7 @@ it.effect.each(["accepted", "rejected", "skipped", "compact"] as const)(
               writeWithEffects: () => Effect.succeed([]),
               writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
             }),
-            IdAllocator.layer,
+            Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
             Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
               ingestNormalized: () => Effect.succeed([]),
             }),
