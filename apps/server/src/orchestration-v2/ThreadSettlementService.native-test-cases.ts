@@ -232,6 +232,8 @@ export function settlementNativeSubagentTests({
             expect(
               (yield* Ref.get(fixture.commands)).slice(3).map((command) => command.threadId),
             ).toEqual([busy.id]);
+            expect(yield* Ref.get(fixture.branchCalls)).toEqual([]);
+            expect(yield* Ref.get(fixture.summaryCalls)).toEqual([]);
           }).pipe(Effect.provide(fixture.layer));
         }).pipe(Effect.provide(projectionStoreSql)),
       ),
