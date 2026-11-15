@@ -65,7 +65,6 @@ export function GoatBotWorkPanel({
   routineLanding = null,
   homeReturn = null,
   onHomeReturnConsumed,
-  showRunInChat,
 }: {
   environmentId: EnvironmentId;
   threadId: ThreadId;
@@ -93,8 +92,6 @@ export function GoatBotWorkPanel({
     | undefined;
   /** Back's return has had its one focus attempt; the parent forgets it. */
   onHomeReturnConsumed?: (() => void) | undefined;
-  /** Shows a routine run's reply in the chat; returns nothing when the chat can't show it. */
-  showRunInChat?: ((inputId: string) => (() => void) | undefined) | undefined;
 }) {
   const [tab, setTab] = useState<Tab>("Home");
   // Back's return applies once; the row stays marked until a peek opens.
@@ -413,7 +410,6 @@ export function GoatBotWorkPanel({
                 onRoutineFocused={() => setRoutineFocus(null)}
                 routineMayFocus={landingMayFocus}
                 docked={onShowChat === undefined}
-                showRunInChat={showRunInChat}
               />
             </GoatBotSectionCard>
             <GoatBotSectionCard title="Machines">

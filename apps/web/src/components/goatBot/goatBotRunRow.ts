@@ -1,5 +1,14 @@
 import { goatBotItemReaders, type GoatBotRow } from "@goat/client-runtime/goatBot";
 import type { OrchestrationV2ProjectedTurnItem } from "@goat/contracts";
+import { createContext } from "react";
+
+/**
+ * The chat's Show in chat for a routine run's input, or nothing when the chat can't show it. A
+ * context, so a streamed update reaches only an open run popover and never redraws Home's rows.
+ */
+export const GoatBotRunInChat = createContext<
+  ((inputId: string) => (() => void) | undefined) | undefined
+>(undefined);
 
 /**
  * The chat row of a routine run's reply: the first shown bot row whose item answered the run's

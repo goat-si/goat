@@ -31,38 +31,44 @@ vi.mock("../settings/MemorySettings", () => ({ MemorySettingsEntry: () => null }
 vi.mock("./GoatBotTaskChip", () => ({ GoatBotTaskChip: () => null }));
 vi.mock("./GoatBotFileViewer", () => ({ GoatBotFileViewer: () => <p>Open file</p> }));
 vi.mock("~/hooks/useMediaQuery", () => ({ useMediaQuery: () => state.narrow }));
-// Home stands in as the run popover's Show in chat and a Library file row.
-vi.mock("./GoatBotWorkPanel", () => ({
-  GoatBotWorkPanel: (props: {
-    showRunInChat?: (inputId: string) => (() => void) | undefined;
+// Home stands in as the run popover's Show in chat, read from the chat's context, and a Library
+// file row.
+vi.mock("./GoatBotWorkPanel", async () => {
+  const { useContext } = await import("react");
+  const { GoatBotRunInChat } = await import("./goatBotRunRow");
+  function GoatBotWorkPanel(props: {
     onOpenFile: (file: { relativePath: string; size: number; modifiedAt: string }) => void;
-  }) => (
-    <div>
-      <button
-        type="button"
-        onClick={() => {
-          const show = props.showRunInChat?.("in-1");
-          state.offered.push(show !== undefined);
-          show?.();
-        }}
-      >
-        Show run
-      </button>
-      <button
-        type="button"
-        onClick={() =>
-          props.onOpenFile({
-            relativePath: "notes.md",
-            size: 1,
-            modifiedAt: "2026-11-14T09:00:00Z",
-          })
-        }
-      >
-        Open notes
-      </button>
-    </div>
-  ),
-}));
+  }) {
+    const showRunInChat = useContext(GoatBotRunInChat);
+    return (
+      <div>
+        <button
+          type="button"
+          onClick={() => {
+            const show = showRunInChat?.("in-1");
+            state.offered.push(show !== undefined);
+            show?.();
+          }}
+        >
+          Show run
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            props.onOpenFile({
+              relativePath: "notes.md",
+              size: 1,
+              modifiedAt: "2026-11-14T09:00:00Z",
+            })
+          }
+        >
+          Open notes
+        </button>
+      </div>
+    );
+  }
+  return { GoatBotWorkPanel };
+});
 
 import { GoatBotChatView } from "./GoatBotChatView";
 import { GoatBotChatHidden } from "./goatBotLayout";

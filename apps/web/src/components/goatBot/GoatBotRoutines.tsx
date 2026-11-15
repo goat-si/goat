@@ -61,8 +61,6 @@ export function GoatBotRoutines(props: {
   readonly routineMayFocus?: (() => boolean) | undefined;
   /** Home sits beside the chat, where a task hiding the chat also hides Home. */
   readonly docked?: boolean | undefined;
-  /** Shows a run's reply in the chat; returns nothing when the chat can't show it. */
-  readonly showRunInChat?: ((inputId: string) => (() => void) | undefined) | undefined;
 }) {
   const nowMinute = useNowMinute();
   const botName = useGoatBotName();
@@ -137,7 +135,6 @@ export function GoatBotRoutines(props: {
           botThreadId={props.threadId}
           botName={botName}
           docked={props.docked ?? false}
-          showRunInChat={props.showRunInChat}
           onFocused={row.id === props.focusRoutineId ? props.onRoutineFocused : undefined}
           mayFocus={props.routineMayFocus}
         />
@@ -183,7 +180,6 @@ function RoutineRow({
   botThreadId,
   botName,
   docked,
-  showRunInChat,
   onFocused,
   mayFocus,
 }: {
@@ -193,7 +189,6 @@ function RoutineRow({
   botThreadId: ThreadId;
   botName: string;
   docked: boolean;
-  showRunInChat: ((inputId: string) => (() => void) | undefined) | undefined;
   /** Present while this row should take focus; called once it has, or once it may not. */
   onFocused?: (() => void) | undefined;
   mayFocus?: (() => boolean) | undefined;
@@ -291,7 +286,6 @@ function RoutineRow({
           title={row.title}
           botName={botName}
           docked={docked}
-          showRunInChat={showRunInChat}
         />
       )}
       {error === null ? null : (

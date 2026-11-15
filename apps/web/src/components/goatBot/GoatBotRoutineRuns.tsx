@@ -17,6 +17,7 @@ import { timestampLocale } from "~/timestampFormat";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { GoatBotChatHidden } from "./goatBotLayout";
+import { GoatBotRunInChat } from "./goatBotRunRow";
 
 const RUNS_SHOWN = 7;
 const NO_DETAILS = "Details for this run aren't available.";
@@ -50,7 +51,6 @@ export function GoatBotRoutineRuns(props: {
   readonly title: string;
   readonly botName: string;
   readonly docked: boolean;
-  readonly showRunInChat?: ((inputId: string) => (() => void) | undefined) | undefined;
 }) {
   const timeOptions = useRunTimeOptions();
   const [openId, setOpenId] = useRunPopoverOpen(props.docked);
@@ -61,19 +61,6 @@ export function GoatBotRoutineRuns(props: {
   if (dots.length === 0) return null;
   // A run pushed out of the seven closes its popover.
   const open = dots.find((dot) => dot.firingId === openId);
-  const conversation = open?.conversation;
-  const show =
-    conversation !== undefined && conversation.threadId === props.botThreadId
-      ? props.showRunInChat?.(conversation.inputId)
-      : undefined;
-  const showInChat =
-    show === undefined
-      ? undefined
-      : () => {
-          setToChatId(open?.firingId ?? null);
-          setOpenId(null);
-          show();
-        };
   return (
     <Toolbar.Root aria-label={`Recent runs of ${props.title}`} className="-ms-2 flex flex-wrap">
       {dots.map((dot) => (
@@ -105,7 +92,9 @@ export function GoatBotRoutineRuns(props: {
               task={props.task}
               botName={props.botName}
               timeOptions={timeOptions}
-              onShowInChat={dot === open ? showInChat : undefined}
+              botThreadId={props.botThreadId}
+              setToChatId={setToChatId}
+              setOpenId={setOpenId}
             />
           </PopoverPopup>
         </Popover>
@@ -137,9 +126,18 @@ function RunDetails(props: {
   readonly task: RunTask;
   readonly botName: string;
   readonly timeOptions: TimeOptions;
-  readonly onShowInChat: (() => void) | undefined;
+  readonly botThreadId: ThreadId;
+  readonly setToChatId: (firingId: RoutineRunDot["firingId"]) => void;
+  readonly setOpenId: (firingId: null) => void;
 }) {
   const { dot } = props;
+  // Read here, the one place a streamed chat update reaches, so it never redraws the strip.
+  const runInChat = useContext(GoatBotRunInChat);
+  const conversation = dot.conversation;
+  const show =
+    conversation !== undefined && conversation.threadId === props.botThreadId
+      ? runInChat?.(conversation.inputId)
+      : undefined;
   const state = routineRunState(dot);
   const inputId = dot.conversation?.inputId;
   const quiet = dot.quiet === true && dot.status === "completed";
@@ -161,9 +159,17 @@ function RunDetails(props: {
       <p className="line-clamp-6 text-sm whitespace-pre-line text-muted-foreground">
         {runBody({ ...props, state, quiet, inputId, read })}
       </p>
-      {props.onShowInChat === undefined ? null : (
+      {show === undefined ? null : (
         <div className="flex justify-end">
-          <Button size="xs" variant="outline" onClick={props.onShowInChat}>
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => {
+              props.setToChatId(dot.firingId);
+              props.setOpenId(null);
+              show();
+            }}
+          >
             Show in chat
           </Button>
         </div>

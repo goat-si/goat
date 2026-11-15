@@ -71,6 +71,7 @@ vi.mock("~/timestampFormat", async (original) => ({
 }));
 import { GoatBotRoutines } from "./GoatBotRoutines";
 import { GoatBotChatHidden } from "./goatBotLayout";
+import { GoatBotRunInChat } from "./goatBotRunRow";
 import { navigationBlocked } from "~/lib/navigationHolds";
 
 const environmentId = EnvironmentId.make("env");
@@ -554,7 +555,7 @@ it("Show in chat is offered only for a run the chat can show, and closes the pop
   const showRunInChat = vi.fn((inputId: string) => (inputId === "in-7" ? undefined : show));
   await using screen = await render(
     <>
-      {routines(tasks, { docked: true, showRunInChat })}
+      <GoatBotRunInChat value={showRunInChat}>{routines(tasks, { docked: true })}</GoatBotRunInChat>
       <button type="button" id="reply-row">
         Reply row
       </button>

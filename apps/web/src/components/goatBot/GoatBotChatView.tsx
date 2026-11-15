@@ -20,7 +20,12 @@ import { cn } from "~/lib/utils";
 import { Sheet, SheetPopup, SheetTitle } from "../ui/sheet";
 import { GoatBotFileViewer } from "./GoatBotFileViewer";
 import { GoatBotOpenFileContext } from "./GoatBotReplyFiles";
-import { centerGoatBotRow, focusGoatBotRow, goatBotRunReplyRow } from "./goatBotRunRow";
+import {
+  centerGoatBotRow,
+  focusGoatBotRow,
+  GoatBotRunInChat,
+  goatBotRunReplyRow,
+} from "./goatBotRunRow";
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 import { useGoatBotRoutineLanding } from "./useGoatBotRoutineLanding";
 
@@ -660,28 +665,29 @@ function GoatBotChatViewContent({
           className="flex shrink-0 border-l border-border"
           style={{ width: GOAT_BOT_HOME_DOCKED_WIDTH }}
         >
-          <GoatBotWorkPanel
-            key={homeKey}
-            environmentId={bot.environmentId}
-            threadId={bot.threadId}
-            onDraft={onDraft}
-            notesRefreshKey={notesRefreshKey}
-            onClose={() => {
-              setHomeReturn(null);
-              setPanelOpen(false);
-              // The chip says whether the panel is open, so closing hands control back to it.
-              homeRef.current?.focus();
-            }}
-            peekRows={rowsForTask}
-            peekSource={source}
-            onRetryInput={onRetryInput}
-            openFile={shownFile?.file.relativePath ?? null}
-            onOpenFile={openFile}
-            routineLanding={routineLanding.landing}
-            homeReturn={homeReturn}
-            onHomeReturnConsumed={() => setHomeReturn(null)}
-            showRunInChat={showRunInChat}
-          />
+          <GoatBotRunInChat value={showRunInChat}>
+            <GoatBotWorkPanel
+              key={homeKey}
+              environmentId={bot.environmentId}
+              threadId={bot.threadId}
+              onDraft={onDraft}
+              notesRefreshKey={notesRefreshKey}
+              onClose={() => {
+                setHomeReturn(null);
+                setPanelOpen(false);
+                // The chip says whether the panel is open, so closing hands control back to it.
+                homeRef.current?.focus();
+              }}
+              peekRows={rowsForTask}
+              peekSource={source}
+              onRetryInput={onRetryInput}
+              openFile={shownFile?.file.relativePath ?? null}
+              onOpenFile={openFile}
+              routineLanding={routineLanding.landing}
+              homeReturn={homeReturn}
+              onHomeReturnConsumed={() => setHomeReturn(null)}
+            />
+          </GoatBotRunInChat>
         </aside>
       )}
       {bot && narrow && (
@@ -699,26 +705,27 @@ function GoatBotChatViewContent({
             className="max-sm:w-full max-sm:max-w-none"
           >
             <SheetTitle className="sr-only">{title} work</SheetTitle>
-            <GoatBotWorkPanel
-              key={homeKey}
-              environmentId={bot.environmentId}
-              threadId={bot.threadId}
-              onDraft={onDraft}
-              notesRefreshKey={notesRefreshKey}
-              onShowChat={() => {
-                setHomeReturn(null);
-                setPanelOpen(false);
-              }}
-              peekRows={rowsForTask}
-              peekSource={source}
-              onRetryInput={onRetryInput}
-              openFile={shownFile?.file.relativePath ?? null}
-              onOpenFile={openFile}
-              routineLanding={routineLanding.landing}
-              homeReturn={homeReturn}
-              onHomeReturnConsumed={() => setHomeReturn(null)}
-              showRunInChat={showRunInChat}
-            />
+            <GoatBotRunInChat value={showRunInChat}>
+              <GoatBotWorkPanel
+                key={homeKey}
+                environmentId={bot.environmentId}
+                threadId={bot.threadId}
+                onDraft={onDraft}
+                notesRefreshKey={notesRefreshKey}
+                onShowChat={() => {
+                  setHomeReturn(null);
+                  setPanelOpen(false);
+                }}
+                peekRows={rowsForTask}
+                peekSource={source}
+                onRetryInput={onRetryInput}
+                openFile={shownFile?.file.relativePath ?? null}
+                onOpenFile={openFile}
+                routineLanding={routineLanding.landing}
+                homeReturn={homeReturn}
+                onHomeReturnConsumed={() => setHomeReturn(null)}
+              />
+            </GoatBotRunInChat>
           </SheetPopup>
         </Sheet>
       )}
