@@ -211,7 +211,9 @@ const make = Effect.gen(function* () {
     const cutoff = DateTime.formatIso(
       DateTime.subtractDuration(clock, Duration.days(SETTLED_LINK_DAYS)),
     );
-    yield* sql`DELETE FROM scheduled_task_channel_inputs WHERE state = 'settled' AND settled_at < ${cutoff}`.pipe(
+    // A link lives as long as its run row, so a routine's history keeps the input each run sent.
+    yield* sql`DELETE FROM scheduled_task_channel_inputs WHERE state = 'settled' AND settled_at < ${cutoff}
+      AND NOT EXISTS (SELECT 1 FROM scheduled_task_runs r WHERE r.firing_id = scheduled_task_channel_inputs.firing_id)`.pipe(
       Effect.mapError(persistence("prune routine links")),
     );
     return settled;

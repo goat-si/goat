@@ -286,9 +286,7 @@ export const withWebhookService = <A, E>(
     return yield* Effect.gen(function* () {
       const service = yield* ScheduledTaskService.ScheduledTaskService;
       const sql = yield* SqlClient.SqlClient;
-      const runs = yield* Effect.gen(function* () {
-        return yield* Runs.ScheduledTaskRuns;
-      }).pipe(Effect.provide(Runs.layer));
+      const runs = yield* Runs.ScheduledTaskRuns;
       return yield* Effect.gen(function* () {
         const sink = yield* EventSink.EventSinkV2;
         const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -296,7 +294,13 @@ export const withWebhookService = <A, E>(
       }).pipe(Effect.provide(layerSink));
     }).pipe(
       Effect.provide(
-        Layer.fresh(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))),
+        // One fresh build holds both, so runs is the service's own and its changes reach the list.
+        Layer.fresh(
+          Layer.merge(
+            ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies)),
+            Runs.layer,
+          ),
+        ),
       ),
     );
   }).pipe(

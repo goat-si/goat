@@ -311,6 +311,11 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       yield* reviveAfterKill;
       yield* previousBuildRefuses;
       assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), UPSTREAM_80S.slice(1));
+      const expected = yield* fresh;
+      assert.deepStrictEqual(yield* onRestart(reopen, snapshot), {
+        ...expected,
+        ledger: expected.ledger.filter(([id]) => id !== 30),
+      });
     }).pipe(provide);
   });
 
@@ -318,29 +323,53 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
     [
       "a shifted ledger that lost row 61",
       Effect.asVoid(runMigrations()),
-      61,
-      "PullRequestReviewGuides",
+      [61, 61],
+      "61_PullRequestReviewGuides",
+      157,
     ],
     [
       "a ledger from before the shift that lost row 72",
       seedOldGoatLedger(147),
-      72,
-      "WaitingLinkRequestIndex",
+      [72, 72],
+      "72_WaitingLinkRequestIndex",
+      147,
+    ],
+    [
+      "a ledger from before the shift that lost row 79, just below GOAT's old block",
+      seedOldGoatLedger(147),
+      [79, 79],
+      "79_DelegatedRecoveryIndexes",
+      147,
+    ],
+    [
+      "a ledger from before the shift that lost rows 78 and 79",
+      seedOldGoatLedger(147),
+      [78, 79],
+      "78_DropOrchestrationEventCorrelationIndex",
+      147,
+    ],
+    [
+      "a ledger with 1-54 and GOAT's rows at 80-147",
+      seedOldGoatLedger(147),
+      [55, 79],
+      "55_OrchestrationV2",
+      147,
     ],
   ] as const)(
     "refuses %s before writing anything, as a skipped migration",
-    ([, seed, lost, lostName]) => {
+    ([, seed, [from, to], skipped, highest]) => {
       const { provide } = database();
       return Effect.gen(function* () {
         yield* seed;
         const sql = yield* SqlClient.SqlClient;
-        yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = ${lost}`;
+        yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id BETWEEN ${from} AND ${to}`;
         const before = yield* history;
         const tables = yield* schema;
         const exit = yield* Effect.exit(runMigrations());
         const failure = exit._tag === "Failure" ? String(Cause.squash(exit.cause)) : "started";
         assert.include(failure, "would skip required schema migrations");
-        assert.include(failure, `${lost}_${lostName} (recorded: nothing)`);
+        assert.include(failure, `${skipped} (recorded: nothing)`);
+        assert.include(failure, `highest recorded id (${highest})`);
         assert.deepStrictEqual(yield* history, before);
         assert.deepStrictEqual(yield* schema, tables);
       }).pipe(provide);

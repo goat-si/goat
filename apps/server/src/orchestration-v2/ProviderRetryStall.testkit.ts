@@ -92,7 +92,7 @@ export function registerRetryStallCheck({
           retryable: true,
         });
         const retry = { attempt: 2, maxAttempts: 5, retryDelayMs: 60_000 };
-        const retryItem = (status: "running" | "interrupted") =>
+        const retryItem = (status: "running" | "interrupted" | "completed") =>
           makeProviderRetryTurnItem({
             driver: CODEX_DRIVER,
             threadId,
@@ -211,6 +211,112 @@ export function registerRetryStallCheck({
           retryStartedAt: now,
           threadDisposition: "reusable",
         });
+      });
+
+      yield* effect.pipe(
+        Effect.provide(
+          layerTest({
+            state,
+            idleTimeoutMs: 60 * 60_000,
+            interruptTurn: Deferred.succeed(interrupted, undefined).pipe(Effect.asVoid),
+          }),
+        ),
+      );
+    }),
+  );
+
+  it.effect("ProviderSessionManagerV2 leaves a turn alone once its provider retry settles", () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const interrupted = yield* Deferred.make<void>();
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("thread-provider-session-manager-retry-stall");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        const providerThread = makeProviderThread({
+          idAllocator,
+          threadId,
+          providerSessionId,
+          now,
+        });
+        yield* eventSink.write({
+          events: [
+            yield* makeThreadCreatedEvent({ idAllocator, threadId, now }),
+            {
+              id: yield* idAllocator.allocate.event({ threadId }),
+              type: "provider-thread.updated",
+              threadId,
+              occurredAt: now,
+              payload: providerThread,
+            },
+          ],
+        });
+        const runtime = yield* manager.open({
+          threadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const subscribeEvents = runtime.subscribeEvents;
+        assert.isDefined(subscribeEvents);
+        const subscription = yield* subscribeEvents;
+        const published = yield* Queue.unbounded<void>();
+        // The pump updates the stall watch before it publishes a turn item.
+        const _collected = yield* subscription.events.pipe(
+          Stream.tap((event) =>
+            event.type === "turn_item.updated" ? Queue.offer(published, undefined) : Effect.void,
+          ),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+        const adapterQueue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
+        assert.isDefined(adapterQueue);
+        const providerTurnId = idAllocator.derive.providerTurn({
+          driver: CODEX_DRIVER,
+          nativeTurnId: "retry-stall-turn",
+        });
+        const failure = makeProviderFailure({
+          message: "Rate limit exceeded",
+          code: "rate_limited",
+          class: "usage_limit",
+          retryable: true,
+        });
+        const retry = { attempt: 2, maxAttempts: 5, retryDelayMs: 60_000 };
+        const retryItem = (status: "running" | "interrupted" | "completed") =>
+          makeProviderRetryTurnItem({
+            driver: CODEX_DRIVER,
+            threadId,
+            runId: null,
+            nodeId: null,
+            providerThreadId: providerThread.id,
+            providerTurnId,
+            itemOrdinal: 3,
+            failure,
+            retry,
+            status,
+            startedAt: now,
+            updatedAt: now,
+          });
+        yield* Queue.offer(adapterQueue, {
+          type: "turn_item.updated",
+          driver: CODEX_DRIVER,
+          turnItem: retryItem("running"),
+        });
+        yield* Queue.take(published);
+        yield* Queue.offer(adapterQueue, {
+          type: "turn_item.updated",
+          driver: CODEX_DRIVER,
+          turnItem: retryItem("completed"),
+        });
+        yield* Queue.take(published);
+        yield* TestClock.adjust("16 minutes");
+        assert.equal((yield* Ref.get(state)).interruptCount, 0);
       });
 
       yield* effect.pipe(
