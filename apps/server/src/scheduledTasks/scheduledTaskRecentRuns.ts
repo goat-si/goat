@@ -33,8 +33,8 @@ interface RecentRunRow {
  */
 export const MAX_STORED_RUN_CHARS = 1024;
 
-// Only the fields the history sends, with any status: a later server may have stored one this
-// server does not know, and the wire carries it as a string.
+// Only the fields the history sends, with any status, so an older firing a later server stored
+// stays. The latest firing is still decoded strictly by list() as lastRun, as before.
 const StoredRun = Schema.Struct({
   firingId: CommandId,
   dispatchStatus: Schema.String,
