@@ -191,4 +191,77 @@ describe("CursorSdk agent transport", () => {
       assert.lengthOf(warnings, warns ? 1 : 0);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
+
+  it.effect(
+    "refuses an environment whose configuration selects another transport than it loaded",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-cursor-cli-config-" });
+        const home = path.join(root, "home");
+        const other = path.join(root, "other");
+        yield* fileSystem.makeDirectory(other, { recursive: true });
+        yield* fileSystem.writeFileString(path.join(other, "cli-config.json"), http1);
+        yield* Effect.gen(function* () {
+          const sdk = Context.get(yield* Layer.build(CursorSdk.layer), CursorSdk.CursorSdk);
+          const refusal = sdk.agentTransportRefusal;
+          assert.isDefined(refusal);
+          assert.isUndefined(yield* refusal({}));
+          assert.strictEqual(
+            yield* refusal({ CURSOR_CONFIG_DIR: other }),
+            CursorSdk.CURSOR_AGENT_TRANSPORT_RESTART_MESSAGE,
+          );
+          // The host's own file changes after GOAT loaded it.
+          yield* fileSystem.makeDirectory(path.join(home, ".cursor"), { recursive: true });
+          yield* fileSystem.writeFileString(path.join(home, ".cursor", "cli-config.json"), http1);
+          assert.strictEqual(yield* refusal({}), CursorSdk.CURSOR_AGENT_TRANSPORT_RESTART_MESSAGE);
+        }).pipe(Effect.scoped, withHost({}, home));
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect.each([
+    { name: "an instance HOME override", sessionHome: "instance" },
+    { name: "a host HOME that changed after GOAT started", sessionHome: "moved" },
+  ])("checks the transport configured under the session's HOME for $name", ({ sessionHome }) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-cursor-cli-config-" });
+      const sessionCursor = path.join(root, sessionHome, ".cursor");
+      yield* fileSystem.makeDirectory(sessionCursor, { recursive: true });
+      yield* fileSystem.writeFileString(path.join(sessionCursor, "cli-config.json"), http1);
+      yield* Effect.gen(function* () {
+        const sdk = Context.get(yield* Layer.build(CursorSdk.layer), CursorSdk.CursorSdk);
+        const home = path.join(root, sessionHome);
+        const environment =
+          HostProcess.Platform.defaultValue() === "win32" ? { USERPROFILE: home } : { HOME: home };
+        assert.strictEqual(
+          yield* sdk.agentTransportRefusal!(environment),
+          CursorSdk.CURSOR_AGENT_TRANSPORT_RESTART_MESSAGE,
+        );
+      }).pipe(Effect.scoped, withHost({}, path.join(root, "server")));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("refuses a session whose transport configuration cannot be read", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-cursor-cli-config-" });
+      const damaged = path.join(root, "damaged");
+      yield* fileSystem.makeDirectory(damaged, { recursive: true });
+      yield* fileSystem.writeFileString(path.join(damaged, "cli-config.json"), "{");
+      yield* Effect.gen(function* () {
+        const sdk = Context.get(yield* Layer.build(CursorSdk.layer), CursorSdk.CursorSdk);
+        const refusal = yield* sdk.agentTransportRefusal!({ CURSOR_CONFIG_DIR: damaged });
+        assert.include(refusal, path.join(damaged, "cli-config.json"));
+        assert.include(refusal, "Fix or remove that file");
+        // A missing file is the default transport, which this process uses.
+        assert.isUndefined(
+          yield* sdk.agentTransportRefusal!({ CURSOR_CONFIG_DIR: path.join(root, "absent") }),
+        );
+      }).pipe(Effect.scoped, withHost({}, path.join(root, "server")));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
 });

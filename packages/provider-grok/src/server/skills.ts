@@ -100,6 +100,7 @@ export const discoverGrokSkills = Effect.fn("discoverGrokSkills")(function* (
       ChildProcess.make(spawnCommand.command, spawnCommand.args, {
         ...(cwd ? { cwd } : {}),
         env: probeEnvironment,
+        extendEnv: false,
         shell: spawnCommand.shell,
       }),
     );

@@ -1,4 +1,3 @@
-import type { ProviderInstanceId } from "@goat/contracts";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import type { ProviderUsageScan } from "@goat/provider-core/server/usage";
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
@@ -28,7 +27,8 @@ import {
   type CursorCredentialSource,
 } from "./accountCache.ts";
 import * as CursorAccountReader from "./CursorAccountReader.ts";
-import { readStoredCursorApiKey } from "./credentialStore.ts";
+import { classifyScanInstance, scanExclusionNote, type ScanInstance } from "./scanCredentials.ts";
+import { exchangesAtCursor } from "./apiKey.ts";
 
 const CURSOR_ACCOUNT_READ_ERROR = "Cursor account usage could not be read.";
 
@@ -40,10 +40,8 @@ export class CursorUsageAccounts extends Context.Service<
   CursorUsageAccounts,
   {
     readonly scan: (input: {
-      readonly instances: ReadonlyArray<{
-        readonly instanceId: ProviderInstanceId;
-        readonly environment: NodeJS.ProcessEnv;
-      }>;
+      /** Each instance's config and own variables, from one settings snapshot. */
+      readonly instances: ReadonlyArray<ScanInstance>;
       readonly keychainUsageEnabled: boolean;
       readonly windowStartMs: number;
       readonly retentionCutoffMs: number;
@@ -273,15 +271,16 @@ const make = Effect.gen(function* () {
       retentionCutoffMs,
       awaitRefresh,
     }) {
+      // One copy of the host decides every instance, the server's own destinations and its login.
+      const server = { ...hostEnvironment };
       const home = yield* HostProcess.HomeDirectory;
-      const userHome =
-        (platform === "win32" ? hostEnvironment["USERPROFILE"] : hostEnvironment["HOME"]) || home;
-      const configHome = hostEnvironment["XDG_CONFIG_HOME"]?.trim();
+      const userHome = (platform === "win32" ? server["USERPROFILE"] : server["HOME"]) || home;
+      const configHome = server["XDG_CONFIG_HOME"]?.trim();
       const cursorHome =
         platform === "darwin"
           ? path.join(userHome, "Library", "Application Support")
           : platform === "win32"
-            ? hostEnvironment["APPDATA"] || path.join(userHome, "AppData", "Roaming")
+            ? server["APPDATA"] || path.join(userHome, "AppData", "Roaming")
             : configHome && path.isAbsolute(configHome)
               ? configHome
               : path.join(userHome, ".config");
@@ -289,16 +288,22 @@ const make = Effect.gen(function* () {
         platform === "darwin"
           ? path.join(userHome, ".cursor", "auth.json")
           : path.join(cursorHome, platform === "win32" ? "Cursor" : "cursor", "auth.json");
-      // GOAT's Cursor sign-in and CURSOR_API_KEY name the account the agent uses, so they win.
-      const apiKeys = yield* Effect.forEach(instances, ({ instanceId, environment }) =>
-        environment.CURSOR_API_KEY?.trim()
-          ? Effect.succeed(environment.CURSOR_API_KEY.trim())
-          : readStoredCursorApiKey(instanceId).pipe(
-              Effect.provideService(ProviderHost.ProviderHost, host),
-              Effect.orElseSucceed(() => undefined),
-            ),
+      const decided = yield* Effect.forEach(instances, (instance) =>
+        classifyScanInstance(instance, server).pipe(
+          Effect.provideService(ProviderHost.ProviderHost, host),
+          Effect.map((credential) => [instance.instanceId, credential] as const),
+        ),
       );
-      const uniqueApiKeys = [...new Set(apiKeys.filter((apiKey) => apiKey !== undefined))];
+      const exclusions = scanExclusionNote(decided);
+      const note: ReadonlyArray<ProviderUsageScan> =
+        exclusions === undefined ? [] : [{ dir: authPath, files: null, message: exclusions }];
+      const uniqueApiKeys = [
+        ...new Set(
+          decided.flatMap(([, credential]) =>
+            typeof credential === "object" && "apiKey" in credential ? [credential.apiKey] : [],
+          ),
+        ),
+      ];
       if (uniqueApiKeys.length > 0) {
         const sources: ReadonlyArray<ProviderUsageScan | null> = yield* Effect.forEach(
           uniqueApiKeys,
@@ -325,11 +330,27 @@ const make = Effect.gen(function* () {
             byAccount.set(source.dir, source);
           }
         }
-        return [...byAccount.values()];
+        return [...byAccount.values(), ...note];
       }
-      const credentialStore = hostEnvironment["AGENT_CLI_CREDENTIAL_STORE"];
+      // The server's own login stands in only when every instance is "none"; it belongs to the
+      // server, so the server must be on Cursor's backend and usage endpoint as well.
+      if (note.length > 0) return note;
+      if (
+        !exchangesAtCursor(server.CURSOR_BACKEND_URL) ||
+        !exchangesAtCursor(server.CURSOR_API_ENDPOINT?.trim() || undefined)
+      ) {
+        return [
+          {
+            dir: authPath,
+            files: null,
+            message:
+              "Cursor account history is unavailable: this server's Cursor backend or usage endpoint is not Cursor's, so its Cursor login is not read.",
+          },
+        ];
+      }
+      const credentialStore = server["AGENT_CLI_CREDENTIAL_STORE"];
       const loginUnavailable =
-        Boolean(hostEnvironment["CURSOR_AUTH_TOKEN"]?.trim()) || credentialStore === "memory";
+        Boolean(server["CURSOR_AUTH_TOKEN"]?.trim()) || credentialStore === "memory";
       const useKeychain = platform === "darwin" && credentialStore !== "file";
       if (useKeychain && !loginUnavailable && !keychainUsageEnabled) {
         return [

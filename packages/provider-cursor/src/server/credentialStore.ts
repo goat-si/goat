@@ -92,8 +92,11 @@ export const makeCursorCredentialStore = Effect.fn("makeCursorCredentialStore")(
   return { store, binding: credentials.binding };
 });
 
-/** The unexpired API key from this instance's GOAT sign-in, read without loading the SDK. */
-export const readStoredCursorApiKey = Effect.fn("readStoredCursorApiKey")(function* (
+/**
+ * This instance's GOAT sign-in, expired or not, and the backend it was made against, read without
+ * the SDK. Fails when a stored sign-in cannot be read; `undefined` means there is none.
+ */
+export const readStoredCursorSignIn = Effect.fn("readStoredCursorSignIn")(function* (
   instanceId: ProviderInstanceId,
 ) {
   const stored = yield* (yield* (yield* ProviderHost.ProviderHost).credentials(
@@ -101,12 +104,10 @@ export const readStoredCursorApiKey = Effect.fn("readStoredCursorApiKey")(functi
     instanceId,
   )).get;
   if (Option.isNone(stored)) return undefined;
-  const credentials = yield* decodeCredentials(new TextDecoder().decode(stored.value)).pipe(
-    Effect.option,
+  const { apiKey, apiKeyExpiresAtMs, backendUrl } = yield* decodeCredentials(
+    new TextDecoder().decode(stored.value),
   );
-  if (Option.isNone(credentials)) return undefined;
-  const { apiKey, apiKeyExpiresAtMs } = credentials.value;
-  return apiKeyExpiresAtMs === undefined || apiKeyExpiresAtMs > (yield* Clock.currentTimeMillis)
-    ? apiKey
-    : undefined;
+  const expired =
+    apiKeyExpiresAtMs !== undefined && apiKeyExpiresAtMs <= (yield* Clock.currentTimeMillis);
+  return { apiKey, backendUrl, expired };
 });
