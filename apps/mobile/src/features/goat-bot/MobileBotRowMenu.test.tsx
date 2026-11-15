@@ -33,7 +33,23 @@ vi.mock("react-native", () => ({
     </button>
   ),
   Text: (props: { children?: ReactNode }) => <span>{props.children}</span>,
+  // A context menu stands for the long press a Pressable reports.
+  Pressable: (props: {
+    accessibilityLabel?: string;
+    children?: ReactNode;
+    onPress?: () => void;
+    onLongPress?: () => void;
+  }) => (
+    <button
+      aria-label={props.accessibilityLabel}
+      onClick={props.onPress}
+      onContextMenu={props.onLongPress}
+    >
+      {props.children}
+    </button>
+  ),
 }));
+vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 const menu = vi.hoisted(() => (kind: string) => (props: MenuProps) => {
   native.menus.push({ kind, actions: props.actions, longPress: props.shouldOpenOnLongPress });
   native.press = (id) => props.onPressAction?.({ nativeEvent: { event: id } });
@@ -56,7 +72,10 @@ vi.mock("@react-native-menu/menu", async () => {
 });
 vi.mock("../../components/ui/Menu", () => ({ Menu: menu("ios") }));
 
+import { BotThreadRow } from "@goat/contracts";
+import * as Schema from "effect/Schema";
 import { MobileBotRowMenu } from "./MobileBotRowMenu";
+import { MobileBotWorkRow } from "./MobileBotWorkRow";
 
 const actions = [
   { id: "work", title: "Show work" },
@@ -145,5 +164,36 @@ it("on iOS wraps the row in a menu set to open on long press, given the button's
   const buttonMenu = native.menus.find((menu) => menu.longPress === false);
   expect(rowMenu?.actions).toEqual(actions);
   expect(buttonMenu?.actions).toEqual(actions);
+  await view.unmount();
+});
+
+it("on Android a long press of a Home work row opens its actions, through the row's own control", async () => {
+  const row = Schema.decodeUnknownSync(BotThreadRow)({
+    kind: "task",
+    task: { taskId: "task-1", title: "Task", status: "running", updatedAt: "2026-11-11T02:00:00.000Z" },
+    view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: "2026-11-11T02:00:00.000Z",
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+  }) as Extract<BotThreadRow, { kind: "task" }>;
+  const view = await show(
+    "android",
+    <MobileBotWorkRow
+      row={row}
+      section="running"
+      chips={new Map()}
+      ticking={false}
+      openable
+      actions={[]}
+      onAction={() => {}}
+      onPress={() => {}}
+    />,
+  );
+  native.shown = 0;
+  const control = view.container.querySelector('[aria-label^="Task, "]');
+  await act(async () =>
+    control?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })),
+  );
+  expect(native.shown).toBe(1);
   await view.unmount();
 });

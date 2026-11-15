@@ -760,6 +760,23 @@ it("keeps an offline task listed, but it neither opens nor offers task actions",
   expect(reads()).toHaveLength(sent);
 });
 
+it("keeps an offline row's pull requests on screen and in its name, while the row stays closed", async () => {
+  state.rows = [
+    decode({
+      ...task("t1", "Fix the slow test"),
+      pullRequests: [{ repository: "goat-si/goat", number: 42, state: "merged", watching: false }],
+    }),
+  ];
+  await open();
+  expect(home()?.textContent).toContain("#42 Merged");
+  state.connected = false;
+  await open();
+  expect(home()?.textContent).toContain("#42 Merged");
+  const row = button("Fix the slow test");
+  expect(row?.getAttribute("aria-label")).toContain("Pull request goat-si/goat#42, merged");
+  expect(row?.hasAttribute("disabled")).toBe(true);
+});
+
 it("with no bot computer saved, keeps nothing once that computer disconnects and none is connected", async () => {
   state.botRef = null;
   state.rows = [task("t1", "Fix the build")];
