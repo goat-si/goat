@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import {
   ChannelInputId,
   CommandId,
+  MessageId,
   SCHEDULED_TASK_RECENT_RUN_BYTES,
   SCHEDULED_TASK_RECENT_RUN_ROUTINES,
   SCHEDULED_TASK_RECENT_RUNS,
@@ -352,6 +353,40 @@ it.effect("two routines firing in the same second each keep their own run", () =
       assert.deepStrictEqual(firings, [[[true, "dispatching"]], [[true, "dispatching"]]]);
     }),
   ),
+);
+
+it.effect(
+  "two firings of one routine at the same instant are listed by firing id, not admission order",
+  () =>
+    withWebhookService((fixture) =>
+      Effect.gen(function* () {
+        const routine = yield* saveRoutine(fixture);
+        const at = yield* now;
+        const admit = (key: string) =>
+          Effect.gen(function* () {
+            const current = (yield* fixture.service.list()).tasks.find(
+              (task) => task.id === routine.id,
+            );
+            const firingId = CommandId.make(`scheduled-task:${routine.id}:${key}`);
+            yield* fixture.runs.begin({
+              task: current ?? routine,
+              firingId,
+              messageId: MessageId.make(`scheduled-task-routine:${routine.id}:${key}`),
+              requestedAt: at,
+              triggerKind: "manual",
+              webhookDeliveryId: null,
+            });
+            yield* refuse(fixture, firingId);
+            return firingId;
+          });
+        const admittedFirst = yield* admit("b");
+        const admittedSecond = yield* admit("a");
+        assert.deepStrictEqual(
+          historyOf(yield* fixture.service.list(), routine.id)?.map((run) => run.firingId),
+          [admittedFirst, admittedSecond],
+        );
+      }),
+    ),
 );
 
 it.effect("only the first fifty GOAT Bot routines carry a history", () =>
