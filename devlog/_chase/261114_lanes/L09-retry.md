@@ -4,6 +4,8 @@ Lane branch: `chase/t3-261114-server-misc-retry`, head 381797e99e, from origin/c
 
 Merged into #3397 at 17af62cba1 (2026-11-16): lane head bc66da99d9 (round 3).
 
+Merged into #3397 at 6eb4322bf5 (2026-11-16): lane head 731b575aeb (follow-up, 49b8e72219).
+
 Count: 10 ported, 1 landed in L03m, 5 real deferrals, 0 not attempted (16 upstream commits), plus the 3376c8da92 partial row. Round 3 also ports 77f40aff37 (#3176:195, deferred on becc7d3510).
 
 ## Decisions
