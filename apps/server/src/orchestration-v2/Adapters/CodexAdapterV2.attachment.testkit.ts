@@ -347,6 +347,8 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     interrupted: Queue.take(interrupts),
     startTurn,
     terminal: Queue.take(terminals),
+    /** A terminal already reported, without waiting for one. */
+    reportedTerminal: Queue.poll(terminals),
     goalTokens: Queue.take(goalTokens),
     goalUpdates: Stream.fromQueue(goalTokens),
     subagentStatuses,
