@@ -99,9 +99,6 @@ import {
   type OrchestrationV2Command,
   type OrchestrationV2ShellSnapshot,
   type ApplicationStoredEvent,
-  type ProjectEntriesFailure,
-  type ProjectFileFailure,
-  type ProjectFileOperation,
   type ProjectId,
   type ProjectMutation,
   type ProviderInstanceId,
@@ -320,14 +317,13 @@ import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
-import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
+import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import {
   filesystemBrowseFailureContext,
-  unexpectedCompatibilityError,
-} from "./workspace/filesystemBrowseFailure.ts";
-import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
-import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
+  projectEntriesFailureContext,
+  projectFileFailureContext,
+} from "./wsWorkspaceFailures.ts";
 import { resolveAvailableWorktreesDirectory } from "./worktreesDirectory.ts";
 import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 import * as AutomationHold from "./automationHold.ts";
@@ -411,107 +407,6 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
     { concurrency: 2 },
   );
 });
-
-function projectEntriesFailureContext(error: WorkspaceEntries.WorkspaceEntriesError): {
-  readonly failure: ProjectEntriesFailure;
-  readonly normalizedCwd?: string;
-  readonly timeout?: string;
-  readonly detail?: string;
-} {
-  switch (error._tag) {
-    case "WorkspaceRootNotExistsError":
-      return {
-        failure: "workspace_root_not_found",
-        normalizedCwd: error.normalizedWorkspaceRoot,
-      };
-    case "WorkspaceRootCreateFailedError":
-      return {
-        failure: "workspace_root_create_failed",
-        normalizedCwd: error.normalizedWorkspaceRoot,
-      };
-    case "WorkspaceRootStatFailedError":
-      return {
-        failure: "workspace_root_stat_failed",
-        normalizedCwd: error.normalizedWorkspaceRoot,
-        detail: error.phase,
-      };
-    case "WorkspaceRootNotDirectoryError":
-      return {
-        failure: "workspace_root_not_directory",
-        normalizedCwd: error.normalizedWorkspaceRoot,
-      };
-    case "WorkspaceEntriesReadDirectoryError":
-      return {
-        failure: "directory_list_failed",
-        ...(error.cwd !== undefined ? { normalizedCwd: error.cwd } : {}),
-        detail: error.message,
-      };
-    case "WorkspaceSearchIndexCreateFailed":
-      return {
-        failure: "search_index_create_failed",
-        normalizedCwd: error.cwd,
-        detail: error.reason,
-      };
-    case "WorkspaceSearchIndexScanTimedOut":
-      return {
-        failure: "search_index_scan_timed_out",
-        normalizedCwd: error.cwd,
-        timeout: error.timeout,
-      };
-    case "WorkspaceSearchIndexSearchFailed":
-      return {
-        failure: "search_index_search_failed",
-        normalizedCwd: error.cwd,
-        detail: error.reason,
-      };
-    default:
-      return unexpectedCompatibilityError(error);
-  }
-}
-
-function projectFileFailureContext(
-  error:
-    | WorkspaceFileSystem.WorkspaceFileSystemError
-    | WorkspacePaths.WorkspacePathOutsideRootError
-    | KnownWorkspaces.UnknownWorkspaceError,
-): {
-  readonly failure: ProjectFileFailure;
-  readonly resolvedPath?: string;
-  readonly resolvedWorkspaceRoot?: string;
-  readonly operation?: ProjectFileOperation;
-  readonly operationPath?: string;
-} {
-  switch (error._tag) {
-    case "WorkspacePathOutsideRootError":
-    case "UnknownWorkspaceError":
-      return { failure: "workspace_path_outside_root" };
-    case "WorkspaceFileSystemOperationError":
-      return {
-        failure: "operation_failed",
-        resolvedPath: error.resolvedPath,
-        operation: error.operation,
-        operationPath: error.operationPath,
-      };
-    case "WorkspaceFilePathEscapeError":
-      return {
-        failure: "resolved_path_outside_root",
-        resolvedPath: error.resolvedPath,
-        resolvedWorkspaceRoot: error.resolvedWorkspaceRoot,
-      };
-    case "WorkspacePathNotFileError":
-      return { failure: "path_not_file", resolvedPath: error.resolvedPath };
-    case "WorkspaceFileChangedOnDiskError":
-      return { failure: "changed_on_disk" };
-    case "WorkspaceFileDeletedOnDiskError":
-      return { failure: "deleted_on_disk" };
-    case "WorkspaceUnsupportedTextFormatError":
-      return { failure: "unsupported_text_format" };
-    case "WorkspaceBinaryFileError":
-      return { failure: "binary_file", resolvedPath: error.resolvedPath };
-    default:
-      return unexpectedCompatibilityError(error);
-  }
-}
 
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
@@ -1334,6 +1229,7 @@ export const layerWsRpc = (
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
       const directEndpoints = yield* DirectEndpoints.DirectEndpoints;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
+      const clientWorktrees = yield* GitWorkflowService.makeClientWorktrees;
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
@@ -2070,10 +1966,9 @@ export const layerWsRpc = (
             ),
           ),
         [ORCHESTRATION_V2_WS_METHODS.getWorktreeThreadIds]: (input) =>
-          readOmittableShellRows(
-            { worktreePath: input.worktreePath },
-            "Failed to load the worktree's threads",
-          ).pipe(Effect.map(({ threads }) => ({ threadIds: threads.map((thread) => thread.id) }))),
+          readOmittableShellRows(input, "Failed to load the worktree's threads").pipe(
+            clientWorktrees.withManaged(input.worktreePath),
+          ),
         [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: (input) =>
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(
@@ -2422,6 +2317,7 @@ export const layerWsRpc = (
               ? providerRegistry.refreshWorkspaceSnapshot({
                   instanceId: input.instanceId,
                   cwd: input.cwd,
+                  scanCwd: yield* projectService.workspaceScanDirectory(input.cwd),
                   fresh: input.fresh === true,
                 })
               : input.reloadSecrets === true && providerRegistry.reloadSecretsAndRefresh
@@ -2885,6 +2781,8 @@ export const layerWsRpc = (
               ),
             ),
         [WS_METHODS.pullRequestsSubscribeRefreshes]: () => pullRequests.subscribeRefreshes,
+        [WS_METHODS.pullRequestsSubscribeLinkedThreadRefreshes]: () =>
+          pullRequests.subscribeLinkedThreadRefreshes,
         [WS_METHODS.pullRequestsReviewerCandidates]: (input) =>
           withPullRequestViewer(input, pullRequests.reviewerCandidates(input)),
         [WS_METHODS.pullRequestsRequestReviewers]: (input) =>
@@ -2911,12 +2809,13 @@ export const layerWsRpc = (
                 })
                 .pipe(
                   Effect.asVoid,
-                  Effect.mapError(
-                    (cause) =>
-                      new OrchestrationDispatchCommandError({
-                        message: "Failed to create clone project.",
-                        cause,
-                      }),
+                  Effect.mapError((cause) =>
+                    cause._tag === "ProjectConflictError"
+                      ? cause
+                      : new OrchestrationDispatchCommandError({
+                          message: "Failed to create clone project.",
+                          cause,
+                        }),
                   ),
                 ),
             onCloned: (project) =>
@@ -3045,7 +2944,7 @@ export const layerWsRpc = (
                 new ProjectMutationError({
                   commandId: mutation.commandId,
                   message:
-                    cause._tag === "ProjectNotEmptyError"
+                    cause._tag === "ProjectNotEmptyError" || cause._tag === "ProjectInvalidError"
                       ? cause.message
                       : "Failed to mutate project.",
                   cause,
@@ -3221,7 +3120,7 @@ export const layerWsRpc = (
         [WS_METHODS.vcsCreateWorktree]: (input) =>
           gitWorkflow.createWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
         [WS_METHODS.vcsRemoveWorktree]: (input) =>
-          gitWorkflow.removeWorktree(input).pipe(
+          clientWorktrees.remove(input).pipe(
             Effect.tap(() => refreshGitStatus(input.cwd)),
             // Subscribers of the removed checkout learn it is no longer a repository.
             Effect.tap(() =>
@@ -3569,7 +3468,6 @@ export const layer = Layer.unwrap(
               // Handler-context reporters see only request defects, not server-wide defects.
               Layer.provide(DefectReporter.layer),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
-              Layer.provide(AgentSessionScanner.layer),
               Layer.provide(Layer.merge(ProviderMaintenanceRunner.layer, starPromptLayer)),
               Layer.provide(
                 Layer.mergeAll(

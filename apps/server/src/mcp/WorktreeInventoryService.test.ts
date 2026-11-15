@@ -76,7 +76,8 @@ const fixture = Effect.gen(function* () {
   // Runs while a sweep lists the projects, before any worktree is checked.
   let duringScan: Effect.Effect<void> = Effect.void;
 
-  const addWorktree = (branch: string, at = worktreesDir + "/" + branch) =>
+  // GOAT places worktrees at <worktrees folder>/<repository>/<name>.
+  const addWorktree = (branch: string, at = worktreesDir + "/repo/" + branch) =>
     run(repo, ["worktree", "add", "-b", branch, at]).pipe(Effect.as(at));
   const commit = (cwd: string) =>
     run(cwd, ["commit", "--allow-empty", "-m", "work"]).pipe(
@@ -273,6 +274,53 @@ describe("WorktreeInventoryService", () => {
       expect(unmanaged.notes[0]).toContain("outside-thread");
       expect(unmanaged.notes[0]).toContain("will not recreate");
     }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.live(
+    "a thread pointing at a checkout outside GOAT's worktrees folder never gets it removed",
+    () =>
+      Effect.gen(function* () {
+        const { service, fs, root, addWorktree, setThreads } = yield* fixture;
+        // An imported session records the user's own linked worktree as its thread's checkout.
+        const own = yield* addWorktree("imported", root + "/user-checkout");
+        setThreads([{ id: "imported-thread", worktreePath: own, branch: "imported" }]);
+
+        const message = yield* refusal(
+          service.remove({ threadId: ThreadId.make("imported-thread"), force: true }),
+        );
+        expect(message).toContain("outside GOAT's worktrees folder");
+        const swept = yield* service.cleanup({ dryRun: false });
+        expect(swept.removed).toEqual([]);
+        expect(swept.kept.find((entry) => entry.path === own)?.reason).toContain(
+          "outside GOAT's worktrees folder",
+        );
+        expect(yield* fs.exists(own)).toBe(true);
+      }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.live(
+    "only <worktrees folder>/<repository>/<name> counts as GOAT's, as turn start and clients judge it",
+    () =>
+      Effect.gen(function* () {
+        const { service, fs, addWorktree, setThreads } = yield* fixture;
+        const worktreesDir = yield* fs.realPath((yield* ServerConfig.ServerConfig).worktreesDir);
+        const shallow = yield* addWorktree("shallow", worktreesDir + "/shallow");
+        const deep = yield* addWorktree("deep", worktreesDir + "/a/b/deep");
+        setThreads([
+          { id: "shallow-thread", worktreePath: shallow, branch: "shallow" },
+          { id: "deep-thread", worktreePath: deep, branch: "deep" },
+        ]);
+
+        const { worktrees } = yield* service.inventory({});
+        const managed = Object.fromEntries(worktrees.map((entry) => [entry.path, entry.managed]));
+        expect([managed[shallow], managed[deep]]).toEqual([false, false]);
+        for (const threadId of ["shallow-thread", "deep-thread"])
+          expect(
+            yield* refusal(service.remove({ threadId: ThreadId.make(threadId), force: true })),
+          ).toContain("outside GOAT's worktrees folder");
+        expect((yield* service.cleanup({ dryRun: false })).removed).toEqual([]);
+        for (const path of [shallow, deep]) expect(yield* fs.exists(path)).toBe(true);
+      }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
   it.live("accepts commits a merged pull request names after the remote branch is gone", () =>

@@ -89,6 +89,8 @@ export class ProviderRegistry extends Context.Service<
     readonly refreshWorkspaceSnapshot: (input: {
       readonly instanceId: ProviderInstanceId;
       readonly cwd: string;
+      /** Directory the driver scans; the snapshot stays keyed by `cwd`. Defaults to `cwd`. */
+      readonly scanCwd?: string;
       readonly fresh?: boolean;
     }) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
@@ -791,6 +793,7 @@ export const layer = Layer.effect(
     const refreshWorkspaceSnapshot = Effect.fn("refreshWorkspaceSnapshot")(function* (input: {
       readonly instanceId: ProviderInstanceId;
       readonly cwd: string;
+      readonly scanCwd?: string;
       readonly fresh?: boolean;
     }) {
       if (input.fresh) {
@@ -838,7 +841,7 @@ export const layer = Layer.effect(
         : Effect.succeed(scannedFrom);
       const runScan = refreshMachineSnapshot.pipe(
         Effect.flatMap((scanBase) =>
-          snapshotForCwd(input.cwd).pipe(
+          snapshotForCwd(input.scanCwd ?? input.cwd).pipe(
             Effect.flatMap(globalSkills.workspace(provider)),
             Effect.map((scopedSnapshot) => ({ scanBase, scopedSnapshot })),
           ),

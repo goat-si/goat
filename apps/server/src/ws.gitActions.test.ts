@@ -12,12 +12,14 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { Headers } from "effect/http";
 import { RpcMessage, RpcServer } from "effect/rpc";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as ServerConfig from "./config.ts";
 import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
@@ -156,13 +158,18 @@ it.effect("removing a worktree tells its own status subscribers it is no longer 
         localInvalidationCalls: 0,
         remoteInvalidationCalls: 0,
       };
+      // vcs.removeWorktree removes only folders where GOAT creates worktrees.
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      yield* fileSystem.makeDirectory(config.worktreesDir, { recursive: true });
+      const worktree = (yield* fileSystem.realPath(config.worktreesDir)) + "/repo/feature";
       const statusEvents = yield* Queue.unbounded<VcsStatusStreamEvent>();
       const status = Context.get(
         yield* Layer.build(layerTestFor(state)),
         VcsStatusBroadcaster.VcsStatusBroadcaster,
       );
       // The removed checkout's panel subscribes to its own path, not the main checkout's.
-      yield* status.streamStatus({ cwd: "/repo-worktree" }).pipe(
+      yield* status.streamStatus({ cwd: worktree }).pipe(
         Stream.filter((event) => event._tag !== "remoteUpdated"),
         Stream.runForEach((event) => Queue.offer(statusEvents, event)),
         Effect.forkScoped,
@@ -191,7 +198,7 @@ it.effect("removing a worktree tells its own status subscribers it is no longer 
         _tag: "Request",
         id: RpcMessage.RequestId("remove"),
         tag: WS_METHODS.vcsRemoveWorktree,
-        payload: { cwd: "/repo", path: "/repo-worktree" },
+        payload: { cwd: "/repo", path: worktree },
         headers: Headers.empty,
       });
       assert.isTrue(Exit.isSuccess(yield* Queue.take(exits)));

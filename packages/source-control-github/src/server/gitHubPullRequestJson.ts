@@ -17,11 +17,11 @@ import type {
   PullRequestFileViewedState,
   PullRequestLabel,
   PullRequestMergeCapabilities,
+  PullRequestMergeQueueRemoval,
   PullRequestOmittedFileStat,
   PullRequestMergeability,
   PullRequestMergeMethod,
   PullRequestReaction,
-  PullRequestReactionContent,
   PullRequestReviewCommentDraft,
   PullRequestReviewDecision,
   PullRequestReviewPosition,
@@ -37,7 +37,7 @@ import { gitRenameHeaders, quoteGitPatchPath } from "@goat/shared/gitPatchPath";
 import { decodeJsonResult } from "@goat/shared/schemaJson";
 import { dedupeChecks } from "@goat/source-control-core/server/pullRequestChecks";
 
-import type * as GitHubSchema from "../../schema/github.graphql.ts";
+import { REACTION_CONTENT_BY_GITHUB } from "./gitHubReactionContent.ts";
 import type {
   PullRequestSummaryRepositoryPullRequestPullRequest as SummarizedPullRequest,
   PullRequestWatchFingerprintRepositoryPullRequestPullRequest as WatchedPullRequest,
@@ -144,36 +144,6 @@ function nodesOf<A>(
   return (connection?.nodes ?? []).flatMap((node) => (node === null ? [] : [node]));
 }
 
-const REACTION_CONTENT_BY_GITHUB: Readonly<Record<string, PullRequestReactionContent>> = {
-  THUMBS_UP: "thumbs-up",
-  THUMBS_DOWN: "thumbs-down",
-  LAUGH: "laugh",
-  HOORAY: "hooray",
-  CONFUSED: "confused",
-  HEART: "heart",
-  ROCKET: "rocket",
-  EYES: "eyes",
-};
-
-const GITHUB_REACTION_BY_CONTENT: Readonly<
-  Record<PullRequestReactionContent, GitHubSchema.ReactionContent>
-> = {
-  "thumbs-up": "THUMBS_UP",
-  "thumbs-down": "THUMBS_DOWN",
-  laugh: "LAUGH",
-  hooray: "HOORAY",
-  confused: "CONFUSED",
-  heart: "HEART",
-  rocket: "ROCKET",
-  eyes: "EYES",
-};
-
-export function gitHubReactionContent(
-  content: PullRequestReactionContent,
-): GitHubSchema.ReactionContent {
-  return GITHUB_REACTION_BY_CONTENT[content];
-}
-
 /** Keep the viewer in counts, not actors, to avoid duplicating 'You'. */
 function toReactions(
   groups: ReadonlyArray<ReactionGroup> | null | undefined,
@@ -204,6 +174,7 @@ const RawWorkflowRunsSchema = Schema.Struct({
       id: Schema.Int,
       name: Schema.optional(Schema.NullOr(Schema.String)),
       html_url: Schema.optional(Schema.NullOr(Schema.String)),
+      status: Schema.optional(Schema.NullOr(Schema.String)),
     }),
   ),
 });
@@ -773,7 +744,7 @@ const decodeDetail = decodeJsonResult(
     updatedAt: Schema.String,
   }),
 );
-const decodeWorkflowRuns = decodeJsonResult(RawWorkflowRunsSchema);
+export const decodeWorkflowRuns = decodeJsonResult(RawWorkflowRunsSchema);
 const decodeFileEntry = Schema.decodeUnknownExit(RawPullRequestFileSchema);
 const decodeRow = Schema.decodeUnknownExit(PullRequestRow);
 
@@ -797,7 +768,7 @@ export const LenientPullRequestList = GraphQL.query(PullRequestList.name, {
   }),
 });
 
-type DecodeFailure = Cause.Cause<Schema.SchemaError>;
+export type DecodeFailure = Cause.Cause<Schema.SchemaError>;
 
 /** Count skipped invalid rows in rawCount to avoid ending pagination early. */
 export function toPullRequestRows(
@@ -982,6 +953,7 @@ export function toPullRequestWatchFingerprint(
       pr.headRefOid,
       stateCounts(contexts?.checkRunCountsByState ?? null),
       stateCounts(contexts?.statusContextCountsByState ?? null),
+      pr.mergeQueueRemovals?.filteredCount ?? 0,
     ].join(" "),
     remarks: [
       pr.comments.totalCount,
@@ -994,6 +966,7 @@ export function toPullRequestWatchFingerprint(
 }
 
 export interface GitHubPullRequestCore extends GitHubPullRequestDetail {
+  readonly mergeQueueRemoval?: PullRequestMergeQueueRemoval;
   readonly maintainerCanModify: boolean;
   readonly canEditMaintainerEdits: boolean;
   readonly reviewRequestTeams: ReadonlyArray<PullRequestActor>;
@@ -1013,7 +986,17 @@ export function toPullRequestCore(result: PullRequestCore.Result): GitHubPullReq
   const pr = repository?.pullRequest;
   if (repository == null || pr == null) return null;
   const contexts = nodesOf(pr.commits)[0]?.commit.statusCheckRollup?.contexts;
+  const removal = nodesOf(pr.mergeQueueRemovals).at(-1);
   return {
+    ...(removal === undefined || !("id" in removal)
+      ? {}
+      : {
+          mergeQueueRemoval: {
+            id: removal.id,
+            removedAt: removal.createdAt,
+            reason: trimmed(removal.reason),
+          },
+        }),
     reviewRequestTeams: nodesOf(pr.reviewRequests).flatMap(
       ({ requestedReviewer }) => toRequestedTeam(requestedReviewer) ?? [],
     ),

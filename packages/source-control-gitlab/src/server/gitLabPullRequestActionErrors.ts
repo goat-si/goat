@@ -41,3 +41,23 @@ export class GitLabPinnedRebaseError extends Schema.TaggedError<GitLabPinnedReba
     return this.detail;
   }
 }
+
+export class GitLabRevertUnavailableError extends Schema.TaggedError<GitLabRevertUnavailableError>()(
+  "GitLabRevertUnavailableError",
+  {
+    command: Schema.Literal("glab"),
+    cwd: Schema.String,
+    number: Schema.Int,
+    reason: Schema.Literals(["not-merged", "several-commits"]),
+  },
+) {
+  get detail(): string {
+    return this.reason === "not-merged"
+      ? "Only a merged merge request can be reverted."
+      : "This merge request landed as several commits, so there is no single commit to revert.";
+  }
+
+  override get message(): string {
+    return `GitLab CLI failed in runMergeRequestAction: ${this.detail}`;
+  }
+}

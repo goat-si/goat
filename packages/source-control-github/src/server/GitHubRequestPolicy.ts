@@ -60,10 +60,18 @@ export class GitHubApiRateLimitError extends Schema.TaggedError<GitHubApiRateLim
 
 export class GitHubApiNotFoundError extends Schema.TaggedError<GitHubApiNotFoundError>()(
   "GitHubApiNotFoundError",
-  { host: Schema.String, operation: Schema.String },
+  {
+    host: Schema.String,
+    operation: Schema.String,
+    githubErrors: Schema.optionalKey(Schema.Array(Schema.String)),
+  },
 ) {
   override get message(): string {
-    return "GitHub could not find the requested resource, or the credential cannot see it.";
+    const missing =
+      "GitHub could not find the requested resource, or the credential cannot see it.";
+    return this.githubErrors !== undefined && this.githubErrors.length > 0
+      ? `${missing} GitHub said: ${this.githubErrors.join("; ")}`
+      : missing;
   }
 }
 

@@ -284,6 +284,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Slack settings take channelScope, userAccess and unlinkedRuntimeModeCeiling. Older servers
       answer listed channels and linked accounts only and drop those fields. */
   slackChannelAccess: Schema.optionalKey(Schema.Boolean),
+  /** Publishes a pull request refresh when linked-thread answers change; older servers need polling. */
+  linkedThreadRefreshes: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

@@ -58,6 +58,7 @@ export const definition = defineSourceControl({
     "update-branch",
     "enable-auto-merge",
     "disable-auto-merge",
+    "revert",
   ] as const),
   checkoutCommand: ({ number }) => `glab mr checkout ${number}`,
   // `accept` is glab's alias for `merge`.
