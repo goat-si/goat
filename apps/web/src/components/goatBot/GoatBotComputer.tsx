@@ -35,28 +35,38 @@ export function GoatBotComputer({
   // or the card shows every member's work beside the main bot's.
   const environment = useEnvironment(environmentId);
   const members = environment?.serverConfig?.environment.capabilities.goatBotMembers === true;
+  // Until the config says whether the server has members, an unscoped read could list theirs.
+  const known = botId !== null || member !== null || environment?.serverConfig != null;
   const scope = botId ?? member?.botId ?? (members ? BotId.make(MAIN_BOT_ID) : null);
   const tasks = useEnvironmentQuery(
-    channelEnvironment.listTasks({
-      environmentId,
-      input: {
-        status: [...BOT_RUNNING_TASK_STATUSES],
-        limit: CHANNEL_LIST_TASKS_MAX_LIMIT,
-        ...(scope === null ? {} : { botId: scope }),
-      },
-    }),
+    known
+      ? channelEnvironment.listTasks({
+          environmentId,
+          input: {
+            status: [...BOT_RUNNING_TASK_STATUSES],
+            limit: CHANNEL_LIST_TASKS_MAX_LIMIT,
+            ...(scope === null ? {} : { botId: scope }),
+          },
+        })
+      : null,
   );
   const refresh = tasks.refresh;
   // oxlint-disable-next-line goat/react-effect-budget -- Work starts and moves between machines on the server; read the list again each time the tab opens.
   useEffect(() => {
-    if (changes) refresh();
-  }, [refresh, changes]);
+    if (known && changes) refresh();
+  }, [known, refresh, changes]);
   if (environment?.connection.phase === "offline")
     return (
       <Inset>
         <GoatBotPanelFailure
           message={`${botName}'s machines are unavailable while the computer is offline.`}
         />
+      </Inset>
+    );
+  if (!known)
+    return (
+      <Inset>
+        <GoatBotPanelFailure message="Machines can't be listed from this server right now." />
       </Inset>
     );
   if (

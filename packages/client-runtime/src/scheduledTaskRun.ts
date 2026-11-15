@@ -21,16 +21,17 @@ function runOutcome(task: RunFields) {
     if (task.lastRunStatus === "failed") return { label: "Failed", tone: "error" } as const;
     return { label: "Outcome unavailable", tone: "outline" } as const;
   }
-  const status = task.lastRun.status;
+  return runStatusPresentation(task.lastRun.status, task.lastRun.dispatchStatus === "failed");
+}
+
+/** A run status in the last-run words; a status this client does not know reads as unavailable. */
+export function runStatusPresentation(status: string, dispatchFailed: boolean) {
   if (status === "dispatching") return { label: "Dispatching", tone: "info" } as const;
   if (status === "queued") return { label: "Queued", tone: "info" } as const;
   if (status === "running") return { label: "Running", tone: "info" } as const;
   if (status === "completed") return { label: "Completed", tone: "success" } as const;
   if (status === "failed")
-    return {
-      label: task.lastRun.dispatchStatus === "failed" ? "Dispatch failed" : "Failed",
-      tone: "error",
-    } as const;
+    return { label: dispatchFailed ? "Dispatch failed" : "Failed", tone: "error" } as const;
   if (status === "interrupted") return { label: "Interrupted", tone: "warning" } as const;
   if (status === "cancelled") return { label: "Cancelled", tone: "outline" } as const;
   if (status === "rolled_back") return { label: "Rolled back", tone: "warning" } as const;
