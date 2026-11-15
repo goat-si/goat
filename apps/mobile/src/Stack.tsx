@@ -1,5 +1,3 @@
-import { SettingsDecisionInboxRouteScreen } from "./features/settings/SettingsDecisionInboxRouteScreen";
-import { SettingsHubNodesRouteScreen } from "./features/settings/SettingsHubNodesRouteScreen";
 import { NotesRouteScreen } from "./features/notes/NotesRouteScreen";
 import { NoteRouteScreen } from "./features/notes/NoteRouteScreen";
 import { NoteConflictRouteScreen } from "./features/notes/NoteConflictRouteScreen";
@@ -107,6 +105,7 @@ import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteSc
 import { SettingsEnvironmentDetailRouteScreen } from "./features/settings/SettingsEnvironmentDetailRouteScreen";
 import { SettingsEnvironmentsRouteScreen } from "./features/settings/SettingsEnvironmentsRouteScreen";
 import { SettingsFollowUpRouteScreen } from "./features/settings/SettingsFollowUpRouteScreen";
+import { SettingsLanguageRouteScreen } from "./features/settings/SettingsLanguageRouteScreen";
 import {
   SettingsEnvironmentAgentBehaviorRouteScreen,
   SettingsEnvironmentMaintenanceRouteScreen,
@@ -137,8 +136,7 @@ import { SettingsAboutRouteScreen } from "./features/settings/SettingsAboutRoute
 import { SettingsNotificationsRouteScreen } from "./features/settings/SettingsNotificationsRouteScreen";
 import { GoatBotRouteScreen } from "./features/goat-bot/GoatBotRouteScreen";
 import { MobileGoatBotHomeWorker } from "./features/goat-bot/MobileGoatBotHomeWorker";
-import { SettingsMemoryRouteScreen } from "./features/settings/SettingsMemoryRouteScreen";
-import { SettingsGoatBotRouteScreen } from "./features/settings/SettingsGoatBotRouteScreen";
+import { goatSettingsScreens } from "./features/settings/goat-settings-screens";
 import { SettingsRouteScreen } from "./features/settings/SettingsRouteScreen";
 import { SettingsThreadsRouteScreen } from "./features/settings/SettingsThreadsRouteScreen";
 import { SettingsEnvironmentFilterProvider } from "./features/settings/settings-environment-filter";
@@ -375,6 +373,11 @@ const SETTINGS_SCREENS = {
       title: "Organization",
     },
   }),
+  SettingsLanguage: createNativeStackScreen({
+    screen: SettingsLanguageRouteScreen,
+    linking: "settings/language",
+    options: { ...SETTINGS_PAGE_OPTIONS, title: "Language" },
+  }),
   SettingsProjectOverview: createNativeStackScreen({
     screen: SettingsProjectOverviewRouteScreen,
     linking: "settings/project",
@@ -484,26 +487,7 @@ const SETTINGS_SCREENS = {
       title: "Usage",
     },
   }),
-  SettingsMemory: createNativeStackScreen({
-    screen: SettingsMemoryRouteScreen,
-    linking: "settings/memory",
-    options: { ...SETTINGS_PAGE_OPTIONS, title: "Memory" },
-  }),
-  SettingsGoatBot: createNativeStackScreen({
-    screen: SettingsGoatBotRouteScreen,
-    linking: "settings/goat-bot",
-    options: { ...SETTINGS_PAGE_OPTIONS, title: "GOAT Bot" },
-  }),
-  SettingsHubNodes: createNativeStackScreen({
-    screen: SettingsHubNodesRouteScreen,
-    linking: "settings/hub-devices",
-    options: { ...SETTINGS_PAGE_OPTIONS, title: "Hub devices" },
-  }),
-  SettingsDecisionInbox: createNativeStackScreen({
-    screen: SettingsDecisionInboxRouteScreen,
-    linking: "settings/decision-inbox",
-    options: { ...SETTINGS_PAGE_OPTIONS, title: "Decision inbox" },
-  }),
+  ...goatSettingsScreens(SETTINGS_PAGE_OPTIONS),
   SettingsAuth: createNativeStackScreen({
     screen: SettingsAuthRouteScreen,
     linking: "settings/auth",

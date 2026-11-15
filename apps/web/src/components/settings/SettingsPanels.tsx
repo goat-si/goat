@@ -89,7 +89,8 @@ import {
   useSettingsSearchTargetId,
 } from "./settingsLayout";
 import { searchableSetting, type SettingsSearchItemId } from "./settingsSearch";
-import { nativeLanguageName, SUPPORTED_LOCALES, SYSTEM_LANGUAGE } from "../../i18n/locales";
+import { nativeLanguageName, SYSTEM_LANGUAGE } from "@goat/client-runtime/locales";
+import { SUPPORTED_LOCALES } from "../../i18n/locales";
 import { SnoozeSettingsSections } from "./SnoozeSettingsSections";
 import { ShowBotThreadsSetting } from "./ShowBotThreadsSetting";
 import { useShowBotThreads } from "../sidebar/useBotThreadKeys";
