@@ -773,16 +773,104 @@ const runForkWithFailingNativeSource = (forkFailures: number) => {
     const now = yield* DateTime.now;
     const sourceThreadId = ThreadId.make("fork-missing-source");
     const targetThreadId = ThreadId.make("fork-missing-target");
-    const providerThreadId = ProviderThreadId.make("fork-missing-native-thread");
-    const sourceRunId = RunId.make("fork-missing-source-run");
-    const userMessageId = MessageId.make("fork-missing-source-message");
+    const parentThreadId = ThreadId.make("fork-missing-parent");
+    // A completed run whose native session no longer exists.
+    const seedRun = (threadId: ThreadId, marker: string) =>
+      Effect.gen(function* () {
+        const providerThreadId = ProviderThreadId.make(`${threadId}-native-thread`);
+        const runId = RunId.make(`${threadId}-run`);
+        const userMessageId = MessageId.make(`${threadId}-message`);
+        yield* eventSink.write({
+          events: [
+            {
+              id: EventId.make(`${threadId}-provider-thread`),
+              type: "provider-thread.updated",
+              threadId,
+              occurredAt: now,
+              payload: {
+                id: providerThreadId,
+                driver,
+                providerInstanceId: instanceId,
+                providerSessionId: null,
+                appThreadId: threadId,
+                ownerNodeId: null,
+                nativeThreadRef: { driver, nativeId: "native-deleted-source", strength: "strong" },
+                nativeConversationHeadRef: null,
+                status: "idle",
+                firstRunOrdinal: 1,
+                lastRunOrdinal: 1,
+                handoffIds: [],
+                forkedFrom: null,
+                createdAt: now,
+                updatedAt: now,
+              },
+            },
+            {
+              id: EventId.make(`${threadId}-run`),
+              type: "run.created",
+              threadId,
+              runId: runId,
+              occurredAt: now,
+              payload: {
+                id: runId,
+                threadId,
+                ordinal: 1,
+                providerInstanceId: instanceId,
+                modelSelection,
+                providerThreadId,
+                userMessageId,
+                rootNodeId: null,
+                activeAttemptId: null,
+                status: "completed",
+                queuePosition: null,
+                requestedAt: now,
+                startedAt: now,
+                completedAt: now,
+                checkpointId: null,
+                contextHandoffId: null,
+              },
+            },
+            {
+              id: EventId.make(`${threadId}-user-item`),
+              type: "turn-item.updated",
+              threadId,
+              runId: runId,
+              occurredAt: now,
+              payload: {
+                id: TurnItemId.make(`${threadId}-user-item`),
+                threadId,
+                runId: runId,
+                nodeId: null,
+                providerThreadId,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 1,
+                status: "completed",
+                title: null,
+                startedAt: now,
+                completedAt: now,
+                updatedAt: now,
+                type: "user_message",
+                createdBy: "user",
+                creationSource: "web",
+                inputIntent: "turn_start",
+                messageId: userMessageId,
+                text: marker,
+                attachments: [],
+              },
+            },
+          ],
+        });
+        return runId;
+      });
 
     yield* orchestrator.dispatch({
       type: "thread.create",
-      commandId: CommandId.make("fork-missing-create-source"),
-      threadId: sourceThreadId,
+      commandId: CommandId.make("fork-missing-create-parent"),
+      threadId: parentThreadId,
       projectId: ProjectId.make("fork-missing-project"),
-      title: "Fork missing source",
+      title: "Fork missing parent",
       modelSelection,
       runtimeMode: "full-access",
       interactionMode: "default",
@@ -791,88 +879,18 @@ const runForkWithFailingNativeSource = (forkFailures: number) => {
       createdBy: "user",
       creationSource: "web",
     });
-    yield* eventSink.write({
-      events: [
-        {
-          id: EventId.make("fork-missing-provider-thread"),
-          type: "provider-thread.updated",
-          threadId: sourceThreadId,
-          occurredAt: now,
-          payload: {
-            id: providerThreadId,
-            driver,
-            providerInstanceId: instanceId,
-            providerSessionId: null,
-            appThreadId: sourceThreadId,
-            ownerNodeId: null,
-            nativeThreadRef: { driver, nativeId: "native-deleted-source", strength: "strong" },
-            nativeConversationHeadRef: null,
-            status: "idle",
-            firstRunOrdinal: 1,
-            lastRunOrdinal: 1,
-            handoffIds: [],
-            forkedFrom: null,
-            createdAt: now,
-            updatedAt: now,
-          },
-        },
-        {
-          id: EventId.make("fork-missing-source-run"),
-          type: "run.created",
-          threadId: sourceThreadId,
-          runId: sourceRunId,
-          occurredAt: now,
-          payload: {
-            id: sourceRunId,
-            threadId: sourceThreadId,
-            ordinal: 1,
-            providerInstanceId: instanceId,
-            modelSelection,
-            providerThreadId,
-            userMessageId,
-            rootNodeId: null,
-            activeAttemptId: null,
-            status: "completed",
-            queuePosition: null,
-            requestedAt: now,
-            startedAt: now,
-            completedAt: now,
-            checkpointId: null,
-            contextHandoffId: null,
-          },
-        },
-        {
-          id: EventId.make("fork-missing-user-item"),
-          type: "turn-item.updated",
-          threadId: sourceThreadId,
-          runId: sourceRunId,
-          occurredAt: now,
-          payload: {
-            id: TurnItemId.make("fork-missing-user-item"),
-            threadId: sourceThreadId,
-            runId: sourceRunId,
-            nodeId: null,
-            providerThreadId,
-            providerTurnId: null,
-            nativeItemRef: null,
-            parentItemId: null,
-            ordinal: 1,
-            status: "completed",
-            title: null,
-            startedAt: now,
-            completedAt: now,
-            updatedAt: now,
-            type: "user_message",
-            createdBy: "user",
-            creationSource: "web",
-            inputIntent: "turn_start",
-            messageId: userMessageId,
-            text: "FORKED_SOURCE_MARKER",
-            attachments: [],
-          },
-        },
-      ],
+    const parentRunId = yield* seedRun(parentThreadId, "INHERITED_PARENT_MARKER");
+    // The source is itself a fork, so its history starts in its parent.
+    yield* orchestrator.dispatch({
+      type: "thread.fork",
+      commandId: CommandId.make("fork-missing-fork-parent"),
+      sourceThreadId: parentThreadId,
+      targetThreadId: sourceThreadId,
+      sourcePoint: { type: "run", runId: parentRunId },
+      createdBy: "user",
+      creationSource: "web",
     });
+    const sourceRunId = yield* seedRun(sourceThreadId, "FORKED_SOURCE_MARKER");
     yield* orchestrator.dispatch({
       type: "thread.fork",
       commandId: CommandId.make("fork-missing-fork"),
@@ -928,6 +946,17 @@ it.effect("a native fork whose source session is gone starts fresh with the sour
     assert.equal(projection.contextTransfers[0]?.status, "resolved_portable");
     assert.isNull(projection.providerThreads[0]?.forkedFrom);
     assert.include(JSON.stringify(turn), "FORKED_SOURCE_MARKER");
+    const handoff = projection.contextHandoffs[0];
+    const history = handoff?.history?.messages.map((message) => message.text).join("\n") ?? "";
+    // The source's own fork parent comes first, as it does in the source's timeline.
+    assert.isAbove(
+      history.indexOf("FORKED_SOURCE_MARKER"),
+      history.indexOf("INHERITED_PARENT_MARKER"),
+    );
+    assert.isAtLeast(history.indexOf("INHERITED_PARENT_MARKER"), 0);
+    // Omitted items live in the source thread, so recovery reads point there.
+    assert.include(handoff?.history?.coverage ?? "", 'threadId:"fork-missing-source"');
+    assert.notInclude(handoff?.history?.coverage ?? "", "fork-missing-target");
     const notices = projection.turnItems.flatMap((item) =>
       item.type === "system_notice" ? [item.message] : [],
     );
