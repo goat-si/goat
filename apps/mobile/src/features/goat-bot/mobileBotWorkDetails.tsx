@@ -1,13 +1,41 @@
 import type { BotWorkTask, HomeCurrentOpenableLink } from "@goat/client-runtime/goatBot";
-import type { BotThreadRow, EnvironmentId, ThreadId } from "@goat/contracts";
-import { Pressable, Text } from "react-native";
+import type { BotThreadRow, BotWorkResult, EnvironmentId, ThreadId } from "@goat/contracts";
+import { Text } from "react-native";
 import type { MobileBotHomeItem } from "./MobileBotTaskList";
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
+import { MobileWorkThreadLink } from "./MobileWorkThreadLink";
 
-/** A coding thread's name in a task's work, as on web: its title, or a plain label when blank. */
-export const workThreadName = (title: string | undefined) => title?.trim() || "Open work thread";
+const workThreadName = (title: string | undefined) => title?.trim() || "Open work thread";
 const threadKey = (thread: { environmentId: EnvironmentId; threadId: ThreadId }) =>
   JSON.stringify([thread.environmentId, thread.threadId]);
+
+type WorkThread = { readonly environmentId: EnvironmentId; readonly threadId: ThreadId };
+/**
+ * A task's work thread as a link: a coding thread by its title (as on web), else a plain label.
+ * The worker and a thread with no coding row are named after the task to a screen reader.
+ */
+export function workThreadLink(input: {
+  thread: WorkThread;
+  worker: WorkThread | undefined;
+  rows: ReadonlyArray<BotThreadRow | BotWorkResult["codingRows"][number]>;
+  taskTitle: string;
+}) {
+  const { thread, worker } = input;
+  const isWorker =
+    worker?.environmentId === thread.environmentId && worker.threadId === thread.threadId;
+  const coding = isWorker
+    ? undefined
+    : input.rows.find(
+        (row) =>
+          row.kind === "coding" &&
+          row.environmentId === thread.environmentId &&
+          row.threadId === thread.threadId,
+      );
+  if (coding?.kind !== "coding")
+    return { text: "Open work thread", label: "Work thread: " + input.taskTitle };
+  const text = workThreadName(coding.title);
+  return { text, label: "GOAT thread: " + text };
+}
 
 export function mobileBotWorkDetails(props: {
   entry: BotWorkTask;
@@ -50,33 +78,18 @@ export function mobileBotWorkDetails(props: {
   const items: MobileBotHomeItem[] = [
     ...threads.map((thread) => ({
       key: JSON.stringify(["task-detail", id, "thread", thread.environmentId, thread.threadId]),
-      render: () => {
-        const coding = props.rows.find(
-          (row) =>
-            row.kind === "coding" &&
-            row.environmentId === thread.environmentId &&
-            row.threadId === thread.threadId,
-        );
-        const isWorker =
-          worker?.environmentId === thread.environmentId && worker.threadId === thread.threadId;
-        const title = !isWorker && coding?.kind === "coding" ? workThreadName(coding.title) : null;
-        return (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={
-              title === null ? "Work thread: " + entry.row.task.title : "GOAT thread: " + title
-            }
-            accessibilityState={{ disabled: closed }}
-            disabled={closed}
-            onPress={() => openThread({ environmentId: thread.environmentId, id: thread.threadId })}
-            className="min-h-[44px] justify-center"
-          >
-            <Text numberOfLines={1} className="text-foreground underline">
-              {title ?? "Open work thread"}
-            </Text>
-          </Pressable>
-        );
-      },
+      render: () => (
+        <MobileWorkThreadLink
+          link={workThreadLink({
+            thread,
+            worker,
+            rows: props.rows,
+            taskTitle: entry.row.task.title,
+          })}
+          disabled={closed}
+          onPress={() => openThread({ environmentId: thread.environmentId, id: thread.threadId })}
+        />
+      ),
     })),
     ...entry.remote.map((item) => ({
       key: JSON.stringify(["task-detail", id, "remote", item.childWorkId]),

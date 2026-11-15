@@ -10,8 +10,10 @@ vi.mock("react-native", () => ({
   AccessibilityInfo: { announceForAccessibility: (line: string) => spoken.lines.push(line) },
   View: (props: Props) => <div>{props.children}</div>,
   Text: (props: Props) => <span>{props.children}</span>,
-  Pressable: (props: Props & { onPress?: () => void; disabled?: boolean }) => (
-    <button onClick={props.onPress} disabled={props.disabled}>
+  Pressable: (
+    props: Props & { onPress?: () => void; disabled?: boolean; accessibilityLabel?: string },
+  ) => (
+    <button onClick={props.onPress} disabled={props.disabled} aria-label={props.accessibilityLabel}>
       {props.children}
     </button>
   ),
@@ -72,6 +74,7 @@ async function render(
     root.render(
       <MobileTaskHeader
         task={undefined}
+        rows={[]}
         chips={chips as never}
         screen={{ lookup, canUpdate: true, update: async () => true, retried: () => {} }}
         title="Old report"
@@ -219,6 +222,7 @@ it("tells the screen reader once when the lookup settles on a failure, a refusal
       root.render(
         <MobileTaskHeader
           task={undefined}
+          rows={[]}
           chips={new Map()}
           screen={{ lookup, canUpdate: true, update: async () => true, retried: () => {} }}
           title="Old report"
@@ -257,5 +261,66 @@ it("a status already showing when the header mounts is told to the screen reader
   spoken.lines = [];
   const root = await render({ state: "denied" });
   expect(spoken.lines).toEqual(["Permission to read this task is unavailable."]);
+  await act(async () => root.unmount());
+});
+
+const codingRow = (threadId: string, title?: string) => ({
+  kind: "coding" as const,
+  taskId: "t1",
+  environmentId: "env",
+  threadId,
+  ...(title === undefined ? {} : { title }),
+  state: "bound" as const,
+  lastActivityAt: at,
+});
+const threadLinks = () =>
+  [...container.querySelectorAll("button")]
+    .filter((item) => /^(GOAT|Work) thread: /.test(item.getAttribute("aria-label") ?? ""))
+    .map((item) => [item.getAttribute("aria-label"), item.textContent]);
+
+it("a looked-up task names its coding threads from the lookup's rows (#3307)", async () => {
+  const withWorker = { ...row, worker: { environmentId: "env", threadId: "w-1" } };
+  const root = await render({
+    state: "known",
+    task: {
+      ...knownTask,
+      row: withWorker,
+      threads: [
+        { environmentId: "env", threadId: "w-1" },
+        { environmentId: "env", threadId: "thread-a" },
+        { environmentId: "env", threadId: "thread-b" },
+        { environmentId: "env", threadId: "child-thread" },
+      ],
+    } as never,
+    result: result({ state: "known", row: withWorker } as never, {
+      codingRows: [codingRow("thread-a", "Patch web"), codingRow("thread-b")] as never,
+    }),
+  });
+  expect(threadLinks()).toEqual([
+    ["Work thread: Old report…", "Open work thread"],
+    ["GOAT thread: Patch web", "Patch web"],
+    ["GOAT thread: Open work thread", "Open work thread"],
+    ["Work thread: Old report…", "Open work thread"],
+  ]);
+  await act(async () => root.unmount());
+});
+
+it("an unavailable looked-up task names its coding threads the same way (#3307)", async () => {
+  const root = await render({
+    state: "unavailable",
+    task: {
+      state: "unavailable",
+      task: { taskId: "t1", title: "Old report", status: "failed", updatedAt: at },
+      worker: { environmentId: "env", threadId: "w-1" },
+    } as never,
+    result: result({ state: "unavailable" } as never, {
+      codingRows: [codingRow("thread-a", "Patch web"), codingRow("thread-b")] as never,
+    }),
+  });
+  expect(threadLinks()).toEqual([
+    ["Work thread: Old report", "Open work thread"],
+    ["GOAT thread: Patch web", "Patch web"],
+    ["GOAT thread: Open work thread", "Open work thread"],
+  ]);
   await act(async () => root.unmount());
 });
