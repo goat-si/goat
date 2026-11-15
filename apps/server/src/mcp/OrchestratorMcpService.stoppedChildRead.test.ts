@@ -1,7 +1,9 @@
 import { assert, it } from "@effect/vitest";
 import { CommandId, MessageId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
 
+import * as EventSink from "../orchestration-v2/EventSink.ts";
 import {
   childRuns,
   continued,
@@ -18,6 +20,7 @@ it.effect(
     Effect.gen(function* () {
       const fixture = yield* makeFixture;
       const created = yield* continued(fixture);
+      const eventSink = yield* EventSink.EventSinkV2;
       yield* fixture.orchestrator.dispatch({
         type: "message.dispatch",
         commandId: CommandId.make("stopped-child-notice"),
@@ -30,11 +33,24 @@ it.effect(
         creationSource: "provider",
         notification: { source: { kind: "monitor" }, outcome: "updated", summary: "Monitor line" },
       });
+      const beforeStop = yield* eventSink.latestSequence();
       yield* fixture.orchestrator.dispatch({
         type: "thread.stop",
         commandId: CommandId.make("stopped-child-stop"),
         threadId: fixture.childThreadId,
       });
+      // The orchestrator's run-update reactor finalizes the stopped task in the background and
+      // owes its result to the parent: the delivery is claimed before any read.
+      yield* eventSink.stream({ afterSequence: beforeStop, eventType: "subagent.updated" }).pipe(
+        Stream.filter(
+          (stored) =>
+            stored.event.type === "subagent.updated" &&
+            stored.event.payload.id === created.taskId &&
+            stored.event.payload.completionDelivery?.state === "claimed",
+        ),
+        Stream.take(1),
+        Stream.runDrain,
+      );
       const [, taskRun, notice] = yield* childRuns(fixture.childThreadId);
       assert.equal(taskRun?.status, "interrupted");
       assert.equal(notice?.status, "cancelled");
@@ -52,11 +68,11 @@ it.effect(
         }),
       );
       assert.equal(read.latestRunId, notice?.id);
-      // The read saw the cancelled notice, not the task's interrupted run, so the parent is
-      // still woken with the task's result.
+      // The read saw the cancelled notice, not the task's interrupted run, so it acknowledges
+      // nothing and the parent is still woken with the task's result.
       const task = (yield* fixture.store.getThreadRecords(parentId, ["subagents"])).subagents.find(
         (candidate) => candidate.id === created.taskId,
       );
-      assert.equal(task?.completionDelivery?.state, "pending");
+      assert.equal(task?.completionDelivery?.state, "claimed");
     }).pipe(Effect.provide(layerTest)),
 );
