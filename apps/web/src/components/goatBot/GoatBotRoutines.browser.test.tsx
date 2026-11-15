@@ -64,6 +64,11 @@ vi.mock("~/hooks/useSettings", () => ({
   usePrimarySettings: <T,>(select: (settings: { timestampFormat: string }) => T) =>
     select({ timestampFormat: reads.timestampFormat }),
 }));
+// Run times read the same in any runner: English months and AM/PM.
+vi.mock("~/timestampFormat", async (original) => ({
+  ...(await original<typeof import("~/timestampFormat")>()),
+  timestampLocale: "en-US",
+}));
 import { GoatBotRoutines } from "./GoatBotRoutines";
 import { GoatBotChatHidden } from "./goatBotLayout";
 import { navigationBlocked } from "~/lib/navigationHolds";
