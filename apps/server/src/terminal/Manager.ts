@@ -2775,7 +2775,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     session.pendingProcessEventIndex = 0;
     session.processEventDrainRunning = false;
     const eventStamp = advanceEventSequence(session);
-    yield* persistHistory(input.threadId, terminalId, session.history);
+    yield* persistWorker.enqueue(toSessionKey(input.threadId, terminalId), {
+      history: session.history,
+      immediate: true,
+    });
     yield* publishEvent({
       type: "cleared",
       threadId: input.threadId,
