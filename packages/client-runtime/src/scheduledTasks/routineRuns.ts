@@ -39,11 +39,7 @@ export function botRoutineRuns(
     .slice(0, Math.max(0, visible))
     .reverse()
     .map((run) => {
-      // A failed run the bot never received is the newest row's "Dispatch failed".
-      const outcome = runStatusPresentation(
-        run.status,
-        run.status === "failed" && run.conversation === undefined,
-      );
+      const outcome = runStatusPresentation(run.status, run.dispatchFailed === true);
       const quiet = run.quiet === true && run.status === "completed";
       const word = quiet ? "no update" : outcome.label.toLowerCase();
       return {

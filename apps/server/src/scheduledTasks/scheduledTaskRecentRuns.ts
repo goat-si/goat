@@ -54,6 +54,7 @@ function recentRun(row: RecentRunRow): ScheduledTaskRecentRun | undefined {
       ? { conversation: { threadId: run.threadId, inputId: inputId.value } }
       : {}),
     ...(run.status === "completed" && row.quiet === 1 ? { quiet: true as const } : {}),
+    ...(run.dispatchStatus === "failed" ? { dispatchFailed: true as const } : {}),
   };
 }
 

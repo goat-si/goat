@@ -119,12 +119,12 @@ it.effect("a GOAT Bot routine lists its newest seven runs, newest first, with wh
         const firingId = yield* fire(fixture, routine);
         if (index === 5) {
           yield* refuse(fixture, firingId);
-          expected.unshift([firingId, "failed", undefined, false]);
+          expected.unshift([firingId, "failed", undefined, false, true]);
           continue;
         }
         const inputId = yield* accept(fixture, firingId);
         yield* answer(fixture, firingId, inputId, index % 2 === 0);
-        expected.unshift([firingId, "completed", inputId, index % 2 === 0]);
+        expected.unshift([firingId, "completed", inputId, index % 2 === 0, false]);
       }
       const listed = yield* fixture.service.list();
       assert.deepStrictEqual(
@@ -133,6 +133,7 @@ it.effect("a GOAT Bot routine lists its newest seven runs, newest first, with wh
           run.status,
           run.conversation?.inputId,
           run.quiet === true,
+          run.dispatchFailed === true,
         ]),
         expected.slice(0, SCHEDULED_TASK_RECENT_RUNS),
       );
@@ -220,27 +221,31 @@ it.effect("a decision that is not JSON leaves its run not quiet and every histor
   ),
 );
 
-it.effect("a run whose stored input id is blank loads without a conversation", () =>
-  withWebhookService((fixture) =>
-    Effect.gen(function* () {
-      const routine = yield* saveRoutine(fixture);
-      const firingId = yield* fire(fixture, routine);
-      yield* fixture.sql`UPDATE scheduled_task_channel_inputs SET input_id = ' ' WHERE firing_id = ${firingId}`;
-      yield* fixture.runs.finishChannelFiring({
-        firingId,
-        outcome: { type: "accepted", threadId: botThread },
-        at: yield* now,
-      });
-      assert.deepStrictEqual(
-        historyOf(yield* fixture.service.list(), routine.id)?.map((run) => [
-          run.firingId,
-          run.status,
-          run.conversation,
-        ]),
-        [[firingId, "running", undefined]],
-      );
-    }),
-  ),
+it.effect(
+  "a run whose stored input id is blank loads without a conversation, and failing after the bot took it only failed",
+  () =>
+    withWebhookService((fixture) =>
+      Effect.gen(function* () {
+        const routine = yield* saveRoutine(fixture);
+        const firingId = yield* fire(fixture, routine);
+        yield* fixture.sql`UPDATE scheduled_task_channel_inputs SET input_id = ' ' WHERE firing_id = ${firingId}`;
+        yield* fixture.runs.finishChannelFiring({
+          firingId,
+          outcome: { type: "accepted", threadId: botThread },
+          at: yield* now,
+        });
+        yield* refuse(fixture, firingId);
+        assert.deepStrictEqual(
+          historyOf(yield* fixture.service.list(), routine.id)?.map((run) => [
+            run.firingId,
+            run.status,
+            run.conversation,
+            run.dispatchFailed,
+          ]),
+          [[firingId, "failed", undefined, undefined]],
+        );
+      }),
+    ),
 );
 
 it.effect("only the first fifty GOAT Bot routines carry a history", () =>

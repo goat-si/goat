@@ -261,7 +261,7 @@ describe("scheduled run outcomes", () => {
     goatBotRoutine: true,
     recentRuns: [
       run(2, { quiet: true, conversation: { threadId: "bot-thread", inputId: "input-2" } }),
-      run(1, { status: "failed" }),
+      run(1, { status: "failed", dispatchFailed: true }),
     ],
   };
   const decodeList = Schema.decodeUnknownSync(Schema.fromJsonString(ScheduledTaskListResult));
@@ -294,7 +294,14 @@ describe("scheduled run outcomes", () => {
     const runs = Array.from({ length: 9 }, (_, index) => run(index));
     const future = run(9, { status: "paused_by_policy" });
     const [decoded] = decodeList(
-      JSON.stringify({ tasks: [{ ...routine, recentRuns: [future, { status: 1 }, ...runs] }] }),
+      JSON.stringify({
+        tasks: [
+          {
+            ...routine,
+            recentRuns: [future, { status: 1 }, { ...run(10), dispatchFailed: false }, ...runs],
+          },
+        ],
+      }),
     ).tasks;
     expect(decoded?.recentRuns).toEqual([future, ...runs]);
   });

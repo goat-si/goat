@@ -21,5 +21,7 @@ export const ScheduledTaskRecentRun = Schema.Struct({
   conversation: Schema.optionalKey(Schema.Struct({ threadId: ThreadId, inputId: ChannelInputId })),
   /** The bot answered that nothing needed the person: no reply was posted. */
   quiet: Schema.optionalKey(Schema.Literal(true)),
+  /** The run never reached the bot. Set from the stored dispatch outcome, apart from conversation. */
+  dispatchFailed: Schema.optionalKey(Schema.Literal(true)),
 });
 export type ScheduledTaskRecentRun = typeof ScheduledTaskRecentRun.Type;

@@ -10,7 +10,7 @@ const conversation = (input: string) => ({
 const run = (
   hour: number,
   status: string,
-  extra: Partial<Pick<ScheduledTaskRecentRun, "conversation" | "quiet">> = {},
+  extra: Partial<Pick<ScheduledTaskRecentRun, "conversation" | "quiet" | "dispatchFailed">> = {},
 ): ScheduledTaskRecentRun => ({
   firingId: CommandId.make(`firing-${hour}`),
   status,
@@ -24,36 +24,39 @@ it("names each run's time and outcome in the last-run words, marks quiet runs, o
   const recentRuns = [
     run(9, "completed", { quiet: true, conversation: conversation("input-9") }),
     run(8, "failed", { conversation: conversation("input-8") }),
-    run(7, "failed"),
-    run(6, "running", { conversation: conversation("input-6") }),
-    run(5, "paused_by_policy"),
-    run(4, "completed", { conversation: conversation("input-4") }),
+    run(7, "failed", { dispatchFailed: true }),
+    // The bot took this run, but its conversation is unknown: it still only failed.
+    run(6, "failed"),
+    run(5, "running", { conversation: conversation("input-5") }),
+    run(4, "paused_by_policy"),
+    run(3, "completed", { conversation: conversation("input-3") }),
   ];
-  const dots = botRoutineRuns({ recentRuns }, 5, formatTime);
+  const dots = botRoutineRuns({ recentRuns }, 6, formatTime);
   expect(dots.map((dot) => [dot.shape, dot.accessibleName, dot.conversation?.inputId])).toEqual([
-    ["hollow-square", "Run on Nov 14, 05:00, outcome unavailable", undefined],
-    ["hollow-diamond", "Run on Nov 14, 06:00, running", "input-6"],
+    ["hollow-square", "Run on Nov 14, 04:00, outcome unavailable", undefined],
+    ["hollow-diamond", "Run on Nov 14, 05:00, running", "input-5"],
+    ["filled-square", "Run on Nov 14, 06:00, failed", undefined],
     ["filled-square", "Run on Nov 14, 07:00, dispatch failed", undefined],
     ["filled-square", "Run on Nov 14, 08:00, failed", "input-8"],
     ["bar", "Run on Nov 14, 09:00, no update", "input-9"],
   ]);
-  // A refused run reads as the row's last-run line reads it.
-  expect(dots[2]?.word).toBe(
+  // A failed run reads as the row's last-run line reads it, from the same dispatch outcome.
+  const lastRunWord = (dispatchStatus: "accepted" | "failed") =>
     scheduledTaskRunPresentation({
       lastRunStatus: "failed",
       lastRun: {
-        firingId: CommandId.make("firing-7"),
-        dispatchStatus: "failed",
+        firingId: CommandId.make("firing"),
+        dispatchStatus,
         status: "failed",
         threadId: null,
         runId: null,
-        requestedAt: recentRuns[2]!.requestedAt,
+        requestedAt: recentRuns[0]!.requestedAt,
         dispatchedAt: null,
         startedAt: null,
         completedAt: null,
       },
-    }).label.toLowerCase(),
-  );
+    }).label.toLowerCase();
+  expect([dots[2]?.word, dots[3]?.word]).toEqual([lastRunWord("accepted"), lastRunWord("failed")]);
 });
 
 it("absent history draws no dots", () => {
