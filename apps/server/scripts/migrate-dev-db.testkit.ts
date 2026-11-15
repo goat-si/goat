@@ -30,6 +30,7 @@ export const withDatabase = <A, E, R>(
 
 export const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(function* (
   baseDir: string,
+  toMigrationInclusive?: number,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -40,8 +41,11 @@ export const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(
     databasePath,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations();
-      yield* sql`INSERT INTO memory_items_fts (rowid, body) VALUES (42, 'synthetic searchable memory')`;
+      yield* runMigrations({ toMigrationInclusive });
+      // GOAT's tables exist only on a fully migrated source.
+      const goatSchema = toMigrationInclusive === undefined;
+      if (goatSchema)
+        yield* sql`INSERT INTO memory_items_fts (rowid, body) VALUES (42, 'synthetic searchable memory')`;
 
       yield* sql`INSERT INTO projection_projects
         (project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at)
@@ -126,7 +130,9 @@ export const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(
         VALUES ('delivery-1', 'task-1', 'key-1', 1900000000000, '{}', '{}', '[]')`;
       yield* sql`INSERT INTO auth_sessions (session_id, subject, scopes, method, issued_at, expires_at)
         VALUES ('session-1', 'user', '[]', 'pairing', '2026-08-01', '2027-08-01')`;
-      for (const threadId of ["stopped-thread", "running-thread", "settled-thread"] as const) {
+      for (const threadId of goatSchema
+        ? (["stopped-thread", "running-thread", "settled-thread"] as const)
+        : []) {
         const correlationId = `corr-${threadId}`;
         yield* sql`INSERT INTO remote_report_bindings
           (thread_id, correlation_id, origin_label, origin_thread_id, read_key_hash, last_sequence, created_at)

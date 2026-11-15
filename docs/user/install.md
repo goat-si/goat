@@ -356,6 +356,45 @@ For provider-specific setup and accounts, see [Codex](./providers-codex.md),
 [Antigravity](./providers-antigravity.md), [Pi](./providers-pi.md),
 [Muse Code](./providers-muse.md), and [fx](./providers-fx.md).
 
+### Provider check timeouts
+
+If a provider works in its CLI but GOAT reports a timeout while checking it,
+allow more time in the GOAT server's environment. For example, give Codex and
+Claude readiness checks 60 seconds:
+
+```bash
+GOAT_CODEX_PROBE_TIMEOUT_MS=60000 GOAT_CLAUDE_PROBE_TIMEOUT_MS=60000 goat serve
+```
+
+For a remote environment, set these on the machine running the GOAT server. For
+the background service, put them in `service.env` (see
+[Configure the service environment](./background-service.md#configure-the-service-environment))
+and restart the service. A provider instance can also set its own values in its
+**Environment variables** in **Settings → Providers**.
+
+Each variable extends that provider's readiness-probe deadlines; a phase whose
+default is already longer keeps its default. Providers with several phases can
+take longer than one deadline in total. Values must be whole milliseconds no
+greater than 2147483647; unset or invalid values keep the defaults.
+
+| Provider            | Environment variable                 |
+| ------------------- | ------------------------------------ |
+| Codex               | `GOAT_CODEX_PROBE_TIMEOUT_MS`        |
+| Claude              | `GOAT_CLAUDE_PROBE_TIMEOUT_MS`       |
+| Cursor              | `GOAT_CURSOR_PROBE_TIMEOUT_MS`       |
+| Antigravity         | `GOAT_ANTIGRAVITY_PROBE_TIMEOUT_MS`  |
+| Grok                | `GOAT_GROK_PROBE_TIMEOUT_MS`         |
+| fx                  | `GOAT_FX_PROBE_TIMEOUT_MS`           |
+| Pi                  | `GOAT_PI_PROBE_TIMEOUT_MS`           |
+| Muse Code           | `GOAT_MUSE_PROBE_TIMEOUT_MS`         |
+| OpenCode            | `GOAT_OPENCODE_PROBE_TIMEOUT_MS`     |
+| ACP Registry agents | `GOAT_ACP_REGISTRY_PROBE_TIMEOUT_MS` |
+
+Longer deadlines also take longer to report a stalled check. These overrides
+cover readiness and discovery, including OpenCode server startup. Usage and
+config enrichment retain their own shorter limits. Turn execution, package
+installation, update checks, and shutdown limits keep their existing behavior.
+
 ## Next steps
 
 - [Working with threads](./thread-sidebar.md): start tasks and organize parallel work.

@@ -440,6 +440,25 @@ it.effect(
     ),
 );
 
+// Migration 080 backfills thread_mode from thread_id; upstream's later reader trusts the column.
+it.effect("saves thread_mode by the same rule as migration 080 on create and every edit", () =>
+  withWebhookService(({ service, sql }) =>
+    Effect.gen(function* () {
+      const input = yield* webhookTaskInput();
+      const mode = sql<{ thread_mode: string }>`
+        SELECT thread_mode FROM scheduled_tasks WHERE task_id = ${input.id}`.pipe(
+        Effect.map((rows) => rows.map((row) => row.thread_mode)),
+      );
+      yield* service.upsert({ ...input, threadId: ThreadId.make("bound") });
+      assert.deepEqual(yield* mode, ["continue"]);
+      yield* service.upsert({ ...input, threadId: null });
+      assert.deepEqual(yield* mode, ["new_thread"]);
+      yield* service.upsert({ ...input, threadId: ThreadId.make("bound") });
+      assert.deepEqual(yield* mode, ["continue"]);
+    }),
+  ),
+);
+
 it.effect("a bound run follows its thread when promotion moves it mid-send", () =>
   Effect.gen(function* () {
     const scratch = ProjectId.make("project:scratch");

@@ -6,7 +6,10 @@ import { workspaceAreaProps } from "../lib/workspaceFocus";
 import { ScrollToEndButton, WorkspaceFileDropOverlay } from "./chat/TimelineOverlays";
 import { usePasteToFocusComposer } from "./chat/usePasteToFocusComposer";
 import { useFocusComposerOnThreadOpen } from "./chat/useFocusComposerOnThreadOpen";
-import { announcedRun, isDetailBehindShell } from "./chat/threadActivityAnnouncement";
+import {
+  announcedRun,
+  isDetailBehindShell,
+} from "@goat/client-runtime/state/thread-activity-announcement";
 import {
   deriveAvailableRevertTurnCounts,
   presentThreadShellFromProjection,
@@ -67,7 +70,6 @@ import {
   type AssistantCitation,
   type ChatFileAttachment,
   isProviderNativeSubagentThread,
-  type EnvironmentId,
   type MessageId,
   type ModelSelection,
   type PreviewAnnotationPayload,
@@ -97,6 +99,7 @@ import {
   workflowOpeningParentThreadId,
 } from "@goat/client-runtime/state/subagentRuntime";
 import { threadSupportsProviderHandoff } from "@goat/client-runtime/state/thread-workflows";
+import { chatCompactionState } from "./chat/chatCompaction";
 import { resolvePendingHandoff } from "@goat/client-runtime/handoff";
 import { HandoffRow } from "./chat/V2LifecycleRow";
 import {
@@ -240,6 +243,7 @@ import {
 } from "../state/server";
 import { threadEnvironment } from "../state/threads";
 import { useOfferedSkills } from "./chat/providerSkillsWithBuiltIns";
+import { resolveProvidersForCwd } from "@goat/client-runtime/providerSkills";
 import { chatGitStatusAtom, NO_CHAT_GIT_STATUS_ATOM, vcsEnvironment } from "../state/vcs";
 import {
   type EnvironmentPresentation,
@@ -403,6 +407,7 @@ import { subscribeSshThreadHandoff } from "./chat/sshThreadHandoffActionBus";
 import { useBrowserHistoryProject } from "../hooks/useBrowserHistoryProject";
 import { useGlobalAgentStore } from "../globalAgentStore";
 import type { DraftSshDestination } from "../composerDraftStore";
+import type { ChatViewProps } from "./ChatView.props";
 
 const sshWorkspaceLaunchCommand = vcsEnvironment.sshWorkspaceLaunch;
 
@@ -417,29 +422,6 @@ const EMPTY_AUTO_UPDATE_ENVIRONMENTS: ReadonlyArray<EnvironmentPresentation> = [
 const EMPTY_COMPOSER_BANNER_ITEMS: ReadonlyArray<ComposerBannerStackItem> = [];
 
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
-
-type ChatViewProps =
-  | {
-      environmentId: EnvironmentId;
-      threadId: ThreadId;
-      onDiffPanelOpen?: () => void;
-      reserveTitleBarControlInset?: boolean;
-      forceExpandedMobileComposer?: boolean;
-      /** Rendered inside another thread's right panel, as that thread's side chat. */
-      embedded?: boolean;
-      routeKind: "server";
-      draftId?: never;
-    }
-  | {
-      environmentId: EnvironmentId;
-      threadId: ThreadId;
-      onDiffPanelOpen?: () => void;
-      reserveTitleBarControlInset?: boolean;
-      forceExpandedMobileComposer?: boolean;
-      embedded?: never;
-      routeKind: "draft";
-      draftId: DraftId;
-    };
 
 const noopHeldTurnDiff = (_turnId: RunId, _filePath?: string) => {};
 const noopHeldRevert = (_targetTurnCount: number) => {};
@@ -1287,10 +1269,18 @@ export default function ChatView(props: ChatViewProps) {
     : (primaryEnvironment?.serverConfig ?? null);
   const providerEnvironmentId = (activeThread ? activeEnvironment : primaryEnvironment)
     ?.environmentId;
-  const providerStatuses =
+  const gitCwd = activeProject
+    ? projectScriptCwd({
+        project: { cwd: activeProject.workspaceRoot },
+        worktreePath: activeThread?.worktreePath ?? null,
+      })
+    : null;
+  const providerStatuses = resolveProvidersForCwd(
     (providerEnvironmentId === undefined
       ? undefined
-      : providersByEnvironment.get(providerEnvironmentId)) ?? EMPTY_PROVIDERS;
+      : providersByEnvironment.get(providerEnvironmentId)) ?? EMPTY_PROVIDERS,
+    gitCwd,
+  );
   const selectedProviderByThreadId = composerActiveProvider ?? null;
   const threadProvider =
     activeThread?.modelSelection.instanceId ??
@@ -1530,25 +1520,14 @@ export default function ChatView(props: ChatViewProps) {
       latestServerUserItem.attachments.length === 0 &&
       latestServerUserItem.runId === activeActivityRun?.runId &&
       !isLatestRunSettled(activeActivityRun, activeRuntime));
-  const compactionSettled = serverVisibleTurnItems.some(
-    ({ item }) =>
-      item.type === "compaction" &&
-      item.runId === activeActivityRun?.runId &&
-      (item.status === "completed" ||
-        item.status === "failed" ||
-        item.status === "interrupted" ||
-        item.status === "cancelled"),
-  );
-  const compactionRunning = serverVisibleTurnItems.some(
-    ({ item }) =>
-      item.type === "compaction" &&
-      item.runId !== null &&
-      item.runId === activeRuntime?.activeRunId &&
-      item.status === "running",
-  );
-  const isCompacting =
-    (isSendBusy || phase === "connecting" || phase === "running") &&
-    (compactionRunning || (compactRequestIsActive && !compactionSettled));
+  const { isCompacting, canSteer } = chatCompactionState({
+    turnItems: serverVisibleTurnItems,
+    activityRunId: activeActivityRun?.runId,
+    activeRunId: activeRuntime?.activeRunId,
+    compactRequestIsActive,
+    busy: isSendBusy || phase === "connecting" || phase === "running",
+    projection: serverProjection,
+  });
   const isWorking =
     phase === "running" ||
     isSendBusy ||
@@ -1720,12 +1699,7 @@ export default function ChatView(props: ChatViewProps) {
     serverVisibleTurnItems,
     turnDiffSummaries.at(-1)?.completedAt ?? null,
   );
-  const gitCwd = activeProject
-    ? projectScriptCwd({
-        project: { cwd: activeProject.workspaceRoot },
-        worktreePath: activeThread?.worktreePath ?? null,
-      })
-    : null;
+
   const gitStatusCwd = activeThread?.worktreePath ?? gitCwd;
   const workspaceStatus = useThreadWorkspaceStatus(
     isServerThread ? activeThreadRef : null,
@@ -3826,7 +3800,7 @@ export default function ChatView(props: ChatViewProps) {
                                   isLocalDraftThread && activeProject === null
                                 }
                                 phase={phase}
-                                isCompacting={isCompacting}
+                                canSteer={canSteer}
                                 canInterrupt={canInterruptRunningThread}
                                 isConnecting={isConnecting}
                                 isSendBusy={

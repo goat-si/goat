@@ -168,6 +168,7 @@ function useNewTaskSettingsSession(): ThreadSettingsSessionProps {
   return {
     environmentId: flow.selectedEnvironmentId,
     projectId: flow.selectedProject?.id ?? null,
+    cwd: flow.workspaceCwd,
     ...(flow.selectedModel ? { providerInstanceId: flow.selectedModel.instanceId } : {}),
     providerGroups: flow.providerGroups,
     selectedModel: flow.selectedModel,

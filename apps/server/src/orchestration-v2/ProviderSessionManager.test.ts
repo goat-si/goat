@@ -19,6 +19,7 @@ export {
 } from "./ProviderSessionFixture.testkit.ts";
 import { registerExtensionSessionChecks } from "./ProviderExtensionSessionChecks.testkit.ts";
 import { registerDetachRequestCheck } from "./ProviderSessionDetachRequest.testkit.ts";
+import { registerSessionScopedArtifactCheck } from "./ProviderSessionScopedArtifact.testkit.ts";
 import * as PreviewAgentActivity from "../preview/PreviewAgentActivity.ts";
 import * as CodexRoutes from "../provider/CodexRouteService.ts";
 import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts";
@@ -3721,90 +3722,12 @@ registerDetachRequestCheck({
   layerTest,
 });
 
-it.effect("ProviderSessionManagerV2 persists session-scoped runtime requests without a run", () =>
-  Effect.gen(function* () {
-    const state = yield* Ref.make(emptyState);
-    const effect = Effect.gen(function* () {
-      const eventSink = yield* EventSink.EventSinkV2;
-      const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
-      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
-      const now = yield* DateTime.now;
-      const projectId = yield* idAllocator.allocate.project({
-        fixtureName: "provider-session-manager-session-request",
-      });
-      const threadId = yield* idAllocator.allocate.thread({
-        fixtureName: "provider-session-manager-session-request",
-        projectId,
-      });
-      const providerSessionId = yield* idAllocator.allocate.providerSession({
-        providerInstanceId: modelSelection.instanceId,
-        threadId,
-      });
-      const providerThread = makeProviderThread({
-        idAllocator,
-        threadId,
-        providerSessionId,
-        now,
-      });
-
-      yield* eventSink.write({
-        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
-      });
-      yield* manager.open({
-        threadId,
-        providerSessionId,
-        modelSelection,
-        runtimePolicy,
-      });
-      const pendingRequest = yield* makePendingRuntimeRequestEvents({
-        idAllocator,
-        threadId,
-        providerSessionId,
-        providerThread,
-        now,
-      });
-      const afterSequence = yield* eventSink.latestSequence({ threadId });
-      const persistedFiber = yield* eventSink.stream({ threadId, afterSequence }).pipe(
-        Stream.filter(
-          (stored) =>
-            stored.event.type === "runtime-request.updated" ||
-            stored.event.type === "node.updated" ||
-            stored.event.type === "turn-item.updated",
-        ),
-        Stream.take(3),
-        Stream.runCollect,
-        Effect.forkScoped,
-      );
-      const adapterEvents = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
-      assert.isDefined(adapterEvents);
-      yield* Queue.offerAll(adapterEvents!, pendingRequest.providerEvents);
-      const persisted = Array.from(yield* Fiber.join(persistedFiber));
-
-      assert.sameMembers(
-        persisted.map((stored) => stored.event.type),
-        ["runtime-request.updated", "node.updated", "turn-item.updated"],
-      );
-      const projection = yield* projectionStore.getThreadProjection(threadId);
-      const request = projection.runtimeRequests.find(
-        (candidate) => candidate.id === pendingRequest.requestId,
-      );
-      const node = projection.nodes.find((candidate) => candidate.id === pendingRequest.nodeId);
-      const turnItem = projection.turnItems.find(
-        (candidate) =>
-          candidate.type === "approval_request" && candidate.requestId === pendingRequest.requestId,
-      );
-      assert.equal(request?.status, "pending");
-      assert.equal(request?.providerTurnId, null);
-      assert.equal(node?.runId, null);
-      assert.equal(node?.status, "waiting");
-      assert.equal(turnItem?.runId, null);
-      assert.equal(turnItem?.status, "waiting");
-    });
-
-    yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })));
-  }),
-);
+registerSessionScopedArtifactCheck({
+  makeThreadCreatedEvent,
+  makeProviderThread,
+  makePendingRuntimeRequestEvents,
+  layerTest,
+});
 
 it.effect(
   "ProviderSessionManagerV2 opens one shared runtime, broadcasts events, and detaches threads independently",

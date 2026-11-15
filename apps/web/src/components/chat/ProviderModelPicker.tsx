@@ -94,6 +94,7 @@ function lockBackgroundScroll(popup: HTMLElement | null) {
 
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   environmentId: EnvironmentId | null;
+  workspaceCwd?: string | null;
   activeInstanceId: ProviderInstanceId;
   model: string;
   selectedModels?: ReadonlyArray<{ instanceId: ProviderInstanceId; model: string }>;
@@ -352,6 +353,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         <ModelPickerContent
           searchInputRef={searchInputRef}
           environmentId={props.environmentId}
+          workspaceCwd={props.workspaceCwd ?? null}
           activeInstanceId={activeInstanceId}
           model={props.model}
           {...(props.selectedModels !== undefined ? { selectedModels: props.selectedModels } : {})}

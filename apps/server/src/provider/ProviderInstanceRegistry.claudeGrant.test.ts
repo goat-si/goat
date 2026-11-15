@@ -31,6 +31,7 @@ import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventL
 import { makeProviderInstanceRegistry } from "./ProviderInstanceRegistry.ts";
 import * as ProviderOrchestrationAdapterInfrastructure from "./ProviderOrchestrationAdapterInfrastructure.ts";
 import * as ProviderHostLive from "./ProviderHostLive.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 
 const layerTestHttpClient = Layer.succeed(
   HttpClient.HttpClient,
@@ -198,6 +199,7 @@ describe("ProviderInstanceRegistry Claude grants", () => {
   );
   const layerBase = ProviderHostLive.layer.pipe(Layer.provideMerge(layerBaseDeps));
   const layerTest = ProviderOrchestrationAdapterInfrastructure.layer.pipe(
+    Layer.provide(SqlitePersistence.layerMemory),
     Layer.provideMerge(layerBase),
   );
 

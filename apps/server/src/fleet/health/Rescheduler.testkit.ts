@@ -13,8 +13,8 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as HostPowerMonitor from "../../background/HostPowerMonitor.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
-import Migration0087 from "../../persistence/Migrations/102_FleetHealth.ts";
-import Migration0140 from "../../persistence/Migrations/140_PlacementAdmission.ts";
+import Migration0087 from "../../persistence/Migrations/112_FleetHealth.ts";
+import Migration0140 from "../../persistence/Migrations/150_PlacementAdmission.ts";
 import { layer as PlacementAttemptsLayer } from "../admission/PlacementAttempts.ts";
 import { PlacementAdmissionEnabled } from "../admission/PlacementKey.ts";
 import * as PlacementPlacer from "../admission/PlacementPlacer.ts";

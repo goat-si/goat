@@ -244,6 +244,7 @@ import { GoatBotSidebarTabs, useBotSidebarSelected } from "./goatBot/GoatBotSide
 import { DecisionInboxSidebarRow } from "./decisions/DecisionInboxSidebarRow";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
+import { useLaunchingSidebarThreads } from "./sidebar/launchingThreads";
 import { TooltipProvider } from "./ui/tooltip";
 import { composerDraftHasUserContent, DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { useShownThreadRouteTarget } from "../hooks/useShownThreadRouteTarget";
@@ -936,6 +937,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ),
         );
   const threads = useQuietThreadShells();
+  const listedThreads = useLaunchingSidebarThreads(threads);
   const routeRowThreadKey =
     routeThreadRef === null
       ? null
@@ -1083,7 +1085,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     openSubagentOwnerKey,
     attentionByOwnerKey: subagentIndex.attentionByOwnerKey,
     routeRowThreadKey,
-    threads,
+    threads: listedThreads,
   });
 
   const priorityRead = useSidebarPriorityRead({

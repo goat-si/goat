@@ -1,3 +1,4 @@
+import { resolveProviderProbeTimeoutMs } from "@goat/provider-core/server/snapshotProbe";
 import * as HomeRoute from "../OpenCodexRoute.ts";
 import * as AdapterInfrastructure from "../ProviderOrchestrationAdapterInfrastructure.ts";
 import * as Option from "effect/Option";
@@ -382,7 +383,7 @@ export const CodexDriver: ProviderDriver<
               provideHomeRoute,
               Effect.provideService(Path.Path, pathService),
               Effect.scoped,
-              Effect.timeout("20 seconds"),
+              Effect.timeout(resolveProviderProbeTimeoutMs("codex", 20_000, processEnv)),
               Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
             ),
           ]).pipe(

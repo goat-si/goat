@@ -11,6 +11,7 @@ import {
   ThreadId,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
+  type ProviderOptionSelection,
 } from "@goat/contracts";
 import { OpenCodeSettings } from "../settings.ts";
 import * as Effect from "effect/Effect";
@@ -120,6 +121,8 @@ export const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness"
   client: object,
   options: {
     readonly external?: boolean;
+    readonly model?: string;
+    readonly modelOptions?: ReadonlyArray<ProviderOptionSelection>;
     readonly memory?: Pick<
       ProviderAdapter.ProviderAdapterV2TurnInput,
       "memoryContext" | "refreshMemoryContext"
@@ -131,8 +134,8 @@ export const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness"
   const threadId = ThreadId.make(`thread-opencode-${suffix}`);
   const modelSelection = {
     instanceId,
-    model: "anthropic/claude-sonnet",
-    options: [],
+    model: options.model ?? "anthropic/claude-sonnet",
+    options: options.modelOptions ?? [],
   };
   const policy = runtimePolicy("full-access", { cwd: "/workspace" });
   const adapter = yield* makeOpenCodeAdapterV2({
