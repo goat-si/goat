@@ -209,7 +209,14 @@ export const make = Effect.gen(function* () {
     (input: I) =>
       installationGate === undefined
         ? run(input)
-        : installationGate.execute(input.modelSelection.instanceId, run(input));
+        : registry.getInstance(input.modelSelection.instanceId).pipe(
+            // The gate keeps an entry per id, so an unregistered id (it fails in run) never enters.
+            Effect.flatMap((instance) =>
+              instance === undefined
+                ? run(input)
+                : installationGate.execute(input.modelSelection.instanceId, run(input)),
+            ),
+          );
   return TextGeneration.of({
     resolveMemoryConflict: gated(ungated.resolveMemoryConflict),
     generateMemorySummary: gated(ungated.generateMemorySummary),
