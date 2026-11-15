@@ -76,7 +76,8 @@ function setup(data: unknown, cause: unknown = null) {
   state.data = data;
   state.cause = cause;
   state.tasksByBot = null;
-  state.members = {};
+  // A known older server, unless a test says otherwise.
+  state.members = { env: false };
   state.refresh.mockReset();
   state.requested.mockReset();
 }
@@ -149,6 +150,8 @@ it("shows a denied read without offering a retry", async () => {
 
 it("a member's tab lists only that bot's work", async () => {
   setup({ tasks: [] });
+  // A member is named whether or not the computer's config has arrived.
+  state.members = {};
   await render({ botId: BotId.make("research") });
   expect(state.requested).toHaveBeenCalledWith({
     environmentId,
@@ -164,6 +167,27 @@ it("the main bot's card lists only the main bot's work on a server with member b
     scout: [task("b", "Pick the release branch", {})],
   };
   await render();
+  expect(container.textContent).toContain("Move the build to Node 24");
+  expect(container.textContent).not.toContain("Pick the release branch");
+});
+
+it("the main bot's card asks for nothing until the computer's config is known, then for the main bot only (#3333)", async () => {
+  setup(null);
+  state.members = {};
+  state.tasksByBot = {
+    main: [task("a", "Move the build to Node 24", {})],
+    scout: [task("b", "Pick the release branch", {})],
+  };
+  await render();
+  expect(state.requested).not.toHaveBeenCalled();
+  expect(container.textContent).toContain("Machines can't be listed from this server right now.");
+  expect(container.textContent).not.toContain("Pick the release branch");
+  state.members = { env: true };
+  await render();
+  expect(state.requested).toHaveBeenLastCalledWith({
+    environmentId,
+    input: expect.objectContaining({ botId: "main" }),
+  });
   expect(container.textContent).toContain("Move the build to Node 24");
   expect(container.textContent).not.toContain("Pick the release branch");
 });
