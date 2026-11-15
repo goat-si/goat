@@ -33,6 +33,8 @@ const screenSession = vi.hoisted(() => ({
   boundedSnapshots: false,
   environmentId: null as string | null,
   threadId: null as string | null,
+  // Where a message would go; undefined follows the conversation shown.
+  sending: undefined as { environmentId: string; threadId: string } | null | undefined,
   // Whether the bot can take messages now; Home opens either way.
   availability: "ready" as string,
 }));
@@ -335,11 +337,13 @@ vi.mock("react-native", () => ({
     value,
     onChangeText,
     accessibilityLabel,
+    editable,
   }: {
     style?: unknown;
     value?: string;
     onChangeText?: (text: string) => void;
     accessibilityLabel?: string;
+    editable?: boolean;
   }) => (
     <input
       // Every chat's message box answers to one label here; other fields keep their own.
@@ -350,6 +354,7 @@ vi.mock("react-native", () => ({
       }
       data-style={JSON.stringify(style)}
       value={value ?? ""}
+      readOnly={editable === false}
       onChange={(event) => onChangeText?.(event.currentTarget.value)}
     />
   ),
@@ -529,6 +534,14 @@ vi.mock("./useMobileGoatBotSession", () => ({
       boundedSnapshots: screenSession.boundedSnapshots,
       historyEnvironmentId: screenSession.environmentId,
       threadId: screenSession.threadId,
+      sendEnvironmentId:
+        screenSession.sending === undefined
+          ? screenSession.environmentId
+          : (screenSession.sending?.environmentId ?? null),
+      sendThreadId:
+        screenSession.sending === undefined
+          ? screenSession.threadId
+          : (screenSession.sending?.threadId ?? null),
     };
   },
 }));
@@ -564,6 +577,8 @@ export function setupComposer() {
 
 export async function typeInto(container: HTMLElement, value: string) {
   const input = container.querySelector<HTMLInputElement>('[aria-label="Message GOAT Bot"]');
+  // A person cannot type into a read-only box, so neither can a test.
+  if (input?.readOnly) throw new Error("The message box is read-only.");
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
     input?.dispatchEvent(new Event("input", { bubbles: true }));

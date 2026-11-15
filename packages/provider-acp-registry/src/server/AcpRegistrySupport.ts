@@ -471,7 +471,7 @@ export class AcpRegistryCatalog extends Context.Service<
       settings: AcpRegistrySettings,
       cwd: string,
       environment?: NodeJS.ProcessEnv,
-      options?: { readonly allowInstall?: boolean },
+      options?: { readonly allowInstall?: boolean; readonly spawnEnvironment?: NodeJS.ProcessEnv },
     ) => Effect.Effect<ResolvedAcpRegistryAgent, AcpRegistryError>;
     readonly uninstallManagedBinary: (
       input: AcpRegistryManagedBinaryUninstallInput,
@@ -1760,8 +1760,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
             detail: "Local ACP provider requires an executable.",
           });
         }
-        const env = environment ?? hostEnvironment;
-        const command = resolveExecutable(executable, platform, env);
+        const command = resolveExecutable(executable, platform, environment ?? hostEnvironment);
         if (command === undefined) {
           return yield* new AcpRegistryError({
             reason: "runner_unavailable",
@@ -1769,6 +1768,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
           });
         }
         yield* validateLocalExecutable(command);
+        const env = options?.spawnEnvironment ?? environment ?? hostEnvironment;
         return {
           distribution: "local",
           spawn: { command, args: settings.commandArgs, cwd, env, shell: false },
@@ -1865,7 +1865,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       }
 
       const baseSpawnEnvironment = {
-        ...effectiveEnvironment,
+        ...(options?.spawnEnvironment ?? effectiveEnvironment),
         ...distribution.env,
       };
       const spawnEnvironment =

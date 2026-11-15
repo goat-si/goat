@@ -25,6 +25,27 @@ import {
   GOAT_PI_MCP_EXTENSION_PATH_ENV,
 } from "./mcpExtensionSource.ts";
 
+function clearInheritedPiEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  // These values belong to the current GOAT session. Never let a Pi child reuse
+  // credentials inherited from the server or a parent provider process.
+  for (const name of [GOAT_MCP_URL_ENV, GOAT_MCP_BEARER_ENV, GOAT_PI_MCP_EXTENSION_PATH_ENV]) {
+    delete environment[name];
+    delete environment[legacyEnvName(name) ?? name];
+  }
+  delete environment[GOAT_CUA_MCP_ENV];
+  delete environment[GOAT_CUA_GATE_ENV];
+  delete environment[GOAT_SCREEN_CODE_SKILL_ENV];
+  delete environment[GOAT_BROWSER_TOOLS_ENV];
+  delete environment[GOAT_SCREEN_CODE_SKILL_GATE_ENV];
+  delete environment[GOAT_SUBAGENT_GATE_ENV];
+  delete environment[GOAT_PI_PROFILE_ENV];
+  return environment;
+}
+
+export function sanitizePiProbeEnvironment(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return clearInheritedPiEnvironment(withThreadAgentEnvironment(base, undefined));
+}
+
 const RESERVED_PI_LAUNCH_ARGUMENTS = new Set([
   "--continue",
   "-c",
@@ -320,23 +341,9 @@ export function buildPiRpcLaunch(input: {
   ) {
     args.push("--extension", input.extensionPath);
   }
-  const environment = withThreadAgentEnvironment(
-    input.environment,
-    hasGoatMcp ? input.mcpSession : undefined,
+  const environment = clearInheritedPiEnvironment(
+    withThreadAgentEnvironment(input.environment, hasGoatMcp ? input.mcpSession : undefined),
   );
-  // These values belong to the current GOAT session. Never let a Pi child reuse
-  // credentials inherited from the server or a parent provider process.
-  for (const name of [GOAT_MCP_URL_ENV, GOAT_MCP_BEARER_ENV, GOAT_PI_MCP_EXTENSION_PATH_ENV]) {
-    delete environment[name];
-    delete environment[legacyEnvName(name) ?? name];
-  }
-  delete environment[GOAT_CUA_MCP_ENV];
-  delete environment[GOAT_CUA_GATE_ENV];
-  delete environment[GOAT_SCREEN_CODE_SKILL_ENV];
-  delete environment[GOAT_BROWSER_TOOLS_ENV];
-  delete environment[GOAT_SCREEN_CODE_SKILL_GATE_ENV];
-  delete environment[GOAT_SUBAGENT_GATE_ENV];
-  delete environment[GOAT_PI_PROFILE_ENV];
   // The driver reaches Pi only through GOAT's extension bridge, fixed at launch.
   const cuaDriver = hasGoatMcp ? input.mcpSession?.cuaDriver : undefined;
 

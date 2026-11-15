@@ -86,6 +86,7 @@ export type CursorAgentOpenTarget =
   | { readonly operation: "resume"; readonly agentId: string };
 
 export type CursorAgentSdkOpenInput = CursorAgentOpenTarget & {
+  readonly validate?: Effect.Effect<void, CursorAgentSdkRunnerError>;
   readonly storeCwd?: string;
   readonly options: AgentOptions;
   readonly threadId: ThreadId;

@@ -203,6 +203,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
   options: {
     readonly memoryRunnerContext?: MemoryGenerationRunnerContext;
     readonly environment?: NodeJS.ProcessEnv;
+    readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -229,7 +230,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
         ? yield* prepareMemoryServer(
             input.operation,
             parsedModel.providerID,
-            options.environment ?? process.env,
+            yield* options.currentEnvironment ?? Effect.succeed(options.environment ?? process.env),
             1,
           )
         : undefined;

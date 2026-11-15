@@ -5,7 +5,8 @@ import * as Predicate from "effect/Predicate";
 /**
  * Claude refuses these before it reads the prompt: replacing a process running background work,
  * launch arguments whose appended system prompt cannot be read, or MCP registration that never
- * answers while the query opens.
+ * answers while the query opens. A query that exits before the turn attaches never offered the
+ * prompt either, so the native session stays usable for the next attempt.
  */
 export const CLAUDE_QUERY_ENDED_BEFORE_TURN_DETAIL =
   "Claude provider query ended before the turn could start.";
