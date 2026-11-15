@@ -58,7 +58,6 @@ async function keptAfterWriting(bots: ReadonlyArray<readonly [string, string]>) 
           isSuccess: data !== null,
           refresh: () => {},
         },
-        !props.online,
         props.bot,
       ),
     );

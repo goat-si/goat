@@ -29,8 +29,55 @@ const deniedKeyOf = (environmentId: EnvironmentId) => `${generation}:${environme
 const removals = new WeakMap<AtomRegistry.AtomRegistry, Map<EnvironmentId, number>>();
 const removalsOf = (registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentId) =>
   removals.get(registry)?.get(environmentId) ?? 0;
-// The per-bot keys written for each computer, so forgetting the computer reaches every one.
-const parts = new WeakMap<AtomRegistry.AtomRegistry, Map<EnvironmentId, Set<string>>>();
+// Member statuses kept, oldest first, per registry: forgetting a computer reaches every one, and
+// the store stays within its bounds by dropping the status kept longest ago.
+const statuses = new WeakMap<
+  AtomRegistry.AtomRegistry,
+  Map<string, { readonly environmentId: EnvironmentId; readonly part: string }>
+>();
+const STATUSES_PER_COMPUTER = 100;
+const STATUSES_IN_ALL = 400;
+// Answers dropped to stay within the bounds: a row still on screen does not write that same answer
+// back (which would drop the next oldest, and so on); a new answer may be kept again. Weak, so it
+// holds nothing a row no longer holds.
+const evicted = new WeakSet<object>();
+
+function dropStatus(registry: AtomRegistry.AtomRegistry, key: string, evict = false) {
+  statuses.get(registry)?.delete(key);
+  const answer = registry.get(keptAtom(key));
+  if (evict && typeof answer === "object" && answer !== null) evicted.add(answer);
+  registry.set(keptAtom(key), null);
+}
+
+function noteStatus(
+  registry: AtomRegistry.AtomRegistry,
+  key: string,
+  environmentId: EnvironmentId,
+  part: string,
+) {
+  const kept =
+    statuses.get(registry) ??
+    new Map<string, { readonly environmentId: EnvironmentId; readonly part: string }>();
+  statuses.set(registry, kept);
+  kept.delete(key);
+  kept.set(key, { environmentId, part });
+  const ofComputer = [...kept.keys()].filter((at) => kept.get(at)?.environmentId === environmentId);
+  const oldestOfComputer = ofComputer[0];
+  if (ofComputer.length > STATUSES_PER_COMPUTER && oldestOfComputer !== undefined)
+    dropStatus(registry, oldestOfComputer, true);
+  const oldest = kept.keys().next();
+  if (kept.size > STATUSES_IN_ALL && !oldest.done) dropStatus(registry, oldest.value, true);
+}
+
+/** Drops the statuses kept for bots a successful bot list no longer lists as active. */
+function keepStatusesOf(
+  registry: AtomRegistry.AtomRegistry,
+  environmentId: EnvironmentId,
+  active: ReadonlySet<string>,
+) {
+  for (const [key, entry] of statuses.get(registry) ?? [])
+    if (entry.environmentId === environmentId && !active.has(entry.part)) dropStatus(registry, key);
+}
 
 export function resetKeptPerComputerForTests() {
   generation += 1;
@@ -38,10 +85,14 @@ export function resetKeptPerComputerForTests() {
 
 function forget(registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentId) {
   for (const kind of KINDS) registry.set(keptAtom(keyOf(kind, environmentId)), null);
-  for (const key of parts.get(registry)?.get(environmentId) ?? [])
-    registry.set(keptAtom(key), null);
-  parts.get(registry)?.delete(environmentId);
+  keepStatusesOf(registry, environmentId, new Set());
   registry.set(deniedAtom(deniedKeyOf(environmentId)), false);
+}
+
+/** The computer refused this phone: everything kept for it goes, and it stays refused. */
+function refuse(registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentId) {
+  forget(registry, environmentId);
+  registry.set(deniedAtom(deniedKeyOf(environmentId)), true);
 }
 
 /**
@@ -78,8 +129,7 @@ export function followKeptPerComputerCatalog(
             for (const [environmentId, presentation] of presentations) {
               const denied = deniedAtom(deniedKeyOf(environmentId));
               if (!refusedConnection(presentation.connection) || registry.get(denied)) continue;
-              forget(registry, environmentId);
-              registry.set(denied, true);
+              refuse(registry, environmentId);
             }
           },
           { immediate: true },
@@ -91,26 +141,21 @@ export function followKeptPerComputerCatalog(
 }
 
 /**
- * The live answer while the computer is connected; offline, the live answer if any, else the last
- * successful one this phone read from that computer. A success still marked waiting (a refresh in
- * flight) is written too: its value is the server's last answer, and a refresh that never finishes
- * before the computer drops must not leave nothing kept.
+ * The live answer when there is one, else the last successful one this phone read from that
+ * computer: offline, and back online until the first read answers. A success still marked waiting
+ * (a refresh in flight) is written too: its value is the server's last answer, and a refresh that
+ * never finishes before the computer drops must not leave nothing kept.
  */
 export function useKeptPerComputer<A>(
   kind: Kind,
   environmentId: EnvironmentId | null,
   live: EnvironmentQueryView<A>,
-  offline: boolean,
+
   /** Keeps one answer per part of the computer (a member's status, by bot id). */
   part?: string,
 ): A | null {
   const registry = useContext(RegistryContext);
   const readable = useComputerReadable(environmentId);
-  const setComputerDenied = useAtomSet(
-    (environmentId === null
-      ? NOT_DENIED
-      : deniedAtom(deniedKeyOf(environmentId))) as Atom.Writable<boolean>,
-  );
   const key = environmentId === null ? null : keyOf(kind, environmentId, part);
   const atom = key === null ? NO_KEPT : keptAtom(key);
   const stored = useAtomValue(atom) as A | null;
@@ -121,10 +166,20 @@ export function useKeptPerComputer<A>(
   // oxlint-disable-next-line goat/react-effect-budget -- Remember each computer's last answer so it still reads after that computer drops.
   useEffect(() => {
     if (environmentId === null || key === null) return;
-    // The bot list speaks for the whole computer: refused, nothing of it shows until a read succeeds.
-    if (kind === "bots") {
-      if (denied) setComputerDenied(true);
-      else if (settled !== null) setComputerDenied(false);
+    // The bot list speaks for the whole computer: refused, nothing of it shows until a read succeeds,
+    // and a successful one drops the statuses of bots it no longer lists as active.
+    if (kind === "bots" && denied) {
+      refuse(registry, environmentId);
+      return;
+    }
+    if (kind === "bots" && settled !== null) {
+      registry.set(deniedAtom(deniedKeyOf(environmentId)), false);
+      const bots = (settled as { readonly bots?: ReadonlyArray<ListedBot> }).bots ?? [];
+      keepStatusesOf(
+        registry,
+        environmentId,
+        new Set(bots.filter((bot) => bot.state !== "deleted").map((bot) => bot.botId)),
+      );
     }
     if (denied || !readable) {
       if (stored !== null) store(null);
@@ -136,12 +191,9 @@ export function useKeptPerComputer<A>(
       registry.get(environmentCatalog.catalogValueAtom).entries.has(environmentId) &&
       removalsOf(registry, environmentId) === removalsAtRender;
     if (!unchanged || settled === null || settled === stored) return;
-    if (part !== undefined) {
-      const computers = parts.get(registry) ?? new Map<EnvironmentId, Set<string>>();
-      parts.set(registry, computers);
-      computers.set(environmentId, (computers.get(environmentId) ?? new Set()).add(key));
-    }
+    if (part !== undefined && typeof settled === "object" && evicted.has(settled)) return;
     store(settled);
+    if (part !== undefined) noteStatus(registry, key, environmentId, part);
   }, [
     registry,
     environmentId,
@@ -153,13 +205,11 @@ export function useKeptPerComputer<A>(
     denied,
     readable,
     store,
-    setComputerDenied,
     removalsAtRender,
   ]);
   // A refused read still holds its earlier answer; it is not shown.
   if (denied || !readable) return null;
-  if (!offline || live.data !== null) return live.data;
-  return stored;
+  return live.data ?? stored;
 }
 
 /**
@@ -174,6 +224,8 @@ export function useComputerReadable(environmentId: EnvironmentId | null): boolea
   );
   return environmentId !== null && catalog.entries.has(environmentId) && !denied;
 }
+
+type ListedBot = { readonly botId: string; readonly state?: string };
 
 /** The connection stopped because the computer refuses this phone's credential or scope. */
 function refusedConnection(connection: EnvironmentPresentation["connection"]): boolean {

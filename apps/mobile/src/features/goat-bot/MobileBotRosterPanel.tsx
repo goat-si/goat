@@ -43,7 +43,9 @@ export function MobileBotRoster(props: {
   const roster = useMobileBotRoster();
   const botRef = useMobileGoatBotHomeMode().botRef;
   const preview = useMobileBotPreview(botRef);
-  const mainReadable = useComputerReadable(botRef?.environmentId ?? null);
+  // A refused bot list is known in the render it arrives; the store hears of it after that commit.
+  const refusedNow = roster.refused && botRef?.environmentId === roster.environmentId;
+  const mainReadable = useComputerReadable(botRef?.environmentId ?? null) && !refusedNow;
   const mainName = goatBotName(roster.groups.main);
   const manage = useMobileBotManage(roster.environmentId, mainName);
   const [editing, setEditing] = useState<BotProfile | null>(null);
@@ -208,11 +210,12 @@ export function MobileBotRoster(props: {
             : undefined
         }
         slackEnabled={roster.slackEnabled}
-        preview={preview?.text}
+        preview={mainReadable ? preview?.text : undefined}
         offline={roster.environmentId !== null && !roster.connected}
+        stale={roster.stale}
         mainUnreadable={!mainReadable}
-        unread={preview?.unread}
-        mainEnvironmentId={environmentId}
+        unread={mainReadable ? preview?.unread : undefined}
+        mainEnvironmentId={roster.refused ? null : environmentId}
         onOpenBot={props.onOpenBot}
         onOpenTask={props.onOpenTask}
         onUnknownBot={roster.refreshBots ?? undefined}

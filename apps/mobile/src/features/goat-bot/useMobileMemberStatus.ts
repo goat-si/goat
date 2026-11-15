@@ -1,5 +1,9 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import { goatBotPreviewText, type GoatBotRowStatus } from "@goat/client-runtime/goatBot";
+import {
+  accessDenied,
+  goatBotPreviewText,
+  type GoatBotRowStatus,
+} from "@goat/client-runtime/goatBot";
 import type { BotProfile, ChannelGetBotStatusResult } from "@goat/contracts";
 import { useEffect, useMemo } from "react";
 
@@ -7,9 +11,9 @@ import { channelEnvironment } from "../../state/channels";
 import { useThreadShell } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
-import { useKeptPerComputer } from "./useKeptPerComputer";
+import { useComputerReadable, useKeptPerComputer } from "./useKeptPerComputer";
 
-// The row shows one line; a kept message is cut well past what a phone row can show.
+// The row shows one line; a kept message is cut, by characters, well past what a row can show.
 const KEPT_LINE_LENGTH = 200;
 
 /**
@@ -28,8 +32,12 @@ export function useMobileMemberStatus(bot: BotProfile): {
   readonly latest: ChannelGetBotStatusResult["latest"];
   readonly unread: boolean;
   readonly status: GoatBotRowStatus | null;
-  /** What the row shows was read before the computer went offline, and may be out of date. */
+  /** What the row shows was read before (offline, or before the first read after a reconnect). */
   readonly kept: boolean;
+  /** The computer is not connected now. */
+  readonly offline: boolean;
+  /** This phone may not read the member now: its status read or its computer refused it. */
+  readonly unreadable: boolean;
 } {
   const { presentationById } = useEnvironments();
   const presentation = presentationById.get(bot.environmentId);
@@ -67,7 +75,9 @@ export function useMobileMemberStatus(bot: BotProfile): {
               : {
                   latest: {
                     ...answer.latest,
-                    text: goatBotPreviewText(answer.latest.text).slice(0, KEPT_LINE_LENGTH),
+                    text: Array.from(goatBotPreviewText(answer.latest.text))
+                      .slice(0, KEPT_LINE_LENGTH)
+                      .join(""),
                   },
                 }),
           },
@@ -77,10 +87,12 @@ export function useMobileMemberStatus(bot: BotProfile): {
     "status",
     bot.state === "deleted" ? null : bot.environmentId,
     { ...status, data: row },
-    offline,
     bot.botId,
   );
   const kept = shown !== null && answer === null;
+  // Nothing this phone may no longer read reaches the row, its face included.
+  const readable = useComputerReadable(bot.environmentId);
+  const unreadable = accessDenied(status.cause) || !readable;
   const data = shown === null ? null : kept ? shown : answer;
   const latest = data?.latest;
   // A server that records no visits (lastVisitedAt absent) cannot say what was read.
@@ -115,5 +127,7 @@ export function useMobileMemberStatus(bot: BotProfile): {
             ...(kept || answer?.tasks === undefined ? {} : { tasks: answer.tasks }),
           },
     kept,
+    offline,
+    unreadable,
   };
 }

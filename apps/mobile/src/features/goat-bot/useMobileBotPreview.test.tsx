@@ -148,20 +148,15 @@ function mainTile() {
     return null;
   }
   function BotList(props: { readonly cause: unknown; readonly offline: boolean }) {
-    useKeptPerComputer(
-      "bots",
-      EnvironmentId.make("env"),
-      {
-        data: props.cause === null && !props.offline ? botList : null,
-        successResult: null,
-        cause: props.cause,
-        error: null,
-        isPending: false,
-        isSuccess: props.cause === null && !props.offline,
-        refresh: () => {},
-      },
-      props.offline,
-    );
+    useKeptPerComputer("bots", EnvironmentId.make("env"), {
+      data: props.cause === null && !props.offline ? botList : null,
+      successResult: null,
+      cause: props.cause,
+      error: null,
+      isPending: false,
+      isSuccess: props.cause === null && !props.offline,
+      refresh: () => {},
+    });
     return null;
   }
   const root = createRoot(document.createElement("div"));

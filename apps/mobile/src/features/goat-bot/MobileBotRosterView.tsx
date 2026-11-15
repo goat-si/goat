@@ -96,6 +96,8 @@ export function MobileBotRosterView(props: {
   unread?: boolean;
   /** The bots' computer is offline: what the rows show was read before and may be out of date. */
   offline?: boolean;
+  /** Back online, the rows still show what was read before, until the first read answers. */
+  stale?: boolean;
   /** The main bot's computer may no longer be read here (refused or removed): its tile rests. */
   mainUnreadable?: boolean;
   /** The main bot's computer, whose Home may govern its work signals. */
@@ -233,9 +235,9 @@ export function MobileBotRosterView(props: {
                   <Text className="text-xs text-foreground-muted">Also in Slack</Text>
                 ) : null}
               </Pressable>
-              {props.offline && !props.mainUnreadable ? (
+              {(props.offline || props.stale) && !props.mainUnreadable ? (
                 <Text className="px-4 pb-1 text-xs text-foreground-muted">
-                  Offline · this may be out of date
+                  {props.offline ? "Offline · this may be out of date" : "This may be out of date"}
                 </Text>
               ) : null}
             </Fragment>
@@ -397,7 +399,8 @@ function MemberRow(props: {
   const waitingCount = stale ? 0 : member.waitingCount;
   const face = useMobileGoatBotFace(
     null,
-    { environmentId: bot.environmentId, threadId: bot.sessionThreadId },
+    // A member this phone may no longer read rests: its retained conversation says nothing.
+    member.unreadable ? null : { environmentId: bot.environmentId, threadId: bot.sessionThreadId },
     // A status whose refresh failed is not read for the face either; it keeps the face it had.
     { status: stale ? null : status },
   );
@@ -416,7 +419,7 @@ function MemberRow(props: {
     unread ? "unread" : null,
     ...(signals?.spoken ?? []),
     line || null,
-    member.kept ? STALE : null,
+    member.kept ? (member.offline ? STALE : "may be out of date") : null,
   ]
     .filter((part) => part !== null)
     .join(", ");

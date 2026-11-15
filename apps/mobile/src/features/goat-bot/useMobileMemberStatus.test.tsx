@@ -204,20 +204,15 @@ function rosterRow(bot = scout) {
   // Needs you's own kept read of the computer's open asks.
   function Asks() {
     const live = member.connected && !member.pending ? member.asks : null;
-    asks = useKeptPerComputer(
-      "asks",
-      EnvironmentId.make("env"),
-      {
-        data: live,
-        successResult: null,
-        cause: null,
-        error: null,
-        isPending: member.connected && member.pending,
-        isSuccess: live !== null,
-        refresh: () => {},
-      },
-      !member.connected,
-    );
+    asks = useKeptPerComputer("asks", EnvironmentId.make("env"), {
+      data: live,
+      successResult: null,
+      cause: null,
+      error: null,
+      isPending: member.connected && member.pending,
+      isSuccess: live !== null,
+      refresh: () => {},
+    });
     return null;
   }
   function Probe(props: { readonly bot: typeof scout }) {
@@ -226,21 +221,16 @@ function rosterRow(bot = scout) {
   }
   // The roster's own bot-list read, which says whether this phone may still read the computer.
   function BotList(props: { readonly cause: unknown }) {
-    useKeptPerComputer(
-      "bots",
-      EnvironmentId.make("env"),
-      {
-        // As in the app, a bot list reads nothing while its computer is offline or refuses it.
-        data: props.cause === null && member.connected ? listOf(member.listed) : null,
-        successResult: null,
-        cause: props.cause,
-        error: null,
-        isPending: false,
-        isSuccess: props.cause === null && member.connected,
-        refresh: () => {},
-      },
-      !member.connected,
-    );
+    useKeptPerComputer("bots", EnvironmentId.make("env"), {
+      // As in the app, a bot list reads nothing while its computer is offline or refuses it.
+      data: props.cause === null && member.connected ? listOf(member.listed) : null,
+      successResult: null,
+      cause: props.cause,
+      error: null,
+      isPending: false,
+      isSuccess: props.cause === null && member.connected,
+      refresh: () => {},
+    });
     return null;
   }
   const root = createRoot(document.createElement("div"));

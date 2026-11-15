@@ -57,7 +57,7 @@ export function useMobileOpenAsks(
     supported && connected ? openAsks({ environmentId, input: {} }) : null,
   );
   // Offline, the asks last read from this computer, kept through a later failed refresh.
-  const kept = useKeptPerComputer("asks", environmentId, asks, !connected);
+  const kept = useKeptPerComputer("asks", environmentId, asks);
   const inView = useAppActive() && visible;
   const refresh = asks.refresh;
   // oxlint-disable-next-line goat/react-effect-budget -- Read the open asks again each time the roster comes into view with the app in front.
