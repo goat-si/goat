@@ -54,7 +54,8 @@ export const readRecentRuns = Effect.fn("ScheduledTaskRecentRuns.read")(function
       FROM json_each(${chosen}))
     SELECT task_id, snapshot_json, input_id, quiet FROM (
       SELECT r.task_id, r.snapshot_json, l.input_id,
-        json_extract(i.decision_json, '$.action.type') = 'no_update' AS quiet,
+        CASE WHEN json_valid(i.decision_json) THEN json_extract(i.decision_json, '$.action.type') END
+          = 'no_update' AS quiet,
         ROW_NUMBER() OVER (PARTITION BY r.task_id, r.task_created_at
           ORDER BY r.requested_at DESC, r.firing_id DESC) AS position
       FROM chosen c

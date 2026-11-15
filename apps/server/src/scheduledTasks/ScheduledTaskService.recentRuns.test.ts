@@ -69,7 +69,12 @@ const accept = ({ sql, runs }: Fixture, firingId: CommandId) =>
   });
 
 /** The bot's answer as reception stores it; a quiet one is its no_update decision. */
-const answer = ({ sql, runs }: Fixture, firingId: CommandId, inputId: string, quiet: boolean) =>
+const answer = (
+  { sql, runs }: Fixture,
+  firingId: CommandId,
+  inputId: string,
+  quiet: boolean | "malformed",
+) =>
   Effect.gen(function* () {
     yield* sql`INSERT OR IGNORE INTO channel_conversations
       (conversation_id, owner_id, kind, connection_id, conversation_key, last_activity_at)
@@ -78,10 +83,11 @@ const answer = ({ sql, runs }: Fixture, firingId: CommandId, inputId: string, qu
       (binding_id, conversation_id, connection_id, reply_address_json, last_activity_at)
       VALUES ('binding', 'conversation', 'goat', '{}', '2026-11-07T00:00:00.000Z')`;
     const decision = { replyText: "Done.", action: { type: quiet ? "no_update" : "report_only" } };
+    const decisionJson = quiet === "malformed" ? "{" : JSON.stringify(decision);
     yield* sql`INSERT INTO channel_inbox (input_id, owner_id, kind, connection_id, idempotency_key,
       content_hash, conversation_id, binding_id, message_json, state, accepted_at, decision_json)
       VALUES (${inputId}, 'owner', 'goat', 'goat', ${inputId}, '', 'conversation', 'binding', '{}',
-      'replied', '2026-11-07T00:00:00.000Z', ${JSON.stringify(decision)})`;
+      'replied', '2026-11-07T00:00:00.000Z', ${decisionJson})`;
     yield* runs.finishChannelFiring({ firingId, outcome: { type: "completed" }, at: yield* now });
   });
 
@@ -156,6 +162,26 @@ it.effect("a run that cannot be read is left out, and the rest of the list stays
       assert.deepStrictEqual(
         historyOf(yield* fixture.service.list(), routine.id)?.map((run) => run.firingId),
         [firings[0], firings[2]],
+      );
+    }),
+  ),
+);
+
+it.effect("a decision that is not JSON leaves its run not quiet and every history in place", () =>
+  withWebhookService((fixture) =>
+    Effect.gen(function* () {
+      const broken = yield* saveRoutine(fixture, "goat-bot-check-in:broken");
+      const other = yield* saveRoutine(fixture, "goat-bot-check-in:other");
+      const brokenFiring = yield* fire(fixture, broken);
+      yield* answer(fixture, brokenFiring, yield* accept(fixture, brokenFiring), "malformed");
+      const otherFiring = yield* fire(fixture, other);
+      yield* answer(fixture, otherFiring, yield* accept(fixture, otherFiring), true);
+      const listed = yield* fixture.service.list();
+      assert.deepStrictEqual(
+        [broken.id, other.id].map((id) =>
+          historyOf(listed, id)?.map((run) => [run.firingId, run.status, run.quiet === true]),
+        ),
+        [[[brokenFiring, "completed", false]], [[otherFiring, "completed", true]]],
       );
     }),
   ),
