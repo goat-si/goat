@@ -7,6 +7,10 @@
       "types": "./src/composerModelMentions.ts",
       "default": "./src/composerModelMentions.ts"
     },
+    "./locales": {
+      "types": "./src/locales.ts",
+      "default": "./src/locales.ts"
+    },
     "./blocked-browser-hosts": {
       "types": "./src/blockedBrowserHosts.ts",
       "default": "./src/blockedBrowserHosts.ts"
