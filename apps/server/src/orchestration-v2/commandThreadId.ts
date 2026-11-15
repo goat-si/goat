@@ -1,6 +1,6 @@
 import type { OrchestrationV2ServerCommand, ThreadId } from "@goat/contracts";
 
-function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
+export function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
   switch (command.type) {
     case "thread.create":
     case "thread.archive":
@@ -84,5 +84,3 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
       return command.targetThreadId;
   }
 }
-
-export { commandThreadId };
