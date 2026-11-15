@@ -494,7 +494,11 @@ it("a minute's tick re-renders only the row whose text changed", async () => {
   const recent = { ...task, lastActivityAt: "2026-11-11T05:00:00.000Z" };
   const old = withPullRequests("task-pr", "Fix the slow test", []);
   await show({
-    work: { running: [], waiting: [{ ...listedTask, row: recent }], finished: [{ ...listedTask, row: old }] },
+    work: {
+      running: [],
+      waiting: [{ ...listedTask, row: recent }],
+      finished: [{ ...listedTask, row: old }],
+    },
     rows: [recent, old],
   });
   commits.clear();

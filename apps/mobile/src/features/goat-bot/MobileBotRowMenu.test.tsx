@@ -77,6 +77,8 @@ import * as Schema from "effect/Schema";
 import { MobileBotRowMenu } from "./MobileBotRowMenu";
 import { MobileBotWorkRow } from "./MobileBotWorkRow";
 
+const decodeRow = Schema.decodeUnknownSync(BotThreadRow);
+
 const actions = [
   { id: "work", title: "Show work" },
   { id: "pin", title: "Pin" },
@@ -168,9 +170,14 @@ it("on iOS wraps the row in a menu set to open on long press, given the button's
 });
 
 it("on Android a long press of a Home work row opens its actions, through the row's own control", async () => {
-  const row = Schema.decodeUnknownSync(BotThreadRow)({
+  const row = decodeRow({
     kind: "task",
-    task: { taskId: "task-1", title: "Task", status: "running", updatedAt: "2026-11-11T02:00:00.000Z" },
+    task: {
+      taskId: "task-1",
+      title: "Task",
+      status: "running",
+      updatedAt: "2026-11-11T02:00:00.000Z",
+    },
     view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
     lastActivityAt: "2026-11-11T02:00:00.000Z",
     unread: false,

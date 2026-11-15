@@ -11,7 +11,7 @@ const notTicking = () => () => {};
 
 /**
  * A work row's time in the words web's Home rows use: "now", "5m", "2h", "3d" (apps/web
- * RelativeTimeLabel over formatRelativeElapsed). The two scales must stay equal (#3310).
+ * RelativeTimeLabel over formatRelativeElapsed). The two scales must stay equal.
  */
 export function mobileRowTime(timestamp: string, nowMs: number): string {
   const at = Date.parse(timestamp);

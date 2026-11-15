@@ -1,4 +1,7 @@
-import { goatBotRowPullRequests, type GoatBotRowPullRequestChip } from "@goat/client-runtime/goatBot";
+import {
+  goatBotRowPullRequests,
+  type GoatBotRowPullRequestChip,
+} from "@goat/client-runtime/goatBot";
 import type { BotThreadRow } from "@goat/contracts";
 import { Pressable, Text, View } from "react-native";
 
@@ -22,11 +25,7 @@ const CHIP_TEXT_CLASS: Record<GoatBotRowPullRequestChip["state"], string> = {
  * The words a task row says and VoiceOver reads: title, status, how long ago, unread and pinned,
  * then each pull request shown and how many more there are.
  */
-export function mobileBotTaskLabel(
-  row: TaskRow,
-  chips: MobileTaskChips,
-  time = "",
-): string {
+export function mobileBotTaskLabel(row: TaskRow, chips: MobileTaskChips, time = ""): string {
   const spoken = mobileRowTimeSpoken(time);
   const pullRequests = goatBotRowPullRequests(row, VISIBLE_PULL_REQUESTS);
   return [
