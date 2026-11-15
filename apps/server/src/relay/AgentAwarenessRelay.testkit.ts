@@ -131,6 +131,7 @@ export const makeTestRelay = Effect.fnUntraced(function* (
   const threads = ThreadManagementService.ThreadManagementService.of({
     getLaunchedPendingQuestions: () => Effect.die("Unused launched question query"),
     assertReviewTaskSendAllowed: unused,
+    getThreadNewestRun: unused,
     getThreadShell: (threadId) =>
       Effect.sync(() => shellReads.push(threadId)).pipe(
         Effect.andThen(options.readShell?.(threadId) ?? Ref.get(currentShell)),

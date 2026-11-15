@@ -392,6 +392,8 @@ const serviceLayer = ({ orchestrator, store }: Fixture, options: ServiceOptions 
           ),
         getReviewLedgerEntries: (input) => store.getReviewLedgerEntries(input).pipe(Effect.orDie),
         getThreadShell: (id) => store.getThreadShell(id).pipe(Effect.orDie),
+        getTimelinePage: (id, options) => store.getTimelinePage(id, options).pipe(Effect.orDie),
+        listLaunchEdges: () => store.listLaunchEdges().pipe(Effect.orDie),
         getProjectThreadRecords: (target, fields, filter) =>
           store.getThreadRecords(target.threadId, fields, filter).pipe(Effect.orDie),
         delegatedTaskResultPending: () => Effect.succeed(false),

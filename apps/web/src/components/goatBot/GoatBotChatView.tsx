@@ -10,9 +10,12 @@ import {
 import { Link } from "@tanstack/react-router";
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { goatBotHomeKey } from "./goatBotHomeRequest";
+import {
+  GOAT_BOT_HOME_DOCKED_WIDTH,
+  GoatBotHomeDockedRegistry,
+  useGoatBotHomePresentation,
+} from "./goatBotLayout";
 
-import { useMediaQuery } from "~/hooks/useMediaQuery";
-import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "~/rightPanelLayout";
 import { cn } from "~/lib/utils";
 import { Sheet, SheetPopup, SheetTitle } from "../ui/sheet";
 import { GoatBotFileViewer } from "./GoatBotFileViewer";
@@ -22,7 +25,7 @@ import { useGoatBotRoutineLanding } from "./useGoatBotRoutineLanding";
 
 import { APP_DISPLAY_NAME } from "~/branding";
 import { isElectron } from "~/env";
-import { GOAT_BOT_PATH, type GlobalAgentLegacyRoute } from "~/globalAgentRoute";
+import { type GlobalAgentLegacyRoute } from "~/globalAgentRoute";
 import { useStableCallback } from "~/hooks/useStableCallback";
 
 import { WorkspaceFileDropOverlay } from "../chat/TimelineOverlays";
@@ -46,6 +49,7 @@ import { GoatBotComposer, type GoatBotComposerHandle } from "./GoatBotComposer";
 import { GoatBotMemberModelPicker } from "./GoatBotMemberModelPicker";
 import { GoatBotModelPicker } from "./GoatBotModelPicker";
 import { GoatBotNameRow } from "./GoatBotNameRow";
+import { GoatBotRemovedNotice } from "./GoatBotRemovedNotice";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { GoatBotActivityStatus } from "./GoatBotActivityStatus";
 import { GoatBotReplyStatus } from "./GoatBotReplyStatus";
@@ -188,7 +192,9 @@ function GoatBotChatViewContent({
   const title = useGoatBotName();
   const mainName = useGoatBotMainName();
   const picture = useGoatBotPicture();
-  const narrow = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const { viewRef, presentation, hidden } = useGoatBotHomePresentation(panelOpen);
+  const registerHomeDocked = useContext(GoatBotHomeDockedRegistry);
+  const narrow = presentation === "sheet";
   const bot = availability.kind === "ready" ? availability.bot : null;
   const routineLanding = useGoatBotRoutineLanding(bot, panelOpen, () => setPanelOpen(true));
   const removed = removal !== null;
@@ -288,20 +294,22 @@ function GoatBotChatViewContent({
   const [replyState, setReplyState] = useState<{ botIdentity: string; text: string } | null>(null);
   if (replyState !== null && replyState.botIdentity !== botIdentity) setReplyState(null);
   const replyTo = replyState?.botIdentity === botIdentity ? replyState.text : null;
-  const onDraft = canSend
-    ? (text: string) => {
-        if (narrow) {
-          sheetClosedFor.current = "draft";
-          setPanelOpen(false);
+  // Home in its sheet over a task would fill a message box nobody can see.
+  const onDraft =
+    canSend && !hidden
+      ? (text: string) => {
+          if (narrow) {
+            sheetClosedFor.current = "draft";
+            setPanelOpen(false);
+          }
+          if (composerRef.current?.offerDraft(text) === false) {
+            toastManager.add({
+              type: "info",
+              title: "Your message box already has a message. Send or clear it, then try again.",
+            });
+          }
         }
-        if (composerRef.current?.offerDraft(text) === false) {
-          toastManager.add({
-            type: "info",
-            title: "Your message box already has a message. Send or clear it, then try again.",
-          });
-        }
-      }
-    : undefined;
+      : undefined;
   const notesRefreshKey = goatBotNotesRefreshKey(rows);
   // A Library file open in place of the conversation, for the bot it was opened from.
   const [viewing, setViewing] = useState<{
@@ -377,7 +385,7 @@ function GoatBotChatViewContent({
             ? null
             : statusLine(availability);
   return (
-    <div className="flex min-h-0 min-w-0 flex-1" style={accentStyle}>
+    <div ref={viewRef} className="flex min-h-0 min-w-0 flex-1" style={accentStyle}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
         <WorkspacePageHeader electron={isElectron} className="surface-glass relative">
           <div aria-hidden className="flex-1 basis-0" />
@@ -497,7 +505,7 @@ function GoatBotChatViewContent({
           {/* The conversation stays mounted under an open file, so closing it keeps its place. */}
           <div className={cn("flex min-h-0 flex-1 flex-col", shownFile !== null && "hidden")}>
             {/* An open file covers the conversation, so its activity lines stop reading. */}
-            <GoatBotStepsReader rows={rows} paused={shownFile !== null}>
+            <GoatBotStepsReader rows={rows} paused={shownFile !== null || hidden}>
               <GoatBotOpenFileContext value={fileOpening}>
                 {rows.length > 0 ? (
                   // History stays readable while the bot is unavailable; only sending stops.
@@ -606,8 +614,14 @@ function GoatBotChatViewContent({
           />
         </div>
       </div>
-      {bot && panelOpen && !narrow && (
-        <aside aria-label={`${title} work`} className="flex w-88 shrink-0 border-l border-border">
+      {bot && panelOpen && presentation === "docked" && (
+        <aside
+          ref={registerHomeDocked}
+          data-goat-bot-home-docked
+          aria-label={`${title} work`}
+          className="flex shrink-0 border-l border-border"
+          style={{ width: GOAT_BOT_HOME_DOCKED_WIDTH }}
+        >
           <GoatBotWorkPanel
             key={homeKey}
             environmentId={bot.environmentId}
@@ -669,135 +683,6 @@ function GoatBotChatViewContent({
         </Sheet>
       )}
     </div>
-  );
-}
-
-function GoatBotRemovedNotice({
-  removal,
-  availability,
-  onRetryAvailability,
-  canOpenCurrentBot,
-  onUnarchive,
-  onRestore,
-  memberName,
-  onCheckAgain,
-}: {
-  readonly removal: Exclude<GoatBotRemoval, null>;
-  readonly availability: GoatBotAvailability;
-  readonly onRetryAvailability: (() => void) | undefined;
-  readonly canOpenCurrentBot: boolean;
-  readonly onUnarchive: (() => void) | undefined;
-  readonly onRestore: (() => void) | undefined;
-  readonly memberName: string | null;
-  readonly onCheckAgain: (() => void) | undefined;
-}) {
-  const picture = useGoatBotPicture();
-  const botName = useGoatBotName();
-  if (memberName !== null) {
-    return (
-      <Empty className="min-h-0 flex-1">
-        <EmptyHeader className="max-w-md">
-          <GoatBotAvatar
-            size="lg"
-            emoji={picture.emoji}
-            accent={picture.accent}
-            className="mx-auto mb-4"
-          />
-          <EmptyTitle>{memberName} was deleted</EmptyTitle>
-          <EmptyDescription>
-            Its conversation is archived. Restore it to keep chatting here.
-          </EmptyDescription>
-        </EmptyHeader>
-        {onRestore !== undefined ? (
-          <EmptyContent>
-            <div className="flex justify-center">
-              <Button size="sm" variant="outline" onClick={onRestore}>
-                Restore
-              </Button>
-            </div>
-          </EmptyContent>
-        ) : null}
-      </Empty>
-    );
-  }
-  if (removal === "unchecked") {
-    return (
-      <Empty className="min-h-0 flex-1">
-        <EmptyHeader className="max-w-md">
-          <GoatBotAvatar
-            size="lg"
-            emoji={picture.emoji}
-            accent={picture.accent}
-            className="mx-auto mb-4"
-          />
-          <EmptyTitle>Couldn't check this chat</EmptyTitle>
-          <EmptyDescription>
-            It may have been archived or deleted. Check again to find out.
-          </EmptyDescription>
-        </EmptyHeader>
-        {onCheckAgain !== undefined ? (
-          <EmptyContent>
-            <div className="flex justify-center">
-              <Button size="sm" variant="outline" onClick={onCheckAgain}>
-                Check again
-              </Button>
-            </div>
-          </EmptyContent>
-        ) : null}
-      </Empty>
-    );
-  }
-  const replacementFailed =
-    removal === "deleted" &&
-    !canOpenCurrentBot &&
-    (availability.kind === "error" ||
-      availability.kind === "legacy_active" ||
-      availability.kind === "ready");
-  const description = canOpenCurrentBot
-    ? `${botName} keeps going in its current chat.`
-    : removal === "archived"
-      ? `Unarchive it to keep chatting with ${botName} here.`
-      : replacementFailed
-        ? `Couldn't start a new ${botName} chat.`
-        : availability.kind === "connecting"
-          ? `${botName} is starting a new chat.`
-          : `Reconnect to start a new ${botName} chat.`;
-  return (
-    <Empty className="min-h-0 flex-1">
-      <EmptyHeader className="max-w-md">
-        <GoatBotAvatar
-          size="lg"
-          emoji={picture.emoji}
-          accent={picture.accent}
-          className="mx-auto mb-4"
-        />
-        <EmptyTitle>
-          {removal === "archived" ? "This chat is archived" : "This chat was deleted"}
-        </EmptyTitle>
-        <EmptyDescription>{description}</EmptyDescription>
-      </EmptyHeader>
-      {canOpenCurrentBot ||
-      onUnarchive !== undefined ||
-      (replacementFailed && onRetryAvailability) ? (
-        <EmptyContent>
-          <div className="flex justify-center">
-            {canOpenCurrentBot ? (
-              <Button size="sm" variant="outline" render={<Link to={GOAT_BOT_PATH} />}>
-                Open GOAT Bot
-              </Button>
-            ) : onUnarchive !== undefined ? (
-              <Button size="sm" variant="outline" onClick={onUnarchive}>
-                Unarchive
-              </Button>
-            ) : (
-              <Button size="sm" variant="outline" onClick={onRetryAvailability}>
-                Try again
-              </Button>
-            )}
-          </div>
-        </EmptyContent>
-      ) : null}
-    </Empty>
   );
 }
 

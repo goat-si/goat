@@ -35,7 +35,6 @@ import {
   serverConfigForCwd,
 } from "../../lib/modelOptions";
 import { scopedProjectKey } from "../../lib/scopedEntities";
-import { appAtomRegistry } from "../../state/atom-registry";
 import { projectEnvironment } from "../../state/projects";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -69,11 +68,7 @@ import {
 } from "../../state/use-model-option-memory";
 import { useBranches, usePaginatedBranches } from "../../state/queries";
 import { vcsEnvironment } from "../../state/vcs";
-import {
-  flattenQueuedThreadMessages,
-  threadOutboxManager,
-  type QueuedThreadMessage,
-} from "../../state/thread-outbox";
+import { flattenQueuedThreadMessages, type QueuedThreadMessage } from "../../state/thread-outbox";
 import {
   holdEditingQueuedMessage,
   releaseEditingQueuedMessage,
@@ -106,26 +101,16 @@ import {
   resolveNewTaskBranchWorktreePath,
   resolveNewTaskDraftWorkspace,
 } from "./new-task-context-presentation";
-import { resolveEnvironmentProjectMatch } from "./new-task-project-selection";
+import { isSameRepository, resolveEnvironmentProjectMatch } from "./new-task-project-selection";
 import { type UnopenableRouteDraft, useNewTaskRouteFlow } from "./use-new-task-route-flow";
 import { useNewTaskProjectDefaults } from "./use-new-task-project-defaults";
+import { findQueuedPendingTask, pendingTaskDraftKey } from "./new-task-pending-task";
 import { resolveProjectThreadCreationBranch } from "./projectThreadCreationValidation";
 
 type WorkspaceMode = "local" | "worktree";
 
-function pendingTaskDraftKey(messageId: string): string {
-  return `pending-task:${messageId}`;
-}
-
 // Track ownership across providers so old unmount flushes cannot drop newer drafts or drain locks.
 let activeEditingMessageId: string | null = null;
-
-function findQueuedPendingTask(messageId: string): QueuedThreadMessage | null {
-  const message = flattenQueuedThreadMessages(
-    appAtomRegistry.get(threadOutboxManager.queuedMessagesByThreadKeyAtom),
-  ).find((candidate) => candidate.messageId === messageId);
-  return message?.creation !== undefined ? message : null;
-}
 
 type NewTaskFlowContextValue = {
   readonly activeNewTask: { readonly pendingKey: string | null } | null;
@@ -561,11 +546,14 @@ export function NewTaskFlowProvider(
     }
     replaceComposerDraftAttachments(selectedProjectDraftKey, []);
   };
-  const carryDraftContentTo = (project: EnvironmentProject) => {
+  const carryDraftContentTo = (
+    project: EnvironmentProject,
+    options?: Parameters<typeof retargetNewTaskDraft>[2],
+  ) => {
     const target = { environmentId: project.environmentId, projectId: project.id };
     const currentDraftKey = readFlow().draftKey;
     if (currentDraftKey !== null && isNewTaskDraftKey(currentDraftKey)) {
-      retargetNewTaskDraft(currentDraftKey, target);
+      retargetNewTaskDraft(currentDraftKey, target, options);
     } else if (!editingPendingTaskRef.current) {
       setActiveDraftKey(createNewTaskDraft(target));
     }
@@ -585,7 +573,10 @@ export function NewTaskFlowProvider(
       selectedProject,
     );
     if (match) {
-      carryDraftContentTo(match);
+      // A name or title match may be another repository, which must not receive the PR checkout.
+      carryDraftContentTo(match, {
+        keepPullRequestWorkspace: isSameRepository(match, selectedProject),
+      });
     }
     setSelectedEnvironmentId(environmentId);
     setSelectedProjectKey(match ? scopedProjectKey(match.environmentId, match.id) : null);

@@ -13,6 +13,7 @@ import { Button } from "../../components/ui/Button";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { splitMarkdownDetails } from "../../lib/markdownDetails";
+import { markdownReferenceDefinitions, withReferenceDefinitions } from "../../lib/markdownDocument";
 import {
   SelectableMarkdownText,
   type MarkdownFileContextMenu,
@@ -99,6 +100,8 @@ function ArtifactTemplateCard(props: {
 // Folds split first, so an artifact card inside a fold stays inside it.
 export function AssistantMarkdownBlocks(props: {
   readonly markdown: string;
+  /** The reply's reference definitions, passed down by the enclosing fold. */
+  readonly definitions?: ReadonlyArray<string> | undefined;
   readonly iconSubtleColor: string;
   readonly markdownStyles: MarkdownStyleSet;
   readonly linkHandlers: MarkdownLinkHandlers;
@@ -106,15 +109,20 @@ export function AssistantMarkdownBlocks(props: {
   readonly renderImage: MarkdownImageRenderer;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
 }) {
-  const blocks = useMemo(
-    () =>
-      splitMarkdownDetails(props.markdown).map((block) =>
-        block.kind === "details"
-          ? block
-          : { ...block, segments: splitCodexArtifactTemplateMarkdown(block.markdown) },
-      ),
-    [props.markdown],
-  );
+  const { blocks, definitions } = useMemo(() => {
+    const blocks = splitMarkdownDetails(props.markdown).map((block) =>
+      block.kind === "details"
+        ? block
+        : { ...block, segments: splitCodexArtifactTemplateMarkdown(block.markdown) },
+    );
+    const [first] = blocks;
+    // A reply rendered as one document resolves its own references; skip the extra parse.
+    const whole = blocks.length === 1 && first?.kind === "markdown" && first.segments.length === 1;
+    return {
+      blocks,
+      definitions: props.definitions ?? (whole ? [] : markdownReferenceDefinitions(props.markdown)),
+    };
+  }, [props.markdown, props.definitions]);
   return blocks.map((block) => {
     if (block.kind === "details") {
       return (
@@ -124,7 +132,7 @@ export function AssistantMarkdownBlocks(props: {
           initiallyOpen={block.open}
           iconSubtleColor={props.iconSubtleColor}
         >
-          <AssistantMarkdownBlocks {...props} markdown={block.body} />
+          <AssistantMarkdownBlocks {...props} markdown={block.body} definitions={definitions} />
         </MarkdownDetailsFold>
       );
     }
@@ -143,7 +151,9 @@ export function AssistantMarkdownBlocks(props: {
       return (
         <SelectableMarkdownText
           key={`markdown:${offset}`}
-          markdown={renderCodexInlineDirectivesAsMarkdown(segment.markdown)}
+          markdown={renderCodexInlineDirectivesAsMarkdown(
+            withReferenceDefinitions(segment.markdown, definitions),
+          )}
           skills={props.skills}
           textStyle={props.markdownStyles.nativeTextStyle}
           {...props.linkHandlers}

@@ -39,6 +39,7 @@ import {
   CHECKPOINT_BACKPRESSURE_FRAMES,
   CHECKPOINT_FRAMES,
   openCheckpointWorker,
+  prepareCheckpointWriter,
 } from "./sqliteCheckpointWorker.ts";
 
 import { makeWriter } from "./nodeSqliteWriter.ts";
@@ -505,8 +506,10 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
       "open",
     );
   }
-  writer.exec("PRAGMA busy_timeout = 5000;");
-  const version = String(writer.prepare("SELECT sqlite_version() AS version").get()?.version);
+  const { version, journalMode, frames, sizeLimit } = yield* Effect.try({
+    try: () => prepareCheckpointWriter(writer),
+    catch: (cause) => failed(cause, "Failed to open database", "open"),
+  });
   const [major = 0, minor = 0] = version.split(".").map(Number);
   // Older SQLite treats NOOP as PASSIVE, which would checkpoint on the writer.
   if (major < 3 || (major === 3 && minor < 51)) {
@@ -516,9 +519,6 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
       "open",
     );
   }
-  const journalMode = writer.prepare("PRAGMA journal_mode");
-  const frames = writer.prepare("PRAGMA wal_checkpoint(NOOP)");
-  const sizeLimit = writer.prepare("PRAGMA journal_size_limit");
   // Replaced once recover() exists; a worker that errors before then also exits, which attach() reports.
   let onWorkerError = (_candidate: NodeWorkerThreads.Worker, _cause: Error) => {};
   const openWorker = () => openCheckpointWorker(filename, (...args) => onWorkerError(...args));

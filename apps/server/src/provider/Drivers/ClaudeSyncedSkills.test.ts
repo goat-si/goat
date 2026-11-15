@@ -23,7 +23,7 @@ it.layer(NodeServices.layer)("discoverClaudeSkills synced plugins", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const configDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-skills-" });
+      const configDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-claude-skills-" });
       const synced = path.join(configDir, "plugins", "synced");
       const organization = "11111111-2222-4333-8444-555555555555";
       const writeBucket = Effect.fn(function* (account: string, skillSuffix = "") {
@@ -133,7 +133,7 @@ it.layer(NodeServices.layer)("discoverClaudeSkills synced plugins", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const configDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-skills-" });
+      const configDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-claude-skills-" });
       const bucketName = "11111111-2222-4333-8444-555555555555_unbound";
       const synced = path.join(configDir, "plugins", "synced");
       const bucket = path.join(synced, bucketName);
@@ -209,7 +209,7 @@ it.layer(NodeServices.layer)("discoverClaudeSkills synced plugins", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-skills-" });
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-claude-skills-" });
       const configDir = path.join(tempDir, "claude-home");
       const workspace = path.join(tempDir, "workspace");
       const bucketName =

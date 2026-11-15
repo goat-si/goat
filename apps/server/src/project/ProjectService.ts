@@ -523,9 +523,10 @@ export const make = Effect.gen(function* () {
           (cause) => new ProjectOperationError({ operation: "list-threads", projectId, cause }),
         ),
       );
-    const projectThreads = [...snapshot.threads, ...snapshot.archivedThreads].filter(
-      (thread) => thread.projectId === projectId,
-    );
+    // Newest first: a source deleted while its fork lives keeps the pages that fork shows.
+    const projectThreads = [...snapshot.threads, ...snapshot.archivedThreads]
+      .filter((thread) => thread.projectId === projectId)
+      .sort((a, b) => DateTime.toEpochMillis(b.createdAt) - DateTime.toEpochMillis(a.createdAt));
     if (projectThreads.length > 0 && input.force !== true) {
       return yield* new ProjectNotEmptyError({ projectId });
     }

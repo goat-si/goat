@@ -40,13 +40,10 @@ import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
-import type { DraftComposerAttachment } from "../../lib/composerImages";
-import { retainComposerAttachmentFile } from "../../lib/composerAttachmentFiles";
-import {
-  GoatBotAttachButton,
-  GoatBotAttachmentStrip,
-  releaseGoatBotAttachments,
-} from "./GoatBotComposerAttachments";
+import { GoatBotAttachButton, GoatBotAttachmentStrip } from "./GoatBotComposerAttachments";
+import { GoatBotComposerMenu } from "./GoatBotComposerMenu";
+import { GOAT_BOT_NEW_ROUTINE_DRAFT } from "./goatBotDraftRequests";
+import { useGoatBotDraftAttachments } from "./useGoatBotDraftAttachments";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import {
   startOpeningDetail,
@@ -420,20 +417,11 @@ export function GoatBotScreen(props: {
   );
   const memberModelMenu = useMobileGoatBotMemberModelMenu(member, goatBotName(props.main ?? null));
   const mainModelMenu = useMobileGoatBotModelMenu();
-  const [attachments, setAttachments] = useState<ReadonlyArray<DraftComposerAttachment>>([]);
-  const draftFiles = useRef(new Map<string, () => void>());
-  const pickerLifetime = useRef<AbortController | null>(null);
-  // oxlint-disable-next-line goat/react-effect-budget -- Release draft file ownership when the screen unmounts.
-  useEffect(() => {
-    const controller = new AbortController();
-    pickerLifetime.current = controller;
-    return () => {
-      controller.abort();
-      pickerLifetime.current = null;
-      for (const release of draftFiles.current.values()) release();
-      draftFiles.current.clear();
-    };
-  }, []);
+  const files = useGoatBotDraftAttachments(
+    props.visible,
+    JSON.stringify([session.historyEnvironmentId, session.threadId, taskId ?? null]),
+  );
+  const { attachments, intake } = files;
   // What the list last reported about its scroll, size and footer; the progress line moves only
   // while enough of it shows. Kept in a ref so scroll events re-render only when that answer flips.
   const listMetrics = useRef<ListMetrics>({
@@ -559,8 +547,6 @@ export function GoatBotScreen(props: {
       accent,
     ],
   );
-  // Photos still being read after the picker closed; they join the message when they arrive.
-  const [intake, setIntake] = useState(0);
   // Where the caret goes once the home sheet has gone, after a request filled the box from it.
   const focusOnDismiss = useRef<number | null>(null);
   // Edit bot from the home sheet opens once the sheet has gone.
@@ -582,8 +568,8 @@ export function GoatBotScreen(props: {
   useEffect(() => {
     if (Platform.OS === "android" && !homeOpen) sheetGone();
   });
-  // A drafted request (New routine, Ask to change or forget) fills only an empty message box; the
-  // caller keeps its sheet and wording when the box is taken.
+  // A drafted request (New routine, Ask to change or forget) fills only a box with no words or files
+  // (blank space counts as empty, as for Send); the caller keeps its sheet and wording otherwise.
   const draft = (request: string) => {
     if (text.trim().length > 0 || attachments.length > 0 || intake > 0) {
       Alert.alert(
@@ -595,7 +581,8 @@ export function GoatBotScreen(props: {
     setText(request);
     // A drafted request is its own message, never an answer to a question.
     answering.stop();
-    if (homeOpen) focusOnDismiss.current = request.length;
+    // Android moves the caret only once the drafted text has committed; see the effect above.
+    if (homeOpen || Platform.OS === "android") focusOnDismiss.current = request.length;
     else focusInput(request.length);
     return true;
   };
@@ -614,20 +601,12 @@ export function GoatBotScreen(props: {
     }
     if (session.onSend(text, attachments)) {
       unread.clear();
-      for (const release of draftFiles.current.values()) release();
-      draftFiles.current.clear();
+      files.sent();
       setText("");
-      setAttachments([]);
       setInputHeight(44);
     }
   };
   const support = session.attachmentSupport;
-  const removeAttachment = (id: string) => {
-    draftFiles.current.get(id)?.();
-    draftFiles.current.delete(id);
-    releaseGoatBotAttachments(attachments.filter((attachment) => attachment.id === id));
-    setAttachments((current) => current.filter((attachment) => attachment.id !== id));
-  };
   const taskCard = taskId
     ? session.rows.find((row): row is TaskRow => row.kind === "task" && row.card.key === taskId)
     : undefined;
@@ -890,7 +869,7 @@ export function GoatBotScreen(props: {
           <GoatBotAttachmentStrip
             environmentId={session.historyEnvironmentId}
             attachments={attachments}
-            onRemove={removeAttachment}
+            onRemove={files.remove}
           />
           {editing.nameRow}
           {answering.target !== null ? (
@@ -926,30 +905,17 @@ export function GoatBotScreen(props: {
             }}
           />
           <View className="min-h-[44px] flex-row items-center gap-2">
-            {support ? (
+            {taskId === undefined ? (
+              <GoatBotComposerMenu
+                shown={props.visible && props.foreground !== false && !opener.covered && !homeOpen}
+                disabled={!session.canSend}
+                attach={support ? files.target(support.maxUploadBytes) : null}
+                onNewRoutine={session.canSend ? () => draft(GOAT_BOT_NEW_ROUTINE_DRAFT) : undefined}
+              />
+            ) : support ? (
               <GoatBotAttachButton
                 disabled={!session.canSend}
-                existingCount={attachments.length}
-                maxUploadBytes={support.maxUploadBytes}
-                getLifetime={() => pickerLifetime.current?.signal}
-                onIntake={(change) => setIntake((count) => count + change)}
-                onPicked={(picked) => {
-                  if (!pickerLifetime.current || pickerLifetime.current.signal.aborted) {
-                    releaseGoatBotAttachments(picked);
-                    return;
-                  }
-                  for (const attachment of picked) {
-                    if (attachment.fileUri !== undefined) {
-                      draftFiles.current.set(
-                        attachment.id,
-                        retainComposerAttachmentFile(attachment.fileUri, () =>
-                          releaseGoatBotAttachments([attachment]),
-                        ),
-                      );
-                    }
-                  }
-                  setAttachments((current) => [...current, ...picked]);
-                }}
+                {...files.target(support.maxUploadBytes)}
               />
             ) : null}
             {modelMenu ? <GoatBotModelPill menu={modelMenu} /> : null}

@@ -25,31 +25,44 @@ export function releaseGoatBotAttachments(attachments: ReadonlyArray<DraftCompos
   );
 }
 
-/** Adds photos or files to the GOAT Bot message being written. */
-export function GoatBotAttachButton(props: {
-  readonly disabled: boolean;
+/** What a pick of photos or files needs from the screen it adds to. */
+export interface GoatBotAttachmentPickTarget {
   readonly existingCount: number;
   /** Files are offered only when the server takes them; null means photos only. */
   readonly maxUploadBytes: number | null;
   readonly getLifetime: () => AbortSignal | undefined;
-  readonly onPicked: (attachments: ReadonlyArray<DraftComposerAttachment>) => void;
+  /**
+   * Picked files, with the lifetime the pick started in. Returns why some were not added, if any,
+   * which the pick then shows instead of a second alert.
+   */
+  readonly onPicked: (
+    attachments: ReadonlyArray<DraftComposerAttachment>,
+    lifetime: AbortSignal,
+  ) => string | null | void;
   /** A pick has started (1) or finished, picked, failed or cancelled (-1). */
   readonly onIntake?: ((change: 1 | -1) => void) | undefined;
-}) {
-  const pick = async (kind: "media" | "files") => {
-    const signal = props.getLifetime();
+}
+
+/**
+ * Picks photos or files for the GOAT Bot message being written. A pick that answers after its
+ * screen has gone is released, not added, and reports no end to that screen.
+ */
+export function goatBotAttachmentPick(target: GoatBotAttachmentPickTarget) {
+  return async (kind: "media" | "files") => {
+    const signal = target.getLifetime();
     if (!signal || signal.aborted) return;
     // Until the picker returns, a photo may still be read or converted: the box is not empty.
-    props.onIntake?.(1);
-    await pickAttachments(kind, props.existingCount, props.maxUploadBytes ?? undefined)
+    target.onIntake?.(1);
+    await pickAttachments(kind, target.existingCount, target.maxUploadBytes ?? undefined)
       .then(
         ({ picked, error }) => {
           if (signal.aborted) {
             releaseGoatBotAttachments(picked);
             return;
           }
-          if (picked.length > 0) props.onPicked(picked);
-          if (error) Dialog.alert("Could not attach file", error);
+          const refused = picked.length > 0 ? target.onPicked(picked, signal) : null;
+          const message = error ?? refused;
+          if (message) Dialog.alert("Could not attach file", message);
         },
         (cause: unknown) => {
           if (signal.aborted) return;
@@ -60,9 +73,16 @@ export function GoatBotAttachButton(props: {
         },
       )
       .finally(() => {
-        if (!signal.aborted) props.onIntake?.(-1);
+        if (!signal.aborted) target.onIntake?.(-1);
       });
   };
+}
+
+/** Adds photos or files to the GOAT Bot message being written. */
+export function GoatBotAttachButton(
+  props: GoatBotAttachmentPickTarget & { readonly disabled: boolean },
+) {
+  const pick = goatBotAttachmentPick(props);
   return (
     <ComposerAttachmentButton
       disabled={props.disabled}

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, render, type Screen } from "../../../test/render";
@@ -164,5 +164,37 @@ describe("PreviewPanelShell focus", () => {
     await screen.rerender(<Workspace open={false} />);
 
     await expect.element(screen.getByRole("button", { name: "Toggle right panel" })).toHaveFocus();
+  });
+});
+
+describe("PreviewPanelShell resize handle", () => {
+  it("a click on the handle keeps the width the person saved", async () => {
+    const storageKey = "test:preview-panel-width";
+    const previous = localStorage.getItem(storageKey);
+    // Wider than this window lets the panel be, so the panel shows its 360px cap.
+    localStorage.setItem(storageKey, "500");
+    try {
+      const container = document.createElement("div");
+      container.style.cssText = "display: flex; width: 1200px; height: 400px";
+      // The panel needs no navigation.
+      await using screen = await render(
+        <PreviewPanelShell mode="inline" widthStorageKey={storageKey}>
+          <p>Preview</p>
+        </PreviewPanelShell>,
+        { router: false, container },
+      );
+      const handle = screen.getByRole("separator").element() as HTMLElement;
+      // Synthetic pointer events have no active browser pointer to capture.
+      using _capture = vi.spyOn(handle, "setPointerCapture").mockImplementation(() => {});
+      const pointer = { bubbles: true, pointerId: 1, button: 0, clientX: 500 };
+      await act(() => {
+        handle.dispatchEvent(new PointerEvent("pointerdown", pointer));
+        handle.dispatchEvent(new PointerEvent("pointerup", pointer));
+      });
+      expect(localStorage.getItem(storageKey)).toBe("500");
+    } finally {
+      if (previous === null) localStorage.removeItem(storageKey);
+      else localStorage.setItem(storageKey, previous);
+    }
   });
 });
