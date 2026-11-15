@@ -35,7 +35,7 @@ poller runs inside the channel worker owner's pass.
 
 > Decision record: [ADR-0011](decisions/ADR-0011-channel-ledger.md)
 
-The ledger migration is `apps/server/src/persistence/Migrations/072_ChannelLedger.ts`. It creates
+The ledger migration is `apps/server/src/persistence/Migrations/093_ChannelLedger.ts`. It creates
 `channel_conversations`, `channel_bindings`, `channel_inbox`, `channel_tasks`,
 `channel_task_events`, `channel_outbox`, `channel_runtime_state`, `channel_identities`, and
 `channel_identity_links`. `ChannelLedger` reads them through `SqlClient`.
@@ -118,7 +118,7 @@ An owner has the main bot and up to 50 member bots. Profiles live in `channel_ru
 `bot-profile:<owner>:<botId>` (`apps/server/src/channels/ChannelBotProfiles.ts`); bot refs sit at
 `bot:<owner>` for main and `bot: <owner>:<botId>` for members
 (`apps/server/src/channels/channelBotLedger.ts`), so the `bot:%` scan in `ChannelBotDirectory`
-recognises member threads too. Migration `135_ChannelBotIds` adds `bot_id` (default `main`) to
+recognises member threads too. Migration `145_ChannelBotIds` adds `bot_id` (default `main`) to
 `channel_inbox` and `channel_tasks`; ingest decides the bot from the reply thread and stores it,
 tasks keep their input's bot, and deliveries go to that bot's current thread. Slack, iMessage and MCP
 always resolve to main. `ChannelBotMembers` (`apps/server/src/channels/ChannelBotMembers.ts`) creates,

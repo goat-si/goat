@@ -175,18 +175,27 @@ export function MobileBotRoster(props: {
         selectedKey={props.selectedKey}
         bots={roster.bots}
         members={
-          roster.supportsMembers
+          // Unknown capabilities (nothing read from this computer yet) are not an older server.
+          roster.supportsMembers || roster.membersUnknown
             ? {
                 hidden: roster.groups.hidden,
                 deleted: roster.groups.deleted,
                 // The generated name needs the whole list, hidden and deleted included.
                 canCreate: manage.canCreate && listed !== null && operation === null,
+                ...(roster.connected
+                  ? {}
+                  : {
+                      unavailable:
+                        environmentId === null
+                          ? "Unavailable until a computer with GOAT Bot connects"
+                          : `Unavailable while ${roster.computerLabel ?? "its computer"} is offline`,
+                    }),
                 onNewBot: () => {
                   if (environmentId !== null && listed !== null)
                     startNewBot(environmentId, listed, create, openIfStillHere(), mount, uuidv4);
                 },
                 onLongPressBot: askAbout,
-                canRestore: manage.canManage,
+                canRestore: manage.mayManage,
                 onRestoreDeleted: (bot) =>
                   menu(`Restore ${bot.name}?`, "Its conversation comes back.", [
                     { text: "Cancel", style: "cancel" },

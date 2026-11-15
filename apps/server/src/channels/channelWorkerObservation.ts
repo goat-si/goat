@@ -21,6 +21,7 @@ import type {
   OrchestrationV2ThreadShell,
   ThreadId,
   ThreadPullRequestLink,
+  PullRequestState,
 } from "@goat/contracts";
 import { derivePendingBackgroundWork } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import * as DateTime from "effect/DateTime";
@@ -128,7 +129,14 @@ export const hasNewLocalQuestion = (
 };
 
 export const pullRequestsFromLinks = (
-  links: ReadonlyArray<ThreadPullRequestLink> | undefined,
+  links:
+    | ReadonlyArray<
+        Pick<ThreadPullRequestLink, "repository" | "number" | "url" | "source"> & {
+          readonly snapshot: { readonly state: PullRequestState } | null;
+          readonly watch?: unknown;
+        }
+      >
+    | undefined,
 ): ReadonlyArray<ChannelTaskPullRequest> =>
   (links ?? [])
     .filter((link) => link.source !== "stack-dismissed")

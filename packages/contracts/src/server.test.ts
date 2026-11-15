@@ -10,6 +10,7 @@ import {
   ServerSelfUpdateInput,
   ServerProvider,
   ServerProviders,
+  ServerProviderWorkspaceSnapshot,
 } from "./server.ts";
 import { ServerSettings } from "./settings.ts";
 
@@ -72,6 +73,51 @@ describe("server config forward compatibility", () => {
     expect(parsed.usageLimits?.windows).toEqual([
       { id: "primary", kind: "session", label: "Session", usedPercent: 12 },
     ]);
+  });
+});
+
+describe("provider workspace snapshot models", () => {
+  const projectModel = { slug: "uni/medium-gpt", name: "Medium GPT", isCustom: false };
+  const snapshot = { cwd: "/project", checkedAt: "2026-04-10T00:00:00.000Z", skills: [] };
+
+  it("decodes both ways between peers with and without a folder's own model catalog", () => {
+    const {
+      models: _models,
+      removedModels: _removedModels,
+      modelsPending: _pending,
+      ...olderFields
+    } = ServerProviderWorkspaceSnapshot.fields;
+    const decodeOlderSnapshot = Schema.decodeUnknownSync(Schema.Struct(olderFields));
+    const newer = {
+      ...snapshot,
+      slashCommands: [],
+      models: [projectModel],
+      removedModels: ["uni/small-gpt"],
+      modelsPending: true,
+    };
+    expect(decodeOlderSnapshot(newer)).not.toHaveProperty("models");
+    expect(decodeOlderSnapshot(newer)).not.toHaveProperty("removedModels");
+    const withRemoved = { ...newer, models: [{ ...projectModel, capabilities: null }] };
+    expect(
+      decodeServerProvider({ ...baseProviderSnapshot, workspaceSnapshots: [withRemoved] }),
+    ).toMatchObject({ workspaceSnapshots: [{ removedModels: ["uni/small-gpt"] }] });
+
+    const fromOlderServer = decodeServerProvider({
+      ...baseProviderSnapshot,
+      workspaceSnapshots: [{ ...snapshot, slashCommands: [] }],
+    });
+    expect(fromOlderServer.workspaceSnapshots?.[0]?.models).toBeUndefined();
+    expect(fromOlderServer.workspaceSnapshots?.[0]?.removedModels).toBeUndefined();
+    expect(fromOlderServer.workspaceSnapshots?.[0]?.modelsPending).toBeUndefined();
+  });
+
+  it("rejects a snapshot whose pending flag is not a boolean", () => {
+    expect(() =>
+      decodeServerProvider({
+        ...baseProviderSnapshot,
+        workspaceSnapshots: [{ ...snapshot, slashCommands: [], modelsPending: "yes" }],
+      }),
+    ).toThrow();
   });
 });
 

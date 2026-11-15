@@ -1,15 +1,14 @@
 import { useAtomValue } from "@effect/atom-react";
-import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { EnvironmentId } from "@goat/contracts";
 import { useState } from "react";
 import { Text } from "react-native";
 
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
-import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { MobileBotProfileSheet } from "../goat-bot/MobileBotProfileSheet";
+import { useMobileBotManage } from "../goat-bot/useMobileBotManage";
 import { useMobileGoatBotHomeSettings } from "../goat-bot/useMobileGoatBotHomeSettings";
 import { useMobileGoatBotModel } from "../goat-bot/useMobileGoatBotModel";
 import { SettingsChoiceRow } from "./components/SettingsChoiceRow";
@@ -114,6 +113,7 @@ function GoatBotProfileSection({ environmentId }: { readonly environmentId: Envi
     supported ? channelEnvironment.listBots({ environmentId, input: {} }) : null,
   );
   const canEdit = useAtomValue(channelEnvironment.updateBot.permissionAtom(environmentId));
+  const manage = useMobileBotManage(environmentId);
   const [editing, setEditing] = useState(false);
   if (!supported) return null;
   const main = profiles.data?.bots.find((bot) => bot.role === "main");
@@ -143,15 +143,7 @@ function GoatBotProfileSection({ environmentId }: { readonly environmentId: Envi
           initial={main}
           canSubmit={canEdit}
           onClose={() => setEditing(false)}
-          onSubmit={async (changes) => {
-            const result = await runAtomCommand(appAtomRegistry, channelEnvironment.updateBot, {
-              environmentId,
-              input: { botId: main.botId, ...changes },
-            });
-            if (result._tag === "Success") return null;
-            const failure = squashAtomCommandFailure(result);
-            return failure instanceof Error ? failure.message : "Couldn't save the profile.";
-          }}
+          onSubmit={(changes) => manage.update(main, changes)}
         />
       ) : null}
     </SettingsSection>

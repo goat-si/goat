@@ -8,47 +8,61 @@ import { Alert } from "react-native";
 
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
+import { goatBotComputerConnectedNow, useGoatBotComputerConnected } from "./goatBotComputerLink";
 
 const NO_PERMISSION = Atom.make(false);
 
-/** Create, edit, hide, delete and restore bots on the GOAT Bot computer, with what to show on failure. */
+/**
+ * Create, edit, hide, delete and restore bots on the GOAT Bot computer, with what to show on
+ * failure. None of them is offered or sent while that computer is offline.
+ */
 export function useMobileBotManage(environmentId: EnvironmentId | null, botName = "GOAT Bot") {
-  const canCreate = useAtomValue(
+  const connected = useGoatBotComputerConnected(environmentId);
+  const mayCreate = useAtomValue(
     environmentId === null
       ? NO_PERMISSION
       : channelEnvironment.createBot.permissionAtom(environmentId),
   );
-  const canManage = useAtomValue(
+  const mayManage = useAtomValue(
     environmentId === null
       ? NO_PERMISSION
       : channelEnvironment.setBotHidden.permissionAtom(environmentId),
   );
-  const canEdit = useAtomValue(
+  const mayEdit = useAtomValue(
     environmentId === null
       ? NO_PERMISSION
       : channelEnvironment.updateBot.permissionAtom(environmentId),
   );
+  const offline = `${botName}'s computer isn't connected.`;
   const change = async (
     title: string,
     run: (environmentId: EnvironmentId) => Promise<{ readonly _tag: string }>,
   ) => {
     if (environmentId === null) return false;
+    if (!goatBotComputerConnectedNow(environmentId)) {
+      Alert.alert(title, offline);
+      return false;
+    }
     const result = await run(environmentId);
     if (result._tag === "Success") return true;
     Alert.alert(title, botManageFailure(squashAtomCommandFailure(result as never)));
     return false;
   };
   return {
-    canCreate,
-    canManage,
-    canEdit,
+    canCreate: mayCreate && connected,
+    canManage: mayManage && connected,
+    canEdit: mayEdit && connected,
+    /** This person may hide, delete and restore bots, connected or not; offline they wait. */
+    mayManage,
+    /** The bot's computer is connected; bot writes wait for it. */
+    connected,
     /** Resolves to the new bot, or to the message to show in the sheet. */
     create: async (
       changes: Partial<BotProfileValues>,
       model: BotProfile["defaultModelSelection"],
       clientRequestId: string,
     ): Promise<BotProfile | string> => {
-      if (environmentId === null) return `${botName}'s computer isn't connected.`;
+      if (environmentId === null || !goatBotComputerConnectedNow(environmentId)) return offline;
       const result = await runAtomCommand(appAtomRegistry, channelEnvironment.createBot, {
         environmentId,
         input: {
@@ -71,7 +85,7 @@ export function useMobileBotManage(environmentId: EnvironmentId | null, botName 
       changes: Partial<BotProfileValues>,
       model?: BotProfile["defaultModelSelection"],
     ) => {
-      if (environmentId === null) return `${botName}'s computer isn't connected.`;
+      if (environmentId === null || !goatBotComputerConnectedNow(environmentId)) return offline;
       const result = await runAtomCommand(appAtomRegistry, channelEnvironment.updateBot, {
         environmentId,
         input: {

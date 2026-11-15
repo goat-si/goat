@@ -10,6 +10,10 @@ import * as NodeCrypto from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
+import {
+  threadPullRequestColumns,
+  type ThreadPullRequestColumns,
+} from "./channelBotRowPullRequests.ts";
 
 const decodeTask = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTask));
 // [botTag, ownerTag, createdAt, taskId]
@@ -92,14 +96,16 @@ export const launchesStatement = (
   sql: SqlClient.SqlClient,
   input: { readonly ownerId: string; readonly taskId: string; readonly limit: number },
 ) =>
-  sql<{
-    readonly key: string;
-    readonly value_json: string;
-    readonly title: string | null;
-    readonly project_id: string | null;
-    readonly work_kind: unknown;
-  }>`SELECT s.key, s.value_json, p.title, p.project_id,
-      json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind
+  sql<
+    {
+      readonly key: string;
+      readonly value_json: string;
+      readonly title: string | null;
+      readonly project_id: string | null;
+      readonly work_kind: unknown;
+    } & ThreadPullRequestColumns
+  >`SELECT s.key, s.value_json, p.title, p.project_id,
+      json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind, ${threadPullRequestColumns(sql)}
     FROM channel_runtime_state s INDEXED BY channel_child_work_launches
     -- Only a local launch's thread is in this machine's projection.
     LEFT JOIN orchestration_v2_projection_threads p

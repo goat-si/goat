@@ -106,6 +106,8 @@ export function MobileBotRosterView(props: {
     readonly hidden: ReadonlyArray<BotProfile>;
     readonly deleted: ReadonlyArray<BotProfile>;
     readonly canCreate: boolean;
+    /** Why New bot and Restore cannot be used now (the computer is offline); said to the screen reader. */
+    readonly unavailable?: string;
     readonly onNewBot: () => void;
     /** Edit, hide, show, delete or restore; the panel asks what to do. */
     readonly onLongPressBot: (bot: BotRosterEntry) => void;
@@ -154,6 +156,7 @@ export function MobileBotRosterView(props: {
       <MobileNeedsYouStrip
         bots={props.bots}
         hidden={props.members?.hidden ?? []}
+        environmentId={props.mainEnvironmentId ?? null}
         visible={props.visible ?? true}
         onOpenAsk={props.onOpenTask ?? ((bot) => props.onOpenBot(bot))}
         onUnknownBot={props.onUnknownBot}
@@ -260,13 +263,22 @@ export function MobileBotRosterView(props: {
           <Text accessibilityRole="header" className="px-4 pt-3 text-foreground-muted">
             Deleted bots
           </Text>
+          {props.members.canRestore && props.members.unavailable !== undefined ? (
+            <Text
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+              className="px-4 text-sm text-foreground-muted"
+            >
+              Restore: {props.members.unavailable.replace(/^Unavailable/, "unavailable")}
+            </Text>
+          ) : null}
           {props.members.deleted.map((profile) => (
             <View key={profile.botId} className="flex-row items-center pr-4">
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`${profile.name}, deleted`}
                 accessibilityHint="Opens its archived conversation"
-                {...(props.members?.canRestore
+                {...(props.members?.canRestore && props.members.unavailable === undefined
                   ? { onLongPress: () => props.members?.onRestoreDeleted(profile) }
                   : {})}
                 onPress={() => props.onOpenBot({ kind: "member", profile })}
@@ -279,10 +291,23 @@ export function MobileBotRosterView(props: {
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={`Restore ${profile.name}`}
+                  disabled={props.members.unavailable !== undefined}
+                  accessibilityState={{ disabled: props.members.unavailable !== undefined }}
+                  {...(props.members.unavailable === undefined
+                    ? {}
+                    : { accessibilityHint: props.members.unavailable })}
                   onPress={() => props.members?.onRestoreDeleted(profile)}
                   className="min-h-[44px] min-w-[44px] items-center justify-center px-3"
                 >
-                  <Text className="font-goat-medium text-primary-text">Restore</Text>
+                  <Text
+                    className={
+                      props.members.unavailable === undefined
+                        ? "font-goat-medium text-primary-text"
+                        : "font-goat-medium text-foreground-muted"
+                    }
+                  >
+                    Restore
+                  </Text>
                 </Pressable>
               ) : null}
             </View>
@@ -291,13 +316,28 @@ export function MobileBotRosterView(props: {
       ) : null}
       <View className="px-4 py-3">
         {props.members ? (
-          <Button
-            label="New bot"
-            icon="plus"
-            disabled={!props.members.canCreate}
-            fullWidth
-            onPress={props.members.onNewBot}
-          />
+          <>
+            <Button
+              label="New bot"
+              icon="plus"
+              disabled={!props.members.canCreate}
+              fullWidth
+              {...(props.members.unavailable === undefined
+                ? {}
+                : { accessibilityHint: props.members.unavailable })}
+              onPress={props.members.onNewBot}
+            />
+            {props.members.unavailable === undefined ? null : (
+              // The hint says it to a screen reader; this says it on screen.
+              <Text
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+                className="pt-2 text-center text-sm text-foreground-muted"
+              >
+                {props.members.unavailable}
+              </Text>
+            )}
+          </>
         ) : (
           <Button
             label="New bot · Coming soon"

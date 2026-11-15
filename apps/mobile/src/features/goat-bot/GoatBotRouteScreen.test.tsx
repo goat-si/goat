@@ -20,6 +20,7 @@ const route = vi.hoisted(() => ({
   screenSeen: undefined as boolean | undefined,
   screenTask: undefined as string | undefined,
   screenMember: undefined as string | null | undefined,
+  connected: true,
 }));
 vi.mock("react-native", () => ({
   Text: (props: { children?: ReactNode }) => <span>{props.children}</span>,
@@ -40,6 +41,7 @@ vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => route.vis
 vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({
     botRef: { environmentId: "env", threadId: route.threadId },
+    environments: [{ environmentId: "env", connected: route.connected }],
   }),
 }));
 vi.mock("./useMobileBotPreview", () => ({
@@ -261,4 +263,25 @@ it("tells the chat what it shows is seen only while focused and the app is activ
   expect(route.screenSeen).toBe(false);
   route.focused = true;
   await view.unmount();
+});
+
+it("writes no visit while the bot's computer is offline, and writes it once the computer is back with the chat still seen", async () => {
+  Object.assign(route, { focused: true, foreground: true, active: true, threadId: "main-thread" });
+  route.visit.mockClear();
+  route.member = { botId: "scout", environmentId: "env", sessionThreadId: "scout-thread" };
+  route.shell = { lastVisitedAt: at(1) };
+  route.memberPreview = { unread: true, at: at(5) };
+  route.connected = false;
+  const root = createRoot(document.createElement("div"));
+  const member = { route: { params: { botId: "scout" } } } as unknown as RouteProps;
+  await act(async () => root.render(<GoatBotRouteScreen {...member} />));
+  expect(route.visit).not.toHaveBeenCalled();
+  route.connected = true;
+  await act(async () => root.render(<GoatBotRouteScreen {...member} />));
+  expect(route.visit).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ input: { threadId: "scout-thread", visitedAt: at(5) } }),
+  );
+  await act(async () => root.unmount());
+  route.member = null;
+  route.memberPreview = null;
 });

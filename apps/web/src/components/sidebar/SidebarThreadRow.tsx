@@ -1,3 +1,4 @@
+import { JumpHintBadge } from "./SidebarJumpHintBadge";
 import { sidebarWorkingLabel } from "./sidebarWorkingLabel";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { ThreadTerminalStatusButton } from "../ThreadStatusIndicators";
@@ -115,6 +116,7 @@ import {
 import type { SnoozePreset } from "../Sidebar.snooze";
 import { SnoozeMenuButton } from "./SidebarSnoozeMenuButton";
 import { useThreadShell } from "../../state/entities";
+import { rowThreadWithLaunch } from "./launchingThreads";
 import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
 import { ThreadSearchMatchExcerpt } from "../ThreadSearchMatch";
 import { makeWorkspaceFileDropHandlers } from "../chat/workspaceFileDrop";
@@ -141,17 +143,6 @@ export type SidebarProviderEntry = Pick<
   | "acpRegistryIconUrl"
   | "models"
 >;
-
-function JumpHintBadge(props: { label: string }) {
-  return (
-    <span
-      aria-hidden
-      className="pointer-events-none absolute right-1.5 top-1/2 z-10 inline-flex h-5 -translate-y-1/2 items-center rounded-full border border-border/80 bg-background/95 px-1.5 font-mono text-3xs font-medium tracking-tight text-foreground shadow-sm"
-    >
-      {props.label}
-    </span>
-  );
-}
 
 function synchronizeSidebarSpinner(event: AnimationEvent<SVGSVGElement>) {
   if (event.animationName !== "spin") return;
@@ -372,9 +363,8 @@ export function SortableThreadRow(
   };
   // The sidebar arranges rows from quiet shells, which hold still while a
   // thread streams; reading the live shell here re-renders only this row.
-  const thread =
-    useThreadShell(scopeThreadRef(rowProps.thread.environmentId, rowProps.thread.id)) ??
-    rowProps.thread;
+  const live = useThreadShell(scopeThreadRef(rowProps.thread.environmentId, rowProps.thread.id));
+  const thread = rowThreadWithLaunch(rowProps.thread, live);
   // Keyed by variant so a card/slim switch remounts the row.
   return <SidebarThreadRow key={rowProps.variant} {...rowProps} thread={thread} sortable={bag} />;
 }
@@ -442,7 +432,7 @@ type SidebarThreadRowProps = {
   wokeAt: string | null;
   isActive: boolean;
   // Set on the active row only; scrolls it into view when a reveal is owed.
-  revealRef?: ((row: HTMLElement, threadKey: string) => void) | undefined;
+  revealRef?: ((row: HTMLElement, threadKey: string) => (() => void) | undefined) | undefined;
   // Unlike isActive, never true for the ancestor standing in for an open
   // subagent: drafts and PR clicks care about which composer is on screen.
   isRouteThread: boolean;
@@ -461,7 +451,7 @@ type SidebarThreadRowProps = {
   onThreadActivate: (threadRef: ScopedThreadRef) => void;
   onStartRename: (threadRef: ScopedThreadRef, title: string) => void;
   onRenameTitleChange: (title: string) => void;
-  onCommitRename: (threadRef: ScopedThreadRef, title: string, originalTitle: string) => void;
+  onCommitRename: (threadRef: ScopedThreadRef, title: string) => void;
   onCancelRename: () => void;
   isRenaming: boolean;
   renamingTitle: string;
@@ -560,8 +550,13 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   const { leaseLiveStatus, rowRef: leaseRowRef } = useSidebarRowSubscriptionLease(props.isActive);
   const { revealRef } = props;
   const rowRef = (row: HTMLElement | null) => {
-    if (row !== null) revealRef?.(row, threadKey);
-    return leaseRowRef(row);
+    const stopReveal = row === null ? undefined : revealRef?.(row, threadKey);
+    const releaseLease = leaseRowRef(row);
+    if (!stopReveal) return releaseLease;
+    return () => {
+      stopReveal();
+      releaseLease?.();
+    };
   };
   const isRegeneratingTitle = thread.titleRegeneration != null;
   const localLastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
@@ -906,7 +901,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     <ThreadRenameInput
       title={renamingTitle}
       onTitleChange={onRenameTitleChange}
-      onCommit={() => onCommitRename(threadRef, renamingTitle, thread.title)}
+      onCommit={() => onCommitRename(threadRef, renamingTitle)}
       onCancel={onCancelRename}
     />
   ) : (
@@ -1525,6 +1520,12 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
     isActive: props.isRouteActive,
   });
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
+  const contextDragListeners = useThreadContextDragHandle({
+    threadKey: scopedThreadKey(threadRef),
+    title: thread.title,
+    disabled: false,
+    unrestricted: true,
+  });
   const { leaseLiveStatus, rowRef } = useSidebarRowSubscriptionLease(
     props.isHighlighted || props.isRouteActive,
   );
@@ -1585,6 +1586,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
             <button
               ref={rowRef}
               id={props.resultId}
+              {...contextDragListeners}
               type="button"
               role="option"
               tabIndex={-1}

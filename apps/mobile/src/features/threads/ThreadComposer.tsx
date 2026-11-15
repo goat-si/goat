@@ -93,10 +93,11 @@ import {
   buildModelOptions,
   groupByProvider,
   isModelSelectionUnavailable,
+  serverConfigForCwd,
 } from "../../lib/modelOptions";
 import { useScaledTextRole, type ScaledTextRole } from "../settings/appearance/useScaledTextRole";
+import { COLLAPSED_EDITOR_DEFAULT_INSET, collapsedEditorInset } from "./composer-editor-inset";
 import type { RemoteClientConnectionState } from "../../lib/connection";
-import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
 import type { ActiveTurnComposerAction } from "@goat/client-runtime/state/composer-dispatch";
 import type { FollowUpBehavior } from "../../lib/followUpBehavior";
@@ -130,17 +131,6 @@ import {
   type NavigationWithFinishTransitioning,
 } from "./use-thread-settings-sheet-presentation";
 export const COMPOSER_COLLAPSED_CHROME = 60;
-const COLLAPSED_EDITOR_DEFAULT_INSET = 6;
-// iOS puts line-height slack above glyphs. The system font's lowercase midline is
-// descender (0.211em) + half x-height (0.526em) above the line bottom.
-const LOWERCASE_MIDLINE_EM = 0.474;
-function lowercaseMidline(text: ScaledTextRole): number {
-  return text.lineHeight - LOWERCASE_MIDLINE_EM * text.fontSize;
-}
-function collapsedEditorInset(text: ScaledTextRole): number {
-  const shift = lowercaseMidline(text) - lowercaseMidline(MOBILE_TYPOGRAPHY.body);
-  return Math.max(0, Math.round(COLLAPSED_EDITOR_DEFAULT_INSET - shift));
-}
 export function useCompactComposerEditor(text: ScaledTextRole, value: string) {
   const [contentSize, setContentSize] = useState({ width: 0, height: 0 });
   const [compactWidth, setCompactWidth] = useState(0);
@@ -738,7 +728,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     ? undefined
     : currentModelSelection.instanceId;
   const modelOptions = buildModelOptions(
-    props.serverConfig,
+    serverConfigForCwd(props.serverConfig, props.projectCwd),
     currentModelSelection,
     lockedProviderInstanceId,
     props.selectedThread.projectId,
@@ -758,6 +748,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     ownerId: composerOwnerKey,
     environmentId: props.environmentId,
     projectId: props.selectedThread.projectId,
+    cwd: props.projectCwd,
     providerInstanceId: currentModelSelection.instanceId,
     ...(lockedProviderInstanceId ? { lockedProviderInstanceId } : {}),
     providerGroups: threadProviderGroups,

@@ -87,4 +87,37 @@ describe("botWorkHistory", () => {
     expect(view(list([task("t0")])).hasMore).toBe(true);
     expect(view(list([task("t0")])).incomplete).toBe(false);
   });
+
+  it("writes a held task through when only its pull requests change, so it keeps them after leaving the current list", () => {
+    const withPullRequest = (state: "open" | "merged") =>
+      ({
+        ...task("t1"),
+        pullRequests: [{ repository: "goat-si/goat", number: 42, state, watching: false }],
+      }) as BotThreadRow;
+    // As the hook does: write the current list through whenever what it reports changes.
+    const step = (
+      walk: typeof EMPTY_WALK,
+      written: string,
+      current: ChannelListBotThreadsResult,
+    ) => {
+      const view = botWorkHistoryView({ walk, current, capabilities, botId: null, loaded: true });
+      return view.reported === written
+        ? { walk, written }
+        : { walk: writeThrough(walk, current), written: view.reported };
+    };
+    const held = applyHistoryPress(EMPTY_WALK, { supported: true, pages: [page([task("t1")])] });
+    const opened = step(held, "[[],[],[]]", list([withPullRequest("open")]));
+    const merged = step(opened.walk, opened.written, list([withPullRequest("merged")]));
+    const left = botWorkHistoryView({
+      walk: merged.walk,
+      current: list([]),
+      capabilities,
+      botId: null,
+      loaded: true,
+    });
+    const row = left.rows.find((item) => item.kind === "task" && item.task.taskId === "t1");
+    expect(row?.kind === "task" ? row.pullRequests?.map((item) => item.state) : undefined).toEqual([
+      "merged",
+    ]);
+  });
 });

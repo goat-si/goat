@@ -19,21 +19,27 @@ import { CODEX_MODEL_SELECTION } from "./fixtures/shared.ts";
 import * as ProviderReplayHarness from "./ProviderReplayHarness.ts";
 import { type CapturedTurn, makeTestAdapter } from "./testing/providerSwitchAdapter.ts";
 
-it.live.each([false, true])(
-  "OpenCode goal defers provider-switch history only with native support: %s",
-  (nativeGoals) =>
+it.live.each([
+  { target: "opencode", nativeGoals: false },
+  { target: "opencode", nativeGoals: true },
+  { target: "codex", nativeGoals: true },
+] as const)(
+  "$target goal defers provider-switch history only with native support: $nativeGoals",
+  ({ target, nativeGoals }) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const cwd = yield* checkpointWorkspace(`goal-handoff-${nativeGoals}`);
+        const cwd = yield* checkpointWorkspace(`goal-handoff-${target}-${nativeGoals}`);
         const turns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
         const selection = { instanceId: ProviderInstanceId.make("opencode-goal"), model: "test" };
+        const initialSelection = target === "codex" ? selection : CODEX_MODEL_SELECTION;
+        const targetSelection = target === "codex" ? CODEX_MODEL_SELECTION : selection;
         const registry = ProviderAdapterRegistry.layerFromAdapters([
           makeTestAdapter({
             instanceId: CODEX_MODEL_SELECTION.instanceId,
             driver: ProviderDriverKind.make("codex"),
             capabilities: CodexProviderCapabilitiesV2,
             modelSelection: CODEX_MODEL_SELECTION,
-            responseByRunOrdinal: { 1: "Original partial work" },
+            responseByRunOrdinal: target === "codex" ? {} : { 1: "Original partial work" },
             capturedTurns: turns,
           }),
           makeTestAdapter({
@@ -44,14 +50,14 @@ it.live.each([false, true])(
               turns: { ...CodexProviderCapabilitiesV2.turns, supportsNativeGoals: nativeGoals },
             },
             modelSelection: selection,
-            responseByRunOrdinal: {},
+            responseByRunOrdinal: target === "codex" ? { 1: "Original partial work" } : {},
             capturedTurns: turns,
           }),
         ]);
         yield* Effect.gen(function* () {
           const orchestrator = yield* Orchestrator.OrchestratorV2;
           const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
-          const threadId = ThreadId.make(`thread:goal-handoff-${nativeGoals}`);
+          const threadId = ThreadId.make(`thread:goal-handoff-${target}-${nativeGoals}`);
           yield* orchestrator.dispatch({
             type: "thread.create",
             commandId: CommandId.make("create"),
@@ -60,7 +66,7 @@ it.live.each([false, true])(
             createdBy: "user",
             creationSource: "web",
             title: "Goal handoff",
-            modelSelection: CODEX_MODEL_SELECTION,
+            modelSelection: initialSelection,
             runtimeMode: "full-access",
             interactionMode: "default",
             branch: null,
@@ -91,13 +97,13 @@ it.live.each([false, true])(
                 Effect.andThen(worker.drain()),
               );
             });
-          yield* send(1, "Original request with constraints", CODEX_MODEL_SELECTION);
-          yield* send(2, "/goal all tests pass", selection);
+          yield* send(1, "Original request with constraints", initialSelection);
+          yield* send(2, "/goal all tests pass", targetSelection);
           const goal = (yield* Ref.get(turns)).at(-1)!.text;
           assert.equal(goal.includes("Original request with constraints"), !nativeGoals);
           if (nativeGoals) {
             assert.equal(goal, "/goal all tests pass");
-            yield* send(3, "Continue", selection);
+            yield* send(3, "Continue", targetSelection);
             assert.include(
               (yield* Ref.get(turns)).at(-1)!.text,
               "Original request with constraints",
@@ -107,7 +113,7 @@ it.live.each([false, true])(
           Effect.provide(
             ProviderReplayHarness.layerWithRegistry(
               {
-                name: `goal-handoff-${nativeGoals}`,
+                name: `goal-handoff-${target}-${nativeGoals}`,
                 runtimePolicyOverride: {
                   cwd,
                   approvalPolicy: "never",

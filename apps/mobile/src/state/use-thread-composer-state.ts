@@ -1,4 +1,4 @@
-import { shouldCompactBeforeSend } from "@goat/client-runtime/state/context-window";
+import { compactBeforeSendTokens } from "@goat/client-runtime/state/context-window";
 import { restoreAttachmentOnlyBootstrapPrompt } from "@goat/shared/composerContextReferences";
 import {
   cloudRetryAllowed,
@@ -13,17 +13,23 @@ import { readEnvironmentScope } from "./session";
 import { useAtomValue } from "@effect/atom-react";
 import { threadRuntimeIsActive } from "@goat/client-runtime/state/shell";
 import type { ThreadCheckpointSummary } from "@goat/client-runtime/state/thread-checkpoints";
+import { threadSteersDuringCompaction } from "@goat/client-runtime/state/thread-workflows";
 import { resolvePendingHandoff } from "@goat/client-runtime/handoff";
 import {
   canResumeThread,
   deriveProviderSubagentStatus,
   deriveProviderExtensionStatuses,
   deriveResumableRunId,
+  deriveLatestThreadRun,
   deriveRunlessWorkStartedAt,
   deriveThreadActivityRun,
   deriveThreadRuntime,
   threadRuntimeHasInterruptibleRun,
 } from "@goat/client-runtime/state/thread-execution";
+import {
+  announcedRun,
+  isDetailBehindShell,
+} from "@goat/client-runtime/state/thread-activity-announcement";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -46,9 +52,8 @@ import {
   type CodexFeedbackSubmission,
 } from "@goat/client-runtime/state/threads";
 import { resolveThreadWorkingStartedAt } from "@goat/client-runtime/state/models";
-import { upgradeLegacyContextMessage } from "@goat/shared/composerContextLegacy";
-import { composerContextSendBlockReason, reidentifyComposerContext } from "../lib/composerContext";
-import { uuidv4 } from "../lib/uuid";
+import { composerContextSendBlockReason } from "../lib/composerContext";
+import { useNowMinuteMs } from "../lib/clock";
 
 import { makeQueuedMessageMetadata } from "../lib/commandMetadata";
 import {
@@ -61,7 +66,6 @@ import {
   pasteComposerClipboard,
   removePersistedComposerAttachmentFile,
 } from "../lib/composerImages";
-import type { DraftComposerImageAttachment } from "../lib/composerImages";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { buildThreadFeed, createThreadFeedCache } from "../lib/threadActivity";
 import {
@@ -74,6 +78,7 @@ import {
 } from "../features/threads/pending-thread-feed";
 import { threadAllowsProviderSwitch } from "./thread-provider-switching";
 import { appAtomRegistry } from "../state/atom-registry";
+import { fullHistoryThreadKeysAtom, setKeepFullHistory } from "./full-history-threads";
 import { pendingThreadCreationMessage } from "./pending-thread-creation";
 import {
   composerAttachmentUploadBlockReason,
@@ -84,7 +89,6 @@ import {
   captureComposerDraftInsertion,
   countComposerDraftAttachmentsAfterSelection,
   insertComposerDraftText,
-  insertComposerDraftContext,
   clearComposerDraft,
   clearComposerDraftContent,
   composerContextImportsAtom,
@@ -95,10 +99,10 @@ import {
   scheduleUnusedComposerAttachmentCleanup,
   setComposerDraftText,
   updateComposerDraftSettings,
-  useComposerDraft,
   useComposerDraftSettings,
 } from "./use-composer-drafts";
 import {
+  compactionBlocksSteering,
   resolveComposerDispatchMode,
   type ActiveTurnComposerAction,
 } from "@goat/client-runtime/state/composer-dispatch";
@@ -138,35 +142,6 @@ const EMPTY_QUEUE_WORKFLOW_ATOM = Atom.make<null>(null).pipe(
 const EMPTY_CHECKPOINT_SUMMARIES_ATOM = Atom.make<ReadonlyArray<ThreadCheckpointSummary>>([]);
 const EMPTY_THREAD_SEQUENCE_ATOM = Atom.make(0);
 
-export function appendReviewCommentToDraft(input: {
-  readonly environmentId: EnvironmentId;
-  readonly threadId: ThreadId;
-  readonly text: string;
-  readonly attachments?: ReadonlyArray<DraftComposerImageAttachment>;
-}): void {
-  const threadKey = scopedThreadKey(input.environmentId, input.threadId);
-  const upgraded = upgradeLegacyContextMessage(input.text);
-  if (
-    !insertComposerDraftContext(
-      threadKey,
-      reidentifyComposerContext(upgraded.text, upgraded.records, uuidv4),
-    )
-  ) {
-    Dialog.alert("Too many context items", "Remove some context from the draft and try again.");
-    return;
-  }
-  if (input.attachments && input.attachments.length > 0) {
-    const rejectedCount = appendComposerDraftAttachments(threadKey, input.attachments, {
-      appendReference: true,
-    });
-    if (rejectedCount > 0) {
-      setPendingConnectionError(
-        `${rejectedCount} comment attachment${rejectedCount === 1 ? " was" : "s were"} not added. Messages can contain at most ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} attachments.`,
-      );
-    }
-  }
-}
-
 /** Resolve per call so callbacks created before editing still target the current draft. */
 function activeComposerDraftKey(thread: {
   readonly environmentId: EnvironmentId;
@@ -175,23 +150,6 @@ function activeComposerDraftKey(thread: {
   const threadKey = scopedThreadKey(thread.environmentId, thread.id);
   const edit = getQueuedRunEdit(threadKey);
   return edit === null ? threadKey : queuedEditDraftKey(threadKey, edit.runId);
-}
-
-export function useThreadDraftForThread(input: {
-  readonly environmentId?: EnvironmentId;
-  readonly threadId?: ThreadId;
-}) {
-  const threadKey =
-    input.environmentId && input.threadId
-      ? scopedThreadKey(input.environmentId, input.threadId)
-      : null;
-  const draft = useComposerDraft(threadKey);
-
-  return {
-    draftMessage: draft.text,
-    draftContext: draft.context,
-    draftAttachments: draft.attachments,
-  };
 }
 
 export function useThreadComposerState() {
@@ -368,8 +326,20 @@ export function useThreadComposerState() {
   const selectedThreadActivityRun = selectedThreadProjection
     ? deriveThreadActivityRun(selectedThreadProjection.projection, serverConfig?.providers)
     : (selectedThreadShell?.latestRun ?? null);
+  const selectedThreadAnnouncedRun = announcedRun(
+    selectedThreadActivityRun,
+    selectedThreadProjection?.projection.runs ?? [],
+  );
+  const selectedThreadDetailBehindShell = isDetailBehindShell(
+    selectedThreadProjection ? deriveLatestThreadRun(selectedThreadProjection.projection) : null,
+    selectedThreadShell?.latestRun ?? null,
+  );
 
-  const isCompacting = (() => {
+  const activeRunId =
+    selectedThreadRuntime?.activeRunId && threadRuntimeIsActive(selectedThreadRuntime)
+      ? selectedThreadRuntime.activeRunId
+      : null;
+  const compactCommandIsActive = (() => {
     const queuedCompact = selectedThreadQueuedMessages.some(
       (message) =>
         message.messageId === dispatchingQueuedMessageId &&
@@ -377,16 +347,7 @@ export function useThreadComposerState() {
         message.attachments.length === 0,
     );
     if (queuedCompact) return true;
-    const activeRunId = selectedThreadRuntime?.activeRunId;
-    if (!activeRunId || !threadRuntimeIsActive(selectedThreadRuntime)) return false;
-    if (
-      selectedThreadVisibleTurnItems.some(
-        ({ item }) =>
-          item.runId === activeRunId && item.type === "compaction" && item.status === "running",
-      )
-    ) {
-      return true;
-    }
+    if (!activeRunId) return false;
     const compactMessage = selectedThreadVisibleTurnItems.findLast(
       ({ item }) =>
         item.runId === activeRunId &&
@@ -405,8 +366,21 @@ export function useThreadComposerState() {
           item.status === "cancelled"),
     );
   })();
-  // A compacting turn cannot take steering input, so follow-ups queue meanwhile.
-  const canSteerActiveTurn = queueWorkflow?.canPromoteToSteer === true && !isCompacting;
+  const compactionRunning =
+    activeRunId !== null &&
+    selectedThreadVisibleTurnItems.some(
+      ({ item }) =>
+        item.runId === activeRunId && item.type === "compaction" && item.status === "running",
+    );
+  const isCompacting = compactCommandIsActive || compactionRunning;
+  const compactionBlocksSteer = compactionBlocksSteering({
+    compactCommandIsActive,
+    compactionRunning,
+    steersDuringCompaction: threadSteersDuringCompaction(selectedThreadProjection?.projection),
+    run: selectedThreadProjection?.projection.runs.find((run) => run.id === activeRunId),
+    messages: selectedThreadMessages,
+  });
+  const canSteerActiveTurn = queueWorkflow?.canPromoteToSteer === true && !compactionBlocksSteer;
   // A stop or a restart holds the queue, completion wakes included, until it
   // is resumed; the queue sheet lists only the user's own messages.
   const queueHeld = queueWorkflow?.isHeld === true;
@@ -438,6 +412,35 @@ export function useThreadComposerState() {
     : null;
 
   const activeThreadBusy = threadRuntimeIsActive(selectedThreadRuntime);
+  const resumeCompactionTokens = (selection: ModelSelection | null, text: string, now: string) =>
+    selectedEnvironmentRuntime?.connectionState === "connected" &&
+    selectedThreadProjection !== null &&
+    serverConfig != null &&
+    selection !== null
+      ? compactBeforeSendTokens({
+          projection: selectedThreadProjection.projection,
+          visibleTurnItems: selectedThreadVisibleTurnItems,
+          selection,
+          providers: serverConfig.providers,
+          settings: serverConfig.settings,
+          text,
+          threadIdle:
+            !activeThreadBusy &&
+            !runlessWorkActive &&
+            !isCompacting &&
+            selectedThreadQueuedMessages.length === 0,
+          now,
+        })
+      : null;
+  const nowMinuteMs = useNowMinuteMs();
+  const compactTokens = resumeCompactionTokens(
+    modelSelection,
+    "",
+    new Date(nowMinuteMs).toISOString(),
+  );
+  const fullHistoryThreadKeys = useAtomValue(fullHistoryThreadKeysAtom);
+  const keepFullHistory =
+    selectedThreadKey !== null && fullHistoryThreadKeys[selectedThreadKey] === true;
   const interruptibleRunId = threadRuntimeHasInterruptibleRun(selectedThreadRuntime)
     ? (selectedThreadRuntime?.activeRunId ?? null)
     : null;
@@ -723,26 +726,14 @@ export function useThreadComposerState() {
           : "auto";
 
     const metadata = makeQueuedMessageMetadata();
+    // Only a send the notice announced compacts, since the notice's minute clock can trail the
+    // exact deadline.
     const compactBeforeSend =
+      compactTokens !== null &&
       followUpDispatchMode === null &&
       beforeDispatch === undefined &&
-      selectedEnvironmentRuntime?.connectionState === "connected" &&
-      selectedThreadProjection !== null &&
-      serverConfig != null &&
-      shouldCompactBeforeSend({
-        projection: selectedThreadProjection.projection,
-        visibleTurnItems: selectedThreadVisibleTurnItems,
-        selection: modelSelection,
-        providers: serverConfig.providers,
-        settings: serverConfig.settings,
-        text,
-        threadIdle:
-          !activeThreadBusy &&
-          !runlessWorkActive &&
-          !isCompacting &&
-          selectedThreadQueuedMessages.length === 0,
-        now: metadata.createdAt,
-      });
+      appAtomRegistry.get(fullHistoryThreadKeysAtom)[threadKey] !== true &&
+      resumeCompactionTokens(modelSelection, text, metadata.createdAt) !== null;
     const messageId = MessageId.make(metadata.messageId);
     onWillEnqueue?.();
     clearThreadComposerError(threadKey);
@@ -769,7 +760,10 @@ export function useThreadComposerState() {
     });
     clearComposerDraftContent(threadKey, { deferAttachmentCleanup: true });
     enqueuePromise.then(
-      () => scheduleUnusedComposerAttachmentCleanup(attachments),
+      () => {
+        setKeepFullHistory(threadKey, false);
+        scheduleUnusedComposerAttachmentCleanup(attachments);
+      },
       (error: unknown) => {
         // Restore with uncapped append; capped merge could drop attachments added during the failed write.
         void mergeComposerDraftContent(threadKey, {
@@ -945,6 +939,8 @@ export function useThreadComposerState() {
     dismissFeedback,
     selectedThreadFeed,
     selectedThreadActivityRun,
+    selectedThreadAnnouncedRun,
+    selectedThreadDetailBehindShell,
     selectedThreadQueueCount,
     selectedThreadQueuedMessages,
     dispatchingQueuedMessageId,
@@ -955,6 +951,14 @@ export function useThreadComposerState() {
     ),
     providerSubagentStatus,
     isCompacting,
+    compactBeforeSend:
+      compactTokens === null || selectedThreadKey === null
+        ? null
+        : {
+            tokens: compactTokens,
+            keepFullHistory,
+            toggleKeepFullHistory: () => setKeepFullHistory(selectedThreadKey, !keepFullHistory),
+          },
     composerDraftKey,
     followUpBehavior,
     canSteerActiveTurn,

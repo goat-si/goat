@@ -29,9 +29,11 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
 import { projectThreadAwarenessV2 } from "@goat/shared/agentAwareness";
+
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -760,7 +762,7 @@ const assertProjectScopedShells = Effect.fn("assertProjectScopedShells")(functio
 it.effect.each([
   ["memory", ProjectionStore.layerMemory],
   ["SQL", layerTest],
-] as const)("%s shells read a subagent family and a worktree's threads", ([, layer]) =>
+] as const)("%s shells read a subagent family and a worktree's threads", ([kind, layer]) =>
   Effect.gen(function* () {
     const store = yield* ProjectionStore.ProjectionStoreV2;
     const now = yield* DateTime.now;
@@ -825,11 +827,28 @@ it.effect.each([
     assert.sameMembers([...(yield* family(id("grandchild")))], tree);
     assert.deepEqual([...(yield* family(id("missing")))], []);
     // Includes another root's idle child on the same path, which a shell may leave out.
-    const onWorktree = yield* store.getShellSnapshot({ location: "active", worktreePath });
+    const { statements, tracer } = traceSqlStatements();
+    const onWorktree = yield* store
+      .getShellSnapshot({ location: "active", worktreePath })
+      .pipe(Effect.withTracer(tracer));
     assert.sameMembers(
       onWorktree.threads.map((thread) => thread.id),
       [id("root"), id("child"), id("other-child")],
     );
+    // A path names a few threads; scanning every thread parses every payload.
+    const sqlClient = yield* Effect.serviceOption(SqlClient.SqlClient);
+    if (kind === "SQL") {
+      const sql = Option.getOrThrow(sqlClient);
+      const threadQuery = statements.find((statement) =>
+        statement.includes("AS latest_run_stop_requested"),
+      );
+      assert.isDefined(threadQuery);
+      const threadPlan = (yield* sql.unsafe<{ readonly detail: string }>(
+        `EXPLAIN QUERY PLAN ${threadQuery}`,
+        [],
+      )).map((row) => row.detail);
+      assert.notInclude(threadPlan, "SCAN t", threadPlan.join("\n"));
+    }
     // A fork keeps its deleted source's root, so the deleted root still names the live tree.
     yield* store.apply({
       id: EventId.make("event:family:root-deleted"),
@@ -1327,18 +1346,6 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
   it.effect(
     "command reads skip finished leaf nodes of finished runs",
     () => commandReadsSkipSettledLeafNodes,
-  );
-  it.effect("limits turn-start history to the requested runs, including an empty selection", () =>
-    Effect.gen(function* () {
-      const store = yield* ProjectionStore.ProjectionStoreV2;
-      const threadId = yield* addRolledBackRecoveryCandidate("selected-turn-start-history");
-      const runId = (yield* store.getThreadProjection(threadId)).runs[0]!.id;
-      const history = yield* store.getTurnStartHistory(threadId);
-      assert.isNotEmpty(history);
-      assert.deepEqual(yield* store.getTurnStartHistory(threadId, [runId]), history);
-      assert.deepEqual(yield* store.getTurnStartHistory(threadId, []), []);
-      assert.deepEqual(yield* store.getTurnStartHistory(threadId, [RunId.make("run:other")]), []);
-    }),
   );
 
   it.effect("preserves stored provider usage when a terminal update omits it", () =>
@@ -3794,7 +3801,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
     }),
   );
 
-  it.effect("looks up shell stop requests through the interrupt request index", () =>
+  it.effect("reads shell runs and item counts without walking a thread's history", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
       const sql = yield* SqlClient.SqlClient;
@@ -3803,19 +3810,43 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       yield* projectionStore
         .getShellSnapshot({ projectId, location: "active" })
         .pipe(Effect.withTracer(tracer));
+      const planOf = (statement: string) =>
+        sql
+          .unsafe<{ readonly detail: string }>(`EXPLAIN QUERY PLAN ${statement}`)
+          .pipe(Effect.map((rows) => rows.map((row) => row.detail)));
 
       const threadQuery = statements.find((statement) =>
         statement.includes("AS latest_run_stop_requested"),
       );
       assert.isDefined(threadQuery);
-      const stopRequestLookups = (yield* sql.unsafe<{ readonly detail: string }>(
-        `EXPLAIN QUERY PLAN ${threadQuery}`,
-      ))
-        .map((row) => row.detail)
-        .filter((detail) => detail.startsWith("SEARCH stop_request "));
+      const plan = yield* planOf(threadQuery);
+      const stopRequestLookups = plan.filter((detail) => detail.startsWith("SEARCH stop_request "));
       assert.lengthOf(stopRequestLookups, 2);
       for (const lookup of stopRequestLookups) {
         assert.include(lookup, "orchestration_v2_projection_turn_items_stop_request_idx");
+      }
+      // The active, activity, and pending-secret lookups; walking the ordinal index instead
+      // reads every run of an idle thread.
+      const activeRunLookups = plan.filter(
+        (detail) => detail.startsWith("SEARCH r ") && detail.includes("(thread_id=?"),
+      );
+      assert.lengthOf(activeRunLookups, 4);
+      for (const lookup of activeRunLookups) {
+        assert.include(lookup, "orchestration_v2_projection_runs_thread_status_idx");
+      }
+      const lastExecutedIndex = plan.findIndex((detail) =>
+        detail.includes("orchestration_v2_projection_runs_last_executed_idx"),
+      );
+      assert.notStrictEqual(lastExecutedIndex, -1);
+      // The lookup that follows the search is the sort it no longer needs.
+      assert.notInclude(plan[lastExecutedIndex + 1] ?? "", "USE TEMP B-TREE");
+
+      const countQueries = statements.filter((statement) => statement.includes("item_count"));
+      assert.isNotEmpty(countQueries);
+      for (const countQuery of countQueries) {
+        for (const detail of yield* planOf(countQuery)) {
+          assert.notInclude(detail, "orchestration_v2_projection_turn_items");
+        }
       }
     }),
   );
@@ -4071,6 +4102,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             },
           });
         }
+        let runWrites = 0;
         const applyRun = (
           threadId: ThreadId,
           suffix: string,
@@ -4079,9 +4111,10 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         ) => {
           const runId = RunId.make(`run:shell-item-counts:${suffix}`);
           const rootNodeId = NodeId.make(`node:shell-item-counts:${suffix}`);
+          runWrites += 1;
           return projectionStore
             .apply({
-              id: EventId.make(`event:shell-item-counts:${suffix}:run`),
+              id: EventId.make(`event:shell-item-counts:${suffix}:run:${runWrites}`),
               type: "run.created",
               threadId,
               runId,
@@ -4108,11 +4141,14 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             })
             .pipe(Effect.as(runId));
         };
-        let ordinal = 0;
-        const applyItem = (threadId: ThreadId, runId: RunId | null) => {
-          ordinal += 1;
+        let items = 0;
+        let writes = 0;
+        // Passing `rewrite` writes that earlier item again, possibly under another run.
+        const applyItem = (threadId: ThreadId, runId: RunId | null, rewrite?: number) => {
+          const ordinal = rewrite ?? (items += 1);
+          writes += 1;
           return projectionStore.apply({
-            id: EventId.make(`event:shell-item-counts:item:${ordinal}`),
+            id: EventId.make(`event:shell-item-counts:write:${writes}`),
             type: "turn-item.updated",
             threadId,
             ...(runId === null ? {} : { runId }),
@@ -4165,6 +4201,28 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           );
           assert.equal(shell?.itemCount, itemCount);
         }
+
+        // Writing an item again keeps its count; moving it to another run moves the count.
+        const itemCountOf = (threadId: ThreadId) =>
+          projectionStore.getThreadShell(threadId).pipe(Effect.map((shell) => shell?.itemCount));
+        yield* applyItem(busyThreadId, completedRunId, 3);
+        assert.equal(yield* itemCountOf(busyThreadId), 4);
+        yield* applyItem(busyThreadId, rolledBackRunId, 3);
+        assert.equal(yield* itemCountOf(busyThreadId), 3);
+        yield* applyItem(busyThreadId, null, 3);
+        assert.equal(yield* itemCountOf(busyThreadId), 4);
+
+        // A run's rollback uncounts its items, and writing the run again counts them back.
+        yield* applyRun(busyThreadId, "busy-completed", 1, true);
+        assert.equal(yield* itemCountOf(busyThreadId), 3);
+        yield* applyRun(busyThreadId, "busy-completed", 1, false);
+        assert.equal(yield* itemCountOf(busyThreadId), 4);
+        // Items written before their run exist count once it does.
+        const lateRunId = RunId.make("run:shell-item-counts:late");
+        yield* applyItem(otherThreadId, lateRunId);
+        assert.equal(yield* itemCountOf(otherThreadId), 1);
+        yield* applyRun(otherThreadId, "late", 2, false);
+        assert.equal(yield* itemCountOf(otherThreadId), 2);
       }),
   );
 

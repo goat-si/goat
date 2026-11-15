@@ -12,7 +12,7 @@ import * as EffectAcpSchema from "effect-acp/compat";
 import * as EffectAcpSchemaV1 from "effect-acp/schema-v1";
 import { deriveToolActivityPresentation, mergeToolActivityData } from "@goat/shared/toolActivity";
 import { GOAT_MCP_TOOL_NAMES } from "@goat/shared/goatMcpToolPresentation";
-import { acpMcpFallbackInput, ompDeviceGoatToolCall } from "./acpMcpCallInput.ts";
+import { acpMcpFallbackInput, hermesGoatTool, ompDeviceGoatToolCall } from "./acpMcpCallInput.ts";
 import type {
   OrchestrationV2ProviderThreadNativeMetadata,
   ThreadTokenUsageSnapshot,
@@ -1152,6 +1152,8 @@ export function extractMcpToolCallIdentity(
   for (const candidate of candidates) {
     const trimmed = candidate.trim();
     const qualified = /^mcp__(.+?)__(.+)$/i.exec(trimmed);
+    const hermesTool = hermesGoatTool(qualified?.[1], qualified?.[2]);
+    if (hermesTool !== undefined) return { server: "goat", tool: hermesTool };
     if (qualified?.[1] && qualified[2] && !/^goat$/i.test(qualified[1]))
       return { server: qualified[1], tool: qualified[2] };
     // The server key and the tool prefix are both "goat", so "goat_thread_send"

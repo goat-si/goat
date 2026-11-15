@@ -26,6 +26,7 @@ import {
   WORK,
   bigPickle,
   event,
+  emptyShellInventory,
   noOpenRequests,
   opening,
   out,
@@ -114,6 +115,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
             input: { sessionID: SESSION },
           }),
           reply("rpc.call", { output: nativeGoal("paused") }),
+          ...emptyShellInventory,
         ],
         { version: "2.2.5" },
       );
@@ -158,6 +160,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
                     ...recovered.slice(0, 2),
                     out("rpc.call", "<any>"),
                     reply("rpc.call", { output: nativeGoal("active") }),
+                    ...emptyShellInventory,
                     ...recovered.slice(2),
                     ...noOpenRequests,
                   ]
@@ -289,6 +292,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
                   ),
                 ]
               : []),
+            ...emptyShellInventory,
             ...reconnect.slice(2),
           ],
           { version: "2.2.5", replayGate: gate },

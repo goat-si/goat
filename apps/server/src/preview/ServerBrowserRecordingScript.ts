@@ -5,6 +5,15 @@
  */
 import { type BrowserRecordingFrameRate, PROVIDER_SEND_TURN_MAX_FILE_BYTES } from "@goat/contracts";
 
+export interface EncoderWindow {
+  __goatRecorder: {
+    cursor(x: number, y: number, click: boolean): void;
+    frame(data: string, width: number): Promise<boolean>;
+    stop(): Promise<{ mimeType: string | null; count: number; bytes: number }>;
+    chunk(index: number): Promise<string>;
+  };
+}
+
 export const recordingEncoderScript = (frameRate: BrowserRecordingFrameRate) => `(() => {
   const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d");

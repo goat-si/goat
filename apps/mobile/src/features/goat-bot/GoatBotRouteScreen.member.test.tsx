@@ -66,7 +66,10 @@ vi.mock("../../state/use-atom-command", () => ({
   },
 }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
-  useMobileGoatBotHomeMode: () => ({ botRef: { environmentId: "env", threadId: "main" } }),
+  useMobileGoatBotHomeMode: () => ({
+    botRef: { environmentId: "env", threadId: "main" },
+    environments: [{ environmentId: "env", connected: true }],
+  }),
 }));
 vi.mock("./useMobileBotRoster", () => ({
   useMobileGoatBotMember: () => ({ member: scout, main: null, missing: false }),

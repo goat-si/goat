@@ -2,6 +2,7 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 import type * as AcpProtocol from "../protocol.ts";
 
 export interface AcpBufferedRawNotification {
@@ -12,13 +13,14 @@ export interface AcpBufferedRawNotification {
 const MAX_BUFFERED_RAW_NOTIFICATIONS = 32;
 const MAX_BUFFERED_RAW_NOTIFICATION_JSON_LENGTH = 16 * 1024 * 1024;
 
-export const makeBufferRawNotification = (
+export const makeRawNotificationBuffer = (
   rawNotifications: Queue.Queue<AcpBufferedRawNotification, Cause.Done<void>>,
 ) => {
+  // JSON length of the notifications still in the queue. `incoming` takes one
+  // at a time, so a slow reader holds at most one outside this budget.
   let rawNotificationsJsonLength = 0;
-  return (notification: AcpProtocol.AcpIncomingNotification, lineLength: number) =>
+  const buffer = (notification: AcpProtocol.AcpIncomingNotification, lineLength: number) =>
     Effect.sync(() => {
-      if (Queue.sizeUnsafe(rawNotifications) === 0) rawNotificationsJsonLength = 0;
       if (!Queue.offerUnsafe(rawNotifications, { notification, lineLength })) return;
       rawNotificationsJsonLength += lineLength;
       while (
@@ -31,4 +33,16 @@ export const makeBufferRawNotification = (
         rawNotificationsJsonLength -= dropped.value.lineLength;
       }
     });
+  const incoming = (): Stream.Stream<AcpProtocol.AcpIncomingNotification> =>
+    Stream.fromPull(
+      Effect.succeed(
+        Queue.take(rawNotifications).pipe(
+          Effect.map(({ notification, lineLength }) => {
+            rawNotificationsJsonLength -= lineLength;
+            return [notification] as const;
+          }),
+        ),
+      ),
+    );
+  return { buffer, incoming };
 };

@@ -5,7 +5,7 @@ import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { BotProfile } from "@goat/contracts";
+import { BotProfile, EnvironmentId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
 type Rect = readonly [number, number, number, number];
@@ -59,6 +59,7 @@ vi.mock("react-native", () => ({
     disabled,
     accessibilityState,
     accessibilityLabel,
+    accessibilityHint,
     onAccessibilityAction,
     accessibilityActions,
     className,
@@ -70,6 +71,7 @@ vi.mock("react-native", () => ({
     disabled?: boolean;
     accessibilityState?: { selected?: boolean; expanded?: boolean };
     accessibilityLabel?: string;
+    accessibilityHint?: string;
     onAccessibilityAction?: (event: { nativeEvent: { actionName: string } }) => void;
     accessibilityActions?: ReadonlyArray<{ name: string; label?: string }>;
     className?: string;
@@ -83,6 +85,7 @@ vi.mock("react-native", () => ({
         aria-pressed={accessibilityState?.selected}
         aria-expanded={accessibilityState?.expanded}
         aria-label={accessibilityLabel}
+        aria-description={accessibilityHint}
         data-class={className}
         data-actions={accessibilityActions?.map((action) => action.label ?? action.name).join(",")}
         onKeyDown={(event) => onAccessibilityAction?.({ nativeEvent: { actionName: event.key } })}
@@ -102,6 +105,13 @@ const phone = vi.hoisted(() => ({
   selected: [] as Array<{ name: string; params?: object }>,
   bots: [] as ReadonlyArray<object>,
   hidden: [] as ReadonlyArray<object>,
+  deleted: [] as ReadonlyArray<object>,
+  // The roster's computer: its member support as last read, whether it is connected, and who may manage.
+  supportsMembers: true,
+  membersUnknown: false,
+  connected: true,
+  environmentId: "env" as string | null,
+  mayManage: false,
 }));
 const homeRoute = { index: 0, routes: [{ key: "home", name: "Home" }] };
 vi.mock("@react-navigation/native", () => ({
@@ -116,9 +126,12 @@ vi.mock("../workspace/useSelectWorkspaceDetail", () => ({
 vi.mock("./useMobileBotRoster", () => ({
   useMobileBotRoster: () => ({
     bots: phone.bots,
-    groups: { main: null, members: [], hidden: phone.hidden, deleted: [] },
-    supportsMembers: true,
-    environmentId: "env",
+    groups: { main: null, members: [], hidden: phone.hidden, deleted: phone.deleted },
+    supportsMembers: phone.supportsMembers,
+    membersUnknown: phone.membersUnknown,
+    connected: phone.connected,
+    computerLabel: "Studio Mac",
+    environmentId: phone.environmentId,
     slackEnabled: false,
     listedBots: [],
     refreshBots: () => {},
@@ -128,7 +141,12 @@ vi.mock("./useMobileBotRoster", () => ({
 }));
 vi.mock("./useMobileBotPreview", () => ({ useMobileBotPreview: () => null }));
 vi.mock("./useMobileBotManage", () => ({
-  useMobileBotManage: () => ({ canCreate: false, canManage: false, canEdit: false }),
+  useMobileBotManage: () => ({
+    canCreate: phone.connected,
+    canManage: phone.connected && phone.mayManage,
+    canEdit: false,
+    mayManage: phone.mayManage,
+  }),
 }));
 vi.mock("./MobileBotEditSheet", () => ({ MobileBotEditSheet: () => null }));
 vi.mock("./MobileNewBotStatus", () => ({ MobileNewBotStatus: () => null }));
@@ -141,7 +159,7 @@ vi.mock("./GoatBotFace", () => ({
   ),
 }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
-  useMobileGoatBotHomeMode: () => ({ botRef: { environmentId: "env", threadId: "bot" } }),
+  useMobileGoatBotHomeMode: () => ({ botRef: { environmentId: link.savedRef, threadId: "bot" } }),
 }));
 vi.mock("../../state/entities", () => ({ useThreadShell: () => null }));
 // The open asks read: a real query view over this atom. Like a server, what it holds (`state`)
@@ -164,13 +182,39 @@ vi.mock("@goat/client-runtime/state/runtime", async () => {
   return { createEnvironmentRpcQueryAtomFamily: () => () => read };
 });
 vi.mock("../../connection/runtime", () => ({ connectionAtomRuntime: {} }));
+// The app's computers: the bot computer "env" stays in the catalog throughout.
+vi.mock("../../connection/catalog", async () => {
+  const { Atom: A } = await import("effect/reactivity");
+  return {
+    environmentCatalog: {
+      catalogValueAtom: A.make({ isReady: true, entries: new Map([["env", { enabled: true }]]) }),
+    },
+  };
+});
+// The bot computer's connection as the app sees it; each test sets it.
+const link = vi.hoisted(() => ({
+  phase: "connected",
+  /** The bot this device saved; the Home claim can move to another computer before it changes. */
+  savedRef: "env",
+  /** The computer's config; null before anything was read from it (a cold start offline). */
+  config: { environment: { capabilities: { goatBotOpenAsks: true } } } as object | null,
+}));
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
     presentationById: new Map([
       [
         "env",
         {
-          connection: { phase: "connected" },
+          connection: { phase: link.phase },
+          entry: { target: { label: "Studio Mac" } },
+          serverConfig: link.config,
+        },
+      ],
+      [
+        "old",
+        {
+          connection: { phase: "disconnected" },
+          entry: { target: { label: "Old Mac" } },
           serverConfig: { environment: { capabilities: { goatBotOpenAsks: true } } },
         },
       ],
@@ -201,15 +245,22 @@ vi.mock("../../components/ui/Button", () => ({
   Button: ({
     label,
     accessibilityLabel,
+    accessibilityHint,
     disabled,
     onPress,
   }: {
     label: string;
     accessibilityLabel?: string;
+    accessibilityHint?: string;
     disabled?: boolean;
     onPress?: () => void;
   }) => (
-    <button aria-label={accessibilityLabel} disabled={disabled} onClick={onPress}>
+    <button
+      aria-label={accessibilityLabel}
+      aria-description={accessibilityHint}
+      disabled={disabled}
+      onClick={onPress}
+    >
       {label}
     </button>
   ),
@@ -217,6 +268,7 @@ vi.mock("../../components/ui/Button", () => ({
 
 import { MobileBotList } from "./MobileBotList";
 import { MobileBotRosterView } from "./MobileBotRosterView";
+import { resetKeptPerComputerForTests } from "./useKeptPerComputer";
 
 const at = "2026-11-11T10:00:00.000Z";
 const decodeProfile = Schema.decodeUnknownSync(BotProfile);
@@ -266,6 +318,7 @@ async function showRoster(
     root?.render(
       <RegistryContext value={registry}>
         <MobileBotRosterView
+          mainEnvironmentId={EnvironmentId.make("env")}
           bots={[
             { kind: "main", profile: null },
             { kind: "member", profile: scout },
@@ -485,4 +538,134 @@ it("on the phone's bot list, an ask opens the GoatBot screen of its bot on that 
     { name: "GoatBot", params: { botId: "quiet", taskId: "task-q" } },
     { name: "GoatBot", params: { taskId: "task-m" } },
   ]);
+});
+
+function setupLink(phase: string) {
+  registry = AtomRegistry.make();
+  link.phase = phase;
+  link.savedRef = "env";
+  link.config = { environment: { capabilities: { goatBotOpenAsks: true } } };
+  resetKeptPerComputerForTests();
+}
+
+it("keeps the asks it last read while the computer is offline, says they may be out of date, and offers no retry", async () => {
+  setupLink("connected");
+  await showRoster(true);
+  serve(read([ask("scout", "task-s", "Which machine?", "2026-11-11T10:05:00.000Z")]));
+  await act(async () => {});
+  link.phase = "disconnected";
+  await showRoster(true);
+  expect(stripButton()?.getAttribute("aria-label")).toBe(
+    "1 waiting for you, offline, may be out of date. Scout: Which machine?",
+  );
+  expect(container.textContent).toContain("Offline · this may be out of date");
+  expect(container.textContent).not.toContain("Try again");
+  link.phase = "connected";
+});
+
+it("keeps the last asks through a failed refresh when the computer then goes offline", async () => {
+  setupLink("connected");
+  await showRoster(true);
+  serve(read([ask("scout", "task-s", "Which machine?", "2026-11-11T10:05:00.000Z")]));
+  await act(async () => {});
+  serve(AsyncResult.failure(Cause.fail(new Error("socket"))));
+  await act(async () => {});
+  link.phase = "disconnected";
+  await showRoster(true);
+  expect(container.textContent).toContain("Scout: Which machine?");
+  expect(container.textContent).toContain("Offline · this may be out of date");
+  link.phase = "connected";
+});
+
+it("says what waits is unavailable when the computer is offline before any read answered", async () => {
+  setupLink("disconnected");
+  await showRoster(true);
+  expect(container.textContent).toContain("Needs you · unavailable while Studio Mac is offline");
+  link.phase = "connected";
+});
+
+/** The phone's bot list, rendered with its real panel and view, for one state of the roster's computer. */
+async function showPhoneList(state: Partial<typeof phone>) {
+  registry = AtomRegistry.make();
+  resetKeptPerComputerForTests();
+  Object.assign(phone, {
+    selected: [],
+    bots: [{ kind: "main", profile: null }],
+    hidden: [],
+    deleted: [],
+    supportsMembers: true,
+    membersUnknown: false,
+    connected: true,
+    environmentId: "env",
+    mayManage: false,
+    ...state,
+  });
+  root ??= createRoot(container);
+  await act(async () =>
+    root?.render(
+      <RegistryContext value={registry}>
+        <MobileBotList />
+      </RegistryContext>,
+    ),
+  );
+  return [...container.querySelectorAll("button")].find((button) =>
+    button.textContent?.includes("New bot"),
+  );
+}
+
+it("New bot says Coming soon only for a computer that says it has no member bots", async () => {
+  const older = await showPhoneList({ supportsMembers: false });
+  expect(older?.textContent).toBe("New bot · Coming soon");
+  const offline = "Unavailable while Studio Mac is offline";
+  for (const [state, why] of [
+    [{ connected: false }, offline],
+    // Nothing read from this computer yet: unknown, not an older server.
+    [{ connected: false, supportsMembers: false, membersUnknown: true }, offline],
+    [
+      { connected: false, supportsMembers: false, membersUnknown: true, environmentId: null },
+      "Unavailable until a computer with GOAT Bot connects",
+    ],
+  ] as const) {
+    const add = await showPhoneList(state);
+    expect(add?.textContent).toBe("New bot");
+    expect(add?.disabled).toBe(true);
+    expect(add?.getAttribute("aria-description")).toBe(why);
+  }
+  const online = await showPhoneList({});
+  expect(online?.textContent).toBe("New bot");
+  expect(online?.disabled).toBe(false);
+});
+
+it("offline, a deleted bot's Restore stays in view, disabled with the reason; back online it restores", async () => {
+  const gone = profile("gone", "Gone", { state: "deleted" });
+  await showPhoneList({ connected: false, mayManage: true, deleted: [gone] });
+  const restore = () =>
+    container.querySelector<HTMLButtonElement>('button[aria-label="Restore Gone"]');
+  expect(restore()?.disabled).toBe(true);
+  expect(restore()?.getAttribute("aria-description")).toBe(
+    "Unavailable while Studio Mac is offline",
+  );
+  expect(container.textContent).toContain("Restore: unavailable while Studio Mac is offline");
+  await showPhoneList({ connected: true, mayManage: true, deleted: [gone] });
+  expect(restore()?.disabled).toBe(false);
+});
+
+it("reads the asks of the computer the roster shows, not a saved bot on a computer the Home claim has left", async () => {
+  setupLink("connected");
+  // The Home claim moved to "env"; the saved bot still names "old", which is offline.
+  link.savedRef = "old";
+  await showRoster(true);
+  serve(read([ask("scout", "task-s", "Which machine?", "2026-11-11T10:05:00.000Z")]));
+  await act(async () => {});
+  expect(stripButton()?.getAttribute("aria-label")).toBe(
+    "1 waiting for you. Scout: Which machine?",
+  );
+  expect(container.textContent).not.toContain("Old Mac");
+});
+
+it("says what waits is unavailable after a cold start offline, before anything was read from the computer", async () => {
+  setupLink("disconnected");
+  link.config = null;
+  await showRoster(true);
+  expect(container.textContent).toContain("Needs you · unavailable while Studio Mac is offline");
 });

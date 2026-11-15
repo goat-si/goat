@@ -14,6 +14,7 @@ import type * as AcpCompat from "effect-acp/compat";
 import { mockSessionNotices } from "./acpMockNotices.ts";
 import { mockSessionPage } from "./acpMockSessions.ts";
 import { beginAcpMockPrompt } from "./acpMockCancellationState.ts";
+import { emitGrokKillTaskScenario, writeJsonRpcNotification } from "./acpMockGrokScenarios.ts";
 const requestLogPath = process.env.GOAT_ACP_REQUEST_LOG_PATH;
 const exitLogPath = process.env.GOAT_ACP_EXIT_LOG_PATH;
 const antigravityProfile = process.env.GOAT_ACP_ANTIGRAVITY === "1";
@@ -21,6 +22,12 @@ const copilotModesProfile = process.env.GOAT_ACP_COPILOT_MODES === "1";
 const copilotModeId = (name: string) =>
   `https://agentclientprotocol.com/protocol/session-modes#${name}`;
 const modeOptionCategory = process.env.GOAT_ACP_MODE_OPTION_CATEGORY ?? "mode";
+// Comma-separated command names the mock advertises, so `/compact` support is testable.
+const advertisedCommandNames = (process.env.GOAT_ACP_AVAILABLE_COMMANDS ?? "")
+  .split(",")
+  .map((name) => name.trim())
+  .filter((name) => name.length > 0);
+const loadedCommandNames = process.env.GOAT_ACP_LOADED_COMMANDS?.split(",").filter(Boolean);
 const emitToolCalls = process.env.GOAT_ACP_EMIT_TOOL_CALLS === "1";
 const emitInterleavedAssistantToolCalls =
   process.env.GOAT_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
@@ -130,6 +137,7 @@ const supportsAcpMcp = process.env.GOAT_ACP_MCP_ACP === "1";
 const supportsV2Management = process.env.GOAT_ACP_V2_MANAGEMENT === "1";
 const omitSessionListHandler = process.env.GOAT_ACP_OMIT_SESSION_LIST_HANDLER === "1";
 const advertisedAuthMethodId = process.env.GOAT_ACP_AUTH_METHOD_ID?.trim();
+const failDeleteSession = process.env.GOAT_ACP_FAIL_DELETE_SESSION === "1";
 const initializeAuthMethodId =
   advertisedAuthMethodId ?? (supportsSessionLifecycle ? "test" : undefined);
 const requiresAuthentication = process.env.GOAT_ACP_REQUIRE_AUTH === "1";
@@ -178,9 +186,6 @@ function logExit(reason: string): void {
     return;
   }
   NodeFS.appendFileSync(exitLogPath, `${reason}\n`, "utf8");
-}
-function writeJsonRpcNotification(method: string, params: unknown): void {
-  process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
 }
 function logResidualCallbackResponse(kind: string): void {
   if (!residualCallbackResponseLogPath) return;
@@ -485,71 +490,6 @@ function modelState(): AcpCompat.SessionModelState {
   };
 }
 
-function emitGrokKillTaskScenario(
-  sessionId: string,
-  promptId: string | undefined,
-  shape: string,
-): void {
-  const taskId = "call-fb9d0000-0000-0000-0000-000000000026-29";
-  const outcome =
-    shape === "already_exited" || shape === "known_failure" ? "already_exited" : "killed";
-  writeJsonRpcNotification("session/update", {
-    sessionId,
-    update: {
-      sessionUpdate: "tool_call_update",
-      toolCallId: "kill-target-command",
-      title: "run_terminal_command",
-      kind: "execute",
-      status: "in_progress",
-      rawInput: { command: "sleep 40" },
-    },
-  });
-  writeJsonRpcNotification("session/update", {
-    sessionId,
-    update: {
-      sessionUpdate: "tool_call_update",
-      toolCallId: "kill-target-command",
-      status: "completed",
-      rawOutput: {
-        type: "BackgroundTaskStarted",
-        task_id: taskId,
-        task_type: "bash",
-        command: "sleep 40",
-      },
-    },
-  });
-  if (shape === "known_failure") {
-    writeJsonRpcNotification("_x.ai/task_completed", {
-      sessionId,
-      update: {
-        sessionUpdate: "task_completed",
-        task_snapshot: { task_id: taskId, kind: "bash", exit_code: 7, output: "known failure\n" },
-      },
-    });
-  }
-  writeJsonRpcNotification("session/update", {
-    sessionId,
-    update: {
-      sessionUpdate: "tool_call_update",
-      toolCallId: "kill-command",
-      title: `kill ${taskId} (${outcome})`,
-      kind: "other",
-      status: "completed",
-      rawInput: {
-        task_id: taskId,
-        ...(shape === "output_only" ? {} : { variant: "KillTask" }),
-      },
-      ...(shape === "variant_only" ? {} : { rawOutput: { type: "KillTask", outcome } }),
-    },
-  });
-  writeJsonRpcNotification("_x.ai/session/prompt_complete", {
-    sessionId,
-    promptId,
-    stopReason: "end_turn",
-    agentResult: null,
-  });
-}
-
 const program = Effect.gen(function* () {
   const agent = yield* EffectAcpAgent.AcpAgent;
   const resumeRelease = yield* Deferred.make<void>();
@@ -669,6 +609,18 @@ const program = Effect.gen(function* () {
       if (antigravityProfile) {
         yield* publishAntigravityCommands(sessionId);
       }
+      if (advertisedCommandNames.length > 0) {
+        yield* agent.client.sessionUpdate({
+          sessionId,
+          update: {
+            sessionUpdate: "available_commands_update",
+            availableCommands: advertisedCommandNames.map((name) => ({
+              name,
+              description: `${name} command`,
+            })),
+          },
+        });
+      }
       if (commandAdvertisementDelayMs >= 0) {
         yield* Effect.sleep(`${commandAdvertisementDelayMs} millis`).pipe(
           Effect.andThen(
@@ -752,6 +704,15 @@ const program = Effect.gen(function* () {
   yield* agent.handleLoadSession((request) =>
     Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
+      if (loadedCommandNames !== undefined) {
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "available_commands_update",
+            availableCommands: loadedCommandNames.map((name) => ({ name, description: name })),
+          },
+        });
+      }
       if (failLoadSession) {
         return yield* AcpError.AcpRequestError.internalError("Mock load session failure");
       }
@@ -840,6 +801,9 @@ const program = Effect.gen(function* () {
   yield* agent.handleDeleteSession(() =>
     Effect.gen(function* () {
       yield* requireAuthentication();
+      if (failDeleteSession) {
+        return yield* AcpError.AcpRequestError.internalError("delete failed");
+      }
       return {};
     }),
   );

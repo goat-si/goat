@@ -1,5 +1,4 @@
 import type { EnvironmentId, ThreadId } from "@goat/contracts";
-
 import type { DraftId } from "../composerDraftStore";
 
 export type ChatViewProps =

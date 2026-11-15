@@ -33,6 +33,7 @@ import {
 } from "./channelCommon.ts";
 import { ChannelBotRef, ChannelTask, ChannelTaskChip, ChannelTaskStatus } from "./channelLedger.ts";
 import { ChannelSkillProposal } from "./channelSkillProposal.ts";
+import { ChannelTaskPullRequest } from "./channelWorkerObservation.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
 import { GoatBotHomeClaim } from "./settings.ts";
 
@@ -452,6 +453,26 @@ export const ChannelUpdateTaskViewInput = Schema.Struct({
 });
 export type ChannelUpdateTaskViewInput = typeof ChannelUpdateTaskViewInput.Type;
 
+/** Shipped clients reject a longer list, so listing more needs a new key. */
+export const CHANNEL_BOT_ROW_PULL_REQUESTS = 5;
+/**
+ * A pull request of a work row's task. An absent state means the host was never read, or the
+ * pull request is no longer refreshed (its threads settled, archived or gone, or a remote task
+ * that stopped running), so its last state may be stale.
+ */
+export const BotRowPullRequest = ChannelTaskPullRequest.mapFields(
+  ({ url: _url, ...fields }) => fields,
+);
+export type BotRowPullRequest = typeof BotRowPullRequest.Type;
+const botRowPullRequestFields = {
+  /** Open first, then without a state, merged, closed; absent when the task has none. */
+  pullRequests: Schema.optionalKey(
+    Schema.Array(BotRowPullRequest).check(Schema.isMaxLength(CHANNEL_BOT_ROW_PULL_REQUESTS)),
+  ),
+  /** The task's pull requests beyond those listed. */
+  pullRequestsOmitted: Schema.optionalKey(PositiveInt),
+};
+
 export const BotThreadRow = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("task"),
@@ -470,6 +491,7 @@ export const BotThreadRow = Schema.Union([
     mainMessagesSinceQuiet: NonNegativeInt,
     /** The task's worker thread on this machine, which this row opens. */
     worker: Schema.optional(Schema.Struct({ environmentId: EnvironmentId, threadId: ThreadId })),
+    ...botRowPullRequestFields,
   }),
   Schema.Struct({
     kind: Schema.Literal("coding"),
@@ -520,6 +542,7 @@ export const BotTaskRow = Schema.Struct({
   unread: Schema.Boolean,
   mainMessagesSinceQuiet: NonNegativeInt,
   worker: Schema.optional(Schema.Struct({ environmentId: EnvironmentId, threadId: ThreadId })),
+  ...botRowPullRequestFields,
 });
 export const BotCodingRow = Schema.Struct({
   kind: Schema.Literal("coding"),
@@ -618,8 +641,9 @@ export const ChannelListBotThreadsResult = Schema.Struct({
       /** The walk cannot go on: the next task's stored id cannot be named in a cursor. */
       endedEarly: Schema.optionalKey(Schema.Boolean),
       /**
-       * This page left out stored tasks, launches or task views it could not read; a row whose
-       * view was unreadable shows the empty view. The walk is not a complete account of the bot.
+       * This page left out stored tasks, launches, task views or a thread's pull request links it
+       * could not read; a row whose view was unreadable shows the empty view. The walk is not a
+       * complete account of the bot.
        */
       partial: Schema.optionalKey(Schema.Boolean),
     }),

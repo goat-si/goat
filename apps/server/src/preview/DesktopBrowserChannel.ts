@@ -7,6 +7,7 @@ import {
   DesktopBrowserEvent,
   type DesktopBrowserCommand as DesktopBrowserCommandType,
   type AgentCursorSnapshot,
+  type PreviewAutomationLoadError,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -50,6 +51,8 @@ export class DesktopBrowserChannel extends Context.Service<
     readonly isAttached: (key: DesktopTabKey) => Effect.Effect<boolean>;
     /** Whether a desktop window draws the tab on screen, which no streamed viewer counts. */
     readonly isShown?: (key: DesktopTabKey) => boolean;
+    /** A load failure the desktop saw, possibly before the server connected to the tab. */
+    readonly loadFailure?: (key: DesktopTabKey) => PreviewAutomationLoadError | undefined;
     readonly endpoint: (key: DesktopTabKey) => Effect.Effect<string, never, Scope.Scope>;
     readonly pointer: (
       key: DesktopTabKey,
@@ -74,6 +77,7 @@ const make = Effect.gen(function* () {
   const attachedTabs = new Set<string>();
   // Missing reports protect desktop tabs until the renderer explicitly marks them hidden.
   const shownTabs = new Map<string, boolean>();
+  const loadFailures = new Map<string, PreviewAutomationLoadError>();
   const inbound = new Map<string, Queue.Queue<string>>();
   const writeLock = yield* Semaphore.make(1);
 
@@ -101,6 +105,7 @@ const make = Effect.gen(function* () {
         return Effect.void;
       }),
       isShown: () => false,
+      loadFailure: () => undefined,
     });
   }
 
@@ -150,9 +155,20 @@ const make = Effect.gen(function* () {
         case "attached":
           attachedTabs.add(id);
           return PubSub.publish(changes, { key, attached: true });
+        case "loadFailed":
+          // Only attached tabs keep one, so the map is no larger than the set of attached tabs.
+          if (attachedTabs.has(id)) {
+            loadFailures.set(id, {
+              url: event.url.slice(0, 2048),
+              code: event.code,
+              description: event.description,
+            });
+          }
+          return Effect.void;
         case "detached": {
           attachedTabs.delete(id);
           shownTabs.delete(id);
+          loadFailures.delete(id);
           const queue = inbound.get(id);
           inbound.delete(id);
           return (queue ? Queue.shutdown(queue) : Effect.void).pipe(
@@ -166,7 +182,12 @@ const make = Effect.gen(function* () {
       }
     }),
     Effect.catchCause((cause) => Effect.logWarning("desktop browser channel stopped", { cause })),
-    Effect.ensuring(Effect.sync(() => shownTabs.clear())),
+    Effect.ensuring(
+      Effect.sync(() => {
+        shownTabs.clear();
+        loadFailures.clear();
+      }),
+    ),
     Effect.forkScoped,
   );
 
@@ -261,6 +282,7 @@ const make = Effect.gen(function* () {
       return Effect.sync(() => attachedTabs.has(keyOf(key)));
     }),
     isShown: (key) => shownTabs.get(keyOf(key)) ?? true,
+    loadFailure: (key) => loadFailures.get(keyOf(key)),
     endpoint,
     turn: Effect.fn("DesktopBrowserChannel.turn")(function (threadId, active) {
       return command({ type: "turn", threadId, active });

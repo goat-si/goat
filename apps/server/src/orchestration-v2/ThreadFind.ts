@@ -406,12 +406,12 @@ export const makeThreadFind = Effect.fn("makeThreadFind")(function* (
             ),
           );
         // Answers rendered inside question cards must not appear as separate matches.
-        const foldedAnswers = new Set<string>();
+        const foldedAnswerRunIds = new Map<string, OrchestrationV2TurnItem["runId"]>();
         for (const payload of payloads) {
           if (payload.type !== "user_input_request") continue;
           const { item } = yield* decode(payload);
           if (item.type === "user_input_request" && item.questionAnswer)
-            foldedAnswers.add(`async-answer:${item.questionAnswer.requestId}`);
+            foldedAnswerRunIds.set(`async-answer:${item.questionAnswer.requestId}`, item.runId);
         }
         // The timeline hides an empty reply's fallback when its run shows an HTML render or MCP app.
         const embeddedResultRunIds = new Set<OrchestrationV2TurnItem["runId"]>();
@@ -427,7 +427,7 @@ export const makeThreadFind = Effect.fn("makeThreadFind")(function* (
         const rows = payloads.filter(
           (row) =>
             row.type !== "user_input_request" &&
-            !(row.type === "user_message" && foldedAnswers.has(row.entryId)),
+            !(row.type === "user_message" && foldedAnswerRunIds.get(row.entryId) === row.runId),
         );
         const documents = new Map<number, FindDocument>();
         const count = Effect.fnUntraced(function* (row: FindPayload) {

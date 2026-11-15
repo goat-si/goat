@@ -179,7 +179,8 @@ import { ComposerUsageLimits } from "./ComposerUsageLimits";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import { ProviderSubagentBar } from "./ProviderSubagentBar";
 import { SideChatParentRow } from "./SideChatParentRow";
-import { ThreadCreationFailedCard } from "./ThreadCreationFailedCard";
+import { ThreadCreationFailedSlot } from "./ThreadCreationFailedSlot";
+import { CompactBeforeSendNotice, type CompactBeforeSendState } from "./CompactBeforeSendNotice";
 import {
   FLOATING_WORKING_CONTROL_COVERAGE,
   FloatingWorkingControl,
@@ -255,6 +256,8 @@ export interface ThreadDetailScreenProps {
   readonly providerSubagentStatus?: ProviderSubagentStatus | null;
   readonly extensionStatuses?: NonNullable<OrchestrationV2ProviderSession["extensionStatuses"]>;
   readonly isCompacting: boolean;
+  /** Set while the next send compacts the thread first. */
+  readonly compactBeforeSend?: CompactBeforeSendState | null;
   readonly creationState:
     | {
         readonly kind: "preparing";
@@ -1622,6 +1625,7 @@ function ThreadDetailBody(
                       />
                     </Animated.View>
                   ) : null}
+                  <CompactBeforeSendNotice state={props.compactBeforeSend} />
                   {usageLimitsReport && activeUserInputRequestId === null ? (
                     <Animated.View
                       className="shrink-0 px-4"
@@ -1639,17 +1643,11 @@ function ThreadDetailBody(
                     </Animated.View>
                   ) : null}
                   {props.creationState?.kind === "failed" ? (
-                    <Animated.View
-                      className="shrink-0 px-4"
-                      style={{ paddingBottom: composerBottomInset }}
-                      entering={FadeInDown.duration(220)}
-                      exiting={FadeOut.duration(140)}
-                    >
-                      <ThreadCreationFailedCard
-                        reason={props.creationState.reason}
-                        onEditTask={props.creationState.onEditTask}
-                      />
-                    </Animated.View>
+                    <ThreadCreationFailedSlot
+                      reason={props.creationState.reason}
+                      onEditTask={props.creationState.onEditTask}
+                      bottomInset={composerBottomInset}
+                    />
                   ) : null}
                 </ComposerCards>
                 <ComposerCards maxWidth={contentMaxWidth} onHeight={handlePendingCardHeight}>
@@ -1676,6 +1674,9 @@ function ThreadDetailBody(
                       ) : null}
                       {props.activePendingUserInput ? (
                         <PendingUserInputCard
+                          environmentId={props.environmentId}
+                          threadId={props.selectedThread.id}
+                          workspaceRoot={props.threadCwd}
                           canOperateThread={props.canOperateThread}
                           pendingUserInput={props.activePendingUserInput}
                           maxHeight={pendingUserInputMaxHeight}

@@ -10,16 +10,18 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironmentServerConfig } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
+import { goatBotComputerConnectedNow, useGoatBotComputerConnected } from "./goatBotComputerLink";
 import { goatBotMemberModelChoice, goatBotMemberModelMenu } from "./goatBotModelMenu";
 
 const NO_PERMISSION = Atom.make(false);
 
 /**
  * Whether a member's model can change here. Older servers drop the key from `channel.updateBot`,
- * so only a server that advertises it is offered the edit.
+ * so only a server that advertises it is offered the edit, and only while it is connected.
  */
 export function useMobileGoatBotMemberModelEditable(environmentId: EnvironmentId | null) {
   const { presentationById } = useEnvironments();
+  const connected = useGoatBotComputerConnected(environmentId);
   const supported =
     environmentId !== null &&
     presentationById.get(environmentId)?.serverConfig?.environment.capabilities
@@ -27,7 +29,11 @@ export function useMobileGoatBotMemberModelEditable(environmentId: EnvironmentId
   const permitted = useAtomValue(
     supported ? channelEnvironment.updateBot.permissionAtom(environmentId) : NO_PERMISSION,
   );
-  return { supported, editable: supported && permitted };
+  return {
+    supported,
+    editable: supported && permitted && connected,
+    offline: supported && permitted && !connected,
+  };
 }
 
 /** Whether the server stores a member's colour; older ones drop the key, so they get no field. */
@@ -51,7 +57,7 @@ export function useMobileGoatBotMemberModelMenu(
 ) {
   const environmentId = member?.environmentId ?? null;
   const config = useEnvironmentServerConfig(environmentId);
-  const { supported, editable } = useMobileGoatBotMemberModelEditable(environmentId);
+  const { supported, editable, offline } = useMobileGoatBotMemberModelEditable(environmentId);
   const [saving, setSaving] = useState(false);
   if (member === null || !config) return null;
   const state = deriveGoatBotModelSettings({
@@ -65,12 +71,21 @@ export function useMobileGoatBotMemberModelMenu(
     // The menu opens even when it cannot change anything, so it says why.
     title: editable
       ? `${member.name}'s model`
-      : supported
-        ? `You can't change ${member.name}'s model`
-        : `Update GOAT on ${member.name}'s computer to change its model`,
+      : offline
+        ? `${member.name}'s model can't change while its computer is offline`
+        : supported
+          ? `You can't change ${member.name}'s model`
+          : `Update GOAT on ${member.name}'s computer to change its model`,
     select: (id: string) => {
       const next = goatBotMemberModelChoice(state, member.defaultModelSelection, id);
       if (next === undefined || !canChange) return;
+      if (!goatBotComputerConnectedNow(member.environmentId)) {
+        Alert.alert(
+          `Couldn't change ${member.name}'s model`,
+          `${member.name}'s computer isn't connected.`,
+        );
+        return;
+      }
       setSaving(true);
       void runAtomCommand(appAtomRegistry, channelEnvironment.updateBot, {
         environmentId: member.environmentId,

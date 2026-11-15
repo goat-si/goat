@@ -62,6 +62,7 @@ import {
 } from "./test/fakePi.ts";
 import { loadMcpBridge } from "./mcpBridge.testkit.ts";
 import { registerOmoAdapterChecks } from "./omoAdapterChecks.testkit.ts";
+import { registerPiModelAndRollbackChecks } from "./test/modelAndRollbackChecks.ts";
 import { turnItemOutputText as outputText } from "../../../client-runtime/src/work-log/itemDetail.ts";
 
 export const layerTest = Layer.mergeAll(
@@ -155,7 +156,7 @@ export const modelSelection = (model: string): ModelSelection => ({
   model,
 });
 
-const makeAdapter = Effect.fnUntraced(function* (
+export const makeAdapter = Effect.fnUntraced(function* (
   fake: FakePi,
   launchArgs = "",
   forkFake?: FakePi,
@@ -289,6 +290,18 @@ export const startTurn = Effect.fnUntraced(function* (
 describe("PiAdapterV2", () => {
   registerPiExtensionStatusChecks({
     makeFakePi,
+    openRuntime,
+    startTurn,
+    THREAD_ID,
+    SESSION_ID,
+    modelSelection,
+    runtimePolicy,
+    layerTest,
+  });
+
+  registerPiModelAndRollbackChecks({
+    makeFakePi,
+    makeAdapter,
     openRuntime,
     startTurn,
     THREAD_ID,
@@ -3259,32 +3272,35 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
-  it.effect("keeps an input dialog's title as the header above its placeholder", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
-      yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      yield* fake.emit({
-        type: "extension_ui_request",
-        id: "ui-input-placeholder",
-        method: "input",
-        title: "Name",
-        placeholder: "Your name",
-      });
-      const event = yield* takeEvent(
-        (event) =>
-          event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
-      );
-      if (event.type !== "turn_item.updated" || event.turnItem.type !== "user_input_request") {
-        return assert.fail("expected a user input request");
-      }
-      assert.equal(event.turnItem.questions[0]?.header, "Name");
-      assert.equal(event.turnItem.questions[0]?.question, "Your name");
-    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  it.effect.each(["Name", "   "])(
+    "keeps input placeholder text answerable with title '%s'",
+    (title) =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        const { runtime, takeEvent } = yield* openRuntime(fake);
+        yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        yield* fake.emit({
+          type: "extension_ui_request",
+          id: "ui-input-placeholder",
+          method: "input",
+          title,
+          placeholder: "Your name",
+        });
+        const event = yield* takeEvent(
+          (event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
+        );
+        if (event.type !== "turn_item.updated" || event.turnItem.type !== "user_input_request") {
+          return assert.fail("expected a user input request");
+        }
+        const question = decodeUserInputQuestions(event.turnItem.questions)[0]!;
+        assert.equal(question.header, title.trim() ? title : "Question");
+        assert.equal(question.question, "Your name");
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
   it.effect("emits a valid empty select option and returns its original value", () =>
@@ -3330,39 +3346,44 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
-  it.effect("asks an input dialog's title when its placeholder is blank", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
-      yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      const title = "Which database?\n1. Postgres\n2. Type something.\nType your answer:";
-      yield* fake.emit({
-        type: "extension_ui_request",
-        id: "ui-input",
-        method: "input",
-        title,
-        placeholder: "",
-      });
-      const event = yield* takeEvent(
-        (event) =>
-          event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
-      );
-      if (event.type !== "turn_item.updated" || event.turnItem.type !== "user_input_request") {
-        return assert.fail("expected a user input request");
-      }
-      assert.equal(decodeUserInputQuestions(event.turnItem.questions)[0]?.header, "Question");
-      assert.equal(decodeUserInputQuestions(event.turnItem.questions)[0]?.question, title);
-      yield* runtime.respondToRuntimeRequest({
-        requestId: event.turnItem.requestId,
-        answers: { "ui-input": "SQLite" },
-      });
-      const response = yield* fake.takeRequest("extension_ui_response");
-      assert.equal(response["value"], "SQLite");
-    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  it.effect.each(["Which database?\n1. Postgres\n2. Type something.\nType your answer:", "   "])(
+    "asks an input dialog's title when its placeholder is blank, with title '%s'",
+    (title) =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        const { runtime, takeEvent } = yield* openRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        yield* startTurn(runtime, providerThread);
+        yield* fake.takeRequest("prompt");
+        yield* fake.emit({
+          type: "extension_ui_request",
+          id: "ui-input",
+          method: "input",
+          title,
+          placeholder: "",
+        });
+        const event = yield* takeEvent(
+          (event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
+        );
+        if (event.type !== "turn_item.updated" || event.turnItem.type !== "user_input_request") {
+          return assert.fail("expected a user input request");
+        }
+        const question = decodeUserInputQuestions(event.turnItem.questions)[0]!;
+        assert.equal(question.header, "Question");
+        assert.equal(question.question, title.trim() ? title : "Question");
+        yield* runtime.respondToRuntimeRequest({
+          requestId: event.turnItem.requestId,
+          answers: { "ui-input": "SQLite" },
+        });
+        const response = yield* fake.takeRequest("extension_ui_response");
+        assert.equal(response["value"], "SQLite");
+        assert.isUndefined(response["cancelled"]);
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
   it.effect("keeps the complete editor prefill editable and returns exact edited text", () =>
@@ -4474,6 +4495,109 @@ describe("PiAdapterV2", () => {
       yield* fake.closeStdout;
       const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
       assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "interrupted");
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect.each([
+    { outcome: "Pi reads it", status: "completed" },
+    { outcome: "Stop clears it unread", status: "cancelled" },
+  ] as const)("reports a queued steer unread until $outcome", ({ status }) =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      fake.setClearQueue({ steering: ["Steer behind a command"], followUp: [] });
+      fake.setStreaming(false);
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      const running = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+      );
+      const providerTurnId =
+        running.type === "provider_turn.updated" ? running.providerTurn.id : undefined;
+      assert.isDefined(providerTurnId);
+      fake.setStreaming(true);
+      yield* fake.emit({ type: "agent_start" });
+
+      const messageId = "message:thread-pi-test:queued-steer" as never;
+      yield* runtime.steerTurn({
+        threadId: THREAD_ID,
+        runId: RunId.make("run:thread-pi-test:1"),
+        providerThread,
+        providerTurnId: providerTurnId!,
+        message: {
+          messageId,
+          text: "Steer behind a command",
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+        },
+      });
+      const queued = yield* takeEvent((event) => event.type === "steer.updated");
+      assert.deepInclude(queued, { messageId, status: "pending" });
+
+      if (status === "completed") {
+        yield* fake.emit({ type: "message_start", message: { role: "user" } });
+      } else {
+        yield* runtime.interruptTurn({ providerThread, providerTurnId: providerTurnId! });
+        yield* fake.takeRequest("abort");
+        fake.setStreaming(false);
+        yield* fake.emit({ type: "agent_settled", aborted: true });
+      }
+      const settled = yield* takeEvent((event) => event.type === "steer.updated");
+      assert.deepInclude(settled, { messageId, status });
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("leaves a steer an older Pi acknowledges without a disposition unmarked", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      fake.omitPromptDisposition();
+      fake.setStreaming(false);
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      const running = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+      );
+      assert(running.type === "provider_turn.updated");
+      fake.setStreaming(true);
+      yield* fake.emit({ type: "agent_start" });
+
+      yield* runtime.steerTurn({
+        threadId: THREAD_ID,
+        runId: RunId.make("run:thread-pi-test:1"),
+        providerThread,
+        providerTurnId: running.providerTurn.id,
+        message: {
+          messageId: "message:thread-pi-test:bare-steer" as never,
+          text: "Steer an older Pi",
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+        },
+      });
+      const steer = yield* fake.takeRequest("prompt");
+      assert.strictEqual(steer["streamingBehavior"], "steer");
+      yield* fake.emit({ type: "message_start", message: { role: "user" } });
+      fake.setStreaming(false);
+      yield* fake.emit({ type: "agent_settled" });
+
+      const next = yield* takeEvent(
+        (event) => event.type === "steer.updated" || event.type === "turn.terminal",
+      );
+      assert.strictEqual(next.type, "turn.terminal");
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 

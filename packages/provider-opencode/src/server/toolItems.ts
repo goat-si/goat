@@ -3,6 +3,7 @@ import { resolveGoatMcpToolId } from "@goat/shared/goatMcpToolPresentation";
 import { formatReadToolLabel, formatSearchToolLabel } from "@goat/shared/toolActivity";
 import { imageBlockFromDataUrl, MAX_TOOL_OUTPUT_IMAGES } from "@goat/shared/toolOutput";
 import type { ToolPart } from "@opencode-ai/sdk/v2";
+import { recordValue } from "./records.ts";
 
 // Search results stay on the timeline wire, so keep their text a preview.
 const SEARCH_PREVIEW_MAX_CHARS = 8_000;
@@ -11,6 +12,29 @@ export function openCodeToolTitle(part: ToolPart): string | null {
   return part.state.status === "running" || part.state.status === "completed"
     ? (part.state.title ?? null)
     : null;
+}
+
+export function toolModel(part: ToolPart): string | null {
+  const metadata =
+    part.state.status === "running" ||
+    part.state.status === "completed" ||
+    part.state.status === "error"
+      ? part.state.metadata
+      : undefined;
+  const model = recordValue(metadata, "model");
+  const providerId = recordString(model, "providerID", "providerId");
+  const modelId = recordString(model, "modelID", "modelId", "id");
+  return providerId !== undefined && modelId !== undefined ? `${providerId}/${modelId}` : null;
+}
+
+export function taskSessionId(part: ToolPart): string | null {
+  const metadata =
+    part.state.status === "running" ||
+    part.state.status === "completed" ||
+    part.state.status === "error"
+      ? part.state.metadata
+      : undefined;
+  return recordString(metadata, "sessionId", "sessionID") ?? null;
 }
 
 type ToolItemBase = Omit<
@@ -51,6 +75,7 @@ export const openCodeFileUris = (
 
 export interface OpenCodeToolResult {
   readonly output: string | undefined;
+  readonly nativeTaskId?: string;
   readonly fileUrls?: ReadonlyArray<string>;
   readonly metadata: unknown;
 }

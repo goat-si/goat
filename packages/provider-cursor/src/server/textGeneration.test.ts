@@ -6,6 +6,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { createModelSelection } from "@goat/shared/model";
 import { beforeEach, vi } from "vite-plus/test";
@@ -155,7 +156,7 @@ const layerFs = FileSystem.layerNoop({
   makeTempDirectoryScoped: () => Effect.succeed("/isolated-text-generation"),
 });
 
-const layerTest = Layer.merge(layerFs, CursorSdk.layer);
+const layerTest = CursorSdk.layer.pipe(Layer.provideMerge(Layer.merge(layerFs, Path.layer)));
 
 const decodeCursorSettings = Schema.decodeSync(CursorSettings);
 

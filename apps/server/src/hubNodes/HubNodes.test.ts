@@ -24,7 +24,7 @@ import * as CloudMachineService from "../cloudMachines/CloudMachineService.ts";
 import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import migration from "../persistence/Migrations/106_HubNodes.ts";
+import migration from "../persistence/Migrations/116_HubNodes.ts";
 import * as DisposableMachineStore from "../hub/disposable/DisposableMachineStore.ts";
 import * as DisposableRouteGuard from "../hub/disposable/DisposableRouteGuard.ts";
 import type { DisposableRecord } from "../hub/disposable/disposableClass.ts";

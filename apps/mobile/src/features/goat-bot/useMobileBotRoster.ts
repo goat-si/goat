@@ -6,8 +6,13 @@ import { useEnvironmentQuery } from "../../state/query";
 import { pickMobileGoatBotHomeEnvironment } from "./goatBotHomeMode";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { syncMobileGoatBotMembers } from "./mobileGoatBotMembers";
+import { useKeptPerComputer } from "./useKeptPerComputer";
 
-/** The bot list: bots only. The work each bot started is listed in that bot's home sheet. */
+/**
+ * The bot list: bots only. The work each bot started is listed in that bot's home sheet. While the
+ * computer is offline it keeps the list it last read there; what the server supports comes from
+ * its capabilities, which outlive the connection.
+ */
 export function useMobileBotRoster() {
   const home = useMobileGoatBotHomeMode();
   const selected = pickMobileGoatBotHomeEnvironment(home.environments, home.botRef);
@@ -18,17 +23,17 @@ export function useMobileBotRoster() {
       ? undefined
       : presentationById.get(environmentId)?.serverConfig?.environment.capabilities;
   const connected = selected?.connected === true;
-  const supportsProfiles = connected && capabilities?.goatBotProfiles === true;
-  const supportsMembers = connected && capabilities?.goatBotMembers === true;
+  const supportsProfiles = capabilities?.goatBotProfiles === true;
+  const supportsMembers = capabilities?.goatBotMembers === true;
   const profiles = useEnvironmentQuery(
-    environmentId !== null && supportsProfiles
+    environmentId !== null && connected && supportsProfiles
       ? channelEnvironment.listBots({
           environmentId,
           input: supportsMembers ? { includeDeleted: true } : {},
         })
       : null,
   );
-  const bots = profiles.data?.bots;
+  const bots = useKeptPerComputer("bots", environmentId, profiles, !connected)?.bots;
   // oxlint-disable-next-line goat/react-effect-budget -- Keep the environment's send queue to the members the roster lists as active.
   useEffect(() => {
     if (environmentId !== null && supportsMembers && bots !== undefined)
@@ -43,6 +48,10 @@ export function useMobileBotRoster() {
     bots: botRoster({ supportsProfiles, bots }),
     groups: botRosterGroups(bots ?? []),
     supportsMembers,
+    /** No computer, or none of its capabilities read yet: not taken as an older server. */
+    membersUnknown: capabilities === undefined,
+    connected,
+    computerLabel: selected?.label ?? null,
     environmentId,
     slackEnabled: slack.data?.some((connection) => connection.enabled) === true,
     error: profiles.error,
@@ -73,25 +82,30 @@ export function useMobileGoatBotMember(botId: string | undefined) {
   const supported = capabilities?.goatBotMembers === true;
   // A named member is looked up as before; the main bot's name follows the roster's condition.
   const readsMember = supported && botId !== undefined;
-  const readsMain = selected?.connected === true && capabilities?.goatBotProfiles === true;
+  const connected = selected?.connected === true;
+  const readsMain = connected && capabilities?.goatBotProfiles === true;
   const profiles = useEnvironmentQuery(
-    environmentId !== null && (readsMember || readsMain)
+    environmentId !== null && connected && (readsMember || readsMain)
       ? channelEnvironment.listBots({
           environmentId,
           input: supported ? { includeDeleted: true } : {},
         })
       : null,
   );
+  // Offline, the list the roster last read here, so a member's chat opens without a new read.
+  const listed = useKeptPerComputer("bots", environmentId, profiles, !connected);
   const member =
     botId === undefined || !supported
       ? null
-      : (profiles.data?.bots.find((bot) => bot.role === "member" && bot.botId === botId) ?? null);
+      : (listed?.bots.find((bot) => bot.role === "member" && bot.botId === botId) ?? null);
   return {
     member,
-    main: botRosterGroups(profiles.data?.bots ?? []).main,
+    main: botRosterGroups(listed?.bots ?? []).main,
     missing:
       botId !== undefined &&
       member === null &&
-      (!supported || (!profiles.isPending && profiles.isSuccess)),
+      (!supported ||
+        (!profiles.isPending && profiles.isSuccess) ||
+        (!connected && listed !== null)),
   };
 }

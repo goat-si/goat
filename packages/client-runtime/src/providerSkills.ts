@@ -10,9 +10,11 @@ import {
   type ProjectId,
   resolveProjectBuiltInSkillEnabled,
   isProviderWorkspaceSnapshotCurrent,
+  isProviderWorkspaceSnapshotPending,
   PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS,
   type ProviderInstanceId,
   type ServerProvider,
+  type ServerProviderWorkspaceSnapshot,
   type ServerSettings,
   type ServerProviderSkill,
   type ServerProviderSlashCommand,
@@ -124,7 +126,7 @@ export function hasCompleteProviderWorkspaceSnapshot(
   cwd: string | null | undefined,
 ): boolean {
   const snapshot = provider && resolveProviderWorkspaceSnapshot(provider, cwd);
-  return Boolean(snapshot && !snapshot.slashCommandsPending);
+  return Boolean(snapshot && !isProviderWorkspaceSnapshotPending(snapshot));
 }
 
 function hasCurrentProviderWorkspaceSnapshot(
@@ -135,7 +137,7 @@ function hasCurrentProviderWorkspaceSnapshot(
   const snapshot = provider && resolveProviderWorkspaceSnapshot(provider, cwd);
   return Boolean(
     snapshot &&
-    !snapshot.slashCommandsPending &&
+    !isProviderWorkspaceSnapshotPending(snapshot) &&
     isProviderWorkspaceSnapshotCurrent(snapshot, nowMs),
   );
 }
@@ -238,6 +240,47 @@ export function resolveProviderSlashCommandsForCwd(
   return resolveProviderWorkspaceSnapshot(provider, cwd)?.slashCommands ?? provider.slashCommands;
 }
 
+const workspaceCatalogs = new WeakMap<
+  ServerProviderWorkspaceSnapshot,
+  { readonly machine: ServerProvider["models"]; readonly models: ServerProvider["models"] }
+>();
+
+/** A project's own provider config can add, change or hide models; its snapshot lists only those. */
+function resolveProviderModelsForCwd(
+  provider: ServerProvider,
+  cwd: string | null | undefined,
+): ServerProvider["models"] {
+  const snapshot = resolveProviderWorkspaceSnapshot(provider, cwd);
+  if (!snapshot || (snapshot.models === undefined && snapshot.removedModels === undefined)) {
+    return provider.models;
+  }
+  const cached = workspaceCatalogs.get(snapshot);
+  if (cached?.machine === provider.models) return cached.models;
+  const changed = new Map(snapshot.models?.map((model) => [model.slug, model]));
+  const removed = new Set(snapshot.removedModels);
+  const machine = new Set(provider.models.map((model) => model.slug));
+  const models = [
+    ...provider.models.flatMap((model) =>
+      removed.has(model.slug) ? [] : [changed.get(model.slug) ?? model],
+    ),
+    ...(snapshot.models ?? []).filter((model) => !machine.has(model.slug)),
+  ];
+  workspaceCatalogs.set(snapshot, { machine: provider.models, models });
+  return models;
+}
+
+/** Providers keep their identity unless the cwd has its own catalog. */
+export function resolveProvidersForCwd<P extends ServerProvider>(
+  providers: ReadonlyArray<P>,
+  cwd: string | null | undefined,
+): ReadonlyArray<P> {
+  const resolved = providers.map((provider) => {
+    const models = resolveProviderModelsForCwd(provider, cwd);
+    return models === provider.models ? provider : { ...provider, models };
+  });
+  return resolved.every((provider, index) => provider === providers[index]) ? providers : resolved;
+}
+
 const WORKSPACE_SNAPSHOT_RETRY_COOLDOWN_MS = 10_000;
 // A cwd that never scans, such as a deleted worktree, would otherwise retry forever.
 const WORKSPACE_SNAPSHOT_MAX_ATTEMPTS = 3;
@@ -281,8 +324,8 @@ function planProviderWorkspaceSnapshotRefresh(
   readonly recheckAt: number | null;
 } {
   const hasSnapshot = hasCompleteProviderWorkspaceSnapshot(provider, cwd);
-  const pending =
-    (provider && resolveProviderWorkspaceSnapshot(provider, cwd)?.slashCommandsPending) === true;
+  const snapshot = provider && resolveProviderWorkspaceSnapshot(provider, cwd);
+  const pending = Boolean(snapshot && isProviderWorkspaceSnapshotPending(snapshot));
   // Losing a snapshot (the server dropped it) lifts both the TTL and the retry
   // cooldown so the scan happens at once.
   const lost = previous.hadSnapshot && !hasSnapshot;
@@ -358,7 +401,7 @@ function resolveWorkspaceSnapshotStatus(
 ): WorkspaceSnapshotStatus {
   const snapshot = provider && resolveProviderWorkspaceSnapshot(provider, cwd);
   if (!snapshot) return "absent";
-  return snapshot.slashCommandsPending ? "pending" : "complete";
+  return isProviderWorkspaceSnapshotPending(snapshot) ? "pending" : "complete";
 }
 
 interface ProviderWorkspaceSnapshotRefreshTarget {

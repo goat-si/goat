@@ -140,6 +140,7 @@ import type * as Statement from "effect/sql/Statement";
 
 import { MCP_APP_OUTPUT_KEY } from "@goat/shared/mcpApp";
 import { threadHtmlRenderAttachmentIds } from "../attachmentStore.ts";
+import { readableSearchText } from "./messageSearchIndex.ts";
 import {
   isThreadHistoryUserTurn,
   isConversationHistoryItem,
@@ -1859,7 +1860,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 streaming,
                 created_at,
                 updated_at,
-                payload_json
+                payload_json,
+                search_text
               )
               VALUES (
                 ${event.payload.id},
@@ -1870,7 +1872,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 ${booleanInt(event.payload.streaming)},
                 ${createdAt},
                 ${updatedAt},
-                ${payloadJson}
+                ${payloadJson},
+                ${readableSearchText(event.payload.text)}
               )
               ON CONFLICT(message_id)
               DO UPDATE SET
@@ -1881,7 +1884,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 streaming = excluded.streaming,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at,
-                payload_json = excluded.payload_json
+                payload_json = excluded.payload_json,
+                search_text = excluded.search_text
               RETURNING ${LatestAnswer.promptOfCompletedRunColumn(sql, event.threadId)}
             `;
               promptOfCompletedRun = upserted[0]?.prompt_of_completed_run === 1;
@@ -5777,27 +5781,21 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
 
     const selectShellRunItemCounts = (threadIds: ReadonlyArray<ThreadId>) =>
       sql<ShellRunItemCountRow>`
-        SELECT thread_id, run_id, COUNT(*) AS item_count
-        FROM orchestration_v2_projection_turn_items
-        WHERE run_id IS NOT NULL AND thread_id IN (SELECT value FROM json_each(${encodeIdList(threadIds)}))
-        GROUP BY thread_id, run_id
+        SELECT thread_id, run_key AS run_id, item_count
+        FROM orchestration_v2_projection_turn_item_counts
+        WHERE run_key <> '' AND thread_id IN (SELECT value FROM json_each(${encodeIdList(threadIds)}))
       `;
 
-    // Count all selected threads in one index walk; fork sources still need per-run counts.
     const selectShellItemCounts = (threadIds: ReadonlyArray<ThreadId>) =>
       sql<ShellItemCountRow>`
         SELECT counts.thread_id,
-          SUM(CASE WHEN counts.run_id IS NULL OR r.status <> 'rolled_back'
+          SUM(CASE WHEN counts.run_key = '' OR r.status <> 'rolled_back'
             THEN counts.item_count ELSE 0 END) AS item_count,
-          SUM(CASE WHEN counts.run_id IS NULL THEN counts.item_count ELSE 0 END)
+          SUM(CASE WHEN counts.run_key = '' THEN counts.item_count ELSE 0 END)
             AS runless_item_count
-        FROM (
-          SELECT thread_id, run_id, COUNT(*) AS item_count
-          FROM orchestration_v2_projection_turn_items
-          WHERE thread_id IN (SELECT value FROM json_each(${encodeIdList(threadIds)}))
-          GROUP BY thread_id, run_id
-        ) counts
-        LEFT JOIN orchestration_v2_projection_runs r ON r.run_id = counts.run_id
+        FROM orchestration_v2_projection_turn_item_counts counts
+        LEFT JOIN orchestration_v2_projection_runs r ON r.run_id = counts.run_key
+        WHERE counts.thread_id IN (SELECT value FROM json_each(${encodeIdList(threadIds)}))
         GROUP BY counts.thread_id
       `;
 
