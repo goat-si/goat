@@ -89,6 +89,7 @@ describe("DesktopSystemWake", () => {
                 revalidateTunnels: Effect.sync(() => {
                   tunnelRevalidations += 1;
                 }),
+                closeAllTunnels: Effect.die("unused"),
               }),
             ),
           ),

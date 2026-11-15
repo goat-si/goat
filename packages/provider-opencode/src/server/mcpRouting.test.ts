@@ -21,6 +21,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import { TestClock } from "effect/testing";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import { OPENCODE_PROVIDER, cuaMcpServerName, goatMcpServerName } from "../testing.ts";
@@ -272,11 +273,16 @@ it.layer(McpProviderSessions.layer)("OpenCode v2 MCP routing", (it) => {
             endpoint: index === 0 ? config.endpoint : "http://fixture.invalid/b",
           });
           const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
-          yield* runtime.startTurn({
-            ...turnInput(thread),
-            providerTurnOrdinal: index + 1,
-            runOrdinal: index + 1,
-          });
+          const started = yield* runtime
+            .startTurn({
+              ...turnInput(thread),
+              providerTurnOrdinal: index + 1,
+              runOrdinal: index + 1,
+            })
+            .pipe(Effect.forkScoped);
+          // Servers before 2.2.6 load a fresh MCP server's tools after a settle delay.
+          yield* TestClock.adjust("250 millis");
+          yield* Fiber.join(started);
           assert.equal((yield* Fiber.join(terminal))?.status, "completed");
           const available = index === 0 || !failReplacement;
           if (available) {
@@ -384,11 +390,15 @@ it.layer(McpProviderSessions.layer)("OpenCode v2 MCP routing", (it) => {
       for (const [index, attachment] of [{ ...config, cuaDriver }, config].entries()) {
         yield* sessions.set(attachment);
         const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
-        yield* runtime.startTurn({
-          ...turnInput(thread),
-          providerTurnOrdinal: index + 1,
-          runOrdinal: index + 1,
-        });
+        const started = yield* runtime
+          .startTurn({
+            ...turnInput(thread),
+            providerTurnOrdinal: index + 1,
+            runOrdinal: index + 1,
+          })
+          .pipe(Effect.forkScoped);
+        yield* TestClock.adjust("250 millis");
+        yield* Fiber.join(started);
         assert.equal((yield* Fiber.join(terminal))?.status, "completed");
         assert.equal((systems.at(-1) ?? "").includes("<computer_use>"), index === 0);
       }

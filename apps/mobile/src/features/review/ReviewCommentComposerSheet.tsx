@@ -18,7 +18,7 @@ import { useNativePaste } from "../../lib/useNativePaste";
 import { retainComposerAttachmentFile } from "../../lib/composerAttachmentFiles";
 import { releaseUnusedComposerAttachmentFiles } from "../../state/use-composer-drafts";
 import { setPendingConnectionError } from "../../state/use-remote-environment-registry";
-import { appendReviewCommentToDraft } from "../../state/use-thread-composer-state";
+import { appendReviewCommentToDraft } from "../../state/thread-draft-review";
 import {
   clearReviewCommentTarget,
   formatReviewCommentContext,

@@ -314,11 +314,25 @@ function ThreadSettingsCatalogList(props: { readonly onPicked: () => void }) {
   const refreshProviders = () => {
     if (!session.environmentId || isRefreshingProviders) return;
     setIsRefreshingProviders(true);
-    void refreshProviderCatalog(session.environmentId).then((result) => {
-      setIsRefreshingProviders(false);
-      const error = providerCatalogRefreshError(result);
-      if (error) Dialog.alert("Could not refresh models", error);
-    });
+    const environmentId = session.environmentId;
+    const workspaceScan = session.workspaceScan;
+    void refreshProviderCatalog(environmentId)
+      .then(async (result) => {
+        // A project's own models are read per folder, so the machine refresh alone keeps them stale.
+        // A failed folder read keeps its previous models and retries, so only the machine result alerts.
+        if (result._tag === "Success" && workspaceScan) {
+          await refreshProvidersCommand({
+            environmentId,
+            input: { ...workspaceScan, fresh: true },
+          });
+        }
+        return result;
+      })
+      .then((result) => {
+        setIsRefreshingProviders(false);
+        const error = providerCatalogRefreshError(result);
+        if (error) Dialog.alert("Could not refresh models", error);
+      });
   };
   const [listLoaded, setListLoaded] = useState(false);
   const reducedMotion = useReducedMotion();

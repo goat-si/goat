@@ -1,3 +1,4 @@
+import { formatProviderSkillDisplayName } from "@goat/shared/inlineSkills";
 import type { ComposerContextRecord, EnvironmentId, ThreadId } from "@goat/contracts";
 import {
   composerChipSizeSuffix,
@@ -100,16 +101,7 @@ export function enrichedSkillLinkRegex(skills?: ReadonlyArray<SelectableMarkdown
   );
 }
 
-export function enrichedSkillDisplayName(skill: SelectableMarkdownSkill) {
-  return (
-    skill.displayName?.trim() ||
-    skill.name
-      .split(/[\s:_-]+/)
-      .filter(Boolean)
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(" ")
-  );
-}
+export const enrichedSkillDisplayName = formatProviderSkillDisplayName;
 
 export function enrichedSkillReference(
   url: string,

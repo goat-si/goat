@@ -1,5 +1,5 @@
 import { detachedThreadField, releasedThreadIds } from "./providerSessionReleasedThreads.ts";
-import { sessionScopedRuntimeRequestThreadId } from "./sessionScopedRuntimeRequestThreadId.ts";
+import { needsAttached, sessionScopedArtifactThreadId } from "./sessionScopedArtifactThreadId.ts";
 import { goatMcpServersFor, nativeSubagentLimiter } from "./goatSessionConfig.ts";
 import { repairSchedule } from "../retryJitter.ts";
 import { makeMemoryProviderAuthority } from "./MemoryProviderAuthority.ts";
@@ -2360,17 +2360,18 @@ export const layerWithOptions = (
                       });
                     });
                   }
-                  // Some providers can block before a run subscriber exists
-                  // (project trust, login, or session-switch hooks). Persist
-                  // their runless request artifacts directly so the normal GOAT
-                  // request UI can answer them and unblock session setup.
-                  const threadId = sessionScopedRuntimeRequestThreadId(event);
+                  // Requests and recovered background commands can arrive before a run subscribes.
+                  const threadId = sessionScopedArtifactThreadId(event);
                   if (threadId !== undefined) {
                     yield* Effect.gen(function* () {
                       const current = (yield* Ref.get(sessions)).get(
                         sessionKey(entry.runtime.providerSessionId),
                       );
-                      if (current?.runtime !== entry.runtime) return;
+                      if (
+                        current?.runtime !== entry.runtime ||
+                        (needsAttached(event) && !current.attachedThreadIds.has(threadId))
+                      )
+                        return;
                       yield* providerEventIngestor
                         .ingestNormalized({
                           providerSessionId: entry.runtime.providerSessionId,

@@ -321,9 +321,9 @@ differences a maintainer would otherwise trip on:
 
 - Code: contract in `packages/contracts/src/fleetGoal.ts`; `plan()` is `planGoal` in
   `apps/server/src/fleet/goals/goalPlan.ts`; claims, CAS and the four tables are in
-  `GoalStore.ts` (migration 086); `GoalController.ts` is the Scheduler source; every touch on a
-  thread goes through `GoalWorkerRuntime.ts`. The four tags live where the interface section says,
-  with the local-only defaults in `apps/server/src/fleet/defaults.ts`.
+  `GoalStore.ts` (the `FleetGoals` migration); `GoalController.ts` is the Scheduler source; every
+  touch on a thread goes through `GoalWorkerRuntime.ts`. The four tags live where the interface
+  section says, with the local-only defaults in `apps/server/src/fleet/defaults.ts`.
 - Workers are observed by reading thread status on each pass. The `controller` watch kind and
   `LaunchWatchService.snapshot` are not built: local workers are launched without a watch, and
   launch-watch reports do not move `nextReconcileAt` yet, so the 60 s cadence is the only trigger.
