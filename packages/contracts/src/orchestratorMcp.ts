@@ -38,6 +38,7 @@ import {
 } from "./providerPolicy.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { OrchestratorMcpRunFailure } from "./orchestratorMcpFailure.ts";
+import { OrchestratorMcpRunStop } from "./orchestratorMcpStop.ts";
 import { HostPressureAdvice } from "./hostPressure.ts";
 import { OrchestratorMcpCloudTask } from "./orchestratorMcpCloudTask.ts";
 import { OrchestratorMcpReconcileFields } from "./orchestratorMcpReconcile.ts";
@@ -285,6 +286,7 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   ).annotate({
     description: "Oldest pending approval, or null. Ends a wait. Grants no approval rights.",
   }),
+  stop: Schema.optional(OrchestratorMcpRunStop),
   waitTimedOut: Schema.Boolean.annotate({
     description: "True only on the timed-out wait call. The child keeps running.",
   }),
@@ -344,12 +346,6 @@ export const OrchestratorMcpTaskCancelInput = Schema.Struct({
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
 });
 export type OrchestratorMcpTaskCancelInput = typeof OrchestratorMcpTaskCancelInput.Type;
-
-export const OrchestratorMcpTaskCancelResult = Schema.Struct({
-  taskId: NodeId,
-  status: Schema.Literals(["cancel_requested", "completed", "failed", "cancelled", "interrupted"]),
-});
-export type OrchestratorMcpTaskCancelResult = typeof OrchestratorMcpTaskCancelResult.Type;
 
 export const OrchestratorMcpCreateThreadRequest = Schema.Struct({
   prompt: Schema.optional(OrchestratorMcpPrompt),
@@ -787,6 +783,7 @@ export const OrchestratorMcpThreadTimelineItem = Schema.Struct({
 export type OrchestratorMcpThreadTimelineItem = typeof OrchestratorMcpThreadTimelineItem.Type;
 
 export const OrchestratorMcpThreadReadResult = Schema.Struct({
+  stop: Schema.optional(OrchestratorMcpRunStop),
   replicaStatus: Schema.optional(ThreadReplicaStatus),
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),
   host: OrchestratorMcpResultHost,
@@ -889,6 +886,7 @@ export type OrchestratorMcpThreadStatusInput = typeof OrchestratorMcpThreadStatu
  * else, or one of the terminal run statuses.
  */
 export const OrchestratorMcpThreadStatusResult = Schema.Struct({
+  stop: Schema.optional(OrchestratorMcpRunStop),
   remoteUnavailable: Schema.optional(Schema.Boolean),
   replicaStatus: Schema.optional(ThreadReplicaStatus),
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),

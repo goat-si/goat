@@ -52,6 +52,7 @@ const localList: OrchestratorMcpThreadListResult = {
   total: 1,
 };
 
+const remoteStop = { state: "unresponsive", since: "2026-10-13T01:05:00.000Z" } as const;
 const remoteCloudTask: OrchestratorMcpCloudTask = {
   taskId: "host-cloud-task",
   status: "running",
@@ -365,7 +366,7 @@ describe("HostThreadsMcpService", () => {
   );
 
   it.effect.each([false, true])(
-    "status fallback keeps optional cloud=%s metadata and caller watch",
+    "status fallback keeps optional cloud=%s metadata, an unanswered Stop, and caller watch",
     (cloud) =>
       Effect.gen(function* () {
         const at = "2026-10-13T01:00:00.000Z";
@@ -397,7 +398,7 @@ describe("HostThreadsMcpService", () => {
                     }),
                   )
                 : Effect.succeed({
-                    ...(cloud ? { cloudTask: remoteCloudTask } : {}),
+                    ...(cloud ? { cloudTask: remoteCloudTask, stop: remoteStop } : {}),
                     thread: {
                       threadId: "remote-1",
                       projectId: "remote-project",
@@ -456,6 +457,9 @@ describe("HostThreadsMcpService", () => {
         });
         expect(result._tag === "Success" ? result.success.cloudTask : null).toEqual(
           cloud ? remoteCloudTask : undefined,
+        );
+        expect(result._tag === "Success" ? result.success.stop : null).toEqual(
+          cloud ? remoteStop : undefined,
         );
       }),
   );
@@ -552,6 +556,45 @@ describe("HostThreadsMcpService", () => {
         webhook: false,
       });
       expect(result.success.cloudTask).toEqual(remoteCloudTask);
+    }),
+  );
+
+  it.effect.each([
+    ["a newer host", remoteStop],
+    ["a host that predates it", undefined],
+  ] as const)("reports the unanswered Stop that %s sends with a remote status", ([, stop]) =>
+    Effect.gen(function* () {
+      const at = "2026-10-13T01:00:00.000Z";
+      const { result } = yield* runService(
+        {
+          interactionMode: "default",
+          watch: {
+            pendingRuns: [],
+            reportedRuns: [],
+            notifyWebhook: false,
+            webhookTarget: null,
+          } as unknown as LaunchWatch,
+          hostCall: () =>
+            Effect.succeed({
+              ...(stop === undefined ? {} : { stop }),
+              threadId: "remote-1",
+              title: "Fix the flake",
+              phase: "running",
+              terminal: false,
+              run: null,
+              queuedRunId: null,
+              pendingRequest: null,
+              lastActivityAt: at,
+              lastMessage: null,
+              lastError: null,
+              watch: { pendingRunIds: [], lastReportedRunId: null, webhook: false },
+            }),
+        },
+        (service) =>
+          service.threadStatus(scope, { host: "box", threadId: ThreadId.make("remote-1") }),
+      );
+      if (result._tag !== "Success") return yield* Effect.die(result);
+      expect(result.success.stop).toEqual(stop);
     }),
   );
 

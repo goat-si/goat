@@ -150,7 +150,7 @@ import { acceptRemoteSender, withRemoteSender } from "./remoteSender.ts";
 import { stableCommandId, stablePart } from "./stableCommandId.ts";
 import { makeContinueReviewTask } from "./reviewContinuation.ts";
 import { makeRemoteTaskTargets } from "./goat/RemoteTaskTargets.ts";
-import { statusFromShell, threadRun } from "./threadStatus.ts";
+import { runStop, STOP_TURN_ITEM_TYPES, statusFromShell, threadRun } from "./threadStatus.ts";
 import * as View from "./threadListView.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
@@ -1366,6 +1366,19 @@ const make = Effect.gen(function* () {
       ? crypto.randomUUIDv4().pipe(Effect.orDie)
       : Effect.succeed(clientRequestId);
 
+  // The described run's unanswered Stop, which agents otherwise cannot see.
+  const readRunStop = (threadId: ThreadId, runId: RunId | null) =>
+    runId === null
+      ? Effect.succeed(undefined)
+      : threadManagement
+          .getThreadRecords(threadId, ["turnItems"], {
+            turnItemRunIds: [runId],
+            turnItemTypes: [...STOP_TURN_ITEM_TYPES],
+          })
+          .pipe(
+            Effect.mapError(threadManagementFailure),
+            Effect.map((records) => runStop(runId, records.turnItems)),
+          );
   const readTask = Effect.fn("OrchestratorMcpService.readTask")(function* (
     scope: McpThreadInvocationScope,
     taskId: NodeId,
@@ -1527,6 +1540,10 @@ const make = Effect.gen(function* () {
             ? "queued"
             : "running";
     const latestRun = ThreadManagementService.latestRun(childControls);
+    const stop = yield* readRunStop(
+      task.childThreadId,
+      (ThreadManagementService.latestActiveRun(childControls) ?? latestRun)?.id ?? null,
+    );
     const questionRunIds = childControls.runs
       .filter(
         (run) =>
@@ -1645,6 +1662,7 @@ const make = Effect.gen(function* () {
         latestTerminalResultContextTransferId === resultContextTransferId
           ? null
           : latestTerminalResultContextTransferId,
+      ...(stop === undefined ? {} : { stop }),
       hasPendingQuestion:
         !isTerminalTaskStatus(status) &&
         childControls.runtimeRequests.some(
@@ -3629,7 +3647,9 @@ const make = Effect.gen(function* () {
         target.runs.find((run) => run.id === (shell.activeRunId ?? shell.latestRunId)),
       );
       const summaryDigest = summary ? yield* readSummary(shell, target, timeline.totalItems) : null;
+      const stop = yield* readRunStop(shell.id, shell.activeRunId ?? shell.latestRunId);
       return {
+        ...(stop === undefined ? {} : { stop }),
         ...(cloudTask === undefined ? {} : { cloudTask }),
         thread,
         recentRuns,
@@ -3824,7 +3844,7 @@ const make = Effect.gen(function* () {
           .getThreadRecords(input.threadId, ["runs", "turnItems", "providerThreads"], {
             runIds,
             turnItemRunIds: runIds,
-            turnItemTypes: ["user_message", "assistant_message", "error"],
+            turnItemTypes: ["user_message", "assistant_message", "error", ...STOP_TURN_ITEM_TYPES],
           })
           .pipe(Effect.mapError(threadManagementFailure));
         const cloudTask = cloudTaskForRun(
