@@ -34,6 +34,19 @@ interface RecentRunRow {
  */
 export const MAX_STORED_RUN_CHARS = 1024;
 
+/**
+ * The longest routine task id, in bytes, the history read takes. Ids this server creates for a
+ * routine are under 100 bytes (`goat-bot-check-in:` and a bot thread id, or `scheduled-task:` and a
+ * UUID), but ids are not limited at creation. A routine over it is not read and carries no history.
+ */
+export const MAX_ROUTINE_ID_BYTES = 256;
+/** Creation times are 24-byte ISO strings the server writes; a stored one over this is not read. */
+const MAX_CREATED_AT_BYTES = 64;
+
+const readable = (task: Pick<ScheduledTask, "id" | "createdAt">) =>
+  Buffer.byteLength(task.id) <= MAX_ROUTINE_ID_BYTES &&
+  Buffer.byteLength(task.createdAt) <= MAX_CREATED_AT_BYTES;
+
 // Only the fields the history sends, with any status, so an older firing a later server stored
 // stays. The latest firing is still decoded strictly by list() as lastRun, as before.
 const StoredRun = Schema.Struct({
@@ -128,18 +141,19 @@ export const readRecentRuns = Effect.fn("ScheduledTaskRecentRuns.read")(function
 });
 
 /**
- * Gives GOAT Bot routines, in list order, their recent runs: at most
- * SCHEDULED_TASK_RECENT_RUN_ROUTINES of them, stopping before the history would pass
- * SCHEDULED_TASK_RECENT_RUN_BYTES. Later routines and other tasks get no key, and so does every
- * task when the read fails. A routine with an oversized stored run gets no key, and the next goes on.
+ * Gives up to 50 GOAT Bot routines, in list order, their recent runs, stopping before the history
+ * passes its byte budget; later routines get no key, and every task does when the read fails. A
+ * routine with an id over MAX_ROUTINE_ID_BYTES or an oversized stored run is skipped.
  */
 export const withRecentRuns = Effect.fn("ScheduledTaskRecentRuns.attach")(function* (
   sql: SqlClient.SqlClient,
   tasks: ReadonlyArray<ScheduledTask>,
 ) {
-  const chosen = tasks
+  const routines = tasks
     .filter((task) => task.goatBotRoutine === true)
     .slice(0, SCHEDULED_TASK_RECENT_RUN_ROUTINES);
+  // Bounds every id the query is given and returns: an id over the cap never reaches it.
+  const chosen = routines.filter(readable);
   if (chosen.length === 0) return tasks;
   const byTask = yield* readRecentRuns(sql, chosen).pipe(
     Effect.asSome,

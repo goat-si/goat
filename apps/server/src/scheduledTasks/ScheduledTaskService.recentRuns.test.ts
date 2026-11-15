@@ -19,7 +19,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { webhookTaskInput, withWebhookService } from "./ScheduledRunFixture.testkit.ts";
-import { MAX_STORED_RUN_CHARS } from "./scheduledTaskRecentRuns.ts";
+import { MAX_ROUTINE_ID_BYTES, MAX_STORED_RUN_CHARS } from "./scheduledTaskRecentRuns.ts";
 
 type Fixture = Parameters<Parameters<typeof withWebhookService>[0]>[0];
 
@@ -456,6 +456,34 @@ it.effect(
         assert.isAtMost(added, SCHEDULED_TASK_RECENT_RUN_BYTES);
         // The first omitted routine's history is the same size, so adding it would pass the budget.
         assert.isAbove(added + oneHistory, SCHEDULED_TASK_RECENT_RUN_BYTES);
+      }),
+    ),
+);
+
+it.effect(
+  "a routine whose task id is over the id cap is never read, and the routines after it keep their history",
+  () =>
+    withWebhookService((fixture) =>
+      Effect.gen(function* () {
+        // 150 two-byte characters: 300 bytes, under the cap if counted as characters (168).
+        const longId = `goat-bot-check-in:a-${"é".repeat(150)}`;
+        const overCap = yield* saveRoutine(fixture, longId);
+        const after = yield* saveRoutine(fixture, "goat-bot-check-in:b");
+        // Its stored runs stay under the stored-run cap, so had its id reached the query, it would
+        // carry this history: the missing key shows the id was left out where routines are chosen.
+        yield* refuse(fixture, yield* fire(fixture, overCap));
+        const kept = yield* fire(fixture, after);
+        yield* refuse(fixture, kept);
+        const listed = yield* fixture.service.list();
+        assert.isAbove(Buffer.byteLength(longId), MAX_ROUTINE_ID_BYTES);
+        assert.notProperty(
+          listed.tasks.find((task) => task.id === overCap.id),
+          "recentRuns",
+        );
+        assert.deepStrictEqual(
+          historyOf(listed, after.id)?.map((run) => run.firingId),
+          [kept],
+        );
       }),
     ),
 );
