@@ -50,7 +50,7 @@ Pi's status.ts and Registry's probe.ts merged cleanly and already read the per-c
 
 ## Tests changed
 
-- status.openCode2Profile.test.ts:25 (dev's test) advances the clock 2 minutes instead of 5 seconds: with L10's loader a first read may wait out a cold server's plugin activation for up to 2 minutes, and only the settling shares the 5 s budget. The assertion is unchanged (the new profile's never-answering read returns `[]`, not the earlier profile's models).
+- status.openCode2Profile.test.ts:25 (dev's test) advances the clock 2 minutes instead of 5 seconds: with L10's loader a first read may wait out a cold server's plugin activation for up to 2 minutes, and only the settling shares the 5 s budget. The assertion is unchanged (the new profile's never-answering read returns `[]`, not the earlier profile's models). The window this leaves, where after a host environment change the old profile's status and models stay shown for up to 2 minutes while a cold server activates its plugins, is goat#3415.
 
 ## Budgets
 
@@ -93,7 +93,7 @@ Test Files  3 failed | 1717 passed | 7 skipped (1727)
 Tests  3 failed | 25626 passed | 24 skipped (25653)
 ```
 
-The three failures are in files this merge does not change (no diff from either parent): packages/ssh/src/launchListenerScripts.test.ts (goat#3403, under full-run load; passes alone), packages/ssh/src/runtimeFactsScripts.test.ts (goat#3363, macOS /bin/bash 3.2; fails alone too), and apps/server/src/notes/NotesService.test.ts "recursive watcher observes an external edit and deletion through subscribe" (120 s timeout under load, load average about 7; the file passes alone, 36 of 36). The Notes watcher failure has no tracking issue yet.
+The three failures are in files this merge does not change (no diff from either parent): packages/ssh/src/launchListenerScripts.test.ts (goat#3403, under full-run load; passes alone), packages/ssh/src/runtimeFactsScripts.test.ts (goat#3363, macOS /bin/bash 3.2; fails alone too), and apps/server/src/notes/NotesService.test.ts "recursive watcher observes an external edit and deletion through subscribe" (120 s timeout under load, load average about 7; the file passes alone, 36 of 36). The Notes watcher failure is goat#3411.
 
 ## NOT RUN
 
