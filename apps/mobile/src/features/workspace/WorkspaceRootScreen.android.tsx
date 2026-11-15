@@ -11,6 +11,7 @@ import { EmptyState } from "../../components/ui/EmptyState";
 import { ScreenContent } from "../../components/ui/ScreenContent";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
 import { HomeRouteScreen } from "../home/HomeRouteScreen";
+import { useMobileGoatBotHomeMode } from "../goat-bot/useMobileGoatBotHomeMode";
 import { PullRequestFilterMenuProvider } from "../pull-requests/PullRequestFilterMenuContext";
 import { PullRequestsScreen } from "../pull-requests/PullRequestsScreen";
 import { PullRequestToolbar } from "../pull-requests/PullRequestToolbar.android";
@@ -28,12 +29,16 @@ export function WorkspaceRootScreen() {
   const enabled = useEnabledNavigationTabs();
   const insets = useSafeAreaInsets();
   const { fabClearance } = useAndroidControlSizing();
+  const botsShown = useMobileGoatBotHomeMode().mode === "bot";
+  // Room for the Threads list's floating New thread button, which the Bots view does not show
+  // (HomeRouteScreen renders AndroidHomeFabLayout only outside it).
+  const floatsButtons = workspace.state.selectedTab === "threads" && !botsShown;
   const context = useMemo(
     () => ({
       ...workspace,
-      bottomClearance: workspace.state.selectedTab === "threads" ? fabClearance + 16 : 16,
+      bottomClearance: floatsButtons ? fabClearance + 16 : 16,
     }),
-    [workspace, fabClearance],
+    [workspace, fabClearance, floatsButtons],
   );
   const tab = workspace.state.selectedTab;
 
