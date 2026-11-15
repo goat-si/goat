@@ -11,6 +11,7 @@ import { resolveWorktreeHome } from "@goat/shared/devHome";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { buildMobilePairingLink } from "@goat/shared/mobilePairingLink";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { formatHostForUrl, isWildcardHost } from "@goat/shared/hostClassification";
 import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 import {
@@ -45,9 +46,7 @@ import {
 } from "../serverRuntimeState.ts";
 import {
   buildPairingUrl,
-  formatHostForUrl,
   isLoopbackHost,
-  isWildcardHost,
   renderTerminalQrCode,
   resolveHeadlessConnectionString,
 } from "../startupAccess.ts";
