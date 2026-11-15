@@ -82,6 +82,7 @@ export const CORE_GOAT_TOOL_NAMES = [
   "goat_hub_opencodex_sync",
   "goat_origin_bound_delete",
   "goat_origin_bound_delete_receipt",
+  "goat_origin_force_stop",
   "goat_origin_report",
   "goat_origin_report_receipt",
   "goat_origin_reports_wait",

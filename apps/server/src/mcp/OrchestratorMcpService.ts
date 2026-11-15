@@ -86,6 +86,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
 import { textPageEnd, timelineItem, turnItemText } from "./threadReadItems.ts";
 import * as Stream from "effect/Stream";
 import * as CloudSource from "../orchestration-v2/CloudTaskSourceService.ts";
@@ -104,6 +105,7 @@ import {
 import * as ReviewExport from "./reviewExport.ts";
 import { recordRemoteTaskResult } from "../remoteReports/recordRemoteTaskResult.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
+import { forceStopRemoteTask } from "../remoteReports/remoteTaskForceStop.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { cloudTaskForRun } from "./cloudTaskView.ts";
 import { hostFailure } from "./hostFailure.ts";
@@ -890,6 +892,7 @@ const make = Effect.gen(function* () {
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const remoteDispatch = yield* RemoteDispatchCoordinator.RemoteDispatchCoordinator;
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
+  const sqlForRemoteForce = yield* Effect.serviceOption(SqlClient.SqlClient);
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const providerAdapters = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
   const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
@@ -1376,6 +1379,30 @@ const make = Effect.gen(function* () {
             Effect.map((records) => runStop(runId, records.turnItems)),
           );
   // goat#2338: ThreadManagementService decides; every refusal stops nothing.
+  const forceCancelRemoteTask = Effect.fn("OrchestratorMcpService.forceCancelRemoteTask")(
+    function* (
+      scope: McpThreadInvocationScope,
+      taskId: NodeId,
+      correlationId: string,
+    ): Effect.fn.Return<OrchestratorMcpTaskCancelResult, OrchestratorMcpFailure> {
+      if (Option.isNone(sqlForRemoteForce))
+        return yield* failure("orchestration_error", "Remote task storage is unavailable.");
+      const forced = yield* forceStopRemoteTask(correlationId, authorizeRemoteWrite(scope)).pipe(
+        Effect.provideService(SqlClient.SqlClient, sqlForRemoteForce.value),
+        Effect.provideService(SshRemoteDispatch.SshRemoteDispatch, ssh),
+      );
+      const task = yield* readTask(scope, taskId);
+      return {
+        taskId,
+        status: isTerminalTaskStatus(task.status) ? task.status : "cancel_requested",
+        forceStop: {
+          outcome: forced.outcome,
+          sharedWithThreadIds: forced.sharedWithThreadIds,
+          note: `The child's run on ${forced.host} was ended by force, so its work may be incomplete. Its result arrives as that host reports it; read it with task.read.`,
+        },
+      };
+    },
+  );
   const forceCancelTask = Effect.fn("OrchestratorMcpService.forceCancelTask")(function* (
     scope: McpThreadInvocationScope,
     taskId: NodeId,
@@ -1384,6 +1411,11 @@ const make = Effect.gen(function* () {
     const { subagents } = yield* threadManagement
       .getThreadRecords(scope.thread.threadId, ["subagents"], { subagentIds: [taskId] })
       .pipe(Effect.mapError(threadManagementFailure));
+    const remote = subagents.find(
+      (task) => task.id === taskId && task.origin === "app_owned" && task.promotedAt === undefined,
+    )?.remote;
+    if (remote !== undefined)
+      return yield* forceCancelRemoteTask(scope, taskId, remote.correlationId);
     const childThreadId = subagents.find((task) => task.id === taskId)?.childThreadId ?? null;
     // Force writes only to the child, which its user may have raised above the parent's modes.
     const [parent, child] = yield* Effect.forEach(
@@ -2331,6 +2363,7 @@ const make = Effect.gen(function* () {
           incrementalThreadRead: true,
           scheduledTasks: true,
           maxBatchThreads: 20,
+          taskForceStop: true,
         },
       };
     }),

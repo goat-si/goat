@@ -8,7 +8,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import { assertTargetWithinLimits, type CallerLimits, unavailable } from "../mcp/threadAccess.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
-import { boundOriginLabel } from "./OriginBoundDeleteService.ts";
+import { boundOriginLabel } from "./originBinding.ts";
 
 /**
  * goat#2338, on the host: the origin that launched this thread as a task Force stops the task's
@@ -44,7 +44,7 @@ export const originBoundForceStop = Effect.fn("remoteReports.originBoundForceSto
                 code: "task_not_cancellable",
                 message: `${error.reason}: ${error.message}`,
               })
-            : unavailable(error),
+            : unavailable(),
       ),
     );
   return {
