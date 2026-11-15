@@ -70,9 +70,13 @@ export function SecretReferencePicker({
     setCheck((current) =>
       current?.reference !== source.reference
         ? current
-        : response._tag === "Success"
-          ? { reference: source.reference, result: response.value }
-          : null,
+        : {
+            reference: source.reference,
+            result:
+              response._tag === "Success"
+                ? response.value
+                : { _tag: "Failed", detail: "Could not reach the server" },
+          },
     );
   };
   return (

@@ -91,6 +91,20 @@ describe("secret source", () => {
     await expect.element(screen.getByText('Could not read this secret from "Work".')).toBeVisible();
   });
 
+  it("says the server could not be reached when the check request fails", async () => {
+    setup(true);
+    checkSecretSource.mockResolvedValueOnce({ _tag: "Failure" } as never);
+    await using screen = await render(
+      <SecretReferencePicker
+        environmentId={EnvironmentId.make("fixture")}
+        value={saved}
+        onChange={vi.fn()}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Check" }));
+    await expect.element(screen.getByText("Could not reach the server")).toBeVisible();
+  });
+
   it("offers no check on a server that predates it", async () => {
     setup(undefined);
     await using screen = await render(
