@@ -12,6 +12,7 @@ import {
   WS_METHODS,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
@@ -84,6 +85,9 @@ export const make = Effect.fn("AuthAccessRpc.make")(function* (
   };
 });
 
+// Access changes one subscriber holds before it falls back to a fresh snapshot.
+export const ACCESS_CHANGE_BUFFER = 256;
+
 function toAuthAccessStreamEvent(
   change: PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange,
   revision: number,
@@ -147,21 +151,49 @@ export const makeStream = Effect.fn("AuthAccessRpc.makeStream")(function* (
     [WS_METHODS.subscribeAuthAccess]: (_input: unknown) =>
       Stream.unwrap(
         Effect.gen(function* () {
+          const liveBuffer = yield* Queue.dropping<
+            PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange
+          >(ACCESS_CHANGE_BUFFER);
+          const overflowed = yield* Ref.make(false);
+          const buffer = (
+            change:
+              | PairingGrantStore.BootstrapCredentialChange
+              | SessionStore.SessionCredentialChange,
+          ) =>
+            Queue.offer(liveBuffer, change).pipe(
+              Effect.flatMap((kept) => (kept ? Effect.void : Ref.set(overflowed, true))),
+            );
+          // Each store subscribes only when consumed, so start both before the snapshot read.
+          yield* Effect.forkScoped(Stream.runForEach(bootstrapCredentials.streamChanges, buffer), {
+            startImmediately: true,
+          });
+          yield* Effect.forkScoped(Stream.runForEach(sessions.streamChanges, buffer), {
+            startImmediately: true,
+          });
           const initialSnapshot = yield* loadAuthAccessSnapshot();
           const revisionRef = yield* Ref.make(1);
-          const accessChanges: Stream.Stream<
-            PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange
-          > = Stream.merge(bootstrapCredentials.streamChanges, sessions.streamChanges);
+          const nextRevision = Ref.updateAndGet(revisionRef, (revision) => revision + 1);
 
-          const liveEvents: Stream.Stream<AuthAccessStreamEvent> = accessChanges.pipe(
-            Stream.mapEffect((change) =>
-              Ref.updateAndGet(revisionRef, (revision) => revision + 1).pipe(
-                Effect.map((revision) =>
-                  toAuthAccessStreamEvent(change, revision, currentSessionId),
-                ),
-              ),
-            ),
-          );
+          // One change per pull, so nothing taken before an overflow is sent after its snapshot.
+          const liveEvents: Stream.Stream<AuthAccessStreamEvent, AuthAccessStreamError> =
+            Stream.fromEffectRepeat(
+              Effect.gen(function* () {
+                const change = yield* Queue.take(liveBuffer);
+                if (!(yield* Ref.getAndSet(overflowed, false))) {
+                  return toAuthAccessStreamEvent(change, yield* nextRevision, currentSessionId);
+                }
+                // Dropped changes are replaced by a snapshot read after the buffer is cleared;
+                // changes buffered after it replay in order, and replaying them is idempotent.
+                yield* Queue.clear(liveBuffer);
+                const payload = yield* loadAuthAccessSnapshot();
+                return {
+                  version: 1 as const,
+                  revision: yield* nextRevision,
+                  type: "snapshot" as const,
+                  payload,
+                };
+              }),
+            );
 
           return Stream.concat(
             rpcInitialItems([
