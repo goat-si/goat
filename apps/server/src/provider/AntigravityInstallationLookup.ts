@@ -10,11 +10,14 @@ import { DRIVER, installationError, RECORD_MAX_BYTES } from "./AntigravityInstal
 import * as ModelManifest from "./ModelManifest.ts";
 import { resolveProviderCompatibility } from "./providerCompatibility.ts";
 
-/** A release the model manifest marks broken or unsupported is never installed or launched. */
+/**
+ * A release the model manifest marks broken or unsupported is never installed or launched; a
+ * release Google's channel publishes is offered only once the manifest marks it supported.
+ */
 export function makeWithdrawalCheck(manifestService: ModelManifest.ModelManifest["Service"]) {
-  const isWithdrawn = Effect.fn("AntigravityInstallation.isWithdrawn")(function* (version: string) {
+  const statusOf = Effect.fn("AntigravityInstallation.statusOf")(function* (version: string) {
     const manifest = yield* manifestService.current;
-    const status = (
+    return (
       resolveProviderCompatibility(manifest.compatibility, DRIVER, version) ??
       resolveProviderCompatibility(
         ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
@@ -22,7 +25,13 @@ export function makeWithdrawalCheck(manifestService: ModelManifest.ModelManifest
         version,
       )
     )?.status;
+  });
+  const isWithdrawn = Effect.fn("AntigravityInstallation.isWithdrawn")(function* (version: string) {
+    const status = yield* statusOf(version);
     return status === "broken" || status === "unsupported";
+  });
+  const isSupported = Effect.fn("AntigravityInstallation.isSupported")(function* (version: string) {
+    return (yield* statusOf(version)) === "supported";
   });
   const ensureEligible = Effect.fn("AntigravityInstallation.ensureEligible")(function* (
     version: string,
@@ -33,7 +42,7 @@ export function makeWithdrawalCheck(manifestService: ModelManifest.ModelManifest
         "This Antigravity release was withdrawn. Check for updates and try again.",
       );
   });
-  return { isWithdrawn, ensureEligible };
+  return { isWithdrawn, isSupported, ensureEligible };
 }
 
 export function makeRecordReaders(deps: {

@@ -117,7 +117,11 @@ it.layer(NodeServices.layer)("Antigravity native CLI installation", (it) => {
                 {
                   driver: "antigravity",
                   t3CodeRange: ">=0.0.42",
-                  ranges: [{ range: ">=1.5.7", status: "broken" }],
+                  // GOAT offers only releases the manifest marks supported, so 1.5.6 is listed.
+                  ranges: [
+                    { range: ">=1.5.7", status: "broken" },
+                    { range: ">=1.5.1 <1.5.7", status: "supported" },
+                  ],
                 },
               ],
             } satisfies ModelManifest.ModelManifestData)

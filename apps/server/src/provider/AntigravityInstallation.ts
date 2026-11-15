@@ -160,7 +160,7 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     message: null,
   });
 
-  const { isWithdrawn, ensureEligible } = makeWithdrawalCheck(manifestService);
+  const { isWithdrawn, isSupported, ensureEligible } = makeWithdrawalCheck(manifestService);
   const { readRecord, executableFile } = makeRecordReaders({ fs, platform });
   const commandCandidates = makeCommandCandidates({ fs, path, platform, environment });
 
@@ -523,6 +523,27 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
   );
 
   let lastUpdateCheck: number | undefined;
+  // An installed release newer than the candidate stays the offer, so it is never offered a downgrade.
+  const showOffer = (candidate: AntigravityReleaseAsset | AntigravityCliReleaseAsset | null) =>
+    SubscriptionRef.updateEffect(state, (value) =>
+      isRunning(value)
+        ? Effect.succeed(value)
+        : Effect.gen(function* () {
+            const keepInstalled =
+              value.installedVersion !== null &&
+              (candidate === null ||
+                compareSemverVersions(value.installedVersion, candidate.version) > 0) &&
+              !(yield* isWithdrawn(value.installedVersion));
+            return {
+              ...value,
+              version: keepInstalled ? value.installedVersion : (candidate?.version ?? null),
+              totalBytes:
+                !keepInstalled && candidate !== null && "archiveBytes" in candidate
+                  ? candidate.archiveBytes
+                  : null,
+            };
+          }),
+    );
   const refreshRelease = Effect.fn("AntigravityInstallation.refreshRelease")(function* (
     explicit = false,
   ) {
@@ -533,27 +554,13 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     lastUpdateCheck = now;
     const latest = yield* lookupAntigravityCliRelease({ http, fs, platform, arch });
     // Nothing usable published keeps the current offer, which was verified when it was read.
-    if (latest === null) return;
-    if (yield* isWithdrawn(latest.version)) {
+    if (latest === null) return yield* showOffer(releaseAsset);
+    if (!(yield* isSupported(latest.version))) {
       releaseAsset = pinned;
-      return;
+      return yield* showOffer(pinned);
     }
     releaseAsset = latest;
-    yield* SubscriptionRef.updateEffect(state, (value) =>
-      isRunning(value)
-        ? Effect.succeed(value)
-        : Effect.gen(function* () {
-            const keepInstalled =
-              value.installedVersion !== null &&
-              compareSemverVersions(value.installedVersion, latest.version) > 0 &&
-              !(yield* isWithdrawn(value.installedVersion));
-            return {
-              ...value,
-              version: keepInstalled ? value.installedVersion : latest.version,
-              totalBytes: null,
-            };
-          }),
-    );
+    yield* showOffer(latest);
   });
 
   const start = Effect.gen(function* () {
@@ -745,6 +752,7 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
       ...current,
       installedVersion: installed.version,
     }));
+    yield* showOffer(releaseAsset);
   }).pipe(
     Effect.catch(() =>
       SubscriptionRef.update(

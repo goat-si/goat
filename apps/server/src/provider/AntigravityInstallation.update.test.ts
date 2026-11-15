@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import {
   makeHarness,
   previousVersion,
+  releaseAsset,
   serverContents,
   terminalState,
 } from "./AntigravityInstallation.testkit.ts";
@@ -137,6 +138,77 @@ it.layer(NodeServices.layer)("Antigravity managed CLI updates", (it) => {
       expect(requests.filter(isNativeDownload)).toHaveLength(1);
       expect(requests).not.toContain("https://mirror.example.com/cli_windows_x64.exe");
       expect((yield* installation.resolve()).version).toBe(previousVersion);
+    }),
+  );
+
+  it.effect("a restart over native 1.5.7 offers 1.5.7, never the pinned 1.4.5", () =>
+    Effect.gen(function* () {
+      const first = yield* makeHarness({
+        native: true,
+        platform: "win32",
+        archive: Buffer.from(serverContents),
+      });
+      yield* first.installation.start;
+      expect((yield* terminalState(first.installation)).installedVersion).toBe("1.5.7");
+      const offline = yield* makeHarness({
+        baseDir: first.baseDir,
+        native: true,
+        platform: "win32",
+        archive: Buffer.from(serverContents),
+        nativeManifest: () => null,
+      });
+      expect((yield* offline.installation.state).version).toBe("1.5.7");
+      yield* offline.installation.checkForUpdate;
+      expect((yield* offline.installation.state).version).toBe("1.5.7");
+      const withdrawnNext = yield* makeHarness({
+        baseDir: first.baseDir,
+        native: true,
+        nativeVersion: "1.5.8",
+        platform: "win32",
+        archive: Buffer.from(serverContents),
+        manifest: withdrawing(">=1.5.8"),
+      });
+      yield* withdrawnNext.installation.checkForUpdate;
+      expect(yield* withdrawnNext.installation.state).toMatchObject({
+        installedVersion: "1.5.7",
+        version: "1.5.7",
+      });
+    }),
+  );
+
+  it.effect.each(["1.5.0", "2.0.0"])(
+    "offers Google's %s only once the model manifest marks it supported",
+    (version) =>
+      Effect.gen(function* () {
+        const { installation, requests } = yield* makeHarness({
+          native: true,
+          nativeVersion: version,
+          platform: "win32",
+          archive: Buffer.from(serverContents),
+        });
+        yield* installation.checkForUpdate;
+        expect((yield* installation.state).version).toBe("1.4.5");
+        yield* installation.start;
+        yield* terminalState(installation);
+        expect(requests.filter(isNativeDownload)).toEqual([]);
+        expect(requests.at(-1)).toBe(PINNED_WINDOWS_URL);
+      }),
+  );
+
+  it.effect("an installed release the manifest does not list keeps running", () =>
+    Effect.gen(function* () {
+      const unlisted = { ...(yield* releaseAsset()), version: "1.5.0" };
+      const first = yield* makeHarness({ asset: unlisted });
+      yield* first.installation.start;
+      expect((yield* terminalState(first.installation)).installedVersion).toBe("1.5.0");
+      const later = yield* makeHarness({
+        baseDir: first.baseDir,
+        native: true,
+        nativeVersion: "2.0.0",
+      });
+      expect((yield* later.installation.resolve()).version).toBe("1.5.0");
+      yield* later.installation.checkForUpdate;
+      expect((yield* later.installation.state).version).toBe("1.5.0");
     }),
   );
 });
