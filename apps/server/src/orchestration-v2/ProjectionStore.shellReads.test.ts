@@ -503,7 +503,7 @@ it.effect.each([
         type: "run.updated",
         threadId,
         occurredAt: now,
-        payload: { ...original, status: "failed" },
+        payload: { ...original, status: "failed", completedAt: now },
       });
       yield* store.apply({
         id: EventId.make(`fallback:${failure}:error`),
@@ -572,7 +572,7 @@ it.effect.each([
           ordinal: executed.ordinal + 1,
           status: "cancelled",
           startedAt: null,
-          completedAt: now,
+          completedAt: DateTime.add(now, { seconds: 1 }),
         },
       });
       assert.equal((yield* store.getThreadShell(threadId))!.status, "cancelled");
