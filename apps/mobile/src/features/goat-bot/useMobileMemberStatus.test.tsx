@@ -17,6 +17,7 @@ const member = vi.hoisted(() => ({
   // What the status read answers; offline it reads nothing.
   answer: null as null | object,
   cause: null as unknown,
+  failure: null as null | { kind: string; reason: string },
 }));
 const visitAware = {
   goatBotMembers: true,
@@ -30,7 +31,10 @@ vi.mock("../../state/environments", () => ({
       [
         "env",
         {
-          connection: { phase: member.connected ? "connected" : "disconnected" },
+          connection:
+            member.failure !== null
+              ? { phase: "error", failure: member.failure }
+              : { phase: member.connected ? "connected" : "disconnected" },
           serverConfig: {
             environment: { capabilities: { ...visitAware, ...member.capabilities } },
           },
@@ -97,6 +101,7 @@ function setup() {
   member.connected = true;
   member.answer = null;
   member.cause = null;
+  member.failure = null;
   resetKeptPerComputerForTests();
 }
 
@@ -301,6 +306,22 @@ it("keeps nothing for a deleted member", async () => {
   await using row = rosterRow(deleted);
   await row.show();
   member.connected = false;
+  await row.show();
+  expect(row.value?.latest).toBeUndefined();
+});
+
+it("a member's kept status is gone once its computer refuses this phone, and does not come back", async () => {
+  setup();
+  member.answer = { waitingCount: 1, latest: reply };
+  await using row = rosterRow();
+  await row.show();
+  member.connected = false;
+  member.failure = { kind: "blocked", reason: "authentication" };
+  await row.show();
+  expect(row.value?.latest).toBeUndefined();
+  expect(row.value?.waitingCount).toBe(0);
+  // The refusal is forgotten (say the phone is paired again) while still offline: what was kept is gone.
+  member.failure = null;
   await row.show();
   expect(row.value?.latest).toBeUndefined();
 });

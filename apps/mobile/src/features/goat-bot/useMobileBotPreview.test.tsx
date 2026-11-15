@@ -20,6 +20,23 @@ vi.mock("../../state/entities", () => ({
 vi.mock("../../state/use-thread-detail", () => ({
   useThreadVisibleTurnItems: () => state.items,
 }));
+// Each computer's connection; a refused one says why.
+const connection = vi.hoisted(() => ({ failure: null as null | { kind: string; reason: string } }));
+vi.mock("../../state/environments", () => ({
+  useEnvironments: () => ({
+    presentationById: new Map([
+      [
+        "env",
+        {
+          connection:
+            connection.failure === null
+              ? { phase: "connected" }
+              : { phase: "error", failure: connection.failure },
+        },
+      ],
+    ]),
+  }),
+}));
 // The app's computers; "env" is listed unless a test removes it.
 const catalog = vi.hoisted(() => ({
   atom: null as null | import("effect/reactivity").Atom.Writable<unknown>,
@@ -199,4 +216,20 @@ it("the main tile shows no line once its computer is removed from the app, thoug
   await tile.setComputers([]);
   await tile.show({ offline: true });
   expect(tile.line).toBeNull();
+});
+
+it("a phone whose access was revoked shows no line, even from a fresh start with the conversation only in its cache", async () => {
+  state.items = [message("b1", "assistant_message", "The build is waiting on you.")];
+  // The computer refuses this phone's credential: the connection stops there, and no read runs.
+  connection.failure = { kind: "blocked", reason: "authentication" };
+  try {
+    await using tile = mainTile();
+    await tile.show({ offline: true });
+    expect(tile.line).toBeNull();
+    connection.failure = { kind: "blocked", reason: "permission" };
+    await tile.show({ offline: true });
+    expect(tile.line).toBeNull();
+  } finally {
+    connection.failure = null;
+  }
 });
