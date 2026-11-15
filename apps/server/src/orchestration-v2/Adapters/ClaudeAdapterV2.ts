@@ -5355,7 +5355,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             driver: CLAUDE_PROVIDER,
             nativeItemId: `task:${taskId}:thread-root`,
           }),
-          childThreadId: idAllocator.derive.threadFromProviderThread({
+          childThreadId: idAllocator.derive.subagentThread({
             driver: CLAUDE_PROVIDER,
             nativeThreadId: `${context.input.providerThread.id}:${taskId}`,
           }),
@@ -5704,7 +5704,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           ...workflow,
           agents: workflow.agents.map((member) => ({
             ...member,
-            childThreadId: idAllocator.derive.threadFromProviderThread({
+            childThreadId: idAllocator.derive.subagentThread({
               driver: CLAUDE_PROVIDER,
               nativeThreadId: `${coordinatorChildThreadId}:agent:${member.index}`,
             }),

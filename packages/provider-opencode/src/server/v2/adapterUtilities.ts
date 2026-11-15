@@ -7,6 +7,7 @@ import type {
   ProviderApprovalDecision,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import type * as OpenCode2Client from "./OpenCode2Client.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { OPENCODE_PROVIDER } from "../adapter.ts";
 import type { Rule } from "./sessionRules.ts";
@@ -161,3 +162,17 @@ export const agentFor = (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
 export const skillMentions = (text: string) => [
   ...new Set([...text.matchAll(SKILL_MENTION_PATTERN)].flatMap((match) => match[2] ?? [])),
 ];
+
+export const sessionOfEvent = (event: OpenCode2Client.OpenCode2StreamEvent) =>
+  event.type === "unreadable.execution.ended" || event.type === "unreadable.execution.started"
+    ? event.sessionID
+    : event.type === "form.created"
+      ? event.data.form.sessionID
+      : "sessionID" in event.data && typeof event.data.sessionID === "string"
+        ? event.data.sessionID
+        : undefined;
+
+export const executionEnd = (type: string) =>
+  type === "session.execution.succeeded" ||
+  type === "session.execution.failed" ||
+  type === "session.execution.interrupted";

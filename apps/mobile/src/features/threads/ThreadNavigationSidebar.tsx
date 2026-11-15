@@ -21,7 +21,7 @@ import { GestureDetector, useNativeGesture } from "react-native-gesture-handler"
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { SearchBarCommands } from "react-native-screens";
-import { AppText as Text } from "../../components/ui/AppText";
+import { ThreadNavigationSidebarEmpty } from "./ThreadNavigationSidebarEmpty";
 import { CompactBrandTitle } from "../../components/CompactBrandTitle";
 import { Menu } from "../../components/ui/Menu";
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -34,6 +34,7 @@ import { useThreadListV2ShelfPreferences } from "./use-thread-list-v2-shelf-pref
 import { usePendingThreadOrder } from "../../state/thread-order";
 import { threadListEnvironmentsAtom } from "../../state/presentation";
 import { usePendingNewTasks, type PendingNewTask } from "../../state/use-pending-new-tasks";
+import { useLaunchingThreads } from "../../state/use-pending-new-tasks";
 import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -154,7 +155,7 @@ function ThreadNavigationSidebarPane(
   const insets = useSafeAreaInsets();
   const { fabClearance } = useAndroidControlSizing();
   const projects = useProjects();
-  const threads = useNavigationThreadShells();
+  const threads = useLaunchingThreads(useNavigationThreadShells());
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const searchInputRef = useRef<TextInputInstance>(null);
@@ -753,25 +754,13 @@ function ThreadNavigationSidebarPane(
     onOpenSettings: props.onOpenSettings,
   });
   const listEmpty = (
-    <Text
-      className={
-        Platform.OS === "android"
-          ? "px-4 py-4 text-center text-sm text-drawer-foreground-muted"
-          : "px-2 py-4 text-sm text-drawer-foreground-muted"
-      }
-    >
-      {catalogState.isLoadingConnections
-        ? "Loading threads…"
-        : Platform.OS === "android" && !catalogState.hasConnections
-          ? "No environments connected"
-          : props.searchQuery.trim().length > 0
-            ? threadSearch.isPending
-              ? "Searching thread messages…"
-              : "No matching threads"
-            : selectedProjectScope !== null
-              ? `No threads in ${selectedProjectScope.title}`
-              : "No threads yet"}
-    </Text>
+    <ThreadNavigationSidebarEmpty
+      catalogState={catalogState}
+      searchQuery={props.searchQuery}
+      searchPending={threadSearch.isPending}
+      projectScopeTitle={selectedProjectScope?.title ?? null}
+      onOpenEnvironmentSettings={props.onOpenEnvironmentSettings}
+    />
   );
 
   if (props.nativeChrome) {

@@ -51,6 +51,7 @@ it.effect("diagnoses project-disabled instances before automatic placement can s
   const project = decodeProject({
     projectId,
     title: "Fixture",
+    hasCustomTitle: false,
     workspaceRoot: "/fixture/repo",
     defaultModelSelection: null,
     defaultThreadEnvMode: null,

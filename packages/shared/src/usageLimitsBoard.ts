@@ -403,16 +403,16 @@ function withoutReadings(presentations: LimitPresentations, now: number) {
 }
 
 function sourceNotices(presentations: LimitPresentations): string[] {
-  const notices: string[] = [];
+  const notices = new Set<string>();
   for (const presentation of presentations.values()) {
     const prefix = presentations.size > 1 ? `${presentation.entry.target.label} · ` : "";
     for (const source of presentation.serverConfig?.usageLimitSources ?? []) {
-      if (source.error) notices.push(`${prefix}${source.label}: ${source.error}`);
+      if (source.error) notices.add(`${prefix}${source.label}: ${source.error}`);
       else if (source.accounts.length === 0)
-        notices.push(`${prefix}${source.label}: No accounts reported.`);
+        notices.add(`${prefix}${source.label}: No accounts reported.`);
     }
   }
-  return notices;
+  return [...notices];
 }
 
 function groupPool(accounts: readonly LimitAccount[], now: number) {

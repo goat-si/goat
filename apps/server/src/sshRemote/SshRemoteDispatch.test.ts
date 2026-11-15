@@ -140,6 +140,7 @@ describe("SSH dispatch tool compatibility", () => {
         forgetEnvironment: () => Effect.die("Unexpected forget"),
         disconnectEnvironment: () => Effect.die("Unexpected SSH disconnect"),
         revalidateTunnels: () => Effect.void,
+        closeAllTunnels: Effect.void,
         issueClientSession: () => Effect.die("unused"),
         issueMcpClientSession: () =>
           Effect.succeed({
@@ -1383,6 +1384,7 @@ const withLaunchRemote = <A, E>(
       forgetEnvironment: () => Effect.die("Unexpected forget"),
       disconnectEnvironment: () => Effect.void,
       revalidateTunnels: () => Effect.void,
+      closeAllTunnels: Effect.void,
       issueClientSession: () => Effect.die("unused"),
       issueMcpClientSession: (target, opts) =>
         Effect.gen(function* () {
@@ -2771,6 +2773,7 @@ it.effect.each(["matching", "missing", "wrong"] as const)(
         forgetEnvironment: () => Effect.die("Unexpected forget"),
         disconnectEnvironment: () => Effect.void,
         revalidateTunnels: () => Effect.void,
+        closeAllTunnels: Effect.void,
         issueClientSession: () => Effect.die("unused"),
         issueMcpClientSession: () =>
           Effect.succeed({ token: "fixture", expiresAt: null, runtimeModeCeilingApplied: true }),
@@ -3182,6 +3185,7 @@ describe("SshRemoteDispatch SSH attachments", () => {
           forgetEnvironment: () => Effect.die("Unexpected forget"),
           disconnectEnvironment: () => Effect.die("Unexpected disconnect"),
           revalidateTunnels: () => Effect.void,
+          closeAllTunnels: Effect.void,
           issueClientSession: () => Effect.die("unused"),
           issueMcpClientSession: () =>
             Effect.sync(() => {
@@ -4038,6 +4042,7 @@ describe("SSH launcher transport", () => {
         forgetEnvironment: () => Effect.die("Unexpected forget"),
         disconnectEnvironment: () => Effect.die("Unexpected disconnect"),
         revalidateTunnels: () => Effect.void,
+        closeAllTunnels: Effect.void,
         issueClientSession: () => Effect.die("unused"),
         issueMcpClientSession: () =>
           Effect.succeed({ token: "fixture", expiresAt: null, runtimeModeCeilingApplied: true }),

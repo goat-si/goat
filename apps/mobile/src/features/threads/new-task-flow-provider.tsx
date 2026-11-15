@@ -32,6 +32,7 @@ import {
   resolveDefaultableModelSelection,
   resolveNewTaskModelSelection,
   resolveSelectableModelSelection,
+  serverConfigForCwd,
 } from "../../lib/modelOptions";
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -106,7 +107,7 @@ import {
   resolveNewTaskDraftWorkspace,
 } from "./new-task-context-presentation";
 import { resolveEnvironmentProjectMatch } from "./new-task-project-selection";
-import { useNewTaskRouteFlow } from "./use-new-task-route-flow";
+import { type UnopenableRouteDraft, useNewTaskRouteFlow } from "./use-new-task-route-flow";
 import { useNewTaskProjectDefaults } from "./use-new-task-project-defaults";
 import { resolveProjectThreadCreationBranch } from "./projectThreadCreationValidation";
 
@@ -126,25 +127,6 @@ function findQueuedPendingTask(messageId: string): QueuedThreadMessage | null {
   return message?.creation !== undefined ? message : null;
 }
 
-export function branchBadgeLabel(input: {
-  readonly branch: VcsRef;
-  readonly project: EnvironmentProject | null;
-}): string | null {
-  if (input.branch.current) {
-    return "current";
-  }
-  if (input.branch.worktreePath && input.branch.worktreePath !== input.project?.workspaceRoot) {
-    return "worktree";
-  }
-  if (input.branch.isRemote) {
-    return "remote";
-  }
-  if (input.branch.isDefault) {
-    return "default";
-  }
-  return null;
-}
-
 type NewTaskFlowContextValue = {
   readonly activeNewTask: { readonly pendingKey: string | null } | null;
   readonly projectScopes: ReadonlyArray<HomeProjectScope>;
@@ -155,6 +137,8 @@ type NewTaskFlowContextValue = {
   readonly isGitRepo: boolean;
   readonly isGitRepoKnown: boolean;
   readonly canChooseWorkspace: boolean;
+  /** Where the draft's agent will run: the selected worktree, else the project root. */
+  readonly workspaceCwd: string | null;
   readonly resolveWorkspaceSelection: (
     selection: ComposerDraftWorkspaceSelection | undefined,
   ) => ComposerDraftWorkspaceSelection;
@@ -186,7 +170,7 @@ type NewTaskFlowContextValue = {
   readonly selectedProviderStatus: ServerProvider | null;
   readonly providerGroups: ReadonlyArray<ProviderGroup>;
   readonly flowKey: string;
-  readonly missingRouteDraftId: string | null;
+  readonly unopenableRouteDraft: UnopenableRouteDraft | null;
   readonly setProject: (project: EnvironmentProject) => void;
   readonly getSelectedProjectKey: () => string | null;
   readonly selectEnvironment: (environmentId: EnvironmentId) => void;
@@ -314,7 +298,7 @@ export function NewTaskFlowProvider(
   })();
 
   const selectedProject =
-    routeFlow.pending || routeFlow.missingRouteDraftId !== null
+    routeFlow.pending || routeFlow.unopenableRouteDraft !== null
       ? null
       : (projectsForEnvironment.find(
           (project) => scopedProjectKey(project.environmentId, project.id) === selectedProjectKey,
@@ -331,7 +315,6 @@ export function NewTaskFlowProvider(
   const verifiedThreadHosts = useThreadContextHosts(selectedProject?.environmentId ?? null);
   const storedStickyModelSelection = useStickyComposerModelSelection();
   const projectDefaults = useNewTaskProjectDefaults(selectedProject);
-  const selectedEnvironmentServerConfig = projectDefaults.serverConfig;
   const isScratchDraft = projectDefaults.isScratch;
   const serverConfigs = useServerConfigs();
   const { connectedEnvironments } = useRemoteConnectionStatus();
@@ -429,6 +412,15 @@ export function NewTaskFlowProvider(
   const workspaceMode = workspaceSelection.mode;
   const selectedBranchName = workspaceSelection.branch;
   const selectedWorktreePath = workspaceSelection.worktreePath;
+  // A new worktree does not exist yet, so the project root stands in for it.
+  const workspaceCwd =
+    (workspaceMode === "worktree"
+      ? selectedProject?.workspaceRoot
+      : (selectedWorktreePath ?? selectedProject?.workspaceRoot)) || null;
+  const selectedEnvironmentServerConfig = serverConfigForCwd(
+    projectDefaults.serverConfig,
+    workspaceCwd,
+  );
   // Keep the user's explicit choice separate from the resolved display value:
   // only the explicit flag is ever written back to the draft, so the resolved
   // value keeps tracking the server setting when the config loads late.
@@ -989,6 +981,7 @@ export function NewTaskFlowProvider(
     isGitRepoKnown: knownIsGitRepo !== null,
     canChooseWorkspace,
     selectedBranchName,
+    workspaceCwd,
     resolveWorkspaceSelection,
     selectedWorktreePath,
     startFromOrigin,
@@ -1014,7 +1007,7 @@ export function NewTaskFlowProvider(
     selectedProviderStatus,
     providerGroups,
     flowKey,
-    missingRouteDraftId: routeFlow.missingRouteDraftId,
+    unopenableRouteDraft: routeFlow.unopenableRouteDraft,
     setProject,
     getSelectedProjectKey: () => readFlow().projectKey,
     selectEnvironment,

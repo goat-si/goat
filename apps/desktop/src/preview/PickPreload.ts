@@ -17,7 +17,15 @@ import type {
 } from "@goat/contracts";
 
 import { createAnnotationIdSource } from "./AnnotationIds.ts";
+import { applyAnnotationTheme } from "./AnnotationTheme.ts";
 import { resolveAnnotationSubmission } from "./AnnotationKeyboard.ts";
+import {
+  addStrokePoint,
+  openStrokePath,
+  startStroke,
+  strokeBounds,
+  type StrokeGeometry,
+} from "./AnnotationStroke.ts";
 import { previewAnnotationStyles } from "./AnnotationStyles.generated.ts";
 import { installRecordingCursor } from "./RecordingCursor.ts";
 import { installAnnotationVoice } from "./AnnotationVoiceGuest.ts";
@@ -29,13 +37,15 @@ import {
   ANNOTATION_THEME_CHANNEL,
   CANCEL_PICK_CHANNEL,
   ELEMENT_PICKED_CHANNEL,
-  MOUSE_NAVIGATE_CHANNEL,
+  HUMAN_INPUT_CHANNEL,
+  POINTER_DOWN_HOST_CHANNEL,
   RECORDING_CURSOR_CHANNEL,
   RECORDING_POINTER_CHANNEL,
   RECORDING_KEY_CHANNEL,
   RECORDING_INPUT_CHANNEL,
   RECORDING_CONTROLLER_CHANNEL,
   START_PICK_CHANNEL,
+  THUMB_PRESS_CHANNEL,
 } from "./GuestProtocol.ts";
 const OVERLAY_ATTRIBUTE = "data-goat-annotation-ui";
 const INPUT_LAYER_ATTRIBUTE = "data-goat-annotation-input";
@@ -145,68 +155,46 @@ interface AnnotationSession {
   teardown: (notifyMain: boolean) => void;
   applyTheme: (theme: DesktopPreviewAnnotationTheme) => void;
   setSendEnabled: (enabled: boolean) => void;
+  handleOverlayKey: (event: KeyboardEvent) => void;
 }
 
 let activeSession: AnnotationSession | null = null;
 let annotationTheme: DesktopPreviewAnnotationTheme | null = null;
 
-const applyAnnotationTheme = (
-  host: HTMLElement,
-  theme: DesktopPreviewAnnotationTheme | null,
-): void => {
-  if (!theme) return;
-  host.style.colorScheme = theme.colorScheme;
-  const variables = {
-    "--goat-radius": theme.radius,
-    "--goat-background": theme.background,
-    "--goat-foreground": theme.foreground,
-    "--goat-popover": theme.popover,
-    "--goat-popover-foreground": theme.popoverForeground,
-    "--goat-primary": theme.primary,
-    "--goat-primary-foreground": theme.primaryForeground,
-    "--goat-muted": theme.muted,
-    "--goat-muted-foreground": theme.mutedForeground,
-    "--goat-accent": theme.accent,
-    "--goat-accent-foreground": theme.accentForeground,
-    "--goat-border": theme.border,
-    "--goat-input": theme.input,
-    "--goat-ring": theme.ring,
-    "--goat-font-sans": theme.fontSans,
-    "--goat-font-mono": theme.fontMono,
-  };
-  for (const [name, value] of Object.entries(variables)) {
-    host.style.setProperty(name, value);
-  }
-};
-
-const MOUSE_BUTTON_BACK = 3;
-const MOUSE_BUTTON_FORWARD = 4;
-
-const navigationDirectionForButton = (button: number): "back" | "forward" | null => {
-  if (button === MOUSE_BUTTON_BACK) return "back";
-  if (button === MOUSE_BUTTON_FORWARD) return "forward";
-  return null;
-};
-
-// Chromium routes thumb-button navigation to the focused WebContents; navigate this hovered guest explicitly.
-const suppressNavigationButton = (event: MouseEvent): void => {
-  if (!event.isTrusted || navigationDirectionForButton(event.button) === null) return;
-  event.preventDefault();
+// Registered before page scripts so their capture listeners never see keys typed into the
+// overlay; the closed shadow root retargets those to the host, hiding that they edit text.
+const isolateOverlayKey = (event: KeyboardEvent): void => {
+  if (!activeSession || !(event.target instanceof Element) || !isAnnotationNode(event.target))
+    return;
+  activeSession.handleOverlayKey(event);
   event.stopImmediatePropagation();
 };
 
-const requestNavigationForButton = (event: MouseEvent): void => {
-  if (!event.isTrusted) return;
-  const direction = navigationDirectionForButton(event.button);
-  if (direction === null) return;
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  ipcRenderer.send(MOUSE_NAVIGATE_CHANNEL, { direction });
-};
+for (const type of ["keydown", "keypress", "keyup"] as const)
+  window.addEventListener(type, isolateOverlayKey, true);
 
-window.addEventListener("mousedown", suppressNavigationButton, true);
-window.addEventListener("mouseup", requestNavigationForButton, true);
-window.addEventListener("auxclick", suppressNavigationButton, true);
+let replayedThumbPress: { readonly x: number; readonly y: number } | null = null;
+ipcRenderer.on(
+  THUMB_PRESS_CHANNEL,
+  (_event, phase: unknown, x: unknown, y: unknown, button: unknown) => {
+    if (phase !== "down" && phase !== "up") return;
+    if (typeof x !== "number" || typeof y !== "number" || typeof button !== "number") return;
+    // Main reports presses inside a frame in that frame's coordinates.
+    const inFrame = document.querySelector("iframe:hover, frame:hover, object:hover, embed:hover");
+    if (phase === "up") {
+      const pressed = replayedThumbPress;
+      replayedThumbPress = null;
+      // A replayed press is always released, at its own point if the release lands in a frame.
+      if (pressed) recordingCursor?.press(inFrame ? pressed : { x, y }, "up");
+      return;
+    }
+    if (inFrame) return;
+    replayedThumbPress = { x, y };
+    ipcRenderer.sendToHost(POINTER_DOWN_HOST_CHANNEL);
+    ipcRenderer.send(HUMAN_INPUT_CHANNEL, { kind: "pointer", x, y, button });
+    recordingCursor?.press({ x, y }, "down");
+  },
+);
 
 const nextId = createAnnotationIdSource();
 
@@ -448,34 +436,6 @@ function createUnitInput(unit: string, placeholder = "0"): HTMLInputElement {
   return input;
 }
 
-function pathFromPoints(points: ReadonlyArray<PreviewAnnotationPoint>): string {
-  if (points.length === 0) return "";
-  if (points.length === 1) return `M ${points[0]!.x} ${points[0]!.y} l 0.01 0.01`;
-  let path = `M ${points[0]!.x} ${points[0]!.y}`;
-  for (let index = 1; index < points.length - 1; index += 1) {
-    const current = points[index]!;
-    const next = points[index + 1]!;
-    path += ` Q ${current.x} ${current.y} ${(current.x + next.x) / 2} ${(current.y + next.y) / 2}`;
-  }
-  const last = points[points.length - 1]!;
-  path += ` L ${last.x} ${last.y}`;
-  return path;
-}
-
-function strokeBounds(
-  points: ReadonlyArray<PreviewAnnotationPoint>,
-  width: number,
-): PreviewAnnotationRect {
-  const xs = points.map((point) => point.x);
-  const ys = points.map((point) => point.y);
-  const padding = width + 3;
-  const left = Math.min(...xs) - padding;
-  const top = Math.min(...ys) - padding;
-  const right = Math.max(...xs) + padding;
-  const bottom = Math.max(...ys) + padding;
-  return { x: left, y: top, width: right - left, height: bottom - top };
-}
-
 function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): void {
   activeSession?.teardown(false);
   let finished = false;
@@ -590,7 +550,12 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
   }
   let tool: AnnotationTool = isPdf ? "marquee" : "select";
   let dragStart: PreviewAnnotationPoint | null = null;
-  let activeStroke: { target: PreviewAnnotationStrokeTarget; path: SVGPathElement } | null = null;
+  let activeStroke: {
+    target: PreviewAnnotationStrokeTarget;
+    geometry: StrokeGeometry;
+    group: SVGGElement;
+    path: SVGPathElement;
+  } | null = null;
   let pendingCapture = false;
   let editorExpanded = false;
   let editorWasShown = false;
@@ -1186,15 +1151,18 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
       return;
     }
     if (tool === "draw" && activeStroke) {
-      activeStroke.target.points = [
-        ...activeStroke.target.points,
-        { x: event.clientX, y: event.clientY },
-      ];
-      activeStroke.target.bounds = strokeBounds(
-        activeStroke.target.points,
-        activeStroke.target.width,
-      );
-      activeStroke.path.setAttribute("d", pathFromPoints(activeStroke.target.points));
+      const closedPath = addStrokePoint(activeStroke.geometry, {
+        x: event.clientX,
+        y: event.clientY,
+      });
+      activeStroke.target.bounds = strokeBounds(activeStroke.geometry, activeStroke.target.width);
+      if (closedPath !== null) {
+        activeStroke.path.setAttribute("d", closedPath);
+        activeStroke.path = activeStroke.group.appendChild(
+          document.createElementNS("http://www.w3.org/2000/svg", "path"),
+        );
+      }
+      activeStroke.path.setAttribute("d", openStrokePath(activeStroke.geometry));
     }
   };
 
@@ -1213,23 +1181,27 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
     }
     dragStart = { x: event.clientX, y: event.clientY };
     if (tool === "draw") {
+      const geometry = startStroke(dragStart);
       const stroke: PreviewAnnotationStrokeTarget = {
         id: nextId("stroke"),
         color: annotationTheme?.primary ?? "#2563eb",
         width: 4,
-        points: [dragStart],
+        points: geometry.points,
         bounds: { x: dragStart.x, y: dragStart.y, width: 1, height: 1 },
       };
-      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      path.setAttribute(OVERLAY_ATTRIBUTE, "");
-      path.setAttribute("data-stroke-id", stroke.id);
-      path.setAttribute("fill", "none");
-      path.setAttribute("stroke", stroke.color);
-      path.setAttribute("stroke-width", String(stroke.width));
-      path.setAttribute("stroke-linecap", "round");
-      path.setAttribute("stroke-linejoin", "round");
-      svg.appendChild(path);
-      activeStroke = { target: stroke, path };
+      const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      group.setAttribute(OVERLAY_ATTRIBUTE, "");
+      group.setAttribute("data-stroke-id", stroke.id);
+      group.setAttribute("fill", "none");
+      group.setAttribute("stroke", stroke.color);
+      group.setAttribute("stroke-width", String(stroke.width));
+      group.setAttribute("stroke-linecap", "round");
+      group.setAttribute("stroke-linejoin", "round");
+      const path = group.appendChild(
+        document.createElementNS("http://www.w3.org/2000/svg", "path"),
+      );
+      svg.appendChild(group);
+      activeStroke = { target: stroke, geometry, group, path };
     }
   };
 
@@ -1256,7 +1228,7 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
       }
     } else if (tool === "draw" && activeStroke) {
       if (activeStroke.target.points.length > 1) strokes.push(activeStroke.target);
-      else activeStroke.path.remove();
+      else activeStroke.group.remove();
       activeStroke = null;
     }
     dragStart = null;
@@ -1330,13 +1302,13 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
   const onCancel = (): void => teardown(false);
   const onCaptured = (): void => teardown(false);
   const onKeyDown = (event: KeyboardEvent): void => {
-    if (isAnnotationNode(event.target as Element) && event.key !== "Escape") return;
-    if (event.key === "Escape") {
+    if (event.key === "Escape" && !event.isComposing) {
       event.preventDefault();
       event.stopPropagation();
       teardown(true);
       return;
     }
+    if (shadowRoot.activeElement?.matches("input, textarea, select")) return;
     if (event.key === "v") tool = "select";
     else if (event.key === "r") tool = "marquee";
     else if (event.key === "d") tool = "draw";
@@ -1410,15 +1382,16 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
       });
   };
   submit.addEventListener("click", () => submitAnnotation("attach"));
-  root.addEventListener("keydown", (event) => {
+  const handleOverlayKey = (event: KeyboardEvent): void => {
+    if (event.type !== "keydown") return;
+    onKeyDown(event);
+    if (event.cancelBubble) return;
     const submission =
-      event.target === comment ? resolveAnnotationSubmission(event, sendEnabled) : null;
-    // Bubble phase lets editor inputs handle events before hiding them from the page.
-    event.stopImmediatePropagation();
+      shadowRoot.activeElement === comment ? resolveAnnotationSubmission(event, sendEnabled) : null;
     if (!submission) return;
     event.preventDefault();
     submitAnnotation(submission);
-  });
+  };
 
   window.addEventListener("pointermove", onPointerMove, { capture: true, passive: false });
   window.addEventListener("pointerdown", onPointerDown, { capture: true, passive: false });
@@ -1450,6 +1423,7 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
       sendEnabled = enabled;
       updateSendHint();
     },
+    handleOverlayKey,
   };
 }
 

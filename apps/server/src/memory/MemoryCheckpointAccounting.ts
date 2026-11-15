@@ -58,7 +58,8 @@ export const refreshCheckpointAccounting = Effect.fnUntraced(function* (
     scope_key: string;
   }>`SELECT dimension,scope_key FROM memory_quota_counters WHERE space='_checkpoint_dirty'`;
   // Validate before initialization or deltas can obscure a missing marker/total.
-  // Migration 083 seeds the baseline once; its triggers retain later lifecycle changes.
+  // The MemoryCheckpointLifecycle migration seeds the baseline once; its triggers retain
+  // later lifecycle changes.
   yield* validateCheckpointLifecycles(
     new Set([...pending.map((row) => row.dimension), ...dirty.map((key) => key.dimension)]),
   );

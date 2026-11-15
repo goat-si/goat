@@ -32,7 +32,7 @@ import {
 } from "./GoalWorkerRuntime.ts";
 
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
-import Migration0140 from "../../persistence/Migrations/140_PlacementAdmission.ts";
+import Migration0140 from "../../persistence/Migrations/150_PlacementAdmission.ts";
 import * as PlacementAttempts from "../admission/PlacementAttempts.ts";
 import { PlacementAdmissionEnabled } from "../admission/PlacementKey.ts";
 import * as PlacementPlacer from "../admission/PlacementPlacer.ts";
