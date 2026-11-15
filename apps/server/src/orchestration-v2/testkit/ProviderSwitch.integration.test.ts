@@ -8,7 +8,6 @@ import {
   MessageId,
   type ModelSelection,
   type OrchestrationV2Command,
-  type OrchestrationV2ThreadProjection,
   ProjectId,
   ProviderInstanceId,
   ProviderSessionId,
@@ -54,6 +53,7 @@ import {
 import * as ProviderReplayHarness from "./ProviderReplayHarness.ts";
 import { type CapturedTurn, makeTestAdapter } from "./testing/providerSwitchAdapter.ts";
 import { checkpointWorkspace } from "@goat/provider-testing/replayWorkspace";
+import { waitForIdle } from "./providerSwitchWaitForIdle.ts";
 
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
@@ -62,35 +62,6 @@ const projectId = ProjectId.make("project:provider-switch");
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const CLAUDE_DRIVER = ProviderDriverKind.make("claudeAgent");
 const GROK_DRIVER = ProviderDriverKind.make("acp");
-
-const waitForIdle = Effect.fn("ProviderSwitchTest.waitForIdle")(function* (
-  targetThreadId: ThreadId,
-) {
-  const orchestrator = yield* Orchestrator.OrchestratorV2;
-  const eventSink = yield* EventSink.EventSinkV2;
-  const isIdle = (projection: OrchestrationV2ThreadProjection) =>
-    projection.runs.every(
-      (run) => !["queued", "starting", "running", "waiting"].includes(run.status),
-    );
-  const afterSequence = yield* eventSink.latestSequence();
-  const current = yield* orchestrator.getThreadProjection(targetThreadId);
-  if (isIdle(current)) {
-    return current;
-  }
-  // Projections commit with their events, so each later event is the only time to re-read.
-  const [idle] = yield* eventSink.stream({ afterSequence }).pipe(
-    Stream.mapEffect(() => orchestrator.getThreadProjection(targetThreadId)),
-    Stream.filter(isIdle),
-    Stream.take(1),
-    Stream.runCollect,
-  );
-  if (idle === undefined) {
-    return yield* Effect.die(
-      new Error("Provider switch test event stream ended before the thread went idle"),
-    );
-  }
-  return idle;
-});
 
 describe("orchestration v2 provider switching", () => {
   it.live.each([
