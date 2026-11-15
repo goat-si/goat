@@ -1,6 +1,6 @@
 # L01 retry (Claude), cycle 261114
 
-Lane branch: chase/t3-261114-claude-retry. Round 1 head 637128e1736f (reviewed: APPROVE WITH NITS, merged into chase/t3-261114-all at 24c7a4e0da). Round 2 hands over 9ed11e8829 as a delta on 637128e173. The original L01 PR #3222 is merged; this file is the full record for the retry (no PR body).
+Lane branch: chase/t3-261114-claude-retry. Round 1 head 637128e1736f (reviewed: APPROVE WITH NITS, merged into chase/t3-261114-all at 24c7a4e0da). Round 2 hands over 2c79a05944 as a delta on 637128e173. The original L01 PR #3222 is merged; this file is the full record for the retry (no PR body).
 
 Round 1 ported 10 upstream commits: 896e64f82d, 7 of the 10 effort rows (543ee27fa8, 5badea5b45, cdbfae86cd, 458a792087, 86ae1747ad, 7315c60b95, d20d535e32) and the two predecessor rows a50ebef78b and 694076dcf3. The first version of this record said 11; that count was wrong. Round 2 ports the last three effort rows (00766e2c02, c7618f6c10, 9ce9b1fd41) and the two rows whose predecessors round 1 landed (ccc9aaf10b, 7462f234e8). Each port commit ends with one paragraph holding `Upstream:` and `Decision:`.
 
@@ -93,15 +93,20 @@ Contracts: no wire schema change this round. ProviderContinuationRequest gains a
 - Until this round merges into chase/t3-261114-all, a cancelled queued Claude continuation still drops later wakes (ccc9aaf10b), delegated results can be lost across wake turns (7462f234e8) and a steer that cuts off a streaming reply leaves it as completed (c7618f6c10).
 - d4b77d2448 is not ported: background commands do not show their running time.
 
-## Gate (round 2, head 9ed11e8829, after merging origin/chase/t3-261114-all at 24c7a4e0da)
+## Gate (round 2, head 2c79a05944, after merging origin/chase/t3-261114-all at bd69c4db0b)
 
-check:changed was not run here: the 1-minute load on pen-mac-studio was 42 to 50 at hand-over (limit 18), so the coordinator gates elsewhere. On the merged tree: `tsc --noEmit` for apps/server has 0 errors (the AntigravityDriver.ts:480 break is gone on the tip); `node scripts/goat-rename.ts --check`: 0 lines with T3 residue; vp fmt and vp lint passed on every commit's files (pre-commit). The knip `gt` finding: `gt` is still a devDependency at apps/web/package.json:123 on the tip and is used only as the CLI of the i18n:generate and i18n:translate scripts; knip itself was not run.
+bd69c4db0b adds the dev merge of #3207, #3209 and #3389 (provider PATH and profile work). It merged without conflicts. This round's changes do not touch that plumbing: the installation gate holds no environment, and the only file both sides changed with an edit from this lane is provider-pi adapter.ts, where the lane's hunk (retry recovery on message_update) reads no environment. The rule "a check reads the current environment, a session keeps the one it opened with, no captured startup copy" holds.
 
-Focused runs before the merge (VITEST_MAX_WORKERS 2 to 4): ProviderSessionManager test, lifecycle and sessionRun 111 passed; provider-pi adapter and rpc.framing 132 passed; the Claude adapter directory with ProviderContinuationService and ClaudeAutomaticDelivery 34 files, 476 passed; installation gate, maintenance runner and output, text generation and the Claude gate test 16 files, 333 passed; DelegatedCompletion*, ClaudeAdapterV2, ClaudeWakeDispatch, ProviderTurnControlService, RunFinalizationQueue, ThreadStop and testkit 34 files, 667 passed; testkit replay fixtures 21 files, 236 passed; ClaudeSteerAcceptance 6 passed; ClaudeWakeRetirement 13 passed; c7618 capture harness 2 passed (not committed).
+`GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 VITEST_MAX_WORKERS=4 vp run check:changed` on 9199d8c289 (merge of bd69c4db0b), 1-minute load 11 at start: format, lint, typecheck, agent budgets, knip 1/2 and 2/2 pass (the knip `gt` finding is gone on this tip). The test step (1742 files): 3 failed, 25684 passed, 24 skipped.
 
-Budget entries touched (read from oxlint-plugin-goat/code-budgets.json on the merged tree; none raised): ClaudeAdapterV2.ts 10941/11224, ClaudeAdapterV2.test.ts 16510/16924, ProviderSessionManager.ts 3021/3128, ProviderSessionManager.test.ts 6149/6326, Orchestrator.ts 13876/13908, ProjectionStore.ts 8148/8836, EffectWorker.ts 985/1005, DelegatedCompletionDelivery.test.ts 2200/2332, testkit/fixtures/index.ts 1829/1844, server.ts 1327/1339, providerMaintenanceRunner.test.ts 1004/1246, provider-pi adapter.ts 3469/3476, provider-pi adapter.test.ts 4712/4784, ClaudeAdapterV2.testkit.ts 2829/2829 (unchanged).
+- packages/ssh runtimeFactsScripts.test.ts "reads a built runner in one call…" (`expected +0 to equal 1`) also fails on bd69c4db0b alone: inherited, not this lane.
+- ClaudeBackgroundDetails.test.ts "preserves a background command and its start time across roster snapshots" and OrchestratorMcpToolkit.integration.test.ts "delegate_task wait returns before a child question is answered" pass on bd69c4db0b and failed here. Both are GOAT-only tests that encode the behaviour 7462f234e8 changes: an exited background command now stays listed until its wake run starts, and recovery after the completion checkpoint can offer the same delivery again (both offers carried the same parent run, generation 1 and message id; the test's single-delivery assertions pass). `2c79a05944` updates the two expectations; the two files then pass (7 tests).
 
-NOT RUN: check:changed and its test step (load); knip; the merged tree's tests (only typecheck and the rename check ran after the merge); a real-client pass of the interrupted badge, the steer badge and the notice; ClaudeAdapterV2.test.ts as a whole file on its own after the merge; CI (runs once on #3397); an independent review of round 2.
+`node scripts/goat-rename.ts --check` on 2c79a05944: 0 lines with T3 residue.
+
+Budget entries touched (code-budgets.json, none raised): ClaudeAdapterV2.ts 10941/11224, ClaudeAdapterV2.test.ts 16510/16924, ProviderSessionManager.ts 3021/3128, ProviderSessionManager.test.ts 6149/6326, Orchestrator.ts 13876/13908, ProjectionStore.ts 8148/8836, EffectWorker.ts 985/1005, DelegatedCompletionDelivery.test.ts 2200/2332, testkit/fixtures/index.ts 1829/1844, server.ts 1327/1339, providerMaintenanceRunner.test.ts 1004/1246, provider-pi adapter.ts 3469/3476, provider-pi adapter.test.ts 4712/4784, OrchestratorMcpToolkit.integration.test.ts 1326/1326.
+
+NOT RUN: a second full check:changed after 2c79a05944 (only the two changed test files were rerun); a real-client pass of the interrupted badge, the steer badge and the notice; CI (runs once on #3397); an independent review of round 2.
 
 Model: claude-opus-5-5 (anthropic) through the Codex harness in GOAT.
 
