@@ -2,6 +2,7 @@ import { hasQueuedOccurrence } from "./queuedOccurrence.ts";
 import type { ScheduledTaskRow } from "./ScheduledTaskRow.ts";
 import { dispatchFailureDetails, taskError } from "./scheduledTaskError.ts";
 import { prepareScheduledTaskNotificationPrompt } from "./scheduledTaskNotificationPrompt.ts";
+import { withRecentRuns } from "./scheduledTaskRecentRuns.ts";
 import * as ScheduledTaskRuns from "./ScheduledTaskRuns.ts";
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import {
@@ -1023,7 +1024,8 @@ export const layer = Layer.effect(
     yield* scheduler.register("scheduled-tasks", runDueTasks());
 
     const list: ScheduledTaskService["Service"]["list"] = () =>
-      listRows().pipe(
+      sql.withTransaction(Effect.flatMap(listRows(), (tasks) => withRecentRuns(sql, tasks))).pipe(
+        NodeSqliteClient.readOnly,
         Effect.flatMap((tasks) =>
           readMemoryPolicy.pipe(
             Effect.map((policy) => ({

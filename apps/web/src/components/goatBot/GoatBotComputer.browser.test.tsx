@@ -13,7 +13,8 @@ const state = vi.hoisted(() => ({
   supportsChanges: false,
   permitted: true,
   phase: "connected",
-  members: false,
+  // "unknown": connected, but the computer's config has not arrived yet.
+  config: "older" as "unknown" | "members" | "older",
   scopedFixture: false,
   requestedBot: null as string | null,
 }));
@@ -36,11 +37,17 @@ vi.mock("@effect/atom-react", async (original) => {
 vi.mock("~/state/environments", () => ({
   useEnvironment: () => ({
     connection: { phase: state.phase },
-    serverConfig: {
-      environment: {
-        capabilities: { goatBotTaskChanges: state.supportsChanges, goatBotMembers: state.members },
-      },
-    },
+    serverConfig:
+      state.config === "unknown"
+        ? null
+        : {
+            environment: {
+              capabilities: {
+                goatBotTaskChanges: state.supportsChanges,
+                ...(state.config === "members" ? { goatBotMembers: true } : {}),
+              },
+            },
+          },
   }),
 }));
 vi.mock("~/state/channels", () => ({
@@ -55,15 +62,18 @@ vi.mock("~/state/channels", () => ({
   },
 }));
 vi.mock("~/state/query", () => ({
-  useEnvironmentQuery: () => ({
-    data: state.scopedFixture
-      ? {
-          tasks: [
-            task("main-task", "Main bot work"),
-            ...(state.requestedBot === "main" ? [] : [task("other-task", "Member bot work")]),
-          ],
-        }
-      : state.data,
+  useEnvironmentQuery: (atom: unknown) => ({
+    data:
+      atom === null
+        ? null
+        : state.scopedFixture
+          ? {
+              tasks: [
+                task("main-task", "Main bot work"),
+                ...(state.requestedBot === "main" ? [] : [task("other-task", "Member bot work")]),
+              ],
+            }
+          : state.data,
     failure: state.failure,
     error: state.failure === null ? null : "failed",
     isPending: false,
@@ -87,7 +97,7 @@ const task = (taskId: string, title: string, worker?: { host?: string }) => ({
 function setup(data: unknown, failure: unknown = null) {
   state.revision = 0;
   state.phase = "connected";
-  state.members = false;
+  state.config = "older";
   state.scopedFixture = false;
   state.requestedBot = null;
   state.supportsChanges = false;
@@ -162,6 +172,8 @@ it("a failure can be tried again", async () => {
 
 it("a member's tab lists only that bot's work", async () => {
   setup({ tasks: [] });
+  // A member is named whether or not the computer's config has arrived.
+  state.config = "unknown";
   const member = decodeProfile({
     botId: "research",
     role: "member",
@@ -258,7 +270,7 @@ it("does not offer retry while machines are offline", async () => {
 
 it("scopes the main bot to its own work on servers with members", async () => {
   setup(null);
-  state.members = true;
+  state.config = "members";
   state.scopedFixture = true;
   await using screen = await render(<GoatBotComputer environmentId={environmentId} />);
   await expect.element(screen.getByText(/Main bot work/)).toBeVisible();
@@ -267,4 +279,27 @@ it("scopes the main bot to its own work on servers with members", async () => {
     environmentId,
     input: expect.objectContaining({ botId: "main" }),
   });
+});
+
+it("the main bot's card asks for nothing until the computer's config is known, then for the main bot only (#3423)", async () => {
+  setup(null);
+  state.config = "unknown";
+  state.scopedFixture = true;
+  await using screen = await render(<GoatBotComputer environmentId={environmentId} />);
+  expect(state.requested).not.toHaveBeenCalled();
+  expect(screen.getByText(/Member bot work/).query()).toBeNull();
+  expect(state.refresh).not.toHaveBeenCalled();
+  await expect
+    .element(screen.getByText("Machines can't be listed from this server right now."))
+    .toBeVisible();
+  expect(screen.getByRole("button", { name: "Try again" }).query()).toBeNull();
+  state.config = "members";
+  await screen.rerender(<GoatBotComputer environmentId={environmentId} />);
+  await expect.element(screen.getByText(/Main bot work/)).toBeVisible();
+  expect(screen.getByText(/Member bot work/).query()).toBeNull();
+  expect(state.requested).toHaveBeenLastCalledWith({
+    environmentId,
+    input: expect.objectContaining({ botId: "main" }),
+  });
+  expect(state.refresh).toHaveBeenCalledTimes(1);
 });
