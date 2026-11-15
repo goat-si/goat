@@ -12,6 +12,8 @@ import type { UsageRecord } from "@goat/provider-core/server/usage";
 import { TEST_FORMAT_MAP } from "./usageTestFormats.ts";
 import { initialCodexScanState, parseCodexLine } from "../provider/Drivers/codexUsage.ts";
 
+const parse = (parts: Iterable<string>) => JSON.parse([...parts].join(""));
+
 function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
   return {
     provider: "claude",
@@ -270,7 +272,7 @@ describe("scan cache round trip", () => {
     ]);
     cache.set("/b.jsonl", { ...cache.get("/b.jsonl")!, malformedRecords: 2 });
     const sources = { "claude\u0000/projects": { dir: "/projects", volumeId: "1:2" } };
-    expect(decodeScanCache(JSON.parse(write(cache, { sources })), TEST_FORMAT_MAP)).toEqual(cache);
+    expect(decodeScanCache(parse(write(cache, { sources })), TEST_FORMAT_MAP)).toEqual(cache);
 
     cache.set("/b.jsonl", {
       ...cache.get("/b.jsonl")!,
@@ -278,7 +280,7 @@ describe("scan cache round trip", () => {
       malformedRecords: 4,
       records: [record({ sessionId: "session-c", model: "claude-opus-5-5", dedupeKey: "msg_3:" })],
     });
-    const document = JSON.parse(write(cache, { sources }));
+    const document = parse(write(cache, { sources }));
     expect(decodeScanCache(document, TEST_FORMAT_MAP)).toEqual(cache);
     expect(document.sources).toEqual(sources);
   });
