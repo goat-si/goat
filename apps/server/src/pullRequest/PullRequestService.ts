@@ -3850,6 +3850,8 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  const revisions = (ref: SubscriptionRef.SubscriptionRef<number>) =>
+    SubscriptionRef.changes(ref).pipe(Stream.filter((revision) => revision > 0));
   return PullRequestService.of({
     findCloudSessionPullRequest,
     withSharedProjectReads,
@@ -3874,11 +3876,9 @@ export const make = Effect.gen(function* () {
       Effect.map((subscription) => Stream.fromSubscription(subscription)),
     ),
     reportState,
-    subscribeRefreshes: SubscriptionRef.changes(pullRequestRefreshes).pipe(
-      Stream.filter((revision) => revision > 0),
-    ),
-    subscribeLinkedThreadRefreshes: SubscriptionRef.changes(linkedThreadRefreshes).pipe(
-      Stream.filter((revision) => revision > 0),
+    subscribeRefreshes: revisions(pullRequestRefreshes),
+    subscribeLinkedThreadRefreshes: revisions(linkedThreadRefreshes).pipe(
+      Stream.buffer({ capacity: 1, strategy: "sliding" }),
     ),
     notifyLinkedThreadsChanged,
     refreshAfterTurn,
