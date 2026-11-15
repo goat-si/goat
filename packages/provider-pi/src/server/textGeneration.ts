@@ -8,7 +8,7 @@ import { TextGenerationError } from "@goat/contracts";
 import type { PiSettings } from "../settings.ts";
 import { PI_PROFILE, type PiRuntimeProfile } from "./profile.ts";
 
-import { makePiRpcConnection, parsePiModelSlug, piRecordString } from "./rpc.ts";
+import { makePiRpcConnection, piRecordField, piRecordString, resolvePiModelSlug } from "./rpc.ts";
 import { buildPiRpcLaunch, resolvePiLaunchArgs } from "./mcpInjection.ts";
 import * as TextGenerationOperations from "@goat/provider-core/server/textGenerationOperations";
 
@@ -64,7 +64,10 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
 
       if (modelSelection.model !== "default") {
         // Reject unusable custom slugs; silently using Pi's default would misreport the requested model.
-        const parsed = parsePiModelSlug(modelSelection.model);
+        const inventory = yield* connection
+          .request({ type: "get_available_models" })
+          .pipe(Effect.orElseSucceed(() => undefined));
+        const parsed = resolvePiModelSlug(modelSelection.model, piRecordField(inventory, "models"));
         if (parsed === null) {
           return yield* new TextGenerationError({
             operation,

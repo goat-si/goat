@@ -24,6 +24,9 @@ const runningCopy = source(true, "merged");
 const staleOpenCopy = source(false, "open");
 // An unsettled thread whose closed snapshot the refresher no longer reads (closed 24 hours or more).
 const finalClosedThread = source(true, "closed", true);
+// Merged with mergedAt: final, and a merge cannot be undone, whether or not the thread is read.
+const finalMergedThread = source(true, "merged", true);
+const staleFinalMergedThread = source(false, "merged", true);
 
 const kept = (
   threads: ReadonlyArray<PullRequestSource>,
@@ -51,6 +54,21 @@ describe("botRowPullRequests", () => {
       ["final closed, then refreshed", [finalClosedThread, refreshedThread], none, "open"],
       ["refreshed, then final closed", [refreshedThread, finalClosedThread], none, "open"],
       ["final closed over the copy", [finalClosedThread], runningCopy, "closed"],
+      // A confirmed merge outranks an open state another thread still reads, in either order.
+      ["final merged, then refreshed open", [finalMergedThread, refreshedThread], none, "merged"],
+      ["refreshed open, then final merged", [refreshedThread, finalMergedThread], none, "merged"],
+      [
+        "stale merged, then refreshed open",
+        [staleFinalMergedThread, refreshedThread],
+        none,
+        "merged",
+      ],
+      [
+        "refreshed open, then stale merged",
+        [refreshedThread, staleFinalMergedThread],
+        none,
+        "merged",
+      ],
     ];
     assert.deepStrictEqual(
       Object.fromEntries(cases.map(([name, threads, copy]) => [name, kept(threads, copy)])),

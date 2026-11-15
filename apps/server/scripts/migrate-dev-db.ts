@@ -26,6 +26,16 @@ import { Command, Flag } from "effect/cli";
 import * as ProjectionStore from "../src/orchestration-v2/ProjectionStore.ts";
 import { rebuildMessageSearch } from "../src/orchestration-v2/messageSearchIndex.ts";
 import { runMigrations } from "../src/persistence/Migrations.ts";
+import {
+  describeForeignKeyViolations,
+  groupForeignKeys,
+  orderTablesParentsFirst,
+  parentExistsPredicates,
+  quoteIdent,
+  type ForeignKeyConstraint,
+  type ForeignKeyRow,
+  type ForeignKeyViolation,
+} from "./migrate-dev-db-foreign-keys.ts";
 import { isProtectedDestination } from "./migrate-dev-db-protected.ts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 
@@ -144,110 +154,6 @@ interface KeptProject {
   readonly title: string;
   readonly threads: number;
 }
-
-interface ForeignKeyRow {
-  readonly child_table: string;
-  readonly id: number;
-  readonly parent_table: string;
-  readonly from: string;
-  readonly to: string | null;
-}
-
-interface ForeignKeyConstraint {
-  readonly parentTable: string;
-  readonly columns: ReadonlyArray<{ readonly from: string; readonly to: string | null }>;
-}
-
-interface ForeignKeyViolation {
-  readonly table: string;
-  readonly rowid: number | null;
-  readonly parent: string;
-  readonly fkid: number;
-}
-
-const quoteIdent = (identifier: string) => `"${identifier.replaceAll('"', '""')}"`;
-
-const groupForeignKeys = (rows: ReadonlyArray<ForeignKeyRow>) => {
-  const byTable = new Map<string, Map<number, ForeignKeyConstraint>>();
-  for (const row of rows) {
-    let constraints = byTable.get(row.child_table);
-    if (constraints === undefined) {
-      constraints = new Map();
-      byTable.set(row.child_table, constraints);
-    }
-    const existing = constraints.get(row.id);
-    const column = { from: row.from, to: row.to };
-    constraints.set(
-      row.id,
-      existing === undefined
-        ? { parentTable: row.parent_table, columns: [column] }
-        : { ...existing, columns: [...existing.columns, column] },
-    );
-  }
-  return new Map(
-    Array.from(byTable, ([table, constraints]) => [table, Array.from(constraints.values())]),
-  );
-};
-
-const orderTablesParentsFirst = <T extends { readonly name: string }>(
-  tables: ReadonlyArray<T>,
-  foreignKeys: ReadonlyMap<string, ReadonlyArray<ForeignKeyConstraint>>,
-): Array<T> => {
-  const byName = new Map(tables.map((table) => [table.name, table]));
-  const visited = new Set<string>();
-  const ordered: Array<T> = [];
-  const visit = (table: T) => {
-    if (visited.has(table.name)) return;
-    visited.add(table.name);
-    for (const fk of foreignKeys.get(table.name) ?? []) {
-      if (fk.parentTable === table.name) continue;
-      const parent = byName.get(fk.parentTable);
-      if (parent !== undefined) visit(parent);
-    }
-    ordered.push(table);
-  };
-  for (const table of tables) visit(table);
-  return ordered;
-};
-
-const parentExistsPredicates = (
-  childTable: string,
-  constraints: ReadonlyArray<ForeignKeyConstraint>,
-  primaryKeys: ReadonlyMap<string, ReadonlyArray<string>>,
-  options?: { readonly includeSelf?: boolean },
-): Array<string> => {
-  const childRef = quoteIdent(childTable);
-  return constraints.flatMap((fk) => {
-    // A self-reference cannot be filtered while the table is being inserted:
-    // the parent row is still in the source, not in main. Delete it afterwards.
-    if (fk.parentTable === childTable && options?.includeSelf !== true) return [];
-    const parentPks = primaryKeys.get(fk.parentTable) ?? [];
-    const resolved = fk.columns.map((col, idx) => ({
-      from: col.from,
-      to: col.to ?? parentPks[idx],
-    }));
-    if (resolved.some((col) => col.to === undefined)) return [];
-    const nullable = resolved.map((col) => `${childRef}.${quoteIdent(col.from)} IS NULL`);
-    const matches = resolved.map(
-      (col) => `parent.${quoteIdent(col.to!)} = ${childRef}.${quoteIdent(col.from)}`,
-    );
-    return [
-      `(${[
-        ...nullable,
-        `EXISTS (SELECT 1 FROM main.${quoteIdent(fk.parentTable)} AS parent WHERE ${matches.join(" AND ")})`,
-      ].join(" OR ")})`,
-    ];
-  });
-};
-
-const describeForeignKeyViolations = (violations: ReadonlyArray<ForeignKeyViolation>) => {
-  const sample = violations
-    .slice(0, 12)
-    .map((row) => `${row.table} row ${row.rowid ?? "without rowid"} -> ${row.parent}`)
-    .join("; ");
-  const extra = violations.length > 12 ? `; and ${violations.length - 12} more` : "";
-  return `${violations.length} dangling foreign key${violations.length === 1 ? "" : "s"} (${sample}${extra})`;
-};
 
 /**
  * `PRAGMA foreign_key_check` is the real constraint list. One pass deletes the
@@ -776,6 +682,33 @@ const pruneSnapshot = Effect.fn("pruneDevDbSnapshot")(function* (input: RunMigra
   };
 });
 
+// Peer links preview builds recorded 68-70 before main took those slots for other migrations.
+// A snapshot with exactly that history drops the preview's schema so main's 68+ can run.
+const PEER_LINKS_PREVIEW_HISTORY = [
+  "68:PeerLinks",
+  "69:PeerLinkFence",
+  "70:WaitingLinkRequestIndex",
+];
+
+const forgetPeerLinksPreviewHistory = Effect.fn("forgetPeerLinksPreviewHistory")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const tables = yield* sql`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'`;
+  if (tables.length === 0) return;
+  const tail = yield* sql<{ migration_id: number; name: string }>`
+    SELECT migration_id, name FROM effect_sql_migrations WHERE migration_id >= 68
+    ORDER BY migration_id`;
+  const history = tail.map((row) => `${row.migration_id}:${row.name}`);
+  if (history.join() !== PEER_LINKS_PREVIEW_HISTORY.join()) return;
+  yield* sql.withTransaction(
+    Effect.gen(function* () {
+      yield* sql`DROP INDEX IF EXISTS orchestration_v2_projection_turn_items_waiting_link_idx`;
+      yield* sql`DROP TABLE IF EXISTS peer_environment_links`;
+      yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 68`;
+    }),
+  );
+});
+
 export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   input: RunMigrateDevDbInput,
   options: RunMigrateDevDbOptions = {},
@@ -871,6 +804,7 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
     const executed = yield* Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* sql.unsafe("PRAGMA foreign_keys = ON").unprepared;
+      yield* forgetPeerLinksPreviewHistory();
       return yield* runMigrations();
     }).pipe(
       Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath })),

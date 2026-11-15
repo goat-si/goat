@@ -1,7 +1,7 @@
 import { PendingUserInputBody } from "./PendingUserInputBody";
 import { Button } from "../../components/ui/Button";
 import { QuestionAttachments } from "./QuestionAttachments";
-import type { RuntimeRequestId } from "@goat/contracts";
+import type { EnvironmentId, RuntimeRequestId, ThreadId } from "@goat/contracts";
 import type { ThreadUserInputQuestion } from "@goat/client-runtime/state/thread-requests";
 import { useCallback, useRef } from "react";
 import { Platform, Pressable, ScrollView, View, type LayoutChangeEvent } from "react-native";
@@ -18,6 +18,9 @@ import { ControlPill } from "../../components/ui/ControlPill";
 import { type PendingUserInput, type PendingUserInputDraftAnswer } from "../../lib/threadActivity";
 
 export interface PendingUserInputCardProps {
+  readonly environmentId?: EnvironmentId;
+  readonly threadId?: ThreadId;
+  readonly workspaceRoot?: string | null;
   readonly canOperateThread: boolean;
   readonly pendingUserInput: PendingUserInput;
   readonly maxHeight: DerivedValue<number>;
@@ -194,6 +197,9 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
         style={{ flexShrink: 1 }}
       >
         <PendingUserInputBody
+          environmentId={props.environmentId}
+          threadId={props.threadId}
+          workspaceRoot={props.workspaceRoot}
           pendingUserInput={props.pendingUserInput}
           drafts={props.drafts}
           respondingUserInputId={props.respondingUserInputId}

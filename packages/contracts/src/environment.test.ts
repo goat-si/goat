@@ -171,3 +171,13 @@ describe("ExecutionEnvironmentCapabilities linked-thread refreshes", () => {
     expect(() => decodeCapabilities({ linkedThreadRefreshes: "yes" })).toThrow();
   });
 });
+
+it("accepts older environment descriptors without ignored-file search", () => {
+  expect(decodeDescriptor(descriptor).capabilities.ignoredFileSearch).toBeUndefined();
+  expect(
+    decodeDescriptor({
+      ...descriptor,
+      capabilities: { ...descriptor.capabilities, ignoredFileSearch: true },
+    }).capabilities.ignoredFileSearch,
+  ).toBe(true);
+});

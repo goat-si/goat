@@ -1,6 +1,6 @@
 import { makeStrictNdJsonRpcParser, type AcpDecodedWireMessage } from "./_internal/strictParser.ts";
 import {
-  makeBufferRawNotification,
+  makeRawNotificationBuffer,
   type AcpBufferedRawNotification,
 } from "./_internal/rawNotifications.ts";
 import type * as AcpCompat from "./compat.ts";
@@ -394,7 +394,8 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       ),
     );
 
-  const bufferRawNotification = makeBufferRawNotification(rawNotifications);
+  const rawNotificationBuffer = makeRawNotificationBuffer(rawNotifications);
+  const bufferRawNotification = rawNotificationBuffer.buffer;
 
   const dispatchNotification = (notification: AcpIncomingNotification, lineLength: number) =>
     bufferRawNotification(notification, lineLength).pipe(
@@ -992,9 +993,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
     clientProtocol,
     serverProtocol,
     get incoming() {
-      return Stream.fromQueue(rawNotifications).pipe(
-        Stream.map(({ notification }) => notification),
-      );
+      return rawNotificationBuffer.incoming();
     },
     request: sendRequest,
     notify: sendNotification,

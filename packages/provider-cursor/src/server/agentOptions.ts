@@ -1,5 +1,5 @@
 import type { AgentOptions, McpServerConfig, SettingSource } from "@cursor/sdk";
-import type { ModelSelection, ThreadId } from "@goat/contracts";
+import type { ModelSelection, ServerProviderModel, ThreadId } from "@goat/contracts";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
@@ -75,6 +75,7 @@ export const cursorSubagentsDisabled = (
 export function makeCursorAgentOptions(input: {
   readonly apiKey?: string;
   readonly modelSelection: ModelSelection;
+  readonly models?: ReadonlyArray<ServerProviderModel>;
   readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
   readonly threadId: ThreadId;
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
@@ -83,7 +84,7 @@ export function makeCursorAgentOptions(input: {
   const policy = cursorRuntimeAgentPolicy(input.runtimePolicy, input.platform);
   const mcpServers = cursorMcpServers(input.mcpSession);
   return {
-    model: cursorSdkModelSelection(input.modelSelection),
+    model: cursorSdkModelSelection(input.modelSelection, input.models),
     name: `GOAT ${input.threadId}`,
     mode: input.runtimePolicy.interactionMode === "plan" ? "plan" : "agent",
     ...(input.apiKey === undefined ? {} : { apiKey: input.apiKey }),

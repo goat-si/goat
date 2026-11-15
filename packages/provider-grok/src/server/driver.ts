@@ -39,6 +39,7 @@ import {
 import { discoverGrokSkills } from "./skills.ts";
 import {
   homebrewOwnershipFromCommandPath,
+  isNixStoreCommandPath,
   makeCachedProviderMaintenanceResolution,
   makeManualOnlyProviderMaintenanceCapabilities,
   makeProviderMaintenanceCapabilities,
@@ -59,13 +60,20 @@ const GROK_NPM_PACKAGE = "@xai-official/grok";
 // `grok update` installs under `GROK_HOME`; use the resolved executable and instance environment.
 // npm 12 blocks the postinstall that moves the new binary in, yet exits 0, so allow it by env.
 // Homebrew casks need brew upgrades; `grok update` would install a second copy.
-// Keep casks manual when their brew cannot vouch for them.
+// Keep casks manual when their brew cannot vouch for them, and Nix store installs too.
 const UPDATE: ProviderMaintenanceCapabilitiesResolver = {
   resolve: Effect.fn("resolveGrokMaintenance")(function* (context) {
     if (!context) {
       return makeManualOnlyProviderMaintenanceCapabilities({
         provider: DRIVER_KIND,
         packageName: GROK_NPM_PACKAGE,
+      });
+    }
+    if ([context.resolvedCommandPath, context.realCommandPath].some(isNixStoreCommandPath)) {
+      return makeManualOnlyProviderMaintenanceCapabilities({
+        provider: DRIVER_KIND,
+        packageName: GROK_NPM_PACKAGE,
+        installPath: context.realCommandPath,
       });
     }
     const homebrew = homebrewOwnershipFromCommandPath(context.realCommandPath);

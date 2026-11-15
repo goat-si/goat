@@ -17,6 +17,7 @@ import {
   runDeliveryCommand,
   settingsCommandId,
   settledCreationOutcomeKeysAtom,
+  setQueuedMessageRetrying,
 } from "./threadOutboxDeliverySupport";
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import * as Dialog from "../components/ui/Dialog";
@@ -65,7 +66,7 @@ import {
 } from "./thread-outbox-model";
 import { environmentThreadShells, threadEnvironment, threadFamilies } from "./threads";
 import { composerDraftsAtom } from "./use-composer-drafts";
-import { editingQueuedMessageIdsAtom } from "./use-thread-outbox";
+import { editingQueuedMessageIdsAtom, retryingQueuedMessageIdsAtom } from "./use-thread-outbox";
 
 interface ThreadOutboxRetry {
   readonly attempt: number;
@@ -104,6 +105,7 @@ export function createThreadOutboxDelivery(): {
       notBefore: Date.now() + delayMs,
       timer: setTimeout(drain, delayMs),
     });
+    setQueuedMessageRetrying(messageId, true);
   };
 
   const clearRetry = (messageId: MessageId): void => {
@@ -111,6 +113,7 @@ export function createThreadOutboxDelivery(): {
     if (retry === undefined) return;
     clearTimeout(retry.timer);
     retries.delete(messageId);
+    setQueuedMessageRetrying(messageId, false);
   };
 
   // A delivery that throws backs off like any failure. Releasing the slot
@@ -807,6 +810,7 @@ export function createThreadOutboxDelivery(): {
       stopCollectingOutcomes();
       for (const retry of retries.values()) clearTimeout(retry.timer);
       retries.clear();
+      appAtomRegistry.set(retryingQueuedMessageIdsAtom, {});
       for (const blocked of blockedRecoveries.values()) blocked.unsubscribe();
       blockedRecoveries.clear();
       for (const release of familyMounts.values()) release();

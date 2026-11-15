@@ -32,6 +32,7 @@ import * as WaitState from "./previewWaitState.ts";
 import {
   PreviewAutomationFeature,
   PreviewAutomationConsoleEntry,
+  PreviewAutomationLoadError,
   PreviewAutomationNetworkEntry,
   PreviewAutomationPageError,
 } from "./previewAutomationSnapshot.ts";
@@ -84,6 +85,7 @@ export const PreviewAutomationStatus = Schema.Struct({
   url: Schema.NullOr(Schema.String),
   title: Schema.NullOr(Schema.String),
   loading: Schema.Boolean,
+  loadError: Schema.optional(PreviewAutomationLoadError),
   /** Server hosts: moves on every main-frame navigation, so screenshot points from an older one fail. */
   documentGeneration: Schema.optional(Schema.Number),
   control: Schema.optional(PreviewAutomationTabControl),

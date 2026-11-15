@@ -876,7 +876,8 @@ it("orders running, waiting, and finished work and collapses finished rows", asy
 const asking = (kind: "approval" | "sign_in") => ({
   observed: { pullRequests: [], needsYou: [{ kind, since: at }] },
 });
-const statusOf = (title: string) => button(title)?.getAttribute("aria-label");
+const statusOf = (title: string) =>
+  button(title)?.getAttribute("aria-label")?.split(", ").slice(0, 2).join(", ");
 
 it("lists running work whose worker asks under waiting, in the wait's words on the row and its label", async () => {
   // Asks is the newest, so it would lead the running group if it were still running.

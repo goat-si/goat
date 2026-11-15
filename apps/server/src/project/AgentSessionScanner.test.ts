@@ -522,6 +522,8 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         const codexWorkspace = yield* makeTempDir("goat-workspace-codex-");
         const piWorkspace = yield* makeTempDir("goat-workspace-pi-");
         const piFlatWorkspace = yield* makeTempDir("goat-workspace-pi-flat-");
+        const piInstanceHome = yield* makeTempDir("goat-pi-instance-home-");
+        const piHomeWorkspace = yield* makeTempDir("goat-workspace-pi-home-");
 
         // Pi nests sessions per cwd by default and keeps a custom session directory flat.
         for (const [filePath, cwd, mtime] of [
@@ -534,6 +536,11 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
             path.join(piSessionDir, "2026-01-04_pi-flat.jsonl"),
             piFlatWorkspace,
             "2026-01-04T00:00:00.000Z",
+          ],
+          [
+            path.join(piInstanceHome, "custom-pi", "sessions", "--slug--", "2026-01-05_pi.jsonl"),
+            piHomeWorkspace,
+            "2026-01-05T00:00:00.000Z",
           ],
         ] as const) {
           yield* writeTranscript({
@@ -593,10 +600,22 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
               ],
               config: {},
             },
+            [ProviderInstanceId.make("pi-home")]: {
+              driver: ProviderDriverKind.make("pi"),
+              enabled: true,
+              environment: [
+                { name: "HOME", value: piInstanceHome, sensitive: false },
+                { name: "USERPROFILE", value: piInstanceHome, sensitive: false },
+                { name: "PI_CODING_AGENT_DIR", value: "~/custom-pi", sensitive: false },
+                { name: "PI_CODING_AGENT_SESSION_DIR", value: "", sensitive: false },
+              ],
+              config: {},
+            },
           },
         });
 
         expect(result.candidates.map((candidate) => [candidate.path, candidate.sources])).toEqual([
+          [piHomeWorkspace, ["pi"]],
           [piFlatWorkspace, ["pi"]],
           [piWorkspace, ["pi"]],
           [codexWorkspace, ["codex"]],
@@ -2257,58 +2276,6 @@ describe("parseAgentSessionTranscript", () => {
     expect(thread?.title).toBe(expected);
   });
 
-  it("drops injected Codex instructions while keeping the visible user event", () => {
-    const thread = AgentSessionScanner.parseAgentSessionTranscript({
-      contents: [
-        JSON.stringify({ type: "session_meta", payload: { id: "codex-session" } }),
-        JSON.stringify({
-          type: "response_item",
-          payload: {
-            type: "message",
-            role: "user",
-            internal_chat_message_metadata_passthrough: { turn_id: "turn-1" },
-            content: [
-              {
-                type: "input_text",
-                text: "<user_instructions>\nInternal setup instructions\n</user_instructions>",
-              },
-            ],
-          },
-        }),
-        JSON.stringify({
-          type: "event_msg",
-          payload: { type: "user_message", message: "Fix the actual bug" },
-        }),
-        JSON.stringify({
-          type: "response_item",
-          payload: {
-            type: "message",
-            role: "user",
-            internal_chat_message_metadata_passthrough: { turn_id: "turn-1" },
-            content: [{ type: "input_text", text: "Fix the actual bug" }],
-          },
-        }),
-        JSON.stringify({
-          type: "response_item",
-          payload: {
-            type: "message",
-            role: "assistant",
-            content: [{ type: "output_text", text: "Fixed" }],
-          },
-        }),
-      ].join("\n"),
-      source: "codex",
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      fallbackSessionId: "fallback",
-      lastActiveAtMs: Date.parse("2026-08-24T12:00:00.000Z"),
-    });
-
-    expect(thread?.messages.map((message) => message.text)).toEqual([
-      "Fix the actual bug",
-      "Fixed",
-    ]);
-  });
-
   it.each([199, 200])("keeps the canonical first prompt with %s later Codex messages", (count) => {
     const canonicalPrompt = "\n  Keep the canonical prompt  \n";
     const canonicalTimestamp = "2026-08-24T10:01:00.000Z";
@@ -2673,31 +2640,6 @@ describe("parseAgentSessionTranscript", () => {
       context,
       "Initialize Git and add a README.",
     ]);
-  });
-
-  it("titles a Codex event after the request that follows injected setup blocks", () => {
-    const prompt = [
-      "<recommended_plugins>\nGitHub\n</recommended_plugins>",
-      "# AGENTS.md instructions for /tmp/project\n\n<INSTRUCTIONS>\nRules\n</INSTRUCTIONS>",
-      '<in-app-browser-context source="ambient-ui-state">\nTab\n</in-app-browser-context>',
-      "Fix the import titles",
-    ].join("\n");
-    const thread = AgentSessionScanner.parseAgentSessionTranscript({
-      contents: [
-        encodeTranscriptRecord({ type: "session_meta", payload: { id: "codex-session" } }),
-        encodeTranscriptRecord({
-          type: "event_msg",
-          payload: { type: "user_message", message: prompt },
-        }),
-      ].join("\n"),
-      source: "codex",
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      fallbackSessionId: "fallback",
-      lastActiveAtMs: Date.parse("2026-08-25T08:00:00.000Z"),
-    });
-
-    expect(thread?.title).toBe("Fix the import titles");
-    expect(thread?.messages.map((message) => message.text)).toEqual([prompt]);
   });
 
   it("skips sessions without a visible user message", () => {

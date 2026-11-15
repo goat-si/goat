@@ -8,7 +8,10 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import { SKILL_MENTION_PATTERN } from "@goat/shared/composerInlineTokens";
 import { resolveSpawnCommand } from "@goat/shared/shell";
 
-import { spawnAndCollect } from "@goat/provider-core/server/snapshotProbe";
+import {
+  spawnAndCollect,
+  resolveProviderProbeTimeoutMs,
+} from "@goat/provider-core/server/snapshotProbe";
 import { grokProbeEnvironment } from "./probeEnvironment.ts";
 
 const GROK_SKILLS_PROBE_TIMEOUT_MS = 4_000;
@@ -112,7 +115,9 @@ export const discoverGrokSkills = Effect.fn("discoverGrokSkills")(function* (
           cause,
         }),
     ),
-    Effect.timeoutOption(GROK_SKILLS_PROBE_TIMEOUT_MS),
+    Effect.timeoutOption(
+      resolveProviderProbeTimeoutMs("grok", GROK_SKILLS_PROBE_TIMEOUT_MS, environment),
+    ),
   );
 
   if (Option.isNone(inspectResult)) {
