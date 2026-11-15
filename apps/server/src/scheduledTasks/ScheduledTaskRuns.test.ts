@@ -246,38 +246,40 @@ const firingIds = Effect.flatMap(SqlClient.SqlClient, (sql) =>
   ),
 );
 
-it.effect("a GOAT Bot routine keeps its seven newest finished firings and prunes the eighth", () =>
-  Effect.gen(function* () {
-    const runs = yield* Runs.ScheduledTaskRuns;
-    const sql = yield* SqlClient.SqlClient;
-    const task = makeTask();
-    yield* seed(task);
-    for (let index = 0; index < 9; index++) {
-      const firingId = CommandId.make(`routine:${index}`);
-      const [current] = yield* sql<{
-        readonly next_run_at: string | null;
-      }>`SELECT next_run_at FROM scheduled_tasks WHERE task_id=${task.id}`;
-      yield* runs.begin({
-        ...claim(
-          { ...task, nextRunAt: current?.next_run_at ?? null },
-          firingId,
-          "manual",
-          minute(index),
-        ),
-        messageId: MessageId.make(`${Runs.ROUTINE_MESSAGE_PREFIX}${index}`),
-      });
-      const step = { firingId, at: minute(index) };
-      yield* runs.finishChannelFiring({
-        ...step,
-        outcome: { type: "accepted", threadId: ThreadId.make("bot") },
-      });
-      yield* runs.finishChannelFiring({ ...step, outcome: { type: "completed" } });
-    }
-    assert.deepEqual(
-      yield* firingIds,
-      [8, 7, 6, 5, 4, 3, 2].map((index) => `routine:${index}`),
-    );
-  }).pipe(Effect.provide(layer)),
+it.effect(
+  "with every firing finished, a GOAT Bot routine keeps its seven newest and prunes the eighth",
+  () =>
+    Effect.gen(function* () {
+      const runs = yield* Runs.ScheduledTaskRuns;
+      const sql = yield* SqlClient.SqlClient;
+      const task = makeTask();
+      yield* seed(task);
+      for (let index = 0; index < 9; index++) {
+        const firingId = CommandId.make(`routine:${index}`);
+        const [current] = yield* sql<{
+          readonly next_run_at: string | null;
+        }>`SELECT next_run_at FROM scheduled_tasks WHERE task_id=${task.id}`;
+        yield* runs.begin({
+          ...claim(
+            { ...task, nextRunAt: current?.next_run_at ?? null },
+            firingId,
+            "manual",
+            minute(index),
+          ),
+          messageId: MessageId.make(`${Runs.ROUTINE_MESSAGE_PREFIX}${index}`),
+        });
+        const step = { firingId, at: minute(index) };
+        yield* runs.finishChannelFiring({
+          ...step,
+          outcome: { type: "accepted", threadId: ThreadId.make("bot") },
+        });
+        yield* runs.finishChannelFiring({ ...step, outcome: { type: "completed" } });
+      }
+      assert.deepEqual(
+        yield* firingIds,
+        [8, 7, 6, 5, 4, 3, 2].map((index) => `routine:${index}`),
+      );
+    }).pipe(Effect.provide(layer)),
 );
 
 it.effect("an ordinary task still keeps only its last finished firing", () =>
