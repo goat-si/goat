@@ -259,6 +259,7 @@ import {
   queryRunnerError,
   encodeClaudeJson,
   type ClaudeFlagSettings,
+  claudeProcessExitFailure,
 } from "./ClaudeAgentSdkQueryRunner.ts";
 export {
   type ClaudeAgentSdkQueryTools,
@@ -6825,6 +6826,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 : {
                     failure: makeProviderFailure({
                       cause: cause === undefined ? undefined : Cause.squash(cause),
+                      ...(cause === undefined ? {} : claudeProcessExitFailure(cause)),
                       class: "transport_error",
                     }),
                   }),
