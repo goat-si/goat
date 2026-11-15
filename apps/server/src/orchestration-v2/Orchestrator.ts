@@ -290,6 +290,7 @@ import { canonicalUserInputAnswers, messageQuestionReplies } from "./userInputAn
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import { makeTimelineRecords, OrchestratorChannelBotThreadError } from "./goat/TimelineRecords.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { delegatedCompletionWakeDetail } from "./delegatedCompletionWake.ts";
 
 export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDispatchError>()(
   "OrchestratorDispatchError",
@@ -632,30 +633,6 @@ function legacyPullRequestLink(
     },
     existing?.watch,
   );
-}
-
-const DELEGATED_RESULT_INLINE_BYTES = 16_000;
-
-function delegatedCompletionWakeDetail(
-  taskIds: ReadonlyArray<string>,
-  tasks: ReadonlyArray<OrchestrationV2Subagent>,
-): string {
-  let remainingBytes = DELEGATED_RESULT_INLINE_BYTES;
-  return taskIds
-    .map((taskId) => {
-      const task = tasks.find((candidate) => candidate.id === taskId);
-      const label = `Delegated task ${taskId}${task?.title == null ? "" : ` (${task.title})`}${task === undefined ? " reached a terminal state" : ` [${task.status}]`}`;
-      if (task?.result != null) {
-        const detail = `${label}:\n${task.result}`;
-        const bytes = Buffer.byteLength(detail);
-        if (bytes <= remainingBytes) {
-          remainingBytes -= bytes;
-          return detail;
-        }
-      }
-      return `${label}. Read the result with goat_call {path: "task.read", args: {taskId: "${taskId}"}}.`;
-    })
-    .join("\n\n");
 }
 
 function nextQueuedRun(
