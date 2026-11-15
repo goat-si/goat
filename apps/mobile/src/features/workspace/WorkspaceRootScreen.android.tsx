@@ -30,8 +30,8 @@ export function WorkspaceRootScreen() {
   const insets = useSafeAreaInsets();
   const { fabClearance } = useAndroidControlSizing();
   const botsShown = useMobileGoatBotHomeMode().mode === "bot";
-  // Room for what the list floats: the Threads list's New thread and filter buttons, which the
-  // Bots view does not show (HomeRouteScreen renders AndroidHomeFabLayout only outside it).
+  // Room for the Threads list's floating New thread button, which the Bots view does not show
+  // (HomeRouteScreen renders AndroidHomeFabLayout only outside it).
   const floatsButtons = workspace.state.selectedTab === "threads" && !botsShown;
   const context = useMemo(
     () => ({
