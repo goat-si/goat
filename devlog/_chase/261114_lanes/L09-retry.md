@@ -1,8 +1,8 @@
 # L09 retry: server misc (lane record)
 
-Lane branch: `chase/t3-261114-server-misc-retry`, head 10b92be000, from origin/chase/t3-261114-all at 56421003ff. The original L09 lane merged as 85920591b0 (#3273); this file is the retry round's full record. Upstream range fa2f4ff2a2..93cbca3fcbd. Round 1 ended at e363f29d85 (review: APPROVE WITH NITS, two P2); round 2 (fix delta and the two items not attempted) adds e89c99947a..10b92be000.
+Lane branch: `chase/t3-261114-server-misc-retry`, head bc66da99d9, from origin/chase/t3-261114-all at 56421003ff. The original L09 lane merged as 85920591b0 (#3273); this file is the retry round's full record. Upstream range fa2f4ff2a2..93cbca3fcbd. Round 1 ended at e363f29d85 (review: APPROVE WITH NITS, two P2); round 2 (fix delta and the two items not attempted) adds e89c99947a..10b92be000; round 3 (review of 10b92be000: BLOCK on one P1, findings L09R2-*) adds b593d5319d..bc66da99d9.
 
-Count: 10 ported, 1 landed in L03m, 5 real deferrals, 0 not attempted (16 upstream commits), plus the 3376c8da92 partial row.
+Count: 10 ported, 1 landed in L03m, 5 real deferrals, 0 not attempted (16 upstream commits), plus the 3376c8da92 partial row. Round 3 also ports 77f40aff37 (#3176:195, deferred on becc7d3510).
 
 ## Decisions
 
@@ -18,11 +18,13 @@ Count: 10 ported, 1 landed in L03m, 5 real deferrals, 0 not attempted (16 upstre
 | 5c0eb5124e a missed fixed-time slot shows as failed | adapt | ccbabda41a, a2c485b248, 7c4de1a9b6 | Missed slot marks the task failed and clears last_firing_id so clients fall back to lastRunStatus/lastRunError; reschedule guarded on the snapshot's next_run_at and last_run_at (upstream's stale-slot guard). Move first: c5bd431a12 (makeDueHint into dueTaskHint.ts). recordRunFailure's reason (round 2, a2c485b248): GOAT's run rows already follow the dispatched run, so instead of upstream's 24-hour waiter the terminal transition in ScheduledTaskRuns.writeResolvedSnapshots (the place onFiringTerminal fires once) stores latestRootProviderFailure's message, else upstream's sentence ("The run was stopped." ...), capped at 500 characters; later receipt changes keep it. Upstream's three-outcome test carried in ScheduledTaskOutcomes.integration.test.ts with two more rows (failed without a provider reason, a 4096-character reason). 7c4de1a9b6: optional lastRunError on goat_schedule_list/create/update and run_scheduled_task_now (older hosts omit it; contracts test reads the new field with an older schema). |
 | c398b46af0 Codex text generation runs when launch args define an MCP server | adapt | 2b8263bb1b | Off table before launch args, again after them only when they set an mcp_servers table, dotted per-server off flags after them; applied to GOAT's execLaunchArgs (reception isolation / OpenCodex route args). Fake mcp_servers handling in the testkit; two new cases (launch-arg server; replacement table with dotted and spaced names) in CodexTextGeneration.mcpServers.test.ts, server name "goat". Moves first: 2f180929b5, e363f29d85. |
 | 8af1fc110e import seed snapshots with peer preview migrations | done in L03m | 730d25fcec (in chase/t3-261114-all) | Landed with the migration shift. Nothing left here. |
-| becc7d3510 Tailscale Serve route holder and dead-port repair | adapt | 777b4ea48b | Round 2. The serve-status parsing subset from d897d3f3f0 (skipped in 261103 as D-POLICY for its policy half) goes into a new packages/tailscale/src/serveRootHolders.ts: the Serve config schema (Services and Foreground are not read), Go-style proxy expansion and dialed host:port, and parseTailscaleServeRootHolders; readTailscaleServeRootHolders in tailscale.ts. GOAT's TailscaleServeStartup keeps its scoped retry and release: the holder check runs inside the forked attempt, so another live server's route or an unreadable status skips ensure, attempted stays false and release never turns it off; every 30 seconds a route found on a dead loopback port is taken back (attempted set first, so release then removes it). Upstream's parser test carried (serveRootHolders.test.ts, Service renamed svc:goat); three startup cases added (other, unreadable, dead-port repair on TestClock). docs/user/remote-access.md: one sentence. |
+b4ea48b, b593d5319d | Round 3 (P1, b593d5319d): a status read that fails (tailscaled or the app not up yet, CLI missing, the 3.5 s timeout) is retried on apply's schedule, first failure a warning, as ensure always was; only a status that was read but cannot be parsed (TailscaleStatusParseError) leaves Serve off. At stop the route is turned off only while the holder reads "ours", so a route another server took over, or an unreadable status, is left (as d897d3f3f0's check). Cases: a read that fails once then reads "none" applies after TestClock 2 s; the failed-start case reads through a failing rootHolder; stop with "other", unreadable and "ours". 
+ Round 2. The serve-status parsing subset from d897d3f3f0 (skipped in 261103 as D-POLICY for its policy half) goes into a new packages/tailscale/src/serveRootHolders.ts: the Serve config schema (Services and Foreground are not read), Go-style proxy expansion and dialed host:port, and parseTailscaleServeRootHolders; readTailscaleServeRootHolders in tailscale.ts. GOAT's TailscaleServeStartup keeps its scoped retry and release: the holder check runs inside the forked attempt, so another live server's route or an unreadable status skips ensure, attempted stays false and release never turns it off; every 30 seconds a route found on a dead loopback port is taken back (attempted set first, so release then removes it). Upstream's parser test carried (serveRootHolders.test.ts, Service renamed svc:goat); three startup cases added (other, unreadable, dead-port repair on TestClock). docs/user/remote-access.md: one sentence. |
 | a09e54a363 proxied usage limits take their reset time from the CLIProxyAPI hub | real defer | none | Round 2. Predecessor c9dfc404cc (custom Codex providers no longer report native quota) is ported only on L02's retry lane (90b3a526f3, chase/t3-261114-adapters-retry; L02-retry.md:16), not in chase/t3-261114-all: a09e54a363's codexCustomEndpoint is built on that commit's codexRouteBaseUrl/routesToNativeOpenai, which GOAT's CodexProvider.ts lacks, and its contracts (ServerProviderAuth.endpoint, UsageLimitSourceSnapshot.origin) and ProviderEventIngestor fallback serve that endpoint. Port after L02 retry is in chase/t3-261114-all; then also decide whether the OpenCodex quota-pool source (UsageLimitSources.ts:139, no URL origin) answers resets for OpenCodex-routed instances, and test unrelated endpoints and unavailable accounts. |
 | 06bd84623b wire budget covers stale todo lists | real defer | none | Needs b015ffd7c2's code half (ProjectionStore.ts +174/-40 and its ProjectionStore.test.ts cases; L03.md:28). Only its migration landed (82f2b9fd0d in chase/t3-261114-all). 61cb845d96 is on the integration tip since 74ae8cc7b2; the blocker is b015ffd7c2's code half itself. |
 | 476fc9be66 wire budget measures what clients fetch today | real defer | none | Needs 06bd84623b (above). .github/scripts/thread-transfer-report.cjs and ci.yml stay under the cycle's upstream-CI skip. |
 | 7fab4ef978, 9a614e34a6 | real defer | none | Need b42841808d (L02), not on dev or in chase/t3-261114-all. Its predecessors 729f6757d9 and 5ff3d3c0ec are now on this lane branch. |
+| 77f40aff37 goat pair --tailscale no longer replaces another app's Serve route (from #3176:195) | adapt | bc66da99d9 | Round 3. The holder read moves into packages/tailscale (readTailscaleServeRootHolder, used by TailscaleServeStartup and pair.ts); pair checks it after the Windows reserved-port check, just before ensure, and refuses with ServePortOccupiedError when another live app holds the root. Upstream's pair.test.ts case carried; two fixtures now answer `serve status` (only `serve --bg` is the apply). |
 | 3376c8da92 legacy compile-cache cleanup | partial (#3273) | none | Unchanged this round: the cleanup of Node engine folders v<digit>* under goat/compile-cache (apps/server/src/cliCompileCache.ts:10, cliCompileCache.test.ts:83) waits on owner approval of that deletion. |
 
 Round 2, review P2-1 (e89c99947a): usageClaudeCopies.testkit.ts:60 and :119 and usageCacheUpgrade.testkit.ts:153 are it.effect again (filesystem fixtures only; upstream 43ce39595b, GOAT's e74e5c2030 port of it was undone by round 1).
@@ -39,8 +41,8 @@ Round 2, review P2-1 (e89c99947a): usageClaudeCopies.testkit.ts:60 and :119 and 
 - 5c0eb5124e: when a missed slot follows a firing whose run is still running, the task card shows the missed failure; that run's outcome stays visible in its thread.
 - 4b316fd544 and b703fdbfdb fail-first evidence is a project timeout (120 s) on the old code, as in upstream's test.
 - 4b316fd544: removing a worktree through the agent tools (apps/server/src/mcp/WorktreeInventoryService.ts:666) still does not refresh the removed path; upstream has the same scope. Follow-up: goat#3432.
-- 5c0eb5124e: a stored run reason is cut at 500 characters (499 plus an ellipsis).
-- becc7d3510: if the Serve status cannot be read at start, Serve stays off until a later check finds the route on a dead port or the server restarts (upstream does the same). The 30-second check runs `tailscale serve status --json` while the server runs with Serve enabled.
+- 5c0eb5124e: a stored run reason is cut at 500 characters (499 plus an ellipsis, one fewer when an emoji straddles the cut).
+- becc7d3510: a Serve status that Tailscale prints but GOAT cannot parse leaves Serve off until restart; any other read failure is retried, as ensure is. The 30-second check runs `tailscale serve status --json` while the server runs with Serve enabled, and stop reads it once more.
 
 ## Surfaces
 
@@ -70,9 +72,20 @@ No captures: no client code changed. The task card already renders lastRunError 
 - b703fdbfdb: a git action that fails partway...: timed out 120000ms on the old code (no refresh), passes after.
 - Round 2, 5c0eb5124e reason: 5 failed | 12 passed on the old ScheduledTaskRuns.ts: expected 'failed' to equal 'Weekly usage limit reached'; expected 'failed' to equal 'The run failed.'; expected 'interrupted' to equal 'The run was stopped.'; expected 'cancelled' to equal 'The run was cancelled.' (and the 4096-character row); 17 passed after.
 - Round 2, becc7d3510: serveRootHolders.test.ts cannot import parseTailscaleServeRootHolders (no module); the three startup cases hang without the holder check (run killed at 200 s); 5 files, 38 tests passed after.
+- Round 3, becc7d3510 P1 and stop (b593d5319d): on 10b92be000, 4 failed | 7 passed: "re-applies the saved port after a failed start" and "applies Serve once Tailscale answers a status read that failed at start" time out at 120000 ms (nothing applies), "at stop turns the route off only while it is ours" fails for other and unreadable (the route was turned off); 11 passed after.
+- Round 3, 5c0eb5124e cut (6d9e8dec98): the emoji row fails on the old cut (half a surrogate pair kept). With the kept-reason arm of writeResolvedSnapshots replaced by safeError, all 6 rows fail after the duplicate update, e.g. expected 'interrupted' to equal 'The run was stopped.' (arm restored); 18 passed after.
+- Round 3, 77f40aff37 (bc66da99d9): expected [ [ 'serve', '--bg', …(2) ] ] to deeply equal [] (pair took over another app's route); pair + tailscale tests 66 passed after.
 
 
 ## Gate
+
+Round 3 gate, on juniui-Macmini (macOS 27.0, node v26.12.1), after L02 run 6's gate finished: `GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 VITEST_MAX_WORKERS=4 vp run check:changed` with pipefail on bc66da99d9 (origin/chase/t3-261114-all at 3f9cb15cba already merged): exit 1.
+
+- pass: unused patches, format, lint, graphql (server, source-control-github), agent context budget (ACP 6,143 of 6,144 B), agent surface audit (doc unchanged), knip 1/2 and 2/2, typecheck (42 packages). `node scripts/goat-rename.ts --check`: 0 lines in 0 files.
+- FAIL test: 1896 files, 5 failed | 1884 passed | 7 skipped; 23 failed | 27406 passed | 33 skipped. The same five files as round 2, none changed by this lane: GrokTextGeneration.test.ts (16, goat#3425), cli/app.test.ts (4, goat#3238; its relative-flag, -env and -bootstrap fixture children of this gate were stopped by PID after 3 minutes), runtimeFactsScripts.test.ts (goat#3363), tunnel.client-session.test.ts (goat#3418), NotesGit.test.ts (goat#3439).
+- Focused runs, all passing: TailscaleServeStartup + packages/tailscale + cli/pair (6 files, 66), ScheduledTaskOutcomes.integration (18), contracts orchestratorMcp (21).
+- code-budgets.json against 3f9cb15cba changes only files this lane changes: ScheduledTaskService.ts 2329 -> 2311, UsageService.test.ts 3240 -> 3119, ws.ts 3736 -> 3656 (dd0c3a16cf).
+
 
 Round 2 gate, on juniui-Macmini (macOS 27.0, node v26.12.1): `GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 VITEST_MAX_WORKERS=4 vp run check:changed` with pipefail on 10b92be000 (merged with origin/chase/t3-261114-all at 3f9cb15cba): exit 1.
 
@@ -91,8 +104,8 @@ Round 1 gate, on cpaui-MacBookAir: `GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYS
 
 ## NOT RUN
 
-- Round 2 review (the coordinator's next review round), CI (runs once on #3397).
+- Round 3 review (the coordinator's), CI (runs once on #3397).
 - Real-client pass and captures: no client code change (Surfaces).
 - becc7d3510 against a real tailnet: covered by the parser and TestClock startup cases only.
 
-Model: anthropic/claude-opus-5-5 in GOAT through the Codex harness (round 1 and round 2).
+Model: anthropic/claude-opus-5-5 in GOAT through the Codex harness (rounds 1 to 3).
