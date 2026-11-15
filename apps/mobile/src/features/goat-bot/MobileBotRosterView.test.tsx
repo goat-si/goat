@@ -117,6 +117,7 @@ const members = vi.hoisted(() => ({
       unread: boolean;
       waitingState?: "ready" | "pending" | "unavailable";
       kept?: boolean;
+      offline?: boolean;
     }
   >,
 }));
@@ -691,6 +692,7 @@ it("offline, rows that show what this phone read before say it may be out of dat
       unread: false,
       waitingState: "pending",
       kept: true,
+      offline: true,
     },
   };
   try {
@@ -753,5 +755,55 @@ it("once its computer may no longer be read here, the main tile rests and says n
     expect(container.textContent).not.toContain("may be out of date");
   } finally {
     face.items = [];
+  }
+});
+
+it("back online before the first read answers, rows still showing what was read before say it may be out of date", async () => {
+  const scout = decodeProfile({
+    botId: "scout",
+    role: "member",
+    name: "Scout",
+    avatar: null,
+    purpose: "",
+    defaultModelSelection: null,
+    defaultProjectId: null,
+    environmentId: "env",
+    sessionThreadId: "thread-scout",
+    createdAt: at,
+    updatedAt: at,
+  });
+  members.status = {
+    scout: {
+      waitingCount: 1,
+      latest: { text: "Which branch should I use?", at, author: "bot" },
+      unread: false,
+      waitingState: "pending",
+      kept: true,
+      offline: false,
+    },
+  };
+  try {
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        <MobileBotRosterView
+          bots={[
+            { kind: "main", profile: null },
+            { kind: "member", profile: scout },
+          ]}
+          stale
+          slackEnabled={false}
+          onOpenBot={() => {}}
+        />,
+      ),
+    );
+    expect(container.textContent).toContain("This may be out of date");
+    expect(container.textContent).not.toContain("Offline");
+    const label = [...container.querySelectorAll("button")]
+      .find((element) => element.getAttribute("aria-label")?.split(", ").includes("Scout"))
+      ?.getAttribute("aria-label");
+    expect(label).toBe("1 waiting for you, Scout, Which branch should I use?, may be out of date");
+  } finally {
+    members.status = {};
   }
 });

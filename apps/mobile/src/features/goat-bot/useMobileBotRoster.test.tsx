@@ -19,6 +19,10 @@ const state = vi.hoisted(() => ({
   connected: true,
   botRef: null as { readonly environmentId: string; readonly threadId: string } | null,
   environmentId: "env",
+  // A bot-list read refused for access; the query keeps its earlier answer beside it.
+  cause: null as unknown,
+  // Back online, the first bot-list read was sent and has not answered.
+  pending: false,
 }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({
@@ -47,14 +51,16 @@ vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (query: string | null) => {
     if (query) state.calls.push(query);
     // An offline computer answers nothing. Like a real read, an answer keeps its identity.
-    const profiles = query === "profiles" && state.connected ? answerOf(state.bots) : null;
+    const profiles =
+      query === "profiles" && state.connected && !state.pending ? answerOf(state.bots) : null;
+    const refused = query === "profiles" ? state.cause : null;
     return {
       data: query === "threads" ? { rows: [] } : profiles,
-      successResult: profiles === null ? null : { value: profiles },
-      cause: null,
+      successResult: profiles === null || refused !== null ? null : { value: profiles },
+      cause: refused,
       error: null,
-      isPending: false,
-      isSuccess: query !== null,
+      isPending: query === "profiles" && state.pending,
+      isSuccess: query !== null && refused === null && !(query === "profiles" && state.pending),
       refresh: vi.fn(),
     };
   },
@@ -98,6 +104,8 @@ afterEach(async () => {
   state.connected = true;
   state.botRef = null;
   state.environmentId = "env";
+  state.cause = null;
+  state.pending = false;
   resetKeptPerComputerForTests();
 });
 
@@ -154,8 +162,9 @@ const echoBots = [
   { botId: "main", role: "main", name: "GOAT Bot", createdAt: "2026-11-01T00:00:00.000Z" },
   { botId: "echo", role: "member", name: "Echo", createdAt: "2026-11-02T00:00:00.000Z" },
 ];
-const memberNames = () =>
-  value.bots.flatMap((entry) => (entry.kind === "member" ? [entry.profile.name] : []));
+const memberNamesOf = (bots: typeof value.bots) =>
+  bots.flatMap((entry) => (entry.kind === "member" ? [entry.profile.name] : []));
+const memberNames = () => memberNamesOf(value.bots);
 
 it("keeps the bots listed while their computer is offline, and still knows it has members", async () => {
   state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
@@ -331,4 +340,46 @@ it("an answer from before its computer was removed and added again is not kept",
   );
   expect(memberNames()).toEqual([]);
   stopFollowing();
+});
+
+it("a refused bot list is known in the same render it arrives, with no bots listed", async () => {
+  state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
+  state.bots = echoBots;
+  state.botRef = { environmentId: "env", threadId: "bot" };
+  const commits: Array<{ refused: boolean; members: string[] }> = [];
+  function Committed() {
+    const roster = useMobileBotRoster();
+    const seen = { refused: roster.refused, members: memberNamesOf(roster.bots) };
+    useLayoutEffect(() => {
+      commits.push(seen);
+    });
+    return null;
+  }
+  root = createRoot(document.createElement("div"));
+  await act(async () => root?.render(<Committed />));
+  expect(commits.at(-1)).toEqual({ refused: false, members: ["Echo"] });
+  const before = commits.length;
+  state.cause = { _tag: "EnvironmentAuthorizationError", message: "Not allowed." };
+  await act(async () => root?.render(<Committed />));
+  // The first commit after the refused answer already says so.
+  expect(commits[before]).toEqual({ refused: true, members: [] });
+});
+
+it("after a reconnect the bot list keeps its last answer until the first read answers", async () => {
+  state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
+  state.bots = echoBots;
+  state.botRef = { environmentId: "env", threadId: "bot" };
+  root = createRoot(document.createElement("div"));
+  await act(async () => root?.render(<Probe />));
+  state.connected = false;
+  await act(async () => root?.render(<Probe />));
+  expect(memberNames()).toEqual(["Echo"]);
+  state.connected = true;
+  state.pending = true;
+  await act(async () => root?.render(<Probe />));
+  expect(memberNames()).toEqual(["Echo"]);
+  expect(value.stale).toBe(true);
+  state.pending = false;
+  await act(async () => root?.render(<Probe />));
+  expect(value.stale).toBe(false);
 });

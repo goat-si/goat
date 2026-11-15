@@ -18,6 +18,13 @@ const member = vi.hoisted(() => ({
   answer: null as null | object,
   cause: null as unknown,
   failure: null as null | { kind: string; reason: string },
+  // The status read was sent after a reconnect and has not answered yet.
+  pending: false,
+  // The bots the roster's list answers with; a deleted one is listed with its state.
+  listed: [{ botId: "scout" }] as ReadonlyArray<{ botId: string; state?: string }>,
+  // Open asks, kept per computer like the statuses, and whether their reader is on screen.
+  asks: { asks: [{ text: "Which machine?" }], total: 1 } as object,
+  asksShown: false,
 }));
 const visitAware = {
   goatBotMembers: true,
@@ -48,13 +55,13 @@ vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (query: string | null) => {
     // Like a real read, an answer keeps its identity; a refused one keeps the earlier answer beside it.
     member.answer ??= { waitingCount: 0, ...(member.latest ? { latest: member.latest } : {}) };
-    const data = query === null ? null : member.answer;
+    const data = query === null || member.pending ? null : member.answer;
     return {
       data,
       successResult: data !== null && member.cause === null ? { value: data } : null,
       cause: query === null ? null : member.cause,
       error: member.error,
-      isPending: false,
+      isPending: query !== null && member.pending,
       isSuccess: data !== null && member.cause === null,
       refresh: member.refresh,
     };
@@ -102,6 +109,9 @@ function setup() {
   member.answer = null;
   member.cause = null;
   member.failure = null;
+  member.pending = false;
+  member.listed = [{ botId: "scout" }];
+  member.asksShown = false;
   resetKeptPerComputerForTests();
 }
 
@@ -190,6 +200,26 @@ function rosterRow(bot = scout) {
   const stop = followKeptPerComputerCatalog(registry, connections as never);
   registry.set(catalog.atom!, listed(["env"]));
   let value: ReturnType<typeof useMobileMemberStatus> | undefined;
+  let asks: unknown = null;
+  // Needs you's own kept read of the computer's open asks.
+  function Asks() {
+    const live = member.connected && !member.pending ? member.asks : null;
+    asks = useKeptPerComputer(
+      "asks",
+      EnvironmentId.make("env"),
+      {
+        data: live,
+        successResult: null,
+        cause: null,
+        error: null,
+        isPending: member.connected && member.pending,
+        isSuccess: live !== null,
+        refresh: () => {},
+      },
+      !member.connected,
+    );
+    return null;
+  }
   function Probe(props: { readonly bot: typeof scout }) {
     value = useMobileMemberStatus(props.bot);
     return null;
@@ -201,7 +231,7 @@ function rosterRow(bot = scout) {
       EnvironmentId.make("env"),
       {
         // As in the app, a bot list reads nothing while its computer is offline or refuses it.
-        data: props.cause === null && member.connected ? botList : null,
+        data: props.cause === null && member.connected ? listOf(member.listed) : null,
         successResult: null,
         cause: props.cause,
         error: null,
@@ -220,6 +250,9 @@ function rosterRow(bot = scout) {
   return {
     get value() {
       return value;
+    },
+    get asks() {
+      return asks;
     },
     show: (botListCause: unknown = null, shown: typeof scout | null = bot) =>
       act(async () => {
@@ -242,6 +275,7 @@ function rosterRow(bot = scout) {
             <>
               <BotList cause={botListCause} />
               {shown === null ? null : <Probe bot={shown} />}
+              {member.asksShown ? <Asks /> : null}
             </>,
           ),
         );
@@ -253,7 +287,15 @@ function rosterRow(bot = scout) {
     },
   };
 }
-const botList = { bots: [] };
+// One answer per listed set, so an unchanged list keeps its identity as a real read does.
+const lists = new Map<string, object>();
+const listOf = (listed: ReadonlyArray<{ botId: string; state?: string }>) => {
+  const key = JSON.stringify(listed);
+  let list = lists.get(key);
+  if (list === undefined)
+    lists.set(key, (list = { bots: listed.map((bot) => ({ ...scout, ...bot })) }));
+  return list;
+};
 const reply = {
   text: "Which machine should I check?",
   at: "2026-11-11T10:05:00.000Z",
@@ -366,4 +408,71 @@ it("keeps only the row's one line of a member's newest message, cut to a bound",
   await row.show();
   expect(row.value?.latest?.text.startsWith("Disk check Which machine? x")).toBe(true);
   expect(row.value?.latest?.text.length).toBe(200);
+});
+
+const refusedRead = { _tag: "EnvironmentAuthorizationError", message: "Not allowed." };
+
+it("a refused bot list forgets every member status and open ask kept for its computer, on screen or not", async () => {
+  setup();
+  member.answer = { waitingCount: 1, latest: reply };
+  member.asksShown = true;
+  await using row = rosterRow();
+  await row.show();
+  expect(row.asks).not.toBeNull();
+  // Scout's row and Needs you leave the screen; then the bot list is refused, then answers again.
+  member.asksShown = false;
+  await row.show(null, null);
+  await row.show(refusedRead, null);
+  await row.show(null, null);
+  member.connected = false;
+  member.asksShown = true;
+  await row.show();
+  expect(row.value?.latest).toBeUndefined();
+  expect(row.asks).toBeNull();
+});
+
+it("a member deleted and restored does not bring back the status kept before it was deleted", async () => {
+  setup();
+  member.answer = { waitingCount: 1, latest: reply };
+  await using row = rosterRow();
+  await row.show();
+  // Deleted: its row leaves the list, which still names it as deleted.
+  member.listed = [{ botId: "scout", state: "deleted" }];
+  await row.show(null, null);
+  // Restored, and the computer drops before a fresh status arrives.
+  member.listed = [{ botId: "scout" }];
+  await row.show(null, null);
+  member.connected = false;
+  await row.show();
+  expect(row.value?.latest).toBeUndefined();
+});
+
+it("after a reconnect, a row keeps its last status, still marked, until the first status read answers", async () => {
+  setup();
+  member.answer = { waitingCount: 1, latest: reply };
+  await using row = rosterRow();
+  await row.show();
+  member.connected = false;
+  await row.show();
+  // Back online, the read was sent and has not answered.
+  member.connected = true;
+  member.pending = true;
+  await row.show();
+  expect(row.value?.latest).toEqual(reply);
+  expect(row.value?.kept).toBe(true);
+  member.pending = false;
+  await row.show();
+  expect(row.value?.kept).toBe(false);
+});
+
+it("cuts a kept line by characters, never through an emoji", async () => {
+  setup();
+  member.answer = { waitingCount: 0, latest: { ...reply, text: "x".repeat(199) + "😀😀" } };
+  await using row = rosterRow();
+  await row.show();
+  member.connected = false;
+  await row.show();
+  const text = row.value?.latest?.text ?? "";
+  expect(Array.from(text)).toHaveLength(200);
+  expect(text.endsWith("😀")).toBe(true);
 });

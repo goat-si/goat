@@ -7,10 +7,14 @@ import * as Schema from "effect/Schema";
 // The roster's member rows through the real member-status hook: only the status read underneath
 // it, the thread shells and the native views stand in.
 // Home's work signals are not under test here.
-// Keeping answers for offline is not under test here: the live answer, from a readable computer.
+// Keeping answers for offline is not under test here: the live answer from a readable computer,
+// and nothing once that read is refused, as the real hook returns.
 vi.mock("./useKeptPerComputer", () => ({
-  useKeptPerComputer: (_kind: string, _environmentId: unknown, live: { data: unknown }) =>
-    live.data,
+  useKeptPerComputer: (
+    _kind: string,
+    _environmentId: unknown,
+    live: { data: unknown; cause?: { _tag?: string } | null },
+  ) => (live.cause?._tag === "EnvironmentAuthorizationError" ? null : live.data),
   useComputerReadable: () => true,
 }));
 vi.mock("./useMobileBotRowSignals", () => ({ useMobileBotRowSignals: () => null }));
@@ -73,6 +77,8 @@ const fixture = vi.hoisted(() => ({
   status: {} as Record<string, object | undefined>,
   // Thread shells by thread id.
   shells: {} as Record<string, object | undefined>,
+  // A status read refused for access, by bot id; the query keeps its earlier answer beside it.
+  refused: {} as Record<string, boolean>,
 }));
 vi.mock("../../state/entities", () => ({
   useThreadShell: (ref: { threadId: string } | null) =>
@@ -86,6 +92,10 @@ vi.mock("../../state/channels", () => ({
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (atom: { botId: string } | null) => ({
     data: atom === null ? null : (fixture.status[atom.botId] ?? null),
+    cause:
+      atom !== null && fixture.refused[atom.botId]
+        ? { _tag: "EnvironmentAuthorizationError", message: "Not allowed." }
+        : null,
     refresh: () => {},
   }),
 }));
@@ -169,6 +179,7 @@ function setup(statuses: Record<string, object | undefined>) {
   vi.useFakeTimers({ now: NOW });
   fixture.status = statuses;
   fixture.shells = {};
+  fixture.refused = {};
 }
 async function show(bots = [scout]) {
   document.body.appendChild(container);
@@ -283,4 +294,24 @@ it("leads the main bot's label with its state", async () => {
   };
   await show([]);
   expect(container.querySelector('[aria-label="Working, GOAT Bot"]')).not.toBeNull();
+});
+
+it("a member whose status read is refused does not wait or work from its retained conversation", async () => {
+  setup({ scout: { waitingCount: 0 } });
+  // The conversation this phone still holds was stopped on a question to the person.
+  fixture.shells = {
+    "thread-scout": {
+      ...quiet("thread-scout"),
+      source: {
+        ...quiet("thread-scout").source,
+        pendingRuntimeRequest: { kind: "user_input", blocking: true },
+      },
+    },
+  };
+  await show();
+  expect(faceOf("Scout")).toBe("waiting");
+  fixture.refused = { scout: true };
+  await show();
+  expect(faceOf("Scout")).not.toBe("waiting");
+  expect(labelOf("Scout")).not.toContain("aiting");
 });

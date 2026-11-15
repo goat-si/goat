@@ -40,6 +40,7 @@ const state = vi.hoisted(() => ({
     supportsMembers: true,
     membersUnknown: false,
     connected: true,
+    refused: false,
   },
   requests: 0,
   newBotRow: null as unknown,
@@ -52,6 +53,7 @@ const state = vi.hoisted(() => ({
   appState: "active",
   rosterError: null as string | null,
   mainUnreadable: false,
+  view: { preview: undefined as string | undefined, mainEnvironmentId: null as string | null },
 }));
 vi.mock("@react-navigation/native", () => ({
   useNavigation: () => ({ getState: () => state.navState, getParent: () => undefined }),
@@ -77,7 +79,9 @@ vi.mock("react-native", () => ({
     },
   },
 }));
-vi.mock("./useMobileBotPreview", () => ({ useMobileBotPreview: () => null }));
+vi.mock("./useMobileBotPreview", () => ({
+  useMobileBotPreview: () => ({ text: "The build is waiting on you.", unread: false }),
+}));
 // Which computers this phone may still read; the main bot's saved computer is "env" unless a test moves it.
 const readable = vi.hoisted(() => ({ ids: new Set(["env"]), botComputer: "env" }));
 vi.mock("./useKeptPerComputer", () => ({
@@ -96,6 +100,7 @@ vi.mock("./useMobileBotRoster", () => ({
     supportsMembers: state.roster.supportsMembers,
     membersUnknown: state.roster.membersUnknown,
     connected: state.roster.connected,
+    refused: state.roster.refused,
     computerLabel: "Studio Mac",
     environmentId: state.roster.environmentId,
     slackEnabled: false,
@@ -112,9 +117,12 @@ vi.mock("./MobileBotRosterView", () => ({
     header?: React.ReactNode;
     newBotRow?: React.ReactNode;
     mainUnreadable?: boolean;
+    preview?: string;
+    mainEnvironmentId?: string | null;
   }) => {
     state.members = props.members ?? null;
     state.mainUnreadable = props.mainUnreadable === true;
+    state.view = { preview: props.preview, mainEnvironmentId: props.mainEnvironmentId ?? null };
     return (
       <>
         {props.header}
@@ -525,5 +533,23 @@ it("rests the main tile by the computer its saved bot lives on, not the one the 
     await act(async () => root.unmount());
   } finally {
     readable.botComputer = "env";
+  }
+});
+
+it("in the render a bot-list refusal arrives, the main tile has no line and Needs you no computer", async () => {
+  state.roster.environmentId = "env";
+  readable.botComputer = "env";
+  const root = createRoot(document.createElement("div"));
+  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
+  expect(state.view).toEqual({ preview: "The build is waiting on you.", mainEnvironmentId: "env" });
+  // The roster's own read is refused; the store has not heard yet, so the computer still reads as open.
+  state.roster.refused = true;
+  try {
+    await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
+    expect(state.mainUnreadable).toBe(true);
+    expect(state.view).toEqual({ preview: undefined, mainEnvironmentId: null });
+  } finally {
+    state.roster.refused = false;
+    await act(async () => root.unmount());
   }
 });
