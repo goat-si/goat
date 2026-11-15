@@ -1,6 +1,6 @@
 # L01 retry (Claude), cycle 261114
 
-Lane branch: chase/t3-261114-claude-retry. Round 1 head 637128e1736f (reviewed: APPROVE WITH NITS, merged into chase/t3-261114-all at 24c7a4e0da). Round 2 hands over 2c79a05944 as a delta on 637128e173. The original L01 PR #3222 is merged; this file is the full record for the retry (no PR body).
+Lane branch: chase/t3-261114-claude-retry. Round 1 head 637128e1736f (reviewed: APPROVE WITH NITS, merged into chase/t3-261114-all at 24c7a4e0da). Round 2 hands over f882ef3daa as a delta on 637128e173 (fresh review of 9ed11e8829: BLOCK; the fix round is on top of 2c79a05944). The original L01 PR #3222 is merged; this file is the full record for the retry (no PR body).
 
 Round 1 ported 10 upstream commits: 896e64f82d, 7 of the 10 effort rows (543ee27fa8, 5badea5b45, cdbfae86cd, 458a792087, 86ae1747ad, 7315c60b95, d20d535e32) and the two predecessor rows a50ebef78b and 694076dcf3. The first version of this record said 11; that count was wrong. Round 2 ports the last three effort rows (00766e2c02, c7618f6c10, 9ce9b1fd41) and the two rows whose predecessors round 1 landed (ccc9aaf10b, 7462f234e8). Each port commit ends with one paragraph holding `Upstream:` and `Decision:`.
 
@@ -81,7 +81,7 @@ The port adds an outbox effect type. An older build claims a row of that type wi
 
 ## Surfaces
 
-What users and agents now see, over both rounds: a "Steer waiting" badge on a Claude steer until Claude reads it (web and mobile render the same turn item status); a "Steer delivery not confirmed" notice when Stop leaves a steer unread; the signal named on a turn whose Claude process was killed; passive "Stop says" notices gone; Working with a "Scheduled wakeup" background row while Claude waits on ScheduleWakeup; a self-resumed subagent reopening as running; a delegated Claude child with a scheduled wakeup holding its task in Working up to an hour. Round 2 adds an "interrupted" badge on a reply a steer cut off mid-stream (web; mobile shows the item status it already renders), a turn stuck in a provider retry failing after 15 minutes of silence plus the retry delay, provider updates showing "Waiting for running provider work to finish." while sessions and text generation drain, later Claude wakes delivered after a cancelled continuation, and delegated results kept across wake turns.
+What users and agents now see, over both rounds: a "Steer waiting" badge on a Claude steer until Claude reads it (web and mobile render the same turn item status); a "Steer delivery not confirmed" notice when Stop leaves a steer unread; the signal named on a turn whose Claude process was killed; passive "Stop says" notices gone; Working with a "Scheduled wakeup" background row while Claude waits on ScheduleWakeup; a self-resumed subagent reopening as running; a delegated Claude child with a scheduled wakeup holding its task in Working up to an hour. Round 2 adds an "interrupted" badge on a reply a steer cut off mid-stream (web only; mobile does not render the interrupted status yet, see #3176), a turn stuck in a provider retry failing after 15 minutes of silence plus the retry delay, provider updates showing "Waiting for running provider work to finish." while sessions and text generation drain, later Claude wakes delivered after a cancelled continuation, and delegated results kept across wake turns.
 
 Captures: the interrupted badge, browser harness with the app stylesheet (before/after, light and dark): https://raw.githubusercontent.com/goat-si/goat/f579eee4b5d513f9b7c4767ed60635628afc3f6c/3397/c7618-before-light.png, …/c7618-after-light.png, …/c7618-before-dark.png, …/c7618-after-dark.png. The steer badge and notice need Claude frames from a paid session, so they have no capture.
 
@@ -92,21 +92,56 @@ Contracts: no wire schema change this round. ProviderContinuationRequest gains a
 - goat#3412: a late steer `pending` can overwrite `completed` (shared with upstream).
 - Until this round merges into chase/t3-261114-all, a cancelled queued Claude continuation still drops later wakes (ccc9aaf10b), delegated results can be lost across wake turns (7462f234e8) and a steer that cuts off a streaming reply leaves it as completed (c7618f6c10).
 - d4b77d2448 is not ported: background commands do not show their running time.
+- While a provider update waits for in-flight work, new sessions, Claude query opens and text generation for that installation queue behind it with no visible reason except the provider's update status ("Waiting for running provider work to finish.").
+- The interrupted badge is web only (mobile row in #3176).
 
-## Gate (round 2, head 2c79a05944, after merging origin/chase/t3-261114-all at bd69c4db0b)
+## Fix round (fresh review of 9ed11e8829: BLOCK, findings L01R2-*)
 
-bd69c4db0b adds the dev merge of #3207, #3209 and #3389 (provider PATH and profile work). It merged without conflicts. This round's changes do not touch that plumbing: the installation gate holds no environment, and the only file both sides changed with an edit from this lane is provider-pi adapter.ts, where the lane's hunk (retry recovery on message_update) reads no environment. The rule "a check reads the current environment, a session keeps the one it opened with, no captured startup copy" holds.
+On top of 2c79a05944. The review found the five ports, the gate's locking, the moves, the test rule and the budgets sound.
 
-`GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 VITEST_MAX_WORKERS=4 vp run check:changed` on 9199d8c289 (merge of bd69c4db0b), 1-minute load 11 at start: format, lint, typecheck, agent budgets, knip 1/2 and 2/2 pass (the knip `gt` finding is gone on this tip). The test step (1742 files): 3 failed, 25684 passed, 24 skipped.
+- **L01R2 P1-1** (two GOAT-only tests failed on 9ed11e8829; `2c79a05944` updated them). Coordinator authorisation, verbatim: "Authorised 2026-11-15: after the 7462f234e8 port, ClaudeBackgroundDetails.test.ts:125 expects ['task-2', 'task-1'] (an exited background command stays on the roster until its wake run starts, as upstream's own roster test now asserts), and OrchestratorMcpToolkit.integration.test.ts:1246 accepts repeated offers of one delivery (the continuation service dispatches an offer only while its delivery is open and carries the same message id, ProviderContinuationService.ts:25-45)." `7c92ad213e` tightens the offer assertion, which also passed when every message id was missing: it now requires at least one offer and that the offers' single message id is the delivery's message id.
+- **L01R2 P1-2** (`c8aa27147f`): Cursor Cloud emitted its retry row running and settled it only when the whole run ended; polling sends no thread events, so the stall watch stopped a retried run that worked past 15 minutes and cancelled the remote run. The row now settles right after the commit that marks the retried run running. Fail-first (adapter.retry.test.ts, retried run polled 16 minutes on the TestClock): `expected [ 'running' ] to deeply equal [ 'running', 'completed' ]`; after the fix the row settles, no terminal is emitted and sdk.cancelRun is not called. The provider package cannot import the server's watch, so the adapter test proves the settle and ProviderRetryStall.testkit.ts proves the watch.
+- **L01R2 P2-1** (coordinator decision): ProviderSessionManagerErrors.ts (`feea042f19`) is the one home of the release reason and the five session-manager error classes; L02 keeps only the service shape in ProviderSessionManagerTypes.ts and imports the errors.
+- **L01R2 P3-5** (`6d57d10bdf`): text generation resolves the provider instance before it takes the gate, so an unregistered id never adds an entry to the gate's per-instance map (bounded by configured instances). Fail-first (TextGeneration.installationGate.test.ts): `expected [ 'never-registered' ] to deeply equal []`.
+- **L01R2 P3-1:** the interrupted badge is web only; mobile does not render the interrupted item status (apps/mobile ThreadFeed.tsx:1296-1315). #3176 has a row for it.
+- **L01R2 P3-3:** handoff to L10 (#3176 and L10-retry.md): the gate releases before "Verifying the installed version" (providerMaintenanceRunner.ts:587 to :613); when b68aedfdb7 is ported, its afterUpdate must run inside gate.update.
+- **L01R2 P3-4:** the optional gate read stays as disclosed in the 9ce9b1fd41 row.
+- **L01R2 P3-6:** provider-pi adapter.ts is 3475/3476 on the merged tree.
 
-- packages/ssh runtimeFactsScripts.test.ts "reads a built runner in one call…" (`expected +0 to equal 1`) also fails on bd69c4db0b alone: inherited, not this lane.
-- ClaudeBackgroundDetails.test.ts "preserves a background command and its start time across roster snapshots" and OrchestratorMcpToolkit.integration.test.ts "delegate_task wait returns before a child question is answered" pass on bd69c4db0b and failed here. Both are GOAT-only tests that encode the behaviour 7462f234e8 changes: an exited background command now stays listed until its wake run starts, and recovery after the completion checkpoint can offer the same delivery again (both offers carried the same parent run, generation 1 and message id; the test's single-delivery assertions pass). `2c79a05944` updates the two expectations; the two files then pass (7 tests).
+### Where each adapter's retry row settles
 
-`node scripts/goat-rename.ts --check` on 2c79a05944: 0 lines with T3 residue.
+| adapter | settles the running retry row |
+|---|---|
+| Claude (ClaudeAdapterV2.ts) | when the API starts a new message (message_start) or a live assistant message arrives; a failed turn reports it through the terminal failure, any other turn end settles it |
+| Pi (provider-pi) | on streamed output (message_update), or auto_retry_end |
+| Cursor Cloud (provider-cursor/cloud) | once the retried run is accepted (fixed this round) |
+| ACP, used by the ACP registry and Grok (provider-acp adapter.ts:4419) | on root session output other than tool call and plan updates; the turn's end settles it too |
+| Muse (provider-muse adapter.ts:387) | on model output items and token usage, or the turn's end |
+| Codex, OpenCode | upstream adapters, unchanged |
+| Cursor local, FX, Devin Cloud, Claude Cloud | emit no retry row |
 
-Budget entries touched (code-budgets.json, none raised): ClaudeAdapterV2.ts 10941/11224, ClaudeAdapterV2.test.ts 16510/16924, ProviderSessionManager.ts 3021/3128, ProviderSessionManager.test.ts 6149/6326, Orchestrator.ts 13876/13908, ProjectionStore.ts 8148/8836, EffectWorker.ts 985/1005, DelegatedCompletionDelivery.test.ts 2200/2332, testkit/fixtures/index.ts 1829/1844, server.ts 1327/1339, providerMaintenanceRunner.test.ts 1004/1246, provider-pi adapter.ts 3469/3476, provider-pi adapter.test.ts 4712/4784, OrchestratorMcpToolkit.integration.test.ts 1326/1326.
+Any event on the retry's thread also restarts the stall window (ProviderRetryStallWatch.ts), so an adapter that streams while retrying is never stopped.
 
-NOT RUN: a second full check:changed after 2c79a05944 (only the two changed test files were rerun); a real-client pass of the interrupted badge, the steer badge and the notice; CI (runs once on #3397); an independent review of round 2.
+The earlier gate notes said the gate ran on pen-mac-studio. That was wrong: every gate in this round ran on this lane's host, macbookpro2 (hostname gimbyeongjun-ui-MacBookPro-2.local).
+
+## Gate (fix round, head f882ef3daa, after merging origin/chase/t3-261114-all at 3f9cb15cba)
+
+Host: macbookpro2 (pen-macbookpro2, hostname gimbyeongjun-ui-MacBookPro-2.local); every gate in this round ran there. The earlier record named pen-mac-studio by mistake.
+
+`GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 VITEST_MAX_WORKERS=4 vp run check:changed` started 00:26:47 with no other check:changed or vitest run on the host (1-minute load 2.2); another lane's gate (verify-rs04-pr1-r6) started during it. Format, lint, graphql, agent context budget, agent surface audit, knip 1/2 and 2/2, and typecheck (42 packages) pass. Tests: 1875 files, 22 failed, 27109 passed, 33 skipped.
+
+| failed tests | triage |
+|---|---|
+| 4 in apps/server/src/cli/app.test.ts ("resolves relative cwd/flag/env/bootstrap against the inaccessible original cwd") | goat#3238: the relative-cwd fixtures start a real server through spawnSync and never exit. The hung fixture processes under this gate (63072, 88872, 76012) were stopped so the run could finish |
+| 16 in apps/server/src/textGeneration/GrokTextGeneration.test.ts | inherited: the same 16 fail on the tip 3f9cb15cba alone; the file uses TextGeneration.ts only as a type |
+| 1 in packages/ssh runtimeFactsScripts.test.ts ("reads a built runner in one call…") | inherited: fails on bd69c4db0b alone |
+| 1 in apps/server/src/provider/ProviderInstanceRegistry.test.ts ("runs Codex and Claude readiness probes from configured tilde paths") | flake: PlatformError from FileSystem.makeTempDirectoryScoped during the run; passes alone on f882ef3daa |
+
+An earlier gate on afa50306cf (tip 1f34e35e42, alone on the host 23:08 to 23:45) had the same Grok and ssh failures and no others. `node scripts/goat-rename.ts --check`: 0 lines with T3 residue.
+
+Budget entries touched on the merged tree (none raised): ClaudeAdapterV2.ts 10941/11224, ClaudeAdapterV2.test.ts 16510/16924, ProviderSessionManager.ts 3021/3128, ProviderSessionManager.test.ts 6149/6326, Orchestrator.ts 13901/13908 (with L04; with L02 run 6 it would reach 13931, so whichever of L01 and L02 lands second frees about 25 lines), ProjectionStore.ts 8148/8836, EffectWorker.ts 985/1005, DelegatedCompletionDelivery.test.ts 2200/2332, testkit/fixtures/index.ts 1829/1844, server.ts 1327/1339, providerMaintenanceRunner.test.ts 1004/1246, provider-pi adapter.ts 3475/3476, provider-pi adapter.test.ts 4712/4784, OrchestratorMcpToolkit.integration.test.ts 1326/1326, provider-cursor cloud adapter.test.ts unchanged.
+
+NOT RUN: a real-client pass of the interrupted badge, the steer badge and the notice; CI (runs once on #3397); the narrow fresh review of the fix round.
 
 Model: claude-opus-5-5 (anthropic) through the Codex harness in GOAT.
 

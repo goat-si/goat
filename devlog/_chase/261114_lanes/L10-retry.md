@@ -25,3 +25,7 @@ NOT RUN: check:changed against origin/dev to completion on 0377149d3f; Windows; 
 ## Known limits
 
 - goat#3415: after a host environment change (PATH or a profile variable), a status check keeps the previous profile's status and models shown until it publishes: up to 20 seconds (or the larger override) when the lent server's model read never answers, and up to 2 minutes while a cold OpenCode 2 answers the plugin-loading 503. Showing the unchecked state during that check is prepared but not shipped (above).
+
+## Handoff from L01 (installation gate, 9ce9b1fd41)
+
+The provider installation gate L01 ported releases before "Verifying the installed version" (apps/server/src/provider/providerMaintenanceRunner.ts:587 to :613). When b68aedfdb7 is ported, its afterUpdate must run inside gate.update so no session or text generation starts on the half-updated installation.
