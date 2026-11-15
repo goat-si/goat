@@ -336,6 +336,54 @@ it.effect.each(["missing", "changed"])(
     }).pipe(Effect.provide(NodeServices.layer)),
 );
 
+it.effect.each([
+  {
+    login: "chatgpt",
+    account: { type: "chatgpt", email: "test@example.com", planType: "pro" },
+    reads: true,
+  },
+  { login: "apiKey", account: { type: "apiKey" }, reads: false },
+])("a verified OpenCodex route with a $login login reads usage: $reads", ({ account, reads }) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const fixture = yield* routeFixture({ role: "home" });
+    const home = fixture.input.execution.home;
+    const usage = JSON.stringify({
+      rateLimits: {
+        limitId: "codex",
+        planType: "pro",
+        primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: 2e9 },
+      },
+      rateLimitsByLimitId: null,
+      rateLimitResetCredits: null,
+      accountId: null,
+    });
+    const peer = ROUTED_CODEX.replace(
+      "result = { account: null, requiresOpenaiAuth: false }",
+      `result = { account: ${JSON.stringify(account)}, requiresOpenaiAuth: true }`,
+    ).replace(
+      'else if (method === "model/list")',
+      `else if (method === "account/rateLimits/read") { fs.appendFileSync(process.env.CODEX_HOME + "/usage-read", "1"); result = ${usage}; }\n  else if (method === "model/list")`,
+    );
+    // A ChatGPT login waits for the catalog Codex refreshes at startup.
+    yield* fs.writeFileString(
+      `${home}/models_cache.json`,
+      JSON.stringify({ fetched_at: "2026-11-16T00:00:00.000Z" }),
+    );
+    const binary = `${home}/usage-codex`;
+    yield* fs.writeFileString(binary, peer);
+    yield* fs.chmod(binary, 0o755);
+    const snapshot = yield* checkCodexProviderStatus(
+      { ...fixture.input.settings, binaryPath: binary },
+      undefined,
+      {},
+    ).pipe(Effect.provideService(HomeRoute.OpenCodexRoute, fixture.service));
+    assert.equal(yield* fs.exists(`${home}/usage-read`), reads);
+    if (reads) assert.equal(snapshot.usageLimits?.windows[0]?.usedPercent, 42);
+    else assert.equal(snapshot.usageLimits?.unavailable?.reason, "unsupported");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
 it.effect(
   "a failed Codex config probe never publishes the inspect-only endpoint as effective",
   () =>

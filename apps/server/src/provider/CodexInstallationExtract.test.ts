@@ -50,9 +50,9 @@ it.layer(NodeServices.layer)("Codex package extraction", (it) => {
   it.effect("stops unpacking once the package inflates past its ceiling", () =>
     Effect.gen(function* () {
       const error = yield* extractWith(1).pipe(Effect.flip);
-      expect(error.detail).toBe(
-        "The Codex package exceeded its unpacked size limit. Nothing was installed.",
-      );
+      expect(error).toMatchObject({
+        detail: "The Codex package exceeded its unpacked size limit. Nothing was installed.",
+      });
     }),
   );
 });

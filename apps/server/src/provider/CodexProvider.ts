@@ -553,10 +553,11 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
         Effect.catch(() => Effect.logDebug("Codex config read failed.").pipe(Effect.as(undefined))),
         Effect.flatMap((config) => {
           // Only a confirmed native route may probe the login's quota; a verified OpenCodex
-          // route still reads it for the pool's local account.
+          // route still reads it for the pool's local account, unless that login is an API key.
           const nativeUsage =
             !input.skipNativeUsage &&
-            (input.route?.settings.modelRoute === "opencodex" ||
+            ((input.route?.settings.modelRoute === "opencodex" &&
+              accountResponse.account?.type !== "apiKey") ||
               (config !== undefined &&
                 codexRoutesSpendNativeQuota(accountResponse, config.config)));
           // Usage is an enrichment: a failure or a slow answer degrades to "no
