@@ -838,6 +838,10 @@ export function PreviewView({
         case "refresh":
           handleRefresh();
           return;
+        case "back":
+        case "forward":
+          (action === "back" ? handleBack : handleForward)();
+          return;
         case "focus-url":
           setFocusUrlNonce((value) => (value ?? 0) + 1);
           return;

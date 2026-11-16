@@ -63,6 +63,8 @@ import {
 } from "./rightPanelSurfaceAvailability";
 import { PreviewPanelShell, type PreviewPanelMode } from "./preview/PreviewPanelShell";
 import { previewBridge } from "./preview/previewBridge";
+import { dispatchPreviewAction } from "./preview/previewActionBus";
+import { preventThumbButtonFocus, takeThumbButtonNavigation } from "./preview/thumbButtons";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import {
   type PullRequestTabStatusSeed,
@@ -791,6 +793,15 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       {...(props.widthStorageKey !== undefined ? { widthStorageKey: props.widthStorageKey } : {})}
       {...(props.defaultWidth !== undefined ? { defaultWidth: props.defaultWidth } : {})}
       {...(props.inlineSize ? { inlineSize: props.inlineSize } : {})}
+      onMouseDown={preventThumbButtonFocus}
+      onMouseUp={(event) =>
+        takeThumbButtonNavigation(
+          event,
+          props.surfaces.find((surface) => surface.id === props.activeSurfaceId)?.kind === "preview"
+            ? dispatchPreviewAction
+            : undefined,
+        )
+      }
     >
       <div
         className={cn(
