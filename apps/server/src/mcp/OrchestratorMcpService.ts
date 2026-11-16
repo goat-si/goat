@@ -126,7 +126,12 @@ import {
   type DispatchModeRefusal,
 } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
-import { delegatedTaskResultRun, runOutcome } from "../orchestration-v2/RestartBackgroundNote.ts";
+import {
+  delegatedTaskAwaitsSubagents,
+  delegatedTaskResultRun,
+  delegatedTaskRuns,
+  runOutcome,
+} from "../orchestration-v2/RestartBackgroundNote.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { delegatedTaskRevision } from "../orchestration-v2/DelegatedTaskRevision.ts";
@@ -1558,16 +1563,18 @@ const make = Effect.gen(function* () {
     const childRun = delegatedTaskRun(childControls, task);
     const terminalRun = latestTerminalResultRun(childControls, childRun);
     const progress = delegatedTaskProgress(childControls);
+    const followupRuns =
+      childRun?.delegatedTaskId === task.id ? delegatedTaskRuns(childControls, task.id) : undefined;
     const taskResultRun =
-      childRun?.delegatedTaskId === task.id
-        ? delegatedTaskResultRun(childControls.runs, task.id)
-        : progress.resultRun;
+      followupRuns === undefined ? progress.resultRun : delegatedTaskResultRun(followupRuns);
     const taskWorkState =
-      childRun?.delegatedTaskId === task.id
-        ? isTerminalTaskStatus(taskStatusForRun(taskResultRun))
-          ? "result_available"
-          : "working"
-        : progress.state;
+      followupRuns === undefined
+        ? progress.state
+        : !isTerminalTaskStatus(taskStatusForRun(taskResultRun))
+          ? "working"
+          : delegatedTaskAwaitsSubagents(followupRuns, childControls.subagents)
+            ? "waiting_for_children"
+            : "result_available";
     const resultRunIds = [
       ...new Set(
         [taskResultRun?.id, terminalRun?.id].filter((id): id is RunId => id !== undefined),

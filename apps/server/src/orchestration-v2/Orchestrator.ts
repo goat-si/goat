@@ -198,7 +198,9 @@ import {
   continuationStartRetryDelayMs,
   isRestartContinuationSource,
   runOutcome,
+  delegatedTaskAwaitsSubagents,
   delegatedTaskResultRun,
+  delegatedTaskRuns,
 } from "./RestartBackgroundNote.ts";
 import {
   isBufferedProviderNotification,
@@ -11809,13 +11811,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ) {
         return;
       }
-      const taskRuns = childControls.runs.filter((run) => run.delegatedTaskId === options.task.id);
+      const taskRuns = delegatedTaskRuns(childControls, options.task.id);
       const childRun =
         taskRuns.length === 0
           ? options.task.id === forkedFrom.nodeId
             ? options.resultRun
             : undefined
-          : delegatedTaskResultRun(taskRuns, options.task.id);
+          : delegatedTaskResultRun(taskRuns);
       if (childRun === undefined) return;
       const outcome = runOutcome(childRun);
       const terminalStatus = delegatedTaskTerminalStatus(outcome);
@@ -11875,6 +11877,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ]);
         return;
       }
+      // A follow-up ends with the subagents its turns started, as the original task does.
+      if (delegatedTaskAwaitsSubagents(taskRuns, childControls.subagents)) return;
       if (
         yield* childAwaitsRestartContinuation(
           taskRuns.length === 0 ? childControls.runs : taskRuns,
@@ -13331,9 +13335,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         { messageRoles: ["user"] },
       );
       if (taskId !== undefined) {
-        const runs = child.runs.filter((run) => run.delegatedTaskId === taskId);
-        const run = delegatedTaskResultRun(runs, taskId);
-        if (run === undefined || delegatedTaskTerminalStatus(run.status) === null) return true;
+        const runs = delegatedTaskRuns(child, taskId);
+        const run = delegatedTaskResultRun(runs);
+        if (
+          run === undefined ||
+          delegatedTaskTerminalStatus(run.status) === null ||
+          delegatedTaskAwaitsSubagents(runs, child.subagents)
+        )
+          return true;
         return yield* childAwaitsRestartContinuation(runs, run);
       }
       const progress = delegatedTaskProgress(child);
