@@ -24,6 +24,7 @@ interface ListView {
   readonly data: { readonly bots: ReadonlyArray<BotProfile> } | null;
   readonly error: string | null;
   readonly isPending: boolean;
+  readonly dataUpdatedAt?: number;
 }
 
 const state = vi.hoisted(() => ({
@@ -41,6 +42,7 @@ const state = vi.hoisted(() => ({
     data: unknown;
     error: string | null;
     isPending: boolean;
+    dataUpdatedAt?: number;
   },
   listAtom: "goat-bot-profile-list",
   listeners: new Set<() => void>(),
@@ -127,6 +129,9 @@ vi.mock(import("../../state/environments"), async (original) => ({
     useTick();
     return environmentId === state.homeId ? state.presentation : null;
   }) as never,
+  readEnvironment: ((environmentId: string) =>
+    environmentId === state.homeId ? state.presentation : null) as never,
+  readPrimaryEnvironmentId: (() => state.primaryId) as never,
   usePrimaryEnvironment: () => null,
   usePrimaryEnvironmentId: (() => {
     useTick();
@@ -203,10 +208,15 @@ vi.mock(import("@tanstack/react-router"), async (original) => ({
 
 import { GoatBotSettingsPanel } from "./GoatBotSettingsPage";
 
+// When each answer settled: one held before a refusal, one read after access returned.
+const READ_BEFORE = 1_000;
+const READ_AFTER = 3_000;
+
 const kept = (bots: ReadonlyArray<BotProfile> = [MAIN]): ListView => ({
   data: { bots },
   error: null,
   isPending: false,
+  dataUpdatedAt: READ_BEFORE,
 });
 
 /** The home's connection, the app's list and the bot list move together, as in the client. */
@@ -227,6 +237,11 @@ const CONNECTED: Connection = { phase: "connected" };
 const RECONNECTING: Connection = {
   phase: "reconnecting",
   failure: { kind: "retrying", reason: "transport", detail: "The connection closed." },
+};
+
+const BLOCKED: Connection = {
+  phase: "error",
+  failure: { kind: "blocked", reason: "authentication", detail: "Not accepted." },
 };
 
 function setup() {
@@ -387,11 +402,69 @@ it.each([
 
     await change(() => {
       state.revoked = false;
-      home(CONNECTED);
+      home(CONNECTED, { ...kept(), dataUpdatedAt: READ_AFTER });
     });
 
     await expect.element(profile(screen).getByText("🐐 Goatie")).toBeVisible();
     expect(page.getByRole("dialog").query()).toBeNull();
+  },
+);
+
+it("after a refusal, access coming back shows Loading… and nothing read before the refusal until a fresh read settles (#3504, access)", async () => {
+  setup();
+  await using screen = await render(<GoatBotSettingsPanel />);
+  await expect.element(profile(screen).getByText("🐐 Goatie")).toBeVisible();
+
+  await change(() => home(BLOCKED, { ...kept(), error: "Not accepted." }));
+  await expect
+    .element(profile(screen).getByText("GOAT on Mac Studio did not accept this device."))
+    .toBeVisible();
+  // Access is back; the query still holds its pre-refusal answer while the fresh read is pending.
+  await change(() => home(CONNECTED, { ...kept(), isPending: true }));
+
+  const row = profile(screen);
+  await expect.element(row.getByText("Loading…")).toBeVisible();
+  const section = screen.container.querySelector("section#goat-bot-profile") as HTMLElement;
+  const named = [...section.querySelectorAll("*")].map((element) =>
+    [element.getAttribute("aria-label"), element.getAttribute("title")].join(" "),
+  );
+  for (const old of ["Goatie", "🐐", "Keeps the studio running."]) {
+    expect(section.textContent).not.toContain(old);
+    expect(named.join(" ")).not.toContain(old);
+  }
+  expect(row.getByRole("button", { name: /Goatie/ }).query()).toBeNull();
+
+  await change(() =>
+    home(CONNECTED, {
+      ...kept([{ ...MAIN, purpose: "Reads again after access." }]),
+      dataUpdatedAt: READ_AFTER,
+    }),
+  );
+  await expect.element(profile(screen).getByText("🐐 Goatie")).toBeVisible();
+  await expect.element(profile(screen).getByText("Reads again after access.")).toBeVisible();
+});
+
+it.each([
+  { change: "the home dropped", connection: RECONNECTING },
+  { change: "the home refused this device", connection: BLOCKED },
+])(
+  "Save (Enter in the form) after $change reached the store, before the screen re-rendered, sends nothing (#3504, access)",
+  async ({ connection }) => {
+    setup();
+    await using screen = await render(<GoatBotSettingsPanel />);
+    await editWithDraft(screen);
+
+    // The store changes; no reader is told, so the dialog still shows Save on.
+    home(connection, kept());
+    const dialog = page.getByRole("dialog");
+    await expect.element(dialog.getByRole("button", { name: "Save" })).toBeEnabled();
+    await userEvent.type(dialog.getByRole("textbox", { name: "Name" }), "{Enter}");
+
+    expect(state.persist).not.toHaveBeenCalled();
+    await expect.element(page.getByRole("dialog").getByRole("alert")).toBeVisible();
+    await expect
+      .element(page.getByRole("dialog").getByRole("textbox", { name: "Name" }))
+      .toHaveValue("Draft name");
   },
 );
 
