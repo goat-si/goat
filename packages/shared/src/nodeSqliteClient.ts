@@ -14,7 +14,6 @@ import * as Fiber from "effect/Fiber";
 import { identity } from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import * as Schedule from "effect/Schedule";
@@ -27,7 +26,7 @@ import * as Tracer from "effect/Tracer";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as Client from "effect/sql/SqlClient";
 import type { Borrower, Connection } from "effect/sql/SqlConnection";
-import { SqlError, classifySqliteError } from "effect/sql/SqlError";
+import { SqlError } from "effect/sql/SqlError";
 import * as Statement from "effect/sql/Statement";
 import { satisfiesSemverRange } from "./semver.ts";
 import { makeReaderPool, type ReaderSlot } from "./nodeSqliteReaderPool.ts";
@@ -42,6 +41,7 @@ import {
   prepareCheckpointWriter,
 } from "./sqliteCheckpointWorker.ts";
 
+import { classifyError } from "./nodeSqliteErrors.ts";
 import { makeWriter } from "./nodeSqliteWriter.ts";
 import {
   hasLargeBinding,
@@ -154,18 +154,6 @@ const checkNodeSqliteCompat = Effect.fn("checkNodeSqliteCompat")(function () {
   }
   return Effect.void;
 });
-
-// node:sqlite supplies errcode; classifySqliteError expects errno.
-const classifyError = (cause: unknown, message: string, operation: string) => {
-  if (
-    Predicate.hasProperty(cause, "errcode") &&
-    typeof cause.errcode === "number" &&
-    !Predicate.hasProperty(cause, "errno")
-  ) {
-    Object.assign(cause, { errno: cause.errcode });
-  }
-  return classifySqliteError(cause, { message, operation });
-};
 
 interface ReaderRequest {
   readonly sql: string;
