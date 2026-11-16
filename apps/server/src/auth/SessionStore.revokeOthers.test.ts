@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId } from "@goat/contracts";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -107,5 +108,30 @@ it.effect(
       );
       expect(result).toEqual({ revokedCount: 1, kept: { desktop: 0, pen: 0 } });
       expect(yield* grantState(sessions, partial.sessionId)).toBe("UnknownSessionTokenError");
+    }).pipe(Effect.provide(layerSessionStore)),
+);
+
+it.effect(
+  "an expired desktop row the list does not show is not counted as kept, and counts again while it is connected",
+  () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStore.SessionStore;
+      const desktop = yield* sessions.issue({
+        subject: "desktop-bootstrap",
+        method: bearer,
+        ttl: Duration.seconds(1),
+      });
+      yield* TestClock.adjust(Duration.seconds(2));
+      const current = yield* sessions.issue({ subject: "settings-page" });
+
+      const unseen = yield* sessions.revokeAllExcept(current.sessionId);
+      yield* sessions.markConnected(desktop.sessionId);
+      const connected = yield* sessions.revokeAllExcept(current.sessionId);
+
+      expect(unseen).toEqual({ revokedCount: 0, kept: { desktop: 0, pen: 0 } });
+      expect(connected).toEqual({ revokedCount: 0, kept: { desktop: 1, pen: 0 } });
+      expect((yield* sessions.listActive()).map((row) => row.sessionId)).toContain(
+        desktop.sessionId,
+      );
     }).pipe(Effect.provide(layerSessionStore)),
 );

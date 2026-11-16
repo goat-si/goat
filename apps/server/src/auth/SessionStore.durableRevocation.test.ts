@@ -9,6 +9,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 import { MAIN_LISTENER, penConnection } from "./connectionContext.testkit.ts";
 import { makeCheckProbe, makeReadBarrier, makeServerAndCli } from "./DurableRevocations.testkit.ts";
+import { PersistenceSqlError } from "../persistence/Errors.ts";
 import { reauthorizeSession } from "./McpClientAuthority.ts";
 import { PEN_PROXY_SUBJECT } from "./sessionBinding.ts";
 import * as SessionStore from "./SessionStore.ts";
@@ -126,9 +127,9 @@ it.effect.each([
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-it.effect(
-  "a desktop session another process adds after Revoke others commits, and this one admits before settling, stays live",
-  () =>
+it.effect.each(["reads", "cannot read"] as const)(
+  "a desktop session another process adds after Revoke others commits, and this one admits before settling, stays live when the store %s its row",
+  (reading) =>
     Effect.gen(function* () {
       const afterCommit = yield* Ref.make<Effect.Effect<void>>(Effect.void);
       const { running, fromCli } = yield* makeServerAndCli((repository) => ({
@@ -137,6 +138,12 @@ it.effect(
           repository
             .revokeAllExcept(input)
             .pipe(Effect.tap(() => Effect.flatten(Ref.get(afterCommit)))),
+        listUnrevoked: (input) =>
+          reading === "reads"
+            ? repository.listUnrevoked(input)
+            : Effect.fail(
+                new PersistenceSqlError({ operation: "listUnrevoked", detail: "injected" }),
+              ),
       }));
       yield* Effect.gen(function* () {
         const store = yield* SessionStore.SessionStore;

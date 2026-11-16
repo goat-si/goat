@@ -263,6 +263,7 @@ it.effect(
       yield* Deferred.await(admitted);
 
       yield* sessions.revokeAllExcept(settingsPage.sessionId);
+      expect(yield* sessions.readActiveScopes(desktop.sessionId)).toEqual(desktop.scopes);
       yield* Queue.offer(updates, "after Revoke others");
 
       expect(yield* Effect.promise(() => Promise.race([message.promise, closed.promise]))).toBe(
