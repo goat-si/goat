@@ -77,15 +77,15 @@ export function routineRunState(
 }
 
 // Building an Intl formatter is costly on Hermes and a row formats every dot each minute. One
-// built without a zone keeps the device's zone of that moment, so the offset is part of its key.
+// without a zone, or whose zone was rejected, keeps the device's zone of that moment, so the
+// device offset is part of every key.
 const formatters = new Map<string, Intl.DateTimeFormat>();
 function formatter(
   locale: string | undefined,
   options: Intl.DateTimeFormatOptions,
   offset: number,
 ) {
-  const zoneKey = options.timeZone === undefined ? offset : "";
-  const key = `${String(locale ?? "")}|${JSON.stringify(options)}|${zoneKey}`;
+  const key = `${String(locale ?? "")}|${JSON.stringify(options)}|${offset}`;
   let cached = formatters.get(key);
   if (cached === undefined) {
     if (formatters.size >= 32) formatters.clear();
