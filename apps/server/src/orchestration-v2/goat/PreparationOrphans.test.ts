@@ -8,13 +8,19 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
+import * as SqlClient from "effect/sql/SqlClient";
 
+import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ThreadLaunch from "../ThreadLaunchService.ts";
 import * as ThreadManagement from "../ThreadManagementService.ts";
 import { makeHarness } from "../testkit/ThreadLaunchHarness.ts";
 import { launchInput } from "../testkit/threadLaunchInput.ts";
 import { makeClaimProbe, makeLaunchHold } from "./PreparationClaims.testkit.ts";
-import { NOT_STARTED_MESSAGE } from "./PreparationOrphans.ts";
+import {
+  NOT_STARTED_MESSAGE,
+  RECOVERY_INDEX_STATUSES,
+  SUSPECTS_QUERY,
+} from "./PreparationOrphans.ts";
 import { makeOrphanProbe, orphanRun, released, runStatus } from "./PreparationOrphans.testkit.ts";
 
 type Harness = ReturnType<typeof makeHarness>;
@@ -31,6 +37,29 @@ const passesBeforeGrace = <E, R>(probe: Probe, still: Effect.Effect<void, E, R>)
       yield* still;
     }
   });
+
+it.effect(
+  "the check's status list is the recovery index's condition, so its read searches that index",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const [index] = yield* sql`
+        SELECT sql FROM sqlite_master WHERE name = 'orchestration_v2_projection_runs_recovery_idx'
+      `;
+      const statuses = RECOVERY_INDEX_STATUSES.map((status) => `'${status}'`).join(", ");
+      assert.include(String(index?.sql), `WHERE status IN (${statuses})`);
+      const plan = yield* sql.unsafe<{ readonly detail: string }>(
+        `EXPLAIN QUERY PLAN ${SUSPECTS_QUERY}`,
+      );
+      assert.deepEqual(
+        plan.map((row) => row.detail),
+        [
+          "SEARCH orchestration_v2_projection_runs USING INDEX orchestration_v2_projection_runs_recovery_idx (status=?)",
+          "USE TEMP B-TREE FOR ORDER BY",
+        ],
+      );
+    }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
 
 it.effect(
   "a run left preparing with nothing preparing it is failed between the grace period and one interval later, says preparation did not finish, and Retry prepares it",

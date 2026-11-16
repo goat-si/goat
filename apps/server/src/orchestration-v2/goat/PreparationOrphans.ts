@@ -25,7 +25,7 @@ import { PREPARATION_NOT_STARTED_CODE } from "./PreparationFailure.ts";
  */
 export const PREPARATION_GRACE = Duration.minutes(3);
 export const PASS_INTERVAL = Duration.minutes(1);
-/** Runs beyond these, by thread id, wait until earlier ones leave "preparing". */
+/** Oldest first, so later passes reach newer runs as older ones leave "preparing". */
 const PASS_LIMIT = 200;
 
 export const NOT_STARTED_MESSAGE =
@@ -38,18 +38,22 @@ export interface Suspect {
 
 export type SuspectRead = Effect.Effect<ReadonlyArray<Suspect>, SqlError.SqlError>;
 
-// The status list repeats the partial index's condition word for word: with status = 'preparing'
-// alone SQLite does not see that the index applies and scans the table. INDEXED BY fails the
-// statement loudly if that index ever changes.
+/** The condition of orchestration_v2_projection_runs_recovery_idx (RecoveryIndexes.ts). */
+export const RECOVERY_INDEX_STATUSES = ["queued", "preparing", "starting", "running", "waiting"];
+
+// The literal status list repeats the partial index's condition: with status = 'preparing' alone,
+// or with bound values, SQLite does not see that the index applies and scans the table. INDEXED BY
+// fails the statement loudly if that index ever changes. The sort runs over preparing rows only.
+export const SUSPECTS_QUERY = `
+  SELECT run_id, thread_id FROM orchestration_v2_projection_runs
+    INDEXED BY orchestration_v2_projection_runs_recovery_idx
+  WHERE status IN (${RECOVERY_INDEX_STATUSES.map((status) => `'${status}'`).join(", ")})
+    AND status = 'preparing'
+  ORDER BY requested_at, run_id
+  LIMIT ${PASS_LIMIT}`;
+
 const readSuspects = (sql: SqlClient.SqlClient): SuspectRead =>
-  sql<{ readonly run_id: string; readonly thread_id: string }>`
-    SELECT run_id, thread_id FROM orchestration_v2_projection_runs
-      INDEXED BY orchestration_v2_projection_runs_recovery_idx
-    WHERE status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
-      AND status = 'preparing'
-    ORDER BY thread_id
-    LIMIT ${PASS_LIMIT}
-  `.pipe(
+  sql.unsafe<{ readonly run_id: string; readonly thread_id: string }>(SUSPECTS_QUERY).pipe(
     Effect.map((rows) =>
       rows.map((row) => ({
         runId: RunId.make(row.run_id),
