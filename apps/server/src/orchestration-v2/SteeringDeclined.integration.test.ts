@@ -117,10 +117,6 @@ it.effect.each(["complete", "stop-before-decline", "stop-after-decline", "queued
             [["provider-turn.steer", "succeeded"]],
           );
           assert.equal(started.length, 1);
-          if (timing === "stop-before-decline") {
-            assert.isUndefined(queued);
-            return;
-          }
           assert.equal(queued?.status, "queued");
           assert.equal(queued?.userMessageId, messageId);
           assert.isFalse(
@@ -129,6 +125,11 @@ it.effect.each(["complete", "stop-before-decline", "stop-after-decline", "queued
             ),
             "a declined steer waiting in the queue must not appear delivered",
           );
+          if (timing === "stop-before-decline") {
+            // Stop already held the queue, so the follow-up waits there for the person to resume it.
+            assert.equal(queued?.queueHeld, true);
+            return;
+          }
           if (timing === "queued-model") {
             assert.deepEqual(queued?.modelSelection, steerSelection);
             assert.deepEqual(

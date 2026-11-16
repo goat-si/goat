@@ -5142,6 +5142,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
   ) {
     let projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+    // Stop already held the queue for this run, so its declined steer waits there instead.
+    let steerFollowUpAfterStop = false;
     if (command.steerFollowUpOfRunId !== undefined) {
       const source = projection.runs.find((run) => run.id === command.steerFollowUpOfRunId);
       if (
@@ -5151,8 +5153,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           (message) => message.id === command.messageId && message.runId === source.id,
         ) ||
         projection.thread.archivedAt !== null ||
-        projection.thread.deletedAt !== null ||
-        (yield* stopReachedRun(command, command.threadId, source.id))
+        projection.thread.deletedAt !== null
       ) {
         yield* emit(
           events,
@@ -5165,6 +5166,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
         return;
       }
+      steerFollowUpAfterStop = yield* stopReachedRun(command, command.threadId, source.id);
     }
     const admissionSelection = command.modelSelection ?? projection.thread.modelSelection;
     const admissionAdapter = yield* providerAdapters
@@ -5988,6 +5990,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         activeAttemptId: attemptId,
         status: "queued",
         ...(worktreeMissingRun !== undefined ||
+        steerFollowUpAfterStop ||
         (heldRunsToRelease.length === 0 &&
           queueIsHeld &&
           !wakeSkipsHold &&
