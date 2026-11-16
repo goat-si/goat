@@ -11,6 +11,8 @@ import {
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { dispatchFailure } from "../mcp/threadAccess.ts";
+import { wakeThread } from "../mcp/threadWake.ts";
+import { dispatchCommand } from "./ThreadMessageIntake.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
@@ -38,10 +40,16 @@ const layerFor = (refusal: string | undefined, dispatched: Array<string>) =>
               id: threadId,
               projectId,
               deletedAt: null,
+              archivedAt: null,
+              lineage: { parentThreadId: null, relationshipToParent: null },
               worktreePath: "/elsewhere/feature",
               branch: "feature",
               modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test" },
             },
+            runs: [],
+            messages: [],
+            providerTurns: [],
+            turnItems: [],
           } as unknown as OrchestrationV2ThreadProjection),
         dispatch: (command) =>
           Effect.sync(() => {
@@ -84,27 +92,97 @@ const send = (
     });
   });
 
-it.effect(
-  "a send to a thread whose missing worktree GOAT cannot restore is refused before it is stored",
-  () => {
-    const dispatched: Array<string> = [];
-    return Effect.gen(function* () {
-      const error = yield* Effect.flip(send("send:unrestorable"));
-      expect(error).toBeInstanceOf(
-        ThreadManagementService.ThreadManagementWorktreeUnrestorableError,
-      );
-      expect(dispatched).toEqual([]);
-      const message = `${REFUSAL} The message was not sent.`;
-      // An agent's MCP send fails with this code and text.
-      expect(dispatchFailure(error as never)).toMatchObject({
-        code: "thread_not_sendable",
-        message,
-      });
-      // Clients, older ones included, show the text the dispatch error carries.
-      expect(userFacingDispatchErrorMessage(error)).toBe(message);
-    }).pipe(Effect.provide(layerFor(REFUSAL, dispatched)));
-  },
-);
+const assertRefused = (error: unknown, dispatched: ReadonlyArray<string>) =>
+  Effect.sync(() => {
+    expect(error).toBeInstanceOf(ThreadManagementService.ThreadManagementWorktreeUnrestorableError);
+    expect(dispatched).toEqual([]);
+    const message = `${REFUSAL} The message was not sent.`;
+    // An agent's MCP send fails with this code and text.
+    expect(dispatchFailure(error as never)).toMatchObject({ code: "thread_not_sendable", message });
+    // Clients, older ones included, show the text the dispatch error carries.
+    expect(userFacingDispatchErrorMessage(error)).toBe(message);
+  });
+
+it.effect("a person's send through the public intake is refused before it is stored", () => {
+  const dispatched: Array<string> = [];
+  return Effect.gen(function* () {
+    // Refused before any attachment is claimed, so the intake's file services are never reached.
+    const intake = dispatchCommand as unknown as (
+      command: Parameters<typeof dispatchCommand>[0],
+    ) => Effect.Effect<
+      Effect.Success<ReturnType<typeof dispatchCommand>>,
+      Effect.Error<ReturnType<typeof dispatchCommand>>,
+      ThreadManagementService.ThreadManagementService
+    >;
+    const error = yield* Effect.flip(
+      intake({
+        type: "message.dispatch",
+        commandId: CommandId.make("send:person"),
+        threadId,
+        messageId: MessageId.make("message:send:person"),
+        text: "Continue",
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "user",
+        creationSource: "mobile",
+      }),
+    );
+    yield* assertRefused(error, dispatched);
+  }).pipe(Effect.provide(layerFor(REFUSAL, dispatched)));
+});
+
+it.effect("an agent's send through the MCP send path is refused before it is stored", () => {
+  const dispatched: Array<string> = [];
+  return Effect.gen(function* () {
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    const error = yield* Effect.flip(
+      threads.sendToThread({
+        projectId,
+        commandId: CommandId.make("send:agent"),
+        threadId,
+        messageId: MessageId.make("message:send:agent"),
+        text: "Continue",
+        attachments: [],
+        mode: "queue",
+        createdBy: "agent",
+        creationSource: "mcp",
+        refuseUnrestorableWorktree: true,
+      }),
+    );
+    yield* assertRefused(error, dispatched);
+  }).pipe(Effect.provide(layerFor(REFUSAL, dispatched)));
+});
+
+// Server-originated sends behave as before: stored once, and the turn fails where a person sees it.
+it.effect("a launch-watch wake and a routed decision to such a thread are stored, once", () => {
+  const dispatched: Array<string> = [];
+  return Effect.gen(function* () {
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    yield* wakeThread(threads, threadId, {
+      commandId: CommandId.make("wake:launch-watch"),
+      messageId: MessageId.make("message:wake:launch-watch"),
+      text: "Your launch finished.",
+      notification: { source: { kind: "background_task" }, outcome: "completed", summary: "Done" },
+    } as never);
+    yield* threads.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("route:decision"),
+      threadId,
+      messageId: MessageId.make("message:route:decision"),
+      text: "A child thread asks you to decide.",
+      notification: {
+        source: { kind: "background_task" },
+        outcome: "updated",
+        summary: "Decision from a child thread",
+      },
+      attachments: [],
+      dispatchMode: { type: "queue_after_active" },
+      createdBy: "agent",
+      creationSource: "server",
+    });
+    expect(dispatched).toEqual(["wake:launch-watch", "route:decision"]);
+  }).pipe(Effect.provide(layerFor(REFUSAL, dispatched)));
+});
 
 it.effect("a live steer starts no turn and is not refused", () => {
   const dispatched: Array<string> = [];

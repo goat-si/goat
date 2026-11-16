@@ -40,6 +40,8 @@ export interface ThreadManagementSendInput {
   readonly targetRunId?: RunId;
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
+  /** Set by the agent send tools: refuse a thread whose missing worktree cannot be restored. */
+  readonly refuseUnrestorableWorktree?: boolean;
 }
 
 export interface ThreadManagementSendResult {
