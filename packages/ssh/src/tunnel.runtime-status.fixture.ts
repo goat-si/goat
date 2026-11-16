@@ -1,11 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert } from "@effect/vitest";
-import { ORCHESTRATION_PROTOCOL_VERSION, type SshHostResult } from "@goat/contracts";
+import { ORCHESTRATION_PROTOCOL_VERSION, SshHostProviders, SshHostResult } from "@goat/contracts";
 import * as NetService from "@goat/shared/Net";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
@@ -19,6 +20,9 @@ import {
   testNetService,
   isRemoteLaunch,
 } from "./tunnel.fixture.ts";
+
+export const decodeProviders = Schema.decodeEffect(SshHostProviders);
+export const decodeSshHostResult = Schema.decodeEffect(SshHostResult);
 
 /** A scripted SSH host for runtime status: probe answers, launches, forwards and readiness. */
 export const signals = (version: string) => ({

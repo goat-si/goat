@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { ORCHESTRATION_PROTOCOL_VERSION, SshHostResult, SshHostProviders } from "@goat/contracts";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { cliArchiveFileName } from "@goat/shared/cliRelease";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NetService from "@goat/shared/Net";
@@ -12,7 +12,6 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
-import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
@@ -27,10 +26,9 @@ import {
 } from "./tunnel.fixture.ts";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 
-const decodeProviders = Schema.decodeEffect(SshHostProviders);
-const decodeSshHostResult = Schema.decodeEffect(SshHostResult);
-
 import {
+  decodeProviders,
+  decodeSshHostResult,
   fixture,
   retained,
   signals,

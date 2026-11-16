@@ -54,6 +54,7 @@ import {
 import { nextVersion, shell, fixture } from "./tunnel.runnerSwitch.fixture.ts";
 import { killGroupWithTestOwner } from "./testParentLifetime.fixture.ts";
 import { makeEnsureFlightFixture } from "./tunnel.ensure-flight.fixture.ts";
+import { MACOS_BIND_PRELOAD } from "./tunnel.core.fixture.ts";
 
 // Archive acquisition stays local to these transport doubles.
 beforeEach(() => vi.stubGlobal("fetch", async () => new Response(null, { status: 404 })));
@@ -2788,18 +2789,6 @@ fi
     );
   },
 );
-
-// On macOS, Node can bind 127.0.0.1:<port> while another process (such as the
-// desktop app with network access on) listens on *:<port>. Linux refuses that
-// bind unless both sockets set SO_REUSEPORT, so on Linux the preload adds it to
-// the picker's probe and the holder sets it too. macOS needs neither.
-const MACOS_BIND_PRELOAD = `const net = require("node:net");
-const listen = net.Server.prototype.listen;
-net.Server.prototype.listen = function (port, host, callback) {
-  if (typeof port !== "number" || typeof host !== "string") return listen.apply(this, arguments);
-  return listen.call(this, { port, host, reusePort: true }, callback);
-};
-`;
 
 describe("remote port picker", () => {
   const hostPlatform = HostProcess.Platform.defaultValue();
