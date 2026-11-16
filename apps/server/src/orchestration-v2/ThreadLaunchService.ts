@@ -1421,7 +1421,7 @@ const make = Effect.gen(function* () {
     });
     yield* prepareRun(input);
     return dispatched;
-  });
+  }, Effect.uninterruptible);
 
   const scheduleRunPreparation = Effect.fn("ThreadLaunchService.scheduleRunPreparation")(function* (
     input: ThreadLaunchPreparationInput,
