@@ -631,13 +631,15 @@ async function refusableRoster(environmentId: string) {
   const stop = followKeptPerComputerCatalog(registry);
   const container = document.createElement("div");
   const root = createRoot(container);
-  await act(async () =>
-    root.render(
-      <RegistryContext value={registry}>
-        <MobileBotRoster selectedKey={null} onOpenBot={() => {}} />
-      </RegistryContext>,
-    ),
-  );
+  const draw = () =>
+    act(async () =>
+      root.render(
+        <RegistryContext value={registry}>
+          <MobileBotRoster selectedKey={null} onOpenBot={() => {}} />
+        </RegistryContext>,
+      ),
+    );
+  await draw();
   const members = () =>
     state.members as {
       onLongPressBot: (entry: object) => void;
@@ -662,6 +664,11 @@ async function refusableRoster(environmentId: string) {
     container,
     members,
     link,
+    /** Home's selection moves the roster to another computer, which this phone may read. */
+    moveTo: (other: string) => {
+      state.roster.environmentId = other;
+      return draw();
+    },
     answerList: (result: AsyncResult.AsyncResult<unknown, unknown>) =>
       act(async () => registry.set(botListAtom, result)),
     longPress: () => act(async () => members().onLongPressBot({ kind: "member", profile: member })),
@@ -719,4 +726,29 @@ it("a Restore confirmation opened before a refusal restores nothing when pressed
   await view.link({ phase: "error", failure: { kind: "blocked", reason: "authentication" } });
   await view.choose("Restore");
   expect(state.manage.restore).not.toHaveBeenCalled();
+});
+
+it("an Edit sheet opened on one computer closes once Home moves the roster to another and the first refuses", async () => {
+  await using view = await refusableRoster("env-a");
+  await view.longPress();
+  await view.choose("Edit");
+  expect(view.container.textContent).toContain("Research");
+  await view.moveTo("env-b");
+  await view.link({ phase: "error", failure: { kind: "blocked", reason: "authentication" } });
+  expect(view.container.textContent).not.toContain("Research");
+});
+
+it("a menu opened on one computer does nothing once Home has moved the roster to another", async () => {
+  await using view = await refusableRoster("env-a");
+  await view.longPress();
+  await view.moveTo("env-b");
+  await view.choose("Hide");
+  expect(state.manage.hide).not.toHaveBeenCalled();
+  await view.moveTo("env-a");
+  await view.longPress();
+  await view.moveTo("env-b");
+  const menus = state.alert.mock.calls.length;
+  await view.choose("Delete");
+  // No confirmation follows: the Delete pressed on the other computer opened nothing.
+  expect(state.alert.mock.calls.length).toBe(menus);
 });
