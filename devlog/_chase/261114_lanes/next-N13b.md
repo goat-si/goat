@@ -4,6 +4,8 @@ Lane branch: `chase/t3-261114-n13b-web-panels`, head `5fac7e3776859269fe1ab5ce52
 
 Merge: 5fac7e3776 merged into the integration branch at 126a321f9f (`chase/t3-261114-next`, 2026-11-17; after N13a at f03a6481b7; git's own result, no conflict).
 
+Merge: 7e6272d52c merged into the integration branch at 5c798a3072 (test-only P3-1 follow-up on 5fac7e3776).
+
 ## Rows and commits
 
 | row             | upstream                          | GOAT commit                                                                            | result                                                                                                                                                                                                                             |
