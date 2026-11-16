@@ -5,13 +5,15 @@ import type { ThreadFeedHistoryControls } from "./ThreadFeed";
 import {
   finishThreadMessageJump,
   pendingThreadMessageJump,
+  pendingThreadMessageJumpId,
   subscribeThreadMessageJump,
 } from "./threadMessageJump";
 
 /**
  * A palette message result opens the thread at that message: earlier history loads until the
  * message is in the feed, which then scrolls to it. The jump makes its own attempt whatever error
- * is showing, and ends when its own load fails or there is no more history.
+ * is showing, and ends when its own load fails or there is no more history; an earlier pick's load
+ * settling never ends a later pick.
  */
 export function useThreadMessageJumpLoading(input: {
   readonly threadKey: string;
@@ -22,6 +24,9 @@ export function useThreadMessageJumpLoading(input: {
   const { threadKey, history } = input;
   const jumpMessageId: MessageId | null = useSyncExternalStore(subscribeThreadMessageJump, () =>
     pendingThreadMessageJump(threadKey),
+  );
+  const jumpId = useSyncExternalStore(subscribeThreadMessageJump, () =>
+    pendingThreadMessageJumpId(threadKey),
   );
   const jumpMessageLoaded =
     jumpMessageId !== null &&
@@ -34,10 +39,11 @@ export function useThreadMessageJumpLoading(input: {
   );
   // History down to the message in one request; another page if it is not there yet.
   const loadEarlierForJump = useEffectEvent(() => {
-    if (jumpMessageId === null || !history) return;
+    if (jumpMessageId === null || jumpId === null || !history) return;
+    const attempt = jumpId;
     attemptsStarted.current.set(threadKey, (attemptsStarted.current.get(threadKey) ?? 0) + 1);
     void history.onLoadThrough(jumpMessageId).then((loaded) => {
-      if (!loaded) finishThreadMessageJump(threadKey);
+      if (!loaded) finishThreadMessageJump(threadKey, attempt);
       setAttemptsSettled((settled) =>
         new Map(settled).set(threadKey, (settled.get(threadKey) ?? 0) + 1),
       );
@@ -46,12 +52,12 @@ export function useThreadMessageJumpLoading(input: {
   const ready = input.ready;
   // oxlint-disable-next-line goat/react-effect-budget -- Loads history until the jump's message is in the feed, then ends the jump.
   useEffect(() => {
-    if (jumpMessageId === null || jumpMessageLoaded || !ready) return;
+    if (jumpMessageId === null || jumpId === null || jumpMessageLoaded || !ready) return;
     const inFlight =
       (attemptsStarted.current.get(threadKey) ?? 0) !== (attemptsSettled.get(threadKey) ?? 0);
     if (history?.loading || inFlight) return;
     if (!history?.hasMoreHistory) {
-      finishThreadMessageJump(threadKey);
+      finishThreadMessageJump(threadKey, jumpId);
       return;
     }
     loadEarlierForJump();
@@ -59,6 +65,7 @@ export function useThreadMessageJumpLoading(input: {
     ready,
     history?.hasMoreHistory,
     history?.loading,
+    jumpId,
     jumpMessageId,
     jumpMessageLoaded,
     attemptsSettled,

@@ -52,10 +52,12 @@ export function useThreadHistoryControls(
           ? { threadId: thread.id }
           : { threadId: thread.id, throughEntryId },
     }).then((result) => {
+      const latest = latestPressByThread.current.get(key) === press;
+      if (latest) latestPressByThread.current.delete(key);
       if (result._tag === "Success")
         return result.value._tag === "loaded" || result.value._tag === "busy";
       if (isAtomCommandInterrupted(result)) return false;
-      if (latestPressByThread.current.get(key) !== press || showing.current !== key) return false;
+      if (!latest || showing.current !== key) return false;
       const message = commandFailureText(result, "Could not load earlier activity.");
       setFailure({ key, message });
       if (Platform.OS === "ios") AccessibilityInfo.announceForAccessibility(message);
