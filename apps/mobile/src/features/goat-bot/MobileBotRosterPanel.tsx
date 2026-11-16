@@ -129,7 +129,9 @@ export function MobileBotRoster(props: {
         now.visible &&
         !now.presenting &&
         whereNow(navigation) === tapped &&
-        now.environmentId === sentTo
+        now.environmentId === sentTo &&
+        // The store when the answer arrives: a refusal not yet rendered opens nothing.
+        isComputerReadable(registry, sentTo)
       )
         onOpenBot({ kind: "member", profile: bot });
     };
@@ -218,7 +220,12 @@ export function MobileBotRoster(props: {
                           : `Unavailable while ${roster.computerLabel ?? "its computer"} is offline`,
                     }),
                 onNewBot: () => {
-                  if (environmentId !== null && listed !== null)
+                  // Read the store when pressed: a refusal not yet rendered starts nothing.
+                  if (
+                    environmentId !== null &&
+                    listed !== null &&
+                    isComputerReadable(registry, environmentId)
+                  )
                     startNewBot(environmentId, listed, create, openIfStillHere(), mount, uuidv4);
                 },
                 onLongPressBot: askAbout,
@@ -245,7 +252,11 @@ export function MobileBotRoster(props: {
             <MobileNewBotStatus
               operation={operation}
               created={created}
-              onRetry={() => retryNewBot(environmentId, create, openIfStillHere(), mount)}
+              onRetry={() => {
+                // Read the store when pressed: a refusal not yet rendered sends nothing.
+                if (isComputerReadable(registry, environmentId))
+                  retryNewBot(environmentId, create, openIfStillHere(), mount);
+              }}
               onDismiss={() => dismissNewBot(environmentId)}
               onOpen={(bot) => onOpenBot({ kind: "member", profile: bot })}
               onDismissCreated={(bot) => dismissCreatedBot(environmentId, bot.botId)}
