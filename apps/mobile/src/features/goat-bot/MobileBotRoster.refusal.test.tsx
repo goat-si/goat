@@ -57,6 +57,11 @@ const state = vi.hoisted(() => ({
   rosterError: null as string | null,
   mainUnreadable: false,
   view: { preview: undefined as string | undefined, mainEnvironmentId: null as string | null },
+  // The open callbacks the panel last handed the list.
+  open: null as null | {
+    onOpenBot: (bot: object) => void;
+    onOpenTask?: (bot: object, taskId: string) => void;
+  },
 }));
 vi.mock("@react-navigation/native", () => ({
   useNavigation: () => ({ getState: () => state.navState, getParent: () => undefined }),
@@ -162,10 +167,13 @@ vi.mock("./MobileBotRosterView", () => ({
     mainUnreadable?: boolean;
     preview?: string;
     mainEnvironmentId?: string | null;
+    onOpenBot: (bot: object) => void;
+    onOpenTask?: (bot: object, taskId: string) => void;
   }) => {
     state.members = props.members ?? null;
     state.mainUnreadable = props.mainUnreadable === true;
     state.view = { preview: props.preview, mainEnvironmentId: props.mainEnvironmentId ?? null };
+    state.open = { onOpenBot: props.onOpenBot, onOpenTask: props.onOpenTask };
     return (
       <>
         {props.header}
@@ -246,11 +254,17 @@ async function refusableRoster(environmentId: string) {
   const root = createRoot(container);
   let visible = true;
   const opened = vi.fn();
+  const openedTask = vi.fn();
   const draw = () =>
     act(async () =>
       root.render(
         <RegistryContext value={registry}>
-          <MobileBotRoster selectedKey={null} onOpenBot={opened} visible={visible} />
+          <MobileBotRoster
+            selectedKey={null}
+            onOpenBot={opened}
+            onOpenTask={openedTask}
+            visible={visible}
+          />
         </RegistryContext>,
       ),
     );
@@ -278,7 +292,9 @@ async function refusableRoster(environmentId: string) {
   return {
     container,
     opened,
+    openedTask,
     members,
+    open: () => state.open ?? { onOpenBot: () => {} },
     link,
     /** The connection changes in the store; React has not rendered it yet. */
     linkNow: setLink,
@@ -335,19 +351,19 @@ it("closes an open Edit sheet, and the bot's name in it, once the bot list or th
   expect(view.container.textContent).not.toContain("Research");
 });
 
-it("an action menu opened before a refusal does nothing when a choice is pressed after it", async () => {
+it("an action menu opened before a refusal does nothing when a choice is pressed after it, and no new one opens", async () => {
   await using view = await refusableRoster("env-menu");
   await view.longPress();
   await view.link({ phase: "error", failure: { kind: "blocked", reason: "permission" } });
+  const menus = state.alert.mock.calls.length;
   await view.choose("Hide");
   expect(state.manage.hide).not.toHaveBeenCalled();
-  await view.longPress();
   await view.choose("Edit");
   expect(view.container.textContent).not.toContain("Research");
-  await view.longPress();
-  const menus = state.alert.mock.calls.length;
   await view.choose("Delete");
-  // No confirmation follows: the Delete pressed after the refusal opened nothing.
+  // No confirmation follows, and a long press after the refusal opens no menu.
+  expect(state.alert.mock.calls.length).toBe(menus);
+  await view.longPress();
   expect(state.alert.mock.calls.length).toBe(menus);
 });
 
@@ -499,4 +515,93 @@ it("a New bot refused before it renders claims no slot: pressed again once reada
   await view.answerList(AsyncResult.success({ bots: [] }));
   await act(async () => (state.members as { onNewBot: () => void }).onNewBot());
   expect(state.manage.create).toHaveBeenCalledOnce();
+});
+type Refusable = Awaited<ReturnType<typeof refusableRoster>>;
+/** A control the roster hands out: made ready on a readable roster, then pressed; and what it does. */
+type Control = readonly [
+  name: string,
+  ready: (view: Refusable) => Promise<() => unknown>,
+  acted: (view: Refusable, menus: number) => void,
+];
+const controls: ReadonlyArray<Control> = [
+  [
+    "a member row",
+    async (view) => {
+      const { onOpenBot } = view.open();
+      return () => onOpenBot({ kind: "member", profile: member });
+    },
+    (view) =>
+      expect(view.opened).toHaveBeenCalledExactlyOnceWith({ kind: "member", profile: member }),
+  ],
+  [
+    "a Needs you ask",
+    async (view) => {
+      const { onOpenTask } = view.open();
+      expect(onOpenTask).toBeDefined();
+      return () => onOpenTask?.({ kind: "member", profile: member }, "task-1");
+    },
+    (view) =>
+      expect(view.openedTask).toHaveBeenCalledExactlyOnceWith(
+        { kind: "member", profile: member },
+        "task-1",
+      ),
+  ],
+  [
+    "a created bot's row",
+    async (view) => {
+      state.manage.create.mockResolvedValueOnce(stored("scout", "Scout"));
+      await act(async () => (state.members as { onNewBot: () => void }).onNewBot());
+      view.opened.mockClear();
+      const row = [...view.container.querySelectorAll("button")].find(
+        (button) => button.textContent === "Scout",
+      );
+      expect(row).toBeDefined();
+      return () => row?.click();
+    },
+    (view) =>
+      expect(view.opened).toHaveBeenCalledExactlyOnceWith({
+        kind: "member",
+        profile: stored("scout", "Scout"),
+      }),
+  ],
+  [
+    "a long press",
+    async (view) => {
+      const { onLongPressBot } = view.members();
+      return () => onLongPressBot({ kind: "member", profile: member });
+    },
+    (_view, menus) => expect(state.alert.mock.calls.length).toBe(menus + 1),
+  ],
+  [
+    "Restore",
+    async (view) => {
+      const { onRestoreDeleted } = view.members();
+      return () => onRestoreDeleted({ ...member, state: "deleted" });
+    },
+    (_view, menus) => expect(state.alert.mock.calls.length).toBe(menus + 1),
+  ],
+];
+
+it.each(controls)(
+  "%s opens nothing once a bot-list refusal reaches the store, before it renders",
+  async (_name, ready) => {
+    await using view = await creatableRoster("env-press-refused");
+    const press = await ready(view);
+    const menus = state.alert.mock.calls.length;
+    const creates = state.manage.create.mock.calls.length;
+    view.answerListNow(refusedList);
+    await act(async () => press());
+    expect(view.opened).not.toHaveBeenCalled();
+    expect(view.openedTask).not.toHaveBeenCalled();
+    expect(state.alert.mock.calls.length).toBe(menus);
+    expect(state.manage.create.mock.calls.length).toBe(creates);
+  },
+);
+
+it.each(controls)("%s still acts while its computer may be read", async (_name, ready, acted) => {
+  await using view = await creatableRoster("env-press-readable");
+  const press = await ready(view);
+  const menus = state.alert.mock.calls.length;
+  await act(async () => press());
+  acted(view, menus);
 });
