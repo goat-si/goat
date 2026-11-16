@@ -111,6 +111,11 @@ in a fresh session that doesn't see earlier runs, so the thread stays readable
 without the agent's context growing. Moving such a task to another project starts
 a new thread there on its next run.
 
+An older GOAT runs a fresh-session task in its thread with the earlier context, and
+starts a new thread on every run for a one-thread task that hasn't run yet. Nothing
+is lost: after you update again, both run as you chose. Saving the task in the older
+version changes its destination, so set **Destination** again after you update.
+
 Deleting a thread also deletes tasks that post into that thread. Tasks that start
 a new thread on each run survive deletion of their previous threads.
 
