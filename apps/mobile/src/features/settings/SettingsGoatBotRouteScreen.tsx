@@ -262,7 +262,9 @@ function GoatBotModelSection({
   return (
     <>
       {connected ? null : (
-        <Text className="text-foreground-muted">{`Changes need ${computer} connected.`}</Text>
+        <Text className="text-foreground-muted">
+          {`Last read from ${computer}, so these may be out of date. Changes need it connected.`}
+        </Text>
       )}
       <SettingsSection title="Messages">
         <SettingsSwitchRow
