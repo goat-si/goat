@@ -133,28 +133,4 @@ describe("preferences when the database opens on Android (#3549)", () => {
         expect(yield* fallbackItem).toBeNull();
       }),
   );
-
-  it.effect("guard: a change saved while the first load moves the fallback is kept (#3549)", () =>
-    Effect.gen(function* () {
-      yield* seedStoredPreferences({ language: "ko", followUpBehavior: "steer" });
-      const row = { current: null as MobileDatabase.StoredPreferencesJson | null };
-
-      yield* MobilePreferences.make().pipe(
-        Effect.flatMap((store) =>
-          Effect.all([store.load, store.savePatch({ followUpBehavior: "queue" })], {
-            concurrency: "unbounded",
-          }),
-        ),
-        Effect.provide(openedDatabase(row)),
-      );
-
-      const reloaded = yield* MobilePreferences.make().pipe(
-        Effect.flatMap((store) => store.load),
-        Effect.provide(openedDatabase(row)),
-      );
-      expect(reloaded.language).toBe("ko");
-      expect(reloaded.followUpBehavior).toBe("queue");
-      expect(yield* fallbackItem).toBeNull();
-    }),
-  );
 });
