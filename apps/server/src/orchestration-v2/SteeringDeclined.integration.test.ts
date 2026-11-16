@@ -19,7 +19,9 @@ const composerSelection = {
 
 type EarlierInterrupt =
   | { readonly kind: "run"; readonly holdQueue: boolean; readonly reason?: string }
-  | { readonly kind: "thread"; readonly reason: string };
+  | { readonly kind: "thread"; readonly reason: string }
+  // Ingestion ends the run outside the effect queue, so no run is active at dispatch.
+  | { readonly kind: "run ends" };
 const agentInterrupt: EarlierInterrupt = {
   kind: "run",
   holdQueue: false,
@@ -52,19 +54,22 @@ const INTERRUPTS_BEFORE_DECLINE = {
     interrupts: [personStop, agentInterrupt],
     holds: true,
   },
-  // Ingestion ends the run outside the effect queue, so no run is active at dispatch.
   "stop, then the run ends before decline": {
-    interrupts: [personStop],
+    interrupts: [personStop, { kind: "run ends" }],
     holds: true,
-    endsRun: true,
+  },
+  // A holding thread.stop that finds the run ended reaches it only through markStoppedRun.
+  "agent interrupt, the run ends, then an agent thread.stop before decline": {
+    interrupts: [
+      agentInterrupt,
+      { kind: "run ends" },
+      { kind: "thread", reason: "Stopped by an agent: done" },
+    ],
+    holds: true,
   },
 } satisfies Record<
   string,
-  {
-    readonly interrupts: ReadonlyArray<EarlierInterrupt>;
-    readonly holds: boolean;
-    readonly endsRun?: true;
-  }
+  { readonly interrupts: ReadonlyArray<EarlierInterrupt>; readonly holds: boolean }
 >;
 type InterruptTiming = keyof typeof INTERRUPTS_BEFORE_DECLINE;
 const isInterruptTiming = (timing: string): timing is InterruptTiming =>
@@ -144,32 +149,30 @@ it.effect.each([
             });
             yield* Fiber.join(ended);
           });
-          const interrupts = Effect.forEach(
+          beforeDecline = Effect.forEach(
             INTERRUPTS_BEFORE_DECLINE[timing].interrupts,
             (interrupt: EarlierInterrupt, index) =>
-              orchestrator.dispatch(
-                interrupt.kind === "thread"
-                  ? {
-                      type: "thread.stop",
-                      commandId: CommandId.make(`earlier-interrupt-${index}`),
-                      threadId,
-                      reason: interrupt.reason,
-                      stopDelegatedTasks: false,
-                    }
-                  : {
-                      type: "run.interrupt",
-                      commandId: CommandId.make(`earlier-interrupt-${index}`),
-                      threadId,
-                      runId: first.runId,
-                      ...(interrupt.holdQueue ? { holdQueue: true } : {}),
-                      ...(interrupt.reason === undefined ? {} : { reason: interrupt.reason }),
-                    },
-              ),
+              interrupt.kind === "run ends"
+                ? Effect.scoped(endRun)
+                : orchestrator.dispatch(
+                    interrupt.kind === "thread"
+                      ? {
+                          type: "thread.stop",
+                          commandId: CommandId.make(`earlier-interrupt-${index}`),
+                          threadId,
+                          reason: interrupt.reason,
+                          stopDelegatedTasks: false,
+                        }
+                      : {
+                          type: "run.interrupt",
+                          commandId: CommandId.make(`earlier-interrupt-${index}`),
+                          threadId,
+                          runId: first.runId,
+                          ...(interrupt.holdQueue ? { holdQueue: true } : {}),
+                          ...(interrupt.reason === undefined ? {} : { reason: interrupt.reason }),
+                        },
+                  ),
           ).pipe(Effect.asVoid, Effect.orDie);
-          beforeDecline =
-            "endsRun" in INTERRUPTS_BEFORE_DECLINE[timing]
-              ? interrupts.pipe(Effect.andThen(Effect.scoped(endRun)), Effect.orDie)
-              : interrupts;
         }
         const steerSelection = { ...runSelection, model: "steer-model" };
         if (timing === "queued-model") {

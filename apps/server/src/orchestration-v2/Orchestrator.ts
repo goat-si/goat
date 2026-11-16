@@ -9626,10 +9626,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
   });
 
-  const runInterruptReason = Effect.fnUntraced(function* (
+  const runInterruptRequest = Effect.fnUntraced(function* (
     command: Extract<
       OrchestrationV2ServerCommand,
-      { readonly type: "run.interrupt" | "thread.background-work.settle" }
+      { readonly type: "run.interrupt" | "thread.background-work.settle" | "thread.stop" }
     >,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     runId: RunId,
@@ -9641,14 +9641,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const pending = (yield* Ref.get(events))
       .flatMap((event) => (event.type === "turn-item.updated" ? [event.payload] : []))
       .findLast(isRequest);
-    if (pending !== undefined) return pending.message;
+    if (pending !== undefined) return pending;
     const { turnItems } = yield* projectionStore
       .getThreadRecords(command.threadId, ["turnItems"], {
         turnItemTypes: ["run_interrupt_request"],
         turnItemRunIds: [runId],
       })
       .pipe(mapDispatchError(command));
-    return turnItems.find(isRequest)?.message;
+    return turnItems.find(isRequest);
   });
 
   // A successful Stop may have no terminal event to ingest: the session or
@@ -9795,7 +9795,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         },
       });
     }
-    const interruptReason = yield* runInterruptReason(input.command, input.events, run.id);
+    const interruptReason = (yield* runInterruptRequest(input.command, input.events, run.id))
+      ?.message;
     if (providerThread !== undefined) {
       yield* emitEvent({
         ...base,
@@ -9882,12 +9883,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const pendingItems = (yield* Ref.get(events)).flatMap((event) =>
       event.type === "turn-item.updated" ? [event.payload] : [],
     );
-    if (
-      pendingItems.some((item) => item.runId === run.id && item.type === "run_interrupt_request") ||
-      (yield* stopReachedRun(command, thread.id, run.id))
-    ) {
-      return;
-    }
+    // An earlier request that did not hold the queue gains the flag; it is never written twice.
+    const request = yield* runInterruptRequest(command, events, run.id);
+    if (request?.holdsQueue === true) return;
     yield* emit(
       events,
       command,
@@ -9898,25 +9896,30 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       nodeId: run.rootNodeId,
       providerInstanceId: run.providerInstanceId,
       occurredAt: now,
-      payload: {
-        id: idAllocator.derive.runSignalTurnItem({ runId: run.id, signal: "interrupt-request" }),
-        threadId: thread.id,
-        runId: run.id,
-        nodeId: run.rootNodeId,
-        providerThreadId: run.providerThreadId,
-        providerTurnId: null,
-        nativeItemRef: null,
-        parentItemId: null,
-        ordinal: yield* nextTurnItemOrdinal({ thread, turnItems: pendingItems }),
-        status: "completed",
-        title: "Interrupt requested",
-        startedAt: now,
-        completedAt: now,
-        updatedAt: now,
-        type: "run_interrupt_request",
-        message: command.reason ?? RunExecutionService.USER_STOP_REASON,
-        holdsQueue: true,
-      },
+      payload: request
+        ? { ...request, holdsQueue: true, updatedAt: now }
+        : {
+            id: idAllocator.derive.runSignalTurnItem({
+              runId: run.id,
+              signal: "interrupt-request",
+            }),
+            threadId: thread.id,
+            runId: run.id,
+            nodeId: run.rootNodeId,
+            providerThreadId: run.providerThreadId,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: yield* nextTurnItemOrdinal({ thread, turnItems: pendingItems }),
+            status: "completed",
+            title: "Interrupt requested",
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            type: "run_interrupt_request",
+            message: command.reason ?? RunExecutionService.USER_STOP_REASON,
+            holdsQueue: true,
+          },
     });
   });
 
