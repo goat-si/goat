@@ -6,11 +6,14 @@ import { useState } from "react";
 
 import { persistClientSettingsPatch, useClientSettings } from "../../hooks/useSettings";
 import { channelEnvironment } from "../../state/channels";
-import { useEnvironment } from "../../state/environments";
+import { readEnvironment, useEnvironment } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { GoatBotProfileDialog } from "../goatBot/GoatBotProfileDialog";
-import { useGoatBotComputerReadable } from "../goatBot/useGoatBotComputerReadable";
+import {
+  readGoatBotComputerReadable,
+  useGoatBotComputerReadable,
+} from "../goatBot/useGoatBotComputerReadable";
 import { useGoatBotEnabled } from "../goatBot/useGoatBotSession";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
@@ -26,12 +29,35 @@ function GoatBotProfileSection() {
   const environmentId = environment?.environmentId ?? null;
   const presentation = useEnvironment(environmentId);
   const readable = useGoatBotComputerReadable(environmentId);
-  if (
-    environment === null ||
-    presentation?.serverConfig?.environment.capabilities.goatBotProfileEdit !== true
-  ) {
-    return null;
+  const supported =
+    environment !== null &&
+    presentation?.serverConfig?.environment.capabilities.goatBotProfileEdit === true;
+  const profiles = useEnvironmentQuery(
+    supported
+      ? channelEnvironment.listBots({ environmentId: environment.environmentId, input: {} })
+      : null,
+  );
+  // At a refusal, note when the answer then held had settled; that answer and older ones stay
+  // hidden until a read settles after access returns (none is sent while refused).
+  const [seen, setSeen] = useState(() => ({
+    environmentId,
+    readable,
+    heldAtRefusal: readable ? null : profiles.dataUpdatedAt,
+  }));
+  if (seen.environmentId !== environmentId || seen.readable !== readable) {
+    const sameComputer = seen.environmentId === environmentId;
+    setSeen({
+      environmentId,
+      readable,
+      heldAtRefusal: readable
+        ? sameComputer
+          ? seen.heldAtRefusal
+          : null
+        : Math.max(profiles.dataUpdatedAt, sameComputer ? (seen.heldAtRefusal ?? 0) : 0),
+    });
   }
+  if (!supported) return null;
+  const refusedLine = `GOAT on ${environment.label ?? "this computer"} did not accept this device.`;
   // A refusal swaps the row out, which drops an open dialog and the profile it was read from.
   return (
     <SettingsSection id="goat-bot-profile" title="Profile">
@@ -40,12 +66,14 @@ function GoatBotProfileSection() {
           key={environment.environmentId}
           environmentId={environment.environmentId}
           phase={presentation.connection.phase}
+          readAfter={seen.environmentId === environmentId ? seen.heldAtRefusal : null}
+          refusedLine={refusedLine}
         />
       ) : (
         <SettingsRow
           {...searchableSetting("goat-bot-profile")}
           title="GOAT Bot"
-          status={`GOAT on ${environment.label ?? "this computer"} did not accept this device.`}
+          status={refusedLine}
         />
       )}
     </SettingsSection>
@@ -55,9 +83,14 @@ function GoatBotProfileSection() {
 function GoatBotProfileRow({
   environmentId,
   phase,
+  readAfter,
+  refusedLine,
 }: {
   readonly environmentId: EnvironmentId;
   readonly phase: EnvironmentConnectionPhase;
+  /** Set after a refusal: only an answer that settled later than this shows. */
+  readonly readAfter: number | null;
+  readonly refusedLine: string;
 }) {
   // Read in every phase: offline the query keeps its last answer and sends nothing.
   const profiles = useEnvironmentQuery(channelEnvironment.listBots({ environmentId, input: {} }));
@@ -69,7 +102,8 @@ function GoatBotProfileRow({
   const starting = phase === "connecting";
   const offline = !connected && !starting;
   const canEdit = mayEdit && connected;
-  const main = profiles.data?.bots.find((bot) => bot.role === "main");
+  const answer = readAfter === null || profiles.dataUpdatedAt > readAfter ? profiles.data : null;
+  const main = answer?.bots.find((bot) => bot.role === "main");
   return (
     <>
       <SettingsRow
@@ -82,7 +116,7 @@ function GoatBotProfileRow({
               ? undefined
               : profiles.error
                 ? "Could not load the bot's profile."
-                : profiles.data === null && (starting || profiles.isPending)
+                : answer === null && (starting || profiles.isPending || profiles.data !== null)
                   ? "Loading…"
                   : "The profile appears once GOAT Bot has started."
         }
@@ -105,6 +139,11 @@ function GoatBotProfileRow({
           unavailableReason={connected ? undefined : `${editing.name}'s computer isn't connected.`}
           onClose={() => setEditing(null)}
           onSubmit={async (changes) => {
+            // The screen may lag a drop or a refusal the store already has.
+            if (!readGoatBotComputerReadable(environmentId)) return refusedLine;
+            if (readEnvironment(environmentId)?.connection.phase !== "connected") {
+              return `${editing.name}'s computer isn't connected.`;
+            }
             const result = await update({
               environmentId,
               input: { botId: editing.botId, ...changes },

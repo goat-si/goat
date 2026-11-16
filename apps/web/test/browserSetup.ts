@@ -16,6 +16,7 @@ installMockFactoryFailureReport();
 // Faces, the main row and Needs you read this gate; a test that is about it unmocks it.
 vi.mock("../src/components/goatBot/useGoatBotComputerReadable", () => ({
   useGoatBotComputerReadable: () => true,
+  readGoatBotComputerReadable: () => true,
 }));
 
 // Test files in one browser session share the origin's storage, and persisted stores such as the
