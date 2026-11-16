@@ -122,10 +122,10 @@ it.layer(NodeServices.layer)("EnvironmentAuth administrative operations", (it) =
         ];
         const current = yield* pair("Test browser");
 
-        const revokedCount = yield* auth.revokeOtherClientSessions(current);
+        const result = yield* auth.revokeOtherClientSessions(current);
         const listed = yield* auth.listClientSessions(current);
 
-        expect(revokedCount).toBe(lookAlikes.length);
+        expect(result).toEqual({ revokedCount: lookAlikes.length, kept: { desktop: 1, pen: 0 } });
         expect(
           Object.fromEntries(
             listed.map((session) => [session.sessionId, session.keptByRevokeOthers ?? "none"]),

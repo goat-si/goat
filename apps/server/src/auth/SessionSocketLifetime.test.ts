@@ -200,3 +200,75 @@ it.effect(
       }).pipe(Effect.provide(Layer.merge(running, layerHubAccess)), Effect.scoped);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.effect(
+  "a kept desktop session's open socket keeps delivering through Revoke others and closes once its row is revoked by itself",
+  () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.SessionStore;
+      const desktop = yield* sessions.issue({
+        subject: "desktop-bootstrap",
+        method: "bearer-access-token",
+      });
+      const settingsPage = yield* sessions.issue({ subject: "settings-page" });
+      const ticket = yield* sessions.issueWebSocketToken(desktop.sessionId, { audience: "rpc" });
+      const admitted = yield* Deferred.make<void>();
+      const updates = yield* Queue.unbounded<string>();
+      const routes = HttpRouter.add(
+        "GET",
+        "/ws",
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          const wsTicket = new URL(request.url, "http://localhost").searchParams.get("wsTicket");
+          const session = yield* sessions.verifyWebSocketToken(wsTicket ?? "", MAIN_LISTENER);
+          return yield* Lifetime.run(
+            session,
+            Effect.gen(function* () {
+              const socket = yield* request.upgrade;
+              const reader = yield* socket.reader;
+              const writer = yield* socket.writer;
+              yield* Deferred.succeed(admitted, undefined);
+              yield* Effect.all(
+                [
+                  Stream.fromPull(Effect.succeed(reader.pull)).pipe(Stream.runDrain),
+                  Stream.fromQueue(updates).pipe(
+                    Stream.runForEach((update) => writer.write(update)),
+                  ),
+                ],
+                { concurrency: "unbounded", discard: true },
+              );
+              return HttpServerResponse.empty();
+            }),
+          );
+        }).pipe(Effect.orDie),
+      );
+      const origin = yield* serve(routes);
+      const opened = Promise.withResolvers<void>();
+      const closed = Promise.withResolvers<"closed">();
+      const message = Promise.withResolvers<string>();
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          const client = new NodeWS.WebSocket(
+            `${origin.replace(/^http/u, "ws")}ws?wsTicket=${encodeURIComponent(ticket.token)}`,
+          );
+          client.on("open", () => opened.resolve());
+          client.on("close", () => closed.resolve("closed"));
+          client.on("message", (data) => message.resolve(data.toString()));
+          client.on("error", () => {});
+          return client;
+        }),
+        (client) => Effect.sync(() => client.terminate()),
+      );
+      yield* Effect.promise(() => opened.promise);
+      yield* Deferred.await(admitted);
+
+      yield* sessions.revokeAllExcept(settingsPage.sessionId);
+      yield* Queue.offer(updates, "after Revoke others");
+
+      expect(yield* Effect.promise(() => Promise.race([message.promise, closed.promise]))).toBe(
+        "after Revoke others",
+      );
+      yield* sessions.revoke(desktop.sessionId);
+      expect(yield* Effect.promise(() => closed.promise)).toBe("closed");
+    }).pipe(Effect.scoped, Effect.provide(layer)),
+);

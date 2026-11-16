@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { AuthStandardClientScopes } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
@@ -121,6 +122,42 @@ it.effect.each([
         expect(yield* grantState(store, issued.sessionId)).toBe("UnknownSessionTokenError");
         yield* Fiber.join(waiting);
         expect(yield* store.readActiveScopes(current.sessionId)).toEqual(AuthStandardClientScopes);
+      }).pipe(Effect.provide(running), Effect.scoped);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "a desktop session another process adds after Revoke others commits, and this one admits before settling, stays live",
+  () =>
+    Effect.gen(function* () {
+      const afterCommit = yield* Ref.make<Effect.Effect<void>>(Effect.void);
+      const { running, fromCli } = yield* makeServerAndCli((repository) => ({
+        ...repository,
+        revokeAllExcept: (input) =>
+          repository
+            .revokeAllExcept(input)
+            .pipe(Effect.tap(() => Effect.flatten(Ref.get(afterCommit)))),
+      }));
+      yield* Effect.gen(function* () {
+        const store = yield* SessionStore.SessionStore;
+        const current = yield* store.issue({ subject: "settings-page" });
+        const late = yield* Deferred.make<SessionStore.IssuedSession>();
+        // Runs between the press's transaction and its read of live ids; verify takes no lock.
+        yield* Ref.set(
+          afterCommit,
+          Effect.gen(function* () {
+            const issued = yield* fromCli((cli) =>
+              cli.issue({ subject: "desktop-bootstrap", method: "bearer-access-token" }),
+            );
+            yield* store.verify(issued.token, MAIN_LISTENER);
+            yield* Deferred.succeed(late, issued);
+          }).pipe(Effect.orDie),
+        );
+
+        yield* store.revokeAllExcept(current.sessionId);
+
+        const issued = yield* Deferred.await(late);
+        expect(yield* grantState(store, issued.sessionId)).toBe("live");
       }).pipe(Effect.provide(running), Effect.scoped);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

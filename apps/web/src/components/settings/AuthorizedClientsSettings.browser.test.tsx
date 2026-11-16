@@ -1,5 +1,6 @@
 import { AuthSessionId, AuthStandardClientScopes, EnvironmentId } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
+import { page, userEvent } from "vite-plus/test/browser";
 
 import { render } from "../../../test/render";
 import type { ServerClientSessionRecord } from "~/environments/primary";
@@ -47,7 +48,13 @@ const phone = clientSession("phone", "Test phone", {
   client: { label: "Test phone", deviceType: "mobile" },
 });
 
-function Clients({ sessions }: { readonly sessions: ReadonlyArray<ServerClientSessionRecord> }) {
+function Clients({
+  sessions,
+  servedByEnvironment = true,
+}: {
+  readonly sessions: ReadonlyArray<ServerClientSessionRecord>;
+  readonly servedByEnvironment?: boolean;
+}) {
   return (
     <>
       <AuthorizedClientsHeaderAction
@@ -58,6 +65,7 @@ function Clients({ sessions }: { readonly sessions: ReadonlyArray<ServerClientSe
         delegatableScopes={[...AuthStandardClientScopes]}
       />
       <PairingClientsList
+        servedByEnvironment={servedByEnvironment}
         endpointUrl={null}
         endpoints={[]}
         defaultEndpointKey={null}
@@ -86,4 +94,61 @@ it("Authorized clients marks the sessions Revoke others keeps, and the button is
 
   await screen.rerender(<Clients sessions={[thisDevice, desktop, pen]} />);
   await expect.element(revokeOthers).toBeDisabled();
+});
+
+it.each([
+  { servedByEnvironment: true, where: "on this computer" },
+  { servedByEnvironment: false, where: "on that computer" },
+])(
+  "A kept desktop row explains itself to a keyboard user, naming the computer $where",
+  async ({ servedByEnvironment, where }) => {
+    await using screen = await render(
+      <Clients sessions={[thisDevice, desktop]} servedByEnvironment={servedByEnvironment} />,
+    );
+    const badge = screen.getByRole("button", { name: "Kept by Revoke others" });
+    badge.element().focus();
+    await expect.element(badge).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
+    await expect
+      .element(
+        page.getByText(
+          `Signed in with the desktop app's built-in credential, normally the GOAT desktop app ${where}. If you do not recognise it or suspect it, revoke it by itself`,
+          { exact: false },
+        ),
+      )
+      .toBeVisible();
+  },
+);
+
+it("A kept Pen row explains itself to a keyboard user", async () => {
+  await using screen = await render(<Clients sessions={[thisDevice, pen]} />);
+  const badge = screen.getByRole("button", { name: "Kept by Revoke others" });
+  badge.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await expect
+    .element(page.getByText("A Pen member holds this session", { exact: false }))
+    .toBeVisible();
+});
+
+it("This device's own row has no Kept mark even when it is a kept kind", async () => {
+  await using screen = await render(<Clients sessions={[{ ...desktop, current: true }, phone]} />);
+  await expect.element(screen.getByText("This device")).toBeVisible();
+  expect(screen.getByText("Kept by Revoke others").elements()).toHaveLength(0);
+});
+
+it("What Revoke others keeps is reachable from the keyboard while the button is off", async () => {
+  await using screen = await render(<Clients sessions={[thisDevice, desktop, pen]} />);
+  await expect.element(screen.getByRole("button", { name: "Revoke others" })).toBeDisabled();
+  const explain = screen.getByRole("button", { name: "What Revoke others keeps" });
+  explain.element().focus();
+  await expect.element(explain).toHaveFocus();
+  await userEvent.keyboard("{Enter}");
+  await expect
+    .element(
+      page.getByText(
+        "Revoke others ends every other client except sessions signed in with the desktop app's built-in credential and Pen members' sessions.",
+        { exact: false },
+      ),
+    )
+    .toBeVisible();
 });

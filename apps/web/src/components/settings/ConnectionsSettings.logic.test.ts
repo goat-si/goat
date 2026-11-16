@@ -6,6 +6,7 @@ import {
   selectHubPhoneQrTarget,
   applyWslEnableSelection,
   resolveTailscaleServeBaseUrl,
+  revokeOthersToast,
   selectQrEndpointOption,
   togglePairingScopeSelection,
 } from "./ConnectionsSettings.logic";
@@ -599,4 +600,45 @@ it("does not apply coherent evidence from a different saved SSH route to this ro
   });
   expect(result.tone).toBe("error");
   expect(result.text).toContain("did not respond");
+});
+
+describe("revokeOthersToast reads what the server kept, never the list on screen", () => {
+  const generalRule =
+    "Revoke others may keep sessions signed in with the desktop app's built-in credential and Pen members' sessions. Check the list below for what is still signed in.";
+  it.each([
+    {
+      label: "no list was loaded when Settings pressed it (read access missing)",
+      result: { revokedCount: 2, kept: { desktop: 1, pen: 0 } },
+      title: "Revoked 2 clients",
+      description:
+        "Kept 1 session signed in with the desktop app's built-in credential. Revoke it below if you do not recognise it.",
+    },
+    {
+      label: "a stale list missed a Pen session kept since",
+      result: { revokedCount: 1, kept: { desktop: 0, pen: 1 } },
+      title: "Revoked 1 other client",
+      description: "Kept 1 Pen session. Revoke it below if you do not recognise it.",
+    },
+    {
+      label: "both kinds were kept",
+      result: { revokedCount: 3, kept: { desktop: 1, pen: 2 } },
+      title: "Revoked 3 clients",
+      description:
+        "Kept 1 session signed in with the desktop app's built-in credential and 2 Pen sessions. Revoke them one by one below if you do not recognise them.",
+    },
+    {
+      label: "nothing was kept",
+      result: { revokedCount: 1, kept: { desktop: 0, pen: 0 } },
+      title: "Revoked 1 other client",
+      description: "Other paired clients will need a new pairing link before reconnecting.",
+    },
+    {
+      label: "an older server did not say what it kept",
+      result: { revokedCount: 4 },
+      title: "Revoked 4 clients",
+      description: generalRule,
+    },
+  ])("$label", ({ result, title, description }) => {
+    expect(revokeOthersToast(result)).toEqual({ type: "success", title, description });
+  });
 });

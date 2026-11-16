@@ -205,14 +205,14 @@ it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
           Effect.forkScoped({ startImmediately: true }),
         );
 
-        const revokedCount = yield* sessions.revokeAllExcept(current.sessionId);
+        const result = yield* sessions.revokeAllExcept(current.sessionId);
         // Removals publish inside the revoke's permit, so every one of them precedes this upsert.
         yield* sessions.issue({ subject: "sentinel" });
         const removedIds = Array.from(yield* Fiber.join(observed)).flatMap((change) =>
           change.type === "clientRemoved" ? [change.sessionId] : [],
         );
 
-        expect(revokedCount).toBe(ended.length);
+        expect(result).toEqual({ revokedCount: ended.length, kept: { desktop: 1, pen: 2 } });
         expect(removedIds.toSorted()).toEqual(ended.map((session) => session.sessionId).toSorted());
         for (const session of Object.values(kept))
           expect(yield* sessions.readActiveScopes(session.sessionId)).toEqual(session.scopes);
@@ -671,7 +671,7 @@ it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
 
       yield* sessions.markConnected(client.sessionId);
       const beforeRevoke = yield* sessions.listActive();
-      const revokedCount = yield* sessions.revokeAllExcept(administrative.sessionId);
+      const { revokedCount } = yield* sessions.revokeAllExcept(administrative.sessionId);
       const afterRevoke = yield* sessions.listActive();
       const revokedClient = yield* Effect.flip(sessions.verify(client.token, MAIN_LISTENER));
       const revokedClientWebSocket = yield* Effect.flip(
