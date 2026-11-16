@@ -164,32 +164,41 @@ it("a finish time that cannot be read says Unknown time, and an unreadable start
 });
 
 const at = "2026-11-14T09:00:00.000Z";
-const englishShort = /^[A-Z][a-z]{2} \d{1,2}, \d{2}:\d{2}$/;
+const enUSShort = /^[A-Z][a-z]{2} \d{1,2}, \d{2}:\d{2}$/;
+// Kathmandu is UTC+5:45, so its minutes differ from almost every device zone's.
+const kathmandu = "Asia/Kathmandu";
+// The 24-hour time in `timeZone` as the device's own locale writes it, in its own digits.
+const deviceClock = (timeZone: string) =>
+  new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone,
+  }).format(Date.parse(at));
 
 it("an invalid locale falls back to the device locale and keeps a valid zone, without throwing", () => {
-  const time = routineRunTime(at, {
-    locale: "not a locale!",
-    timeZone: "Asia/Tokyo",
-    hour12: false,
-  });
-  // 09:00 UTC reads 18:00 in Tokyo, whatever the device's language.
-  expect(time).toMatch(/18\D?00/);
-  expect(
-    routineRunTime(at, { locale: "not a locale!", timeZone: "Asia/Tokyo", hour12: false }),
-  ).toBe(time);
+  const options = { locale: "not a locale!", timeZone: kathmandu, hour12: false } as const;
+  const time = routineRunTime(at, options);
+  expect(time.endsWith(deviceClock(kathmandu))).toBe(true);
+  expect(time.endsWith(deviceClock("UTC"))).toBe(false);
+  expect(routineRunTime(at, options)).toBe(time);
 });
 
 it("an invalid zone falls back to the device zone and keeps a valid locale, without throwing", () => {
   const time = routineRunTime(at, { locale: "en-US", timeZone: "Not/A_Zone", hour12: false });
-  expect(time).toMatch(englishShort);
+  expect(time).toMatch(enUSShort);
   expect(routineRunTime(at, { locale: "en-US", timeZone: "Not/A_Zone", hour12: false })).toBe(time);
 });
 
 it("a null or Symbol locale reads in the device locale, without throwing", () => {
   for (const locale of [null, Symbol("locale")]) {
-    const time = routineRunTime(at, { locale: locale as never, timeZone: "UTC", hour12: false });
-    expect(time).toMatch(/09\D?00/);
-    expect(routineRunFinished(at, at, { locale: locale as never, timeZone: "UTC" })).toMatch(
+    const time = routineRunTime(at, {
+      locale: locale as never,
+      timeZone: kathmandu,
+      hour12: false,
+    });
+    expect(time.endsWith(deviceClock(kathmandu))).toBe(true);
+    expect(routineRunFinished(at, at, { locale: locale as never, timeZone: kathmandu })).toMatch(
       /^finished /,
     );
   }
@@ -222,6 +231,20 @@ it("a device zone change while the app is open reads the next time in the new zo
     // @effect-diagnostics-next-line globalDate:off -- the zone's offset at the fixed test instant.
     expect(new Date(at).getTimezoneOffset()).not.toBe(tokyo);
     expect(routineRunTime(at, { locale: "en-US", hour12: false })).toBe("Nov 14, 04:00");
+  } finally {
+    if (before === undefined) delete process.env.TZ;
+    else process.env.TZ = before;
+  }
+});
+
+it("a zone that falls back to the device's follows a device zone change too", () => {
+  const before = process.env.TZ;
+  const options = { locale: "en-US", hour12: false, timeZone: "Not/A_Zone" } as const;
+  try {
+    process.env.TZ = "Asia/Tokyo";
+    expect(routineRunTime(at, options)).toBe("Nov 14, 18:00");
+    process.env.TZ = "America/New_York";
+    expect(routineRunTime(at, options)).toBe("Nov 14, 04:00");
   } finally {
     if (before === undefined) delete process.env.TZ;
     else process.env.TZ = before;
