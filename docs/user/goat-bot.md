@@ -14,8 +14,9 @@ task as a card in the conversation.
 On mobile, **Something else** on a task's question lets you answer it in your own words: Send
 answers that question. The "Answering" chip above the message box stays until you send, close it,
 or the task records an answer.
-On web and desktop, what you type into **Something else** stays until you send or clear it. If the
-task records an answer first, your words show as **Not sent** until you discard them.
+On web and desktop, while the chat stays open, what you type into **Something else** stays until
+you send or clear it. If the task records an answer first, your words show as **Not sent** until
+you discard them. Opening a task, leaving the chat or reloading the page loses them.
 
 ## Bots
 
