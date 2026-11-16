@@ -182,6 +182,15 @@ vi.mock("@goat/client-runtime/state/runtime", async () => {
   return { createEnvironmentRpcQueryAtomFamily: () => () => read };
 });
 vi.mock("../../connection/runtime", () => ({ connectionAtomRuntime: {} }));
+vi.mock("../../state/channels", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const idle = Atom.make(AsyncResult.initial());
+  return { channelEnvironment: { listBots: () => idle } };
+});
+vi.mock("../../state/presentation", async () => {
+  const { Atom: A } = await import("effect/reactivity");
+  return { environmentPresentations: { presentationsAtom: A.make(new Map()) } };
+});
 // The app's computers: the bot computer "env" stays in the catalog throughout.
 vi.mock("../../connection/catalog", async () => {
   const { Atom: A } = await import("effect/reactivity");
@@ -307,6 +316,10 @@ afterEach(async () => {
   root = undefined;
   container.remove();
   app.active = true;
+  // Tests move the bot computer's link; the next starts from the default one.
+  link.phase = "connected";
+  link.savedRef = "env";
+  link.config = { environment: { capabilities: { goatBotOpenAsks: true } } };
 });
 async function showRoster(
   visible: boolean,
@@ -470,6 +483,24 @@ it("keeps the asks it has when a refresh fails, marked out of date, and reads ag
   const before = query.reads;
   await act(async () => retry?.click());
   expect(query.reads).toBeGreaterThan(before);
+});
+
+it("an asks read refused for access shows nothing of the earlier answer it still holds", async () => {
+  registry = AtomRegistry.make();
+  await showRoster(true);
+  const earlier = read([ask("scout", "task-s", "Which machine?", "2026-11-11T10:10:00.000Z")]);
+  serve(earlier);
+  await act(async () => {});
+  expect(container.textContent).toContain("Which machine?");
+  // This phone lost the scope: the read is refused, and the query still holds its earlier answer.
+  serve(
+    AsyncResult.failure(
+      Cause.fail({ _tag: "EnvironmentAuthorizationError", message: "Not allowed." }),
+      { previousSuccess: Option.some(earlier) },
+    ),
+  );
+  await act(async () => {});
+  expect(container.textContent).not.toContain("Which machine?");
 });
 
 it("reads again when the roster comes back into view, so an ask that arrived meanwhile shows", async () => {

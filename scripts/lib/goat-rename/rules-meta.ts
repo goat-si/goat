@@ -318,7 +318,7 @@ export const TEST_TITLES: readonly (readonly [path: string, from: string, to: st
     "sends append launch arguments to Claude after the GOAT instructions",
   ],
   [
-    "apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts",
+    "apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.runtimePolicy.test.ts",
     "derives concrete Codex turn policies from every T3 runtime mode",
     "derives concrete Codex turn policies from every GOAT runtime mode",
   ],

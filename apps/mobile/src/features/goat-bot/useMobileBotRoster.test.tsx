@@ -19,6 +19,12 @@ const state = vi.hoisted(() => ({
   connected: true,
   botRef: null as { readonly environmentId: string; readonly threadId: string } | null,
   environmentId: "env",
+  // A bot-list read refused for access; the query keeps its earlier answer beside it.
+  cause: null as unknown,
+  // The computer's Slack connections, as its settings read answers.
+  slack: null as null | ReadonlyArray<{ enabled: boolean }>,
+  // The bot list was read again (a removal refreshes it): its answer shows marked waiting.
+  refreshed: false,
 }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({
@@ -44,30 +50,50 @@ vi.mock("../../state/environments", () => ({
   }),
 }));
 vi.mock("../../state/query", () => ({
-  useEnvironmentQuery: (query: string | null) => {
+  useEnvironmentQuery: (atom: string | object | null) => {
+    // The bot list is a real atom, so a refusal can refresh it; the other reads are names.
+    const query = atom === null || typeof atom === "string" ? atom : "profiles";
     if (query) state.calls.push(query);
     // An offline computer answers nothing. Like a real read, an answer keeps its identity.
     const profiles = query === "profiles" && state.connected ? answerOf(state.bots) : null;
+    const refused = query === "profiles" ? state.cause : null;
     return {
-      data: query === "threads" ? { rows: [] } : profiles,
-      successResult: profiles === null ? null : { value: profiles },
-      cause: null,
+      data: query === "threads" ? { rows: [] } : query === "slack" ? state.slack : profiles,
+      successResult:
+        profiles === null || refused !== null || state.refreshed ? null : { value: profiles },
+      cause: refused,
       error: null,
-      isPending: false,
-      isSuccess: query !== null,
+      isPending: query === "profiles" && state.refreshed,
+      isSuccess: query !== null && refused === null,
       refresh: vi.fn(),
     };
   },
 }));
-vi.mock("../../state/channels", () => ({
-  channelEnvironment: {
-    listBots: () => "profiles",
-    listBotThreads: () => "threads",
-    slackSettings: () => "slack",
-    updateTaskView: {},
-  },
-}));
+const profilesRead = vi.hoisted(() => ({ atom: {} as object }));
+vi.mock("../../state/channels", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  profilesRead.atom = Atom.make(AsyncResult.initial());
+  return {
+    channelEnvironment: {
+      listBots: () => profilesRead.atom,
+      listBotThreads: () => "threads",
+      slackSettings: () => "slack",
+      updateTaskView: {},
+    },
+  };
+});
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
+// Needs you's open asks read, refreshed when a computer refuses or leaves; idle here.
+vi.mock("./openAsksRead", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const idle = Atom.make(AsyncResult.initial());
+  return { openAsks: () => idle };
+});
+// The computers' presentations, empty unless a test links one.
+vi.mock("../../state/presentation", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return { environmentPresentations: { presentationsAtom: Atom.make(new Map()) } };
+});
 // The app's computers. Each test's registry holds its own catalog value; "env" is listed unless a test says not.
 const catalog = vi.hoisted(() => ({
   atom: null as null | import("effect/reactivity").Atom.Writable<unknown>,
@@ -80,6 +106,7 @@ vi.mock("../../connection/catalog", async () => {
   });
   return { environmentCatalog: { catalogValueAtom: catalog.atom } };
 });
+import { environmentPresentations } from "../../state/presentation";
 import { useMobileBotRoster, useMobileGoatBotMember } from "./useMobileBotRoster";
 import { followKeptPerComputerCatalog, resetKeptPerComputerForTests } from "./useKeptPerComputer";
 
@@ -98,6 +125,9 @@ afterEach(async () => {
   state.connected = true;
   state.botRef = null;
   state.environmentId = "env";
+  state.cause = null;
+  state.slack = null;
+  state.refreshed = false;
   resetKeptPerComputerForTests();
 });
 
@@ -154,8 +184,9 @@ const echoBots = [
   { botId: "main", role: "main", name: "GOAT Bot", createdAt: "2026-11-01T00:00:00.000Z" },
   { botId: "echo", role: "member", name: "Echo", createdAt: "2026-11-02T00:00:00.000Z" },
 ];
-const memberNames = () =>
-  value.bots.flatMap((entry) => (entry.kind === "member" ? [entry.profile.name] : []));
+const memberNamesOf = (bots: typeof value.bots) =>
+  bots.flatMap((entry) => (entry.kind === "member" ? [entry.profile.name] : []));
+const memberNames = () => memberNamesOf(value.bots);
 
 it("keeps the bots listed while their computer is offline, and still knows it has members", async () => {
   state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
@@ -266,6 +297,7 @@ it("an answer already on its way to the kept list is not kept once its computer 
   // effects run first, so this lands exactly in that gap.
   function RemoveAfterRender() {
     useLayoutEffect(() => {
+      state.refreshed = true;
       registry.set(catalog.atom!, listed([]));
     }, []);
     return null;
@@ -307,6 +339,7 @@ it("an answer from before its computer was removed and added again is not kept",
   // Removed and added again after the roster rendered its answer, before that render's effects ran.
   function RemoveAndReAddAfterRender() {
     useLayoutEffect(() => {
+      state.refreshed = true;
       registry.set(catalog.atom!, listed([]));
       registry.set(catalog.atom!, listed(["env"]));
     }, []);
@@ -330,5 +363,98 @@ it("an answer from before its computer was removed and added again is not kept",
     ),
   );
   expect(memberNames()).toEqual([]);
+  stopFollowing();
+});
+
+it("a refused bot list lists no bots in the same render it arrives", async () => {
+  state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
+  state.bots = echoBots;
+  state.botRef = { environmentId: "env", threadId: "bot" };
+  const commits: Array<{ members: string[] }> = [];
+  function Committed() {
+    const roster = useMobileBotRoster();
+    const seen = { members: memberNamesOf(roster.bots) };
+    useLayoutEffect(() => {
+      commits.push(seen);
+    });
+    return null;
+  }
+  root = createRoot(document.createElement("div"));
+  await act(async () => root?.render(<Committed />));
+  expect(commits.at(-1)).toEqual({ members: ["Echo"] });
+  const before = commits.length;
+  state.cause = { _tag: "EnvironmentAuthorizationError", message: "Not allowed." };
+  await act(async () => root?.render(<Committed />));
+  // The first commit after the refused answer already says so.
+  expect(commits[before]).toEqual({ members: [] });
+});
+
+it("says nothing of Slack once the bot list is refused", async () => {
+  state.capabilities = { goatBotProfiles: true, goatBotMembers: true, slackChannel: true };
+  state.slack = [{ enabled: true }];
+  state.bots = echoBots;
+  state.botRef = { environmentId: "env", threadId: "bot" };
+  root = createRoot(document.createElement("div"));
+  await act(async () => root?.render(<Probe />));
+  expect(value.slackEnabled).toBe(true);
+  state.cause = { _tag: "EnvironmentAuthorizationError", message: "Not allowed." };
+  // As in the app, the refusing computer lists bots; it is not connected, so no other read runs.
+  const registry = AtomRegistry.make();
+  registry.set(
+    environmentPresentations.presentationsAtom as never,
+    new Map([
+      [
+        "env",
+        {
+          connection: { phase: "disconnected" },
+          serverConfig: { environment: { capabilities: state.capabilities } },
+        },
+      ],
+    ]),
+  );
+  await act(async () =>
+    root?.render(
+      <RegistryContext value={registry}>
+        <Probe />
+      </RegistryContext>,
+    ),
+  );
+  expect(value.slackEnabled).toBe(false);
+});
+
+it("a member's chat never says it is missing while its computer's bot list is being read again", async () => {
+  state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
+  state.bots = echoBots;
+  state.botRef = { environmentId: "env", threadId: "bot" };
+  const registry = AtomRegistry.make();
+  const stopFollowing = followKeptPerComputerCatalog(registry);
+  registry.set(catalog.atom!, {
+    isReady: true,
+    entries: new Map([["env", { enabled: true }]]),
+  });
+  const said: boolean[] = [];
+  function MemberChat() {
+    said.push(useMobileGoatBotMember("echo").missing);
+    return null;
+  }
+  const draw = () =>
+    act(async () =>
+      root?.render(
+        <RegistryContext value={registry}>
+          <MemberChat />
+        </RegistryContext>,
+      ),
+    );
+  root = createRoot(document.createElement("div"));
+  await draw();
+  // Removed and added again: the list is read again, and its earlier answer shows marked waiting.
+  state.refreshed = true;
+  await act(async () => {
+    registry.set(catalog.atom!, { isReady: true, entries: new Map() });
+    registry.set(catalog.atom!, { isReady: true, entries: new Map([["env", { enabled: true }]]) });
+  });
+  state.refreshed = false;
+  await draw();
+  expect(said).not.toContain(true);
   stopFollowing();
 });
