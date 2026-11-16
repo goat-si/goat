@@ -73,6 +73,22 @@ describe("keepFailedSendInStash", () => {
     expect(shown.actionProps).toBeUndefined();
   });
 
+  it("names the lost attachments beside Copy when storage rejects the stash of a send with text", async () => {
+    usePromptStashStore.setState({
+      stashEntry: () => ({ evicted: null, written: false, durable: false }),
+    });
+
+    await keepFailedSendInStash({ snapshot: snapshot("See"), environmentId, interrupted: false });
+
+    expect(toast).toHaveBeenCalledOnce();
+    const shown = toast.mock.calls[0]?.[0] as {
+      description: string;
+      actionProps?: { children: string };
+    };
+    expect(shown.description).toContain("screen.png, log.txt could not be kept");
+    expect(shown.actionProps?.children).toBe("Copy message");
+  });
+
   it("warns when the entry was restored before its images finished saving", async () => {
     usePromptStashStore.setState({
       finalizeEntryImages: () => ({ attached: false, durable: true }),
