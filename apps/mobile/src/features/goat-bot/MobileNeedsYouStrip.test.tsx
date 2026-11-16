@@ -312,6 +312,10 @@ afterEach(async () => {
   root = undefined;
   container.remove();
   app.active = true;
+  // Tests move the bot computer's link; the next starts from the default one.
+  link.phase = "connected";
+  link.savedRef = "env";
+  link.config = { environment: { capabilities: { goatBotOpenAsks: true } } };
 });
 async function showRoster(
   visible: boolean,
