@@ -50,6 +50,7 @@ export async function openMigratedMobileDatabase() {
     }
     publishing.create();
     await temporary.move(target);
+    // Deleting throws on failure, so the target is opened only once the record is gone.
     publishing.delete();
   }
   return SQLite.openDatabaseAsync(DATABASE_NAME);
