@@ -43,7 +43,7 @@ import {
   readSafeSqliteInteger,
 } from "./sqliteCheckpointWorker.ts";
 
-import { classifyError } from "./nodeSqliteErrors.ts";
+import { classifyError, toleratingFinishedRollback } from "./nodeSqliteErrors.ts";
 import { makeWriter } from "./nodeSqliteWriter.ts";
 import { hasLargeBinding, sqliteParameters } from "./nodeSqliteParameters.ts";
 import { waitForWalRecovery } from "./nodeSqliteWalRecovery.ts";
@@ -1257,7 +1257,7 @@ const make = Effect.fn("makeWithDatabase")(function* (
     acquirer: transactionAcquirer,
     borrower,
     compiler,
-    transactionAcquirer,
+    transactionAcquirer: Effect.map(transactionAcquirer, toleratingFinishedRollback),
     // BEGIN IMMEDIATE avoids read-then-write SQLITE_BUSY_SNAPSHOT, which busy_timeout cannot resolve.
     beginTransaction: options.readonly === true ? "BEGIN" : "BEGIN IMMEDIATE",
     spanAttributes: [
