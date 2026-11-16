@@ -1,4 +1,5 @@
 import * as Context from "effect/Context";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -16,7 +17,10 @@ export class EffectExecutionFences extends Context.Service<
     readonly revision: Effect.Effect<number>;
     readonly awaitChange: (revision: number) => Effect.Effect<Option.Option<Effect.Effect<void>>>;
     readonly setGeneralCapacity: (count: number) => Effect.Effect<void>;
-    readonly snapshotWith: (input: { readonly startCapacity: number }) => Effect.Effect<{
+    readonly snapshotWith: (input: {
+      readonly startCapacity: number;
+      readonly startSlots: number;
+    }) => Effect.Effect<{
       readonly fullLanes: ReadonlyArray<EffectLane>;
       readonly titleThreads: ReadonlyArray<string>;
       readonly titleAtCapacity: boolean;
@@ -28,15 +32,34 @@ export class EffectExecutionFences extends Context.Service<
       claim: OrchestrationEffectV2,
     ) => Effect.Effect<Option.Option<OrchestrationEffectV2>>;
     readonly warnSlowCleanup: (claim: OrchestrationEffectV2) => Effect.Effect<void>;
-    readonly retireJoined: (claim: OrchestrationEffectV2) => Effect.Effect<void>;
+    readonly detach: (claim: OrchestrationEffectV2, cap: number) => Effect.Effect<boolean>;
+    readonly retireJoined: (
+      claim: OrchestrationEffectV2,
+      outcome: "executed" | "cancelled" | "failed" | "interrupted",
+    ) => Effect.Effect<void>;
     readonly retireAdmission: (claim: OrchestrationEffectV2) => Effect.Effect<void>;
   }
 >()("goat/orchestration-v2/EffectExecutionFences") {}
 
+// Set by runClaim so the daemon slot running it can detach a hung execution.
+export class ClaimSlot extends Context.Reference<
+  | {
+      current?: {
+        readonly claim: OrchestrationEffectV2;
+        readonly fences: EffectExecutionFences["Service"];
+      };
+    }
+  | undefined
+>("goat/orchestration-v2/ClaimSlot", { defaultValue: () => undefined }) {}
+
 // Process-local occupancy deliberately supplies no native retirement or restart guarantee.
 export const layer = Layer.sync(EffectExecutionFences, () => {
   // Each decoded claim object identifies its generation, even when a retry refunds its attempt.
-  const active = new Map<string, { effect: OrchestrationEffectV2; executing: boolean }>();
+  // A detached entry still fences its thread but no longer fills its lane.
+  const active = new Map<
+    string,
+    { effect: OrchestrationEffectV2; executing: boolean; detached: boolean; beganAt: number }
+  >();
   let claims = 0;
   let revision = 0;
   let changed = Deferred.makeUnsafe<void>();
@@ -83,8 +106,11 @@ export const layer = Layer.sync(EffectExecutionFences, () => {
         const counts = { general: 0, control: 0, cleanup: 0, start: 0 };
         const titleThreads: string[] = [];
         const mainThreads: string[] = [];
-        for (const { effect } of active.values()) {
-          counts[EFFECT_LANES[effect.request.type]]++;
+        for (const { effect, detached } of active.values()) {
+          const lane = EFFECT_LANES[effect.request.type];
+          // Reduced start capacity (critical host pressure) still counts detached starts.
+          if (!detached || (lane === "start" && input.startCapacity < input.startSlots))
+            counts[lane]++;
           (effect.request.type === "thread-title.generate" ? titleThreads : mainThreads).push(
             effect.threadId,
           );
@@ -104,14 +130,15 @@ export const layer = Layer.sync(EffectExecutionFences, () => {
     admissions: Effect.sync(() => Array.from(active.values(), ({ effect }) => effect)),
     admitClaim: Effect.fn("EffectExecutionFences.admitClaim")((effect) =>
       Effect.sync(() => {
-        active.set(effect.id, { effect, executing: false });
+        active.set(effect.id, { effect, executing: false, detached: false, beganAt: 0 });
         notifyChanged();
       }),
     ),
     begin: Effect.fn("EffectExecutionFences.begin")((claim) =>
-      Effect.sync(() => {
+      Effect.map(Clock.currentTimeMillis, (now) => {
         const entry = active.get(claim.id);
         if (entry?.effect !== claim) return Option.none();
+        entry.beganAt = now;
         entry.executing = true;
         return Option.some(claim);
       }),
@@ -128,12 +155,36 @@ export const layer = Layer.sync(EffectExecutionFences, () => {
             });
       }),
     ),
-    retireJoined: Effect.fn("EffectExecutionFences.retireJoined")((claim) =>
+    detach: Effect.fn("EffectExecutionFences.detach")((claim, cap) =>
       Effect.sync(() => {
-        if (active.get(claim.id)?.effect === claim) {
-          active.delete(claim.id);
-          notifyChanged();
+        const entry = active.get(claim.id);
+        if (entry?.effect !== claim || !entry.executing || entry.detached) return false;
+        const lane = EFFECT_LANES[claim.request.type];
+        let detached = 0;
+        for (const other of active.values()) {
+          if (other.detached && EFFECT_LANES[other.effect.request.type] === lane) detached++;
         }
+        if (detached >= cap) return false;
+        entry.detached = true;
+        notifyChanged();
+        return true;
+      }),
+    ),
+    retireJoined: Effect.fn("EffectExecutionFences.retireJoined")((claim, outcome) =>
+      Effect.flatMap(Clock.currentTimeMillis, (now) => {
+        const entry = active.get(claim.id);
+        if (entry?.effect !== claim) return Effect.void;
+        active.delete(claim.id);
+        notifyChanged();
+        return entry.detached
+          ? Effect.logInfo("orchestration-v2.effect-execution-detached-settled", {
+              effectId: claim.id,
+              effectType: claim.request.type,
+              threadId: claim.threadId,
+              outcome,
+              elapsedMs: now - entry.beganAt,
+            })
+          : Effect.void;
       }),
     ),
     retireAdmission: Effect.fn("EffectExecutionFences.retireAdmission")((claim) =>

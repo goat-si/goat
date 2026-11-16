@@ -179,6 +179,8 @@ export const UsageLimitSourceSnapshot = Schema.Struct({
   id: UsageLimitSourceId,
   kind: Schema.Literals(["cliproxy", "opencodex"]),
   label: TrimmedNonEmptyString,
+  /** Origin of the hub, which also serves the agents sent through it. */
+  origin: Schema.optional(TrimmedNonEmptyString),
   checkedAt: IsoDateTime,
   /** The OpenCodex Home whose newest snapshot decides membership and state. */
   homeId: Schema.optional(TrimmedNonEmptyString),

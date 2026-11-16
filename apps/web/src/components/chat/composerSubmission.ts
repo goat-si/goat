@@ -1,5 +1,6 @@
 import { PROVIDER_SEND_TURN_MAX_INPUT_CHARS } from "@goat/contracts";
 import { expandAssistantCitationsForProvider } from "@goat/shared/assistantCitations";
+import { parseSideChatCommand } from "../sideChat/sideChat.logic";
 
 type ComposerSubmitEvent = { preventDefault: () => void };
 
@@ -53,6 +54,20 @@ export function isComposerSubmissionBlocked(input: {
   return input.submissionTarget === "pending-user-input"
     ? input.attachmentBlockReason !== null || input.environmentUnavailable
     : input.noProviderAvailable || input.sendDisabledReason !== null;
+}
+
+/**
+ * \`/side\` asks in the side chat, so typed while a question is open it opens the side chat and
+ * leaves the question pending. Where no side chat can start, or the answer carries attachments
+ * or context, the text stays a literal answer.
+ */
+export function sideChatCommandOverAnswer(input: {
+  readonly answer: string;
+  readonly sideChatAvailable: boolean;
+  readonly hasAttachmentsOrContext: boolean;
+}): { readonly prompt: string } | null {
+  if (!input.sideChatAvailable || input.hasAttachmentsOrContext) return null;
+  return parseSideChatCommand(input.answer.trim());
 }
 
 export function submitComposerDraft(

@@ -9,7 +9,9 @@ import {
   clearComposerDraft,
   composerDraftsAtom,
   questionAttachmentDraftsAtom,
+  schedulePersistComposerState,
 } from "./use-composer-drafts";
+import { returnUnsentAnswersToThreadDraft } from "./unsent-question-answers";
 import {
   composerAttachmentUploadsAtom,
   composerAttachmentUploadBlockReason,
@@ -135,10 +137,23 @@ function pruneResolvedRequestDrafts(
 }
 
 // Resolution can come from anywhere: another device, an interrupt, the turn
-// ending, or a reload over drafts for requests that resolved meanwhile.
-onThreadRequestsResolved(({ environmentId, threadId, pendingRequestIds }) =>
-  pruneResolvedRequestDrafts(environmentId, threadId, pendingRequestIds),
-);
+// ending, or a reload over drafts for requests that resolved meanwhile. Unsent
+// answers move to the thread draft before their drafts are pruned.
+onThreadRequestsResolved(({ environmentId, threadId, pendingRequestIds, unansweredRequestIds }) => {
+  const drafts = appAtomRegistry.get(composerDraftsAtom);
+  const next = returnUnsentAnswersToThreadDraft({
+    drafts,
+    answers: appAtomRegistry.get(userInputDraftsByRequestKeyAtom),
+    environmentId,
+    threadId,
+    unansweredRequestIds,
+  });
+  if (next !== drafts) {
+    appAtomRegistry.set(composerDraftsAtom, next);
+    schedulePersistComposerState();
+  }
+  pruneResolvedRequestDrafts(environmentId, threadId, pendingRequestIds);
+});
 
 /**
  * Drops `answeredRequestId`'s drafts as soon as the server accepts the

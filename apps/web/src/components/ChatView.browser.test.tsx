@@ -1,6 +1,6 @@
 import { createMemoryHistory } from "@tanstack/react-router";
 import { scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environment";
-import { RunId, ThreadId } from "@goat/contracts";
+import { OrchestrationV2DispatchCommandError, RunId, ThreadId } from "@goat/contracts";
 import { DEFAULT_CLIENT_SETTINGS } from "@goat/contracts/settings";
 import type * as Context from "effect/Context";
 import { expect, it, vi } from "vite-plus/test";
@@ -12,6 +12,7 @@ import { AppRoot } from "~/AppRoot";
 import "~/components/ChatView";
 import { DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { __setClientSettingsForTests } from "~/hooks/useSettings";
+import { usePromptStashStore } from "~/promptStashStore";
 import { selectThreadDiffPanelSelection, useDiffPanelStore } from "~/diffPanelStore";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { getRouter } from "~/router";
@@ -316,4 +317,54 @@ it("opening a thread or returning to the window on a touch tablet does not focus
   vi.advanceTimersToNextFrame();
   vi.advanceTimersToNextFrame();
   expect(document.activeElement).not.toBe(composer.element());
+});
+
+it("a rejected send moves to the stash when a new draft was typed meanwhile", async () => {
+  const thread = threadWithHistory("rejected-send", 1);
+  let rejectSend: ((message: string) => void) | null = null;
+  using _environment = installFakeEnvironment([thread], {
+    capabilities: { serverResolvedCommandContext: true },
+    onCommand: (command) =>
+      command.type === "message.dispatch"
+        ? new Promise((_, reject) => {
+            rejectSend = (message) =>
+              reject(
+                new OrchestrationV2DispatchCommandError({
+                  commandId: command.commandId,
+                  commandType: command.type,
+                  message,
+                }),
+              );
+          })
+        : Promise.resolve({ sequence: 100 }),
+  });
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${thread.id}`] }),
+  );
+  await router.load();
+  await using _app = await render(<AppRoot router={router} />, {
+    // AppRoot brings its own router.
+    router: false,
+  });
+  await expect.element(page.getByText(`Answer 0 for ${thread.id}.`)).toBeVisible();
+
+  const editor = page.getByTestId("composer-editor");
+  await userEvent.click(editor);
+  await userEvent.keyboard("Failed prompt{Enter}");
+  await vi.waitFor(() => expect(rejectSend).not.toBeNull());
+  await expect.element(page.getByText("Failed prompt")).toBeVisible();
+  await userEvent.keyboard("Next draft");
+
+  rejectSend!("Attachment 'sample.png' cannot be sent.");
+
+  await expect.element(page.getByText("Failed prompt")).not.toBeInTheDocument();
+  expect(editor.element().textContent).toContain("Next draft");
+  expect(usePromptStashStore.getState().entries.map((entry) => entry.prompt)).toContain(
+    "Failed prompt",
+  );
+  await expect.element(page.getByText("Message not sent")).toBeVisible();
 });

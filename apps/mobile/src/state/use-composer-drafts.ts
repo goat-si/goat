@@ -494,7 +494,7 @@ function attachmentContextRecord(
     : { ...common, kind: "file" as const };
 }
 
-function restoreMissingComposerFileReferences(
+export function restoreMissingComposerFileReferences(
   draft: ComposerDraft,
   attachments = draft.attachments,
 ): ComposerDraft {

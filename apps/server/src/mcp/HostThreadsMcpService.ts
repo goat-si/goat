@@ -72,6 +72,7 @@ import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
 import * as HostToolAuthorization from "./HostToolAuthorization.ts";
 import { remoteSenderFor } from "./remoteSender.ts";
 import { unwatchLaunch } from "./unwatchLaunch.ts";
+import { tailCutsResult } from "./tailReadResult.ts";
 import {
   assertLiveCaller,
   readCaller,
@@ -526,7 +527,7 @@ const make = Effect.gen(function* () {
             );
       const result: OrchestratorMcpThreadReadResult = yield* read;
       // Only after every read above: acknowledging cancels the child's completion wake.
-      if (input.view === "summary" || input.tail !== undefined)
+      if (input.view === "summary" || (input.tail !== undefined && !tailCutsResult(result)))
         yield* local.acknowledgeChildRead(scope, input, result.thread);
       return watch === null ? result : { ...result, replicaStatus: replicaStatus(watch) };
     });
