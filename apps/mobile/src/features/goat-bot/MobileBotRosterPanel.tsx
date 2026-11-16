@@ -251,7 +251,7 @@ export function MobileBotRoster(props: {
               operation={operation}
               created={created}
               onRetry={() => {
-                // Refused before it renders: the failed row waits, hidden, until access is back.
+                // Read the store when pressed: a refusal not yet rendered sends nothing.
                 if (isComputerReadable(registry, environmentId))
                   retryNewBot(environmentId, create, openIfStillHere(), mount);
               }}

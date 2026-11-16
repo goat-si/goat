@@ -838,6 +838,7 @@ it("Save in an open Edit sheet sends nothing once a bot-list refusal reaches the
 /** A roster that may read its computer and lists no bots yet, with a create that records each send. */
 async function creatableRoster(environmentId: string) {
   state.roster.listedBots = [];
+  state.rosterError = null;
   state.manage.create.mockReset();
   const view = await refusableRoster(environmentId);
   await view.link({ phase: "connected" });
