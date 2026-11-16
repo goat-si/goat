@@ -23,6 +23,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpIncomingMessage from "effect/http/HttpIncomingMessage";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
+import { appliesToModel, isWindowExhausted } from "@goat/shared/quotaVerdict";
 import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
 
 const Config = Schema.Struct({
@@ -385,6 +386,25 @@ export function servesEndpoint(source: UsageLimitSourceSnapshot, endpoint: strin
 
 type PoolAccount = UsageLimitSourceSnapshot["accounts"][number];
 
+// GOAT's quota verdict reads each window: a window that does not gate the run's model is dropped,
+// and the producer's exhausted flag decides before the percentage does.
+const judged = (account: PoolAccount, model: string | null, now: number): PoolAccount => ({
+  ...account,
+  usageLimits: {
+    ...account.usageLimits,
+    windows: account.usageLimits.windows.flatMap((window) =>
+      appliesToModel(window.scopeModel, model ?? undefined)
+        ? [
+            {
+              ...window,
+              usedPercent: isWindowExhausted(window, now) ? 100 : Math.min(window.usedPercent, 99),
+            },
+          ]
+        : [],
+    ),
+  },
+});
+
 // Paused and reauth accounts take no turns. An exhausted account that no window shows spent is
 // spent with no known reset: it adds no time, so the others' earliest refill answers.
 const countsTowardReset = (account: PoolAccount) =>
@@ -398,11 +418,20 @@ const countsTowardReset = (account: PoolAccount) =>
 /** The OpenCodex pool answers when it knows the reset; otherwise a CLIProxyAPI hub does. */
 export function poolFirstResetAt(
   serving: ReadonlyArray<UsageLimitSourceSnapshot>,
+  model: string | null,
+  now: number,
   resetAt: (sources: ReadonlyArray<UsageLimitSourceSnapshot>) => string | null,
 ): string | null {
   const pools = serving.flatMap((source) =>
     source.kind === "opencodex"
-      ? [{ ...source, accounts: source.accounts.filter(countsTowardReset) }]
+      ? [
+          {
+            ...source,
+            accounts: source.accounts
+              .map((account) => judged(account, model, now))
+              .filter(countsTowardReset),
+          },
+        ]
       : [],
   );
   return resetAt(pools) ?? resetAt(serving.filter((source) => source.kind !== "opencodex"));

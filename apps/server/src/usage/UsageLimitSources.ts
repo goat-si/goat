@@ -310,7 +310,9 @@ export const layerResetFallback = Layer.effect(
         yield* sources.refresh.pipe(Effect.timeout("5 seconds"), Effect.ignore);
         const serving = yield* atEndpoint;
         const now = DateTime.toEpochMillis(yield* DateTime.now);
-        return poolFirstResetAt(serving, (from) => hubPoolResetAt(from, driver, model, now));
+        return poolFirstResetAt(serving, model, now, (from) =>
+          hubPoolResetAt(from, driver, model, now),
+        );
       }),
     };
   }),
