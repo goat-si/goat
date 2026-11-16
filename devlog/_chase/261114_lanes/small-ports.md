@@ -2,7 +2,7 @@
 
 Lane branch: `chase/t3-261114-small-ports`, based on origin/chase/t3-261114-all at `e943ef0c5f`, merged with the tip at 417eaf7fdb, 1275f975dd and 50b8ca19dd (lane head 077313a6c1). Bundle (b) of cycle 261114: five rows, one GOAT commit each, plus one budget refactor. Integration PR #3397 is the coordinator's.
 
-Merged into #3397 at e87890ecf9 (2026-11-16): lane head 077313a6c1.
+Merged into #3397 at e87890ecf9 (2026-11-16): lane head 077313a6c1. Merged into #3397 at 1e67a275fc (2026-11-16): review follow-up, lane head b3d3c918ec.
 
 ## Rows
 
