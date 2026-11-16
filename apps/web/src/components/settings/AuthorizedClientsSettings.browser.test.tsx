@@ -97,11 +97,15 @@ it("Authorized clients marks the sessions Revoke others keeps, and the button is
 });
 
 it.each([
-  { servedByEnvironment: true, where: "on this computer" },
-  { servedByEnvironment: false, where: "on that computer" },
+  { servedByEnvironment: true, where: "on this computer", until: "you quit and reopen it." },
+  {
+    servedByEnvironment: false,
+    where: "on that computer",
+    until: "someone quits and reopens it on that computer.",
+  },
 ])(
   "A kept desktop row explains itself to a keyboard user, naming the computer $where",
-  async ({ servedByEnvironment, where }) => {
+  async ({ servedByEnvironment, where, until }) => {
     await using screen = await render(
       <Clients sessions={[thisDevice, desktop]} servedByEnvironment={servedByEnvironment} />,
     );
@@ -112,7 +116,7 @@ it.each([
     await expect
       .element(
         page.getByText(
-          `Signed in with the desktop app's built-in credential, normally the GOAT desktop app ${where}. If you do not recognise it or suspect it, revoke it by itself`,
+          `Signed in with the desktop app's built-in credential, normally the GOAT desktop app ${where}. If you do not recognise it or suspect it, revoke it by itself; if it is the desktop app's session, that signs the app out until ${until}`,
           { exact: false },
         ),
       )
