@@ -23,7 +23,7 @@ import { PREPARATION_NOT_STARTED_CODE } from "./PreparationFailure.ts";
  * The longest such gap, a delegation's, is two writes and three reads; with each write waiting
  * out busy_timeout (5 s) and two 8 s event-loop stalls it stays under about 30 s.
  */
-export const PREPARATION_GRACE = Duration.minutes(3);
+const PREPARATION_GRACE = Duration.minutes(3);
 export const PASS_INTERVAL = Duration.minutes(1);
 /** Oldest first, so later passes reach newer runs as older ones leave "preparing". */
 const PASS_LIMIT = 200;
@@ -68,7 +68,7 @@ const readSuspects = (sql: SqlClient.SqlClient): SuspectRead =>
  * it; a pass that finds its claim held (a preparation is running) starts its count again.
  */
 // Untraced: a span here would parent every pass for the server's life; each pass has its own.
-export const start = Effect.fnUntraced(function* (suspects: SuspectRead) {
+const start = Effect.fnUntraced(function* (suspects: SuspectRead) {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const claims = yield* PreparationClaims;
   const failing = yield* Ref.make(false);
