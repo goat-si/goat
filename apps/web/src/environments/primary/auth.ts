@@ -189,6 +189,30 @@ export async function fetchSessionState(): Promise<AuthSessionState> {
   });
 }
 
+/** What one read of this tab's own session says; only the server's decoded "no" is `revoked`. */
+export type PrimarySessionAnswer = "revoked" | "signed-in" | "unknown";
+
+/** One auth/session read with no retry: a failed, slow, redirected or unexpected answer is unknown. */
+export const readPrimarySessionAnswer: Effect.Effect<
+  PrimarySessionAnswer,
+  never,
+  PrimaryEnvironmentHttpClient
+> = PrimaryEnvironmentHttpClient.pipe(
+  Effect.flatMap((client) => client.auth.session({ headers: {} })),
+  Effect.timeout("10 seconds"),
+  Effect.map((session): PrimarySessionAnswer => (session.authenticated ? "signed-in" : "revoked")),
+  Effect.catchCause(() => Effect.succeed<PrimarySessionAnswer>("unknown")),
+);
+
+export function probePrimarySession(): Promise<PrimarySessionAnswer> {
+  return runPrimaryHttp(readPrimarySessionAnswer).catch((): PrimarySessionAnswer => "unknown");
+}
+
+/** Whether this tab signed in to its own server, so it holds that server's credential. */
+export function isPrimaryAuthGateAuthenticated(): boolean {
+  return resolvedAuthenticatedGateState?.status === "authenticated";
+}
+
 function readHttpApiStatus(error: unknown): number | null {
   if (isEnvironmentHttpCommonError(error)) {
     return readEnvironmentHttpErrorStatus(error);
