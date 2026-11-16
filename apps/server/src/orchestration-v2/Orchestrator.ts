@@ -13012,10 +13012,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandThreadId: dispatchThreadId,
       });
     }
-    if (command.type === "queue.resume" || command.type === "queued-run.start") {
+    if (
+      command.type === "queue.resume" ||
+      command.type === "queued-run.start" ||
+      command.type === "thread.runtime-mode.set"
+    ) {
       yield* mapDispatchError(command)(
         startNextQueuedRun(command.threadId, {
-          userStarted: true,
+          // A mode change is an automatic start, so a provider's usage limit still holds the queue.
+          userStarted: command.type !== "thread.runtime-mode.set",
           ...(command.type === "queued-run.start" ? { queuedRunId: command.runId } : {}),
         }),
       );
