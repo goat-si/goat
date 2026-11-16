@@ -383,13 +383,27 @@ export function servesEndpoint(source: UsageLimitSourceSnapshot, endpoint: strin
   );
 }
 
+type PoolAccount = UsageLimitSourceSnapshot["accounts"][number];
+
+// Paused and reauth accounts take no turns. An exhausted account that no window shows spent is
+// spent with no known reset: it adds no time, so the others' earliest refill answers.
+const countsTowardReset = (account: PoolAccount) =>
+  account.state !== "paused" &&
+  account.state !== "reauth" &&
+  !(
+    account.state === "exhausted" &&
+    !account.usageLimits.windows.some((window) => window.usedPercent >= 100)
+  );
+
 /** The OpenCodex pool answers when it knows the reset; otherwise a CLIProxyAPI hub does. */
 export function poolFirstResetAt(
   serving: ReadonlyArray<UsageLimitSourceSnapshot>,
   resetAt: (sources: ReadonlyArray<UsageLimitSourceSnapshot>) => string | null,
 ): string | null {
-  return (
-    resetAt(serving.filter((source) => source.kind === "opencodex")) ??
-    resetAt(serving.filter((source) => source.kind !== "opencodex"))
+  const pools = serving.flatMap((source) =>
+    source.kind === "opencodex"
+      ? [{ ...source, accounts: source.accounts.filter(countsTowardReset) }]
+      : [],
   );
+  return resetAt(pools) ?? resetAt(serving.filter((source) => source.kind !== "opencodex"));
 }

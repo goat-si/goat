@@ -255,6 +255,27 @@ const pool = (windows: ReadonlyArray<ServerProviderUsageWindow>): UsageLimitSour
   label: "via OpenCodex Home home-1",
   origin: POOL_ORIGIN,
 });
+const poolOf = (
+  accounts: ReadonlyArray<{
+    state: NonNullable<UsageLimitSourceSnapshot["accounts"][number]["state"]>;
+    windows: ReadonlyArray<ServerProviderUsageWindow>;
+  }>,
+): UsageLimitSourceSnapshot => {
+  const source = pool([]);
+  const [template] = source.accounts;
+  return {
+    ...source,
+    accounts: template
+      ? accounts.map(({ state, windows }, index) => ({
+          ...template,
+          id: `account-${index}`,
+          state,
+          usageLimits: { ...template.usageLimits, windows },
+        }))
+      : [],
+  };
+};
+const roomLeft = (id: string): ServerProviderUsageWindow => ({ ...spent(id, 1), usedPercent: 40 });
 const hubAt = (origin: string, windows: ReadonlyArray<ServerProviderUsageWindow>) => ({
   ...hub([{ driver: "codex", windows }]),
   origin,
@@ -290,6 +311,45 @@ it.effect.each([
     sources: [pool([spent("five_hour", 2)])],
     endpoint: "http://localhost:4318",
     expected: at(2),
+  },
+  {
+    name: "a paused pool account with room is not counted",
+    sources: [
+      poolOf([
+        { state: "available", windows: [spent("five_hour", 2)] },
+        { state: "paused", windows: [roomLeft("five_hour")] },
+      ]),
+    ],
+    endpoint: POOL_ORIGIN,
+    expected: at(2),
+  },
+  {
+    name: "a pool account that needs sign-in again is not counted",
+    sources: [
+      poolOf([
+        { state: "reauth", windows: [roomLeft("five_hour")] },
+        { state: "available", windows: [spent("five_hour", 2)] },
+      ]),
+    ],
+    endpoint: POOL_ORIGIN,
+    expected: at(2),
+  },
+  {
+    name: "an exhausted pool account below 100% is spent with no known reset",
+    sources: [
+      poolOf([
+        { state: "exhausted", windows: [roomLeft("five_hour")] },
+        { state: "available", windows: [spent("five_hour", 2)] },
+      ]),
+    ],
+    endpoint: POOL_ORIGIN,
+    expected: at(2),
+  },
+  {
+    name: "a pool whose only account is exhausted below 100% knows no reset",
+    sources: [poolOf([{ state: "exhausted", windows: [roomLeft("five_hour")] }])],
+    endpoint: POOL_ORIGIN,
+    expected: null,
   },
   {
     name: "a hub answers its own endpoint while the pool serves another",
