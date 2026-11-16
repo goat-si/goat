@@ -1379,7 +1379,7 @@ const make = Effect.gen(function* () {
             Effect.mapError(threadManagementFailure),
             Effect.map((records) => runStop(runId, records.turnItems)),
           );
-  // goat#2338: ThreadManagementService decides; every refusal stops nothing.
+  // goat#2338: ownership of a remote task is decided in forceCancelTask, the rest by its host.
   const forceCancelRemoteTask = Effect.fn("OrchestratorMcpService.forceCancelRemoteTask")(
     function* (
       scope: McpThreadInvocationScope,
