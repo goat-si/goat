@@ -792,6 +792,7 @@ export const make = Effect.gen(function* () {
       (pullRequest) => !wanted.has(pullRequest),
     );
     yield* Effect.forEach(stale, (pullRequest) => FiberMap.remove(feeds, pullRequest), {
+      concurrency: "unbounded",
       discard: true,
     });
     for (const [pullRequest, group] of wanted) {

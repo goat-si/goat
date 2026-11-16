@@ -31,6 +31,8 @@ const REFUSED_PAUSE = Duration.hours(1);
 const LIMIT_PAUSE = Duration.minutes(10);
 const MAX_FAILURES = 6;
 const MAX_BACKOFF_MS = 60_000;
+/** A feed waits this long for its DELETE, so ending watches and shutdown are not held up. */
+const UNSUBSCRIBE_LIMIT = Duration.seconds(5);
 
 // Decoded apart, so a subscription whose URL is refused can still be deleted by its id.
 const decodeSubscriptionId = Schema.decodeUnknownOption(
@@ -93,7 +95,7 @@ export const make = Effect.gen(function* () {
         method: "DELETE",
         path: `event-subscriptions/${encodeURIComponent(String(id))}`,
       })
-      .pipe(Effect.ignore);
+      .pipe(Effect.timeout(UNSUBSCRIBE_LIMIT), Effect.ignore);
   });
 
   const subscribe = Effect.fn("GitHubPullRequestEvents.subscribe")(function* (
@@ -167,7 +169,10 @@ export const make = Effect.gen(function* () {
             ),
           )
           // Client spans would carry the subscription URL.
-          .pipe(Effect.provideService(HttpClient.TracerDisabledWhen, () => true));
+          .pipe(
+            Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
+            Effect.timeout(SILENCE_LIMIT),
+          );
         if (response.status === 401 || response.status === 403 || response.status === 404) {
           return Stream.succeed<Ending>("stop");
         }

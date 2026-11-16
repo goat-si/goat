@@ -27,16 +27,17 @@ function fakeRest(
     string,
     GitHubApiResponseError | GitHubApiNotFoundError | GitHubApiAuthenticationError
   >,
+  deleteAnswer: Effect.Effect<void> = Effect.void,
 ) {
   const posts: Array<unknown> = [];
   const deletes: Array<string> = [];
   const rest = GitHubRest.GitHubRest.of({
     rest: (input) =>
       input.method === "DELETE"
-        ? Effect.sync(() => {
-            deletes.push(input.path);
-            return { status: 204, headers: {}, body: "", truncated: false, invalidUtf8: false };
-          })
+        ? Effect.sync(() => deletes.push(input.path)).pipe(
+            Effect.andThen(deleteAnswer),
+            Effect.as({ status: 204, headers: {}, body: "", truncated: false, invalidUtf8: false }),
+          )
         : Effect.suspend(() => {
             posts.push(input.body);
             return subscribe(posts.length);
@@ -361,5 +362,52 @@ it.effect("keeps a stream open across a retry: line, without counting a failure 
     assert.equal(connections, 1, "the retry: line ended the connection");
     assert.equal(changes, 1, "only the opening counts as a change");
     yield* Fiber.interrupt(fiber);
+  }),
+);
+
+it.effect("stops waiting on a DELETE GitHub does not answer within five seconds", () =>
+  Effect.gen(function* () {
+    const deleting = yield* Deferred.make<void>();
+    const { rest, deletes } = fakeRest(
+      subscription,
+      Deferred.succeed(deleting, undefined).pipe(Effect.andThen(Effect.never)),
+    );
+    const httpClient = HttpClient.make((request) =>
+      Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status: 403 }))),
+    );
+    const events = yield* eventsOf(rest, httpClient);
+    // Detached: a release that never ends must fail this test, not hang its teardown.
+    const fiber = yield* events(target).pipe(Stream.runCount, Effect.forkDetach);
+    yield* Deferred.await(deleting);
+    yield* TestClock.adjust("5 seconds");
+    assert.isDefined(fiber.pollUnsafe(), "the feed still waits on GitHub's DELETE");
+    assert.equal(yield* Fiber.join(fiber), 0);
+    assert.deepEqual(deletes, ["event-subscriptions/1"]);
+  }),
+);
+
+it.effect("reconnects when a stream request gets no answer within the silence limit", () =>
+  Effect.gen(function* () {
+    const { rest, posts } = fakeRest(subscription);
+    const waiting = yield* Deferred.make<void>();
+    let connections = 0;
+    const httpClient = HttpClient.make((request) =>
+      Effect.suspend(() => {
+        connections += 1;
+        return connections === 1
+          ? Deferred.succeed(waiting, undefined).pipe(Effect.andThen(Effect.never))
+          : Effect.succeed(
+              HttpClientResponse.fromWeb(request, new Response(null, { status: 403 })),
+            );
+      }),
+    );
+    const events = yield* eventsOf(rest, httpClient);
+    const fiber = yield* events(target).pipe(Stream.runCount, Effect.forkChild);
+    yield* Deferred.await(waiting);
+    yield* TestClock.adjust("45 seconds");
+    yield* TestClock.adjust("1 minute");
+    assert.equal(connections, 2, "the stream request waited without a deadline");
+    assert.equal(yield* Fiber.join(fiber), 0);
+    assert.equal(posts.length, 1);
   }),
 );
