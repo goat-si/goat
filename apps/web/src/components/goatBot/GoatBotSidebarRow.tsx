@@ -253,24 +253,27 @@ function GoatBotConversationRow({
       />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5 group-data-[collapsible=icon]:hidden">
         <span className="flex min-w-0 items-center gap-2">
-          <span
-            className={
-              preview?.unread
-                ? "min-w-0 flex-1 truncate font-semibold text-sidebar-foreground"
-                : "min-w-0 flex-1 truncate"
-            }
-          >
-            {name}
-            {preview?.unread ? <span className="sr-only">, unread</span> : null}
-          </span>
-          {at ? (
+          {/* The time wraps onto a hidden second line before the counts would run under the options button. */}
+          <span className="flex h-5 min-w-0 flex-1 flex-wrap content-start items-center gap-x-2 overflow-hidden">
             <span
-              data-slot="goat-bot-relative-time"
-              className="shrink-0 text-xs font-normal text-sidebar-muted-foreground"
+              className={
+                preview?.unread
+                  ? "min-w-0 flex-1 truncate font-semibold text-sidebar-foreground"
+                  : "min-w-0 flex-1 truncate"
+              }
             >
-              <RelativeTimeLabel timestamp={at} />
+              {name}
+              {preview?.unread ? <span className="sr-only">, unread</span> : null}
             </span>
-          ) : null}
+            {at ? (
+              <span
+                data-slot="goat-bot-relative-time"
+                className="shrink-0 text-xs font-normal text-sidebar-muted-foreground"
+              >
+                <RelativeTimeLabel timestamp={at} />
+              </span>
+            ) : null}
+          </span>
           {readable ? (
             <GoatBotRowSignals
               environmentId={waiting.environmentId}
