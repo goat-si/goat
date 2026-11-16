@@ -12,7 +12,9 @@ vi.mock("react-native", () => ({
   Modal: ({ children }: { children?: ReactNode }) => <div role="dialog">{children}</div>,
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   ScrollView: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
+  Text: (props: { children?: ReactNode; accessibilityElementsHidden?: boolean }) => (
+    <span aria-hidden={props.accessibilityElementsHidden}>{props.children}</span>
+  ),
   TextInput: (props: {
     accessibilityLabel: string;
     value: string;
@@ -29,8 +31,14 @@ vi.mock("react-native", () => ({
     onPress?: () => void;
     disabled?: boolean;
     accessibilityLabel?: string;
+    accessibilityHint?: string;
   }) => (
-    <button onClick={props.onPress} disabled={props.disabled} aria-label={props.accessibilityLabel}>
+    <button
+      onClick={props.onPress}
+      disabled={props.disabled}
+      aria-label={props.accessibilityLabel}
+      aria-description={props.accessibilityHint}
+    >
       {props.children}
     </button>
   ),
@@ -101,8 +109,8 @@ vi.mock("../../state/environments", async () => {
     }),
   };
 });
-// The roster's bot-list read, deleted members included, which every reader of a computer must share;
-// any other input is a read nobody answers. And this phone's permission to edit bots.
+// The roster's bot-list read of "env", deleted members included, which every reader of a computer
+// must share; any other computer or input is a read nobody answers. And the permission to edit bots.
 vi.mock("../../state/channels", async () => {
   const { Atom, AsyncResult } = await import("effect/reactivity");
   const read = Atom.make<AsyncResult.AsyncResult<unknown, unknown>>(AsyncResult.initial());
@@ -111,8 +119,12 @@ vi.mock("../../state/channels", async () => {
   const allowed = { permissionAtom: () => Atom.make(true) };
   return {
     channelEnvironment: {
-      listBots: (args: { input: { includeDeleted?: boolean } }) =>
-        args.input.includeDeleted === true ? read : unanswered,
+      listBots: (args: { environmentId: string; input: Record<string, unknown> }) =>
+        args.environmentId === "env" &&
+        Object.keys(args.input).length === 1 &&
+        args.input.includeDeleted === true
+          ? read
+          : unanswered,
       updateBot: { permissionAtom: () => mayEdit },
       createBot: allowed,
       setBotHidden: allowed,
@@ -223,6 +235,15 @@ async function settings() {
     get saveEnabled() {
       return save() !== null && !save()!.disabled;
     },
+    /** What a screen reader says after Save, or null. */
+    get saveHint() {
+      return save()?.getAttribute("aria-description") ?? null;
+    },
+    /** Each place the text shows on screen, and whether a screen reader skips it. */
+    shown: (text: string) =>
+      [...container.querySelectorAll("span")]
+        .filter((span) => span.textContent === text)
+        .map((span) => ({ hiddenFromReader: span.getAttribute("aria-hidden") === "true" })),
     answer: (result: AsyncResult.AsyncResult<unknown, unknown>) =>
       act(async () => registry.set(botListAtom, result)),
     openRow: () => act(async () => row()?.click()),
@@ -258,19 +279,25 @@ it("offline, the Profile row keeps the main bot's name it last read, reads Offli
   expect(screen.sheetOpen).toBe(false);
 });
 
-it("an Edit sheet open when the computer drops stays open with its typed change and Save off, and Save comes back on reconnect", async () => {
+it("an Edit sheet open when the computer drops stays open with its typed change and Save off with the reason said once, and Save comes back on reconnect", async () => {
   await using screen = await settings();
   await screen.answer(AsyncResult.success(botList));
   await screen.openRow();
   await screen.typePurpose("Keeps an eye on the release");
   expect(screen.saveEnabled).toBe(true);
+  expect(screen.saveHint).toBe(null);
   await screen.drop();
   expect(screen.sheetOpen).toBe(true);
   expect(screen.purpose).toBe("Keeps an eye on the release");
   expect(screen.saveEnabled).toBe(false);
+  // Shown beside Save and said as Save's hint; the visible line is skipped so it is said once.
+  expect(screen.saveHint).toBe("Scout's computer isn't connected.");
+  expect(screen.shown("Scout's computer isn't connected.")).toEqual([{ hiddenFromReader: true }]);
   await screen.reconnect();
   expect(screen.purpose).toBe("Keeps an eye on the release");
   expect(screen.saveEnabled).toBe(true);
+  expect(screen.saveHint).toBe(null);
+  expect(screen.shown("Scout's computer isn't connected.")).toEqual([]);
 });
 
 it("once the computer refuses the bot list, the row shows no name and does not open, and an open sheet closes for good", async () => {
@@ -291,6 +318,28 @@ it("once the computer refuses the bot list, the row shows no name and does not o
   await screen.answer(AsyncResult.success(botList));
   expect(screen.row).toBe("🐐 Scout, Edit");
   expect(screen.sheetOpen).toBe(false);
+});
+
+it("after a refusal the row reads Loading with no name while the list is read again, and Couldn't load while the refusal stands", async () => {
+  await using screen = await settings();
+  await screen.answer(AsyncResult.success(botList));
+  const refusal = AsyncResult.failure(Cause.fail(refused), {
+    previousSuccess: Option.some(AsyncResult.success(botList)),
+  });
+  await screen.answer(refusal);
+  expect(screen.row).toBe("GOAT Bot, Couldn't load");
+  // Access back: the list is asked again and has not answered.
+  await screen.answer(AsyncResult.waitingFrom(Option.some(refusal)));
+  expect(screen.row).toBe("GOAT Bot, Loading…");
+  await screen.openRow();
+  expect(screen.sheetOpen).toBe(false);
+  // Refused again, the refusal stands.
+  await screen.answer(refusal);
+  expect(screen.row).toBe("GOAT Bot, Couldn't load");
+  await screen.answer(AsyncResult.initial(true));
+  expect(screen.row).toBe("GOAT Bot, Loading…");
+  await screen.answer(AsyncResult.success(botList));
+  expect(screen.row).toBe("🐐 Scout, Edit");
 });
 
 it("without permission the row says so, and offline it says Offline first", async () => {
