@@ -247,3 +247,82 @@ it.effect("pauses the host when a subscription answer does not decode", () =>
     assert.equal(posts.length, 1, "the host subscribes again at once");
   }),
 );
+
+const refusing = (status: number) =>
+  fakeRest(() =>
+    Effect.fail(
+      new GitHubApiResponseError({
+        host: "github.com",
+        operation: "subscribePullRequestEvents",
+        status,
+      }),
+    ),
+  );
+const noStream = HttpClient.make(() => Effect.die("no stream without a subscription"));
+
+it.effect.each([400, 410, 415])("pauses the host for an hour on a %s subscribe answer", (status) =>
+  Effect.gen(function* () {
+    const { rest, posts } = refusing(status);
+    const events = yield* eventsOf(rest, noStream);
+    assert.equal(yield* Stream.runCount(events(target)), 0);
+    assert.equal(yield* Stream.runCount(events({ ...target, number: 16 })), 0);
+    assert.equal(posts.length, 1, "a refused host is asked again at once");
+    yield* TestClock.adjust("61 minutes");
+    assert.equal(yield* Stream.runCount(events(target)), 0);
+    assert.equal(posts.length, 2);
+  }),
+);
+
+it.effect("keeps the subscription limit pause at ten minutes", () =>
+  Effect.gen(function* () {
+    const { rest, posts } = refusing(422);
+    const events = yield* eventsOf(rest, noStream);
+    assert.equal(yield* Stream.runCount(events(target)), 0);
+    yield* TestClock.adjust("9 minutes");
+    assert.equal(yield* Stream.runCount(events({ ...target, number: 16 })), 0);
+    assert.equal(posts.length, 1);
+    yield* TestClock.adjust("2 minutes");
+    assert.equal(yield* Stream.runCount(events(target)), 0);
+    assert.equal(posts.length, 2);
+  }),
+);
+
+it.effect("asks again after a server error", () =>
+  Effect.gen(function* () {
+    const { rest, posts } = refusing(502);
+    const events = yield* eventsOf(rest, noStream);
+    assert.equal(yield* Stream.runCount(events(target)), 0);
+    assert.equal(yield* Stream.runCount(events(target)), 0);
+    assert.equal(posts.length, 2);
+  }),
+);
+
+it.effect.each([401, 403, 404])(
+  "a stream answering %s stops, deletes its subscription and pauses that pull request",
+  (status) =>
+    Effect.gen(function* () {
+      const { rest, posts, deletes } = fakeRest(subscription);
+      let connections = 0;
+      const httpClient = HttpClient.make((request) =>
+        Effect.sync(() => {
+          connections += 1;
+          return HttpClientResponse.fromWeb(request, new Response(null, { status }));
+        }),
+      );
+      const events = yield* eventsOf(rest, httpClient);
+      const fiber = yield* events(target).pipe(Stream.runCount, Effect.forkChild);
+      yield* TestClock.adjust("10 minutes");
+      assert.equal(yield* Fiber.join(fiber), 0);
+      assert.equal(connections, 1, "the stream reconnected");
+      assert.deepEqual(deletes, ["event-subscriptions/1"]);
+      assert.equal(yield* Stream.runCount(events(target)), 0);
+      assert.equal(posts.length, 1, "the pull request subscribed again at once");
+      const other = yield* events({ ...target, number: 16 }).pipe(
+        Stream.runCount,
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust("10 minutes");
+      yield* Fiber.join(other);
+      assert.equal(posts.length, 2, "other pull requests still subscribe");
+    }),
+);

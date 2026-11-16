@@ -59,6 +59,9 @@ export interface PullRequestEventsInput {
   readonly number: number;
 }
 
+const resourceUrlOf = (input: PullRequestEventsInput) =>
+  `https://${input.host}/${input.repository}/pull/${input.number}`;
+
 /**
  * Emits when a connection opens, so a reader catches up on what it missed, then once per change
  * GitHub reports. Ends quietly when GitHub refuses the subscription; the caller polls meanwhile.
@@ -68,6 +71,12 @@ export const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   /** Keyed by host for account-wide refusals, and by pull request for one it cannot read. */
   const pausedUntil = new Map<string, number>();
+  const pause = (key: string, duration: Duration.Duration) =>
+    Clock.currentTimeMillis.pipe(
+      Effect.map((now) => {
+        pausedUntil.set(key, now + Duration.toMillis(duration));
+      }),
+    );
 
   const unsubscribe = Effect.fn("GitHubPullRequestEvents.unsubscribe")(function* (
     host: string,
@@ -86,13 +95,11 @@ export const make = Effect.gen(function* () {
   const subscribe = Effect.fn("GitHubPullRequestEvents.subscribe")(function* (
     input: PullRequestEventsInput,
   ) {
-    const resourceUrl = `https://${input.host}/${input.repository}/pull/${input.number}`;
+    const resourceUrl = resourceUrlOf(input);
     const now = yield* Clock.currentTimeMillis;
     if (Math.max(pausedUntil.get(input.host) ?? 0, pausedUntil.get(resourceUrl) ?? 0) > now) {
       return Option.none();
     }
-    const pause = (key: string, duration: Duration.Duration) =>
-      Effect.sync(() => pausedUntil.set(key, now + Duration.toMillis(duration)));
     const response = yield* rest
       .rest({
         host: input.host,
@@ -109,10 +116,11 @@ export const make = Effect.gen(function* () {
           GitHubApiNotFoundError: () =>
             pause(resourceUrl, REFUSED_PAUSE).pipe(Effect.as(Option.none())),
           GitHubApiResponseError: (error) =>
-            (error.status === 403
-              ? pause(input.host, REFUSED_PAUSE)
-              : error.status === 422
-                ? pause(input.host, LIMIT_PAUSE)
+            // Other refusals are not asked again for an hour; server errors are.
+            (error.status === 422
+              ? pause(input.host, LIMIT_PAUSE)
+              : error.status >= 400 && error.status < 500 && error.status !== 429
+                ? pause(input.host, REFUSED_PAUSE)
                 : Effect.void
             ).pipe(Effect.as(Option.none())),
         }),
@@ -156,7 +164,7 @@ export const make = Effect.gen(function* () {
           )
           // Client spans would carry the subscription URL.
           .pipe(Effect.provideService(HttpClient.TracerDisabledWhen, () => true));
-        if (response.status === 403 || response.status === 404) {
+        if (response.status === 401 || response.status === 403 || response.status === 404) {
           return Stream.succeed<Ending>("stop");
         }
         if (response.status !== 200) return Stream.succeed<Ending>("reconnect");
@@ -224,7 +232,9 @@ export const make = Effect.gen(function* () {
                       const failures = healthy ? 0 : failuresSoFar + 1;
                       switch (ending) {
                         case "stop":
-                          return Stream.empty;
+                          return Stream.fromEffectDrain(
+                            pause(resourceUrlOf(target), REFUSED_PAUSE),
+                          );
                         case "renew":
                           session.renew = true;
                           return Stream.empty;
