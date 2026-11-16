@@ -754,7 +754,7 @@ function statusLine(availability: GoatBotAvailability): string {
       return "Connecting…";
     case "offline":
     case "home_offline":
-      return availability.refused === true ? "Didn't accept this device" : "Offline";
+      return availability.refused === true ? "Not accepted" : "Offline";
     case "legacy_active":
       return "Waiting for the global agent";
     case "error":
