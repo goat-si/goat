@@ -29,6 +29,8 @@ export function MobileBotProfileSheet(props: {
   readonly colorEditable?: boolean | undefined;
   /** Starts the name field from words typed elsewhere; changes still count against `initial`. */
   readonly draftName?: string | undefined;
+  /** Why `canSubmit` is false, shown by Save while it is off for that reason. */
+  readonly unavailableReason?: string | undefined;
 }) {
   const [name, setName] = useState(props.draftName ?? props.initial.name);
   const [avatar, setAvatar] = useState(props.initial.avatar ?? "");
@@ -47,6 +49,7 @@ export function MobileBotProfileSheet(props: {
   const nameRef = useRef<TextInputInstance>(null);
   const saveDisabled = busy || !props.canSubmit;
   const saveLabel = create ? (busy ? "Creating…" : "Create") : busy ? "Saving…" : "Save";
+  const unavailable = !busy && !props.canSubmit ? props.unavailableReason : undefined;
 
   const save = async () => {
     if (saveDisabled) return;
@@ -96,6 +99,8 @@ export function MobileBotProfileSheet(props: {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={saveLabel}
+            // A value, not a hint: hints can be turned off, and this is why Save is off.
+            accessibilityValue={unavailable === undefined ? undefined : { text: unavailable }}
             accessibilityState={{ disabled: saveDisabled }}
             disabled={saveDisabled}
             onPress={() => void save()}
@@ -106,6 +111,16 @@ export function MobileBotProfileSheet(props: {
             </Text>
           </Pressable>
         </View>
+        {unavailable ? (
+          // Save says it; this line is skipped so a screen reader says it once, at Save.
+          <Text
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            className="text-right text-foreground-muted"
+          >
+            {unavailable}
+          </Text>
+        ) : null}
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerClassName="gap-3 py-4">
           <Text className="text-foreground-muted">
             {props.mode === "create"
