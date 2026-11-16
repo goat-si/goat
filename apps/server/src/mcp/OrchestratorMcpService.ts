@@ -128,7 +128,7 @@ import {
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import { delegatedTaskResultRun, runOutcome } from "../orchestration-v2/RestartBackgroundNote.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
-import { commandAccepted, dispatchThenPrepare } from "../orchestration-v2/goat/RunPreparation.ts";
+import { dispatchThenPrepare } from "../orchestration-v2/goat/RunPreparation.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { delegatedTaskRevision } from "../orchestration-v2/DelegatedTaskRevision.ts";
 import { isSnoozed } from "../orchestration-v2/ThreadSettlementService.ts";
@@ -2839,7 +2839,7 @@ const make = Effect.gen(function* () {
                 (dispatch) => Effect.andThen(claimLaunch, dispatch),
                 Effect.scoped,
               ),
-            commandAccepted(threadManagement, commandId),
+            threadLaunch.committed(commandId),
             Effect.gen(function* () {
               if (admitted.enabled) yield* permissions.complete(commandId);
               const threadId = derive.delegatedTaskThread({ commandId });

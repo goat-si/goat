@@ -18,7 +18,7 @@ import type {
 type Restore = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 
 /** Whether the command committed, here or in an earlier attempt. */
-export const commandAccepted = (
+const commandAccepted = (
   threads: ThreadManagement.ThreadManagementService["Service"],
   commandId: CommandId,
 ) => threads.receiptStatus(commandId).pipe(Effect.map((status) => status === "accepted"));
@@ -66,8 +66,9 @@ export const makeRunPreparation = <ES>(deps: {
 }) => {
   const { threads, reservePreparation, releasePreparation } = deps;
 
-  /** Whether a cut dispatch's command committed. */
-  const committed = (commandId: CommandId) => commandAccepted(threads, commandId);
+  /** Whether a cut dispatch's command committed, once a commit it started on the worker settled. */
+  const committed = (commandId: CommandId) =>
+    deps.settled.pipe(Effect.andThen(commandAccepted(threads, commandId)));
 
   const scheduleRunPreparation = Effect.fn("ThreadLaunchService.scheduleRunPreparation")(function* (
     input: ThreadLaunchPreparationInput,

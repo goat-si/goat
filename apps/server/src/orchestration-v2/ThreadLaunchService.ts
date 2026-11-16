@@ -78,7 +78,7 @@ import {
   withPreparationLog,
 } from "./preparationLog.ts";
 import { confirmLaunchStep, type LaunchConfirm } from "./goat/LaunchConfirm.ts";
-import { commandAccepted, dispatchThenPrepare, makeRunPreparation } from "./goat/RunPreparation.ts";
+import { dispatchThenPrepare, makeRunPreparation } from "./goat/RunPreparation.ts";
 import { classifyPreparationFailure } from "./goat/PreparationFailure.ts";
 import { makeLaunchCommandSlots } from "./goat/launchCommandSlots.ts";
 import {
@@ -255,6 +255,8 @@ export class ThreadLaunchService extends Context.Service<
       | ThreadManagement.ThreadManagementProviderInstanceDisabledError
     >;
     readonly prepareRun: (input: ThreadLaunchPreparationInput) => Effect.Effect<void>;
+    /** Whether a cut dispatch's command committed, once its commit on the batch worker settled. */
+    readonly committed: (commandId: CommandId) => Effect.Effect<boolean>;
   }
 >()("goat/orchestration-v2/ThreadLaunchService") {}
 
@@ -1312,7 +1314,7 @@ const make = Effect.gen(function* () {
                     creationSource: input.creationSource,
                   })
                   .pipe(Effect.mapError(failDispatch)),
-                commandAccepted(threads, messageCommandId),
+                committed(messageCommandId),
                 prepareMessageRun({ commandId: input.commandId, threadId, messageId }),
               );
               // A concurrent retry can read no receipt and still replay the dispatch.
@@ -1396,7 +1398,7 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const { prepareRun, prepareMessageRun, retryPreparation } = makeRunPreparation({
+  const { committed, prepareRun, prepareMessageRun, retryPreparation } = makeRunPreparation({
     threads,
     reservePreparation,
     releasePreparation,
@@ -1410,6 +1412,7 @@ const make = Effect.gen(function* () {
     checkWorktreeBase,
     retryPreparation,
     prepareRun,
+    committed,
   });
 });
 
