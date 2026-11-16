@@ -195,15 +195,12 @@ export const layer = Layer.effect(
     const fences = yield* EffectExecutionFences.EffectExecutionFences;
     const claimLock = yield* Semaphore.make(1);
     const pressure = yield* Effect.serviceOption(HostPressureMonitor.HostPressureMonitor);
+    const startSlots = Math.max(2, Math.floor(NodeOS.availableParallelism() / 2));
     const sampleStartCapacity = Option.isSome(pressure)
       ? pressure.value.held.pipe(
-          Effect.map((sample) =>
-            sample?.level === "critical"
-              ? 1
-              : Math.max(2, Math.floor(NodeOS.availableParallelism() / 2)),
-          ),
+          Effect.map((sample) => (sample?.level === "critical" ? 1 : startSlots)),
         )
-      : Effect.succeed(Math.max(2, Math.floor(NodeOS.availableParallelism() / 2)));
+      : Effect.succeed(startSlots);
     const hold = yield* AutomationHold.AutomationHold;
     let backlog: { readonly effects: string; readonly threads: string } | undefined;
     const heldBacklog = Effect.gen(function* () {
@@ -654,7 +651,7 @@ export const layer = Layer.effect(
           const held = yield* heldBacklog;
           const startState = yield* startGuard;
           const startCapacity = yield* sampleStartCapacity;
-          const occupancy = yield* fences.snapshotWith({ startCapacity });
+          const occupancy = yield* fences.snapshotWith({ startCapacity, startSlots });
           const now = yield* DateTime.now;
           const nowIso = DateTime.formatIso(now);
           const leaseExpiresAt = DateTime.formatIso(
@@ -697,7 +694,7 @@ export const layer = Layer.effect(
           const held = yield* heldBacklog;
           const startState = yield* startGuard;
           const startCapacity = yield* sampleStartCapacity;
-          const occupancy = yield* fences.snapshotWith({ startCapacity });
+          const occupancy = yield* fences.snapshotWith({ startCapacity, startSlots });
           const rows = yield* sql<{ readonly available_at: string | null }>`
           SELECT MIN(candidate.available_at) AS available_at
           FROM orchestration_v2_effect_outbox AS candidate

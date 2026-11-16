@@ -1,5 +1,12 @@
 import { botProfileChanges, type BotProfileValues } from "@goat/client-runtime/state/channels";
-import { useRef, useState, type ComponentProps, type FormEvent, type ReactNode } from "react";
+import {
+  useId,
+  useRef,
+  useState,
+  type ComponentProps,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 
 import { Button } from "../ui/button";
 import {
@@ -27,6 +34,8 @@ export function GoatBotProfileDialog(props: {
   /** A name typed elsewhere to start from; changes are still those from `initial`. */
   readonly draftName?: string | undefined;
   readonly canSubmit: boolean;
+  /** Why Save is off while `canSubmit` is false, shown beside it. */
+  readonly unavailableReason?: string | undefined;
   readonly onSubmit: (changes: GoatBotProfileChanges) => Promise<string | null>;
   readonly onClose: () => void;
   /** More fields after the profile, such as a member's model. */
@@ -49,6 +58,12 @@ export function GoatBotProfileDialog(props: {
   const [nameEdited, setNameEdited] = useState(false);
   const nameMissing = blankName && nameChecked;
   const nameRef = useRef<HTMLInputElement>(null);
+  const reasonId = useId();
+  const alertId = useId();
+  const blocked = !busy && !props.canSubmit && props.unavailableReason !== undefined;
+  // A failed save that already says why stands in for the line beside Save.
+  const alertSaysWhy = blocked && error === props.unavailableReason;
+  const unavailable = blocked && !alertSaysWhy ? props.unavailableReason : undefined;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -139,16 +154,31 @@ export function GoatBotProfileDialog(props: {
               <p className="text-sm text-muted-foreground">The bot needs a name.</p>
             ) : null}
             {error ? (
-              <p role="alert" className="text-sm text-destructive-foreground">
+              <p
+                role="alert"
+                id={alertSaysWhy ? alertId : undefined}
+                className="text-sm text-destructive-foreground"
+              >
                 {error}
               </p>
             ) : null}
           </DialogPanel>
           <DialogFooter>
+            {unavailable === undefined ? null : (
+              <p id={reasonId} className="text-sm text-muted-foreground sm:me-auto sm:self-center">
+                {unavailable}
+              </p>
+            )}
             <Button type="button" variant="outline" disabled={busy} onClick={props.onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={busy || !props.canSubmit}>
+            <Button
+              type="submit"
+              disabled={busy || !props.canSubmit}
+              aria-describedby={
+                unavailable !== undefined ? reasonId : alertSaysWhy ? alertId : undefined
+              }
+            >
               {busy ? "Saving…" : "Save"}
             </Button>
           </DialogFooter>

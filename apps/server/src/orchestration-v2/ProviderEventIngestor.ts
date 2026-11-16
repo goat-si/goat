@@ -39,6 +39,7 @@ import { modelSelectionsEqual } from "@goat/shared/model";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import { UsageLimitResetFallback } from "../usage/UsageLimitSources.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -318,6 +319,7 @@ export const layer: Layer.Layer<
     const analytics = yield* ProviderTurnAnalytics;
     const agentScope = yield* AgentScope;
     const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+    const usageLimitResets = yield* UsageLimitResetFallback;
     const scope = yield* Effect.scope;
     const completedTurnAnalytics = new Set<string>();
 
@@ -752,9 +754,39 @@ export const layer: Layer.Layer<
                 return dismissed;
               }
               const occurredAt = yield* DateTime.now;
-              const failure = yield* withAgentOom(input.threadId, input.event.failure).pipe(
+              const reported = yield* withAgentOom(input.threadId, input.event.failure).pipe(
                 Effect.provideService(AgentScope, agentScope),
               );
+              // A proxied CLI can drop the reset time; the hub still knows when its pool refills.
+              const endpoint =
+                reported.class === "usage_limit" && reported.resetAt == null
+                  ? (yield* Effect.flatMap(
+                      instances.getInstance(input.providerInstanceId),
+                      (instance) => instance?.snapshot.getSnapshot ?? Effect.undefined,
+                    ))?.auth.endpoint
+                  : undefined;
+              const hubResetAt =
+                endpoint === undefined
+                  ? null
+                  : yield* Effect.gen(function* () {
+                      // The failing run's model, which may differ from a selection changed mid-turn.
+                      const { runs } =
+                        input.runId === undefined
+                          ? { runs: [] }
+                          : yield* projections.getThreadRecords(input.threadId, ["runs"], {
+                              runIds: [input.runId],
+                            });
+                      return (
+                        runs[0]?.modelSelection ??
+                        (yield* projections.getThread(input.threadId)).modelSelection
+                      ).model;
+                    }).pipe(
+                      Effect.orElseSucceed(() => null),
+                      Effect.flatMap((model) =>
+                        usageLimitResets.resetAt(input.event.driver, endpoint, model),
+                      ),
+                    );
+              const failure = hubResetAt === null ? reported : { ...reported, resetAt: hubResetAt };
               return [
                 ...dismissed,
                 yield* makeDomainEvent(input, {

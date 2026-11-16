@@ -35,6 +35,7 @@ import {
 } from "./CodexModelOptionDefaults.ts";
 import {
   accountProbeStatus,
+  codexEndpoint,
   codexRoutesSpendNativeQuota,
   routesAwayFromOpenAi,
 } from "./CodexProviderAccount.ts";
@@ -127,6 +128,7 @@ const CODEX_PRESENTATION = {
 export interface CodexAppServerProviderSnapshot {
   readonly effectiveBaseUrl?: string;
   readonly account: CodexSchema.V2GetAccountResponse;
+  readonly endpoint?: string | undefined;
   readonly nativeUsage?: boolean;
   readonly rateLimits?: CodexRateLimitsProbe;
   readonly version: string | undefined;
@@ -603,6 +605,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   return {
     ...(effectiveBaseUrl ? { effectiveBaseUrl } : {}),
     account: accountResponse,
+    endpoint: codexEndpoint(config, effectiveBaseUrl),
     nativeUsage,
     ...(rateLimits ? { rateLimits } : {}),
     version,
@@ -997,7 +1000,9 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       installed: true,
       version: snapshot.version ?? null,
       status: snapshot.models === undefined ? "warning" : accountStatus.status,
-      auth: accountStatus.auth,
+      auth: snapshot.endpoint
+        ? { ...accountStatus.auth, endpoint: snapshot.endpoint }
+        : accountStatus.auth,
       ...(accountStatus.message
         ? { message: accountStatus.message }
         : snapshot.models === undefined

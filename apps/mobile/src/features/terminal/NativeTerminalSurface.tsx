@@ -1,4 +1,8 @@
-import type { TerminalGrid, TerminalOutputState } from "@goat/client-runtime/state/terminal";
+import {
+  terminalOutputText,
+  type TerminalGrid,
+  type TerminalOutputState,
+} from "@goat/client-runtime/state/terminal";
 import {
   memo,
   useCallback,
@@ -206,7 +210,12 @@ const FallbackTerminalSurface = memo(function FallbackTerminalSurface({
 });
 
 export const TerminalSurface = memo(function TerminalSurface(props: TerminalSurfaceProps) {
-  const buffer = useTerminalSurfaceBuffer(props);
+  // The text fallback draws escape sequences literally, so it gets displayed text, not the replay.
+  const buffer = useTerminalSurfaceBuffer(
+    resolveNativeTerminalSurfaceView() || props.output === null
+      ? props
+      : { terminalKey: props.terminalKey, buffer: terminalOutputText(props.output) },
+  );
   return <ReadyTerminalSurface key={props.terminalKey} {...props} buffer={buffer} />;
 });
 

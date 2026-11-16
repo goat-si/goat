@@ -2,9 +2,9 @@ import { expect } from "vite-plus/test";
 import * as Effect from "effect/Effect";
 
 export const settlementCase = (
-  createManager: typeof import("./Manager.test.ts").createManager,
-  openInput: typeof import("./Manager.test.ts").openInput,
-  layerWithHostPlatform: typeof import("./Manager.test.ts").layerWithHostPlatform,
+  createManager: typeof import("./Manager.testkit.ts").createManager,
+  openInput: typeof import("./Manager.testkit.ts").openInput,
+  layerWithHostPlatform: typeof import("./Manager.testkit.ts").layerWithHostPlatform,
 ) =>
   Effect.gen(function* () {
     const { manager, ptyAdapter } = yield* createManager(5, {

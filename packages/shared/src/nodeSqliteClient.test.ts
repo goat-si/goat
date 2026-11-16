@@ -43,7 +43,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
           const config = ${JSON.stringify(config)};
           let attempts = 0;
           const prototype = config.point === "statement" ? sqlite.StatementSync.prototype : sqlite.DatabaseSync.prototype;
-          const method = config.point === "statement" ? "all" : "prepare";
+          const method = config.point === "statement" ? "iterate" : "prepare";
           const original = prototype[method];
           prototype[method] = function(...args) {
             const matches = config.point === "statement"

@@ -14,8 +14,29 @@ import {
 import { sshRuntimeStatusText } from "@goat/client-runtime/state/sshRuntime";
 import { GOAT_CONNECT_COMING_SOON } from "@goat/shared/goatConnect";
 import * as Option from "effect/Option";
-import { isGoatConnectUnavailable } from "./EnvironmentRow.logic";
+import type { DesktopDiscoveredSshHost } from "@goat/contracts";
+import { formatDesktopSshTarget, isGoatConnectUnavailable } from "./EnvironmentRow.logic";
 import * as DateTime from "effect/DateTime";
+
+// known_hosts can list one host on several ports. Its own bracketed form keeps an IPv6
+// host's port separate from the address; no portless known_hosts entry has that form.
+export const sshHostSuggestionValue = (target: DesktopDiscoveredSshHost) =>
+  target.source === "known-hosts" && target.port !== null
+    ? `[${target.alias}]:${target.port}`
+    : target.alias;
+
+/** Suggestions not saved yet; a known_hosts port is its own destination, apart from the bare host. */
+export function unsavedSshHostSuggestions(
+  hosts: ReadonlyArray<DesktopDiscoveredSshHost>,
+  savedKeys: ReadonlySet<string>,
+): ReadonlyArray<DesktopDiscoveredSshHost> {
+  return hosts.filter((target) =>
+    target.source === "ssh-config"
+      ? !savedKeys.has(target.alias)
+      : !savedKeys.has(formatDesktopSshTarget(target)) &&
+        (target.port !== null || !savedKeys.has(target.alias)),
+  );
+}
 
 import { getPairingTokenFromUrl, setPairingTokenOnUrl } from "../../pairingUrl";
 import {
