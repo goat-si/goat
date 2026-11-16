@@ -52,9 +52,19 @@ const INTERRUPTS_BEFORE_DECLINE = {
     interrupts: [personStop, agentInterrupt],
     holds: true,
   },
+  // Ingestion ends the run outside the effect queue, so no run is active at dispatch.
+  "stop, then the run ends before decline": {
+    interrupts: [personStop],
+    holds: true,
+    endsRun: true,
+  },
 } satisfies Record<
   string,
-  { readonly interrupts: ReadonlyArray<EarlierInterrupt>; readonly holds: boolean }
+  {
+    readonly interrupts: ReadonlyArray<EarlierInterrupt>;
+    readonly holds: boolean;
+    readonly endsRun?: true;
+  }
 >;
 type InterruptTiming = keyof typeof INTERRUPTS_BEFORE_DECLINE;
 const isInterruptTiming = (timing: string): timing is InterruptTiming =>
@@ -109,6 +119,31 @@ it.effect.each([
           .pipe(Effect.asVoid, Effect.orDie);
         if (timing.startsWith("stop-before-decline")) beforeDecline = stop;
         if (isInterruptTiming(timing)) {
+          const endRun = Effect.gen(function* () {
+            const turn = (yield* orchestrator.getThreadProjection(threadId)).providerTurns[0]!;
+            const ended = yield* orchestrator.streamDomainEvents.pipe(
+              Stream.filter(
+                (event) =>
+                  event.type === "run.updated" &&
+                  event.payload.id === first.runId &&
+                  event.payload.status === "interrupted",
+              ),
+              Stream.take(1),
+              Stream.runDrain,
+              Effect.forkScoped,
+            );
+            yield* Queue.offer(events, {
+              type: "turn.terminal",
+              driver,
+              providerThreadId: turn.providerThreadId,
+              providerTurnId: turn.id,
+              runOrdinal: first.runOrdinal,
+              status: "interrupted",
+              failure: null,
+              threadDisposition: "reusable",
+            });
+            yield* Fiber.join(ended);
+          });
           const interrupts = Effect.forEach(
             INTERRUPTS_BEFORE_DECLINE[timing].interrupts,
             (interrupt: EarlierInterrupt, index) =>
@@ -131,7 +166,10 @@ it.effect.each([
                     },
               ),
           ).pipe(Effect.asVoid, Effect.orDie);
-          beforeDecline = interrupts;
+          beforeDecline =
+            "endsRun" in INTERRUPTS_BEFORE_DECLINE[timing]
+              ? interrupts.pipe(Effect.andThen(Effect.scoped(endRun)), Effect.orDie)
+              : interrupts;
         }
         const steerSelection = { ...runSelection, model: "steer-model" };
         if (timing === "queued-model") {

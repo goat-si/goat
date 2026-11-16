@@ -5784,7 +5784,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ? latestRun
         : undefined;
     const queueBehindRun =
-      activeRun && survivorQueued.has(activeRun.id) ? undefined : (activeRun ?? worktreeMissingRun);
+      activeRun && survivorQueued.has(activeRun.id)
+        ? undefined
+        : (activeRun ??
+          worktreeMissingRun ??
+          // A held follow-up never starts after Stop, even once the steered run has ended.
+          (steerFollowUpAfterStop
+            ? projection.runs.find((run) => run.id === command.steerFollowUpOfRunId)
+            : undefined));
     const pendingMergeBackTransfers = pendingMergeBackTransfersForThread(projection);
     const startsOrQueuesRun =
       dispatchMode.type === "defer_start" ||
