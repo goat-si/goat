@@ -1019,27 +1019,20 @@ const layerListingChanges = Layer.effectDiscard(
 );
 
 /**
- * `McpServer` for in-process calls, which provide `McpInvocationContext` and
- * `McpServerClient` around `callTool` as the transport does for each /mcp request.
+ * `McpServer` for in-process calls. Callers provide `McpInvocationContext` and `McpServerClient`
+ * around `callTool` as the transport does for each /mcp request; a tool that reads one its caller
+ * left out dies on use, as under Effect 4.0.
  */
 export const layerInProcessMcpServer = McpServer.middleware<{
   provides: McpInvocationContext.McpInvocationContext | McpSchema.McpServerClient;
 }>()(
   (effect) =>
-    Effect.flatMap(
-      Effect.all([
-        Effect.serviceOption(McpInvocationContext.McpInvocationContext),
-        Effect.serviceOption(McpSchema.McpServerClient),
-      ]),
-      ([scope, client]) =>
-        Option.isNone(scope) || Option.isNone(client)
-          ? Effect.die(
-              "Provide McpInvocationContext and McpServerClient around in-process MCP calls.",
-            )
-          : effect.pipe(
-              Effect.provideService(McpInvocationContext.McpInvocationContext, scope.value),
-              Effect.provideService(McpSchema.McpServerClient, client.value),
-            ),
+    Effect.updateContext(
+      effect,
+      (context: Context.Context<never>) =>
+        context as Context.Context<
+          McpInvocationContext.McpInvocationContext | McpSchema.McpServerClient
+        >,
     ),
   { global: true },
 ).pipe(Layer.provideMerge(McpServer.McpServer.layer));
