@@ -129,7 +129,9 @@ export function MobileBotRoster(props: {
         now.visible &&
         !now.presenting &&
         whereNow(navigation) === tapped &&
-        now.environmentId === sentTo
+        now.environmentId === sentTo &&
+        // The store when the answer arrives: a refusal not yet rendered opens nothing.
+        isComputerReadable(registry, sentTo)
       )
         onOpenBot({ kind: "member", profile: bot });
     };

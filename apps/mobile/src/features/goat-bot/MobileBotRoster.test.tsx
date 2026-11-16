@@ -638,11 +638,12 @@ async function refusableRoster(environmentId: string) {
   const container = document.createElement("div");
   const root = createRoot(container);
   let visible = true;
+  const opened = vi.fn();
   const draw = () =>
     act(async () =>
       root.render(
         <RegistryContext value={registry}>
-          <MobileBotRoster selectedKey={null} onOpenBot={() => {}} visible={visible} />
+          <MobileBotRoster selectedKey={null} onOpenBot={opened} visible={visible} />
         </RegistryContext>,
       ),
     );
@@ -669,6 +670,7 @@ async function refusableRoster(environmentId: string) {
   let left = false;
   return {
     container,
+    opened,
     members,
     link,
     /** The connection changes in the store; React has not rendered it yet. */
@@ -839,6 +841,8 @@ it("Save in an open Edit sheet sends nothing once a bot-list refusal reaches the
 async function creatableRoster(environmentId: string) {
   state.roster.listedBots = [];
   state.rosterError = null;
+  state.appState = "active";
+  state.navState = { index: 0, routes: [{ key: "home", name: "Home" }] };
   state.manage.create.mockReset();
   const view = await refusableRoster(environmentId);
   await view.link({ phase: "connected" });
@@ -864,5 +868,28 @@ it("Retry sends no create once a bot-list refusal reaches the store, before it r
   expect(retry).toBeDefined();
   view.answerListNow(refusedList);
   await act(async () => retry?.click());
+  expect(state.manage.create).toHaveBeenCalledOnce();
+});
+
+it("a create that answers after a bot-list refusal reaches the store, before it renders, opens nothing", async () => {
+  await using view = await creatableRoster("env-open-refused");
+  const answers: Array<(value: object | string) => void> = [];
+  state.manage.create.mockImplementation(
+    () => new Promise<object | string>((resolve) => answers.push(resolve)),
+  );
+  await act(async () => (state.members as { onNewBot: () => void }).onNewBot());
+  expect(state.manage.create).toHaveBeenCalledOnce();
+  view.answerListNow(refusedList);
+  await act(async () => answers.shift()?.(stored("research", "New bot")));
+  expect(view.opened).not.toHaveBeenCalled();
+});
+
+it("a New bot refused before it renders claims no slot: pressed again once readable, it sends its create", async () => {
+  await using view = await creatableRoster("env-refused-then-readable");
+  view.answerListNow(refusedList);
+  await act(async () => (state.members as { onNewBot: () => void }).onNewBot());
+  expect(state.manage.create).not.toHaveBeenCalled();
+  await view.answerList(AsyncResult.success({ bots: [] }));
+  await act(async () => (state.members as { onNewBot: () => void }).onNewBot());
   expect(state.manage.create).toHaveBeenCalledOnce();
 });
