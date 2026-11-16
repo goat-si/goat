@@ -666,10 +666,16 @@ async function refusableRoster(environmentId: string) {
         ]),
       ),
     );
+  let left = false;
   return {
     container,
     members,
     link,
+    /** The person navigates away: the roster unmounts while a native alert stays up. */
+    leave: () => {
+      left = true;
+      return act(async () => root.unmount());
+    },
     /** Home's selection moves the roster to another computer, which this phone may read. */
     moveTo: (other: string) => {
       state.roster.environmentId = other;
@@ -680,7 +686,7 @@ async function refusableRoster(environmentId: string) {
     longPress: () => act(async () => members().onLongPressBot({ kind: "member", profile: member })),
     choose: (text: string) => act(async () => choose(text)),
     [Symbol.asyncDispose]: async () => {
-      await act(async () => root.unmount());
+      if (!left) await act(async () => root.unmount());
       stop();
     },
   };
@@ -724,6 +730,14 @@ it("an action menu opened before a refusal does nothing when a choice is pressed
   await view.choose("Delete");
   // No confirmation follows: the Delete pressed after the refusal opened nothing.
   expect(state.alert.mock.calls.length).toBe(menus);
+});
+
+it("a menu left open does nothing once the roster has left the screen", async () => {
+  await using view = await refusableRoster("env-a");
+  await view.longPress();
+  await view.leave();
+  await view.choose("Hide");
+  expect(state.manage.hide).not.toHaveBeenCalled();
 });
 
 it("a Restore confirmation opened before a refusal restores nothing when pressed after it", async () => {
