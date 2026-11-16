@@ -8,5 +8,7 @@ export function commandFailureText(
 ): string {
   if (Cause.hasDies(result.cause)) return fallback;
   const failure = squashAtomCommandFailure(result);
-  return failure instanceof Error && failure.message.trim() !== "" ? failure.message : fallback;
+  const message =
+    failure instanceof Error ? failure.message : typeof failure === "string" ? failure : "";
+  return message.trim() === "" ? fallback : message;
 }

@@ -57,8 +57,10 @@ function NumberRow({
         placeholder={emptyLabel}
         onChangeText={setDraft}
         onEndEditing={() => {
-          const number = Number(shown);
-          if (shown.trim() === "") save(null);
+          if (draft === null) return;
+          const number = draft.trim() === "" ? null : Number(draft);
+          if (number === value) setDraft(null);
+          else if (number === null) save(null);
           else if (Number.isInteger(number) && number >= 1 && number <= maximum) save(number);
           else setDraft(null);
         }}
