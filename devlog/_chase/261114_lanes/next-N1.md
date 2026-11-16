@@ -1,6 +1,6 @@
 # N1: web saves and composer (lane record)
 
-Lane branch: `chase/t3-261114-n1-web-saves`, from origin/dev `02511156b0`, merged with origin/dev at `3182a54238` (merge `d6257bb019`). Lane head `232e473f333a4a3bc411239b75a92258e2172041` (review round 1 fixes on top of `f4044724aa`), pushed. Not merged anywhere yet; the coordinator merges reviewed lane heads into `chase/t3-261114-next`. Host pen-mac-studio. Class: L21 is C4 (the merge decides which saved user data survives; ruling N1-P3-4), with P2-1 as its older-data case; L19, L20 and L22 keep #3176's labels. Stored shape and wire are unchanged.
+Lane branch: `chase/t3-261114-n1-web-saves`, from origin/dev `02511156b0`, merged with origin/dev at `3182a54238` (merge `d6257bb019`). Merged into the integration branch `chase/t3-261114-next` at `a677ec2600` (lane head `232e473f33`, draft PR [#3519](https://github.com/goat-si/goat/pull/3519)); not in dev until #3519 merges. Follow-up head `ade3024ae755837fc611c122bba5b2b878f1351e` (N1F-P3-A), pushed, not merged yet. Host pen-mac-studio. Class: L21 is C4 (the merge decides which saved user data survives; ruling N1-P3-4), with P2-1 as its older-data case; L19, L20 and L22 keep #3176's labels. Stored shape and wire are unchanged.
 
 ## Rows
 
@@ -53,8 +53,7 @@ Other commits:
 - Entry points: drafts, settings (all pages) and the stash share the storage paths; `/side` from the composer only (the command palette has no answer path).
 - Clients: web for all four; mobile for O2 (unsent-question-answers.ts). Desktop wraps web; its settings read and write through the bridge and go through the same merge.
 - Providers: none provider-specific; O2 depends on runtime request status, which every adapter reports.
-- Real client (web dev server on this worktree, GOAT's browser): two tabs of one browser context; tab B turned Render math on, then tab A turned Keep composer context on; after reloading tab A both are on, and tab B showed A's change live. Capture: /tmp/n1-c1-two-tabs-after-reload.png. Replay `question`: Stop on an open question ends the run with "Stopped by user" and no console errors.
-- Captures stay in /tmp until the coordinator names the PR.
+- Real client (web dev server on this worktree, GOAT's browser): two tabs of one browser context; tab B turned Render math on, then tab A turned Keep composer context on; after reloading tab A both are on, and tab B showed A's change live. Capture: [n1-c1-two-tabs-after-reload.png](https://raw.githubusercontent.com/goat-si/goat/6d72354a7c347e4c8f7d68b18e89d649d65a0713/3519/n1-c1-two-tabs-after-reload.png) (uploaded to #3519). Replay `question`: Stop on an open question ends the run with "Stopped by user" and no console errors.
 
 ## Code budgets
 
@@ -86,6 +85,14 @@ Fail-first, round 1:
 
 Gate, round 1: on `232e473f33` (the fixes merged with origin/dev at `0eb911bba8`; N13b had no gate running on pen-mac-studio): `node scripts/goat-rename.ts --check` 0; `set -o pipefail; vp run check:changed` exit 0, with format, lint, knip 1/2 and 2/2, agent surface audit, agent context budget and typecheck (8 packages) passing, and 182 test files, 5636 tests passing with no unhandled errors. Budgets unchanged from round 0 (composerDraftStore.ts 4477, useComposerSend.ts 1675); useSettings.ts is 972 lines (991 before the move).
 
+## Fix round review and follow-up (232e473f33: APPROVE WITH NITS, P3 only)
+
+Report /Users/jun/handoff-in/chase/next-N1-fix-review-232e473f.md; merged into `chase/t3-261114-next` at `a677ec2600`.
+
+- N1F-P3-A, `ade3024ae7`: when the failed send had text and images or files and storage refused the stash write, the Copy toast now also says which attachments could not be kept, in the same sentence as the no-text case. Fail-first (stashFailedSend.test.ts, on 232e473f33): `AssertionError: expected 'Your new draft was kept, and browser …' to contain 'screen.png, log.txt could not be kept'`, 1 failed, 2 passed.
+- N1F-P3-B: recorded under NOT RUN.
+- Checks on `ade3024ae7` (pen-mac-studio, no other gate running): `node scripts/goat-rename.ts --check` 0; `set -o pipefail; vp run check:changed` exit 0, with format, lint, knip 1/2 and 2/2, agent surface audit, agent context budget and typecheck (8 packages) passing, and 182 test files, 5637 tests passing. Focused: stashFailedSend and promptStashStore 16/16, ChatView and ComposerStashMenu browser 9/9. No existing dev test expectation changed; no dev merge in this follow-up.
+
 ## Known limits
 
 - Cross-tab localStorage in Chromium propagates between renderer processes asynchronously; the lock serializes read-merge-write between tabs but cannot make a write another process has not delivered yet visible. Upstream has the same window.
@@ -101,6 +108,7 @@ Gate, round 1: on `232e473f33` (the fixes merged with origin/dev at `0eb911bba8`
 
 - Real-client O2 and O4: the Replay `question` scenario takes options only (no custom answer), so nothing can be typed as an answer; covered by questionAttachments.test.ts, unsent-question-answers.test.ts and useComposerSend.question.browser.test.tsx.
 - Real-client O3 (needs a server to reject a dispatch); covered by the ChatView.browser.test.tsx scenario.
+- Real-client view of the round 1 and follow-up toasts (rejected stash naming lost attachments, the two stash image warnings on a failed send): same reason as O3, and they also need storage that refuses the write; stashFailedSend.test.ts checks their wording.
 - Before captures on dev for C1; the two-tab unit tests fail on dev's code (above).
 - Mobile device pass (N15a).
 - Full suite (`ci:full`).
