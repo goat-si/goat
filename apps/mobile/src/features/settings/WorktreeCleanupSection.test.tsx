@@ -29,16 +29,19 @@ vi.mock("react-native", () => ({
     value,
     onChangeText,
     onEndEditing,
+    onFocus,
   }: {
     accessibilityLabel: string;
     value: string;
     onChangeText: (value: string) => void;
     onEndEditing: () => void;
+    onFocus?: () => void;
   }) => (
     <input
       aria-label={accessibilityLabel}
       value={value}
       onChange={(event) => onChangeText(event.target.value)}
+      onFocus={onFocus}
       onBlur={onEndEditing}
     />
   ),
@@ -104,14 +107,16 @@ async function mountSection() {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  await act(() =>
-    root.render(
-      <WorktreeCleanupSection
-        environmentId={EnvironmentId.make("local")}
-        settings={{ ...DEFAULT_SERVER_SETTINGS.storageCleanup, worktreeKeepRecent: 15 }}
-      />,
-    ),
-  );
+  const draw = (worktreeKeepRecent: number) =>
+    act(() =>
+      root.render(
+        <WorktreeCleanupSection
+          environmentId={EnvironmentId.make("local")}
+          settings={{ ...DEFAULT_SERVER_SETTINGS.storageCleanup, worktreeKeepRecent }}
+        />,
+      ),
+    );
+  await draw(15);
   const field = container.querySelector<HTMLInputElement>(
     'input[aria-label="Keep most recent worktrees"]',
   );
@@ -132,6 +137,8 @@ async function mountSection() {
         field.dispatchEvent(new Event("input", { bubbles: true }));
       }),
     submit: () => act(async () => field.blur()),
+    /** The computer reports a new saved value, from this field's save or another device. */
+    saved: draw,
     [Symbol.asyncDispose]: async () => {
       await act(() => root.unmount());
       container.remove();
@@ -227,4 +234,101 @@ it("an older number save that fails does not reset a newer one (#3556)", async (
   expect(section.field.value).toBe("50");
   await act(async () => newer.resolve(AsyncResult.success(undefined)));
   expect(section.field.value).toBe("50");
+});
+
+const held = () => Promise.withResolvers<AsyncResult.AsyncResult<unknown, unknown>>();
+const saved = () => AsyncResult.success(undefined) as AsyncResult.AsyncResult<unknown, unknown>;
+const sent = (worktreeKeepRecent: number) => ({
+  environmentId: "local",
+  input: { patch: { storageCleanup: { worktreeKeepRecent } } },
+});
+
+it("a saved value from the field's own save doesn't replace typing in progress, and the typing is saved on leaving (#3556)", async () => {
+  await using section = await mountSection();
+  const first = held();
+  mocks.update.mockReturnValueOnce(first.promise).mockResolvedValueOnce(saved());
+  await section.type("40");
+  await section.submit();
+  await section.type("45");
+  await act(async () => first.resolve(saved()));
+  await section.saved(40);
+  expect(section.field.value).toBe("45");
+  await section.submit();
+  expect(mocks.update).toHaveBeenLastCalledWith(sent(45));
+});
+
+it("a saved value from another device doesn't replace typing in progress, and the typing is saved on leaving (#3556)", async () => {
+  await using section = await mountSection();
+  mocks.update.mockResolvedValueOnce(saved());
+  await section.type("45");
+  await section.saved(20);
+  expect(section.field.value).toBe("45");
+  await section.submit();
+  expect(mocks.update).toHaveBeenCalledExactlyOnceWith(sent(45));
+});
+
+it("going back to the saved number while another is still being saved sends it (#3556)", async () => {
+  await using section = await mountSection();
+  const first = held();
+  mocks.update.mockReturnValueOnce(first.promise).mockReturnValueOnce(held().promise);
+  await section.type("40");
+  await section.submit();
+  await section.type("15");
+  await section.submit();
+  expect(mocks.update.mock.calls).toEqual([[sent(40)], [sent(15)]]);
+});
+
+it("when 40 is saved and the later 15 fails, the field shows 40 with one alert (#3556)", async () => {
+  await using section = await mountSection();
+  const first = held();
+  const second = held();
+  mocks.update.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+  await section.type("40");
+  await section.submit();
+  await section.type("15");
+  await section.submit();
+  await act(async () => first.resolve(saved()));
+  await section.saved(40);
+  await act(async () => second.resolve(offline()));
+  expect(section.field.value).toBe("40");
+  expect(mocks.alert).toHaveBeenCalledOnce();
+});
+
+it("retyping the number still being saved doesn't send it again, and its failure shows the saved value (#3556)", async () => {
+  await using section = await mountSection();
+  const first = held();
+  mocks.update.mockReturnValueOnce(first.promise);
+  await section.type("40");
+  await section.submit();
+  await section.type("40");
+  await section.submit();
+  expect(mocks.update).toHaveBeenCalledOnce();
+  await act(async () => first.resolve(offline()));
+  expect(section.field.value).toBe("15");
+});
+
+it("guard: an older save that fails after a newer one succeeded keeps the newer number (#3556)", async () => {
+  await using section = await mountSection();
+  const older = held();
+  const newer = held();
+  mocks.update.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+  await section.type("40");
+  await section.submit();
+  await section.type("50");
+  await section.submit();
+  await act(async () => newer.resolve(saved()));
+  await section.saved(50);
+  await act(async () => older.resolve(offline()));
+  expect(section.field.value).toBe("50");
+});
+
+it("guard: an interrupted save shows the saved value and alerts nothing (#3556)", async () => {
+  await using section = await mountSection();
+  const first = held();
+  mocks.update.mockReturnValueOnce(first.promise);
+  await section.type("40");
+  await section.submit();
+  await act(async () => first.resolve(AsyncResult.failure(Cause.interrupt())));
+  expect(section.field.value).toBe("15");
+  expect(mocks.alert).not.toHaveBeenCalled();
 });
