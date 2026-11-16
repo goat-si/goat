@@ -10,6 +10,8 @@ const native = vi.hoisted(() => {
   const directory = { value: "file:///sqlite" };
   // How the next publishing move ends: done, copied partly then interrupted, or refused untouched.
   const nextMove = { value: "done" as "done" | "partial" | "refused" };
+  // Files whose next delete fails, as a native delete that reports it could not remove the file.
+  const failDelete = new Set<string>();
   const pathOf = (name: string) =>
     `${decodeURIComponent(directory.value.replace(/^file:\/\//, ""))}/${name}`;
   const databases = new Map<
@@ -21,6 +23,7 @@ const native = vi.hoisted(() => {
     events,
     directory,
     nextMove,
+    failDelete,
     pathOf,
     databases,
     backup: vi.fn(
@@ -92,6 +95,7 @@ vi.mock("expo-file-system", () => {
       }
       delete() {
         const path = diskPath(this.uri);
+        if (native.failDelete.delete(this.name)) throw new Error(`failed to delete '${path}'`);
         native.events.push(`delete:${this.name}`);
         native.files.delete(path);
       }
@@ -127,6 +131,7 @@ beforeEach(() => {
   native.databases.clear();
   native.directory.value = "file:///sqlite";
   native.nextMove.value = "done";
+  native.failDelete.clear();
   native.open.mockClear();
   native.backup.mockReset().mockImplementation(copyBackup);
 });
@@ -240,5 +245,52 @@ describe("mobile SQLite namespace copy", () => {
       "rows written after the migration",
     );
     expect(native.backup).toHaveBeenCalledTimes(1);
+  });
+
+  it("guard: when the publishing record can't be removed, the open fails and the next launch rebuilds before opening (#3549)", async () => {
+    put(LEGACY_MOBILE_DATABASE_NAME, "rows kept from the old name");
+    native.failDelete.add("goat-client.db.publishing");
+    await expect(openMigratedMobileDatabase()).rejects.toThrow("failed to delete");
+    expect(native.events).not.toContain("open:goat-client.db");
+    native.events.length = 0;
+    await openMigratedMobileDatabase();
+    expect(native.events.indexOf("open:goat-client.db")).toBe(native.events.length - 1);
+    expect(native.files.get(native.pathOf("goat-client.db"))).toBe("rows kept from the old name");
+    expect(native.backup).toHaveBeenCalledTimes(2);
+  });
+
+  it("guard: a launch that finds the publishing record removes goat-client.db and rebuilds it before opening it (#3549)", async () => {
+    put(LEGACY_MOBILE_DATABASE_NAME, "rows kept from the old name");
+    put("goat-client.db", "rows");
+    put("goat-client.db-wal");
+    put("goat-client.db.publishing");
+    await openMigratedMobileDatabase();
+    const firstOpen = native.events.indexOf("open:goat-client.db");
+    expect(native.events.slice(0, firstOpen)).toEqual(
+      expect.arrayContaining([
+        "delete:goat-client.db",
+        "delete:goat-client.db-wal",
+        "backup",
+        "move:goat-client.db",
+      ]),
+    );
+    expect(native.events.lastIndexOf("delete:goat-client.db.publishing")).toBeLessThan(firstOpen);
+    expect(native.files.get(native.pathOf("goat-client.db"))).toBe("rows kept from the old name");
+    expect(has("goat-client.db-wal")).toBe(false);
+  });
+
+  it("guard: a rebuild whose cleanup fails halfway opens nothing and finishes on the next launch (#3549)", async () => {
+    put(LEGACY_MOBILE_DATABASE_NAME, "rows kept from the old name");
+    put("goat-client.db", "rows");
+    put("goat-client.db-wal");
+    put("goat-client.db.publishing");
+    native.failDelete.add("goat-client.db-wal");
+    await expect(openMigratedMobileDatabase()).rejects.toThrow("failed to delete");
+    expect(native.events).not.toContain("open:goat-client.db");
+    expect(has("goat-client.db.publishing")).toBe(true);
+    await openMigratedMobileDatabase();
+    expect(native.files.get(native.pathOf("goat-client.db"))).toBe("rows kept from the old name");
+    expect(has("goat-client.db-wal")).toBe(false);
+    expect(has("goat-client.db.publishing")).toBe(false);
   });
 });
