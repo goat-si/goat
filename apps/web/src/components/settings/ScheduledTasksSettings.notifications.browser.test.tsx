@@ -30,7 +30,7 @@ vi.mock(import("../../state/session"), async (original) => ({
 }));
 vi.mock(import("../../state/entities"), async (original) => ({
   ...(await original()),
-  useProjects: (() => [project()]) as never,
+  useProjects: (() => [project(), otherProject()]) as never,
   useThreadShell: (() => ({ title: "Synthetic thread" })) as never,
 }));
 vi.mock(import("../../state/query"), async (original) => ({
@@ -101,6 +101,9 @@ function project() {
     defaultModelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "model" },
     scripts: [],
   };
+}
+function otherProject() {
+  return { ...project(), id: ProjectId.make("other"), title: "Other", workspaceRoot: "/other" };
 }
 function providers() {
   return [
@@ -175,11 +178,13 @@ function setup(
       ...task,
       title: input.title,
       prompt: input.prompt,
+      // A task moved to another project leaves its thread.
       threadId: !state.threadModes
         ? (input.threadId ?? null)
-        : mode === "new_thread"
+        : mode === "new_thread" || input.projectId !== task.projectId
           ? null
           : (input.threadId ?? task.threadId),
+      projectId: input.projectId ?? task.projectId,
       ...(state.threadModes && mode !== undefined ? { threadMode: mode } : {}),
       ...(input.notificationPolicy === undefined
         ? {}
@@ -450,4 +455,39 @@ it("with thread modes, choosing Important updates again clears the reset notice"
   await expect
     .element(page.getByRole("combobox", { name: "Notifications" }))
     .toHaveTextContent("Important updates");
+});
+
+it("with thread modes, moving a bound task to another project leaves its thread as Destination says", async () => {
+  const task = setup("important_updates", true, { threadMode: "continue" }, true);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  const projectPicker = page.getByRole("combobox", { name: "Project" });
+  await userEvent.click(projectPicker);
+  await userEvent.click(page.getByRole("option", { name: "Other" }));
+  await expect
+    .element(
+      page.getByText(
+        "Notifications changed to All runs because Important updates requires an existing thread.",
+      ),
+    )
+    .toBeVisible();
+  await expect
+    .element(page.getByText("The first run starts a thread", { exact: false }))
+    .toBeVisible();
+  await userEvent.click(projectPicker);
+  await userEvent.click(page.getByRole("option", { name: "Synthetic" }));
+  await expect
+    .element(page.getByText("Each run continues this conversation", { exact: false }))
+    .toBeVisible();
+  await userEvent.click(projectPicker);
+  await userEvent.click(page.getByRole("option", { name: "Other" }));
+  await userEvent.click(page.getByRole("button", { name: "Save task" }));
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  expect(state.tasks[0]).toMatchObject({
+    projectId: "other",
+    threadId: null,
+    threadMode: "continue",
+    notificationPolicy: "all_runs",
+  });
 });

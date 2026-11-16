@@ -28,8 +28,19 @@ vi.mock("../../components/ui/AppText", () => ({
   AppText: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
 }));
 vi.mock("./components/SettingsSection", () => ({
-  SettingsSection: ({ title, children }: { title: string; children?: ReactNode }) => (
-    <section aria-label={title}>{children}</section>
+  SettingsSection: ({
+    title,
+    footer,
+    children,
+  }: {
+    title: string;
+    footer?: string;
+    children?: ReactNode;
+  }) => (
+    <section aria-label={title}>
+      {children}
+      {footer ? <p>{footer}</p> : null}
+    </section>
   ),
 }));
 vi.mock("./ScheduledTaskFormFields", () => ({
@@ -136,6 +147,11 @@ const RESET_NOTICE =
 const threadModesConfig = { environment: { capabilities: { scheduledTaskThreadModes: true } } };
 
 /** The route screen's wiring of both sections around one draft. */
+const projects = [
+  { id: ProjectId.make("project"), title: "Synthetic" },
+  { id: ProjectId.make("other"), title: "Other" },
+] as never;
+
 function Editor({ initial }: { initial: ScheduledTaskDraft }) {
   const [draft, setDraft] = useState(initial);
   return (
@@ -144,7 +160,7 @@ function Editor({ initial }: { initial: ScheduledTaskDraft }) {
         draft={draft}
         setDraft={setDraft}
         config={threadModesConfig as never}
-        projects={[]}
+        projects={projects}
         saving={false}
         locked={false}
         onPickModel={vi.fn()}
@@ -197,4 +213,20 @@ it("New thread each run on an Important updates task shows the notice and drops 
   expect(editor.container.textContent).toContain(RESET_NOTICE);
   expect(editor.labels()).toContain("Notifications, All runs");
   expect(editor.labels()).not.toContain("Notifications: Important updates");
+});
+
+it("moving a bound task to another project shows the next run starting a thread there", async () => {
+  using editor = await renderEditor({
+    threadId: ThreadId.make("bound"),
+    threadMode: "continue",
+    notificationPolicy: "important_updates",
+  });
+  expect(editor.container.textContent).toContain("Each run continues this conversation.");
+  await editor.press("Project: Other");
+  expect(editor.container.textContent).toContain(RESET_NOTICE);
+  expect(editor.container.textContent).toContain("The first run starts the thread.");
+  expect(editor.labels()).not.toContain("Notifications: Important updates");
+  await editor.press("Project: Synthetic");
+  expect(editor.container.textContent).toContain("Each run continues this conversation.");
+  expect(editor.labels()).toContain("Notifications: Important updates");
 });

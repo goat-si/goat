@@ -379,6 +379,27 @@ export const withThreadMode = (
       ? { ...draft, threadMode, threadId: saved.threadId }
       : { ...draft, threadMode };
 
+/**
+ * A task moved to another project leaves its thread on save, as the server does, so the draft
+ * leaves it now, with the same Important updates reset; the saved project gets it back.
+ */
+export const withProject = (
+  draft: DraftState,
+  projectId: string,
+  saved?: Pick<ScheduledTask, "threadId" | "projectId"> | null,
+): DraftState => {
+  const moved = { ...draft, projectId };
+  if (!saved?.threadId) return moved;
+  if (projectId === saved.projectId)
+    return draft.threadId === "" && draft.threadMode !== "new_thread"
+      ? { ...moved, threadId: saved.threadId }
+      : moved;
+  if (draft.threadId === "") return moved;
+  return draft.notificationPolicy === "important_updates"
+    ? { ...moved, threadId: "", notificationPolicy: "all_runs", notificationPolicyReset: true }
+    : { ...moved, threadId: "" };
+};
+
 // Still bound to its GOAT Bot conversation; moved to new threads it is an ordinary task again.
 export const isBotRoutineDraft = (
   liveTask: ScheduledTask | null | undefined,

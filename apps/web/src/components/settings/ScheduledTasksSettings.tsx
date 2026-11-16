@@ -101,6 +101,7 @@ import {
   taskToDraft,
   type DraftState,
   isBotRoutineDraft,
+  withProject,
   withThreadMode,
   workspaceStrategyFromDraft,
   type ScheduleMode,
@@ -1316,7 +1317,7 @@ function ScheduledTaskEditorForm({
                   <Select
                     value={selectedProjectId}
                     onValueChange={(projectId) =>
-                      setDraft((current) => ({ ...current, projectId: projectId ?? "" }))
+                      setDraft((current) => withProject(current, projectId ?? "", liveTask))
                     }
                   >
                     <SelectTrigger size="sm" id="scheduled-task-project">

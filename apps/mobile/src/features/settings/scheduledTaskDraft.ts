@@ -340,9 +340,14 @@ export function scheduledTaskContextFields(
   };
 }
 
+/** The save keeps the task's thread: one-thread mode, same project (the server's rule). */
+export const keepsThread = (draft: ScheduledTaskDraft) =>
+  draft.task?.threadId != null &&
+  draft.threadMode !== "new_thread" &&
+  draft.projectId === draft.task.projectId;
+
 /** Important updates needs a thread that later runs keep. */
-export const offersImportantUpdates = (draft: ScheduledTaskDraft) =>
-  draft.task?.threadId != null && draft.threadMode !== "new_thread";
+export const offersImportantUpdates = keepsThread;
 
 /** Choosing a new thread each run drops Important updates to All runs. */
 export const withThreadMode = (
@@ -352,3 +357,16 @@ export const withThreadMode = (
   threadMode === "new_thread" && draft.notificationPolicy === "important_updates"
     ? { ...draft, threadMode, notificationPolicy: "all_runs", notificationPolicyReset: true }
     : { ...draft, threadMode };
+
+/** Moving a bound task to another project leaves its thread, so Important updates drops too. */
+export const withProject = (
+  draft: ScheduledTaskDraft,
+  projectId: ProjectId,
+): ScheduledTaskDraft => {
+  const moved = { ...draft, projectId };
+  return keepsThread(draft) &&
+    !keepsThread(moved) &&
+    draft.notificationPolicy === "important_updates"
+    ? { ...moved, notificationPolicy: "all_runs", notificationPolicyReset: true }
+    : moved;
+};

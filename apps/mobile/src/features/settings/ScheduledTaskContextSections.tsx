@@ -16,6 +16,8 @@ import { FormField, SelectRow } from "./ScheduledTaskFormFields";
 import {
   scheduledTaskDefaultModel,
   type ScheduledTaskDraft as Draft,
+  keepsThread,
+  withProject,
   withThreadMode,
 } from "./scheduledTaskDraft";
 
@@ -125,14 +127,18 @@ export function ScheduledTaskContextSections({
                   project.id,
                   draft.modelSelection.instanceId,
                 ));
-            setDraft({
-              ...draft,
-              projectId: project.id,
-              modelSelection: keepsExplicitModel
-                ? draft.modelSelection
-                : scheduledTaskDefaultModel(config, project),
-              modelSelectionIsExplicit: keepsExplicitModel,
-            });
+            setDraft(
+              withProject(
+                {
+                  ...draft,
+                  modelSelection: keepsExplicitModel
+                    ? draft.modelSelection
+                    : scheduledTaskDefaultModel(config, project),
+                  modelSelectionIsExplicit: keepsExplicitModel,
+                },
+                project.id,
+              ),
+            );
           }}
         />
         <PickerRow
@@ -158,10 +164,15 @@ export function ScheduledTaskContextSections({
           footer={
             draft.threadMode === "new_thread"
               ? "Each run starts a new thread."
-              : (draft.threadMode === "continue"
-                  ? "Runs continue one conversation."
-                  : "Runs share one thread, each in a fresh session without earlier runs' context.") +
-                " The first run starts the thread. Deleting it also deletes this task."
+              : keepsThread(draft)
+                ? (draft.threadMode === "continue"
+                    ? "Each run continues this conversation."
+                    : "Each run starts a fresh session in this thread, without earlier runs' context.") +
+                  " Deleting the thread also deletes this task."
+                : (draft.threadMode === "continue"
+                    ? "Runs continue one conversation."
+                    : "Runs share one thread, each in a fresh session without earlier runs' context.") +
+                  " The first run starts the thread. Deleting it also deletes this task."
           }
         >
           <SelectRow
