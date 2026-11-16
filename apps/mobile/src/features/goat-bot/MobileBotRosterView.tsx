@@ -187,9 +187,10 @@ export function MobileBotRosterView(props: {
         const selected = props.selectedKey === key;
         if (bot.kind === "main") {
           // The main bot leads the list as one tile, like a contact the person returns to most.
-          // Keyed by its computer too, so a switch closes a menu opened on the other one.
+          // Keyed by its computer too, so a switch closes a menu opened on the other one. Android
+          // wraps the tile in its menu, so this view re-measures when the tile moves in the list.
           return (
-            <Fragment key={`main:${props.mainEnvironmentId ?? ""}`}>
+            <View key={`main:${props.mainEnvironmentId ?? ""}`} onLayout={measure}>
               {withMenu(bot, (longPress) => (
                 <Pressable
                   ref={rowRef}
@@ -247,7 +248,7 @@ export function MobileBotRosterView(props: {
                   ) : null}
                 </Pressable>
               ))}
-            </Fragment>
+            </View>
           );
         }
         return (
