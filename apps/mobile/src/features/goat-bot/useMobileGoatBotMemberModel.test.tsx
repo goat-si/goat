@@ -49,6 +49,7 @@ vi.mock("@goat/client-runtime/state/runtime", () => ({
 }));
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
+    environments: [{ environmentId: "env", label: "Studio" }],
     presentationById: new Map([
       [
         "env",
@@ -139,7 +140,11 @@ it("offers no model change while the member's computer is offline, and a menu op
   const opened = await menuOf();
   state.connected = false;
   const offline = await menuOf();
-  expect(offline.canChange).toBe(false);
+  expect(offline).toMatchObject({
+    canChange: false,
+    title:
+      "Last read from Studio, so Research's model may be out of date. Changes need it connected.",
+  });
   state.alert.mockClear();
   opened.select("codex:astra");
   expect(state.run).not.toHaveBeenCalled();
