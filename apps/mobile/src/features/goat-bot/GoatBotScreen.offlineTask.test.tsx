@@ -133,6 +133,7 @@ it("a home that refused this phone says so in the banner and the empty chat, nev
   } finally {
     Object.assign(screenSession, {
       availability: "ready",
+      rows: [],
       homeConnected: true,
       homeLabel: null,
       homeKnown: false,
@@ -161,6 +162,7 @@ it("guard: a home that is only unreachable keeps the offline banner and the usua
   } finally {
     Object.assign(screenSession, {
       availability: "ready",
+      rows: [],
       homeConnected: true,
       homeLabel: null,
       homeKnown: false,

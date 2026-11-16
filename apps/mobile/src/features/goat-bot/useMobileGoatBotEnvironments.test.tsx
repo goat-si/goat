@@ -2,7 +2,6 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { RegistryContext } from "@effect/atom-react";
 import { Atom, AtomRegistry } from "effect/reactivity";
-import type { GoatBotEnvironmentInput } from "@goat/client-runtime/goatBot";
 import { EnvironmentId } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -44,12 +43,13 @@ it("a computer that refused this phone reaches GOAT Bot as refused, until it con
   const registry = AtomRegistry.make();
   registry.set(catalogAtom, listed(["env"]));
   const env = EnvironmentId.make("env");
-  let inputs: ReadonlyArray<GoatBotEnvironmentInput> = [];
+  // What GOAT Bot reads for the one computer, drawn so the test reads it like a person would.
   function Probe() {
-    inputs = useMobileGoatBotEnvironments();
-    return null;
+    const refused = useMobileGoatBotEnvironments()[0]?.refused;
+    return <span>{refused === undefined ? "not refused" : String(refused)}</span>;
   }
-  const root = createRoot(document.createElement("div"));
+  const container = document.createElement("div");
+  const root = createRoot(container);
   try {
     await act(async () =>
       root.render(
@@ -58,14 +58,14 @@ it("a computer that refused this phone reaches GOAT Bot as refused, until it con
         </RegistryContext>,
       ),
     );
-    expect(inputs[0]?.refused).toBeUndefined();
+    expect(container.textContent).toBe("not refused");
     await act(async () => registry.set(connectionRefusedAtom(env), true));
-    expect(inputs[0]?.refused).toBe(true);
+    expect(container.textContent).toBe("true");
     await act(async () => registry.set(connectionRefusedAtom(env), false));
-    expect(inputs[0]?.refused).toBeUndefined();
+    expect(container.textContent).toBe("not refused");
     await act(async () => registry.set(connectionRefusedAtom(env), true));
     await act(async () => registry.set(catalogAtom, listed([])));
-    expect(inputs[0]?.refused).toBeUndefined();
+    expect(container.textContent).toBe("not refused");
   } finally {
     await act(async () => root.unmount());
     vi.unstubAllGlobals();

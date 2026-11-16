@@ -150,5 +150,5 @@ it("a computer that refused this phone is named as refusing it, not left offline
   harness.environments = [{ ...environment("env", false), refused: true }];
   await render();
   expect(view.session.availability).toBe("offline");
-  expect((view.session as { refusedBy?: string | null }).refusedBy).toBe("env");
+  expect(view.session.refusedBy).toBe("env");
 });
