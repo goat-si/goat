@@ -443,7 +443,7 @@ function GoatBotChatViewContent({
             <h1
               className={cn(
                 "flex min-w-0 shrink-0",
-                // Every header status is at least 2rem minus the gap (32px); a shorter one would cut a name that fits.
+                // Every header status is at least 2rem (32px) wide; a shorter one would cut a name that fits.
                 headerStatus ? "max-w-[calc(100%-2.5rem)]" : "max-w-full",
               )}
             >
