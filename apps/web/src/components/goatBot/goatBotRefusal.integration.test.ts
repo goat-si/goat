@@ -178,6 +178,8 @@ it.effect(
       server.signedIn = true;
       yield* supervisor.retryNow;
       yield* settled(supervisor.state, (state) => state.phase === "connected");
+      // The final Retry made exactly one attempt.
+      expect(server.attempts).toBe(3);
 
       const refusedAt = samples.findIndex((sample) => sample.phase === "blocked");
       expect(refusedAt).toBeGreaterThan(-1);
