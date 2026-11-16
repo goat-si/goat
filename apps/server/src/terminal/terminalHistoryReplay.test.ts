@@ -1,3 +1,4 @@
+import { DEFAULT_MAX_TERMINAL_BUFFER_BYTES } from "@goat/contracts";
 import { expect, it } from "vite-plus/test";
 import {
   MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH,
@@ -170,4 +171,17 @@ it("keeps a CSI just under its limit whole", () => {
   const history = historyFeed();
   history.feed(csi.slice(0, 1024), csi.slice(1024, 3000), csi.slice(3000), "after");
   expect(history.visible).toBe(csi + "after");
+});
+
+it("swallows a sequence longer than the client replay window, which no client could replay", () => {
+  // The window is UTF-8 bytes and the cap UTF-16 units; image and sixel payloads are ASCII.
+  const history = historyFeed();
+  const start = "\u001b]1337;File=:";
+  history.feed(
+    "before",
+    start,
+    "QUJD".repeat(DEFAULT_MAX_TERMINAL_BUFFER_BYTES / 4),
+    "\u0007after\n",
+  );
+  expect(history.visible).toBe("beforeafter\n");
 });
