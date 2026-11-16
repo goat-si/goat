@@ -1,5 +1,6 @@
 import * as FleetSync from "../goatclaw/FleetSync.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
+import { followUpRemoteTask } from "../remoteReports/remoteTaskFollowUp.ts";
 import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
 import {
   OrchestratorMcpFailure,
@@ -914,6 +915,7 @@ const make = Effect.gen(function* () {
                     ),
                   ),
           ),
+          Effect.flatMap((sent) => followUpRemoteTask(coordinator, scope, host, input, sent)),
         );
         const result =
           ceilingAdvice === undefined || sent.delivery === "relayed"
