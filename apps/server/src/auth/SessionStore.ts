@@ -6,6 +6,7 @@ import {
   decodeWebSocketClaims,
 } from "./sessionClaims.ts";
 import * as CloudSessionFence from "./CloudSessionFence.ts";
+import * as DurableRevocations from "./DurableRevocations.ts";
 import {
   AuthSessionId,
   AuthStandardClientScopes,
@@ -150,12 +151,13 @@ export class SessionStore extends Context.Service<
       readonly principalKind?: SessionPrincipalKind;
       readonly penBinding?: AuthSessions.AuthSessionPenBinding;
     }) => Effect.Effect<IssuedSession, SessionCredentialInternalError>;
-    /**
-     * Token-free live authority; revocation and expiry are checked on every read. A memory read
-     * with no SQL or lock, so it is safe inside a SQL transaction. Covers sessions loaded at
-     * startup, issued here, or accepted by `verify`, including ones another process issued.
-     */
     readonly setCloudWithdrawalPending: (pending: boolean) => Effect.Effect<void>;
+    /**
+     * Token-free live authority: a memory read with no SQL or lock, so it is safe inside a SQL
+     * transaction. Covers sessions loaded at startup, issued here, or accepted by `verify`,
+     * including ones another process issued. Expiry and this process's revocations apply at
+     * once; another process's revocation applies at the next durable check, within 5 seconds.
+     */
     readonly readActiveScopes: (
       sessionId: AuthSessionId,
     ) => Effect.Effect<ReadonlyArray<AuthEnvironmentScope>, SessionCredentialError>;
@@ -336,6 +338,35 @@ export const make = Effect.gen(function* () {
     );
 
   const cloudFence = yield* CloudSessionFence.make(activeScopeRows, emitRemoved);
+
+  /** Ends sessions whose rows are already revoked or gone. Callers hold authorityLock. */
+  const settleEnded = (sessionIds: ReadonlyArray<AuthSessionId>) =>
+    Ref.update(connectedSessionsRef, (current) => {
+      const next = new Map(current);
+      for (const sessionId of sessionIds) next.delete(sessionId);
+      return next;
+    }).pipe(
+      Effect.andThen(
+        Effect.forEach(sessionIds, emitRemoved, { concurrency: "unbounded", discard: true }),
+      ),
+    );
+  const liveSessionIds = Effect.map(
+    Effect.all([Ref.get(activeScopes), Ref.get(connectedSessionsRef)]),
+    ([scopes, connected]) => [...new Set([...scopes.records.keys(), ...connected.keys()])],
+  );
+  const isLive = (sessionId: AuthSessionId) =>
+    Effect.map(liveSessionIds, (live) => live.includes(sessionId));
+  const pruneExpired = Effect.flatMap(DateTime.now, (now) =>
+    Ref.update(activeScopes, (current) => ({
+      ...current,
+      records: withoutExpired(current.records, now.epochMilliseconds),
+    })),
+  );
+  yield* DurableRevocations.start({
+    repository: authSessions,
+    liveIds: Effect.andThen(pruneExpired, liveSessionIds),
+    settle: (ended) => authorityLock.withPermit(settleEnded(ended).pipe(Effect.uninterruptible)),
+  });
 
   /** Registers a running verify; yields its ticket and the removal count it started at. */
   const beginVerify = Ref.modify(activeScopes, (current) => {
@@ -966,15 +997,10 @@ export const make = Effect.gen(function* () {
           revokedAt,
         })
         .pipe(Effect.mapError((cause) => new SessionRevocationError({ sessionId, cause })));
-      if (revoked) {
-        yield* Ref.update(connectedSessionsRef, (current) => {
-          const next = new Map(current);
-          next.delete(sessionId);
-          return next;
-        });
-        yield* emitRemoved(sessionId);
-      }
-      return revoked;
+      // Matching no row while still live here means another process already ended it.
+      const ended = revoked || (yield* isLive(sessionId));
+      if (ended) yield* settleEnded([sessionId]);
+      return ended;
     },
   );
 
@@ -992,23 +1018,11 @@ export const make = Effect.gen(function* () {
           (cause) => new OtherSessionsRevocationError({ currentSessionId: sessionId, cause }),
         ),
       );
-    if (revokedSessionIds.length > 0) {
-      yield* Ref.update(connectedSessionsRef, (current) => {
-        const next = new Map(current);
-        for (const revokedSessionId of revokedSessionIds) {
-          next.delete(revokedSessionId);
-        }
-        return next;
-      });
-      yield* Effect.forEach(
-        revokedSessionIds,
-        (revokedSessionId) => emitRemoved(revokedSessionId),
-        {
-          concurrency: "unbounded",
-          discard: true,
-        },
-      );
-    }
+    // Every other row is now revoked or gone, including ones another process revoked earlier.
+    const live = yield* liveSessionIds;
+    yield* settleEnded(
+      [...new Set([...revokedSessionIds, ...live])].filter((id) => id !== sessionId),
+    );
     return revokedSessionIds.length;
   });
 
