@@ -23,12 +23,14 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FiberMap from "effect/FiberMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import type * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 
 import {
   type ProviderChangeRequestWatchFingerprint,
@@ -51,6 +53,21 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 /** Checks take minutes; faster sweeps waste the account's shared host quota. */
 const SWEEP_MINUTES = 2;
 const READ_FAILURE_LIMIT = 8;
+/** Each feed holds a host connection and subscription; watches past the cap rely on the sweep. */
+export const MAX_EVENT_FEEDS = 64;
+/**
+ * A wake costs the user a provider turn, so a burst of host events (check suites, a review's
+ * comments) settles into one read; the sweep still reads every two minutes.
+ */
+const EVENT_SETTLE = "20 seconds";
+
+/** The first feeds by key, so the same pull requests keep theirs from sweep to sweep. */
+export const feedsToFollow = <A>(candidates: Iterable<readonly [string, A]>) =>
+  new Map(
+    [...new Map(candidates)]
+      .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .slice(0, MAX_EVENT_FEEDS),
+  );
 /** A failed read waits twice as long as the one before it, up to this, before the next try. */
 const READ_RETRY_MAX_MS = 30 * 60_000;
 /** Without fingerprints, reread quiet PRs on snapshot changes or this interval to catch edits. */
@@ -267,6 +284,10 @@ export const make = Effect.gen(function* () {
   const readFailures = new Map<string, number>();
   /** When a failing group reads again, and the watches it held when it last failed. */
   const readRetryAt = new Map<string, { readonly at: number; readonly watches: Set<string> }>();
+  /** The last sweep's groups, whose pull requests get host change feeds. */
+  let currentGroups: ReadonlyArray<WatchGroup> = [];
+  // A pass reads watches and records new ones, so passes must not overlap.
+  const passes = Semaphore.makeUnsafe(1);
   const lastReads = new Map<string, LastRead>();
   const threadTails = new Map<
     string,
@@ -641,19 +662,26 @@ export const make = Effect.gen(function* () {
     });
   });
 
-  const sweep = Effect.gen(function* () {
+  /** Every watch, or with `changed`, only that pull request's after its host reported a change. */
+  // The sweep and change reads each name their own span.
+  const pass = Effect.fnUntraced(function* (changed: string | undefined) {
     const threads = yield* projections.getThreadsWithPullRequests();
     const targets = threads.flatMap((thread) =>
       visibleThreadPullRequests(thread.pullRequests ?? []).flatMap((link) =>
-        link.watch === undefined ? [] : [{ thread, link, watch: link.watch }],
+        link.watch === undefined ||
+        (changed !== undefined && threadPullRequestKeyOf(link) !== changed)
+          ? []
+          : [{ thread, link, watch: link.watch }],
       ),
     );
     const present = new Set(targets.map(lifeKey));
-    yield* Effect.forEach(
-      [...lives].filter(([key]) => !present.has(key)),
-      ([key, life]) => reportEnd(key, life, "stopped"),
-      { discard: true },
-    );
+    if (changed === undefined) {
+      yield* Effect.forEach(
+        [...lives].filter(([key]) => !present.has(key)),
+        ([key, life]) => reportEnd(key, life, "stopped"),
+        { discard: true },
+      );
+    }
     for (const target of targets) lifeOf(target);
     const byPullRequest = new Map<string, Array<WatchTarget>>();
     const ending: Array<readonly [WatchTarget, WatchEndReason]> = [];
@@ -672,10 +700,13 @@ export const make = Effect.gen(function* () {
       targets: members,
       fingerprint: [...new Set(members.map(snapshotFingerprint))].toSorted().join("\n"),
     }));
-    for (const cache of [readRetryAt, lastReads, threadTails]) {
-      for (const key of cache.keys()) if (!byPullRequest.has(key)) cache.delete(key);
+    if (changed === undefined) {
+      currentGroups = groups;
+      for (const cache of [readRetryAt, lastReads, threadTails]) {
+        for (const key of cache.keys()) if (!byPullRequest.has(key)) cache.delete(key);
+      }
+      for (const key of readFailures.keys()) if (!present.has(key)) readFailures.delete(key);
     }
-    for (const key of readFailures.keys()) if (!present.has(key)) readFailures.delete(key);
     yield* Effect.forEach(
       ending,
       ([target, reason]) =>
@@ -710,7 +741,24 @@ export const make = Effect.gen(function* () {
     yield* Effect.forEach(
       due,
       (group) =>
-        fingerprintOf(group).pipe(
+        // The host just reported a change, so a cached fingerprint may predate it.
+        (changed === undefined
+          ? Effect.void
+          : pullRequests.invalidate({ reference: referenceOf(group) })
+        ).pipe(
+          Effect.andThen(fingerprintOf(group)),
+          Effect.tap((fingerprint) => {
+            const last = lastReads.get(group.key);
+            // Open pull request views refresh only when the host state moved.
+            return changed !== undefined &&
+              fingerprint !== null &&
+              fingerprint !== "paused" &&
+              (last === undefined ||
+                last.status !== fingerprint.status ||
+                last.remarks !== fingerprint.remarks)
+              ? pullRequests.invalidate({ reference: referenceOf(group) }, { notifyReaders: true })
+              : Effect.void;
+          }),
           Effect.flatMap((fingerprint) =>
             fingerprint === "paused"
               ? Effect.void
@@ -725,22 +773,62 @@ export const make = Effect.gen(function* () {
         ),
       { concurrency: "unbounded", discard: true },
     );
-  }).pipe(
+  }, passes.withPermit);
+
+  const sweep = pass(undefined).pipe(
     Effect.catchCause(logFailure("pull request watch sweep failed", {})),
     Effect.withSpan("PullRequestWatchReactor.sweep"),
   );
 
-  const start: PullRequestWatchReactor["Service"]["start"] = () =>
-    forkParked(
+  const readOnChange = (pullRequest: string) =>
+    NodeSqliteClient.backgroundReads(pass(pullRequest)).pipe(
+      Effect.catchCause(logFailure("pull request watch change read failed", { pullRequest })),
+      Effect.withSpan("PullRequestWatchReactor.readOnChange"),
+    );
+
+  // One feed per pull request: the host keeps one subscription per pull request and account.
+  const follow = Effect.fnUntraced(function* (feeds: FiberMap.FiberMap<string>) {
+    const wanted = feedsToFollow(
+      currentGroups.flatMap((group) =>
+        group.targets.slice(0, 1).map(({ link }) => [threadPullRequestKeyOf(link), group] as const),
+      ),
+    );
+    const stale = Array.from(feeds, ([pullRequest]) => pullRequest).filter(
+      (pullRequest) => !wanted.has(pullRequest),
+    );
+    yield* Effect.forEach(stale, (pullRequest) => FiberMap.remove(feeds, pullRequest), {
+      concurrency: "unbounded",
+      discard: true,
+    });
+    for (const [pullRequest, group] of wanted) {
+      // An ended feed restarts here, so a host that refused it is asked again each sweep.
+      yield* FiberMap.run(feeds, pullRequest, { onlyIfMissing: true })(
+        pullRequests.changes(referenceOf(group)).pipe(
+          Stream.debounce(EVENT_SETTLE),
+          // Events that settle during a read queue one more.
+          Stream.buffer({ capacity: 1, strategy: "sliding" }),
+          Stream.runForEach(() => readOnChange(pullRequest)),
+        ),
+      );
+    }
+  });
+
+  const start: PullRequestWatchReactor["Service"]["start"] = Effect.fn(
+    "PullRequestWatchReactor.start",
+  )(function* () {
+    const feeds = yield* FiberMap.make<string>();
+    yield* forkParked(
       hold.awaitRelease.pipe(
         Effect.andThen(
           NodeSqliteClient.backgroundReads(sweep).pipe(
+            Effect.andThen(follow(feeds)),
             Effect.repeat(Schedule.spaced(`${SWEEP_MINUTES} minutes`)),
             Effect.asVoid,
           ),
         ),
       ),
     );
+  });
 
   return { start, sweep } satisfies PullRequestWatchReactor["Service"];
 });

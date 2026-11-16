@@ -23,6 +23,13 @@ function choosePullRequestBranch(
   }
 }
 
+const PULL_REQUEST_BRANCH_NAME = new RegExp(String.raw`^(?:t3code/pr-\d+/|goat-pr-\d+-)`, "u");
+
+/** Both names `resolvePullRequestWorktreeLocalBranchName` gives a fork pull request's branch. */
+export function isPullRequestWorktreeLocalBranchName(branch: string): boolean {
+  return PULL_REQUEST_BRANCH_NAME.test(branch);
+}
+
 export const resolvePullRequestWorktreeLocalBranchName = Effect.fn(
   "GitManager.resolvePullRequestWorktreeLocalBranchName",
 )(function* (

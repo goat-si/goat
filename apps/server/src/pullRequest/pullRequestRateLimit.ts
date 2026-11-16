@@ -131,6 +131,10 @@ export function withRateLimitBackoff(
             api.getChangeRequestWatchFingerprint,
           ),
         }),
+    // A long-lived feed, not a read: the quota guard would hold its lease for hours.
+    ...(api.changeRequestEvents === undefined
+      ? {}
+      : { changeRequestEvents: api.changeRequestEvents }),
     getChangeRequestActivity: wrap("getChangeRequestActivity", api.getChangeRequestActivity),
     ...(api.getReviewThreadComments === undefined
       ? {}
