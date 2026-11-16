@@ -39,6 +39,12 @@ const screenSession = vi.hoisted(() => ({
   availability: "ready" as string,
   // Whether the bot's computer, which Home and task screens read, is connected.
   homeConnected: true,
+  // The computer GOAT Bot waits on, whether this app knows it, and whether it refused this device.
+  homeLabel: null as string | null,
+  homeKnown: false,
+  refusedBy: null as string | null,
+  // Where Home Settings would move the bot.
+  moveTarget: null as { environmentId: string; label: string } | null,
   // Each task's newest chip in the conversation, which says which questions it took answers to.
   taskChips: new Map() as ReadonlyMap<string, unknown>,
 }));
@@ -474,6 +480,7 @@ vi.mock("@legendapp/list/react-native", async () => {
       data?: GoatBotRow[];
       renderItem?: Render;
       extraData?: unknown;
+      ListEmptyComponent?: ReactNode;
       ListFooterComponent?: ReactNode;
       ref?: { current: unknown };
     }) => {
@@ -481,6 +488,7 @@ vi.mock("@legendapp/list/react-native", async () => {
       if (props.ref) props.ref.current = { scrollToIndex: list.scrollToIndex };
       return (
         <>
+          {props.data?.length ? null : props.ListEmptyComponent}
           {props.data?.map((item) =>
             list.unmounted.has(item.id) ? null : (
               <Row key={item.id} item={item} extra={props.extraData} render={props.renderItem} />
@@ -525,7 +533,12 @@ vi.mock("../../state/use-remote-environment-registry", () => ({
   }),
 }));
 vi.mock("./useMobileGoatBotHomeSettings", () => ({
-  useMobileGoatBotHomeSettings: () => ({ moveTarget: null, error: null }),
+  useMobileGoatBotHomeSettings: () => ({
+    moveTarget: screenSession.moveTarget,
+    error: null,
+    busy: false,
+    changeHome: () => {},
+  }),
 }));
 vi.mock("./useMobileGoatBotSession", () => ({
   useMobileGoatBotSession: (_visible: boolean, taskId?: string | null) => {
@@ -542,6 +555,9 @@ vi.mock("./useMobileGoatBotSession", () => ({
       activity: screenSession.activity,
       supportsTaskThreads: screenSession.supportsTaskThreads,
       homeConnected: screenSession.homeConnected,
+      homeLabel: screenSession.homeLabel,
+      homeKnown: screenSession.homeKnown,
+      refusedBy: screenSession.refusedBy,
       taskChips: screenSession.taskChips,
       streamingReplyIds: new Set<string>(),
       visibleTurnItems: screenSession.visibleTurnItems,
