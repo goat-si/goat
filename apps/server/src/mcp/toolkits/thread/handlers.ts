@@ -40,6 +40,21 @@ function queueEntry(
     truncated: characters.length > limit,
   };
 }
+
+// A long thread holds thousands of runs and messages; the queue needs only its queued runs.
+const readQueue = Effect.fn("mcp.readQueue")(function* (threadId: ThreadId | undefined) {
+  const { threads, projection: queued } = yield* readThread(threadId, ["runs"], undefined, {
+    runStatuses: ["queued"],
+  });
+  const messages = yield* threads
+    .getMessagesById(
+      queued.thread.id,
+      queued.runs.map((run) => run.userMessageId),
+    )
+    .pipe(Effect.mapError(unavailable));
+  return { runs: queued.runs, messages: [...messages.values()] };
+});
+
 const dispatch = Effect.fn("mcp.dispatchThreadCommand")(function* (
   threadId: ThreadId | undefined,
   command: (common: { commandId: CommandId; threadId: ThreadId }) => OrchestrationV2Command,
@@ -347,7 +362,7 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
   ),
   goat_queue_list: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
-      const { projection } = yield* readThread(input.threadId, ["runs", "messages"]);
+      const projection = yield* readQueue(input.threadId);
       const runs = queuedRunsInDeliveryOrder(projection);
       const cursor = input.cursor ?? 0;
       const end = cursor + (input.limit ?? 20);
@@ -362,7 +377,7 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
   ),
   goat_queue_read: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
-      const { projection } = yield* readThread(input.threadId, ["runs", "messages"]);
+      const projection = yield* readQueue(input.threadId);
       const entry = queueEntry(projection, input.queuedRunId, 16000);
       return (
         entry ??
@@ -379,11 +394,16 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
         // An edit keeps the message's author, so a person's message must not become a command
         // (such as /logout) that turn start would run as theirs.
         if (input.text.trimStart().startsWith("/")) {
-          const { projection } = yield* readThread(input.threadId, ["runs", "messages"]);
-          const run = projection.runs.find((candidate) => candidate.id === input.queuedRunId);
-          const message = projection.messages.find(
-            (candidate) => candidate.id === run?.userMessageId,
-          );
+          const { threads, projection } = yield* readThread(input.threadId, ["runs"], undefined, {
+            runIds: [input.queuedRunId],
+          });
+          const [run] = projection.runs;
+          const message =
+            run === undefined
+              ? undefined
+              : (yield* threads
+                  .getMessagesById(projection.thread.id, [run.userMessageId])
+                  .pipe(Effect.mapError(unavailable))).get(run.userMessageId);
           if (message?.createdBy !== "agent")
             return yield* new OrchestratorMcpFailure({
               code: "capability_denied",

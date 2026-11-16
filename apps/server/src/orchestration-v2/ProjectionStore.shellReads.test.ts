@@ -27,6 +27,8 @@ import {
   d10DecisionFixture,
   saveD10Request,
   addRolledBackRecoveryCandidate,
+  traceSqlStatements,
+  queryPlanFor,
 } from "./ProjectionStore.testkit.ts";
 
 it.effect("record reads restrict provider histories to delivery identities", () =>
@@ -182,7 +184,7 @@ it.effect.each([
   ["SQL", layerTest],
 ] as const)(
   "%s idle compaction filters keep the latest run, live work and the newest usage",
-  ([, layer]) =>
+  ([name, layer]) =>
     Effect.gen(function* () {
       const store = yield* ProjectionStore.ProjectionStoreV2;
       const threadId = yield* addRolledBackRecoveryCandidate("idle-compaction");
@@ -324,6 +326,36 @@ it.effect.each([
         records.runs.map((run) => run.id),
         ["run:idle-compaction:rolled-back", "run:idle-compaction:4"],
       );
+      const { statements, tracer } = traceSqlStatements();
+      const statusOnly = yield* store
+        .getThreadRecords(threadId, ["runs"], {
+          runStatuses: ["preparing", "starting", "running", "rolled_back"],
+        })
+        .pipe(Effect.withTracer(tracer));
+      assert.equal(statusOnly.runs.map((run) => run.id).join(), "run:idle-compaction:rolled-back");
+      // An id filter reads by primary key, not every row of the thread.
+      const byId = traceSqlStatements();
+      const found = yield* store
+        .getThreadRecords(threadId, ["runs", "nodes", "subagents", "messages"], {
+          runIds: [RunId.make("run:idle-compaction:4")],
+          nodeIds: [nodeId],
+          subagentIds: [nodeId],
+          messageIds: [MessageId.make("message:idle-compaction:4")],
+        })
+        .pipe(Effect.withTracer(byId.tracer));
+      assert.equal(found.runs.map((run) => run.id).join(), "run:idle-compaction:4");
+      if (name === "SQL") {
+        // Read only the matching runs, not every run in ordinal order.
+        const runPlan = yield* queryPlanFor(statements, "runs");
+        assert.notInclude(runPlan, "orchestration_v2_projection_runs_thread_ordinal_idx");
+        assert.match(runPlan, /SEARCH orchestration_v2_projection_runs USING INDEX \w*status\w*/);
+        for (const table of ["runs", "nodes", "subagents", "messages"]) {
+          assert.include(
+            yield* queryPlanFor(byId.statements, table),
+            `USING INDEX sqlite_autoindex_orchestration_v2_projection_${table}_1`,
+          );
+        }
+      }
       assert.deepEqual(
         records.providerTurns.map((turn) => turn.id),
         ["turn:idle-newest"],

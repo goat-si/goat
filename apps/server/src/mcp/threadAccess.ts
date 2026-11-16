@@ -1,4 +1,7 @@
-import type { ProjectionRecordField } from "../orchestration-v2/ProjectionStore.ts";
+import type {
+  ProjectionRecordField,
+  ProjectionRecordFilter,
+} from "../orchestration-v2/ProjectionStore.ts";
 import {
   CommandId,
   type EnvironmentAuthorizationError,
@@ -172,6 +175,7 @@ export const readThread = Effect.fn("mcp.readThread")(function* <
   threadId?: ThreadId,
   fields: ReadonlyArray<K> = [],
   turnItemTypes: ReadonlyArray<OrchestrationV2TurnItem["type"]> = ["user_input_request"],
+  filter?: ProjectionRecordFilter,
 ) {
   const context = yield* readCaller();
   const targetId = yield* resolveThreadId(context, threadId);
@@ -186,6 +190,7 @@ export const readThread = Effect.fn("mcp.readThread")(function* <
   const projection = yield* context.threads
     .getProjectThreadRecords({ projectId: shell.projectId, threadId: targetId }, fields, {
       turnItemTypes,
+      ...filter,
     })
     .pipe(
       Effect.mapError((error) =>
