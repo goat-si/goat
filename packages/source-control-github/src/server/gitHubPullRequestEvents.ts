@@ -32,11 +32,13 @@ const LIMIT_PAUSE = Duration.minutes(10);
 const MAX_FAILURES = 6;
 const MAX_BACKOFF_MS = 60_000;
 
-const Subscription = Schema.Struct({
-  id: Schema.Union([Schema.String, Schema.Number]),
-  events_url: Schema.String,
-});
-const decodeSubscription = Schema.decodeUnknownOption(Schema.fromJsonString(Subscription));
+// Decoded apart, so a subscription whose URL is refused can still be deleted by its id.
+const decodeSubscriptionId = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ id: Schema.Union([Schema.String, Schema.Number]) })),
+);
+const decodeEventsUrl = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ events_url: Schema.String })),
+);
 
 const decodeStreamEnd = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ outcome: Schema.String })),
@@ -66,6 +68,20 @@ export const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   /** Keyed by host for account-wide refusals, and by pull request for one it cannot read. */
   const pausedUntil = new Map<string, number>();
+
+  const unsubscribe = Effect.fn("GitHubPullRequestEvents.unsubscribe")(function* (
+    host: string,
+    id: string | number,
+  ) {
+    yield* rest
+      .rest({
+        host,
+        operation: "unsubscribePullRequestEvents",
+        method: "DELETE",
+        path: `event-subscriptions/${encodeURIComponent(String(id))}`,
+      })
+      .pipe(Effect.ignore);
+  });
 
   const subscribe = Effect.fn("GitHubPullRequestEvents.subscribe")(function* (
     input: PullRequestEventsInput,
@@ -107,24 +123,19 @@ export const make = Effect.gen(function* () {
         ),
       );
     if (Option.isNone(response)) return Option.none();
+    const id = decodeSubscriptionId(response.value.body);
     // The stream request carries the token, so its URL must stay on GitHub's API.
-    return decodeSubscription(response.value.body).pipe(
-      Option.filter(({ events_url }) => URL.parse(events_url)?.origin === API_ORIGIN),
+    const eventsUrl = decodeEventsUrl(response.value.body).pipe(
+      Option.map(({ events_url }) => events_url),
+      Option.filter((url) => URL.parse(url)?.origin === API_ORIGIN),
     );
-  });
-
-  const unsubscribe = Effect.fn("GitHubPullRequestEvents.unsubscribe")(function* (
-    host: string,
-    id: string | number,
-  ) {
-    yield* rest
-      .rest({
-        host,
-        operation: "unsubscribePullRequestEvents",
-        method: "DELETE",
-        path: `event-subscriptions/${encodeURIComponent(String(id))}`,
-      })
-      .pipe(Effect.ignore);
+    if (Option.isSome(id) && Option.isSome(eventsUrl)) {
+      return Option.some({ id: id.value.id, events_url: eventsUrl.value });
+    }
+    // A subscription GOAT cannot follow is deleted, and the host is not asked again for a while.
+    if (Option.isSome(id)) yield* unsubscribe(input.host, id.value.id);
+    yield* pause(input.host, REFUSED_PAUSE);
+    return Option.none();
   });
 
   /** One SSE connection: "changed" when it opens and per event, and last, how it ended. */

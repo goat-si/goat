@@ -203,3 +203,47 @@ it.effect("stops following a pull request whose stream the token cannot read", (
     assert.deepEqual(deletes, ["event-subscriptions/1"]);
   }),
 );
+
+it.effect.each([
+  "https://evil.example/event-subscriptions/1/events",
+  "https://api.github.com.evil.example/event-subscriptions/1/events",
+  "https://api.github.com@evil.example/event-subscriptions/1/events",
+  "http://api.github.com/event-subscriptions/1/events",
+])(
+  "deletes a subscription whose events URL leaves GitHub's API (%s) and sends it no token",
+  (eventsUrl) =>
+    Effect.gen(function* () {
+      const { rest, posts, deletes } = fakeRest(() =>
+        Effect.succeed(JSON.stringify({ id: 1, events_url: eventsUrl })),
+      );
+      let streams = 0;
+      const httpClient = HttpClient.make(() =>
+        Effect.suspend(() => {
+          streams += 1;
+          return Effect.die("no stream request may leave GitHub's API");
+        }),
+      );
+      const events = yield* eventsOf(rest, httpClient);
+      assert.equal(yield* Stream.runCount(events(target)), 0);
+      assert.equal(yield* Stream.runCount(events({ ...target, number: 16 })), 0);
+      assert.equal(streams, 0, "a stream request went out");
+      assert.deepEqual(
+        deletes,
+        ["event-subscriptions/1"],
+        "the subscription GitHub made stays behind",
+      );
+      assert.equal(posts.length, 1, "the host subscribes again at once");
+    }),
+);
+
+it.effect("pauses the host when a subscription answer does not decode", () =>
+  Effect.gen(function* () {
+    const { rest, posts, deletes } = fakeRest(() => Effect.succeed("{}"));
+    const httpClient = HttpClient.make(() => Effect.die("no stream without a subscription"));
+    const events = yield* eventsOf(rest, httpClient);
+    assert.equal(yield* Stream.runCount(events(target)), 0);
+    assert.equal(yield* Stream.runCount(events({ ...target, number: 16 })), 0);
+    assert.deepEqual(deletes, []);
+    assert.equal(posts.length, 1, "the host subscribes again at once");
+  }),
+);
