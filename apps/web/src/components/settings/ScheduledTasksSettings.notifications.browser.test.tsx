@@ -16,6 +16,7 @@ import { render } from "../../../test/render";
 const state = vi.hoisted(() => ({
   tasks: [] as ScheduledTask[],
   dropPolicy: false,
+  threadModes: false,
   upsert: vi.fn(),
   toast: vi.fn(),
 }));
@@ -123,14 +124,23 @@ function environment() {
     label: "Synthetic",
     connection: { phase: "connected" },
     serverConfig: {
-      environment: { platform: "darwin" },
+      environment: {
+        platform: "darwin",
+        capabilities: { scheduledTaskThreadModes: state.threadModes },
+      },
       settings: DEFAULT_SERVER_SETTINGS,
       providers: providers(),
     },
   };
 }
-function setup(policy = "all_runs", bound = true, overrides: Partial<ScheduledTask> = {}) {
+function setup(
+  policy = "all_runs",
+  bound = true,
+  overrides: Partial<ScheduledTask> = {},
+  threadModes = false,
+) {
   state.dropPolicy = false;
+  state.threadModes = threadModes;
   state.toast.mockReset();
   state.upsert.mockReset();
   const task: ScheduledTask = {
@@ -159,11 +169,18 @@ function setup(policy = "all_runs", bound = true, overrides: Partial<ScheduledTa
   };
   state.tasks = [task];
   state.upsert.mockImplementation(async ({ input }: { input: ScheduledTaskUpsertInput }) => {
+    // With thread modes the server keeps the stored thread unless the mode is new_thread.
+    const mode = input.threadMode ?? task.threadMode;
     const saved: ScheduledTask = {
       ...task,
       title: input.title,
       prompt: input.prompt,
-      threadId: input.threadId ?? null,
+      threadId: !state.threadModes
+        ? (input.threadId ?? null)
+        : mode === "new_thread"
+          ? null
+          : (input.threadId ?? task.threadId),
+      ...(state.threadModes && mode !== undefined ? { threadMode: mode } : {}),
       ...(input.notificationPolicy === undefined
         ? {}
         : { notificationPolicy: input.notificationPolicy }),
@@ -200,6 +217,27 @@ it("visibly resets an important policy when unbinding and retains it on editor r
   await expect
     .element(page.getByRole("combobox", { name: "Notifications" }))
     .toHaveTextContent("All runs");
+});
+
+it("with thread modes, Run in new threads saves the task as a new thread each run", async () => {
+  const task = setup("all_runs", true, { threadMode: "continue" }, true);
+  await using screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  const destination = page.getByRole("combobox", { name: "Destination" });
+  await expect.element(destination).toHaveTextContent("One thread, continuing the conversation");
+  await userEvent.click(page.getByRole("button", { name: "Run in new threads" }));
+  await expect.element(destination).toHaveTextContent("New thread each run");
+  await userEvent.click(page.getByRole("button", { name: "Save task" }));
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  expect(state.tasks[0]?.threadId).toBeNull();
+  expect(state.tasks[0]?.threadMode).toBe("new_thread");
+  await screen.rerender(
+    <ScheduledTasksSettings key="reopened" environmentId={environmentId} taskId={task.id} />,
+  );
+  await expect
+    .element(page.getByRole("combobox", { name: "Destination" }))
+    .toHaveTextContent("New thread each run");
 });
 
 it("keeps the editor open when an older host drops the requested policy", async () => {

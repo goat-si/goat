@@ -74,7 +74,11 @@ export function ScheduledTaskNotificationPolicyField({
           size="sm"
           onClick={() => {
             const important = draft.notificationPolicy === "important_updates";
-            onChange({ threadId: "", ...(important ? { notificationPolicy: "all_runs" } : {}) });
+            onChange({
+              threadId: "",
+              threadMode: "new_thread",
+              ...(important ? { notificationPolicy: "all_runs" } : {}),
+            });
             setReset(important);
           }}
         >
