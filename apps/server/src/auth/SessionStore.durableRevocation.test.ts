@@ -7,12 +7,7 @@ import * as Ref from "effect/Ref";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 import { MAIN_LISTENER } from "./connectionContext.testkit.ts";
-import {
-  joinAfterCheck,
-  makeCheckProbe,
-  makeReadBarrier,
-  makeServerAndCli,
-} from "./DurableRevocations.testkit.ts";
+import { makeCheckProbe, makeReadBarrier, makeServerAndCli } from "./DurableRevocations.testkit.ts";
 import { reauthorizeSession } from "./McpClientAuthority.ts";
 import * as SessionStore from "./SessionStore.ts";
 
@@ -36,6 +31,8 @@ it.effect.each(["revoked", "deleted"] as const)(
       yield* Effect.gen(function* () {
         const store = yield* SessionStore.SessionStore;
         const sql = yield* SqlClient.SqlClient;
+        // Keeps a session live so the next check reads and proves this one ended.
+        const kept = yield* store.issue({ scopes: ["memory:read"] });
         const issued = yield* fromCli((cli) =>
           cli.issue({ method: "bearer-access-token", scopes: ["memory:read"] }),
         );
@@ -51,8 +48,12 @@ it.effect.each(["revoked", "deleted"] as const)(
         else yield* sql`DELETE FROM auth_sessions WHERE session_id = ${issued.sessionId}`;
         expect(yield* grantState(store, issued.sessionId)).toBe("live");
 
-        expect(yield* joinAfterCheck(yield* probe.next, waiting)).toBe(true);
+        yield* probe.pass;
+        // Settling removes the grant and publishes in one step, so the join below is reached only
+        // once the event that ends it was published.
         expect(yield* grantState(store, issued.sessionId)).toBe("UnknownSessionTokenError");
+        expect(yield* grantState(store, kept.sessionId)).toBe("live");
+        yield* Fiber.join(waiting);
         expect(
           yield* reauthorizeSession(
             store,
@@ -124,9 +125,10 @@ it.effect.each(["fail", "die"] as const)(
         expect(yield* grantState(store, ended.sessionId)).toBe("live");
 
         yield* Ref.set(probe.mode, "read");
-        expect(yield* joinAfterCheck(yield* probe.next, waiting)).toBe(true);
+        yield* probe.pass;
         expect(yield* grantState(store, ended.sessionId)).toBe("UnknownSessionTokenError");
         expect(yield* grantState(store, kept.sessionId)).toBe("live");
+        yield* Fiber.join(waiting);
       }).pipe(Effect.provide(running), Effect.scoped);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
@@ -154,17 +156,17 @@ it.effect(
         // One statement from another process, as a script or an older CLI might write.
         yield* sql`UPDATE auth_sessions SET revoked_at = '2026-01-01T00:00:00.000Z' WHERE subject = 'bulk'`;
 
-        const outcome = yield* probe.next;
-        const events = outcome === "read" ? Array.from(yield* Fiber.join(removed)) : [];
-        const removedIds = events.map((change) =>
-          change.type === "clientRemoved" ? change.sessionId : "",
-        );
-        expect(new Set(removedIds).size).toBe(ids.size);
+        yield* probe.pass;
         const states = yield* Effect.forEach(bulk, (session) =>
           grantState(store, session.sessionId),
         );
         expect(states.filter((state) => state !== "UnknownSessionTokenError")).toEqual([]);
         expect(yield* grantState(store, kept.sessionId)).toBe("live");
+        const events = Array.from(yield* Fiber.join(removed));
+        const removedIds = events.map((change) =>
+          change.type === "clientRemoved" ? change.sessionId : "",
+        );
+        expect(new Set(removedIds).size).toBe(ids.size);
       }).pipe(Effect.provide(running), Effect.scoped);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

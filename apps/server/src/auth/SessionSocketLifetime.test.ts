@@ -103,6 +103,8 @@ it.effect(
       yield* Effect.gen(function* () {
         const sessions = yield* Sessions.SessionStore;
         const token = yield* sessions.issue({ subject: "phone" });
+        // Keeps a session live so the next check reads and proves this one ended.
+        yield* sessions.issue({ subject: "kept" });
         const ticket = yield* sessions.issueWebSocketToken(token.sessionId, { audience: "rpc" });
         const admitted = yield* Deferred.make<Sessions.VerifiedWebSocketTicket>();
         const updates = yield* Queue.unbounded<string>();
@@ -168,7 +170,15 @@ it.effect(
         yield* Queue.offer(updates, "update before revoke");
         yield* fromCli((cli) => cli.revoke(token.sessionId));
         yield* Queue.offer(updates, "update after revoke");
-        if ((yield* probe.next) === "read") yield* Effect.promise(() => closed.promise);
+        yield* probe.pass;
+        expect(
+          yield* sessions
+            .readActiveScopes(token.sessionId)
+            .pipe(Effect.match({ onFailure: (error) => error._tag, onSuccess: () => "live" })),
+        ).toBe("UnknownSessionTokenError");
+        // Reached only after the settle removed the grant and, in the same step, published the
+        // removal; the socket's lifetime ends on that event, so its close always follows.
+        yield* Effect.promise(() => closed.promise);
         expect(isClosed).toBe(true);
 
         // This checks the permit a settings write passes before commit, not a routed RPC.

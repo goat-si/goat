@@ -1,7 +1,6 @@
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
@@ -127,6 +126,11 @@ export const makeCheckProbe = Effect.gen(function* () {
   const mode = yield* Ref.make<CheckOutcome>("read");
   const started = yield* Ref.make(0);
   const finished = yield* Queue.unbounded<CheckOutcome>();
+  const next = Effect.gen(function* () {
+    yield* TestClock.adjust(Duration.seconds(5));
+    if ((yield* Ref.getAndSet(started, 0)) === 0) return "none" as const;
+    return yield* Queue.take(finished);
+  });
   const wrap = (repository: Repository): Repository => ({
     ...repository,
     listUnrevoked: (input) =>
@@ -158,17 +162,17 @@ export const makeCheckProbe = Effect.gen(function* () {
     wrap,
     mode,
     /** Advances one interval; the check's outcome once its read returned, or "none" if none ran. */
-    next: Effect.gen(function* () {
-      yield* TestClock.adjust(Duration.seconds(5));
-      if ((yield* Ref.getAndSet(started, 0)) === 0) return "none" as const;
-      return yield* Queue.take(finished);
+    next,
+    /**
+     * Runs one check, then waits for the next check's read. Checks run one after another in one
+     * fiber (DurableRevocations.ts:65), so that read proves the first check, settle included, ended.
+     * The next read needs a live session, so a test using this keeps one.
+     */
+    pass: Effect.gen(function* () {
+      const outcome = yield* next;
+      if (outcome === "none") return outcome;
+      // Without a later read nothing proves the first check ended, so report none.
+      return (yield* next) === "none" ? ("none" as const) : outcome;
     }),
   };
 });
-
-/** Joins a fiber the check ends; when no check read anything it reports false instead of waiting. */
-export const joinAfterCheck = <A, E>(
-  outcome: CheckOutcome | "none",
-  fiber: Fiber.Fiber<A, E>,
-): Effect.Effect<boolean, E> =>
-  outcome === "read" ? Fiber.join(fiber).pipe(Effect.as(true)) : Effect.succeed(false);
