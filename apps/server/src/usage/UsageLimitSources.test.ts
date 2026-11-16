@@ -373,3 +373,74 @@ it.effect.each([
     ),
   ),
 );
+
+// GOAT's quota verdict decides which pool windows are spent and which model they gate.
+const claudePool = (
+  accounts: ReadonlyArray<ReadonlyArray<ServerProviderUsageWindow>>,
+): UsageLimitSourceSnapshot => {
+  const source = pool([]);
+  const [template] = source.accounts;
+  return {
+    ...source,
+    accounts: template
+      ? accounts.map((windows, index) => ({
+          ...template,
+          id: "claude-" + index,
+          driver: ProviderDriverKind.make("claudeAgent"),
+          state: "available" as const,
+          usageLimits: { ...template.usageLimits, windows },
+        }))
+      : [],
+  };
+};
+const opusWeekly: ServerProviderUsageWindow = {
+  ...spent("family:opus", 72),
+  scopeModel: "family:opus",
+};
+const markedExhausted = (hours: number): ServerProviderUsageWindow => ({
+  ...spent("five_hour", hours),
+  usedPercent: 98,
+  exhausted: true,
+});
+
+it.effect.each([
+  {
+    name: "a Sonnet run on its 5-hour limit is not given the Opus weekly reset",
+    sources: [claudePool([[spent("five_hour", 2), opusWeekly]])],
+    model: "claude-sonnet-5-5",
+    expected: at(2),
+  },
+  {
+    name: "an Opus run waits for the Opus weekly reset",
+    sources: [claudePool([[spent("five_hour", 2), opusWeekly]])],
+    model: "claude-opus-5-5",
+    expected: at(72),
+  },
+  {
+    name: "a window OpenCodex marks exhausted at 98% answers with its reset",
+    sources: [claudePool([[markedExhausted(1)]])],
+    model: "claude-sonnet-5-5",
+    expected: at(1),
+  },
+  {
+    name: "a window marked exhausted at 98% beside another spent account gives the earlier reset",
+    sources: [claudePool([[markedExhausted(1)], [spent("five_hour", 4)]])],
+    model: "claude-sonnet-5-5",
+    expected: at(1),
+  },
+])("reset fallback verdict: $name", ({ sources, model, expected }) =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(NOW);
+    const fallback = yield* UsageLimitSources.UsageLimitResetFallback;
+    expect(
+      yield* fallback.resetAt(ProviderDriverKind.make("claudeAgent"), POOL_ORIGIN, model),
+    ).toBe(expected);
+  }).pipe(
+    Effect.provide(
+      resetFallback(
+        () => sources,
+        () => Effect.void,
+      ),
+    ),
+  ),
+);
