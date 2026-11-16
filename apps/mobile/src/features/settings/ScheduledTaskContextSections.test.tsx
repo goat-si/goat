@@ -271,3 +271,16 @@ it("coming back to the thread clears the reset notice and keeps All runs", async
   expect(editor.container.textContent).not.toContain(RESET_NOTICE);
   expect(editor.labels()).toContain("Notifications, All runs");
 });
+
+it("picking another policy while away from the thread clears the reset notice", async () => {
+  using editor = await renderEditor({
+    threadId: ThreadId.make("bound"),
+    threadMode: "continue",
+    notificationPolicy: "important_updates",
+  });
+  await editor.press("Runs go to: New thread each run");
+  expect(editor.container.textContent).toContain(RESET_NOTICE);
+  await editor.press("Notifications: Failed runs only");
+  expect(editor.container.textContent).not.toContain(RESET_NOTICE);
+  expect(editor.labels()).toContain("Notifications, Failed runs only");
+});

@@ -543,3 +543,17 @@ it("with thread modes, coming back to the thread clears the reset notice and kee
     .element(page.getByRole("combobox", { name: "Notifications" }))
     .toHaveTextContent("All runs");
 });
+
+it("with thread modes, picking another policy while away from the thread clears the reset notice", async () => {
+  const task = setup("important_updates", true, { threadMode: "continue" }, true);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  const notice = page.getByText("Notifications changed to All runs", { exact: false });
+  await userEvent.click(page.getByRole("combobox", { name: "Destination" }));
+  await userEvent.click(page.getByRole("option", { name: "New thread each run" }));
+  await expect.element(notice).toBeVisible();
+  await userEvent.click(page.getByRole("combobox", { name: "Notifications" }));
+  await userEvent.click(page.getByRole("option", { name: "Failed runs only" }));
+  await expect.element(notice).not.toBeInTheDocument();
+});
