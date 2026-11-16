@@ -9,7 +9,8 @@ const PROVIDER_ENV_PREFIXES = ["ANTHROPIC_", "CLAUDE_", "CODEX_", "OPENAI_", "GO
 const KEPT_ENV_PREFIXES = ["GOAT_TEST_"];
 
 const KEPT_ENV = new Set([
-  // CI sets these so the transfer budget integration test writes its report for the job summary.
+  // Set by hand to write the transfer budget report, result and scenarios
+  // (docs/internals/performance-regressions.md).
   "GOAT_TRANSFER_BUDGET_REPORT_PATH",
   "GOAT_TRANSFER_BUDGET_RESULT_PATH",
   "GOAT_TRANSFER_BUDGET_SCENARIOS_PATH",

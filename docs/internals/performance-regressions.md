@@ -74,11 +74,12 @@ contract fails typecheck until the test sends it; give a fixture the data the op
 test caps decoded bytes and rows for a 900-row agent turn in both states: while the turn runs (the
 bounded snapshot and one older page) and after it finishes (the deferred cold open over HTTP and
 over the socket alone, and the first page of its deferred work). It caps the socket bytes of two
-resumes that must not send a snapshot: a thread after one ordinary turn and an idle thread. It caps the cold-connect shell for a sidebar of settled threads and
-idle subagents, and the subscription a client opens from that snapshot. It also caps the bytes and
-the node, subagent, plan, provider turn and checkpoint counts of the bounded snapshot for a thread
-of 40 finished runs behind one working run, so finished runs cannot ride along with a window. The
-working run has a ready context handoff, so its history cannot ride along either.
+resumes that must not send a snapshot: a thread after one ordinary turn and an idle thread. It caps
+the cold-connect shell for a sidebar of settled threads and idle subagents, and the subscription a
+client opens from that snapshot. It also caps the bytes and the node, subagent, plan, provider turn
+and checkpoint counts of the bounded snapshot for a thread of 40 finished runs behind one working
+run, so finished runs cannot ride along with a window. The working run has a ready context handoff,
+so its history cannot ride along either.
 
 Set `GOAT_TRANSFER_BUDGET_REPORT_PATH`, `GOAT_TRANSFER_BUDGET_RESULT_PATH` or
 `GOAT_TRANSFER_BUDGET_SCENARIOS_PATH` to write every row, the pass/fail result or the budgeted rows

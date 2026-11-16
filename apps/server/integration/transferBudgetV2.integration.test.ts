@@ -92,8 +92,8 @@ import {
 } from "./TransferBudgetV2Fixture.integration.ts";
 
 // The opt-ins current web and mobile clients send, as client-runtime's boundedThreadSnapshotHttp.ts,
-// threadHistoryHttp.ts, shellSnapshotHttp.ts, threads.ts and shell.ts send them. Each is `Required`,
-// so an opt-in added to a contract fails typecheck here until this test sends it.
+// threadHistoryHttp.ts, shellSnapshotHttp.ts, threads.ts, shell.ts and rpc/client.ts send them.
+// Each is `Required`, so an opt-in added to a contract fails typecheck until this test sends it.
 const CLIENT_BOUNDED_OPT_INS = {
   compactTurnItems: "1",
   dedupeBodies: "1",
