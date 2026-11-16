@@ -128,4 +128,6 @@ Checks on the merged tree: goat-rename --check 0; format check and lint of the c
 
 check:changed NOT RUN: lane N9b's gate was running on pen-macmini's heavy slot.
 
+`81fc05ff22` merged into the integration branch at `c5d8d872d0` (#3519).
+
 NOT RUN: CI (ci:full); a live two-machine run of O9 and O11 (server-only rows: the runtime evidence is the test transcripts above); the desktop app; mobile; an independent C4 review lane.
