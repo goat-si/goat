@@ -9,8 +9,11 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 import { layerSessionStore, startGuardedCall } from "../auth/SessionEnd.testkit.ts";
+import { dependencies, serveOverHttp } from "../mcp/agentSurface.testkit.ts";
+import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { HubOcx, HubOcxError, type OcxOutput, SYNC_EXIT } from "./HubOcx.ts";
 import { layer as syncLayer, OpenCodexSync } from "./OpenCodexSync.ts";
@@ -627,4 +630,60 @@ it.effect(
       expect(homeSyncs).toBe(1);
       expect(yield* sync.latest).toEqual(report);
     }),
+);
+
+it.effect.each(["notifications/cancelled", "a dropped request"] as const)(
+  "%s over /mcp during goat_hub_opencodex_sync lets this machine finish and skips the rest",
+  (stop) =>
+    Effect.gen(function* () {
+      const fleet = makeFleet();
+      const started = yield* Deferred.make<void>();
+      const gate = yield* Deferred.make<void>();
+      fleet.onHomeSync = Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Deferred.await(gate)),
+      );
+      const { sync } = yield* setup(fleet);
+      // Completes when the server ends the tool call: the milestone that the stop reached it.
+      const callerGone = yield* Deferred.make<void>();
+      const served: OpenCodexSync["Service"] = {
+        ...sync,
+        run: (runScope, permits) =>
+          sync
+            .run(runScope, permits)
+            .pipe(Effect.onInterrupt(() => Deferred.succeed(callerGone, undefined))),
+      };
+      const outside: McpInvocationScope = {
+        ...scope,
+        client: { sessionId: "outside", label: "Outside agent", access: "full-access" },
+      };
+      const http = yield* serveOverHttp(
+        { outside },
+        McpHttpServer.catalogRegistrations.hostStatus.pipe(
+          Layer.provide(Layer.mergeAll(dependencies, Layer.succeed(OpenCodexSync, served))),
+        ),
+      );
+      yield* http.listTools("outside");
+      const requestId = http.nextRequestId();
+      const running = yield* http
+        .callTool("outside", "goat_hub_opencodex_sync", {})
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(started);
+      if (stop === "notifications/cancelled")
+        yield* http.notify("outside", "notifications/cancelled", { requestId });
+      else yield* Fiber.interrupt(running);
+      yield* Deferred.await(callerGone);
+      // Queued behind the running sync, which holds the permit until this machine finishes.
+      const after = yield* Effect.forkChild(sync.exclusive(Effect.void));
+      yield* Deferred.succeed(gate, undefined);
+      yield* Fiber.join(after);
+      yield* Fiber.interrupt(running);
+      expect(fleet.calls).toEqual(["home sync --restart-codex"]);
+      const report = yield* sync.latest;
+      expect(report && rows(report)).toEqual([
+        [null, "synced", undefined],
+        ["macmini-ts", "skipped", "interrupted"],
+        ["lidge-ts", "skipped", "interrupted"],
+        ["mac-studio", "skipped", "interrupted"],
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
