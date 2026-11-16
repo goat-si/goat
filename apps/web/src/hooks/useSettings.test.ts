@@ -96,7 +96,8 @@ describe("client settings hydration", () => {
     const completedSettings = { ...savedSettings, onboardingCompletedAt };
     await expect(persistClientSettingsUpdate(complete)).resolves.toEqual(completedSettings);
     expect(persistenceMocks.setClientSettings).toHaveBeenCalledExactlyOnceWith(completedSettings);
-    expect(persistenceMocks.getClientSettings).toHaveBeenCalledTimes(2);
+    // The failed read, the retried read, then the read that merges other tabs' saves.
+    expect(persistenceMocks.getClientSettings).toHaveBeenCalledTimes(3);
   });
 
   it("holds patches until a pending read supplies the saved preferences", async () => {
@@ -121,7 +122,8 @@ describe("client settings hydration", () => {
     finishRead(savedSettings);
     await hydration;
     await expect(persisted).resolves.toEqual({ ...savedSettings, wordWrap: false });
-    expect(persistenceMocks.getClientSettings).toHaveBeenCalledOnce();
+    // One hydration read, then the read that merges other tabs' saves before the write.
+    expect(persistenceMocks.getClientSettings).toHaveBeenCalledTimes(2);
   });
 
   it("handles failed patch reads without writing and retries with the saved preferences", async () => {
@@ -293,6 +295,92 @@ describe("persistClientSettingsPatch", () => {
 
     expect(persistenceMocks.setClientSettings).toHaveBeenNthCalledWith(1, firstSettings);
     expect(persistenceMocks.setClientSettings).toHaveBeenNthCalledWith(2, secondSettings);
+  });
+});
+
+describe("client settings saved by another tab", () => {
+  // regression: upstream #35010 a save in one tab reverted settings another tab saved after it loaded
+  it("keeps a setting another tab saved after this tab loaded", async () => {
+    vi.stubGlobal("window", new EventTarget());
+    try {
+      await ensureClientSettingsHydrated();
+      const otherTabSettings = { ...DEFAULT_CLIENT_SETTINGS, timestampFormat: "12-hour" as const };
+      persistenceMocks.getClientSettings.mockResolvedValue(otherTabSettings);
+      window.dispatchEvent(Object.assign(new Event("storage"), { key: "goat:client-settings:v1" }));
+
+      await persistClientSettingsPatch({ wordWrap: false });
+
+      expect(getClientSettings()).toEqual({ ...otherTabSettings, wordWrap: false });
+      expect(persistenceMocks.setClientSettings).toHaveBeenLastCalledWith({
+        ...otherTabSettings,
+        wordWrap: false,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // regression: the merge copied the raw stored firstRunPrompts, dropping an answer under the legacy key
+  it("keeps a first-run answer stored under the legacy key when another setting is saved", async () => {
+    persistenceMocks.getClientSettings.mockResolvedValue({
+      ...DEFAULT_CLIENT_SETTINGS,
+      computerUsePrompt: "enabled",
+    });
+    await ensureClientSettingsHydrated();
+
+    await persistClientSettingsPatch({ wordWrap: false });
+
+    const written = persistenceMocks.setClientSettings.mock.lastCall?.[0];
+    expect(written?.firstRunPrompts.computerUse).toBe("answered");
+    expect(written?.wordWrap).toBe(false);
+  });
+
+  /** Two module instances over one settings store stand in for two tabs that never saw each other's writes. */
+  async function openTwoTabs() {
+    let stored: ClientSettings | null = null;
+    persistenceMocks.getClientSettings.mockImplementation(async () => stored);
+    persistenceMocks.setClientSettings.mockImplementation(async (settings) => {
+      stored = settings;
+    });
+    vi.resetModules();
+    const thisTab = await import("./useSettings");
+    vi.resetModules();
+    const otherTab = await import("./useSettings");
+    await Promise.all([
+      thisTab.ensureClientSettingsHydrated(),
+      otherTab.ensureClientSettingsHydrated(),
+    ]);
+    return { thisTab, otherTab, saved: () => stored };
+  }
+
+  it("keeps the other tab's setting when this tab saves after it", async () => {
+    const { thisTab, otherTab, saved } = await openTwoTabs();
+
+    await otherTab.persistClientSettingsPatch({ timestampFormat: "12-hour" });
+    await thisTab.persistClientSettingsPatch({ wordWrap: false });
+
+    expect(saved()).toMatchObject({ timestampFormat: "12-hour", wordWrap: false });
+  });
+
+  it("keeps this tab's setting when the other tab saves after it", async () => {
+    const { thisTab, otherTab, saved } = await openTwoTabs();
+
+    await thisTab.persistClientSettingsPatch({ wordWrap: false });
+    await otherTab.persistClientSettingsUpdate((current) => ({
+      ...current,
+      timestampFormat: "12-hour",
+    }));
+
+    expect(saved()).toMatchObject({ timestampFormat: "12-hour", wordWrap: false });
+  });
+
+  it("writes a setting this tab changed back over the other tab's older value", async () => {
+    const { thisTab, otherTab, saved } = await openTwoTabs();
+
+    await otherTab.persistClientSettingsPatch({ wordWrap: false });
+    await thisTab.persistClientSettingsPatch({ wordWrap: true, timestampFormat: "12-hour" });
+
+    expect(saved()).toMatchObject({ timestampFormat: "12-hour", wordWrap: true });
   });
 });
 
