@@ -20,7 +20,7 @@ import {
 } from "@goat/provider-acp/server/adapter";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { makeTurnInput } from "./AcpAdapterV2.testkit.ts";
-import { makeMockRuntime } from "./AcpMockRuntime.testkit.ts";
+import { makeMockRuntime, bundledMockAgentPath } from "./AcpMockRuntime.testkit.ts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -28,7 +28,6 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -56,15 +55,12 @@ const makePromptInactivityHarness = Effect.fnUntraced(function* (input: {
   readonly cancelled?: Deferred.Deferred<void>;
 }) {
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const path = yield* Path.Path;
   const natives: Array<AcpSessionRuntime.AcpSessionRuntime["Service"]> = [];
   const runtimeInputs: AcpAdapterV2RuntimeInput[] = [];
   const instanceId = ProviderInstanceId.make("acp-prompt-inactivity");
   const mockRuntime = makeMockRuntime({
     childProcessSpawner,
-    mockAgentPath: yield* path.fromFileUrl(
-      new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-    ),
+    mockAgentPath: yield* bundledMockAgentPath,
     environment: input.environment,
     wrapRuntime: (runtime) => {
       natives.push(runtime);

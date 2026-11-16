@@ -13,7 +13,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -29,6 +28,7 @@ import {
   makeMockRuntime,
   rawProtocolMethod,
   rawProtocolPromptTextBlocks,
+  bundledMockAgentPath,
 } from "./AcpMockRuntime.testkit.ts";
 
 const layerTest = Layer.mergeAll(
@@ -44,11 +44,8 @@ const makeAdvertisedCompactionHarness = Effect.fnUntraced(function* (
   environment: Readonly<Record<string, string>>,
 ) {
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const path = yield* Path.Path;
   const selfInvocation = yield* resolveSelfInvocation();
-  const mockAgentPath = yield* path.fromFileUrl(
-    new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-  );
+  const mockAgentPath = yield* bundledMockAgentPath;
   const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
   // Resolves after the adapter records what the agent advertised, so the refusal is deterministic.
   const commandsPublished = yield* Deferred.make<void>();

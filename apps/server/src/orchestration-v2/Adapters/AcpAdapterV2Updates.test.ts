@@ -12,7 +12,6 @@ import * as DateTime from "effect/DateTime";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -29,7 +28,7 @@ import {
 } from "@goat/provider-acp/server/adapter";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { makeTurnInput } from "./AcpAdapterV2.testkit.ts";
-import { makeMockRuntime } from "./AcpMockRuntime.testkit.ts";
+import { makeMockRuntime, bundledMockAgentPath } from "./AcpMockRuntime.testkit.ts";
 
 const layerTest = Layer.mergeAll(
   DocumentText.layer.pipe(Layer.provide(NodeServices.layer)),
@@ -39,9 +38,7 @@ const layerTest = Layer.mergeAll(
   TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
 );
 const ACP_TEST_DRIVER = ProviderDriverKind.make("acp-test");
-const mockAgentPath = Effect.flatMap(Path.Path, (path) =>
-  path.fromFileUrl(new URL("../../../scripts/acp-mock-agent.ts", import.meta.url)),
-);
+const mockAgentPath = bundledMockAgentPath;
 
 describe("AcpAdapterV2 session updates", () => {
   it.live("keeps a completed tool's status when its linked ACP terminal streams output", () =>

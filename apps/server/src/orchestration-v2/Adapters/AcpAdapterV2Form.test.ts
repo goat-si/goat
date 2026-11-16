@@ -24,7 +24,11 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { AcpProviderCapabilitiesV2, makeAcpAdapterV2 } from "@goat/provider-acp/server/adapter";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { makeTurnInput } from "./AcpAdapterV2.testkit.ts";
-import { makeMockRuntime, decodeUnknownJson } from "./AcpMockRuntime.testkit.ts";
+import {
+  makeMockRuntime,
+  decodeUnknownJson,
+  bundledMockAgentPath,
+} from "./AcpMockRuntime.testkit.ts";
 
 const layerHost = TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer));
 const layerTest = Layer.mergeAll(
@@ -47,9 +51,7 @@ const runFormElicitation = (input: {
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const mockAgentPath = yield* path.fromFileUrl(
-      new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-    );
+    const mockAgentPath = yield* bundledMockAgentPath;
     const directory = yield* fileSystem.makeTempDirectoryScoped({
       prefix: "goat-acp-form-elicitation-",
     });
