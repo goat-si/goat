@@ -36,7 +36,7 @@ import { GoatBotChannelContext } from "./goatBotChannelPort";
 import { GoatBotMainMenu } from "./GoatBotMemberRows";
 import { useGoatBotComputerReadable } from "./useGoatBotComputerReadable";
 import { useGoatBotSidebarWaiting } from "./useGoatBotWaitingCount";
-import { GoatBotRowSignals } from "./GoatBotRowSignals";
+import { GoatBotRowSignals, GoatBotWaitingMark } from "./GoatBotRowSignals";
 import { useGoatBotReadMenu } from "./useGoatBotReadMenu";
 import { useBotThreads } from "./useBotRoster";
 
@@ -229,6 +229,7 @@ function GoatBotConversationRow({
   return (
     <SidebarMenuButton
       size="lg"
+      className="group/bot-row"
       isActive={active}
       aria-current={active ? "page" : undefined}
       onClick={onClick}
@@ -279,11 +280,7 @@ function GoatBotConversationRow({
               waitingState={waiting.state}
             />
           ) : null}
-          {count !== undefined && count > 0 ? (
-            <Badge size="sm" variant="secondary" aria-hidden>
-              {count}
-            </Badge>
-          ) : null}
+          <GoatBotWaitingMark count={count} />
         </span>
         <span className="flex min-w-0 items-center gap-1">
           <Badge size="sm" variant="secondary">

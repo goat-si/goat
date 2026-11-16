@@ -227,6 +227,7 @@ async function renderRow() {
   const screen = stack.use(await render(<GoatBotSidebarRow />, { router: false }));
   await expect.element(screen.getByText(LINE)).toBeVisible();
   await expect.element(screen.getByRole("img", { name: "2 waiting for you" })).toBeVisible();
+  expect(screen.container.querySelector("[data-slot=goat-bot-waiting-mark]")).not.toBeNull();
   stack.move();
   return screen;
 }
@@ -235,6 +236,7 @@ function expectClosed(screen: Awaited<ReturnType<typeof render>>) {
   expect(screen.getByText(LINE).query()).toBeNull();
   expect(screen.container.querySelector("[data-slot=goat-bot-relative-time]")).toBeNull();
   expect(screen.getByRole("img", { name: "2 waiting for you" }).query()).toBeNull();
+  expect(screen.container.querySelector("[data-slot=goat-bot-waiting-mark]")).toBeNull();
   // Only the fixed "Main" label is left; the count and Slack badges are gone.
   expect(
     screen
