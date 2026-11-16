@@ -651,26 +651,27 @@ async function refusableRoster(environmentId: string) {
       onLongPressBot: (entry: object) => void;
       onRestoreDeleted: (bot: object) => void;
     };
-  const link = (connection: object) =>
-    act(async () =>
-      registry.set(
-        presentationsAtom,
-        new Map([
-          [
-            environmentId,
-            {
-              connection,
-              serverConfig: { environment: { capabilities: { goatBotProfiles: true } } },
-            },
-          ],
-        ]),
-      ),
+  const setLink = (connection: object) =>
+    registry.set(
+      presentationsAtom,
+      new Map([
+        [
+          environmentId,
+          {
+            connection,
+            serverConfig: { environment: { capabilities: { goatBotProfiles: true } } },
+          },
+        ],
+      ]),
     );
+  const link = (connection: object) => act(async () => setLink(connection));
   let left = false;
   return {
     container,
     members,
     link,
+    /** The connection changes in the store; React has not rendered it yet. */
+    linkNow: setLink,
     /** The person navigates away: the roster unmounts while a native alert stays up. */
     leave: () => {
       left = true;
@@ -736,6 +737,16 @@ it("a menu left open does nothing once the roster has left the screen", async ()
   await using view = await refusableRoster("env-a");
   await view.longPress();
   await view.leave();
+  await view.choose("Hide");
+  expect(state.manage.hide).not.toHaveBeenCalled();
+});
+
+it("a menu choice pressed after a refusal reaches the store, before the roster renders it, does nothing", async () => {
+  await using view = await refusableRoster("env");
+  await view.link({ phase: "connected" });
+  await view.answerList(AsyncResult.success({ bots: [] }));
+  await view.longPress();
+  view.linkNow({ phase: "error", failure: { kind: "blocked", reason: "authentication" } });
   await view.choose("Hide");
   expect(state.manage.hide).not.toHaveBeenCalled();
 });
