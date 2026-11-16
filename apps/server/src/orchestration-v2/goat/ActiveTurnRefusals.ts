@@ -1,9 +1,9 @@
 /** Agent- and client-visible: why a selection change waits for the running turn. */
-export const PROVIDER_SELECTION_BUSY =
+const PROVIDER_SELECTION_BUSY =
   "This thread has a turn running, and this provider change would end it. Wait for the turn to finish, or press Stop, then try again.";
 
 /** Agent- and client-visible: why a worktree change waits for the running turn. */
-export const WORKTREE_CHANGE_BUSY =
+const WORKTREE_CHANGE_BUSY =
   "This thread has a turn running, and moving it to another worktree would end it. Wait for the turn to finish, or press Stop, then try again.";
 
 /**
