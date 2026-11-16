@@ -141,6 +141,8 @@ export interface Fixture {
   readonly revokeFails?: boolean;
   /** Runs once Home `ocx link revoke` has removed the link, before it answers. */
   readonly afterRevoke?: Effect.Effect<void>;
+  /** Runs while the move probes the target's host key, before anything changes. */
+  readonly duringProbe?: Effect.Effect<void>;
   /** Home `ocx link routes` answers; absent answers as an OpenCodex without the command. */
   readonly routes?: (args: ReadonlyArray<string>) => OcxOutput;
   /** Home `ocx link routes` as a run that can fail or never finish; overrides routes. */
@@ -206,7 +208,8 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
       );
     }
     if (command === "probe")
-      return Effect.succeed(
+      return Effect.as(
+        fixture.duringProbe ?? Effect.void,
         json({ alias, fingerprint: offered, keyType: fixture.offeredKeyType ?? "ssh-ed25519" }),
       );
     if (group === "link" && command === "routes")

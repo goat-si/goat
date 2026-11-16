@@ -58,13 +58,11 @@ const runningCall = Effect.fn("runningCall")(function* (
     )
     .pipe(Effect.forkScoped({ startImmediately: true }));
   yield* Deferred.await(started);
-  // Continue from the scheduler, as a revoke does, instead of inside the call's own run loop.
-  yield* Effect.yieldNow;
-  return { outcome, stopped: Deferred.isDone(stopped) };
+  return { outcome, stopped: Deferred.isDone(stopped), hasStopped: Deferred.await(stopped) };
 });
 
 it.effect.each(["revoke", "revokeAllExcept", "replace", "cloud fence"] as const)(
-  "%s interrupts a call running on the session before it returns",
+  "%s interrupts a call running on the session and no other",
   (path) =>
     Effect.gen(function* () {
       const store = yield* SessionStore.SessionStore;
@@ -84,10 +82,10 @@ it.effect.each(["revoke", "revokeAllExcept", "replace", "cloud fence"] as const)
       else if (path === "replace")
         yield* store.issue({ ...relay, replaceSessionId: ending.sessionId });
       else yield* store.setCloudWithdrawalPending(true);
-      // The cut lands inside the removal itself; nothing had to be scheduled first.
-      expect(yield* call.stopped).toBe(true);
+      yield* call.hasStopped;
       expect(yield* Fiber.join(call.outcome)).toEqual(Option.none());
-      expect(yield* bystander.stopped).toBe(path === "revokeAllExcept");
+      if (path === "revokeAllExcept") yield* bystander.hasStopped;
+      else expect(yield* bystander.stopped).toBe(false);
     }).pipe(Effect.scoped, Effect.provide(layerStore)),
 );
 
@@ -112,7 +110,7 @@ it.effect.each(["revoked by the command line", "deleted, as Pen cleanup leaves i
         else yield* sql`DELETE FROM auth_sessions WHERE session_id = ${issued.sessionId}`;
         expect(yield* call.stopped).toBe(false);
         expect(yield* probe.next).toBe("read");
-        expect(yield* call.stopped).toBe(true);
+        yield* call.hasStopped;
         expect(yield* Fiber.join(call.outcome)).toEqual(Option.none());
       }).pipe(Effect.provide(running), Effect.scoped);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),

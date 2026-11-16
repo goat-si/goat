@@ -7,10 +7,10 @@ import {
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 
+import { layerSessionStore, startGuardedCall } from "../auth/SessionEnd.testkit.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { HubOcx, HubOcxError, type OcxOutput, SYNC_EXIT } from "./HubOcx.ts";
 import { layer as syncLayer, OpenCodexSync } from "./OpenCodexSync.ts";
@@ -562,10 +562,17 @@ it.effect("marks an interrupted update sync as failed instead of leaving it sync
     });
   }),
 );
+/** Runs a sync as a caller would; `stop` ends that caller the way the case names. */
+const startSync = (sync: OpenCodexSync["Service"], how: "stop" | "revoke") =>
+  Effect.gen(function* () {
+    if (how === "revoke") return { stop: (yield* startGuardedCall(sync.run(scope))).revoke };
+    const fiber = yield* sync.run(scope).pipe(Effect.forkChild({ startImmediately: true }));
+    return { stop: Fiber.interrupt(fiber) };
+  });
 
-it.effect(
-  "a sync whose session ends finishes the machine it is on and skips the machines it has not started",
-  () =>
+it.effect.each(["stop", "revoke"] as const)(
+  "a sync whose caller ends by %s finishes the machine it is on and skips the machines it has not started",
+  (how) =>
     Effect.gen(function* () {
       const fleet = makeFleet();
       const started = yield* Deferred.make<void>();
@@ -574,19 +581,14 @@ it.effect(
         Effect.andThen(Deferred.await(gate)),
       );
       const { sync } = yield* setup(fleet);
-      const ended = yield* Ref.make(false);
-      const ending: McpInvocationScope = {
-        ...scope,
-        sessionEnd: { run: (effect) => Effect.asSome(effect), ended: Ref.get(ended) },
-      };
-      const running = yield* sync.run(ending).pipe(Effect.forkChild({ startImmediately: true }));
+      const running = yield* startSync(sync, how);
       yield* Deferred.await(started);
-      // The session is revoked and the caller's MCP call is cut while ocx syncs this Home.
-      yield* Ref.set(ended, true);
-      yield* Fiber.interrupt(running);
+      // The caller is gone while ocx syncs this Home, with Codex possibly stopped mid-restart.
+      yield* running.stop;
       yield* Deferred.succeed(gate, undefined);
-      // The next run waits on the permit the cut run holds until it finishes.
+      // The next run waits on the permit the running sync holds until it finishes.
       yield* sync.exclusive(Effect.void);
+      // ocx ran to its end on this machine, and no other machine was started.
       expect(fleet.calls).toEqual(["home sync --restart-codex"]);
       expect(fleet.holds).toBe(0);
       const report = yield* sync.latest;
@@ -596,5 +598,33 @@ it.effect(
         ["lidge-ts", "skipped", "interrupted"],
         ["mac-studio", "skipped", "interrupted"],
       ]);
+    }).pipe(Effect.provide(layerSessionStore)),
+);
+
+it.effect(
+  "a sync cut while it waits for another run leaves no job and keeps that run's report",
+  () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet();
+      const started = yield* Deferred.make<void>();
+      const gate = yield* Deferred.make<void>();
+      let homeSyncs = 0;
+      fleet.onHomeSync = Effect.suspend(() =>
+        ++homeSyncs === 1
+          ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(gate)))
+          : Effect.void,
+      );
+      const { sync } = yield* setup(fleet);
+      const first = yield* sync.run(scope).pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(started);
+      const queued = yield* sync.run(scope).pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Fiber.interrupt(queued);
+      // Queued behind anything the cut call left waiting, while the first run still holds the permit.
+      const after = yield* Effect.forkChild(sync.exclusive(Effect.void));
+      yield* Deferred.succeed(gate, undefined);
+      const report = yield* Fiber.join(first);
+      yield* Fiber.join(after);
+      expect(homeSyncs).toBe(1);
+      expect(yield* sync.latest).toEqual(report);
     }),
 );

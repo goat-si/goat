@@ -13,9 +13,13 @@ import {
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import * as Broker from "../connections/ConnectionCatalogBroker.ts";
 import * as Sessions from "../auth/SessionStore.ts";
 import * as HubNodes from "../hubNodes/HubNodes.ts";
@@ -87,10 +91,13 @@ const fixture = (
     prepareResult?: SshHostResult;
     /** The hub names this host a disposable machine by its alias or by the key it offers. */
     disposable?: "alias" | "host_key";
+    /** Runs inside the hub registration before it saves; Effect.never models a stuck lock. */
+    hubWait?: Effect.Effect<void>;
   } = {},
 ) =>
   Effect.gen(function* () {
     const calls: string[] = [];
+    const hubSaves: string[] = [];
     let pinned = !options.typed && !options.configured;
     const managedAlias = options.configured ? "goat-build" : "build";
     const checkedHosts: string[] = [];
@@ -226,6 +233,8 @@ const fixture = (
                     detail: "Could not reach build.",
                   });
                 yield* hubOptions.beforeSave;
+                if (options.hubWait !== undefined) yield* options.hubWait;
+                hubSaves.push(input.kind === "ssh" ? input.alias : input.kind);
                 return { created: true, node: hubNode };
               }),
           }),
@@ -275,6 +284,7 @@ const fixture = (
     return {
       call,
       calls,
+      hubSaves,
       checkedHosts,
       report,
       approve: () => {
@@ -376,6 +386,50 @@ it.effect("a saved desktop connection is also registered on the hub", () =>
     });
     expect(f.calls).toEqual(["preflight", "broker", "hub"]);
   }),
+);
+it.effect("a call cut after the desktop saved the connection still registers it on the hub", () =>
+  Effect.gen(function* () {
+    const registering = yield* Deferred.make<void>();
+    const gate = yield* Deferred.make<void>();
+    const f = yield* fixture({
+      hubWait: Deferred.succeed(registering, undefined).pipe(Effect.andThen(Deferred.await(gate))),
+    });
+    const adding = yield* f.call().pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(registering);
+    // The cut waits for the registration, which cannot be interrupted once the desktop answered.
+    const cutting = yield* Fiber.interrupt(adding).pipe(
+      Effect.forkChild({ startImmediately: true }),
+    );
+    expect(f.hubSaves).toEqual([]);
+    yield* Deferred.succeed(gate, undefined);
+    yield* Fiber.join(cutting);
+    expect(f.hubSaves).toEqual(["build"]);
+  }),
+);
+it.effect(
+  "a hub registration still waiting after 30 seconds ends unsaved instead of holding the add",
+  () =>
+    Effect.gen(function* () {
+      const release = yield* Deferred.make<void>();
+      // A registration that cannot be interrupted still ends with the test, whatever it asserted.
+      yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
+      const f = yield* fixture({ hubWait: Deferred.await(release) });
+      const done = yield* Deferred.make<unknown>();
+      yield* f.call().pipe(
+        Effect.flatMap((result) => Deferred.succeed(done, result)),
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* TestClock.adjust(Duration.seconds(29));
+      expect(yield* Deferred.isDone(done)).toBe(false);
+      yield* TestClock.adjust(Duration.seconds(1));
+      expect(yield* Deferred.isDone(done)).toBe(true);
+      expect(yield* Deferred.await(done)).toMatchObject({
+        outcome: "connected",
+        desktopCatalog: "saved",
+        hub: { saved: false },
+      });
+      expect(f.hubSaves).toEqual([]);
+    }).pipe(Effect.scoped),
 );
 it.effect("a hub failure after the desktop saved is reported without failing the add", () =>
   Effect.gen(function* () {

@@ -20,16 +20,26 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import { McpSchema, McpServer } from "effect/ai";
 import { HttpServerRequest } from "effect/http";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
-import { onMainListener } from "../auth/connectionContext.testkit.ts";
+import type { ConnectionContext } from "../auth/connectionContext.ts";
+import { MAIN_LISTENER, onConnection, penConnection } from "../auth/connectionContext.testkit.ts";
+import {
+  layerHubAccess,
+  makeCheckProbe,
+  makeServerAndCli,
+} from "../auth/DurableRevocations.testkit.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
+import * as EnvironmentAuthPolicy from "../auth/EnvironmentAuthPolicy.ts";
 import * as McpOAuth from "../auth/McpOAuth.ts";
 import { mcpClientScopes } from "../auth/mcpClientScopes.ts";
+import * as PairingGrantStore from "../auth/PairingGrantStore.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as SessionStore from "../auth/SessionStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
@@ -113,22 +123,22 @@ const projectRegistrations = (probe: Probe) =>
 const served = (probe: Probe) =>
   projectRegistrations(probe).pipe(Layer.provideMerge(McpServer.McpServer.layer));
 
-/** An MCP client signed in for an hour; its scope is what /mcp builds from its bearer token. */
-const signIn = Effect.gen(function* () {
-  const auth = yield* EnvironmentAuth.EnvironmentAuth;
-  const issued = yield* auth.issueSession({
-    subject: "mcp-client",
-    label: "Outside agent",
-    scopes: mcpClientScopes("full-access"),
-    runtimeModeCeiling: "full-access",
-    ttl: Duration.hours(1),
-  });
-  const authenticator = Effect.gen(function* () {
+/** The scope /mcp builds for a bearer token arriving on `connection`. */
+const authenticate = (
+  auth: EnvironmentAuth.EnvironmentAuth["Service"],
+  token: string,
+  connection: ConnectionContext = MAIN_LISTENER,
+) =>
+  Effect.gen(function* () {
     const clients = yield* McpHttpServer.McpClientAuthenticator;
     const request = new Request("http://127.0.0.1/mcp", {
-      headers: { host: "box.example.ts.net", authorization: "Bearer " + issued.token },
+      headers: { host: "box.example.ts.net", authorization: "Bearer " + token },
     });
-    return yield* clients.authenticate(onMainListener(HttpServerRequest.fromWeb(request)));
+    const scope = yield* clients.authenticate(
+      onConnection(HttpServerRequest.fromWeb(request), connection),
+    );
+    if (scope === undefined) return yield* Effect.die("the MCP client did not authenticate");
+    return scope;
   }).pipe(
     Effect.provide(
       McpOAuth.layerMcpClientAuthenticator.pipe(
@@ -141,14 +151,25 @@ const signIn = Effect.gen(function* () {
       ),
     ),
   );
-  const scope = yield* authenticator;
-  if (scope === undefined) return yield* Effect.die("the MCP client did not authenticate");
+
+/** An MCP client signed in for an hour; its scope is what /mcp builds from its bearer token. */
+const signIn = Effect.gen(function* () {
+  const auth = yield* EnvironmentAuth.EnvironmentAuth;
+  const issued = yield* auth.issueSession({
+    subject: "mcp-client",
+    label: "Outside agent",
+    scopes: mcpClientScopes("full-access"),
+    runtimeModeCeiling: "full-access",
+    ttl: Duration.hours(1),
+  });
+  const scope = yield* authenticate(auth, issued.token);
   const settings = yield* auth.issueSession({
     subject: "settings-page",
     scopes: AuthStandardClientScopes,
   });
   return {
     scope,
+    sessionId: issued.sessionId,
     revoke: auth.revokeClientSession(settings.sessionId, issued.sessionId),
     revokeOthers: auth.revokeOtherClientSessions(settings.sessionId),
   };
@@ -188,6 +209,80 @@ it.effect.each(["Settings revoke", "Revoke others"] as const)(
         expect(result._meta).toBeUndefined();
       }).pipe(Effect.provide(served(probe)));
     }).pipe(Effect.provide(layerAuth)),
+);
+
+const peer = {
+  meshId: "mesh-1",
+  nodeId: "node-a",
+  signPub: "sign-a",
+  noisePub: "noise-a",
+  name: "a",
+} as const;
+/** EnvironmentAuth over the server's store on disk, which a second store (the CLI) shares. */
+const layerAuthOver = <E, R>(
+  running: Layer.Layer<SessionStore.SessionStore | SqlClient.SqlClient, E, R>,
+) =>
+  Layer.effect(EnvironmentAuth.EnvironmentAuth, EnvironmentAuth.make).pipe(
+    Layer.provide(EnvironmentAuthPolicy.layer),
+    Layer.provide(PairingGrantStore.layer),
+    Layer.provide(layerHubAccess),
+    Layer.provideMerge(running),
+    Layer.provide(ServerSecretStore.layer),
+    Layer.provide(ServerEnvironment.layerIdentity),
+    Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-cut-disk-" })),
+  );
+
+it.effect.each(["revoked by the command line", "Pen-bound and its row is deleted"] as const)(
+  "a project create admitted before its session is %s never lands once the durable check runs",
+  (ending) =>
+    Effect.gen(function* () {
+      const check = yield* makeCheckProbe;
+      const probe = yield* makeProbe;
+      const { running, fromCli } = yield* makeServerAndCli(check.wrap);
+      yield* Effect.gen(function* () {
+        const auth = yield* EnvironmentAuth.EnvironmentAuth;
+        const store = yield* SessionStore.SessionStore;
+        const sql = yield* SqlClient.SqlClient;
+        // Keeps a session live so the check reads and proves this one ended.
+        yield* store.issue({ scopes: ["memory:read"] });
+        const client =
+          ending === "revoked by the command line"
+            ? yield* signIn
+            : yield* Effect.gen(function* () {
+                const issued = yield* store.issue({
+                  subject: "mcp-client",
+                  method: "bearer-access-token",
+                  scopes: mcpClientScopes("full-access"),
+                  runtimeModeCeiling: "full-access",
+                  principalKind: "outside_client",
+                  penBinding: {
+                    meshId: peer.meshId,
+                    nodeId: peer.nodeId,
+                    signPub: peer.signPub,
+                    noisePub: peer.noisePub,
+                  },
+                });
+                const scope = yield* authenticate(auth, issued.token, penConnection(peer).context);
+                return { scope, sessionId: issued.sessionId };
+              });
+        const running = yield* call(client.scope, "goat_project_create", create("gated")).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Deferred.await(probe.admitted);
+        if (ending === "revoked by the command line")
+          yield* fromCli((cli) => cli.revoke(client.sessionId));
+        else yield* sql`DELETE FROM auth_sessions WHERE session_id = ${client.sessionId}`;
+        expect(yield* check.next).toBe("read");
+        yield* Deferred.succeed(probe.gate, undefined);
+        const result = yield* Fiber.join(running);
+        expect(yield* Ref.get(probe.landed)).toEqual([]);
+        expect(textOf(result)).toContain(CUT);
+      }).pipe(
+        // Built in order: the disk store opens before the served catalog's own in-memory database.
+        Effect.provide(served(probe).pipe(Layer.provideMerge(layerAuthOver(running)))),
+        Effect.scoped,
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 it.effect("an eval cut during one step never runs its next step", () =>
