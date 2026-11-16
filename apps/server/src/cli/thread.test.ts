@@ -6,6 +6,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { assert, it } from "@effect/vitest";
 import { ProjectId, RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -19,6 +20,7 @@ import {
 } from "./thread.ts";
 
 const threadId = ThreadId.make("thread-1");
+const isToolFailure = Schema.is(ThreadToolFailedError);
 const runId = RunId.make("run-1");
 
 /** Answers each tool call with the next scripted response for that tool. */
@@ -28,7 +30,7 @@ const scriptedTools = (script: Record<string, Array<unknown>>) => {
     calls.push({ tool, args });
     const next = script[tool]?.shift();
     if (next === undefined) return Effect.die(`unscripted ${tool} call`);
-    return next instanceof ThreadToolFailedError ? Effect.fail(next) : Effect.succeed(next);
+    return isToolFailure(next) ? Effect.fail(next) : Effect.succeed(next);
   }) as ThreadTools["call"];
   return { tools: { call } satisfies ThreadTools, calls };
 };
