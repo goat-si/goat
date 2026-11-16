@@ -185,3 +185,11 @@ it("swallows a sequence longer than the client replay window, which no client co
   );
   expect(history.visible).toBe("beforeafter\n");
 });
+
+it("ends a swallowed DCS at a C1 code point whose surrogate pair is split across chunks", () => {
+  // U+10000's UTF-8 bytes run as C1 controls inside a DCS: 0x90 then 0x80, which ends it.
+  const history = historyFeed();
+  history.feed("before", ...overCap("\u001bPq", "?"), "\ud800", "\udc00after\n");
+  expect(history.visible).toBe("before\u001b@\ufffdafter\n");
+  expect(history.pending).toBe("");
+});
