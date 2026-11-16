@@ -254,7 +254,8 @@ To close several, press **Close**, drag across the rows in the same group, and r
 Press **Escape** before releasing to cancel. Failed closes stay in the list so you can retry them.
 
 GitHub, GitLab, and Azure DevOps support auto-merge while checks are outstanding. GitHub also
-supports approving waiting fork workflows and opening a revert pull request for a merged change.
+supports approving waiting fork workflows. GitHub and GitLab can open a revert pull request for
+a merged change.
 
 Pull request sharing is off by default. In Settings → Connections → Pull request sharing (Pull
 request routing under Environments on mobile), choose **Read PRs** or **Read and act** for each
@@ -356,7 +357,7 @@ Linking and unlinking are available in the web and desktop clients.
 The **Linked pull requests** panel lists every review and groups stacks. Unlink a review from its
 row menu. An unlinked stack layer stays out of later syncs. Open linked reviews refresh on the server;
 closed reviews refresh periodically so reopening one on the host is detected. Merged reviews refresh
-when requested. A settled thread's reviews stop refreshing until you unsettle it. With **Auto-settle merged threads** enabled, a thread can settle after every linked
+when requested. Settling a thread refreshes its open and closed reviews once; after that they stop refreshing until you unsettle it. With **Auto-settle merged threads** enabled, a thread can settle after every linked
 review is terminal. An open or unsynced link keeps it active.
 
 GOAT automatically watches open pull requests that a thread creates or its agent links, unless you
@@ -366,7 +367,8 @@ with `goat_call {path:"pull_request.watch"}` and keep the thread working between
 
 The server checks every two minutes. Checks waiting for workflow approval are reported once and
 follow the failed-check notification setting. By default, failed checks, passing required checks, and other
-people's comments or reviews wake the agent. Your own comments do not. Bot comments are ignored
+people's comments or reviews wake the agent. On github.com, the merge queue dropping the pull request
+without merging it follows the failed-check setting and carries GitHub's reason. Your own comments do not. Bot comments are ignored
 unless the bot is listed in **Bots that count as people**. Merge conflicts do not wake a thread idle
 for more than 3 days. In **Settings → Organization**, choose **React** to wake the agent immediately,
 **Keep as context** to record an update on the timeline and include it with the next wake without

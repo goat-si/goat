@@ -4,6 +4,8 @@ import { defineConfig, normalizePath } from "vite-plus";
 import "vite-plus/test/config";
 
 const reactTests = [
+  "src/features/threads/PendingUserInputCard.test.tsx",
+  "src/components/FilePreviewModal.test.tsx",
   "src/features/usage/UsageLimitDetails.test.tsx",
   "src/features/usage/UsageLimitsPooled.test.tsx",
   "src/features/keyboard/keyboardControllerState.test.tsx",
@@ -29,6 +31,8 @@ const reactTests = [
   "src/components/ui/SplitButton.android.test.tsx",
   "src/components/ProjectFavicon.test.tsx",
   "src/features/files/useFileTreeEntries.test.tsx",
+  "src/features/home/home-route-visibility.test.tsx",
+  "src/features/threads/McpAppFullscreenScreen.test.tsx",
   "src/features/files/FileSourceSurface.test.tsx",
   "src/features/files/ZipArchiveView.test.tsx",
   "src/lib/clock.test.ts",
@@ -138,6 +142,8 @@ const reactTests = [
   "src/features/notes/NoteRouteScreen.test.tsx",
   "src/features/notes/NoteStartWorkRouteScreen.test.tsx",
   "src/features/settings/ProjectActionsSettings.test.tsx",
+  "src/features/files/thread-file-navigator-pane.test.tsx",
+  "src/features/workspace/WorkspaceRootScreen.android.test.tsx",
   "src/features/projects/AddProjectScreen.test.ts",
   "src/lib/useMediaVideoPlayback.test.tsx",
   "src/features/pull-requests/usePullRequestEnvironmentFallback.test.tsx",

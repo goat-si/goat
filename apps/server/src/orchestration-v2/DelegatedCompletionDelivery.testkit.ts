@@ -34,6 +34,7 @@ import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 
@@ -106,6 +107,7 @@ export const layerTest = Layer.mergeAll(
   RuntimeLayer.layer,
   RuntimeLayer.layerEventSink,
   ThreadCommandExecutor.layer,
+  EffectOutbox.layer,
 ).pipe(
   Layer.provideMerge(RuntimeLayer.layerProjectService),
   Layer.provide(
@@ -130,6 +132,7 @@ export const layerTest = Layer.mergeAll(
           repositoryIdentityResolved: false,
         }),
       awaitRepositoryIdentity: () => Effect.succeed(null),
+      refreshRepositoryIdentity: () => Effect.void,
       invalidate: () => Effect.void,
       subscribeChanges: Effect.never,
     }),

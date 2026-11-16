@@ -904,13 +904,17 @@ class SurvivorFenceInterruptError extends ProviderAdapter.ProviderAdapterInterru
 }
 
 const isSurvivorStopFenceError = Schema.is(CodexSurvivorStopFenceError);
+const isInterruptTimeoutError = Schema.is(ProviderAdapter.ProviderAdapterInterruptTimeoutError);
 
+// A Stop Codex never confirmed keeps its own error, so clients offer Force stop.
 export const mapSurvivorInterruptError = (input: {
   readonly driver: ProviderDriverKind;
   readonly providerThreadId: ProviderAdapter.ProviderAdapterV2InterruptInput["providerThread"]["id"];
   readonly providerTurnId: ProviderTurnId;
   readonly cause: unknown;
 }) =>
-  isSurvivorStopFenceError(input.cause)
-    ? new SurvivorFenceInterruptError(input)
-    : new ProviderAdapter.ProviderAdapterInterruptError(input);
+  isInterruptTimeoutError(input.cause)
+    ? input.cause
+    : isSurvivorStopFenceError(input.cause)
+      ? new SurvivorFenceInterruptError(input)
+      : new ProviderAdapter.ProviderAdapterInterruptError(input);

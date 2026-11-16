@@ -17,10 +17,12 @@ import {
   redactComputerUseTypedText,
 } from "@goat/shared/toolActivity";
 import { goatCallTarget } from "@goat/contracts/agentSurface/callArguments";
+import { LEGACY_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
 import {
   dedupeSubagentBodies,
   dedupeTurnItemBodies,
 } from "@goat/shared/orchestrationV2DedupedBodies";
+import { MCP_APP_OUTPUT_KEY, readMcpAppReference } from "@goat/shared/mcpApp";
 import {
   compactDynamicToolOutput,
   omitToolOutputImageData,
@@ -274,7 +276,7 @@ function boundDynamicValue(value: unknown): unknown {
 }
 
 /** Preserve ordered image markers in truncated output so clients can load images by index. */
-function boundToolOutput(output: unknown): unknown {
+function boundToolResult(output: unknown): unknown {
   const omitted = omitToolOutputImageData(output);
   const bounded = boundDynamicValue(omitted);
   if (typeof bounded !== "string" || typeof omitted === "string") return bounded;
@@ -285,6 +287,24 @@ function boundToolOutput(output: unknown): unknown {
         { type: "text", text: bounded },
         ...images.map((image) => ({ type: "image", mimeType: image.mimeType })),
       ];
+}
+
+function boundToolOutput(output: unknown): unknown {
+  if (typeof output !== "object" || output === null || !("result" in output)) {
+    return boundToolResult(output);
+  }
+  const stored: { readonly [key: string]: unknown } = output;
+  // Rows saved before the rename keep the app under the legacy key.
+  const app =
+    readMcpAppReference(stored[MCP_APP_OUTPUT_KEY]) ??
+    readMcpAppReference(stored[LEGACY_MCP_APP_OUTPUT_KEY]);
+  if (app === undefined) return boundToolResult(output);
+  // The app receives this result, so its image data stays unless it is too large to send.
+  const fits = boundDynamicValue(output.result) === output.result;
+  return {
+    [MCP_APP_OUTPUT_KEY]: app,
+    result: fits ? output.result : boundToolResult(output.result),
+  };
 }
 
 export function projectTurnItemForDetail(item: OrchestrationV2TurnItem): OrchestrationV2TurnItem {

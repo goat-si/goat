@@ -8,6 +8,7 @@ import { visibleThreadPullRequests } from "@goat/shared/threadPullRequests";
 import {
   CommandId,
   isOrchestrationV2WorkActive,
+  isProviderNativeSubagentThread,
   type ThreadId,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ThreadShell,
@@ -331,6 +332,30 @@ export const make = Effect.gen(function* () {
   const lookupPermits = yield* Semaphore.make(LOOKUP_CONCURRENCY);
   let mergeGeneration = 0;
 
+  // Untraced: a parent's settle can release many native children and the sweep's span covers them.
+  const settleNativeChild = Effect.fnUntraced(
+    function* (thread: ProjectionStore.ProjectionSettlementCandidate) {
+      const uuid = yield* crypto.randomUUIDv4();
+      yield* orchestrator.dispatch({
+        type: "thread.auto-settle",
+        commandId: CommandId.make(`server:auto-settle:${thread.id}:${uuid}`),
+        threadId: thread.id,
+        snapshotAt: thread.updatedAt,
+      });
+    },
+    (effect, thread) =>
+      effect.pipe(
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) =>
+            Effect.logWarning("automatic thread settlement skipped", {
+              threadId: thread.id,
+              cause: Cause.pretty(cause),
+            }),
+        ),
+      ),
+  );
+
   const sweep = Effect.fn("ThreadSettlementServiceV2.sweep")(function* (
     mergedPullRequest: PullRequestService.PullRequestMergeEvent | null,
     threadId?: ThreadId,
@@ -344,10 +369,10 @@ export const make = Effect.gen(function* () {
     if (refreshLookups && threadId === undefined) evaluated.clear();
     const generation = mergeGeneration;
     const settings = yield* settingsService.getSettings;
-    if (!autoSettlementConfigured(settings)) {
-      return;
-    }
-    const threads = yield* projections.getSettlementCandidates(threadId);
+    const automaticSettlementEnabled = autoSettlementConfigured(settings);
+    const threads = yield* projections.getSettlementCandidates(threadId, {
+      providerNativeSubagentsOnly: !automaticSettlementEnabled,
+    });
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
     if (threadId === undefined) {
       const live = new Set(threads.map((thread) => thread.id));
@@ -356,7 +381,19 @@ export const make = Effect.gen(function* () {
         if (entry.expiresAt <= nowMs) lookupCache.delete(key);
       }
     }
-    if (threads.length === 0) return;
+    // The store returns a provider-native child only once its parent is done, so it settles with
+    // the parent, without lookups and even when automatic settlement is off.
+    yield* Effect.forEach(
+      threads.filter(
+        (thread) =>
+          isProviderNativeSubagentThread(thread) && isAutoSettlementCandidate(thread, nowMs),
+      ),
+      settleNativeChild,
+      { concurrency: 8, discard: true },
+    );
+    if (!automaticSettlementEnabled) return;
+    const ownThreads = threads.filter((thread) => !isProviderNativeSubagentThread(thread));
+    if (ownThreads.length === 0) return;
     const projectShells = yield* projectStore.listShells();
     const projects = new Map(projectShells.map((project) => [project.id, project]));
     // A merge event re-sweeps every candidate, not just the threads linked to
@@ -366,7 +403,7 @@ export const make = Effect.gen(function* () {
     const settingsKey = autoSettlementSettingsKey(settings);
     const keys = new Map<ThreadId, string>();
     const dueThreads = new Set<ThreadId>();
-    const candidates = threads.filter((thread) => {
+    const candidates = ownThreads.filter((thread) => {
       if (!isAutoSettlementCandidate(thread, nowMs)) {
         evaluated.delete(thread.id);
         return false;
@@ -784,15 +821,19 @@ export const make = Effect.gen(function* () {
         return event.payload.type === "subagent_result"
           ? enqueueThread(event.payload.sourceThreadId)
           : Effect.void;
+      // A parent that is done releases its provider-native children to the next full sweep.
       case "thread.deleted":
       case "thread.archived":
         return Effect.sync(() => {
           shellClosedThreads.delete(event.threadId);
-        });
+        }).pipe(Effect.andThen(admission.enqueueFull));
       case "thread.settled":
         return Effect.sync(() => {
           shellClosedThreads.delete(event.threadId);
-        }).pipe(Effect.andThen(cleanUpSettledThread(event.threadId)));
+        }).pipe(
+          Effect.andThen(cleanUpSettledThread(event.threadId)),
+          Effect.andThen(admission.enqueueFull),
+        );
       case "thread.pull-request-link-updated":
       case "thread.pull-request-synced":
       case "provider-session.detached":

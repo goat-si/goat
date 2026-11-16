@@ -148,6 +148,14 @@ export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(
       cause: "A fork's workspace is chosen through orchestration.forkThread.",
     });
   }
+  if (incoming.type === "thread.metadata.update" && incoming.continuation !== undefined) {
+    // An agent's message, queued with its own workspace binding by goat_worktree_handoff.
+    return yield* new Orchestrator.OrchestratorDispatchError({
+      commandId: incoming.commandId,
+      commandType: incoming.type,
+      cause: "A handoff continuation is queued by goat_worktree_handoff, not sent by clients.",
+    });
+  }
   const command =
     incoming.type === "message.dispatch" ? yield* withGuestAttachments(incoming) : incoming;
   const threads = yield* ThreadManagement.ThreadManagementService;

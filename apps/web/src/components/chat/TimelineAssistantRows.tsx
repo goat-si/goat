@@ -1,6 +1,9 @@
 import { shouldPreserveAssistantLineBreaks } from "@goat/shared/markdownPipeline";
 import { type RunId } from "@goat/contracts";
-import { canForkProjectedAssistantItem } from "@goat/client-runtime/state/thread-workflows";
+import {
+  assistantReplyStatusBadge,
+  canForkProjectedAssistantItem,
+} from "@goat/client-runtime/state/thread-workflows";
 import { memo, use, useState } from "react";
 import { type ChatMessage, type TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
@@ -70,6 +73,11 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
             resolvedTheme={ctx.resolvedTheme}
             onOpenTurnDiff={ctx.onOpenTurnDiff}
           />
+        ) : null}
+        {!row.showAssistantMeta && assistantReplyStatusBadge(row.projectedItem, false) ? (
+          <div className="mt-1.5 flex">
+            <AssistantStatusBadge status="interrupted" />
+          </div>
         ) : null}
         {row.showAssistantMeta ? (
           <AssistantMessageMeta
@@ -170,6 +178,7 @@ function AssistantMessageMeta({
   alwaysVisible?: boolean;
 }) {
   const ctx = use(TimelineRowCtx);
+  const statusBadge = assistantReplyStatusBadge(projectedItem, true);
 
   return (
     <div
@@ -181,11 +190,7 @@ function AssistantMessageMeta({
         className,
       )}
     >
-      {projectedItem && projectedItem.item.status !== "completed" ? (
-        <span className="rounded-full border border-border/70 px-1.5 py-0.5 font-mono text-3xs text-muted-foreground">
-          {projectedItem.item.status}
-        </span>
-      ) : null}
+      {statusBadge ? <AssistantStatusBadge status={statusBadge} /> : null}
       <AssistantCopyButton
         message={message}
         showCopyButton={showCopyButton}
@@ -205,6 +210,14 @@ function AssistantMessageMeta({
         </Tooltip>
       )}
     </div>
+  );
+}
+
+function AssistantStatusBadge({ status }: { status: string }) {
+  return (
+    <span className="rounded-full border border-border/70 px-1.5 py-0.5 font-mono text-3xs text-muted-foreground">
+      {status}
+    </span>
   );
 }
 

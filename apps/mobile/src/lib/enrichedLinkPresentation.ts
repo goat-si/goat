@@ -1,3 +1,4 @@
+import { formatProviderSkillDisplayName } from "@goat/shared/inlineSkills";
 import type { ComposerContextRecord, EnvironmentId, ThreadId } from "@goat/contracts";
 import {
   composerChipSizeSuffix,
@@ -87,7 +88,7 @@ export function enrichedLinkVariantPattern(url: string) {
 }
 
 export const ENRICHED_INLINE_FILE_LINK_REGEX =
-  /^(?!\S*:\/\/)(?:(?:\.{1,2}[\\/]|~[\\/]|\/(?:Users|home|tmp|var|etc|opt|mnt|Volumes|private|root|usr|bin|sbin|lib|lib64|srv|dev|proc|sys|run|boot|media|workspace|workspaces)\/|[A-Za-z]:[\\/])[^\s`]+|(?:[A-Za-z0-9._-]+[\\/])+[A-Za-z0-9._-]+\.[A-Za-z0-9_-]+(?::\d+(?::\d+|-\d+)?)?|[A-Za-z0-9._-]+\.[A-Za-z0-9_-]+:\d+(?::\d+|-\d+)?)$/;
+  /^(?!\S*:\/\/)(?:(?:\.{1,2}[\\/]|~[\\/]|\/(?:Users|home|tmp|var|etc|opt|mnt|Volumes|private|root|usr|bin|sbin|lib|lib64|srv|dev|proc|sys|run|boot|media|workspace|workspaces)\/|[A-Za-z]:[\\/])[^\s`]+|(?:[\p{L}\p{M}\p{N}._-]+[\\/])+[\p{L}\p{M}\p{N}._-]+\.[A-Za-z0-9_-]+(?::\d+(?::\d+|-\d+)?)?|[\p{L}\p{M}\p{N}._-]+\.[A-Za-z0-9_-]+:\d+(?::\d+|-\d+)?)$/u;
 
 export function enrichedSkillLinkRegex(skills?: ReadonlyArray<SelectableMarkdownSkill>) {
   const names = [...new Set(skills?.map((skill) => skill.name) ?? [])].filter(Boolean);
@@ -100,16 +101,7 @@ export function enrichedSkillLinkRegex(skills?: ReadonlyArray<SelectableMarkdown
   );
 }
 
-export function enrichedSkillDisplayName(skill: SelectableMarkdownSkill) {
-  return (
-    skill.displayName?.trim() ||
-    skill.name
-      .split(/[\s:_-]+/)
-      .filter(Boolean)
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(" ")
-  );
-}
+export const enrichedSkillDisplayName = formatProviderSkillDisplayName;
 
 export function enrichedSkillReference(
   url: string,

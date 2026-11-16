@@ -156,7 +156,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
   expect([...names].filter((name) => name.startsWith("channel_")).sort()).toEqual(
     [...Object.values(CHANNEL_MCP_TOOL_NAMES), "channel_task_export"].sort(),
   );
-  expect(names.size).toBe(257);
+  expect(names.size).toBe(258);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   for (const [tool, questionDelivery] of [
     [ProjectToolkit.tools.goat_thread_launch, "Only local user-input questions still arrive."],
@@ -1129,7 +1129,7 @@ it.effect("discovers workflow stop targets and requires orchestration capability
               Effect.succeed(McpToolAccessTestkit.idleThreadProjection(shell)),
             getThreadRecords: () =>
               Effect.succeed(McpToolAccessTestkit.idleThreadProjection(shell)),
-            getTimelinePage: () => Effect.succeed({ items: [row], totalItems: 1, hasMore: false }),
+            getTimelinePage: () => Effect.succeed(McpToolAccessTestkit.timelinePage([row])),
             stopWorkflow: (input) =>
               Effect.sync(() => {
                 stopped.push(input);

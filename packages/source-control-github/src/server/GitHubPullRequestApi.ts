@@ -17,6 +17,7 @@ import {
 } from "./gitHubReferenceSearch.ts";
 import { matchesUnsortedListing, searchQuery } from "./gitHubPullRequestSearch.ts";
 import { toPullRequestActionSummary } from "./gitHubActionSummary.ts";
+import { gitHubReactionContent } from "./gitHubReactionContent.ts";
 import {
   GitHubBranchDeletionRefusedError,
   GitHubMergeHeadChangedError,
@@ -70,6 +71,11 @@ import {
 import * as GitHubRest from "./GitHubRest.ts";
 import * as GitHubRequestPolicy from "./GitHubRequestPolicy.ts";
 import * as GitHubGraphQlClient from "./gitHubGraphQlClient.ts";
+import {
+  isRefusedRequestedReviewersOnly,
+  toleratingMissingPullRefInActionState,
+  toleratingMissingPullRefInCore,
+} from "./gitHubGraphQlErrors.ts";
 import { PullRequestBatchesGraphQLGroup } from "./pullRequestBatches.graphql.ts";
 import {
   PullRequestMutationsGraphQLGroup,
@@ -119,7 +125,6 @@ import {
   decodePullRequestStacksJson,
   buildLabelRequest,
   PULL_REQUEST_SEARCH_MAX_ROWS,
-  gitHubReactionContent,
   reviewThreadConversation,
   type GitHubPullRequestActivity,
   type GitHubPullRequestActivityPage,
@@ -140,6 +145,8 @@ import type {
   ProviderChangeRequestSummary,
   ProviderListCursor,
 } from "@goat/source-control-core/server/PullRequestProvider";
+import { LIST_STATES, type GitHubPullRequestListPage } from "./gitHubPullRequestListStates.ts";
+import { decodeUnfinishedWorkflowRunsJson } from "./gitHubWorkflowRunsJson.ts";
 
 export class GitHubPullRequestReadError extends Schema.TaggedError<GitHubPullRequestReadError>()(
   "GitHubPullRequestReadError",
@@ -325,41 +332,10 @@ const isGraphQlClientError = (error: unknown): error is GraphQLClientError.Graph
 
 const { isNotFoundOnly } = GitHubGraphQlClient;
 
-const isRefusedRequestedReviewersOnly = (error: unknown): boolean =>
-  isGraphQlClientError(error) &&
-  error.reason._tag === "ResponseError" &&
-  error.reason.status === 200 &&
-  error.reason.errors.every(
-    ({ path, type }) =>
-      type === "FORBIDDEN" &&
-      path?.length === 6 &&
-      path[0] === "repository" &&
-      path[1] === "pullRequest" &&
-      path[2] === "reviewRequests" &&
-      path[3] === "nodes" &&
-      typeof path[4] === "number" &&
-      Number.isInteger(path[4]) &&
-      path[4] >= 0 &&
-      path[5] === "requestedReviewer",
-  );
-
 /** A large pull request can produce a multi-megabyte patch; past this it is truncated. */
 const DIFF_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const DIFF_TIMEOUT = Duration.seconds(60);
 const DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
-
-const LIST_STATES: Record<PullRequestListState, ReadonlyArray<"OPEN" | "CLOSED" | "MERGED">> = {
-  all: ["OPEN", "CLOSED", "MERGED"],
-  open: ["OPEN"],
-  closed: ["CLOSED", "MERGED"],
-  merged: ["MERGED"],
-};
-
-interface GitHubPullRequestListPage {
-  readonly items: ReadonlyArray<GitHubPullRequestListItem>;
-  readonly rawCount: number;
-  readonly endCursor: string | null;
-}
 
 const PULL_REQUEST_FALLBACK_MAX_ROWS = 1_000;
 
@@ -515,6 +491,14 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly headBranch: string;
       readonly headRepositoryOwner: string;
       readonly isCrossRepository: true;
+    }) => Effect.Effect<ReadonlyArray<GitHubWorkflowRunApproval>, GitHubPullRequestApiError>;
+
+    /** The head's workflow runs that have not finished, the latest 100. */
+    readonly listUnfinishedWorkflowRuns: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly headSha: string;
     }) => Effect.Effect<ReadonlyArray<GitHubWorkflowRunApproval>, GitHubPullRequestApiError>;
 
     readonly getPullRequestStack: (input: {
@@ -1287,14 +1271,17 @@ export const make = Effect.gen(function* () {
     const { owner, name } = parseRepositorySelector(input.repository);
     const operation = "getPullRequestDetail";
     const read = (requestedReviewers: number) =>
-      client.PullRequestCore({
-        owner,
-        name,
-        number: input.number,
-        headRef: `refs/pull/${input.number}/head`,
-        required: asksRequired(input.host),
-        requestedReviewers,
-      });
+      client
+        .PullRequestCore({
+          owner,
+          name,
+          number: input.number,
+          headRef: `refs/pull/${input.number}/head`,
+          required: asksRequired(input.host),
+          requestedReviewers,
+          mergeQueue: input.host.toLowerCase() === "github.com",
+        })
+        .pipe(toleratingMissingPullRefInCore);
     return SourceControlRateLimit.Interactive.pipe(
       Effect.flatMap((allowReserve) =>
         read(100).pipe(
@@ -1529,6 +1516,7 @@ export const make = Effect.gen(function* () {
             ? new GitHubRequestPolicy.GitHubApiNotFoundError({
                 host: input.host,
                 operation: input.operation,
+                githubErrors: GitHubGraphQlClient.describeErrors(error),
               })
             : readError(input.cwd, input.operation, error),
       ),
@@ -1582,7 +1570,10 @@ export const make = Effect.gen(function* () {
     (input) => {
       const lookup = pullRequestLookup(input);
       if (lookup === null) return Effect.succeed(null);
-      return GraphQLResolver.request(lookup, watchFingerprintResolver).pipe(
+      return GraphQLResolver.request(
+        { ...lookup, mergeQueue: input.host.toLowerCase() === "github.com" },
+        watchFingerprintResolver,
+      ).pipe(
         Effect.map((result) => {
           const pullRequest = result.repository?.pullRequest;
           return pullRequest == null ? null : toPullRequestWatchFingerprint(pullRequest);
@@ -1855,6 +1846,19 @@ export const make = Effect.gen(function* () {
       },
     ),
     listWorkflowRunsRequiringApproval,
+    listUnfinishedWorkflowRuns: Effect.fn("GitHubPullRequestApi.listUnfinishedWorkflowRuns")(
+      function (input) {
+        const { owner, name } = parseRepositorySelector(input.repository);
+        // Read with every pull request detail, so revalidate it.
+        return revalidatedRestRead({
+          cwd: input.cwd,
+          host: input.host,
+          operation: "listUnfinishedWorkflowRuns",
+          path: `repos/${owner}/${name}/actions/runs?head_sha=${encodeURIComponent(input.headSha)}&per_page=100`,
+          decode: decodeUnfinishedWorkflowRunsJson,
+        });
+      },
+    ),
 
     getPullRequestStack: Effect.fn("GitHubPullRequestApi.getPullRequestStack")(function (input) {
       const { owner, name } = parseRepositorySelector(input.repository);
@@ -2465,6 +2469,7 @@ export const make = Effect.gen(function* () {
             headRef: `refs/pull/${input.number}/head`,
           })
           .pipe(
+            toleratingMissingPullRefInActionState,
             graphql({ ...target, allowReserve: true }),
             Effect.map((result) => result.repository?.pullRequest ?? null),
             Effect.flatMap(found(target)),
@@ -2521,7 +2526,7 @@ export const make = Effect.gen(function* () {
             !IMMEDIATELY_MERGEABLE.has(state.mergeStateStatus?.toUpperCase() ?? ""));
         const merge = {
           pullRequestId: state.id,
-          mergeMethod: GRAPHQL_MERGE_METHODS[input.mergeMethod ?? "merge"],
+          mergeMethod: GRAPHQL_MERGE_METHODS[input.mergeMethod ?? "merge"] ?? "MERGE",
           ...(expectedHead === undefined ? {} : { expectedHeadOid: expectedHead }),
           ...(body === undefined ? {} : { commitBody: body }),
         };

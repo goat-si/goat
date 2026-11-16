@@ -14,6 +14,7 @@ import {
   ProviderInstanceConfigMap,
   ServerSettings as ServerSettingsSchema,
   ProviderInstanceId,
+  SecretReference,
 } from "@goat/contracts";
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -37,6 +38,7 @@ import { makeProviderInstanceRegistry } from "./ProviderInstanceRegistry.ts";
 import { ProviderDriverError } from "./Errors.ts";
 import * as ProviderOrchestrationAdapterInfrastructure from "./ProviderOrchestrationAdapterInfrastructure.ts";
 import * as ProviderHostLive from "./ProviderHostLive.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 
 const layerTestHttpClient = Layer.succeed(
   HttpClient.HttpClient,
@@ -48,6 +50,7 @@ const layerTestHttpClient = Layer.succeed(
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 const decodeProviderInstanceConfigMap = Schema.decodeUnknownSync(ProviderInstanceConfigMap);
 const decodeSecretProviderSettings = Schema.decodeUnknownSync(ServerSettingsSchema);
+const decodeSecretReference = Schema.decodeUnknownSync(SecretReference);
 
 const layerBackgroundPolicyAlwaysRun = Layer.mock(BackgroundPolicy.BackgroundPolicy)({
   reportClientActivity: () => Effect.void,
@@ -131,6 +134,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
   );
   const layerBase = ProviderHostLive.layer.pipe(Layer.provideMerge(layerBaseDeps));
   const layerTest = ProviderOrchestrationAdapterInfrastructure.layer.pipe(
+    Layer.provide(SqlitePersistence.layerMemory),
     Layer.provideMerge(layerBase),
   );
 
@@ -592,5 +596,58 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       expect(reads).toBe(2);
       expect(yield* registry.getInstance(id)).toBeUndefined();
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+  it.effect(
+    "a Check's reload uses its value: no second read, no other secret cleared, kept if the store then fails",
+    () =>
+      Effect.gen(function* () {
+        let reads = 0;
+        let available = true;
+        let invalidations = 0;
+        const received: unknown[] = [];
+        const driver = {
+          ...CodexDriver,
+          driverKind: ProviderDriverKind.make("antigravity"),
+          configSchema: AntigravitySettings,
+          create: (input: Parameters<typeof CodexDriver.create>[0]) => {
+            received.push(input.config);
+            return CodexDriver.create({ ...input, config: makeCodexConfig({ enabled: true }) });
+          },
+        } as unknown as typeof CodexDriver;
+        const id = ProviderInstanceId.make("checked_secret");
+        const reference = { provider: "vault", reference: "op://work/item/password" };
+        const configMap = decodeProviderInstanceConfigMap({
+          [id]: { driver: "antigravity", config: { enabled: true, apiKey: reference } },
+        });
+        const { registry, mutator } = yield* makeProviderInstanceRegistry({
+          drivers: [driver],
+          configMap,
+          resolveSecret: () => {
+            reads++;
+            return available
+              ? Effect.succeed("first")
+              : Effect.fail(
+                  new ProviderDriverError({
+                    driver: driver.driverKind,
+                    instanceId: id,
+                    detail: "locked",
+                  }),
+                );
+          },
+          invalidateSecrets: () => {
+            invalidations++;
+          },
+        });
+        expect(received).toMatchObject([{ apiKey: "first" }]);
+        const checked = { reference: decodeSecretReference(reference), value: "checked" };
+        yield* mutator.reloadSecrets?.(id, checked) ?? Effect.void;
+        expect({ reads, invalidations }).toEqual({ reads: 1, invalidations: 0 });
+        expect(received).toMatchObject([{ apiKey: "first" }, { apiKey: "checked" }]);
+        available = false;
+        yield* mutator.reloadSecrets?.(id, checked) ?? Effect.void;
+        expect(reads).toBe(1);
+        expect(received).toHaveLength(2);
+        expect(yield* registry.getInstance(id)).toBeDefined();
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 });

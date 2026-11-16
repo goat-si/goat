@@ -29,7 +29,6 @@ import { describe, expect, it } from "vite-plus/test";
 import { serializeAssistantCitation } from "@goat/shared/assistantCitations";
 import {
   computeStableMessagesTimelineRows,
-  computeMessageDurationStart,
   deriveMessagesTimelineRows,
   timelineEntryTurnFoldRunId,
   deriveMessagesTimelineRowsWithState,
@@ -39,118 +38,6 @@ import {
   workEntryDisplayLabel,
   liveWorkEntryLabel,
 } from "./MessagesTimeline.logic";
-
-describe("computeMessageDurationStart", () => {
-  it("uses the previous completed assistant updatedAt for subsequent assistant responses", () => {
-    const result = computeMessageDurationStart([
-      {
-        id: "u1",
-        role: "user",
-        createdAt: "2026-01-01T00:00:00Z",
-        updatedAt: "2026-01-01T00:00:00Z",
-        streaming: false,
-      },
-      {
-        id: "a1",
-        role: "assistant",
-        createdAt: "2026-01-01T00:00:30Z",
-        updatedAt: "2026-01-01T00:00:30Z",
-        streaming: false,
-      },
-      {
-        id: "a2",
-        role: "assistant",
-        createdAt: "2026-01-01T00:00:55Z",
-        updatedAt: "2026-01-01T00:00:55Z",
-        streaming: false,
-      },
-    ]);
-
-    expect(result).toEqual(
-      new Map([
-        ["u1", "2026-01-01T00:00:00Z"],
-        ["a1", "2026-01-01T00:00:00Z"],
-        ["a2", "2026-01-01T00:00:30Z"],
-      ]),
-    );
-  });
-
-  it("does not advance the boundary for a streaming message", () => {
-    const result = computeMessageDurationStart([
-      {
-        id: "u1",
-        role: "user",
-        createdAt: "2026-01-01T00:00:00Z",
-        updatedAt: "2026-01-01T00:00:00Z",
-        streaming: false,
-      },
-      {
-        id: "a1",
-        role: "assistant",
-        createdAt: "2026-01-01T00:00:30Z",
-        updatedAt: "2026-01-01T00:00:40Z",
-        streaming: true,
-      },
-      {
-        id: "a2",
-        role: "assistant",
-        createdAt: "2026-01-01T00:00:55Z",
-        updatedAt: "2026-01-01T00:00:55Z",
-        streaming: false,
-      },
-    ]);
-
-    expect(result).toEqual(
-      new Map([
-        ["u1", "2026-01-01T00:00:00Z"],
-        ["a1", "2026-01-01T00:00:00Z"],
-        ["a2", "2026-01-01T00:00:00Z"],
-      ]),
-    );
-  });
-
-  it("resets the boundary on a new user message", () => {
-    const result = computeMessageDurationStart([
-      {
-        id: "u1",
-        role: "user",
-        createdAt: "2026-01-01T00:00:00Z",
-        updatedAt: "2026-01-01T00:00:00Z",
-        streaming: false,
-      },
-      {
-        id: "a1",
-        role: "assistant",
-        createdAt: "2026-01-01T00:00:30Z",
-        updatedAt: "2026-01-01T00:00:30Z",
-        streaming: false,
-      },
-      {
-        id: "u2",
-        role: "user",
-        createdAt: "2026-01-01T00:01:00Z",
-        updatedAt: "2026-01-01T00:01:00Z",
-        streaming: false,
-      },
-      {
-        id: "a2",
-        role: "assistant",
-        createdAt: "2026-01-01T00:01:20Z",
-        updatedAt: "2026-01-01T00:01:20Z",
-        streaming: false,
-      },
-    ]);
-
-    expect(result).toEqual(
-      new Map([
-        ["u1", "2026-01-01T00:00:00Z"],
-        ["a1", "2026-01-01T00:00:00Z"],
-        ["u2", "2026-01-01T00:01:00Z"],
-        ["a2", "2026-01-01T00:01:00Z"],
-      ]),
-    );
-  });
-});
 
 describe("resolveAssistantMessageCopyState", () => {
   it("copies the rendered representation of Codex directives", () => {
@@ -718,6 +605,63 @@ describe("deriveMessagesTimelineRows", () => {
     },
   );
 
+  it("keeps only the latest compaction divider visible when a turn that compacted twice folds", () => {
+    const fixture = makeStreamingTimelineFixture();
+    const [, , , liveUser, liveWork, liveAssistant] = fixture.visibleTurnItems;
+    if (liveUser?.item.type !== "user_message" || liveAssistant?.item.type !== "assistant_message")
+      throw new Error("Expected live fixture items");
+    if (!liveWork) throw new Error("Expected live work");
+    const assistantItem = liveAssistant.item;
+    const compaction = (id: string, position: number, before: number, after: number) => ({
+      ...liveAssistant,
+      position,
+      sourceItemId: TurnItemId.make(id),
+      item: {
+        ...assistantItem,
+        id: TurnItemId.make(id),
+        type: "compaction" as const,
+        driver: null,
+        status: "completed" as const,
+        beforeTokenCount: before,
+        afterTokenCount: after,
+      },
+    });
+    const timelineEntries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: [
+        liveUser,
+        compaction("first-compaction", 4, 100_000, 20_000),
+        { ...liveWork, position: 5 },
+        compaction("second-compaction", 6, 90_000, 30_000),
+      ],
+      optimisticMessages: [],
+    });
+    const rowsFor = (expandedRunIds?: ReadonlySet<RunId>) =>
+      deriveMessagesTimelineRows({
+        timelineEntries,
+        isWorking: false,
+        latestRun: {
+          runId: fixture.runId,
+          status: "completed",
+          startedAt: fixture.time(5),
+          completedAt: fixture.time(8),
+        },
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+        ...(expandedRunIds ? { expandedRunIds } : {}),
+      });
+    const collapsed = rowsFor();
+    expect(collapsed.filter((row) => row.kind === "turn-fold")).toHaveLength(1);
+    expect(collapsed.some((row) => row.kind === "work")).toBe(false);
+    expect(collapsed.filter((row) => row.kind === "context-compaction")).toMatchObject([
+      { tokenCounts: { before: "90K", after: "30K" } },
+    ]);
+    const expanded = rowsFor(new Set([fixture.runId]));
+    expect(expanded.filter((row) => row.kind === "context-compaction")).toMatchObject([
+      { tokenCounts: { before: "100K", after: "20K" } },
+      { tokenCounts: { before: "90K", after: "30K" } },
+    ]);
+  });
+
   it("folds an answered compact-on-return question into its compaction row", () => {
     const fixture = makeStreamingTimelineFixture();
     const [history0, history1, history2, liveUser, liveWork, liveAssistant] =
@@ -918,7 +862,7 @@ describe("deriveMessagesTimelineRows", () => {
       activeTurnStartedAt: null,
       turnDiffSummaries: [assistantTurnDiffSummary],
       supportsConversationRollback: true,
-      threadStartCheckpointReady: true,
+      threadStartCheckpointAvailable: true,
     });
 
     const userRow = rows.find(

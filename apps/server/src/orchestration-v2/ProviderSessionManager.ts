@@ -1,29 +1,29 @@
 import { detachedThreadField, releasedThreadIds } from "./providerSessionReleasedThreads.ts";
-import { sessionScopedRuntimeRequestThreadId } from "./sessionScopedRuntimeRequestThreadId.ts";
+import {
+  makeReleasedBackgroundWork,
+  type ReleasedProviderThread,
+} from "./providerSessionReleasedWork.ts";
+import { needsAttached, sessionScopedArtifactThreadId } from "./sessionScopedArtifactThreadId.ts";
 import { goatMcpServersFor, nativeSubagentLimiter } from "./goatSessionConfig.ts";
 import { repairSchedule } from "../retryJitter.ts";
 import { makeMemoryProviderAuthority } from "./MemoryProviderAuthority.ts";
 import { isReleasedRuntimeRequest } from "./ReleasedRuntimeRequest.ts";
 import * as CodexRoute from "../provider/CodexRouteService.ts";
 import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapterInfrastructure.ts";
-import type { MemorySnapshotPolicy } from "../memory/MemorySnapshot.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
   isOrchestrationV2WorkActive,
-  ModelSelection,
   type AuthEnvironmentScope,
-  type MemoryTaskGrantCeiling,
+  type OrchestrationV2AppThread,
+  type OrchestrationV2Run,
+  type OrchestrationV2Subagent,
   type RunId,
-  type ScreenBindingHints,
-  type TurnCapability,
-  type NodeId,
   OrchestrationV2DomainEvent,
   OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
   ProviderInstanceId,
-  type ProviderInteractionMode,
   ProviderSessionId,
   ThreadId,
   type ProviderThreadId,
@@ -44,7 +44,6 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
-import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -57,8 +56,10 @@ import {
   withMetrics,
 } from "../observability/Metrics.ts";
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
+import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import type * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as ServerSettings from "../serverSettings.ts";
 import * as CuaDriver from "../cua/CuaDriver.ts";
 import * as ComputerUse from "../cua/ComputerUseAttachment.ts";
@@ -79,6 +80,7 @@ import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import { makeScopeCloser, type ReopenLatch } from "./ProviderSessionScopeClose.ts";
+import { makeRetryStallWatch } from "./ProviderRetryStallWatch.ts";
 import * as Retirement from "./ProviderSessionRetirement.ts";
 import {
   providerThreadLoadKey,
@@ -86,9 +88,27 @@ import {
   releaseStatusFor,
   sessionKey,
 } from "./ProviderSessionKeys.ts";
+import {
+  ProviderSessionActivityError,
+  ProviderSessionCloseError,
+  ProviderSessionLookupError,
+  ProviderSessionOpenError,
+  ProviderSessionReleaseError,
+  ProviderSessionReleaseReason,
+} from "./ProviderSessionManagerErrors.ts";
 import { prepareScreenTurn, sameScreenBindingHints } from "./ScreenSkills.ts";
 import { instanceUrlOpener } from "../urlOpener/UrlOpenerShim.ts";
 
+import type {
+  ProviderMemoryPrepareInput,
+  McpCredentialRotation,
+  ProviderSessionManagerV2Shape,
+} from "./ProviderSessionManagerTypes.ts";
+export type {
+  ProviderMemoryPrepareInput,
+  McpCredentialRotation,
+  ProviderSessionManagerV2Shape,
+} from "./ProviderSessionManagerTypes.ts";
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
 const RELEASE_SCOPE_CLOSE_TIMEOUT_MS = 30 * 1000;
@@ -106,198 +126,39 @@ const WORKING_RUN_STATUSES: ReadonlySet<string> = new Set([
   "waiting",
 ]);
 
-export const ProviderSessionReleaseReason = Schema.Literals([
-  "idle_timeout",
-  "runtime_error",
-  "manual_shutdown",
-  "server_shutdown",
-]);
-export type ProviderSessionReleaseReason = typeof ProviderSessionReleaseReason.Type;
-
-export class ProviderSessionOpenError extends Schema.TaggedError<ProviderSessionOpenError>()(
-  "ProviderSessionOpenError",
-  {
-    instanceId: ProviderInstanceId,
-    providerSessionId: ProviderSessionId,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Failed to open provider instance ${this.instanceId} session ${this.providerSessionId}.`;
-  }
-}
-
-export class ProviderSessionLookupError extends Schema.TaggedError<ProviderSessionLookupError>()(
-  "ProviderSessionLookupError",
-  {
-    providerSessionId: ProviderSessionId,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Failed to look up provider session ${this.providerSessionId}.`;
-  }
-}
-
-export class ProviderSessionCloseError extends Schema.TaggedError<ProviderSessionCloseError>()(
-  "ProviderSessionCloseError",
-  {
-    providerSessionId: ProviderSessionId,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Failed to close provider session ${this.providerSessionId}.`;
-  }
-}
-
-export class ProviderSessionReleaseError extends Schema.TaggedError<ProviderSessionReleaseError>()(
-  "ProviderSessionReleaseError",
-  {
-    providerSessionId: ProviderSessionId,
-    reason: ProviderSessionReleaseReason,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Failed to release provider session ${this.providerSessionId}.`;
-  }
-}
-
-export class ProviderSessionActivityError extends Schema.TaggedError<ProviderSessionActivityError>()(
-  "ProviderSessionActivityError",
-  {
-    providerSessionId: ProviderSessionId,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Failed to update provider session activity for ${this.providerSessionId}.`;
-  }
-}
-
-export const ProviderSessionManagerV2Error = Schema.Union([
-  ProviderSessionOpenError,
-  ProviderWorkspaceMissingError,
-  ProviderSessionLookupError,
-  ProviderSessionCloseError,
-  ProviderSessionReleaseError,
+export {
   ProviderSessionActivityError,
-]);
-export type ProviderSessionManagerV2Error = typeof ProviderSessionManagerV2Error.Type;
+  ProviderSessionCloseError,
+  ProviderSessionLookupError,
+  ProviderSessionManagerV2Error,
+  ProviderSessionOpenError,
+  ProviderSessionReleaseError,
+  ProviderSessionReleaseReason,
+} from "./ProviderSessionManagerErrors.ts";
 
-export interface ProviderMemoryPrepareInput {
-  readonly runId?: RunId;
-  readonly delegatedTaskId?: NodeId;
-  readonly threadId: ThreadId;
-  readonly providerInstanceId: ProviderInstanceId;
-  /** Explicit null is ordinary; missing legacy task authority is none. */
-  readonly memoryGrantCeiling?: MemoryTaskGrantCeiling | null;
-  readonly readOnly?: boolean;
-  /** Plan turns never get computer use. */
-  readonly interactionMode?: ProviderInteractionMode;
-  readonly dispatchScopes?: ReadonlyArray<AuthEnvironmentScope>;
-  /** What this turn's `@computer` / `@browser` chips asked for; the next turn starts over. */
-  readonly turnCapabilities?: ReadonlyArray<TurnCapability>;
-  readonly screenBindingHints?: ScreenBindingHints;
-}
-
-/** What opening a provider session for a turn admits; the same for a new or a shared session. */
-export interface McpCredentialRotation {
-  readonly threadId: ThreadId;
-  readonly providerInstanceId: ProviderInstanceId;
-  readonly providerSessionId: string;
-  readonly grantedScopes: ReadonlyArray<AuthEnvironmentScope>;
-  readonly memoryPolicy: McpSessionRegistry.McpMemoryPolicy;
-}
-
-export interface ProviderSessionManagerV2Shape {
-  /** Positive execution authority with prepare identity; callers also match the run/task projection. */
-  readonly memoryAccessInputs?: (
-    threadId: ThreadId,
-    providerInstanceId: ProviderInstanceId,
-  ) => Effect.Effect<
-    | (ProviderMemoryPrepareInput & {
-        readonly currentMemoryGrant: Exclude<MemoryTaskGrantCeiling, "none">;
-      })
-    | undefined
+/** Matches planDelegatedCompletionDelivery: true while a delegated task's result still wakes the thread. */
+export const delegatedTaskWillWake = (records: {
+  readonly thread: Pick<OrchestrationV2AppThread, "archivedAt" | "deletedAt">;
+  readonly runs: ReadonlyArray<Pick<OrchestrationV2Run, "id" | "delegatedCompletion">>;
+  readonly subagents: ReadonlyArray<
+    Pick<OrchestrationV2Subagent, "origin" | "status" | "runId" | "completionDelivery">
   >;
-  readonly currentMemoryPolicy?: (threadId: ThreadId) => Effect.Effect<MemorySnapshotPolicy>;
-  readonly prepareMcpSession?: (input: ProviderMemoryPrepareInput) => Effect.Effect<void>;
-  readonly mcpCredentialRotations?: Stream.Stream<McpCredentialRotation>;
-
-  readonly shutdown: Effect.Effect<void>;
-  readonly open: (input: {
-    readonly threadId: ThreadId;
-    readonly providerSessionId: ProviderSessionId;
-    readonly modelSelection: ModelSelection;
-    readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
-    readonly runId?: RunId;
-    readonly delegatedTaskId?: NodeId;
-    readonly memoryGrantCeiling?: MemoryTaskGrantCeiling | null;
-    readonly readOnly?: boolean;
-    readonly dispatchScopes?: ReadonlyArray<AuthEnvironmentScope>;
-    readonly turnCapabilities?: ReadonlyArray<TurnCapability>;
-    readonly screenBindingHints?: ScreenBindingHints;
-    readonly resumeFromSession?: OrchestrationV2ProviderSession;
-    readonly initialNativeThreadId?: string;
-    readonly initialProviderItemIdentityVersion?: 2;
-    /** Set for a new turn: a process that predates its model is restarted when idle, or refused. */
-    readonly startsTurn?: boolean;
-  }) => Effect.Effect<
-    ProviderAdapter.ProviderAdapterV2SessionRuntime,
-    ProviderSessionManagerV2Error
-  >;
-  readonly get: (
-    providerSessionId: ProviderSessionId,
-  ) => Effect.Effect<
-    Option.Option<ProviderAdapter.ProviderAdapterV2SessionRuntime>,
-    ProviderSessionManagerV2Error
-  >;
-  readonly isLive: (providerSessionId: ProviderSessionId) => Effect.Effect<boolean>;
-  readonly close: (
-    providerSessionId: ProviderSessionId,
-  ) => Effect.Effect<void, ProviderSessionManagerV2Error>;
-  readonly closeInstance: (
-    instanceId: ProviderInstanceId,
-  ) => Effect.Effect<void, ProviderSessionManagerV2Error>;
-  readonly release: (input: {
-    readonly providerSessionId: ProviderSessionId;
-    readonly reason: ProviderSessionReleaseReason;
-    readonly detail?: string;
-  }) => Effect.Effect<void, ProviderSessionManagerV2Error>;
-  readonly detach: (input: {
-    readonly providerSessionId: ProviderSessionId;
-    readonly threadId: ThreadId;
-    readonly detail?: string;
-    readonly revokeMcpCredential?: boolean;
-  }) => Effect.Effect<void, ProviderSessionManagerV2Error>;
-  /** Ends a turn start's catalog-restart reservation once that start attempt has exited. */
-  readonly settleTurnStart: (input: {
-    readonly threadId: ThreadId;
-    readonly runId: RunId;
-  }) => Effect.Effect<void>;
-  /**
-   * Releases the session unless, at the moment of removal, a turn other than run `runOrdinal`'s
-   * on `ownProviderThreadIds` is busy on it. Checked atomically with turn starts. Succeeds with
-   * whether it was released.
-   */
-  readonly releaseUnlessBusy: (input: {
-    readonly providerSessionId: ProviderSessionId;
-    readonly ownProviderThreadIds: ReadonlyArray<ProviderThreadId>;
-    readonly runOrdinal: number;
-    readonly reason: ProviderSessionReleaseReason;
-    readonly detail?: string;
-  }) => Effect.Effect<boolean, ProviderSessionManagerV2Error>;
-  /**
-   * Other threads with a run or background work on this session's shared process; empty when
-   * it serves one thread.
-   */
-  readonly otherWorkingThreads: (input: {
-    readonly providerSessionId: ProviderSessionId;
-    readonly threadId: ThreadId;
-  }) => Effect.Effect<ReadonlyArray<ThreadId>>;
-}
+}): boolean =>
+  records.thread.archivedAt === null &&
+  records.thread.deletedAt === null &&
+  records.subagents.some((task) => {
+    const run = records.runs.find((candidate) => candidate.id === task.runId);
+    const delivery = task.completionDelivery?.state;
+    return (
+      task.origin === "app_owned" &&
+      isOrchestrationV2WorkActive(task.status) &&
+      run !== undefined &&
+      (run.delegatedCompletion?.disposition ?? "open") === "open" &&
+      delivery !== "acknowledged" &&
+      delivery !== "delivered" &&
+      delivery !== "disposed"
+    );
+  });
 
 export class ProviderSessionManagerV2 extends Context.Service<
   ProviderSessionManagerV2,
@@ -420,7 +281,18 @@ export const layerWithOptions = (
       const commandOutput = yield* CommandOutputHub.CommandOutputHub;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const providerEventIngestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const installationGate = yield* ProviderInstallationGate.current;
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const withPendingWake = <C extends McpProviderSession.McpProviderSessionConfig>(
+        threadId: ThreadId,
+        config: C,
+      ): C => ({
+        ...config,
+        hasPendingWake: projectionStore.getThreadRecords(threadId, ["runs", "subagents"]).pipe(
+          Effect.map(delegatedTaskWillWake),
+          Effect.orElseSucceed(() => false),
+        ),
+      });
       const agentScope = yield* AgentScope;
       const agentAccessSettings = Effect.fn("ProviderSessionManagerV2.agentAccessSettings")(
         function* (threadId: ThreadId, readOnly: boolean) {
@@ -726,7 +598,7 @@ export const layerWithOptions = (
                     yield* mcpSessions.set(
                       yield* withNativeSubagentLimit(
                         threadId,
-                        withUrlOpener(withTurnSkills(existing)),
+                        withUrlOpener(withTurnSkills(withPendingWake(threadId, existing))),
                       ),
                     );
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
@@ -774,7 +646,11 @@ export const layerWithOptions = (
                 yield* mcpSessions.set(
                   yield* withNativeSubagentLimit(
                     threadId,
-                    withUrlOpener(withTurnSkills({ ...credential.config, goatMcpServers })),
+                    withUrlOpener(
+                      withTurnSkills(
+                        withPendingWake(threadId, { ...credential.config, goatMcpServers }),
+                      ),
+                    ),
                   ),
                 );
                 yield* Ref.update(
@@ -854,6 +730,11 @@ export const layerWithOptions = (
             );
       };
 
+      const subscriberReleaseCleanup = new WeakMap<
+        Queue.Queue<ProviderSessionEventSignal, Cause.Done>,
+        Effect.Effect<void>
+      >();
+
       const publishToSubscribers = (
         subscribers: Ref.Ref<
           ReadonlyMap<number, Queue.Queue<ProviderSessionEventSignal, Cause.Done>>
@@ -871,20 +752,26 @@ export const layerWithOptions = (
       const failSubscribers = Effect.fn("ProviderSessionManager.failSubscribers")(function* (
         entry: LiveSessionEntry,
         detail: string,
+        afterDrain: Effect.Effect<void>,
+        cause?: Cause.Cause<ProviderAdapter.ProviderAdapterV2Error>,
+        detachedThreadId?: ThreadId,
       ) {
         const error = new ProviderAdapter.ProviderAdapterEventStreamError({
           driver: entry.runtime.driver,
           providerSessionId: entry.runtime.providerSessionId,
+          ...detachedThreadField(detachedThreadId),
           cause: detail,
         });
         const subscribers = yield* Ref.getAndSet(entry.eventSubscribers, new Map());
         yield* Effect.forEach(
           subscribers.values(),
-          (queue) =>
-            Queue.offer(queue, {
+          (queue) => {
+            subscriberReleaseCleanup.set(queue, afterDrain);
+            return Queue.offer(queue, {
               type: "failure",
-              cause: Cause.fail(error),
-            }),
+              cause: cause ?? Cause.fail(error),
+            });
+          },
           { discard: true },
         );
       });
@@ -907,11 +794,17 @@ export const layerWithOptions = (
       // must let consumers drain them before the stream completes.
       const endSubscribers = Effect.fn("ProviderSessionManager.endSubscribers")(function* (
         entry: LiveSessionEntry,
+        afterDrain: Effect.Effect<void>,
       ) {
         const subscribers = yield* Ref.getAndSet(entry.eventSubscribers, new Map());
-        yield* Effect.forEach(subscribers.values(), (queue) => Queue.end(queue), {
-          discard: true,
-        });
+        yield* Effect.forEach(
+          subscribers.values(),
+          (queue) => {
+            subscriberReleaseCleanup.set(queue, afterDrain);
+            return Queue.end(queue);
+          },
+          { discard: true },
+        );
       });
 
       const cancelIdleFiber = (fiber: Fiber.Fiber<void, never> | null) =>
@@ -1097,112 +990,17 @@ export const layerWithOptions = (
         }
       });
 
-      // Read tasks as soon as the session leaves the live map, before a replacement reports its own.
-      // Keep OpenCode's roster: its background subagents share a server and can outlive the session.
-      const readReleasedBackgroundTasks = Effect.fn(
-        "ProviderSessionManager.readReleasedBackgroundTasks",
-      )(
-        function* (input: {
-          readonly entry: LiveSessionEntry;
-          readonly reason: ProviderSessionReleaseReason;
-          readonly detachedThreadId?: ThreadId;
-        }) {
-          if (
-            input.reason === "server_shutdown" ||
-            input.entry.runtime.backgroundTasksEndWithProcess !== true
-          ) {
-            return [];
-          }
-          const providerSessionId = input.entry.runtime.providerSessionId;
-          const released = [];
-          for (const threadId of releasedThreadIds(input)) {
-            const projection = yield* projectionStore.getThreadRecords(threadId, [
-              "providerThreads",
-            ]);
-            for (const providerThread of projection.providerThreads) {
-              const tasks = providerThread.pendingBackgroundTasks ?? [];
-              if (providerThread.providerSessionId !== providerSessionId || tasks.length === 0) {
-                continue;
-              }
-              released.push({
-                threadId,
-                providerSessionId,
-                providerThreadId: providerThread.id,
-                taskIds: new Set(tasks.map((task) => task.taskId)),
-              });
-            }
-          }
-          return released;
-        },
-        (effect, input) =>
-          effect.pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("orchestration-v2.provider-session-release-roster-read-failed", {
-                providerSessionId: input.entry.runtime.providerSessionId,
-                cause,
-              }).pipe(Effect.as([])),
-            ),
-          ),
-      );
-      type ReleasedBackgroundTasks = Effect.Success<
-        ReturnType<typeof readReleasedBackgroundTasks>
-      >[number];
-
-      // Dead processes cannot report task endings; stale rosters keep threads Waiting.
-      const writeReleasedBackgroundWorkEvents = (
-        released: ReadonlyArray<ReleasedBackgroundTasks>,
-      ) =>
-        Effect.forEach(
-          released,
-          ({ threadId, providerSessionId, providerThreadId, taskIds }) =>
-            Effect.gen(function* () {
-              for (let attempt = 0; attempt < 3; attempt++) {
-                const projection = yield* projectionStore.getThreadRecords(threadId, [
-                  "providerThreads",
-                ]);
-                const providerThread = projection.providerThreads.find(
-                  (candidate) => candidate.id === providerThreadId,
-                );
-                const tasks = providerThread?.pendingBackgroundTasks ?? [];
-                const remaining = tasks.filter((task) => !taskIds.has(task.taskId));
-                if (providerThread === undefined || remaining.length === tasks.length) return;
-                const now = yield* DateTime.now;
-                const { committed } = yield* eventSink.writeIfProviderThreadUnchanged({
-                  expected: providerThread,
-                  events: [
-                    {
-                      id: yield* idAllocator.allocate.event({ threadId, providerSessionId }),
-                      type: "provider-thread.updated",
-                      threadId,
-                      driver: providerThread.driver,
-                      providerInstanceId: providerThread.providerInstanceId,
-                      occurredAt: now,
-                      payload: {
-                        ...providerThread,
-                        pendingBackgroundTasks: remaining,
-                        updatedAt: now,
-                      },
-                    },
-                  ],
-                });
-                if (committed) return;
-              }
-              yield* Effect.logWarning(
-                "orchestration-v2.provider-session-release-roster-conflict",
-                {
-                  providerSessionId,
-                  providerThreadId,
-                },
-              );
-            }),
-          { discard: true },
-        );
+      const {
+        readReleasedProviderThreads,
+        writeReleasedToolCallEvents,
+        writeReleasedBackgroundWorkEvents,
+      } = makeReleasedBackgroundWork({ projectionStore, eventSink, idAllocator });
 
       const writeReleaseRecords = (input: {
         readonly entry: LiveSessionEntry;
         readonly reason: ProviderSessionReleaseReason;
         readonly detail?: string;
-        readonly releasedBackgroundTasks: ReadonlyArray<ReleasedBackgroundTasks>;
+        readonly releasedProviderThreads: ReadonlyArray<ReleasedProviderThread>;
         readonly releasedAt: DateTime.Utc;
         readonly detachedThreadId?: ThreadId;
         readonly replaced: boolean;
@@ -1217,7 +1015,9 @@ export const layerWithOptions = (
                 input.entry.requestEventPermit.withPermits(1),
               ),
             ),
-            Effect.exit(writeReleasedBackgroundWorkEvents(input.releasedBackgroundTasks)),
+            Effect.exit(
+              writeReleasedBackgroundWorkEvents(input.releasedProviderThreads, input.releasedAt),
+            ),
           ],
           { concurrency: 1 },
         ).pipe(Effect.flatMap(Exit.asVoidAll));
@@ -1331,6 +1131,7 @@ export const layerWithOptions = (
         readonly keepIfBusyOtherThan?: ReadonlyArray<string>;
         readonly gracefulSubscribers?: boolean;
         readonly latch: ReopenLatch;
+        readonly eventStreamCause?: Cause.Cause<ProviderAdapter.ProviderAdapterV2Error>;
       }) =>
         Effect.acquireUseRelease(
           removeLiveEntry(input).pipe(
@@ -1342,7 +1143,7 @@ export const layerWithOptions = (
               onSome: (entry) =>
                 Effect.gen(function* () {
                   const detachedThread = detachedThreadField(input.detachedThreadId);
-                  const releasedBackgroundTasks = yield* readReleasedBackgroundTasks({
+                  const releasedProviderThreads = yield* readReleasedProviderThreads({
                     entry,
                     reason: input.reason,
                     ...detachedThread,
@@ -1350,14 +1151,23 @@ export const layerWithOptions = (
                   if (input.cancelIdleFiber !== false) {
                     yield* cancelIdleFiber(entry.idleFiber);
                   }
+                  // Queued events can persist tool calls after the release-time scan.
+                  const afterDrain = Effect.forEach(
+                    releasedProviderThreads,
+                    (thread) => writeReleasedToolCallEvents(thread, releasedAt),
+                    { discard: true },
+                  ).pipe(logReleaseFailure(input.providerSessionId));
                   if (input.gracefulSubscribers === true) {
-                    yield* endSubscribers(entry);
+                    yield* endSubscribers(entry, afterDrain);
                   } else if (input.reason === "server_shutdown") {
                     yield* interruptSubscribers(entry);
                   } else {
                     yield* failSubscribers(
                       entry,
                       input.detail ?? `Provider session released: ${input.reason}.`,
+                      afterDrain,
+                      input.eventStreamCause,
+                      input.detachedThreadId,
                     );
                   }
                   const closeExit = yield* closeScopeWithin(entry.scope, {
@@ -1369,7 +1179,7 @@ export const layerWithOptions = (
                     entry,
                     reason: input.reason,
                     ...(input.detail === undefined ? {} : { detail: input.detail }),
-                    releasedBackgroundTasks,
+                    releasedProviderThreads,
                     releasedAt,
                     ...detachedThread,
                   };
@@ -1462,11 +1272,19 @@ export const layerWithOptions = (
           // Capture runtime identity before yielding; replacements can reuse the session id.
           const probedRuntime = entry.runtime;
           const hasPendingWork =
-            probedRuntime.hasPendingBackgroundWork === undefined
+            (probedRuntime.hasPendingBackgroundWork === undefined
               ? false
               : yield* probedRuntime.hasPendingBackgroundWork.pipe(
                   Retirement.unlessInterrupted(false),
-                );
+                )) ||
+            // Closing now would skip the archive of a child whose parent has not taken its result.
+            Option.isSome(
+              yield* Effect.findFirst(entry.idleThreadUnloads.keys(), (threadId) =>
+                delegatedChildArchive(threadId).pipe(
+                  Effect.map((child) => child === "awaiting_delivery"),
+                ),
+              ),
+            );
           const now = yield* Clock.currentTimeMillis;
           const pinnedSinceMs = entry.pinnedSinceMs ?? now;
           const pastPinCeiling = entry.retiring || now - pinnedSinceMs >= maxIdlePinMs;
@@ -1513,6 +1331,18 @@ export const layerWithOptions = (
               pinnedForMs: now - pinnedSinceMs,
             });
           }
+          // Closing skips the threads' own idle unloads, so archive delivered children first.
+          yield* Effect.forEach(
+            entry.idleThreadUnloads,
+            ([threadId, pending]) =>
+              unloadIdleThread({
+                providerSessionId: input.providerSessionId,
+                threadId,
+                generation: pending.generation,
+                archiveOnly: true,
+              }),
+            { discard: true },
+          );
           // Adapter probes yield; guard busyTurns and idleGeneration atomically when removing the entry.
           yield* releaseEntry({
             providerSessionId: input.providerSessionId,
@@ -1956,11 +1786,44 @@ export const layerWithOptions = (
         },
       );
 
+      // Provider clients list a delegated child as an ordinary conversation, so a
+      // finished one is archived once its parent has the result.
+      const delegatedChildArchive = Effect.fn("ProviderSessionManager.delegatedChildArchive")(
+        function* (threadId: ThreadId) {
+          const { thread, runs } = yield* projectionStore.getThreadRecords(threadId, ["runs"], {
+            runStatuses: [],
+            includeLatestRun: true,
+          });
+          // Follow-up tasks name their run; the initial task is the node the child forked from.
+          const taskId =
+            runs.at(-1)?.delegatedTaskId ??
+            (thread.forkedFrom?.type === "node" ? thread.forkedFrom.nodeId : undefined);
+          const parentThreadId = thread.lineage.parentThreadId;
+          if (parentThreadId === null || taskId === undefined) return undefined;
+          const task = (yield* projectionStore.getThreadRecords(parentThreadId, ["subagents"], {
+            subagentIds: [taskId],
+          })).subagents[0];
+          if (
+            task?.origin !== "app_owned" ||
+            task.childThreadId !== threadId ||
+            task.status !== "completed"
+          ) {
+            return undefined;
+          }
+          const delivery = task.completionDelivery?.state;
+          if (delivery === "pending" || delivery === "claimed") return "awaiting_delivery";
+          return delivery === "delivered" || delivery === "acknowledged" ? "ready" : undefined;
+        },
+        (effect) => effect.pipe(Effect.orElseSucceed(() => undefined)),
+      );
+
       const unloadIdleThread = Effect.fn("ProviderSessionManager.unloadIdleThread")(
         function* (input: {
           readonly providerSessionId: ProviderSessionId;
           readonly threadId: ThreadId;
           readonly generation: number;
+          /** Session release unloads only the threads it would archive, and never waits. */
+          readonly archiveOnly?: boolean;
         }): Effect.fn.Return<void> {
           const outcome = yield* threadAttachment.withLock(
             threadAttachmentKey(input),
@@ -1987,6 +1850,11 @@ export const layerWithOptions = (
                       .hasPendingBackgroundWorkForThread(pending.providerThread)
                       .pipe(Effect.catchCause(() => Effect.succeed(false)));
               if (hasPendingWork) return "deferred" as const;
+              const child = yield* delegatedChildArchive(input.threadId);
+              // Unloading now would miss the archive once the parent takes the result.
+              if (child === "awaiting_delivery") return "deferred" as const;
+              const archive = child === "ready";
+              if (input.archiveOnly === true && !archive) return "skipped" as const;
               const unloading = yield* Ref.modify(sessions, (current) => {
                 const latest = current.get(key);
                 if (
@@ -2010,8 +1878,23 @@ export const layerWithOptions = (
                 return [true, updated] as const;
               });
               if (!unloading) return "skipped" as const;
-              yield* unloadThread({ providerThread: pending.providerThread }).pipe(
-                Effect.timeout(UNLOAD_THREAD_TIMEOUT_MS),
+              const unload = (archiveThread: boolean) =>
+                unloadThread({
+                  providerThread: pending.providerThread,
+                  archive: archiveThread,
+                }).pipe(Effect.timeout(UNLOAD_THREAD_TIMEOUT_MS));
+              yield* unload(archive).pipe(
+                // A failed or timed-out archive may have left the thread loaded.
+                Effect.catch((cause) =>
+                  archive
+                    ? Effect.logWarning("orchestration-v2.driver-session.idle-archive-failed", {
+                        providerSessionId: input.providerSessionId,
+                        threadId: input.threadId,
+                        providerThreadId: pending.providerThread.id,
+                        cause,
+                      }).pipe(Effect.andThen(unload(false)))
+                    : Effect.fail(cause),
+                ),
                 Effect.catchCause((cause) =>
                   Effect.logWarning("orchestration-v2.driver-session.idle-unload-failed", {
                     providerSessionId: input.providerSessionId,
@@ -2025,7 +1908,7 @@ export const layerWithOptions = (
             }),
           );
           // Wait outside the lock so the next attach is not blocked.
-          if (outcome === "deferred") {
+          if (outcome === "deferred" && input.archiveOnly !== true) {
             yield* Effect.sleep(Duration.millis(idleTimeoutMs));
             return yield* unloadIdleThread(input);
           }
@@ -2070,6 +1953,14 @@ export const layerWithOptions = (
               removed
                 ? Queue.clear(queue).pipe(Effect.andThen(Queue.end(queue)), Effect.asVoid)
                 : Effect.void,
+            ),
+            // Detached so the consumer's run failure is not ordered behind release cleanup.
+            Effect.andThen(
+              Effect.suspend(() => {
+                const cleanup = subscriberReleaseCleanup.get(queue);
+                subscriberReleaseCleanup.delete(queue);
+                return cleanup === undefined ? Effect.void : Effect.forkDetach(cleanup);
+              }),
             ),
           );
           const events = Stream.fromQueue(queue).pipe(
@@ -2361,13 +2252,26 @@ export const layerWithOptions = (
       const startEventPump = (entry: LiveSessionEntry) => {
         let stoppedByProvider = false;
         let lastSessionStatus = entry.runtime.providerSession.status;
+        const retryStalls = makeRetryStallWatch({
+          providerSessionId: entry.runtime.providerSessionId,
+          isCurrent: Ref.get(sessions).pipe(
+            Effect.map(
+              (current) =>
+                current.get(sessionKey(entry.runtime.providerSessionId))?.runtime === entry.runtime,
+            ),
+          ),
+          projectionStore,
+          runtime: entry.exposedRuntime,
+        });
         return entry.runtime.events.pipe(
-          Stream.runForEach((event) => {
+          Stream.runForEach((nativeEvent) => {
             if (shutdownSignal.received) return Effect.void;
             // Live output bypasses persistence and subscribers so floods cannot delay domain events.
-            if (event.type === "command_output.delta") {
-              return commandOutput.append(event);
+            if (nativeEvent.type === "command_output.delta") {
+              return commandOutput.append(nativeEvent);
             }
+            const tracked = retryStalls.track(nativeEvent);
+            const event = tracked.event;
             const releaseLiveOutput =
               event.type === "turn_item.updated" &&
               event.turnItem.type === "command_execution" &&
@@ -2397,6 +2301,7 @@ export const layerWithOptions = (
                   ? Effect.void
                   : touchActivity(entry.runtime.providerSessionId, { providerActivity: true }),
             ).pipe(
+              Effect.andThen(retryStalls.update(tracked)),
               Effect.andThen(
                 event.type === "provider_session.updated"
                   ? persistProviderSessionUpdate(entry, event)
@@ -2423,17 +2328,18 @@ export const layerWithOptions = (
                       });
                     });
                   }
-                  // Some providers can block before a run subscriber exists
-                  // (project trust, login, or session-switch hooks). Persist
-                  // their runless request artifacts directly so the normal GOAT
-                  // request UI can answer them and unblock session setup.
-                  const threadId = sessionScopedRuntimeRequestThreadId(event);
+                  // Requests and recovered background commands can arrive before a run subscribes.
+                  const threadId = sessionScopedArtifactThreadId(event);
                   if (threadId !== undefined) {
                     yield* Effect.gen(function* () {
                       const current = (yield* Ref.get(sessions)).get(
                         sessionKey(entry.runtime.providerSessionId),
                       );
-                      if (current?.runtime !== entry.runtime) return;
+                      if (
+                        current?.runtime !== entry.runtime ||
+                        (needsAttached(event) && !current.attachedThreadIds.has(threadId))
+                      )
+                        return;
                       yield* providerEventIngestor
                         .ingestNormalized({
                           providerSessionId: entry.runtime.providerSessionId,
@@ -2489,11 +2395,6 @@ export const layerWithOptions = (
                         cause: "Provider event stream ended unexpectedly.",
                       }),
                     );
-              yield* publishToSubscribers(entry.eventSubscribers, {
-                type: "failure",
-                cause,
-              });
-              yield* Ref.set(entry.eventSubscribers, new Map());
               // lastError is the thread banner, so it gets the same bounded
               // message as a failed turn; the raw cause survives only in the log.
               yield* Effect.logWarning("orchestration-v2.provider-session-runtime-failed", {
@@ -2504,6 +2405,7 @@ export const layerWithOptions = (
                 providerSessionId: entry.runtime.providerSessionId,
                 reason: "runtime_error",
                 detail: makeProviderFailure({ cause }).message,
+                eventStreamCause: cause,
               }).pipe(logReleaseFailure(entry.runtime.providerSessionId));
             }),
           ),
@@ -2711,55 +2613,54 @@ export const layerWithOptions = (
                     // The previous session's agent scope must not explain this
                     // session's failures, even when this provider runs without one.
                     yield* agentScope.clear(input.threadId);
-                    const runtime = yield* adapter
-                      .openSession({
-                        threadId: input.threadId,
-                        providerSessionId: input.providerSessionId,
-                        modelSelection: input.modelSelection,
-                        runtimePolicy: input.runtimePolicy,
-                        ...(input.resumeFromSession === undefined
-                          ? {}
-                          : { resumeFromSession: input.resumeFromSession }),
-                        ...(input.initialNativeThreadId === undefined
-                          ? {}
-                          : { initialNativeThreadId: input.initialNativeThreadId }),
-                        ...(input.initialProviderItemIdentityVersion === undefined
-                          ? {}
-                          : {
-                              initialProviderItemIdentityVersion:
-                                input.initialProviderItemIdentityVersion,
-                            }),
-                      })
-                      .pipe(
-                        Effect.provideService(Scope.Scope, sessionScope),
-                        // Any failure, including a Stop that interrupts a slow
-                        // handshake, stops the provider process this open started.
-                        // The session cleanup runs first, and the close is
-                        // time-boxed: this runs under the session's open lock, so an
-                        // adapter finalizer that never finishes must not hold the
-                        // interrupter, the lock, or later opens.
-                        Effect.onError(() =>
-                          dropReservation.pipe(
-                            // Clear only a session this open freshly set up: a reused
-                            // one is held by another live provider process and must
-                            // survive this open's failure.
-                            Effect.andThen(
-                              prepared.issued
-                                ? clearMcpSession(
-                                    input.threadId,
-                                    mcpCredentialId,
-                                    admission ?? null,
-                                  )
-                                : Effect.void,
-                            ),
+                    const openSession = adapter.openSession({
+                      threadId: input.threadId,
+                      providerSessionId: input.providerSessionId,
+                      modelSelection: input.modelSelection,
+                      runtimePolicy: input.runtimePolicy,
+                      ...(input.resumeFromSession === undefined
+                        ? {}
+                        : { resumeFromSession: input.resumeFromSession }),
+                      ...(input.initialNativeThreadId === undefined
+                        ? {}
+                        : { initialNativeThreadId: input.initialNativeThreadId }),
+                      ...(input.initialProviderItemIdentityVersion === undefined
+                        ? {}
+                        : {
+                            initialProviderItemIdentityVersion:
+                              input.initialProviderItemIdentityVersion,
+                          }),
+                    });
+                    const runtime = yield* (
+                      installationGate === undefined
+                        ? openSession
+                        : installationGate.execute(input.modelSelection.instanceId, openSession)
+                    ).pipe(
+                      Effect.provideService(Scope.Scope, sessionScope),
+                      // Any failure, including a Stop that interrupts a slow
+                      // handshake, stops the provider process this open started.
+                      // The session cleanup runs first, and the close is
+                      // time-boxed: this runs under the session's open lock, so an
+                      // adapter finalizer that never finishes must not hold the
+                      // interrupter, the lock, or later opens.
+                      Effect.onError(() =>
+                        dropReservation.pipe(
+                          // Clear only a session this open freshly set up: a reused
+                          // one is held by another live provider process and must
+                          // survive this open's failure.
+                          Effect.andThen(
+                            prepared.issued
+                              ? clearMcpSession(input.threadId, mcpCredentialId, admission ?? null)
+                              : Effect.void,
                           ),
                         ),
-                        Effect.mapError(openError),
-                        withMetrics({
-                          counter: providerSessionsTotal,
-                          attributes: { provider: adapter.driver, operation: "open" },
-                        }),
-                      );
+                      ),
+                      Effect.mapError(openError),
+                      withMetrics({
+                        counter: providerSessionsTotal,
+                        attributes: { provider: adapter.driver, operation: "open" },
+                      }),
+                    );
                     const eventSubscribers = yield* Ref.make<
                       ReadonlyMap<number, Queue.Queue<ProviderSessionEventSignal, Cause.Done>>
                     >(new Map());

@@ -205,6 +205,8 @@ export function createCdpRelayConnection(
     }
   };
 
+  let runtimeReset: Promise<unknown> | undefined;
+
   const pageCommand = (command: CdpCommand): Promise<unknown> => {
     const viewer = command.sessionId ?? PAGE_SESSION_ID;
     const child = sessions.get(viewer) === "page" ? undefined : viewer;
@@ -229,6 +231,14 @@ export function createCdpRelayConnection(
       }
     }
     if (command.method === "Emulation.setFocusEmulationEnabled") return Promise.resolve({});
+    // The shared debugger keeps Runtime enabled after an earlier connection, and a repeated
+    // enable reports no existing contexts; Playwright waits for them, so reset once per connection.
+    if (command.method === "Runtime.enable" && child === undefined) {
+      runtimeReset ??= target.send("Runtime.disable", {}, undefined, owner).catch(() => undefined);
+      return runtimeReset.then(() =>
+        target.send(command.method, command.params ?? {}, undefined, owner),
+      );
+    }
     return target.send(command.method, command.params ?? {}, child, owner);
   };
 

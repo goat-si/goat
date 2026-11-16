@@ -2,6 +2,9 @@ import { cursorSource, cursorSources, totalOutputTokens } from "./UsageAssertion
 import { WINDOW, registerUnpricedTest } from "./usageUnpriced.testkit.ts";
 import { registerPiHistoryTest } from "./usagePiHistory.testkit.ts";
 import { registerMusePendingTest } from "./usageMusePending.testkit.ts";
+import { registerCacheUpgradeTest } from "./usageCacheUpgrade.testkit.ts";
+import { registerCompressedRolloutTest } from "./usageCompressedRollout.testkit.ts";
+import { registerClaudeCopiesTests } from "./usageClaudeCopies.testkit.ts";
 // @effect-diagnostics nodeBuiltinImport:off - the suite seeds and grows real transcript trees on disk, outside the service's Effect FileSystem
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
@@ -41,7 +44,6 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
-import * as NodeZlib from "node:zlib";
 import { vi } from "vite-plus/test";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
@@ -479,72 +481,7 @@ describe("Codex usage history", () => {
 });
 
 describe("UsageService", () => {
-  it.effect("counts compressed Codex rollouts across refresh, rewrites, and cache restarts", () =>
-    Effect.gen(function* () {
-      const { home, settings } = yield* setup;
-      const sessions = NodePath.join(home, "codex", "sessions");
-      const compressedPath = NodePath.join(sessions, "compressed.jsonl.zst");
-      const usage = (output_tokens: number, timestamp = "2026-08-01T10:00:00Z") =>
-        encodeUnknownJsonString({
-          type: "event_msg",
-          timestamp,
-          payload: {
-            type: "token_count",
-            info: { last_token_usage: { input_tokens: 10, output_tokens } },
-          },
-        }) + "\n";
-      const rollout = (id: string, output: number) =>
-        [
-          { type: "session_meta", payload: { id } },
-          { type: "turn_context", payload: { model: "gpt-6-astra" } },
-        ]
-          .map((line) => encodeUnknownJsonString(line))
-          .join("\n") +
-        "\n" +
-        usage(output);
-      const compressed = rollout("compressed-session", 23);
-      yield* Effect.promise(async () => {
-        await NodeFSP.mkdir(sessions, { recursive: true });
-        await NodeFSP.writeFile(
-          NodePath.join(sessions, "plain.jsonl"),
-          rollout("plain-session", 17),
-        );
-        await NodeFSP.writeFile(compressedPath, NodeZlib.zstdCompressSync(compressed));
-      });
-      yield* Effect.gen(function* () {
-        const service = yield* UsageService.make;
-        const first = yield* service.readSummary(WINDOW);
-        assert.strictEqual(totalOutputTokens(first), 40);
-        assert.strictEqual(
-          first.sources.find((source) => source.fingerprint.provider === "codex")?.distinctSessions,
-          2,
-        );
-        assert.deepStrictEqual((yield* service.readSummary(WINDOW)).buckets, first.buckets);
-        yield* service.awaitPersisted;
-        // The same rollout may remain in a plain file while compression finishes.
-        yield* Effect.promise(() =>
-          NodeFSP.writeFile(NodePath.join(sessions, "copy.jsonl"), compressed),
-        );
-        assert.strictEqual(totalOutputTokens(yield* service.readSummary(WINDOW)), 40);
-        yield* Effect.promise(() =>
-          NodeFSP.writeFile(
-            compressedPath,
-            NodeZlib.zstdCompressSync(compressed + usage(31, "2026-08-01T10:00:05Z")),
-          ),
-        );
-        const rewritten = yield* service.readSummary(WINDOW);
-        assert.strictEqual(totalOutputTokens(rewritten), 71);
-        assert.deepStrictEqual((yield* service.readSummary(WINDOW)).buckets, rewritten.buckets);
-        yield* service.awaitPersisted;
-        const restarted = yield* UsageService.make;
-        assert.deepStrictEqual((yield* restarted.readSummary(WINDOW)).buckets, rewritten.buckets);
-        yield* restarted.awaitPersisted;
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(layerService({ prefix: "usage-compressed-codex", home, settings })),
-      );
-    }).pipe(Effect.scoped),
-  );
+  registerCompressedRolloutTest(setup, layerService);
 
   it.effect("keeps the first host identity across recreation and explicit override removal", () =>
     Effect.gen(function* () {
@@ -2511,6 +2448,7 @@ describe("UsageService", () => {
       }).pipe(Effect.scoped),
   );
 
+  registerClaudeCopiesTests(setup, layerService, claudeLine);
   it.effect(
     "keeps large-record totals and costs exact through append, dedupe, restart and cleanup",
     () =>
@@ -2566,131 +2504,7 @@ describe("UsageService", () => {
       }).pipe(Effect.scoped),
   );
 
-  it.live.each([4, 5, 6, 7, 8, 10])(
-    "upgrades a v%s cache: reparses live Codex usage, keeps deleted rollouts and the old file",
-    (version) =>
-      Effect.gen(function* () {
-        const { home, settings } = yield* setup;
-        const sessions = NodePath.join(home, "codex", "sessions");
-        const rollout = (sessionId: string, outputTokens: number) =>
-          [
-            { type: "session_meta", payload: { id: sessionId } },
-            { type: "turn_context", payload: { model: "gpt-6-astra" } },
-            {
-              type: "event_msg",
-              payload: {
-                type: "thread_settings_applied",
-                thread_settings: { service_tier: "ultrafast" },
-              },
-            },
-            {
-              type: "event_msg",
-              timestamp: "2026-08-01T10:00:00Z",
-              payload: {
-                type: "token_count",
-                info: {
-                  last_token_usage: { input_tokens: 0, output_tokens: outputTokens },
-                  total_token_usage: { input_tokens: 100, output_tokens: outputTokens + 30 },
-                },
-              },
-            },
-          ]
-            .map((line) => encodeUnknownJsonString(line))
-            .join("\n") + "\n";
-        const live = NodePath.join(sessions, "live.jsonl");
-        const deleted = NodePath.join(sessions, "deleted.jsonl");
-        yield* Effect.promise(async () => {
-          await NodeFSP.mkdir(sessions, { recursive: true });
-          await NodeFSP.writeFile(live, rollout("live", 10));
-          await NodeFSP.writeFile(deleted, rollout("deleted", 20));
-        });
-
-        yield* Effect.gen(function* () {
-          const { stateDir } = yield* ServerConfig.ServerConfig;
-          const cachePath = NodePath.join(stateDir, SCAN_CACHE_FILE_NAME);
-          const legacyPath = NodePath.join(
-            stateDir,
-            version === 4 ? "usage-scan-cache.json" : `usage-scan-cache-v${version}.json`,
-          );
-          const first = yield* UsageService.make;
-          yield* first.readSummary(WINDOW);
-          yield* first.awaitPersisted;
-
-          const legacy = yield* Effect.promise(async () => {
-            const livePath = await NodeFSP.realpath(live);
-            const document = decodeUnknownJsonString(await NodeFSP.readFile(cachePath, "utf8")) as {
-              files: Record<string, { r: unknown[][]; mr: number; cs: Record<string, unknown> }>;
-            };
-            for (const [path, file] of Object.entries(document.files)) {
-              file.r = file.r.map((row) => [
-                ...row.slice(0, 6),
-                path === livePath ? 99 : row[6],
-                ...row.slice(7, 10),
-                version === 4 ? 0 : 1,
-              ]);
-              if (version === 4) delete file.cs.speed;
-              if (version < 6) {
-                delete file.cs.lastCumulativeUsage;
-                delete file.cs.malformedRecords;
-              }
-              if (version >= 8 && path === livePath) {
-                file.r = [];
-                file.mr = 1;
-                file.cs.malformedRecords = 1;
-              }
-            }
-            const text = encodeUnknownJsonString({ ...document, version });
-            await NodeFSP.rm(cachePath);
-            await NodeFSP.writeFile(legacyPath, text);
-            if (version === 6) {
-              for (const [name, olderVersion] of [
-                ["usage-scan-cache-v5.json", 5],
-                ["usage-scan-cache.json", 4],
-              ] as const) {
-                await NodeFSP.writeFile(
-                  NodePath.join(stateDir, name),
-                  encodeUnknownJsonString({ ...document, version: olderVersion, files: {} }),
-                );
-              }
-            }
-            await NodeFSP.rm(deleted);
-            return text;
-          });
-
-          const upgraded = yield* UsageService.make;
-          const summary = yield* upgraded.readSummary(WINDOW);
-          assert.strictEqual(totalOutputTokens(summary), 30);
-          assert.strictEqual(
-            summary.buckets.reduce((sum, bucket) => sum + bucket.costUsd, 0),
-            60 + 20 * (version === 4 ? 1 : 2),
-          );
-          yield* upgraded.awaitPersisted;
-          assert.strictEqual(SCAN_CACHE_FILE_NAME, "usage-scan-cache-v11.json");
-          assert.strictEqual(
-            yield* Effect.promise(() => NodeFSP.readFile(legacyPath, "utf8")),
-            legacy,
-          );
-        }).pipe(
-          Effect.provide(
-            layerService({
-              prefix: "usage-service-cache-upgrade-test",
-              home,
-              settings,
-              ratesDocument: {
-                "gpt-6-astra": {
-                  input_cost_per_token: 0,
-                  output_cost_per_token: 1,
-                  input_cost_per_token_priority: 0,
-                  output_cost_per_token_priority: 2,
-                  input_cost_per_token_ultrafast: 0,
-                  output_cost_per_token_ultrafast: 6,
-                },
-              },
-            }),
-          ),
-        );
-      }).pipe(Effect.scoped),
-  );
+  registerCacheUpgradeTest(setup, layerService);
 
   it.effect("re-parses a clean v10 Codex rollout that grew after an interrupted request", () =>
     Effect.gen(function* () {

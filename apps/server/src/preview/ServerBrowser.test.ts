@@ -6,6 +6,7 @@ import {
 import { assertBusyCopy, assertClipboardAccess } from "./BusyCopyAssertions.testkit.ts";
 import { assertDialogHistory, historyMemoryLayer } from "./BrowserHistoryAssertions.testkit.ts";
 import { assertTimedOutOpenClosed } from "./FailedOpenAssertions.testkit.ts";
+import * as LoadError from "./LoadErrorAssertions.testkit.ts";
 import * as NodeEvents from "node:events";
 import {
   assertFastRecordingAcks,
@@ -20,6 +21,7 @@ import { it } from "@effect/vitest";
 import {
   type BrowserRecordingFrameRate,
   PreviewTabId,
+  type PreviewAutomationLoadError,
   type PreviewAutomationSnapshot,
   type PreviewAutomationLogs,
   type PreviewAutomationStatus,
@@ -228,6 +230,7 @@ const desktopRenders = (tabId: string) => {
   return desktopTabs.has(tabId);
 };
 const releasedDesktopTabs: Array<string> = [];
+const desktopLoadFailures = new Map<string, PreviewAutomationLoadError>();
 const desktopTurns = new NodeEvents.EventEmitter();
 const desktopConnections: Array<{ endpoint: string; context: ReturnType<typeof makeContext> }> = [];
 export { scope } from "./ServerBrowserTestFixtures.ts";
@@ -270,6 +273,7 @@ const dependencies = Layer.mergeAll(
       ),
     ),
     isAttached: (key) => Effect.sync(() => desktopRenders(key.tabId)),
+    loadFailure: (key) => desktopLoadFailures.get(key.tabId),
     endpoint: (key) =>
       Effect.acquireRelease(Effect.succeed(`ws://desktop/${key.tabId}`), () =>
         Effect.sync(() => {
@@ -343,6 +347,7 @@ beforeEach(() => {
   desktopDetachReady = Promise.withResolvers<void>();
   desktopReleased = Promise.withResolvers<void>();
   releasedDesktopTabs.length = 0;
+  desktopLoadFailures.clear();
   desktopConnections.length = 0;
 });
 it.live.each([
@@ -2466,174 +2471,101 @@ it.effect("profiles reported by one client survive another client's report", () 
   ).pipe(Effect.provide(layer)),
 );
 
-it.effect.each([
-  { budget: "agent", limit: 8 },
-  { budget: "server", limit: 32 },
-])("opens and popups reserve the $budget budget before session creation", ({ budget, limit }) =>
+const dataUrl = `data:text/html,${"PAYLOAD".repeat(300)}`;
+
+it.effect("reports why a page failed to load while the tab shows the error page", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const { broker, browser, tabId } = yield* ready;
-      const manager = yield* Manager.PreviewManager;
-      const open = (target = scope) =>
-        broker.invoke<PreviewAutomationStatus>({
-          scope: target,
-          operation: "open",
-          input: { reuseExistingTab: false, show: false },
+      const { broker, tabId } = yield* ready;
+      const page = contexts[0]!.page;
+      const request = LoadError.certificateFailure(page);
+      const status = () =>
+        broker.invoke<PreviewAutomationStatus>({ scope, tabId, operation: "status", input: {} });
+      const snapshot = () =>
+        broker.invoke<PreviewAutomationSnapshot>({
+          scope,
+          tabId,
+          operation: "snapshot",
+          input: {},
         });
-      for (let index = 1; index < limit - 3; index++) {
-        yield* open(budget === "agent" ? scope : asSession(`other-${Math.floor(index / 8)}`));
-      }
+      expect(yield* status()).not.toHaveProperty("loadError");
+      expect(yield* snapshot()).not.toHaveProperty("loadError");
+      page.emit("request", request);
+      page.emit("requestfailed", request);
+      page.url = () => "chrome-error://chromewebdata/";
+      yield* LoadError.assertShowsLoadError(status(), snapshot());
 
-      const sessionGate = Promise.withResolvers<void>();
-      const launchGate = (contextGate = Promise.withResolvers<void>());
-      const sessionStarted = Promise.withResolvers<void>();
-      const popupStarted = Promise.withResolvers<void>();
-      const realOpen = manager.open;
-      const delayedOpen = vi.spyOn(manager, "open").mockImplementation((input) =>
-        Effect.promise(() => {
-          if (delayedOpen.mock.calls.length === 2) popupStarted.resolve();
-          sessionStarted.resolve();
-          return sessionGate.promise;
-        }).pipe(Effect.andThen(realOpen(input))),
-      );
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          sessionGate.resolve();
-          launchGate.resolve();
-          delayedOpen.mockRestore();
-        }),
-      );
-      const events = yield* manager.subscribeEvents;
-      const first = yield* open().pipe(Effect.result, Effect.forkScoped);
-      yield* Effect.promise(() => sessionStarted.promise);
-      const popup = makeContext();
-      const resized = Promise.withResolvers<void>();
-      const setViewportSize = popup.page.setViewportSize;
-      popup.page.setViewportSize = vi.fn(async (size) => {
-        await setViewportSize(size);
-        if (size?.width === 900) resized.resolve();
-      });
-      const newCDPSession = popup.newCDPSession;
-      let popupSessions = 0;
-      popup.newCDPSession = async (target) => {
-        if (popupSessions++ > 0) await launchGate.promise;
-        return newCDPSession(target);
+      const subframeRequest = {
+        ...request,
+        url: () => "https://frame.local/",
+        frame: () => ({}),
       };
-      contexts[0]!.page.emit("popup", popup.page);
-      // GOAT resolves the popup target's owner before reserving its session.
-      yield* Effect.promise(() => popupStarted.promise);
-      const last = yield* open().pipe(Effect.result, Effect.forkScoped);
-      const overflow = yield* open().pipe(Effect.result, Effect.forkScoped);
-      // The host processes this after the opens, while manager creation is blocked.
-      const reused = yield* broker.invoke<PreviewAutomationStatus>({
-        scope,
-        tabId,
-        operation: "open",
-        input: { show: false },
-      });
-      expect(reused.tabId).toBe(tabId);
-      expect((yield* manager.list({ threadId: scope.thread.threadId })).sessions).toHaveLength(
-        limit - 3,
-      );
+      page.emit("request", subframeRequest);
+      page.emit("requestfailed", subframeRequest);
+      yield* LoadError.assertShowsLoadError(status());
 
-      sessionGate.resolve();
-      for (let count = 0; count < 3; count++) {
-        let event = yield* PubSub.take(events);
-        while (event.type !== "opened") event = yield* PubSub.take(events);
-        yield* manager.resize({
-          threadId: scope.thread.threadId,
-          tabId: event.tabId,
-          viewport: { _tag: "freeform", width: 900, height: 700 },
-        });
-      }
-      // The same slots must stay reserved after publication, while pages are still opening.
-      const duringLaunch = yield* open().pipe(Effect.result, Effect.forkScoped);
-      const rejectedPopup = makeContext();
-      contexts[0]!.page.emit("popup", rejectedPopup.page);
-      yield* broker.invoke({ scope, tabId, operation: "status", input: {} });
-      launchGate.resolve();
+      // Clearing must happen before the next navigation replaces the error page.
+      page.emit("request", { ...request, url: () => "https://device.local/login" });
+      expect(yield* status()).not.toHaveProperty("loadError");
+      expect(yield* snapshot()).not.toHaveProperty("loadError");
 
-      expect((yield* Fiber.join(first))._tag).toBe("Success");
-      expect((yield* Fiber.join(last))._tag).toBe("Success");
-      for (const fiber of [overflow, duringLaunch]) {
-        expect(yield* Fiber.join(fiber)).toMatchObject({
-          _tag: "Failure",
-          failure: { _tag: "PreviewAutomationControlInterruptedError", reason: "tabLimit" },
-        });
-      }
-      yield* Effect.promise(() => resized.promise);
-      const { sessions } = yield* manager.list({ threadId: scope.thread.threadId });
-      for (const session of sessions)
-        yield* browser.attachViewer(viewerInput(session.tabId, false));
-      expect(sessions).toHaveLength(limit);
-      expect(popup.page.isClosed()).toBe(false);
-      expect(rejectedPopup.page.isClosed()).toBe(true);
-      const status = yield* broker.invoke<PreviewAutomationStatus>({
-        scope,
-        tabId,
-        operation: "status",
-        input: {},
-      });
-      expect(status.tabs).toHaveLength(limit);
+      const dataRequest = { ...request, url: () => dataUrl };
+      page.emit("request", dataRequest);
+      page.emit("requestfailed", dataRequest);
+      expect((yield* status()).loadError?.url).toBe("data:text/html,…");
+      initialNavigation = async () => {
+        page.emit("request", request);
+        page.emit("requestfailed", request);
+      };
+      yield* LoadError.assertNavigationFails(broker, tabId);
+      // A desktop page that failed before automation attached fails its open the same way.
+      desktopRendersNext = true;
+      desktopPageUrl = "chrome-error://chromewebdata/";
+      yield* LoadError.assertDesktopOpenFails(broker, tabId);
     }),
   ).pipe(Effect.provide(layer)),
 );
 
-it.effect("failed session and browser launches release capacity, as does closing a tab", () =>
+it.effect("reports a desktop tab's load failure from before the server connected", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const { broker, tabId } = yield* ready;
-      const manager = yield* Manager.PreviewManager;
-      const open = broker.invoke<PreviewAutomationStatus>({
-        scope,
-        operation: "open",
-        input: { reuseExistingTab: false, show: false },
-      });
-      for (let count = 1; count < 7; count++) yield* open;
-      const failSession = vi
-        .spyOn(manager, "open")
-        .mockImplementationOnce(() => Effect.die(new Error("session creation failed")));
-      yield* Effect.addFinalizer(() => Effect.sync(() => failSession.mockRestore()));
-      expect(yield* open.pipe(Effect.result)).toMatchObject({ _tag: "Failure" });
-      failSession.mockRestore();
-      const events = yield* manager.subscribeEvents;
-      contextFailure = new Error("Chromium launch failed");
-      expect(yield* open.pipe(Effect.result)).toMatchObject({ _tag: "Failure" });
-      let failedSession = yield* PubSub.take(events);
-      while (failedSession.type !== "opened") failedSession = yield* PubSub.take(events);
-      // A failed launch must not leave a session a viewer can relaunch past the budget.
-      expect((yield* manager.list({ threadId: scope.thread.threadId })).sessions).toHaveLength(7);
-      contextFailure = null;
-      pageSetupFailure = new Error("CDP setup failed");
-      expect(yield* open.pipe(Effect.result)).toMatchObject({ _tag: "Failure" });
-      pageSetupFailure = null;
-      expect(contexts.at(-1)!.close).toHaveBeenCalled();
-      expect(contexts.at(-1)!.page.isClosed()).toBe(true);
-      expect((yield* manager.list({ threadId: scope.thread.threadId })).sessions).toHaveLength(7);
-      expect((yield* open).available).toBe(true);
-      expect(yield* open.pipe(Effect.flip)).toMatchObject({ reason: "tabLimit" });
-      expect(
-        yield* broker
-          .invoke<PreviewAutomationStatus>({
-            scope,
-            tabId: PreviewTabId.make(failedSession.tabId),
-            operation: "open",
-            input: { show: false },
-          })
-          .pipe(Effect.flip),
-      ).toMatchObject({ _tag: "PreviewAutomationTabNotFoundError" });
       const browser = yield* ServerBrowser.ServerBrowser;
-      expect(
-        yield* browser.attachViewer(viewerInput(failedSession.tabId, false)).pipe(Effect.flip),
-      ).toMatchObject({ _tag: "ServerBrowserTabNotFoundError" });
-      yield* broker.invoke({ scope, tabId, operation: "close", input: {} });
-      expect((yield* open).available).toBe(true);
-      const status = yield* broker.invoke<PreviewAutomationStatus>({
-        scope,
-        operation: "status",
-        input: {},
+      const broker = yield* Broker.PreviewAutomationBroker;
+      const manager = yield* Manager.PreviewManager;
+      yield* Effect.yieldNow;
+      desktopRendersNext = true;
+      const opened = yield* manager.open({ threadId: scope.thread.threadId, runtime: "server" });
+      desktopLoadFailures.set(opened.tabId, LoadError.certificateError);
+      yield* browser.attachViewer(viewerInput(opened.tabId, false));
+      const page = desktopConnections[0]!.context.page;
+      page.url = () => "chrome-error://chromewebdata/";
+      const status = () =>
+        broker.invoke<PreviewAutomationStatus>({
+          scope,
+          operation: "status",
+          input: {},
+          tabId: PreviewTabId.make(opened.tabId),
+        });
+      const snapshot = () =>
+        broker.invoke<PreviewAutomationSnapshot>({
+          scope,
+          operation: "snapshot",
+          input: {},
+          tabId: PreviewTabId.make(opened.tabId),
+        });
+      yield* LoadError.assertShowsLoadError(status(), snapshot());
+      desktopLoadFailures.set(opened.tabId, { ...LoadError.certificateError, url: dataUrl });
+      expect((yield* status()).loadError?.url).toBe("data:text/html,…");
+      // A navigation the server sees supersedes it, even before the error page goes.
+      page.emit("request", {
+        url: () => "https://device.local/retry",
+        method: () => "GET",
+        redirectedFrom: () => null,
+        isNavigationRequest: () => true,
+        frame: () => page,
       });
-      expect(status.tabs).toHaveLength(8);
+      expect(yield* status()).not.toHaveProperty("loadError");
+      expect(yield* snapshot()).not.toHaveProperty("loadError");
     }),
   ).pipe(Effect.provide(layer)),
 );

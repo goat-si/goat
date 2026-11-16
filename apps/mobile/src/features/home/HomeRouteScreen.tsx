@@ -21,7 +21,7 @@ import {
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useProjects } from "../../state/entities";
 import { environmentThreadShells } from "../../state/threads";
-import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
+import { useLaunchingThreads, usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
@@ -33,7 +33,7 @@ import { AndroidHomeFabLayout } from "./AndroidHomeFab";
 import { HomeScreen } from "./HomeScreen";
 import { HomeHeader } from "./HomeHeader";
 import { useHomeListOptions } from "./home-list-options";
-import { useAtomValueWhileVisible, useHomeRouteVisible } from "./home-route-visibility";
+import { useAtomValueWhileVisible, useHomeRouteVisibility } from "./home-route-visibility";
 import { buildHomeProjectScopes } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
@@ -63,14 +63,16 @@ export function HomeRouteScreen() {
   // Streaming turns rewrite thread shells many times a second. While a Thread
   // covers Home, rebuilding this list is invisible work.
   const tabActive = use(NativeWorkspaceTabActivityContext)?.active ?? true;
-  const routeVisible = useHomeRouteVisible();
+  const { visible: routeVisible, runWhenCovered } = useHomeRouteVisibility();
   const visible = routeVisible && tabActive;
-  const threads = useAtomValueWhileVisible(
-    environmentThreadShells.navigationThreadShellsAtom,
-    tabActive &&
-      (layout.usesSplitView
-        ? nativePrimaryColumn !== null && panes.primarySidebarVisible
-        : visible && !compactBot),
+  const threads = useLaunchingThreads(
+    useAtomValueWhileVisible(
+      environmentThreadShells.navigationThreadShellsAtom,
+      tabActive &&
+        (layout.usesSplitView
+          ? nativePrimaryColumn !== null && panes.primarySidebarVisible
+          : visible && !compactBot),
+    ),
   );
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
@@ -87,17 +89,29 @@ export function HomeRouteScreen() {
     else if (workspace) workspace.dispatch({ type: "query", query, tab: "threads" });
     else setLocalSearchQuery(query);
   };
+  // Split layouts keep the query; only the stacked layout opens the thread over the list.
+  // Android's search field keeps its own open state, which a cleared query would leave open.
+  const clearsSearchOnOpen = Platform.OS !== "android" && !layout.usesSplitView;
+  const selectThreadRoute = useCallback(
+    (params: ReactNavigation.RootParamList["Thread"]) => {
+      if (searchQuery !== "" && clearsSearchOnOpen && workspace) {
+        const { searchEntryOffset } = workspace.state.tabs.threads;
+        runWhenCovered(() => {
+          workspace.recordScrollOffset("threads", searchEntryOffset);
+          workspace.dispatch({ type: "cancel", tab: "threads" });
+        });
+      }
+      selectDetail({ name: "Thread", params });
+    },
+    [searchQuery, clearsSearchOnOpen, workspace, runWhenCovered, selectDetail],
+  );
   const handleSelectThread = useCallback(
     (thread: EnvironmentThreadShell) =>
-      selectDetail({
-        name: "Thread",
-        params: { environmentId: String(thread.environmentId), threadId: String(thread.id) },
+      selectThreadRoute({
+        environmentId: String(thread.environmentId),
+        threadId: String(thread.id),
       }),
-    [selectDetail],
-  );
-  const selectThreadRoute = useCallback(
-    (params: ReactNavigation.RootParamList["Thread"]) => selectDetail({ name: "Thread", params }),
-    [selectDetail],
+    [selectThreadRoute],
   );
   const handleNewThreadOnBranch = useCallback(
     (thread: EnvironmentThreadShell) => {

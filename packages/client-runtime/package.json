@@ -7,6 +7,10 @@
       "types": "./src/composerModelMentions.ts",
       "default": "./src/composerModelMentions.ts"
     },
+    "./locales": {
+      "types": "./src/locales.ts",
+      "default": "./src/locales.ts"
+    },
     "./blocked-browser-hosts": {
       "types": "./src/blockedBrowserHosts.ts",
       "default": "./src/blockedBrowserHosts.ts"
@@ -434,6 +438,10 @@
     "./state/threads": {
       "types": "./src/state/threads.ts",
       "default": "./src/state/threads.ts"
+    },
+    "./state/thread-activity-announcement": {
+      "types": "./src/state/threadActivityAnnouncement.ts",
+      "default": "./src/state/threadActivityAnnouncement.ts"
     },
     "./state/subagent-display": {
       "types": "./src/state/subagentDisplay.ts",

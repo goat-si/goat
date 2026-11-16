@@ -35,6 +35,26 @@ export function mayStartSubagentFollowup(
   );
 }
 
+// A workspace change detaches the session, which can settle the calling run at once. Queuing its
+// follow-up in a later command would let a delegated task report its result before that exists.
+export function metadataUpdateContinuation(
+  command: Extract<OrchestrationV2Command, { readonly type: "thread.metadata.update" }>,
+): Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }> | undefined {
+  return command.continuation === undefined
+    ? undefined
+    : {
+        type: "message.dispatch",
+        commandId: command.commandId,
+        threadId: command.threadId,
+        messageId: command.continuation.messageId,
+        text: command.continuation.text,
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "agent",
+        creationSource: "mcp",
+      };
+}
+
 export function isBlockingRun(run: OrchestrationV2Run): boolean {
   return (
     run.status === "preparing" ||

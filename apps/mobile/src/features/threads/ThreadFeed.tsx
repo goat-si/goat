@@ -49,6 +49,7 @@ import {
   resolveUserMessagePresentation,
 } from "@goat/client-runtime/user-message";
 import type { ThreadCheckpointSummary } from "@goat/client-runtime/state/thread-checkpoints";
+import { assistantReplyStatusBadge } from "@goat/client-runtime/state/thread-workflows";
 import { formatDiffCount } from "@goat/client-runtime/diff-count";
 import type { WorkflowOpening } from "@goat/client-runtime/state/subagentRuntime";
 import {
@@ -1313,6 +1314,10 @@ function renderFeedEntry(
       props.terminalAssistantMessageIds.has(message.id) &&
       !assistantTurnStillInProgress &&
       !message.streaming;
+    const statusBadge =
+      message.role === "assistant" && !message.streaming
+        ? assistantReplyStatusBadge(message.projectedItem, showAssistantMeta)
+        : null;
 
     if (isUser && props.workflowOpening?.messageId === message.id) {
       return (
@@ -1643,8 +1648,14 @@ function renderFeedEntry(
             onOpenTurnDiff={props.onOpenTurnDiff}
           />
         ) : null}
+        {!showAssistantMeta && statusBadge ? (
+          <View className="mt-1 flex-row">
+            <AssistantStatusBadge status={statusBadge} />
+          </View>
+        ) : null}
         {showAssistantMeta ? (
           <View className="mt-1 flex-row items-center gap-1">
+            {statusBadge ? <AssistantStatusBadge status={statusBadge} /> : null}
             <CopyTextButton
               accessibilityLabel="Copy message"
               text={renderedText}
@@ -1692,6 +1703,14 @@ function renderFeedEntry(
       renderReasoning={props.renderReasoning}
       onPressPreview={props.onPressPreview}
     />
+  );
+}
+
+function AssistantStatusBadge(props: { readonly status: string }) {
+  return (
+    <View className="rounded-full border border-border px-1.5 py-0.5">
+      <Text className="font-goat-medium text-2xs text-foreground-secondary">{props.status}</Text>
+    </View>
   );
 }
 
@@ -2651,7 +2670,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   const jumpRunId =
     jumpReady &&
     !presentedFeed.some((entry) => entry.type === "message" && entry.id === jumpToMessageId)
-      ? messageFoldRunId(props.feed, jumpToMessageId)
+      ? messageFoldRunId(props.feed, jumpToMessageId, presentedFeed)
       : null;
   if (jumpRunId && !expandedTurnIds.has(jumpRunId)) {
     setInteractionState((current) => ({

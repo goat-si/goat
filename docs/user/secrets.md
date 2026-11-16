@@ -20,6 +20,9 @@ Where secret providers are enabled, add a 1Password provider in **Settings → P
 providers** for the environment that will use it. Install and sign in to the 1Password `op` CLI
 on that environment, then supply the account and a name for the provider. In supported settings,
 select that provider and enter a reference such as `op://vault/item/field`.
+Select **Check** beside a saved reference to read it from 1Password now, for example after
+unlocking 1Password or changing the item. GOAT shows whether it could read the secret, never its
+value, and providers that use the reference start using what it read.
 
 Removing a provider leaves its settings references intact, but they cannot resolve until you add a
 provider with the original provider ID again or choose another source in each affected setting.

@@ -23,6 +23,7 @@ import * as Schema from "effect/Schema";
 
 import {
   OrchestratorMcpScheduledTask,
+  OrchestratorMcpThreadReadInput,
   OrchestratorMcpScheduleTaskInput,
   OrchestratorMcpUpdateScheduledTaskInput,
   OrchestratorMcpCreateThreadsInput,
@@ -508,6 +509,30 @@ it("preserves lastRun in MCP JSON and keeps legacy and future nested outcomes re
   expect(decode({ ...task, lastRun: { status: "future" } }).lastRun).toBeUndefined();
 });
 
+it("adds lastRunError to MCP task output without breaking an older reader", () => {
+  const task = {
+    scheduledTaskId: "task",
+    title: "Synthetic",
+    prompt: "Synthetic",
+    enabled: true,
+    projectId: "project",
+    boundThreadId: null,
+    schedule: { type: "interval", everyMs: 60000 },
+    nextRunAt: null,
+    lastRunStatus: "failed",
+  };
+  const codec = Schema.fromJsonString(OrchestratorMcpScheduledTask);
+  const old = OrchestratorMcpScheduledTask.mapFields(
+    ({ lastRunError: _lastRunError, ...fields }) => fields,
+  );
+  const decode = Schema.decodeUnknownSync(codec);
+  const output = JSON.stringify({ ...task, lastRunError: "Weekly usage limit reached" });
+  expect(decode(output).lastRunError).toBe("Weekly usage limit reached");
+  expect(decode(JSON.stringify(task)).lastRunError).toBeUndefined();
+  expect(() => decode(JSON.stringify({ ...task, lastRunError: 404 }))).toThrow();
+  expect(Schema.decodeUnknownSync(Schema.fromJsonString(old))(output).lastRunStatus).toBe("failed");
+});
+
 it("retains notification policy in MCP writes and future-policy task output", () => {
   const create = Schema.decodeUnknownSync(OrchestratorMcpScheduleTaskInput);
   const update = Schema.decodeUnknownSync(OrchestratorMcpUpdateScheduledTaskInput);
@@ -727,7 +752,7 @@ it("decodes list, detail and search replies across peer versions", () => {
       PreviousOrchestratorMcpThreadReadResult,
       OrchestratorMcpThreadReadResult,
       read,
-      { ...read, thread: { ...detail, ...additions } },
+      { ...read, thread: { ...detail, ...additions }, earlierPosition: 3 },
     ],
     [
       PreviousOrchestratorMcpThreadSearchResult,
@@ -743,10 +768,45 @@ it("decodes list, detail and search replies across peer versions", () => {
   }
 });
 
+it("thread reads start at the oldest item with afterPosition -1 and page back with beforePosition", () => {
+  const decode = Schema.decodeUnknownSync(OrchestratorMcpThreadReadInput);
+  expect(decode({ threadId: "thread-1", afterPosition: -1 }).afterPosition).toBe(-1);
+  expect(decode({ threadId: "thread-1", beforePosition: 4 }).beforePosition).toBe(4);
+  expect(() => decode({ threadId: "thread-1", afterPosition: -2 })).toThrow();
+  expect(() => decode({ threadId: "thread-1", beforePosition: -1 })).toThrow();
+  expect(decode({ threadId: "thread-1", maxCharsPerItem: 50_000 }).maxCharsPerItem).toBe(20_000);
+});
+
 it("rejects a nonboolean schedule binding and advertises the cross-project default", () => {
   const base = { prompt: "Synthetic", schedule: { type: "interval", everyMs: 60000 } };
   expect(() => decodeScheduleTaskInput({ ...base, bindToCurrentThread: "true" })).toThrow();
   expect(JSON.stringify(Schema.toJsonSchemaDocument(OrchestratorMcpScheduleTaskInput))).toContain(
     "true in own project, else false",
   );
+});
+
+it("decodes a running-task next written by another version", () => {
+  const next = "Completion wakes this thread, so end your turn. Do not wait on it or poll it.";
+  expect(
+    decodeThreadWaitResult({
+      threadId: "thread-child-1",
+      runId: "run-child-1",
+      status: "running",
+      timedOut: true,
+      next,
+    }).next,
+  ).toBe(next);
+});
+
+it("decodes a running-task next in a newer host's wording", () => {
+  const next = "Completion wakes this thread. Wording a newer host sends.";
+  expect(
+    decodeThreadWaitResult({
+      threadId: "thread-child-1",
+      runId: "run-child-1",
+      status: "running",
+      timedOut: true,
+      next,
+    }).next,
+  ).toBe(next);
 });

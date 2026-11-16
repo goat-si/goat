@@ -478,18 +478,24 @@ it.layer(layerTest)("Codex usage and the session's home", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const root = yield* fs.makeTempDirectoryScoped();
       const bin = NodePath.join(root, "bin");
-      // A Codex app-server whose usage read succeeds, at 5%.
+      // A ChatGPT login's Codex app-server, whose usage read succeeds at 5%. Like the real one it
+      // refreshes its model catalog at startup, which the probe waits for under a ChatGPT login.
+      const catalogHome = NodePath.join(root, "catalog");
       writeFakeCli({
         directory: bin,
         name: "codex",
         source: [
+          'import fs from "node:fs";',
           'import readline from "node:readline";',
+          `const catalogHome = ${JSON.stringify(catalogHome)};`,
+          "fs.mkdirSync(catalogHome, { recursive: true });",
+          'fs.writeFileSync(catalogHome + "/models_cache.json", JSON.stringify({ fetched_at: new Date().toISOString() }));',
           'readline.createInterface({ input: process.stdin }).on("line", (line) => {',
           "  const { id, method } = JSON.parse(line);",
           "  if (id === undefined) return;",
           "  const result =",
-          '    method === "initialize" ? { userAgent: "codex/0.156.1", codexHome: process.env.CODEX_HOME, platformFamily: "unix", platformOs: "macos" }',
-          '    : method === "account/read" ? { account: null, requiresOpenaiAuth: false }',
+          '    method === "initialize" ? { userAgent: "codex/0.156.1", codexHome: catalogHome, platformFamily: "unix", platformOs: "macos" }',
+          '    : method === "account/read" ? { account: { type: "chatgpt", email: "person@example.com", planType: "plus" }, requiresOpenaiAuth: true }',
           '    : method === "account/rateLimits/read" ? { rateLimits: { limitId: "codex", primary: { usedPercent: 5, resetsAt: 2000100000, windowDurationMins: 300 } } }',
           '    : method === "config/read" ? { config: {}, origins: {} }',
           '    : method === "model/list" ? { data: [], nextCursor: null }',

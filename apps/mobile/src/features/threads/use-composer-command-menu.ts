@@ -1,3 +1,4 @@
+import { threadPullRequestKeyOf } from "@goat/client-runtime/thread-pull-requests";
 import * as Dialog from "../../components/ui/Dialog";
 import type {
   EnvironmentId,
@@ -43,7 +44,6 @@ import {
   scoreQueryMatch,
 } from "@goat/shared/searchRanking";
 import {
-  createProviderWorkspaceSnapshotRefreshAtomFamily,
   dedupeProviderSkillsByName,
   getProviderSkillsForSlashMenu,
   getProviderSlashCommandsForSlashMenu,
@@ -60,6 +60,7 @@ import { useNavigation } from "@react-navigation/native";
 import type { ComposerEditorSelection } from "../../components/ComposerEditor";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
+import { providerWorkspaceSnapshotRefresh } from "../../state/provider-workspace-snapshot-refresh";
 import {
   useComposerPathSearch,
   useComposerPullRequestSearch,
@@ -71,11 +72,6 @@ import { useComposerCapabilityContext } from "./useComposerCapabilityContext";
 import { buildComposerModelItems } from "./composerModelMentions";
 import { formatComposerModelMention } from "@goat/client-runtime/composer-model-mentions";
 import type { ModelOption } from "../../lib/modelOptions";
-
-const providerWorkspaceSnapshotRefresh = createProviderWorkspaceSnapshotRefreshAtomFamily({
-  providers: serverEnvironment.providersValueAtom,
-  refreshProviders: serverEnvironment.refreshProviders,
-});
 
 const idleWorkspaceSnapshotRefreshAtom: Atom.Atom<unknown> = Atom.make<void>(undefined).pipe(
   Atom.withLabel("mobile:provider-workspace-snapshot-refresh:idle"),
@@ -431,7 +427,7 @@ export function useComposerCommandMenu({
 
     if (trigger.kind === "pull-request") {
       return pullRequestSearch.entries.map((entry) => ({
-        id: `pr:${entry.projectId}:${entry.repository}:${entry.number}`,
+        id: `pr:${entry.projectId}:${threadPullRequestKeyOf(entry)}`,
         type: "pull-request",
         pullRequest: {
           number: entry.number,

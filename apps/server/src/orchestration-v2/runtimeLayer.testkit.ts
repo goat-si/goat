@@ -1,5 +1,13 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { type ModelSelection, ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
+import {
+  EventId,
+  type ModelSelection,
+  type ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type PullRequestDetail,
+  SourceControlProviderKind,
+} from "@goat/contracts";
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Effect from "effect/Effect";
@@ -14,6 +22,12 @@ import * as SourceControlProviderRegistry from "../sourceControl/SourceControlPr
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as ProjectStore from "./ProjectStore.ts";
+import * as RuntimeLayer from "./runtimeLayer.ts";
+import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ServerSettings from "../serverSettings.ts";
 
 export const layerPlatformTest = Layer.merge(
   NodeServices.layer,
@@ -84,18 +98,155 @@ const alternateProviderInstance = {
   },
 } satisfies ProviderInstance;
 
+export const antigravityInstanceId = ProviderInstanceId.make("antigravity_test");
+const antigravityDriver = ProviderDriverKind.make("antigravity");
+const antigravityProviderInstance = {
+  ...providerInstance,
+  instanceId: antigravityInstanceId,
+  driverKind: antigravityDriver,
+  continuationIdentity: { driverKind: antigravityDriver, continuationKey: "antigravity:test" },
+  displayName: "Antigravity test",
+  orchestrationAdapter: {
+    ...orchestrationAdapter,
+    instanceId: antigravityInstanceId,
+    driver: antigravityDriver,
+    getCapabilities: () =>
+      Effect.succeed({
+        ...CodexProviderCapabilitiesV2,
+        turns: { ...CodexProviderCapabilitiesV2.turns, supportsNativeGoals: true },
+      }),
+  },
+} satisfies ProviderInstance;
+
 export const layerTestProviderInstanceRegistry = Layer.succeed(
   ProviderInstanceRegistry.ProviderInstanceRegistry,
   {
     getInstance: (instanceId) =>
       Effect.succeed(
-        [providerInstance, alternateProviderInstance].find(
+        [providerInstance, alternateProviderInstance, antigravityProviderInstance].find(
           (instance) => instanceId === instance.instanceId,
         ),
       ),
-    listInstances: Effect.succeed([providerInstance, alternateProviderInstance]),
+    listInstances: Effect.succeed([
+      providerInstance,
+      alternateProviderInstance,
+      antigravityProviderInstance,
+    ]),
     listUnavailable: Effect.succeed([]),
     streamChanges: Stream.empty,
     subscribeChanges: Effect.never,
   },
+);
+
+export const watchedPullRequestDetail = (input: {
+  readonly projectId: ProjectId;
+  readonly number: number;
+  readonly at: string;
+}): PullRequestDetail => ({
+  provider: SourceControlProviderKind.make("github"),
+  capabilities: {
+    diff: true,
+    comment: true,
+    actions: [],
+    mergeMethods: [],
+    search: false,
+    checksAlwaysReport: true,
+    review: { inlineComment: false, reply: false, resolve: false, verdicts: [] },
+    reviewers: { request: false, listCandidates: false },
+  },
+  viewerPermissions: {
+    actions: [],
+    comment: true,
+    resolve: true,
+    verdicts: [],
+    requestReviewers: false,
+  },
+  projectId: input.projectId,
+  projectTitle: "Watch wake",
+  workspaceRoot: "/workspace/watch",
+  repository: "goat-si/goat",
+  number: input.number,
+  title: "Watched pull request",
+  body: "",
+  url: `https://github.com/goat-si/goat/pull/${input.number}`,
+  author: { login: "agent-user", name: null, avatarUrl: null },
+  state: "open",
+  isDraft: false,
+  mergeability: "mergeable",
+  additions: 1,
+  deletions: 0,
+  changedFiles: 1,
+  headBranch: "feature",
+  headSha: "abc1234def",
+  baseBranch: "main",
+  createdAt: input.at,
+  updatedAt: input.at,
+  mergedAt: null,
+  closedAt: null,
+  reviewers: [],
+  labels: [],
+  checks: [{ name: "lint", status: "failure", description: null, url: null }],
+  mergeCapabilities: { merge: true, squash: true, rebase: true },
+  viewer: "agent-user",
+});
+
+export const seedProject = (input: {
+  readonly projectId: ProjectId;
+  readonly title: string;
+  readonly workspaceRoot: string;
+  readonly defaultModelSelection: ModelSelection | null;
+  readonly createdAt: string;
+}) =>
+  Effect.flatMap(ProjectStore.ProjectStoreV2, (projects) =>
+    projects.apply({
+      sequence: 0,
+      eventId: EventId.make(`seed:${input.projectId}`),
+      aggregateKind: "project",
+      aggregateId: input.projectId,
+      occurredAt: input.createdAt,
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      type: "project.created",
+      payload: {
+        projectId: input.projectId,
+        title: input.title,
+        workspaceRoot: input.workspaceRoot,
+        defaultModelSelection: input.defaultModelSelection,
+        scripts: [],
+        createdAt: input.createdAt,
+        updatedAt: input.createdAt,
+      },
+    }),
+  );
+
+export const moveProject = (projectId: ProjectId, workspaceRoot: string, updatedAt: string) =>
+  Effect.flatMap(ProjectStore.ProjectStoreV2, (projects) =>
+    projects.apply({
+      sequence: 0,
+      eventId: EventId.make(`move:${projectId}:${workspaceRoot}`),
+      aggregateKind: "project",
+      aggregateId: projectId,
+      occurredAt: updatedAt,
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      type: "project.meta-updated",
+      payload: { projectId, workspaceRoot, updatedAt },
+    }),
+  );
+
+export const layerLegacyImportTest = RuntimeLayer.layer.pipe(
+  Layer.provide(McpSessionRegistryTestkit.layer),
+  Layer.provide(McpProviderSessions.layer),
+  Layer.provideMerge(SqlitePersistence.layerMemory),
+  Layer.provide(layerCheckpointStoreTest),
+  Layer.provide(layerServerConfig),
+  Layer.provide(ServerSettings.layerTest()),
+  Layer.provide(layerTestProviderInstanceRegistry),
+  Layer.provide(layerGitWorkflowTest),
+  Layer.provide(layerProjectServiceTest),
+  Layer.provide(layerPlatformTest),
 );

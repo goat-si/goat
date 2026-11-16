@@ -114,6 +114,11 @@ const PEN_WINDOWS_TASK = "test-pen-windows";
 const WINDOWS_RUNNER_TASKS = new Set([WINDOWS_TASK, PEN_WINDOWS_TASK]);
 /** The quick run's selected tests. */
 const CHANGED_TESTS_TASK = "test-changed";
+/**
+ * goat-ci.yml hands test-changed its list in one environment string, which Linux caps at 128 KiB.
+ * A list near that is most of the tests, more than one job runs inside its time limit.
+ */
+const CHANGED_TESTS_MAX_BYTES = 100_000;
 /** CI script tests use node:test, not Vitest. */
 const NODE_TEST_RE = /^\.github\/scripts\/[^/]+\.test\.cjs$/;
 const CODE_RE = /\.[cm]?[jt]sx?$/;
@@ -252,6 +257,15 @@ function packageSuiteManifests(root) {
 }
 
 const packageSuites = (root) => packageSuiteManifests(root).map(([, name]) => name);
+
+/**
+ * Selected tests no task of the full matrix runs. The matrix runs package suites, so a test under
+ * scripts, .github/scripts or a package without a test script runs only when test-changed gets it.
+ */
+function testsOutsideSuites(root, tests) {
+  const suites = [...OWNED_SUITES, ...packageSuiteManifests(root).map(([dir]) => dir)];
+  return tests.filter((file) => !suites.some((dir) => file.startsWith(dir + "/")));
+}
 
 /**
  * apps/server lists @goat/web only so its build runs after the web build. Server
@@ -711,6 +725,19 @@ function quickRun(changed, root) {
     vitest: tests.filter((file) => !NODE_TEST_RE.test(file)),
     node: tests.filter((file) => NODE_TEST_RE.test(file)),
   };
+  if (Buffer.byteLength(JSON.stringify(changedTests.vitest)) > CHANGED_TESTS_MAX_BYTES) {
+    const why = tests.length + " test files for the changes, more than test-changed takes";
+    const left = testsOutsideSuites(root, tests);
+    return {
+      ...laneRun("all"),
+      tasks: MATRIX_ORDER.filter((task) => task !== CHANGED_TESTS_TASK || left.length > 0),
+      reasons: new Map([["full", why]]),
+      changedTests: {
+        vitest: left.filter((file) => !NODE_TEST_RE.test(file)),
+        node: left.filter((file) => NODE_TEST_RE.test(file)),
+      },
+    };
+  }
   if (tests.length > 0) {
     reasons.set(CHANGED_TESTS_TASK, tests.length + " test file(s) for the changes");
   }

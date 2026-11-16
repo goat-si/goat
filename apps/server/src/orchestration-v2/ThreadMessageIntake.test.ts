@@ -501,3 +501,20 @@ it.effect(
       expect(captured).toEqual([]);
     }).pipe(Effect.provide(layerIntakeTest)),
 );
+
+// Compatibility: continuation is server-issued, so no client depends on sending it and none can
+// queue an agent-attributed turn through a metadata update.
+it.effect("refuses a client-sent metadata update that carries a handoff continuation", () =>
+  Effect.gen(function* () {
+    const captured: OrchestrationV2ServerCommand[] = [];
+    const error = yield* dispatchCommand({
+      type: "thread.metadata.update",
+      commandId: CommandId.make("client-metadata-with-continuation"),
+      threadId: ThreadId.make("thread-metadata-continuation"),
+      title: "Renamed",
+      continuation: { messageId: MessageId.make("message-continuation"), text: "Keep going." },
+    }).pipe(Effect.provide(layerFailingDispatch(captured)), Effect.flip);
+    expect(error._tag).toBe("OrchestratorDispatchError");
+    expect(captured).toEqual([]);
+  }).pipe(Effect.provide(layerIntakeTest)),
+);

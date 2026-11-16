@@ -131,6 +131,7 @@ export const makeTestRelay = Effect.fnUntraced(function* (
   const threads = ThreadManagementService.ThreadManagementService.of({
     getLaunchedPendingQuestions: () => Effect.die("Unused launched question query"),
     assertReviewTaskSendAllowed: unused,
+    getThreadNewestRun: unused,
     getThreadShell: (threadId) =>
       Effect.sync(() => shellReads.push(threadId)).pipe(
         Effect.andThen(options.readShell?.(threadId) ?? Ref.get(currentShell)),
@@ -190,6 +191,8 @@ export const makeTestRelay = Effect.fnUntraced(function* (
     interruptThread: unused,
     stopWorkflow: () => Effect.die("unused stopWorkflow"),
     forceStopThread: () => Effect.die("unused forceStopThread"),
+    forceStopDelegatedTask: () => Effect.die("unused forceStopDelegatedTask"),
+    forceStopUnresponsiveRun: () => Effect.die("unused forceStopUnresponsiveRun"),
     awaitBackgroundTasks: unused,
     stopDelegatedTasks: unused,
     getThreadEventSequence: unused,
@@ -245,6 +248,7 @@ export const makeTestRelay = Effect.fnUntraced(function* (
       update: unused,
       delete: unused,
       getByWorkspaceRoot: unused,
+      workspaceScanDirectory: unused,
       snapshot: Effect.succeed({ projects: [] } as never),
       awaitRepositoryIdentity: unused,
       getShell: unused,

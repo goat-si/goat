@@ -1,4 +1,5 @@
 import { startDocumentTitle } from "./documentTitle";
+import { startI18n } from "./i18n/runtime";
 import { scopedThreadKey, scopeThreadRef } from "@goat/client-runtime/environment";
 import type { ClientSettings } from "@goat/contracts/settings";
 import { createBrowserHistory, createHashHistory } from "@tanstack/react-router";
@@ -151,6 +152,7 @@ export function startAppServices(): AppRouter {
   }
 
   startClientAppearance();
+  startI18n();
   startDocumentTitle(router);
   startDefaultThemeAdoption();
   startModelPreferencesMigration();

@@ -32,55 +32,27 @@ import { withChatGptSessionLock } from "./CodexChatGptSessionLock.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import {
+  TokenResponse,
+  Record,
+  Sessions,
+  Discovery,
+  decodeSessions,
+  encodeSessions,
+  decodeTokens,
+  decodeDiscoveryEffect,
+  decodeOAuthError,
+} from "./CodexChatGptAuthSchemas.ts";
+import type { CodexChatGptCredentials } from "./CodexChatGptAuthSchemas.ts";
+export type { CodexChatGptCredentials } from "./CodexChatGptAuthSchemas.ts";
 const isSetupError = Schema.is(ProviderSetupError);
 const RESOURCE = "https://api.openai.com/v1";
 const REQUIRED_SCOPE = "chatgpt.tokens.use.direct";
 const DISCOVERY = "https://auth.openai.com/.well-known/openid-configuration";
-const TokenResponse = Schema.Struct({
-  access_token: Schema.NonEmptyString,
-  refresh_token: Schema.optionalKey(Schema.NonEmptyString),
-  id_token: Schema.optionalKey(Schema.String),
-  token_type: Schema.String,
-  expires_in: Schema.Int.check(Schema.isGreaterThan(0)),
-  scope: Schema.String,
-  earliest_refresh_at: Schema.optionalKey(Schema.Union([Schema.Finite, Schema.String])),
-});
-const Record = Schema.Struct({
-  clientId: Schema.String,
-  accessToken: Schema.String,
-  refreshToken: Schema.NullOr(Schema.String),
-  expiresAt: Schema.Finite,
-  earliestRefreshAt: Schema.NullOr(Schema.Finite),
-  scopes: Schema.Array(Schema.String),
-  subject: Schema.String,
-  email: Schema.NullOr(Schema.String),
-  idToken: Schema.optionalKey(Schema.String),
-  issuer: Schema.optionalKey(Schema.String),
-});
-export type CodexChatGptCredentials = typeof Record.Type;
-const Sessions = Schema.Struct({
-  activeClientId: Schema.NullOr(Schema.String),
-  sessions: Schema.Array(Record),
-});
 const sessionLocks = new WeakMap<
   typeof ServerSecretStore.ServerSecretStore.Service,
   Map<string, Semaphore.Semaphore>
 >();
-const Discovery = Schema.Struct({
-  issuer: Schema.String,
-  authorization_endpoint: Schema.String,
-  token_endpoint: Schema.String,
-  jwks_uri: Schema.String,
-  revocation_endpoint: Schema.optionalKey(Schema.String),
-});
-const OAuthError = Schema.Struct({ error: Schema.String });
-const decodeSessions = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(Schema.Union([Sessions, Record])),
-);
-const encodeSessions = Schema.encodeEffect(Schema.fromJsonString(Sessions));
-const decodeTokens = Schema.decodeUnknownSync(TokenResponse);
-const decodeDiscoveryEffect = Schema.decodeUnknownEffect(Discovery);
-const decodeOAuthError = Schema.decodeUnknownSync(OAuthError);
 export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* (options: {
   readonly instanceId: ProviderInstanceId;
   readonly discoveryUrl?: string;
@@ -468,13 +440,23 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
     void callback.promise.catch(() => undefined); // A server error after listening ends sign-in.
     const clientCallback = context.callbackMode === "client";
     let used = false;
+    const callbackBase = "http://127.0.0.1/auth/callback";
     const answerCallback: NodeHttp.RequestListener = (request, response) => {
-      const url = new URL(request.url ?? "/", "http://127.0.0.1");
-      if (request.method !== "GET" || url.pathname !== "/auth/callback")
+      const url = URL.parse(request.url ?? "/", callbackBase);
+      if (request.method !== "GET" || url?.pathname !== "/auth/callback")
         return void response.writeHead(404).end();
       if (used) return void response.writeHead(410).end("Sign-in is no longer active.");
+      // Reject a stray request without ending the sign-in, so the real redirect still lands.
+      let returned: URL;
+      try {
+        returned = codexCallbackUrl(url.toString(), callbackBase, state);
+      } catch {
+        return void response
+          .writeHead(400)
+          .end("This response does not belong to the active sign-in.");
+      }
       used = true;
-      callback.resolve({ url, response });
+      callback.resolve({ url: returned, response });
     };
     const server = clientCallback
       ? undefined

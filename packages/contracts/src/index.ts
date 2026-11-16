@@ -78,6 +78,7 @@ export * from "./settings.ts";
 export * from "./worktreeRetention.ts";
 export {
   SecretReference,
+  SecretSourceCheckResult,
   isSecretReference,
   isOnePasswordReference,
   SettingsSecretValue,
@@ -101,6 +102,7 @@ export * from "./orchestratorMcp.ts";
 export * from "./orchestratorMcpThreadConfiguration.ts";
 export * from "./orchestratorMcpCloudTask.ts";
 export * from "./orchestratorMcpFailure.ts";
+export * from "./orchestratorMcpStop.ts";
 export * from "./threadReplica.ts";
 export * from "./remoteReports.ts";
 export * from "./remoteLaunchesRpc.ts";

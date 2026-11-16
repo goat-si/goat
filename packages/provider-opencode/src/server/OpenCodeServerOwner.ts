@@ -59,12 +59,16 @@ export const make = Effect.fn("OpenCodeServerOwner.make")(function* (input: {
   readonly serverPassword?: string;
   readonly environment?: NodeJS.ProcessEnv;
   readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
-  readonly verify?: (url: string) => Effect.Effect<string, OpenCodeRuntime.OpenCodeRuntimeError>;
+  readonly verify?: (
+    url: string,
+    launch: OpenCodeServerLaunch,
+  ) => Effect.Effect<string, OpenCodeRuntime.OpenCodeRuntimeError>;
   readonly onClosed?: (url: string) => void;
 }) {
   const runtime = yield* OpenCodeRuntime.OpenCodeRuntime;
   const platform = yield* HostProcess.Platform;
   const resolveExecutable = yield* SpawnExecutableResolution;
+  const verify = input.verify;
   const ownerScope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
     Scope.close(scope, Exit.void),
   );
@@ -158,7 +162,7 @@ export const make = Effect.fn("OpenCodeServerOwner.make")(function* (input: {
                     ...(launch.environment !== undefined
                       ? { environment: launch.environment }
                       : {}),
-                    ...(input.verify ? { verify: input.verify } : {}),
+                    ...(verify ? { verify: (url: string) => verify(url, launch) } : {}),
                   })
                   .pipe(Effect.provideService(Scope.Scope, scope)),
               ),

@@ -2,6 +2,7 @@ import { resolveMacPortsOwner } from "./maintenanceMacPorts.ts";
 import { runProbe } from "./maintenanceProbe.ts";
 import { environmentCacheKey } from "./maintenanceEnvironmentCache.ts";
 import { quoteShellWord, quoteUpdateExecutable } from "./maintenanceShellQuote.ts";
+import { followVitePlusSystemFirstShim, vitePlusLatestVersion } from "./maintenanceVitePlus.ts";
 export type {
   ProviderMaintenanceCapabilities,
   ProviderMaintenanceCommandAction,
@@ -18,7 +19,6 @@ import {
 import { compareSemverVersions, satisfiesSemverRange } from "@goat/shared/semver";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveCommandPath } from "@goat/shared/shell";
-import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -45,6 +45,7 @@ import {
   parseChocolateyLatestVersion,
 } from "./maintenanceCommandPaths.ts";
 import * as ProviderLatestVersions from "./ProviderLatestVersions.ts";
+import { readCommandLookupEnv } from "./commandLookupEnv.ts";
 
 export {
   isNixStoreCommandPath,
@@ -60,25 +61,6 @@ export {
 const LATEST_VERSION_TIMEOUT_MS = 4_000;
 const MISE_WRAPPER_MAX_BYTES = 16 * 1_024;
 const PROVIDER_UPDATE_ACTION_TOAST_MESSAGE = "Install the update now or review provider settings.";
-
-const compactEnv = (input: Record<string, Option.Option<string>>): NodeJS.ProcessEnv =>
-  Object.fromEntries(
-    Object.entries(input).flatMap(([key, value]) =>
-      Option.match(value, {
-        onNone: () => [],
-        onSome: (resolved) => [[key, resolved]],
-      }),
-    ),
-  );
-
-const CommandLookupEnvConfig = Config.all({
-  PATH: Config.String("PATH").pipe(Config.option),
-  Path: Config.String("Path").pipe(Config.option),
-  path: Config.String("path").pipe(Config.option),
-  PATHEXT: Config.String("PATHEXT").pipe(Config.option),
-}).pipe(Config.map(compactEnv));
-
-const readCommandLookupEnv = CommandLookupEnvConfig.pipe(Effect.orElseSucceed(() => ({})));
 
 export interface ProviderMaintenanceResolutionContext {
   readonly binaryPath: string;
@@ -359,14 +341,15 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
   "resolvePackageManagedProviderMaintenance",
 )(function* (
   definition: PackageManagedProviderMaintenanceDefinition,
-  context: ProviderMaintenanceResolutionContext | null,
+  configuredContext: ProviderMaintenanceResolutionContext | null,
 ) {
-  if (!context) {
+  if (!configuredContext) {
     return makeManualOnlyProviderMaintenanceCapabilities({
       provider: definition.provider,
       packageName: definition.npmPackageName,
     });
   }
+  const context = yield* followVitePlusSystemFirstShim(configuredContext);
   const manual = makeManualOnlyProviderMaintenanceCapabilities({
     provider: definition.provider,
     packageName: definition.npmPackageName,
@@ -457,14 +440,19 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
       ? manual
       : native;
   if (commandPaths.some(isVitePlusGlobalCommandPath)) {
-    return makeProviderMaintenanceCapabilities({
-      provider: definition.provider,
-      packageName,
-      updateExecutable: "vp",
-      updateArgs: ["i", "-g", packageName],
-      updateLockKey: "vite-plus-global",
-      env: context.env,
-    });
+    const latest = yield* vitePlusLatestVersion(packageName, context);
+    return {
+      ...makeProviderMaintenanceCapabilities({
+        provider: definition.provider,
+        packageName,
+        updateExecutable: "vp",
+        updateArgs: ["i", "-g", packageName],
+        updateLockKey: "vite-plus-global",
+        env: context.env,
+        lookupLatestVersion: latest.lookup,
+      }),
+      latestVersionCacheKey: latest.cacheKey,
+    };
   }
   if (commandPaths.some(isBunGlobalCommandPath)) {
     const services = yield* Effect.context<ProviderMaintenanceResolverServices>();

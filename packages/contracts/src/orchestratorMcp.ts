@@ -38,6 +38,7 @@ import {
 } from "./providerPolicy.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { OrchestratorMcpRunFailure } from "./orchestratorMcpFailure.ts";
+import { OrchestratorMcpRunStop, OrchestratorMcpTaskForce } from "./orchestratorMcpStop.ts";
 import { HostPressureAdvice } from "./hostPressure.ts";
 import { OrchestratorMcpCloudTask } from "./orchestratorMcpCloudTask.ts";
 import { OrchestratorMcpReconcileFields } from "./orchestratorMcpReconcile.ts";
@@ -246,8 +247,9 @@ export type OrchestratorMcpDelegateTaskInput = typeof OrchestratorMcpDelegateTas
 
 // Set only on results for still-running tasks whose completion will wake the parent.
 export const ORCHESTRATOR_MCP_RUNNING_TASK_NEXT =
-  "Completion wakes this thread, so end your turn. Do not wait on it or poll it.";
-const OrchestratorMcpRunningTaskNext = Schema.Literal(ORCHESTRATOR_MCP_RUNNING_TASK_NEXT);
+  "Completion wakes this thread. Do not wait on it or poll it. Continue other work, and end your turn when none is left.";
+// A string, not a literal: linked environments on other versions send their own wording.
+const OrchestratorMcpRunningTaskNext = Schema.String;
 
 export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),
@@ -285,6 +287,7 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   ).annotate({
     description: "Oldest pending approval, or null. Ends a wait. Grants no approval rights.",
   }),
+  stop: Schema.optional(OrchestratorMcpRunStop),
   waitTimedOut: Schema.Boolean.annotate({
     description: "True only on the timed-out wait call. The child keeps running.",
   }),
@@ -341,15 +344,10 @@ export type OrchestratorMcpTaskStatusInput = typeof OrchestratorMcpTaskStatusInp
 export const OrchestratorMcpTaskCancelInput = Schema.Struct({
   taskId: NodeId,
   reason: Schema.optional(Schema.String.check(Schema.isMaxLength(2_000))),
+  force: OrchestratorMcpTaskForce,
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
 });
 export type OrchestratorMcpTaskCancelInput = typeof OrchestratorMcpTaskCancelInput.Type;
-
-export const OrchestratorMcpTaskCancelResult = Schema.Struct({
-  taskId: NodeId,
-  status: Schema.Literals(["cancel_requested", "completed", "failed", "cancelled", "interrupted"]),
-});
-export type OrchestratorMcpTaskCancelResult = typeof OrchestratorMcpTaskCancelResult.Type;
 
 export const OrchestratorMcpCreateThreadRequest = Schema.Struct({
   prompt: Schema.optional(OrchestratorMcpPrompt),
@@ -684,9 +682,8 @@ export const OrchestratorMcpThreadSearchResult = Schema.Struct({
   ),
 });
 export type OrchestratorMcpThreadSearchResult = typeof OrchestratorMcpThreadSearchResult.Type;
-// Codex hides `minimum` and `maximum` from the model, so a value above the maximum clamps on
-// decode instead of failing the call; pagination returns the rest. Values below 1 still fail:
-// 0 asks for nothing, and answering it with one item would be a different request.
+// Codex hides `minimum` and `maximum` from the model, so a value above the maximum clamps on decode
+// (pagination returns the rest). Below 1 still fails: 0 asks for nothing, so one item would differ.
 const clampedPositiveInt = (maximum: number) =>
   PositiveInt.pipe(
     Schema.decodeTo(
@@ -709,17 +706,18 @@ export const OrchestratorMcpThreadReadInput = Schema.Struct({
   }),
   tail: Schema.optional(clampedPositiveInt(50)).annotate({
     description:
-      'Only the last N items of the view, 1 to 50; tailStartPosition is the first one. Not with afterPosition or itemId. Example: {"threadId":"<id>","tail":3}',
+      'Only the last N items of the view, 1 to 50; tailStartPosition is the first one. Not with afterPosition, beforePosition or itemId. Example: {"threadId":"<id>","tail":3}',
   }),
-  afterPosition: Schema.optional(NonNegativeInt),
+  afterPosition: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(-1))),
+  beforePosition: Schema.optional(NonNegativeInt),
   limit: Schema.optional(clampedPositiveInt(100)).annotate({
     description: "Max items, 1 to 100.",
   }),
   runLimit: Schema.optional(clampedPositiveInt(50)).annotate({
     description: "Max recent runs, 1 to 50.",
   }),
-  maxCharsPerItem: Schema.optional(clampedPositiveInt(50_000)).annotate({
-    description: "Max chars per item, 1 to 50000.",
+  maxCharsPerItem: Schema.optional(clampedPositiveInt(20_000)).annotate({
+    description: "Max chars per item, 1 to 20000.",
   }),
 });
 export type OrchestratorMcpThreadReadInput = typeof OrchestratorMcpThreadReadInput.Type;
@@ -786,6 +784,7 @@ export const OrchestratorMcpThreadTimelineItem = Schema.Struct({
 export type OrchestratorMcpThreadTimelineItem = typeof OrchestratorMcpThreadTimelineItem.Type;
 
 export const OrchestratorMcpThreadReadResult = Schema.Struct({
+  stop: Schema.optional(OrchestratorMcpRunStop),
   replicaStatus: Schema.optional(ThreadReplicaStatus),
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),
   host: OrchestratorMcpResultHost,
@@ -794,6 +793,8 @@ export const OrchestratorMcpThreadReadResult = Schema.Struct({
   items: Schema.Array(OrchestratorMcpThreadTimelineItem),
   nextPosition: Schema.NullOr(NonNegativeInt),
   hasMore: Schema.Boolean,
+  /** null when nothing is older than the page. Missing from peers that only read forward. */
+  earlierPosition: Schema.optional(Schema.NullOr(NonNegativeInt)),
   /**
    * The latest run's structured result; null before the thread's first run.
    * Optional because hosts running an older GOAT do not send it.
@@ -886,6 +887,7 @@ export type OrchestratorMcpThreadStatusInput = typeof OrchestratorMcpThreadStatu
  * else, or one of the terminal run statuses.
  */
 export const OrchestratorMcpThreadStatusResult = Schema.Struct({
+  stop: Schema.optional(OrchestratorMcpRunStop),
   remoteUnavailable: Schema.optional(Schema.Boolean),
   replicaStatus: Schema.optional(ThreadReplicaStatus),
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),
@@ -1095,6 +1097,7 @@ export const OrchestratorMcpCapabilitiesResult = Schema.Struct({
     incrementalThreadRead: Schema.Boolean,
     scheduledTasks: Schema.Boolean,
     maxBatchThreads: Schema.Number,
+    taskForceStop: Schema.optional(Schema.Boolean),
   }),
 });
 export type OrchestratorMcpCapabilitiesResult = typeof OrchestratorMcpCapabilitiesResult.Type;

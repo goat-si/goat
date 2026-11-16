@@ -2,7 +2,12 @@ import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 
 import { buildMobilePairingLink } from "@goat/shared/mobilePairingLink";
-import { isPrivateNetworkHost, isSharedAddressSpaceHost } from "@goat/shared/hostClassification";
+import {
+  formatHostForUrl,
+  isPrivateNetworkHost,
+  isSharedAddressSpaceHost,
+  isWildcardHost,
+} from "@goat/shared/hostClassification";
 import { QrCode } from "@goat/shared/qrCode";
 import * as Effect from "effect/Effect";
 import { HttpServer } from "effect/http";
@@ -32,12 +37,6 @@ export const isLoopbackHost = (host: string | undefined): boolean => {
     host.startsWith("127.")
   );
 };
-
-export const isWildcardHost = (host: string | undefined): boolean =>
-  host === "0.0.0.0" || host === "::" || host === "[::]";
-
-export const formatHostForUrl = (host: string): string =>
-  host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
 
 /**
  * Container and VM networks (Docker, libvirt, VMware, VirtualBox, Hyper-V, and

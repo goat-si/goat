@@ -120,9 +120,10 @@ it.effect("preserves a background command and its start time across roster snaps
       }),
     );
     const last = harness.events.filter((event) => event.type === "provider_thread.updated").at(-1);
+    // An exited background command stays listed until its wake run starts.
     assert.deepEqual(
       last?.providerThread.pendingBackgroundTasks?.map((task) => task.taskId),
-      ["task-2"],
+      ["task-2", "task-1"],
     );
   }).pipe(Effect.scoped, Effect.provide(layer)),
 );

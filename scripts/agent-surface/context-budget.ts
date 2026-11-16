@@ -119,7 +119,7 @@ const harnesses: ReadonlyArray<Harness> = [
     carrier:
       "turn additionalContext; Codex supplies its own collaboration-mode instructions; resent on change or after compaction",
     delivery: "harness may defer",
-    composedIn: "apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts",
+    composedIn: "apps/server/src/orchestration-v2/Adapters/CodexTurnStartParams.ts",
     mustContain: ["buildCodexAdditionalContext(", "buildCodexDevelopmentContext()"],
     firstTurn: (b) =>
       Object.values(

@@ -340,11 +340,26 @@ on the environment's machine. An unlisted version is unverified.
 When a provider CLI is behind its latest release, its provider card shows the
 available version. **Update now** runs the installer that owns the CLI
 (Homebrew, or a global npm, pnpm, Yarn, Bun, Volta, or Vite+ install), or the
-CLI's own update command when GOAT cannot tell. Update a CLI installed with
+CLI's own update command when GOAT cannot tell. Claude, Codex, and OpenCode
+installs GOAT cannot identify stay manual: update them through the installer you
+used. Update a CLI installed with
 mise through mise, and one installed with Nix through Nix. Cursor and
 Antigravity update with GOAT. Homebrew and Chocolatey installs compare against
 the version their package manager offers, which can trail the npm release;
 update Claude installed with Chocolatey through Chocolatey.
+
+The managed Codex runtime for Codex connected through ChatGPT first installs
+the release GOAT tested. When GOAT finds a newer compatible release, its setup
+in **Settings → Providers** offers an update.
+
+The managed Antigravity runtime works the same way. While provider update checks
+are on (**Settings → Maintenance**), opening Antigravity setup checks Google's CLI
+release channel at most once an hour, and setup then shows the new version with
+**Update Antigravity**. Installing or reinstalling checks the channel too. Nothing
+installs until you choose it, GOAT offers only releases its compatibility list marks
+supported, and it installs one only after its download matches the SHA-512 digest
+Google publishes for it. When the channel is unreachable or offers nothing supported,
+setup offers the release GOAT tested, or keeps your installed release if it is newer.
 
 Add another provider instance for a separate account or configuration. Each
 instance can have its own environment variables, such as API keys or a custom
@@ -355,6 +370,45 @@ For provider-specific setup and accounts, see [Codex](./providers-codex.md),
 [Claude](./providers-claude.md), [OpenCode](./providers-opencode.md),
 [Antigravity](./providers-antigravity.md), [Pi](./providers-pi.md),
 [Muse Code](./providers-muse.md), and [fx](./providers-fx.md).
+
+### Provider check timeouts
+
+If a provider works in its CLI but GOAT reports a timeout while checking it,
+allow more time in the GOAT server's environment. For example, give Codex and
+Claude readiness checks 60 seconds:
+
+```bash
+GOAT_CODEX_PROBE_TIMEOUT_MS=60000 GOAT_CLAUDE_PROBE_TIMEOUT_MS=60000 goat serve
+```
+
+For a remote environment, set these on the machine running the GOAT server. For
+the background service, put them in `service.env` (see
+[Configure the service environment](./background-service.md#configure-the-service-environment))
+and restart the service. A provider instance can also set its own values in its
+**Environment variables** in **Settings → Providers**.
+
+Each variable extends that provider's readiness-probe deadlines; a phase whose
+default is already longer keeps its default. Providers with several phases can
+take longer than one deadline in total. Values must be whole milliseconds no
+greater than 2147483647; unset or invalid values keep the defaults.
+
+| Provider            | Environment variable                 |
+| ------------------- | ------------------------------------ |
+| Codex               | `GOAT_CODEX_PROBE_TIMEOUT_MS`        |
+| Claude              | `GOAT_CLAUDE_PROBE_TIMEOUT_MS`       |
+| Cursor              | `GOAT_CURSOR_PROBE_TIMEOUT_MS`       |
+| Antigravity         | `GOAT_ANTIGRAVITY_PROBE_TIMEOUT_MS`  |
+| Grok                | `GOAT_GROK_PROBE_TIMEOUT_MS`         |
+| fx                  | `GOAT_FX_PROBE_TIMEOUT_MS`           |
+| Pi                  | `GOAT_PI_PROBE_TIMEOUT_MS`           |
+| Muse Code           | `GOAT_MUSE_PROBE_TIMEOUT_MS`         |
+| OpenCode            | `GOAT_OPENCODE_PROBE_TIMEOUT_MS`     |
+| ACP Registry agents | `GOAT_ACP_REGISTRY_PROBE_TIMEOUT_MS` |
+
+Longer deadlines also take longer to report a stalled check. These overrides
+cover readiness and discovery, including OpenCode server startup. Usage and
+config enrichment retain their own shorter limits. Turn execution, package
+installation, update checks, and shutdown limits keep their existing behavior.
 
 ## Next steps
 

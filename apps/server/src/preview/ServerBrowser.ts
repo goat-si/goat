@@ -94,7 +94,7 @@ import {
   withCaptureLockHeld,
 } from "./CaptureLock.ts";
 import { downloadJournal, downloadsOf, journalDownload } from "./downloadJournal.ts";
-import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
+import { type EncoderWindow, recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { answeredFinalFrame, captureFinalRecordingFrame } from "./ServerBrowserRecordingFinal.ts";
 import { awaitRevealedViewer, viewerArrived } from "./ServerBrowserRevealWait.ts";
 import { saveRecording } from "./ServerBrowserRecordingExport.ts";
@@ -106,6 +106,7 @@ import {
 } from "./ServerBrowserSessions.ts";
 import { pointBefore, sleepUntil, tabKey } from "./ServerBrowserPointer.ts";
 import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
+import * as LoadError from "./serverBrowserLoadError.ts";
 import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
 import { guardedNavigate, resolveNavigationUrl } from "./ServerBrowserNavigate.ts";
 import { makeBrowserHistorySupport } from "./BrowserHistoryRecordAction.ts";
@@ -266,15 +267,6 @@ interface ViewerState {
   requestedSize: { width: number; height: number; order: number } | null;
 }
 
-interface EncoderWindow {
-  __goatRecorder: {
-    cursor(x: number, y: number, click: boolean): void;
-    frame(data: string, width: number): Promise<boolean>;
-    stop(): Promise<{ mimeType: string | null; count: number; bytes: number }>;
-    chunk(index: number): Promise<string>;
-  };
-}
-
 interface Recording {
   readonly encoder: Page;
   readonly session: CDPSession;
@@ -331,6 +323,7 @@ interface ServerTab {
   /** A read queued behind `desktopViewportRead`, shared by every caller that waits for it. */
   desktopViewportNext: Promise<ServerTab["desktopViewport"]> | null;
   loading: boolean;
+  loadError: import("@goat/contracts").PreviewAutomationLoadError | undefined;
   closing: boolean;
   recording: Recording | null;
   initialNavigation: Promise<void> | null;
@@ -714,6 +707,7 @@ const make = Effect.gen(function* () {
         desktopViewportRead: Promise.resolve(null),
         desktopViewportNext: null,
         loading: false,
+        loadError: undefined,
         closing: false,
         recording: null,
         recordingStart: null,
@@ -765,6 +759,7 @@ const make = Effect.gen(function* () {
         tab.documentGeneration++;
         clearAbortedNavigation(tab);
         tab.loading = true;
+        tab.loadError = undefined;
         report(tab, {
           _tag: "Loading",
           url: ServerBrowserPage.withoutDataPayload(request.url()).slice(0, 2048),
@@ -827,13 +822,9 @@ const make = Effect.gen(function* () {
         }
         tab.loading = false;
         const { code, description } = ServerBrowserPage.parseNetError(errorText);
-        report(tab, {
-          _tag: "LoadFailed",
-          url: ServerBrowserPage.withoutDataPayload(request.url()).slice(0, 2048),
-          title: "",
-          code,
-          description,
-        });
+        const url = ServerBrowserPage.withoutDataPayload(request.url()).slice(0, 2048);
+        tab.loadError = { url, code, description };
+        report(tab, { _tag: "LoadFailed", url, title: "", code, description });
       });
       page.on("dialog", (dialog) => {
         if (acceptClosingDialog(tab.closing, dialog)) return;
@@ -1377,13 +1368,15 @@ const make = Effect.gen(function* () {
             () => "",
           ).then((value) => value || null),
     ]);
+    const loadError = LoadError.loadErrorOf(tab, desktopChannel);
     const status = {
       available: true,
       visible: capacity.visible(tab),
       tabId: tab.tabId,
-      url: url === "about:blank" ? null : url,
+      url: loadError?.url ?? (url === "about:blank" ? null : url),
       title,
       loading: tab.loading,
+      ...(loadError ? { loadError } : {}),
       documentGeneration: tab.documentGeneration,
       control: {
         owner: tabOwner(tab),
@@ -1401,10 +1394,7 @@ const make = Effect.gen(function* () {
         .filter((candidate) => candidate.threadId === tab.threadId)
         .map((candidate) => ({
           tabId: candidate.tabId,
-          url:
-            candidate.page.url() === "about:blank"
-              ? null
-              : ServerBrowserPage.withoutDataPayload(candidate.page.url()),
+          url: LoadError.reportedTabUrl(candidate, desktopChannel),
           ...(candidate.openerTabId === undefined ? {} : { openerTabId: candidate.openerTabId }),
           owner: tabOwner(candidate),
           ownedByCaller: candidate.control.agentId === agentSessionId,
@@ -1722,6 +1712,7 @@ const make = Effect.gen(function* () {
                     "load",
                     navigationTimeout,
                     tabActionGate(tab, request, blockedTabs, deadlineMs, actionSignal, url).channel,
+                    () => LoadError.assertNavigationSucceeded(tab, desktopChannel),
                   );
                 }
               } else {
@@ -1730,6 +1721,8 @@ const make = Effect.gen(function* () {
                   dropTab(tab, false);
                 });
                 navigationSent = tab.initialNavigationSent;
+                if (url)
+                  await LoadError.assertOpenedPageLoaded(tab, desktopChannel, navigationTimeout);
               }
               actionSignal.throwIfAborted();
             };
@@ -1746,11 +1739,6 @@ const make = Effect.gen(function* () {
                 }),
               );
               shown = awaitRevealedViewer(tab, reveal, deadlineMs);
-            }
-            if (!existing && url) {
-              await tab.page
-                .waitForLoadState("load", { timeout: navigationTimeout })
-                .catch(constVoid);
             }
             await checkOpenBlocked(
               () => blockedTabs.assertTab(tab, request.runId, url),
@@ -1843,6 +1831,7 @@ const make = Effect.gen(function* () {
         throw new ServerBrowserPage.ServerBrowserOperationError(
           "PreviewAutomationExecutionError",
           "This tab has no agent owner. Ask the user to close it in the browser panel.",
+          { beforeInput: true },
         );
       if (tab.control.agentId !== request.agentSessionId)
         throw new BrowserControlInterrupted(
@@ -1977,6 +1966,7 @@ const make = Effect.gen(function* () {
               navigateInput.readiness ?? "load",
               navigateInput.timeoutMs ?? request.timeoutMs,
               actionGate(destination).channel,
+              () => LoadError.assertNavigationSucceeded(tab, desktopChannel),
             ),
           { url: destination },
         );
@@ -2027,7 +2017,12 @@ const make = Effect.gen(function* () {
               timeoutMs: deadlineMs - performance.now(),
             }),
           deadlineMs,
-        ).then(ServerBrowserScreen.recheck(tab, request));
+        )
+          .then(ServerBrowserScreen.recheck(tab, request))
+          .then((snapshot) => {
+            const loadError = LoadError.loadErrorOf(tab, desktopChannel);
+            return loadError ? { ...snapshot, url: loadError.url, loadError } : snapshot;
+          });
       }
       case "logs":
         return tab.diagnostics.readMasked(decodeLogsInput(input));

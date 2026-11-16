@@ -8,7 +8,6 @@ import {
   RunAttemptId,
   ThreadId,
 } from "@goat/contracts";
-import * as Clock from "effect/Clock";
 import type * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -17,7 +16,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
-import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { providerTextWithSkills } from "../skills/GoatSkillText.ts";
@@ -33,6 +32,7 @@ export class ProviderTurnControlError extends Schema.TaggedError<ProviderTurnCon
     providerTurnId: ProviderTurnId,
     turnCompleted: Schema.optional(Schema.Boolean),
     reason: Schema.optional(Schema.Literal("tracking-unavailable")),
+    steerDeclined: Schema.optional(Schema.Boolean),
     /** The provider never confirmed the stop; Force stop is the way out. */
     unresponsive: Schema.optional(Schema.Boolean),
     cause: Schema.optional(Schema.Defect()),
@@ -281,23 +281,44 @@ export const layer: Layer.Layer<
             );
           // Cloud acknowledgement requests cancellation; its observer owns terminal settlement.
           if (loaded.providerThread.cloudTask !== undefined) return;
-          // Use real time; ingestion fibers do not advance TestClock and would leave Stop blocked.
-          yield* Effect.gen(function* () {
-            const deadline = (yield* Clock.currentTimeMillis) + 2_000;
-            while (
-              loaded.providerTurn.status === "running" &&
-              (yield* Clock.currentTimeMillis) < deadline
-            ) {
-              const current = yield* projections.getProviderControlContext(input.threadId, input);
-              if (
-                current.providerTurn?.status !== "running" &&
-                current.attempt?.status !== "running"
-              ) {
-                return;
-              }
-              yield* Effect.sleep("10 millis");
-            }
-          }).pipe(Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()));
+          if (loaded.providerTurn.status === "running") {
+            const afterSequence = yield* eventSink.latestSequence({ threadId: input.threadId });
+            const { runAttemptId } = loaded.providerTurn;
+            const isSettled = projections
+              .getProviderControlContext(input.threadId, {
+                providerThreadId: input.providerThreadId,
+                providerTurnId: input.providerTurnId,
+                ...(runAttemptId === null ? {} : { attemptId: runAttemptId }),
+              })
+              .pipe(
+                Effect.map(
+                  ({ providerTurn, attempt }) =>
+                    providerTurn?.status !== "running" && attempt?.status !== "running",
+                ),
+              );
+            yield* Effect.gen(function* () {
+              if (yield* isSettled) return;
+              const settled = yield* eventSink
+                .stream({ threadId: input.threadId, afterSequence })
+                .pipe(
+                  Stream.filter(
+                    ({ event }) =>
+                      event.type === "provider-turn.updated" ||
+                      event.type === "run-attempt.updated",
+                  ),
+                  Stream.mapEffect(() => isSettled),
+                  Stream.filter(Boolean),
+                  Stream.runHead,
+                );
+              if (Option.isNone(settled))
+                return yield* new ProviderTurnControlError({
+                  threadId: input.threadId,
+                  operation: "interrupt",
+                  providerTurnId: input.providerTurnId,
+                  cause: "The persisted settlement event stream ended before Stop.",
+                });
+            }).pipe(Effect.timeoutOption("2 seconds"));
+          }
         },
         (effect, input) =>
           effect.pipe(
@@ -470,17 +491,31 @@ export const layer: Layer.Layer<
               },
             })
             .pipe(
+              Effect.catchTags({
+                ProviderAdapterSteerDeclinedError: (cause) =>
+                  Effect.fail(
+                    new ProviderTurnControlError({
+                      threadId: input.threadId,
+                      operation: "steer",
+                      providerTurnId: input.providerTurnId,
+                      steerDeclined: true,
+                      cause,
+                    }),
+                  ),
+              }),
               Effect.catch((cause) =>
                 Effect.gen(function* () {
+                  if (isProviderTurnControlError(cause)) return yield* cause;
                   const current = yield* projections.getProviderControlContext(
                     input.threadId,
                     input,
                   );
+                  const status = current.providerTurn?.status;
                   return yield* new ProviderTurnControlError({
                     threadId: input.threadId,
                     operation: "steer",
                     providerTurnId: input.providerTurnId,
-                    turnCompleted: current.providerTurn?.status === "completed",
+                    turnCompleted: status === "completed",
                     cause,
                   });
                 }),

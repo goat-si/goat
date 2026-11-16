@@ -1,3 +1,4 @@
+import { withRateLimitBackoff } from "./pullRequestRateLimit.ts";
 import { gatherReferencePages, rankFilterOptions } from "./pullRequestFilterRanking.ts";
 import { toPullRequestSummary, matchesFilterRepository } from "./pullRequestSummary.ts";
 import { ACTION_ACCESS_REFUSALS, pinnedAutoMergeRefusal } from "./pullRequestActionPolicy.ts";
@@ -101,13 +102,18 @@ import {
   type ProviderChangeRequestDetail,
   type ProviderDiffFilePaths,
   type ProviderFilterOptionPage,
-  type ProviderListCursor,
   type ProviderChangeRequestSummary,
   type ProviderChangeRequestWatchFingerprint,
   type PullRequestProviderApi,
   PullRequestProviderError,
 } from "@goat/source-control-core/server/PullRequestProvider";
 import * as PullRequestReadCache from "./PullRequestReadCache.ts";
+import {
+  type ListCursor,
+  listCursorAt,
+  listCursorKey,
+  nextListCursor,
+} from "./pullRequestListCursor.ts";
 import * as PullRequestProviderRegistry from "./PullRequestProviderRegistry.ts";
 import { pullRequestHoldReason } from "./pullRequestHold.ts";
 import * as ViewedFiles from "./pullRequestViewedFiles.ts";
@@ -217,8 +223,13 @@ export class PullRequestService extends Context.Service<
     ) => Effect.Effect<A, E | PullRequestError, R>;
     readonly summary: (
       input: PullRequestRef,
-      options?: { readonly recoverTransientFailure?: boolean },
+      options?: {
+        readonly recoverTransientFailure?: boolean;
+        /** Registration preflights must reach the provider despite a successful cached read. */
+        readonly bypassCache?: boolean;
+      },
     ) => Effect.Effect<PullRequestSummary, PullRequestError>;
+    readonly batchesReads: (input: PullRequestRef) => Effect.Effect<boolean, PullRequestError>;
     readonly stack: (
       input: PullRequestRef,
       options?: { readonly includeDetails?: boolean },
@@ -237,6 +248,9 @@ export class PullRequestService extends Context.Service<
       input: PullRequestReportStateInput,
     ) => Effect.Effect<void, PullRequestError>;
     readonly subscribeRefreshes: Stream.Stream<number>;
+    readonly subscribeLinkedThreadRefreshes: Stream.Stream<number>;
+    /** Wakes linked-thread readers only; other pull request reads don't depend on thread links. */
+    readonly notifyLinkedThreadsChanged: Effect.Effect<void>;
     readonly refreshAfterTurn: (
       projectId: ProjectId,
       options?: { readonly pushed?: boolean },
@@ -360,10 +374,6 @@ interface RepositoryBatch {
   readonly nextCursor: string | null;
 }
 
-interface ListCursor extends ProviderListCursor {
-  readonly seenAt: ReadonlyArray<number>;
-}
-
 const LIST_CURSOR_PATTERN =
   /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2}))\|(\d{1,9})\|(\d{1,9}(?:,\d{1,9})*)?(?:\|([\w.:~+-]{1,128}))?$/;
 
@@ -377,40 +387,6 @@ function parseListCursor(raw: string): ListCursor | null {
     seenAt: seenAt === undefined ? [] : seenAt.split(",").map(Number),
     ...(match[4] === undefined ? {} : { resumeAfter: match[4] }),
   };
-}
-
-function listCursorKey(host: string, repository: string): string {
-  return `${host} ${repository.toLowerCase()}`;
-}
-
-// Preserve exclusions across slices sharing a timestamp to avoid redelivery.
-function nextListCursor(
-  previous: ListCursor | undefined,
-  fetched: ReadonlyArray<ProviderChangeRequest>,
-  delivered: ReadonlyArray<ProviderChangeRequest>,
-  /** A provider may consume malformed offset-paged rows that never appear in `delivered`. */
-  cursorAdvance = delivered.length,
-  resumeAfter?: string,
-): string | null {
-  if (fetched.length === 0) return null;
-  // Use all fetched rows: a slice containing only duplicates must still advance to older rows.
-  const oldest = fetched.reduce((left, right) => (right.updatedAt < left.updatedAt ? right : left));
-  return listCursorAt(previous, oldest.updatedAt, fetched, cursorAdvance, resumeAfter);
-}
-
-function listCursorAt(
-  previous: ListCursor | undefined,
-  boundary: string,
-  fetched: ReadonlyArray<ProviderChangeRequest>,
-  deliveredCount: number,
-  resumeAfter?: string,
-): string {
-  const seenAt = new Set([
-    ...(previous?.updatedBefore === boundary ? previous.seenAt : []),
-    ...fetched.filter((item) => item.updatedAt === boundary).map((item) => item.number),
-  ]);
-  const cursor = `${boundary}|${(previous?.delivered ?? 0) + deliveredCount}|${[...seenAt].join(",")}`;
-  return resumeAfter === undefined ? cursor : `${cursor}|${resumeAfter}`;
 }
 
 function isProviderUnusable(error: PullRequestProviderError): boolean {
@@ -468,202 +444,6 @@ function toPullRequestErrorWith(
   };
 }
 
-function withRateLimitBackoff(
-  api: PullRequestProviderApi,
-  host: string,
-  limits: SourceControlRateLimit.SourceControlRateLimit["Service"],
-  options?: { readonly viewerAllowsPause: boolean },
-): PullRequestProviderApi {
-  const key = { provider: api.kind, host };
-  const protect = <A>(
-    operation: string,
-    effect: Effect.Effect<A, PullRequestProviderError>,
-    alwaysInteractive: boolean,
-  ) =>
-    SourceControlRateLimit.Interactive.pipe(
-      Effect.map((callerInteractive) => alwaysInteractive || callerInteractive),
-      Effect.flatMap((allowPaused) =>
-        limits.check(key, allowPaused ? { allowPaused: true } : undefined).pipe(
-          Effect.mapError(
-            (error) =>
-              new PullRequestProviderError({
-                provider: api.kind,
-                operation,
-                reason: "rate-limited",
-                detail: error.detail,
-                retryAt: error.retryAt,
-                cause: error,
-              }),
-          ),
-          Effect.flatMap((lease) =>
-            effect.pipe(
-              Effect.provideService(SourceControlRateLimit.Interactive, allowPaused),
-              Effect.tap(() => limits.recordSuccess({ ...key, lease })),
-              Effect.tapError((error) =>
-                error.reason === "rate-limited"
-                  ? limits.recordRateLimit({
-                      ...key,
-                      lease,
-                      ...(error.retryAt === undefined ? {} : { retryAt: error.retryAt }),
-                    })
-                  : Effect.void,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  const wrap =
-    <Args extends ReadonlyArray<unknown>, A>(
-      operation: string,
-      call: (...args: Args) => Effect.Effect<A, PullRequestProviderError>,
-      alwaysInteractive = false,
-    ) =>
-    (...args: Args) =>
-      protect(operation, call(...args), alwaysInteractive);
-  const interactive = <Args extends ReadonlyArray<unknown>, A>(
-    operation: string,
-    call: (...args: Args) => Effect.Effect<A, PullRequestProviderError>,
-  ) => wrap(operation, call, true);
-
-  const wrapped = {
-    kind: api.kind,
-    capabilities: api.capabilities,
-    ...(api.mergeMessageRewrite === undefined
-      ? {}
-      : { mergeMessageRewrite: api.mergeMessageRewrite }),
-    ...(api.unavailableRequirement === undefined
-      ? {}
-      : { unavailableRequirement: api.unavailableRequirement }),
-    ...(api.repositoryKey === undefined ? {} : { repositoryKey: api.repositoryKey }),
-    ...(api.servesHost === undefined ? {} : { servesHost: api.servesHost }),
-    ...(api.readsPublicHostWithoutCheckout === undefined
-      ? {}
-      : { readsPublicHostWithoutCheckout: api.readsPublicHostWithoutCheckout }),
-    getViewer:
-      options?.viewerAllowsPause === true
-        ? interactive("getViewer", api.getViewer)
-        : wrap("getViewer", api.getViewer),
-    ...(api.getRoutingIdentity === undefined ? {} : { getRoutingIdentity: api.getRoutingIdentity }),
-    ...(api.withVerifiedCredential === undefined
-      ? {}
-      : { withVerifiedCredential: api.withVerifiedCredential }),
-    ...(api.findCloudSessionPullRequest === undefined
-      ? {}
-      : {
-          findCloudSessionPullRequest: wrap(
-            "findCloudSessionPullRequest",
-            api.findCloudSessionPullRequest,
-          ),
-        }),
-    listChangeRequests: wrap("listChangeRequests", api.listChangeRequests),
-    ...(api.listChangeRequestsAcross === undefined
-      ? {}
-      : {
-          listChangeRequestsAcross: wrap("listChangeRequestsAcross", api.listChangeRequestsAcross),
-        }),
-    ...(api.listChangeRequestStats === undefined
-      ? {}
-      : {
-          listChangeRequestStats: wrap("listChangeRequestStats", api.listChangeRequestStats),
-        }),
-    getChangeRequest: wrap("getChangeRequest", api.getChangeRequest),
-    ...(api.forgetChangeRequestReads === undefined
-      ? {}
-      : { forgetChangeRequestReads: api.forgetChangeRequestReads }),
-    ...(api.getChangeRequestPreview === undefined
-      ? {}
-      : { getChangeRequestPreview: wrap("getChangeRequestPreview", api.getChangeRequestPreview) }),
-    ...(api.getChangeRequestChecks === undefined
-      ? {}
-      : { getChangeRequestChecks: wrap("getChangeRequestChecks", api.getChangeRequestChecks) }),
-    ...(api.getChangeRequestSummary === undefined
-      ? {}
-      : {
-          getChangeRequestSummary: wrap("getChangeRequestSummary", api.getChangeRequestSummary),
-        }),
-    ...(api.getChangeRequestStack === undefined
-      ? {}
-      : { getChangeRequestStack: wrap("getChangeRequestStack", api.getChangeRequestStack) }),
-    ...(api.getChangeRequestWatchFingerprint === undefined
-      ? {}
-      : {
-          getChangeRequestWatchFingerprint: wrap(
-            "getChangeRequestWatchFingerprint",
-            api.getChangeRequestWatchFingerprint,
-          ),
-        }),
-    getChangeRequestActivity: wrap("getChangeRequestActivity", api.getChangeRequestActivity),
-    ...(api.getReviewThreadComments === undefined
-      ? {}
-      : {
-          getReviewThreadComments: wrap("getReviewThreadComments", api.getReviewThreadComments),
-        }),
-    getViewerPermissions: interactive("getViewerPermissions", api.getViewerPermissions),
-    getDiff: wrap("getDiff", api.getDiff),
-    ...(api.getDiffFilePaths === undefined
-      ? {}
-      : { getDiffFilePaths: wrap("getDiffFilePaths", api.getDiffFilePaths) }),
-    ...(api.getDiffFileContents === undefined
-      ? {}
-      : { getDiffFileContents: wrap("getDiffFileContents", api.getDiffFileContents) }),
-    ...(api.getFilesViewed === undefined
-      ? {}
-      : { getFilesViewed: wrap("getFilesViewed", api.getFilesViewed) }),
-    ...(api.getFileStats === undefined
-      ? {}
-      : { getFileStats: wrap("getFileStats", api.getFileStats) }),
-    ...(api.setFilesViewed === undefined
-      ? {}
-      : { setFilesViewed: interactive("setFilesViewed", api.setFilesViewed) }),
-    ...(api.getFileRevisions === undefined
-      ? {}
-      : { getFileRevisions: wrap("getFileRevisions", api.getFileRevisions) }),
-    runAction: interactive("runAction", api.runAction),
-    ...(api.updateChangeRequest === undefined
-      ? {}
-      : {
-          updateChangeRequest: interactive("updateChangeRequest", api.updateChangeRequest),
-        }),
-    comment: interactive("comment", api.comment),
-    ...(api.updateComment === undefined
-      ? {}
-      : { updateComment: interactive("updateComment", api.updateComment) }),
-    submitReview: interactive("submitReview", api.submitReview),
-    listReviewerCandidates: interactive("listReviewerCandidates", api.listReviewerCandidates),
-    setReviewerRequest: interactive("setReviewerRequest", api.setReviewerRequest),
-    ...(api.listLabelCandidates === undefined
-      ? {}
-      : { listLabelCandidates: interactive("listLabelCandidates", api.listLabelCandidates) }),
-    ...(api.setLabels === undefined ? {} : { setLabels: interactive("setLabels", api.setLabels) }),
-    ...(api.listRepositoryLabels === undefined
-      ? {}
-      : { listRepositoryLabels: interactive("listRepositoryLabels", api.listRepositoryLabels) }),
-    ...(api.searchRepositoryAuthors === undefined
-      ? {}
-      : {
-          searchRepositoryAuthors: interactive(
-            "searchRepositoryAuthors",
-            api.searchRepositoryAuthors,
-          ),
-        }),
-    ...(api.searchRepositoryReferences === undefined
-      ? {}
-      : {
-          searchRepositoryReferences: interactive(
-            "searchRepositoryReferences",
-            api.searchRepositoryReferences,
-          ),
-        }),
-    replyToThread: interactive("replyToThread", api.replyToThread),
-    setReaction: interactive("setReaction", api.setReaction),
-    setThreadResolution: interactive("setThreadResolution", api.setThreadResolution),
-  };
-  // Optional provider methods must be forwarded too; returning the interface alone permits omissions.
-  return wrapped satisfies PullRequestProviderApi &
-    Record<Exclude<keyof PullRequestProviderApi, keyof typeof wrapped>, never>;
-}
-
 // Capture before the provider read so a slow response keeps its original freshness through caches.
 const observeRead = Effect.fnUntraced(function* <A, E, R>(read: Effect.Effect<A, E, R>) {
   const observedAt = yield* Clock.currentTimeMillis;
@@ -674,6 +454,7 @@ export const make = Effect.gen(function* () {
   const mergedPullRequests = yield* PubSub.sliding<PullRequestMergeEvent>(64);
   const stateChanges = yield* PubSub.sliding<ThreadPullRequestKey>(64);
   const pullRequestRefreshes = yield* SubscriptionRef.make(0);
+  const linkedThreadRefreshes = yield* SubscriptionRef.make(0);
   const registry = yield* PullRequestProviderRegistry.PullRequestProviderRegistry;
   const requirementOf: UnavailableRequirementOf = (kind) =>
     registry.get(kind)?.unavailableRequirement;
@@ -1752,6 +1533,9 @@ export const make = Effect.gen(function* () {
             ...(changeRequest.workflowApprovalsRequired === undefined
               ? {}
               : { workflowApprovalsRequired: changeRequest.workflowApprovalsRequired }),
+            ...(changeRequest.mergeQueueRemoval === undefined
+              ? {}
+              : { mergeQueueRemoval: changeRequest.mergeQueueRemoval }),
           })),
         ),
       ),
@@ -2965,18 +2749,29 @@ export const make = Effect.gen(function* () {
 
   const summary: PullRequestService["Service"]["summary"] = (input, options) => {
     const key = refCacheKey(input);
-    const cached = persistedRead(input, "summary", summaryCodec, summaryUncached(input));
+    const read =
+      options?.bypassCache === true
+        ? summaryUncached(input)
+        : persistedRead(input, "summary", summaryCodec, summaryUncached(input));
     const held = lastGoodSummary.peek(key);
-    return held !== undefined &&
+    return options?.bypassCache !== true &&
+      held !== undefined &&
       input.allowStale !== false &&
       (options?.recoverTransientFailure !== false || held.state === "merged")
       ? Effect.succeed(held)
-      : cached.pipe(
+      : read.pipe(
           Effect.tap((value) =>
             shouldReplaceHeldSummary(key, value) ? lastGoodSummary.record(key, value) : Effect.void,
           ),
         );
   };
+
+  const batchesReads = Effect.fn("PullRequestService.batchesReads")(function* (
+    input: PullRequestRef,
+  ) {
+    const project = yield* requireProject(input);
+    return project.api.batchesReads === true;
+  });
 
   const stack: PullRequestService["Service"]["stack"] = (input, options) =>
     persistedRead(
@@ -3587,6 +3382,11 @@ export const make = Effect.gen(function* () {
     yield* SubscriptionRef.set(pullRequestRefreshes, epoch);
   });
 
+  const notifyLinkedThreadsChanged = SubscriptionRef.update(
+    linkedThreadRefreshes,
+    (revision) => revision + 1,
+  );
+
   const invalidatedByMutation =
     <I extends PullRequestRef>(
       method: (input: I) => Effect.Effect<void, PullRequestError>,
@@ -3863,6 +3663,8 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  const revisions = (ref: SubscriptionRef.SubscriptionRef<number>) =>
+    SubscriptionRef.changes(ref).pipe(Stream.filter((revision) => revision > 0));
   return PullRequestService.of({
     findCloudSessionPullRequest,
     withSharedProjectReads,
@@ -3879,6 +3681,7 @@ export const make = Effect.gen(function* () {
       return yield* listStats({ ...input, refs: refs.flatMap(Option.toArray) });
     }),
     summary: credentialCached(summary),
+    batchesReads,
     stack: credentialCached(stack),
     subscribeMerges: PubSub.subscribe(mergedPullRequests).pipe(
       Effect.map((subscription) => Stream.fromSubscription(subscription)),
@@ -3887,9 +3690,11 @@ export const make = Effect.gen(function* () {
       Effect.map((subscription) => Stream.fromSubscription(subscription)),
     ),
     reportState,
-    subscribeRefreshes: SubscriptionRef.changes(pullRequestRefreshes).pipe(
-      Stream.filter((revision) => revision > 0),
+    subscribeRefreshes: revisions(pullRequestRefreshes),
+    subscribeLinkedThreadRefreshes: revisions(linkedThreadRefreshes).pipe(
+      Stream.buffer({ capacity: 1, strategy: "sliding" }),
     ),
+    notifyLinkedThreadsChanged,
     refreshAfterTurn,
     detail: credentialCached(detail),
     checks: credentialCached((input) => Cache.get(checksCache, refCacheKey(input))),

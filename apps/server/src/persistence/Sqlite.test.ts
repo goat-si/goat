@@ -6,23 +6,29 @@ import * as NodeSqlite from "node:sqlite";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { vi } from "vite-plus/test";
-import { migrationManifest } from "./Migrations.ts";
+import { migrationManifest, runMigrations } from "./Migrations.ts";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlError from "effect/sql/SqlError";
 import * as TestClock from "effect/testing/TestClock";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import * as Context from "effect/Context";
 import * as Exit from "effect/Exit";
 import * as Runtime from "effect/Runtime";
 import { makeCommandGate } from "../serverRuntimeStartup.ts";
+import * as ServerConfig from "../config.ts";
+import * as ProcessRunner from "../processRunner.ts";
+import * as ServerOwnership from "../serverOwnership.ts";
 import * as PersistenceOwner from "./PersistenceRecoveryOwner.ts";
+import { GOAT_MIGRATION_NAMES } from "./reconcileGoatMigrationIds.ts";
 
 import * as SqlitePersistence from "./Sqlite.ts";
 
@@ -449,3 +455,137 @@ it.effect("prunes expired computer use history when the database opens", () =>
     }).pipe(Effect.provide(SqlitePersistence.layerFromPath(dbPath)));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.effect("names a database file that is not SQLite", () => {
+  const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-sqlite-notadb-"));
+  const dbPath = NodePath.join(tempDir, "state.sqlite");
+  NodeFS.writeFileSync(dbPath, "not a db\n");
+
+  return Effect.gen(function* () {
+    const opened = yield* Effect.void.pipe(
+      Effect.provide(
+        SqlitePersistence.layerFromPath(dbPath).pipe(Layer.provide(NodeServices.layer)),
+      ),
+      Effect.result,
+    );
+
+    assert.equal(opened._tag, "Failure");
+    if (opened._tag === "Failure") {
+      assert.isTrue(SqlError.isSqlError(opened.failure));
+      assert.include(opened.failure.message, dbPath);
+    }
+  }).pipe(
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
+  );
+});
+const ownGoatHome = Effect.fn(function* () {
+  const { serverRuntimeStatePath } = yield* ServerConfig.ServerConfig;
+  // A running server's own path; an empty home, so no boot service on this machine is read.
+  const home = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
+  yield* ServerOwnership.acquireServerOwnership(serverRuntimeStatePath).pipe(
+    Effect.provide(ProcessRunner.layer),
+    Effect.provideService(HostProcess.HomeDirectory, home),
+    Effect.provideService(HostProcess.Environment, {}),
+  );
+});
+
+const onServerDatabase = <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
+  Effect.gen(function* () {
+    const { dbPath } = yield* ServerConfig.ServerConfig;
+    return yield* effect.pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath })));
+  });
+
+const recordedMigrations = onServerDatabase(
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    return yield* sql<{ readonly migration_id: number; readonly name: string }>`
+      SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id
+    `;
+  }),
+);
+
+const layerGoatHome = ServerConfig.layerTest(process.cwd(), { prefix: "goat-sqlite-cli-" });
+
+it.layer(NodeServices.layer)("layerCliConfig", (it) => {
+  it.effect("does not migrate a GOAT home a running server owns", () =>
+    Effect.gen(function* () {
+      const recorded = Math.max(...migrationManifest.map(([id]) => id)) - 1;
+      yield* onServerDatabase(runMigrations({ toMigrationInclusive: recorded }));
+      yield* ownGoatHome();
+
+      const opened = yield* Effect.void.pipe(
+        Effect.provide(SqlitePersistence.layerCliConfig),
+        Effect.result,
+      );
+
+      assert.equal((yield* recordedMigrations).at(-1)?.migration_id, recorded);
+      assert.equal(opened._tag, "Failure");
+      if (opened._tag === "Failure") {
+        assert.instanceOf(opened.failure, SqlitePersistence.ServerOwnsDatabaseError);
+      }
+    }).pipe(Effect.scoped, Effect.provide(layerGoatHome)),
+  );
+
+  it.effect("does not move GOAT's migration ids in a home a running server owns", () =>
+    Effect.gen(function* () {
+      yield* onServerDatabase(
+        Effect.gen(function* () {
+          yield* runMigrations();
+          const sql = yield* SqlClient.SqlClient;
+          // GOAT's block ten ids above this build's: reconcileGoatMigrationIds would move it down.
+          const goat = sql.in([...GOAT_MIGRATION_NAMES]);
+          yield* sql`UPDATE effect_sql_migrations SET migration_id = -migration_id WHERE name IN ${goat}`;
+          yield* sql`UPDATE effect_sql_migrations SET migration_id = 10 - migration_id WHERE migration_id < 0`;
+        }),
+      );
+      const before = yield* recordedMigrations;
+      yield* ownGoatHome();
+
+      const opened = yield* Effect.void.pipe(
+        Effect.provide(SqlitePersistence.layerCliConfig),
+        Effect.result,
+      );
+
+      assert.deepEqual(yield* recordedMigrations, before);
+      assert.equal(opened._tag, "Failure");
+      if (opened._tag === "Failure") {
+        assert.instanceOf(opened.failure, SqlitePersistence.ServerOwnsDatabaseError);
+      }
+    }).pipe(Effect.scoped, Effect.provide(layerGoatHome)),
+  );
+
+  it.effect("opens a current GOAT home while a running server owns it", () =>
+    Effect.gen(function* () {
+      yield* onServerDatabase(runMigrations());
+      yield* ownGoatHome();
+
+      yield* Effect.void.pipe(Effect.provide(SqlitePersistence.layerCliConfig));
+    }).pipe(Effect.scoped, Effect.provide(layerGoatHome)),
+  );
+
+  it.effect("does not resume GOAT's id shift in a home a running server owns", () =>
+    Effect.gen(function* () {
+      yield* onServerDatabase(
+        Effect.gen(function* () {
+          yield* runMigrations();
+          const sql = yield* SqlClient.SqlClient;
+          // A shift stopped after 082: GOAT's rows moved, upstream 083-089 still to run.
+          yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id BETWEEN 83 AND 89`;
+        }),
+      );
+      const before = yield* recordedMigrations;
+      yield* ownGoatHome();
+
+      const opened = yield* Effect.void.pipe(
+        Effect.provide(SqlitePersistence.layerCliConfig),
+        Effect.result,
+      );
+
+      assert.deepEqual(yield* recordedMigrations, before);
+      assert.equal(opened._tag, "Failure");
+      if (opened._tag === "Failure") {
+        assert.instanceOf(opened.failure, SqlitePersistence.ServerOwnsDatabaseError);
+      }
+    }).pipe(Effect.scoped, Effect.provide(layerGoatHome)),
+  );
+});

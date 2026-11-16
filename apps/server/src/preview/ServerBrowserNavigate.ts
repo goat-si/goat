@@ -11,6 +11,8 @@ export const guardedNavigate = async (
   readiness: "load" | "domContentLoaded" | "none",
   timeout: number,
   channel: ActionChannel,
+  /** Checks the page the navigation reached, once it has loaded. */
+  assertLoaded?: () => void,
 ) => {
   const startedAt = performance.now();
   const navigation = channel.call(() =>
@@ -49,6 +51,7 @@ export const guardedNavigate = async (
       }
       throw ServerBrowserPage.toOperationError(cause, timeout);
     });
+  assertLoaded?.();
 };
 
 export const resolveNavigationUrl = (input: PreviewAutomationNavigateInput) => {

@@ -650,6 +650,44 @@ describe("planRun", () => {
     }
   });
 
+  it("runs the full suite when the selected tests outgrow what test-changed takes, and keeps the ones no suite owns", async () => {
+    // providerEnv.ts selects every test file, and goat-ci.yml hands test-changed its list in one
+    // environment string, which Linux caps at 128 KiB.
+    const result = await plan(pr(), labels([]), ["packages/shared/src/testing/providerEnv.ts"]);
+    assert.equal(result.full, true);
+    assert.equal(result.quick, false);
+    assert.match(result.reasons.get("full"), /test files for the changes/);
+    assert.deepEqual(
+      result.tasks.filter((task) => task !== "test-changed"),
+      TASKS,
+    );
+    // The full matrix runs package suites; scripts, CI scripts and packages without a test script
+    // have none, so their selected tests stay in test-changed.
+    const { vitest, node } = result.changedTests;
+    assert.ok(vitest.includes("scripts/lib/goat-rename/rules-meta.test.ts"));
+    assert.ok(vitest.includes("apps/marketing/src/lib/userDocs.test.ts"));
+    assert.ok(vitest.includes("packages/provider-testing/src/replayWorkspace.test.ts"));
+    assert.ok(node.includes(".github/scripts/goat-ci-rerun-republish.test.cjs"));
+    for (const owned of [
+      "apps/web/",
+      "apps/server/",
+      "apps/mobile/",
+      "packages/contracts/",
+      "infra/relay/",
+    ])
+      assert.deepEqual(
+        vitest.filter((file) => file.startsWith(owned)),
+        [],
+        owned,
+      );
+    assert.ok(Buffer.byteLength(JSON.stringify(vitest)) < 100_000);
+    const titles = matrixFor(result.tasks, result.server, result.changedTests).include.map(
+      (entry) => entry.title,
+    );
+    assert.ok(titles.includes("test-changed"));
+    assert.ok(titles.includes("test-server 4/4"));
+  });
+
   it("widens a quick run with ci:server and ci:memory, drafts included", async () => {
     const result = await plan(pr({ draft: true }), labels([SERVER_LABEL, MEMORY_LABEL]));
     assert.deepEqual(result.tasks, [

@@ -11,6 +11,7 @@ import { resolveWorktreeHome } from "@goat/shared/devHome";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { buildMobilePairingLink } from "@goat/shared/mobilePairingLink";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { formatHostForUrl, isWildcardHost } from "@goat/shared/hostClassification";
 import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 import {
@@ -18,6 +19,7 @@ import {
   DEFAULT_TAILSCALE_SERVE_PORT,
   ensureTailscaleServe,
   findExcludedRange,
+  readTailscaleServeRootHolder,
   readTailscaleStatus,
   readWindowsExcludedTcpPortRanges,
   reservedPortMessage,
@@ -45,9 +47,7 @@ import {
 } from "../serverRuntimeState.ts";
 import {
   buildPairingUrl,
-  formatHostForUrl,
   isLoopbackHost,
-  isWildcardHost,
   renderTerminalQrCode,
   resolveHeadlessConnectionString,
 } from "../startupAccess.ts";
@@ -464,6 +464,15 @@ const resolveTailscalePairingBase = Effect.fn("pair.resolveTailscalePairingBase"
         end: reserved.end,
         suggestion: suggestFreePort(input.servePort, reservedRanges),
       });
+    }
+    // The probe above fails whenever this host cannot reach its own MagicDNS name, so the Serve
+    // config, not the probe, decides whether the port is free.
+    const holder = yield* readTailscaleServeRootHolder(input.servePort, {
+      host: (localTarget.localHost ?? "127.0.0.1").replace(/^\[|\]$/gu, ""),
+      port: localTarget.localPort,
+    }).pipe(Effect.mapError((cause) => new TailscaleUnavailableError({ cause })));
+    if (holder === "other") {
+      return yield* new ServePortOccupiedError({ servePort: input.servePort });
     }
     yield* ensureTailscaleServe({
       localPort: localTarget.localPort,

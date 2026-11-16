@@ -51,6 +51,7 @@ import * as ProviderAuthService from "../../provider/ProviderAuthService.ts";
 import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import * as ProviderContinuationService from "../ProviderContinuationService.ts";
 import * as ProviderEventIngestor from "../ProviderEventIngestor.ts";
+import * as ProviderInstallationGate from "../../provider/ProviderInstallationGate.ts";
 import * as ProviderInstanceRegistry from "../../provider/ProviderInstanceRegistry.ts";
 import * as ProviderRuntimeRecoveryService from "../ProviderRuntimeRecoveryService.ts";
 import * as ProviderSessionManager from "../ProviderSessionManager.ts";
@@ -338,6 +339,7 @@ export function layerWithRegistry<Error>(
   } = {},
 ): Layer.Layer<
   | Orchestrator.OrchestratorV2
+  | EffectOutbox.EffectOutboxV2
   | EffectWorker.OrchestrationEffectWorkerV2
   | EventSink.EventSinkV2
   | EffectOutbox.EffectOutboxV2
@@ -346,7 +348,8 @@ export function layerWithRegistry<Error>(
   | ProviderTurnControlService.ProviderTurnControlServiceV2
   | ThreadManagementService.ThreadManagementService
   | ProviderSessionManager.ProviderSessionManagerV2
-  | CommandOutputRecorder.CommandOutputRecorder,
+  | CommandOutputRecorder.CommandOutputRecorder
+  | ThreadCommandExecutor.ThreadCommandExecutor,
   Error | ReplayDatabaseError
 > {
   const layerServerConfig = Layer.effect(
@@ -376,6 +379,7 @@ export function layerWithRegistry<Error>(
       ? {}
       : { codexAppServerIsolation: options.codexAppServerIsolation }),
   }).pipe(Layer.orDie);
+  const layerEffectOutboxProvided = EffectOutbox.layer.pipe(Layer.provide(layerDatabase));
   const wrapProjectionStore = options.wrapProjectionStore;
   const layerProjectionStore =
     wrapProjectionStore === undefined
@@ -391,7 +395,7 @@ export function layerWithRegistry<Error>(
     layerProjectionStore,
     ProjectStore.layer,
     CommandReceiptStore.layer,
-    EffectOutbox.layer,
+    layerEffectOutboxProvided,
     TurnItemPositionStore.layer,
   ).pipe(Layer.provide(layerDatabase));
   const layerEventSinkProvided = EventSink.layerFromStores.pipe(
@@ -456,6 +460,7 @@ export function layerWithRegistry<Error>(
         McpSessionRegistryTestkit.layer,
         layerProviderEventIngestorProvided,
         layerStores,
+        ProviderInstallationGate.layer,
       ),
     ),
   );
@@ -471,6 +476,7 @@ export function layerWithRegistry<Error>(
         layerCheckpointServiceProvided,
         layerEventSinkProvided,
         IdAllocator.layer,
+        ThreadCommandExecutor.layer,
         layerProviderEventIngestorProvided,
         layerServerSettings,
         layerStores,
@@ -633,6 +639,7 @@ export function layerWithRegistry<Error>(
       : { maxAttempts: options.effectWorkerMaxAttempts },
   ).pipe(Layer.provide(Layer.merge(layerStores, layerEffectExecutorProvided)));
   const layerReplayRuntime = Layer.mergeAll(
+    layerEffectOutboxProvided,
     layerOrchestratorProvided,
     layerStores,
     layerProviderTurnStartServiceProvided,
@@ -643,6 +650,7 @@ export function layerWithRegistry<Error>(
     layerEventSinkProvided,
     layerContinuationWorkerProvided,
     layerCommandOutputHubProvided,
+    ThreadCommandExecutor.layer,
   ).pipe(
     Layer.provide(
       options.projects === undefined

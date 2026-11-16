@@ -81,6 +81,8 @@ import {
 import { goatOrchestrationSystemPrompt } from "@goat/provider-core/server/orchestrationInstructions";
 import { buildSessionRuntimeInstructions } from "./screenInstructions.ts";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
+import { dateTimeFromEpoch, toolCompletedAt, toolInput, toolStartedAt } from "./toolPartTimes.ts";
+import { resolveOpenCodeVariant, type OpenCodeVariantCache } from "./openCodeVariant.ts";
 import { readableProviderErrorMessage } from "./providerErrorMessage.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
@@ -97,6 +99,8 @@ import {
   subagentThreadTitle,
 } from "@goat/provider-core/server/subagentProjection";
 import {
+  toolModel,
+  taskSessionId,
   openCodeToolStatus,
   openCodeToolOutputWithImages,
   openCodeToolStateResult,
@@ -361,7 +365,8 @@ interface OpenCodeThreadState {
   readonly messageRoles: Map<string, "user" | "assistant">;
   readonly userMessageIds: Array<string>;
   parentSubagent: OpenCodeSubagentContext | null;
-  nextChildTurnOrdinal: number;
+  // null: a child resumed after a restart, whose next ordinal is recovered from OpenCode.
+  nextChildTurnOrdinal: number | null;
   nextAdmissionGeneration: number;
   /** The session's rules as last read or written, and whether their trailing deny is GOAT's. */
   permission: PermissionRuleset;
@@ -490,11 +495,6 @@ function nativeThreadId(providerThread: OrchestrationV2ProviderThread): string {
   return nativeId;
 }
 
-function dateTimeFromEpoch(value: number | undefined, fallback: DateTime.Utc): DateTime.Utc {
-  if (value === undefined) return fallback;
-  return Option.getOrElse(DateTime.make(value), () => fallback);
-}
-
 function sdkResponseForRawLog(value: unknown): unknown {
   if (typeof value !== "object" || value === null) return value;
   if ("data" in value) return { data: (value as { readonly data?: unknown }).data ?? null };
@@ -514,46 +514,6 @@ export function openCodeBoundaryAfterProviderTurn(
     .toSorted((left, right) => left.ordinal - right.ordinal)
     .map((turn) => turn.nativeTurnRef?.nativeId)
     .find((nativeId): nativeId is string => nativeId !== null && nativeId !== undefined);
-}
-
-function toolInput(part: ToolPart): Record<string, unknown> {
-  return part.state.input;
-}
-
-function toolStartedAt(part: ToolPart, now: DateTime.Utc): DateTime.Utc {
-  return dateTimeFromEpoch(
-    part.state.status === "pending" ? undefined : part.state.time.start,
-    now,
-  );
-}
-
-function toolCompletedAt(part: ToolPart, now: DateTime.Utc): DateTime.Utc | null {
-  return part.state.status === "completed" || part.state.status === "error"
-    ? dateTimeFromEpoch(part.state.time.end, now)
-    : null;
-}
-
-function toolModel(part: ToolPart): string | null {
-  const metadata =
-    part.state.status === "running" ||
-    part.state.status === "completed" ||
-    part.state.status === "error"
-      ? part.state.metadata
-      : undefined;
-  const model = recordValue(metadata, "model");
-  const providerId = recordString(model, "providerID", "providerId");
-  const modelId = recordString(model, "modelID", "modelId", "id");
-  return providerId !== undefined && modelId !== undefined ? `${providerId}/${modelId}` : null;
-}
-
-function taskSessionId(part: ToolPart): string | null {
-  const metadata =
-    part.state.status === "running" ||
-    part.state.status === "completed" ||
-    part.state.status === "error"
-      ? part.state.metadata
-      : undefined;
-  return recordString(metadata, "sessionId", "sessionID") ?? null;
 }
 
 function makeProviderThread(input: {
@@ -779,6 +739,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event, Cause.Done>();
         let nativeStreamFailure: OrchestrationV2ProviderFailure | null = null;
         const threads = new Map<string, OpenCodeThreadState>();
+        const variantCache: OpenCodeVariantCache = new Map();
         const commandReceipts = new Map<string, Deferred.Deferred<void>>();
         const commandControllers = new Map<string, Set<AbortController>>();
         const pendingRequests = new Map<string, PendingOpenCodeRequest>();
@@ -1082,6 +1043,22 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           });
         });
 
+        // A child turn's ordinal never exceeds its user message's position in the session, and that
+        // position survives restarts, so it stays above every ordinal allocated before.
+        const storedUserMessagePosition = Effect.fnUntraced(function* (
+          childSessionId: string,
+          messageId: string,
+        ) {
+          const response = yield* sdkCall("session.messages", { sessionID: childSessionId }, () =>
+            client.session.messages({ sessionID: childSessionId }),
+          );
+          const userMessageIds = unwrapData("session.messages", response).flatMap((entry) =>
+            entry.info.role === "user" ? [entry.info.id] : [],
+          );
+          const index = userMessageIds.indexOf(messageId);
+          return (index === -1 ? userMessageIds.length : index) + 1;
+        });
+
         const emitSubagent = Effect.fnUntraced(function* (
           state: OpenCodeThreadState,
           turn: ActiveOpenCodeTurn,
@@ -1123,7 +1100,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           const childSessionId = taskSessionId(part);
           if (childSessionId !== null && context.childSessionId === null) {
             context.childSessionId = childSessionId;
-            context.childThreadId = idAllocator.derive.threadFromProviderThread({
+            context.childThreadId = idAllocator.derive.subagentThread({
               driver: OPENCODE_PROVIDER,
               nativeThreadId: childSessionId,
             });
@@ -1191,6 +1168,15 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                   permission: childPermission,
                 }),
             );
+            // A Task call with task_id resumes the child, whose earlier turns already hold ordinals.
+            const knownChild = threads.get(childSessionId);
+            const resumedChild = knownChild?.parentSubagent == null ? undefined : knownChild;
+            const nextChildTurnOrdinal =
+              resumedChild === undefined
+                ? recordString(input, "task_id") === childSessionId
+                  ? null
+                  : 1
+                : resumedChild.nextChildTurnOrdinal;
             threads.set(childSessionId, {
               nativeSessionId: childSessionId,
               providerThread: childProviderThread,
@@ -1198,10 +1184,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               activeTurn: null,
               providerTurns: new Map(),
               runtimeRequests: new Map(),
-              messageRoles: new Map(),
-              userMessageIds: [],
+              messageRoles: resumedChild?.messageRoles ?? new Map(),
+              userMessageIds: resumedChild?.userMessageIds ?? [],
               parentSubagent: context,
-              nextChildTurnOrdinal: 1,
+              nextChildTurnOrdinal,
               nextAdmissionGeneration: 1,
               permission: childPermission,
               metadata: undefined,
@@ -1992,6 +1978,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           message: Extract<OpenCodeMessage, { role: "user" }>,
         ) {
           if (state.appThread === null || state.parentSubagent === null) return null;
+          const ordinal =
+            state.nextChildTurnOrdinal ??
+            (yield* storedUserMessagePosition(state.nativeSessionId, message.id));
+          state.nextChildTurnOrdinal = ordinal + 1;
           const now = yield* DateTime.now;
           const startedAt = dateTimeFromEpoch(message.time.created, now);
           const rootNodeId = idAllocator.derive.nodeFromProviderItem({
@@ -2008,7 +1998,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             nodeId: rootNodeId,
             runAttemptId: null,
             nativeTurnRef: providerRef(message.id, "weak"),
-            ordinal: state.nextChildTurnOrdinal++,
+            ordinal,
             status: "running",
             startedAt,
             completedAt: null,
@@ -2756,13 +2746,25 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         const submitPrompt = Effect.fn("OpenCode.submitPrompt")(function* (
           state: OpenCodeThreadState,
           turn: ActiveOpenCodeTurn,
-          payload: Parameters<typeof client.session.promptAsync>[0] & {
+          inputPayload: Parameters<typeof client.session.promptAsync>[0] & {
             messageID: string;
             sessionID: string;
           },
           abortController: AbortController,
           memoryInput?: ProviderAdapter.ProviderAdapterV2TurnInput,
         ) {
+          const { variant, ...payloadWithoutVariant } = inputPayload;
+          const selectedVariant = yield* resolveOpenCodeVariant(
+            client,
+            inputPayload.model,
+            variant,
+            abortController.signal,
+            variantCache,
+          );
+          const payload = {
+            ...payloadWithoutVariant,
+            ...(selectedVariant === undefined ? {} : { variant: selectedVariant }),
+          };
           const text = payload.parts
             ?.filter((part) => part.type === "text")
             .map((part) => part.text)
@@ -3317,8 +3319,20 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 ...(text.length === 0 ? [] : [{ type: "text" as const, text }]),
                 ...files,
               ];
+              const admissionMessageId = yield* makeOpenCodeMessageId(messageIdClock);
+              while (turn.admissionAbortController !== null) {
+                const pendingAdmission = turn.admissionSettled;
+                yield* Deferred.await(pendingAdmission);
+                // Another waiting steer may have claimed admission first.
+                if (turn.admissionSettled === pendingAdmission) break;
+              }
+              if (state.activeTurn !== turn || turn.finalized || turn.interrupted) {
+                return yield* protocolError(
+                  `OpenCode turn ${steerInput.providerTurnId} is not active`,
+                );
+              }
               turn.admissionGeneration = state.nextAdmissionGeneration++;
-              turn.admissionMessageId = yield* makeOpenCodeMessageId(messageIdClock);
+              turn.admissionMessageId = admissionMessageId;
               turn.admissionPending = true;
               turn.admissionAccepted = false;
               turn.admissionMessageObserved = false;
@@ -3353,7 +3367,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                   ]).pipe(Effect.asVoid),
                 ),
               );
-              if (state.activeTurn === turn && !turn.finalized) {
+              if (state.activeTurn === turn && !turn.finalized && !turn.interrupted) {
                 const admissionAction = advanceOpenCodePromptAdmission(turn, "accepted");
                 if (admissionAction === "reconcile-idle") {
                   yield* reconcilePromptAdmission(state, turn);

@@ -6,3 +6,5 @@ export const turnPromptId = (sessionId: string, attemptId: string) =>
   SessionMessage.ID.make(`msg_t3_turn_${sessionId}:${attemptId}`);
 export const steerPromptId = (sessionId: string, messageId: string) =>
   SessionMessage.ID.make(`msg_t3_steer_${sessionId}:${messageId}`);
+export const isOwnPrompt = (inboxId: string) =>
+  inboxId.startsWith("msg_t3_turn_") || inboxId.startsWith("msg_t3_steer_");

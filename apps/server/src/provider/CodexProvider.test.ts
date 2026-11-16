@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as HomeRoute from "./OpenCodexRoute.ts";
+import { codexRoutesSpendNativeQuota } from "./CodexProviderAccount.ts";
 import { fixture as routeFixture } from "./OpenCodexRoute.testkit.ts";
 import { checkCodexProviderStatus } from "./CodexProvider.ts";
 // Recorded from the pinned Codex 0.156.1 config/read in an isolated home.
@@ -137,6 +138,7 @@ it("maps current Codex model capability fields", () => {
     id: "gpt-test",
     isDefault: true,
     model: "gpt-test",
+    availableAccessPrograms: { cyber: ["standard", "daybreakBlue"] },
     defaultServiceTier: "flex",
     serviceTiers: [
       {
@@ -185,6 +187,16 @@ it("maps current Codex model capability fields", () => {
         },
       ],
       currentValue: "flex",
+    },
+    {
+      id: "cyberAccessProgram",
+      label: "Cyber Access",
+      type: "select",
+      options: [
+        { id: "standard", label: "Standard", isDefault: true },
+        { id: "daybreakBlue", label: "Daybreak Blue" },
+      ],
+      currentValue: "standard",
     },
   ]);
 });
@@ -322,6 +334,54 @@ it.effect.each(["missing", "changed"])(
       assert.include(account, fixture.catalog);
       assert.include(account, fixture.input.settings.opencodexBaseUrl);
     }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each([
+  {
+    login: "chatgpt",
+    account: { type: "chatgpt", email: "test@example.com", planType: "pro" },
+    reads: true,
+  },
+  { login: "apiKey", account: { type: "apiKey" }, reads: false },
+])("a verified OpenCodex route with a $login login reads usage: $reads", ({ account, reads }) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const fixture = yield* routeFixture({ role: "home" });
+    const home = fixture.input.execution.home;
+    const usage = JSON.stringify({
+      rateLimits: {
+        limitId: "codex",
+        planType: "pro",
+        primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: 2e9 },
+      },
+      rateLimitsByLimitId: null,
+      rateLimitResetCredits: null,
+      accountId: null,
+    });
+    const peer = ROUTED_CODEX.replace(
+      "result = { account: null, requiresOpenaiAuth: false }",
+      `result = { account: ${JSON.stringify(account)}, requiresOpenaiAuth: true }`,
+    ).replace(
+      'else if (method === "model/list")',
+      `else if (method === "account/rateLimits/read") { fs.appendFileSync(process.env.CODEX_HOME + "/usage-read", "1"); result = ${usage}; }\n  else if (method === "model/list")`,
+    );
+    // A ChatGPT login waits for the catalog Codex refreshes at startup.
+    yield* fs.writeFileString(
+      `${home}/models_cache.json`,
+      JSON.stringify({ fetched_at: "2026-11-16T00:00:00.000Z" }),
+    );
+    const binary = `${home}/usage-codex`;
+    yield* fs.writeFileString(binary, peer);
+    yield* fs.chmod(binary, 0o755);
+    const snapshot = yield* checkCodexProviderStatus(
+      { ...fixture.input.settings, binaryPath: binary },
+      undefined,
+      {},
+    ).pipe(Effect.provideService(HomeRoute.OpenCodexRoute, fixture.service));
+    assert.equal(yield* fs.exists(`${home}/usage-read`), reads);
+    if (reads) assert.equal(snapshot.usageLimits?.windows[0]?.usedPercent, 42);
+    else assert.equal(snapshot.usageLimits?.unavailable?.reason, "unsupported");
+  }).pipe(Effect.provide(NodeServices.layer)),
 );
 
 it.effect(
@@ -474,3 +534,28 @@ it.live.each(
       assert.notInclude(requests, "model/list");
     }).pipe(Effect.provide(NodeServices.layer)),
 );
+
+it("reports native quota only for an OpenAI login on a native route", () => {
+  const chatgpt = { type: "chatgpt", email: "a@example.com", planType: "pro" } as const;
+  const hub = {
+    model_provider: "hub",
+    model_providers: { hub: { base_url: "https://hub.example.com/v1" } },
+  };
+  const cases = [
+    ["default route", chatgpt, true, {}, true],
+    ["openai base url", chatgpt, true, { openai_base_url: "https://chatgpt.com/x" }, true],
+    ["openai proxy url", chatgpt, true, { openai_base_url: "https://proxy.example.com" }, false],
+    ["custom provider", chatgpt, true, hub, false],
+    ["unknown provider id", chatgpt, true, { model_provider: "missing" }, false],
+    ["unreadable config", chatgpt, true, null, false],
+    ["login not required", chatgpt, false, {}, false],
+    ["api key", { type: "apiKey" }, true, {}, false],
+  ] as const;
+  for (const [name, account, requiresOpenaiAuth, config, expected] of cases) {
+    assert.strictEqual(
+      codexRoutesSpendNativeQuota({ account, requiresOpenaiAuth }, config),
+      expected,
+      name,
+    );
+  }
+});

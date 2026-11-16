@@ -9,6 +9,11 @@ import {
 import { ScheduledTask, ScheduledTaskRunStatus, ScheduledTaskSchedule } from "./scheduledTask.ts";
 import { OrchestratorMcpReconcileFields } from "./orchestratorMcpReconcile.ts";
 
+export const OrchestratorMcpLastRunError = Schema.optional(Schema.String).annotate({
+  description:
+    "Why the last run did not complete: the provider's reason, or how the run ended. Absent when there is none or on older hosts.",
+});
+
 export const OrchestratorMcpScheduledTask = Schema.Struct({
   scheduledTaskId: ScheduledTaskId,
   title: Schema.String,
@@ -21,6 +26,7 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   nextRunAt: Schema.NullOr(IsoDateTime),
   lastRunStatus: ScheduledTaskRunStatus,
   lastRun: ScheduledTask.fields.lastRun,
+  lastRunError: OrchestratorMcpLastRunError,
   runCount: Schema.optional(NonNegativeInt),
   lastRunAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   /** For webhook tasks: the public GOAT Connect URL, shown only to a caller that may start the task's runs. */

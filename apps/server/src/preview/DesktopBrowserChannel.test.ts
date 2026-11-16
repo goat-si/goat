@@ -88,6 +88,62 @@ it.effect("protects unknown desktop visibility until an explicit hidden report a
   ),
 );
 
+it.effect("keeps an attached desktop tab's load failure until it detaches", () =>
+  Effect.gen(function* () {
+    const input = yield* Queue.unbounded<Uint8Array>();
+    vi.mocked(NodeStream.fromReadable).mockReturnValue(Stream.fromQueue(input));
+    const config = yield* ServerConfig.ServerConfig;
+    yield* Effect.gen(function* () {
+      const channel = yield* DesktopBrowserChannel.DesktopBrowserChannel;
+      const key = { threadId: "thread-1", tabId: "tab-1" };
+      const send = (event: object) =>
+        Queue.offer(input, new TextEncoder().encode(`${JSON.stringify(event)}\n`));
+      const settle = (tabId: string) =>
+        send({ type: "attached", threadId: key.threadId, tabId }).pipe(
+          Effect.andThen(channel.awaitAttached({ threadId: key.threadId, tabId }, "5 seconds")),
+        );
+      const failure = {
+        url: `https://device.local/${"a".repeat(3000)}`,
+        code: -202,
+        description: "ERR_CERT_AUTHORITY_INVALID",
+      };
+
+      // A tab that never attached keeps nothing, so a desktop cannot grow the server's memory.
+      yield* send({ type: "loadFailed", ...key, ...failure });
+      yield* settle("sentinel-1");
+      expect(channel.loadFailure?.(key)).toBeUndefined();
+
+      yield* send({ type: "attached", ...key });
+      // Events from a newer desktop are skipped; an older server drops loadFailed the same way.
+      yield* send({ type: "futureEvent", ...key });
+      yield* send({ type: "loadFailed", ...key, ...failure });
+      yield* settle("sentinel-2");
+      expect(channel.loadFailure?.(key)).toEqual({
+        ...failure,
+        url: failure.url.slice(0, 2048),
+      });
+
+      yield* send({ type: "detached", ...key });
+      yield* settle("sentinel-3");
+      expect(channel.loadFailure?.(key)).toBeUndefined();
+    }).pipe(
+      Effect.provide(
+        DesktopBrowserChannel.layer.pipe(
+          Layer.provide(
+            ServerConfig.layer({ ...config, desktopBrowserFd: 41, desktopBrowserControlFd: 42 }),
+          ),
+        ),
+      ),
+    );
+  }).pipe(
+    Effect.provide(
+      ServerConfig.layerTest(process.cwd(), { prefix: "desktop-browser-channel-" }).pipe(
+        Layer.provide(NodeServices.layer),
+      ),
+    ),
+  ),
+);
+
 it.effect("a detached relay cannot release a replacement on reattach", () =>
   Effect.gen(function* () {
     writes.length = 0;

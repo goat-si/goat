@@ -17,6 +17,7 @@ import * as ProviderSessionManager from "../ProviderSessionManager.ts";
 import * as ProviderReplayHarness from "../testkit/ProviderReplayHarness.ts";
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
 import * as CodexAdapterV2Testkit from "./CodexAdapterV2.testkit.ts";
+import { withConfigReads } from "./CodexReplay.testkit.ts";
 
 const modelSelection = { instanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID, model: "gpt-5.4" };
 const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
@@ -146,7 +147,7 @@ it.effect(
             if (transcript === undefined) return yield* Effect.die("unexpected app-server spawn");
             if (spawns === 1)
               yield* Effect.addFinalizer(() => Deferred.succeed(firstProcessReleased, undefined));
-            const driver = yield* CodexReplay.makeReplayDriver(transcript, {
+            const driver = yield* CodexReplay.makeReplayDriver(withConfigReads(transcript), {
               beforeEmitInbound: (entry) =>
                 entry.label === "external-stop" ? Deferred.await(stop) : Effect.void,
             });
@@ -228,10 +229,12 @@ it.effect("retires a silent initialize before the provider can be reused", () =>
           const first = ++spawns === 1;
           if (first) yield* Effect.addFinalizer(() => Deferred.succeed(released, undefined));
           const driver = yield* CodexReplay.makeReplayDriver(
-            appServerProcess({
-              nativeThreadId: first ? "silent-initialize" : "fresh-initialize",
-              stopsAfterThreadStart: false,
-            }),
+            withConfigReads(
+              appServerProcess({
+                nativeThreadId: first ? "silent-initialize" : "fresh-initialize",
+                stopsAfterThreadStart: false,
+              }),
+            ),
             {
               beforeEmitInbound: (entry) =>
                 first && entry.label === "initialize"
@@ -457,7 +460,7 @@ it.effect.each([
           const spawn = ++spawns;
           if (spawn === 1) yield* Effect.addFinalizer(() => Deferred.succeed(released, undefined));
           const driver = yield* CodexReplay.makeReplayDriver(
-            spawn === 1 ? firstTranscript : second,
+            withConfigReads(spawn === 1 ? firstTranscript : second),
           );
           const context = yield* Layer.build(CodexReplay.layerReplayWithDriver(driver)).pipe(
             Effect.mapError(

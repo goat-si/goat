@@ -56,6 +56,7 @@ import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { webhookAddress } from "@goat/client-runtime/webhook-address";
 import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import { withImplicitFastModeSelection } from "../../lib/providerOptions";
 import { usePreparedConnection } from "../../state/session";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useProjects, useEnvironmentServerConfig } from "../../state/entities";
@@ -593,7 +594,10 @@ function TaskForm({
       title: draft.title.trim(),
       prompt: draft.prompt.trim(),
       projectId: context.projectId,
-      modelSelection: context.modelSelection,
+      modelSelection: withImplicitFastModeSelection(
+        context.modelSelection,
+        config?.providers ?? [],
+      ),
       schedule,
       enabled: draft.enabled,
       ...(isNotificationPolicy(draft.notificationPolicy)

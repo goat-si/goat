@@ -45,6 +45,7 @@ import {
   providerModelsFromSettings,
   spawnAndCollect,
   type ServerProviderDraft,
+  resolveProviderProbeTimeoutMs,
 } from "@goat/provider-core/server/snapshotProbe";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
@@ -185,6 +186,7 @@ const discoverPiViaRpc = Effect.fn("PiProviderStatus.discoverPiViaRpc")(function
   cwd: string | undefined,
   profile: PiRuntimeProfile,
 ) {
+  const timeoutMs = resolveProviderProbeTimeoutMs("pi", PI_RPC_DISCOVERY_TIMEOUT_MS, environment);
   const connection = yield* makePiDiscoveryConnection(
     piSettings,
     environment,
@@ -192,10 +194,10 @@ const discoverPiViaRpc = Effect.fn("PiProviderStatus.discoverPiViaRpc")(function
     cwd,
     profile,
   );
-  const stateData = yield* connection.request({ type: "get_state" });
-  const modelsData = yield* connection.request({ type: "get_available_models" });
+  const stateData = yield* connection.request({ type: "get_state" }, timeoutMs);
+  const modelsData = yield* connection.request({ type: "get_available_models" }, timeoutMs);
   const commandsData = yield* connection
-    .request({ type: "get_commands" })
+    .request({ type: "get_commands" }, timeoutMs)
     .pipe(Effect.orElseSucceed(() => undefined));
   const discoveredModels = yield* Effect.fromResult(parseDiscoveredModels(modelsData, stateData));
   const { slashCommands, skills } = parsePiDiscoveredCommands(commandsData);
@@ -237,18 +239,23 @@ export const discoverPiCommandsForCwd = Effect.fn("discoverPiCommandsForCwd")(
       profile,
     );
     // A failed read must not replace a previously usable workspace catalog with an empty one.
-    const commandsData = yield* connection.request({ type: "get_commands" });
+    const commandsData = yield* connection.request(
+      { type: "get_commands" },
+      resolveProviderProbeTimeoutMs("pi", PI_RPC_DISCOVERY_TIMEOUT_MS, environment),
+    );
     const { slashCommands, skills } = parsePiDiscoveredCommands(commandsData);
     return { slashCommands: withPiBuiltinSlashCommands(slashCommands), skills };
   },
   Effect.scoped,
-  Effect.timeoutOrElse({
-    duration: PI_RPC_DISCOVERY_TIMEOUT_MS,
-    orElse: () =>
-      Effect.fail(
-        new PiRpcTimeoutError({ operation: "discovery", timeoutMs: PI_RPC_DISCOVERY_TIMEOUT_MS }),
-      ),
-  }),
+  (effect, _settings, environment) => {
+    const timeoutMs = resolveProviderProbeTimeoutMs("pi", PI_RPC_DISCOVERY_TIMEOUT_MS, environment);
+    return effect.pipe(
+      Effect.timeoutOrElse({
+        duration: timeoutMs,
+        orElse: () => Effect.fail(new PiRpcTimeoutError({ operation: "discovery", timeoutMs })),
+      }),
+    );
+  },
 );
 
 const runPiVersionCommand = Effect.fn("PiProviderStatus.runPiVersionCommand")(function* (
@@ -309,7 +316,7 @@ const describeUnavailablePiModel = Effect.fn("PiProviderStatus.describeUnavailab
           }),
         ),
       ),
-      Effect.timeout(DEFAULT_TIMEOUT_MS),
+      Effect.timeout(resolveProviderProbeTimeoutMs("pi", DEFAULT_TIMEOUT_MS, environment)),
       Effect.option,
     );
     const missingCredentials = Option.exists(
@@ -392,7 +399,12 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
     probeEnvironment,
     spawnCwd,
     profile,
-  ).pipe(Effect.timeoutOption(VERSION_PROBE_TIMEOUT_MS), Effect.result);
+  ).pipe(
+    Effect.timeoutOption(
+      resolveProviderProbeTimeoutMs("pi", VERSION_PROBE_TIMEOUT_MS, environment),
+    ),
+    Effect.result,
+  );
 
   if (Result.isFailure(versionResult)) {
     const error = versionResult.failure;
@@ -522,7 +534,12 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
     resolvedLaunchArgs.args,
     cwd,
     profile,
-  ).pipe(Effect.timeoutOption(PI_RPC_DISCOVERY_TIMEOUT_MS), Effect.exit);
+  ).pipe(
+    Effect.timeoutOption(
+      resolveProviderProbeTimeoutMs("pi", PI_RPC_DISCOVERY_TIMEOUT_MS, environment),
+    ),
+    Effect.exit,
+  );
   if (Exit.isFailure(discoveryExit)) {
     yield* Effect.logWarning("Pi RPC discovery failed.", {
       errorTag: causeErrorTag(discoveryExit.cause),

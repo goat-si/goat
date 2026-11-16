@@ -13,9 +13,9 @@ import {
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
-  type OrchestrationV2TurnItem,
   OrchestratorMcpCapabilitiesResult,
   type OrchestratorMcpCreatedThread,
+  type OrchestratorMcpThreadTimelineItem,
   type OrchestratorMcpCapabilitiesInput,
   type OrchestratorMcpModelOption,
   type OrchestratorMcpCreateThreadsInput,
@@ -53,7 +53,6 @@ import {
   type OrchestratorMcpThreadSendInput,
   type OrchestratorMcpThreadStatusInput,
   OrchestratorMcpThreadStatusResult,
-  type OrchestratorMcpThreadTimelineItem,
   type OrchestratorMcpThreadWaitInput,
   type OrchestratorMcpThreadWaitResult,
   type OrchestratorMcpUpdateScheduledTaskInput,
@@ -88,6 +87,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
+import { timelineItemsWithinBudget } from "./threadReadItems.ts";
 import * as Stream from "effect/Stream";
 import * as CloudSource from "../orchestration-v2/CloudTaskSourceService.ts";
 import * as ChannelChildWork from "../channels/ChannelChildWork.ts";
@@ -105,6 +106,7 @@ import {
 import * as ReviewExport from "./reviewExport.ts";
 import { recordRemoteTaskResult } from "../remoteReports/recordRemoteTaskResult.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
+import { forceModeRefusal, forceStopRemoteTask } from "../remoteReports/remoteTaskForceStop.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { cloudTaskForRun } from "./cloudTaskView.ts";
 import { hostFailure } from "./hostFailure.ts";
@@ -151,7 +153,7 @@ import { acceptRemoteSender, withRemoteSender } from "./remoteSender.ts";
 import { stableCommandId, stablePart } from "./stableCommandId.ts";
 import { makeContinueReviewTask } from "./reviewContinuation.ts";
 import { makeRemoteTaskTargets } from "./goat/RemoteTaskTargets.ts";
-import { statusFromShell, threadRun } from "./threadStatus.ts";
+import { runStop, STOP_TURN_ITEM_TYPES, statusFromShell, threadRun } from "./threadStatus.ts";
 import * as View from "./threadListView.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
@@ -461,6 +463,7 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
     nextRunAt: task.nextRunAt,
     lastRunStatus: task.lastRunStatus,
     ...(task.lastRun === undefined ? {} : { lastRun: task.lastRun }),
+    ...(task.lastRunError === null ? {} : { lastRunError: task.lastRunError }),
     runCount: task.runCount,
     lastRunAt: task.lastRunAt,
     ...webhookUrlFields(task.webhook, mayRun),
@@ -679,13 +682,12 @@ function taskResultTransfer(
 
 function pageIncludesTerminalTaskResult(input: {
   readonly parent: Pick<OrchestrationV2ThreadProjection, "thread" | "contextTransfers">;
-  readonly page: ReadonlyArray<OrchestrationV2ThreadProjection["visibleTurnItems"][number]>;
+  readonly items: ReadonlyArray<OrchestratorMcpThreadTimelineItem>;
   readonly task: OrchestrationV2Subagent;
   readonly target: Pick<
     OrchestrationV2ThreadProjection,
     "thread" | "runs" | "contextTransfers" | "messages" | "turnItems"
   >;
-  readonly maxChars: number;
 }): boolean {
   const transfer = taskResultTransfer(input.parent, input.target, input.task);
   if (transfer === undefined) return false;
@@ -698,17 +700,14 @@ function pageIncludesTerminalTaskResult(input: {
   const result = subagentResultForRun(input.target, run);
   if (result.messageId === null && result.turnItemId === null) return false;
 
-  return input.page.some((row) => {
-    if (row.sourceThreadId !== input.target.thread.id) return false;
+  return input.items.some((item) => {
+    if (item.sourceThreadId !== input.target.thread.id) return false;
     const matchesResult =
-      (result.turnItemId !== null && row.sourceItemId === result.turnItemId) ||
+      (result.turnItemId !== null && item.itemId === result.turnItemId) ||
       (result.messageId !== null &&
-        row.item.type === "assistant_message" &&
-        row.item.messageId === result.messageId);
-    if (!matchesResult) return false;
-
-    const text = turnItemText(row.item);
-    return text !== null && text.length <= textPageEnd(text, 0, input.maxChars);
+        item.type === "assistant_message" &&
+        item.messageId === result.messageId);
+    return matchesResult && item.text !== null && !item.textTruncated;
   });
 }
 
@@ -880,141 +879,6 @@ function taskPrompt(input: OrchestratorMcpDelegateTaskInput): string {
     : `Act as the ${input.role} sub-agent for this task.\n\n${input.task}`;
 }
 
-function jsonText(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function turnItemText(item: OrchestrationV2TurnItem): string | null {
-  switch (item.type) {
-    case "notification":
-      return [item.summary, item.detail].filter((part) => part !== undefined).join("\n");
-    case "user_message":
-    case "assistant_message":
-    case "reasoning":
-      return item.text;
-    case "proposed_plan":
-      return item.markdown;
-    case "todo_list":
-      return [item.explanation, ...item.steps.map((step) => `[${step.status}] ${step.text}`)]
-        .filter((line): line is string => line !== undefined)
-        .join("\n");
-    case "user_input_request":
-      return jsonText(item.questions);
-    case "file_change":
-      return [
-        item.fileName,
-        item.additions === undefined && item.deletions === undefined
-          ? undefined
-          : `+${item.additions ?? 0} -${item.deletions ?? 0}`,
-        item.diffStr ?? item.newStr,
-      ]
-        .filter((line): line is string => line !== undefined)
-        .join("\n");
-    case "command_execution":
-      return [`$ ${item.input}`, item.output]
-        .filter((line): line is string => line !== undefined)
-        .join("\n");
-    case "file_search":
-      return jsonText({ pattern: item.pattern, results: item.results });
-    case "web_search":
-      return jsonText({ patterns: item.patterns, results: item.results });
-    case "approval_request":
-      return [item.prompt ?? item.requestKind, item.reason]
-        .filter((line): line is string => line !== undefined)
-        .join("\n");
-    case "checkpoint":
-      return jsonText(item.files);
-    case "run_interrupt_request":
-    case "run_interrupt_result":
-    case "system_notice":
-      return item.message;
-    case "error":
-      return item.failure.message;
-    case "compaction":
-      return item.summary ?? null;
-    case "handoff":
-      return item.summary ?? `${item.strategy} handoff to ${item.toProviderInstanceId}`;
-    case "fork":
-      return `Forked to thread ${item.targetThreadId}.`;
-    case "thread_created":
-      return `Created thread ${item.targetThreadId} with ${item.targetProviderInstanceId} (${item.targetModel}).`;
-    case "human_handoff":
-      return `${item.handoff.title}: ${item.handoff.state} (${item.handoff.target.path})`;
-    case "secret_request":
-      return `Asked the user for ${item.label}: ${item.secretStatus}.`;
-    case "subagent":
-      return item.result ?? item.progress ?? item.prompt;
-    case "dynamic_tool":
-      return jsonText({ toolName: item.toolName, input: item.input, output: item.output });
-  }
-}
-
-function textPageEnd(text: string | null, offset: number, maxChars: number): number {
-  const end = offset + maxChars;
-  if (text === null || end >= text.length) return end;
-  const last = text.charCodeAt(end - 1);
-  if (last < 0xd800 || last > 0xdbff) return end;
-  return end - 1 > offset ? end - 1 : end + 1;
-}
-
-function timelineItem(input: {
-  readonly row: OrchestrationV2ThreadProjection["visibleTurnItems"][number];
-  readonly maxChars: number;
-  readonly textOffset?: number;
-  readonly messagesByThreadId: ReadonlyMap<ThreadId, OrchestrationV2ThreadProjection["messages"]>;
-  readonly tasksByThreadId: ReadonlyMap<ThreadId, OrchestrationV2ThreadProjection["subagents"]>;
-}): OrchestratorMcpThreadTimelineItem {
-  const item = input.row.item;
-  const task =
-    item.type === "subagent"
-      ? input.tasksByThreadId
-          .get(input.row.sourceThreadId)
-          ?.find((task) => task.id === item.subagentId)
-      : undefined;
-  const text = turnItemText(item);
-  const offset = input.textOffset ?? 0;
-  const end = textPageEnd(text, offset, input.maxChars);
-  const textTruncated = text !== null && text.length > end;
-  const messageId =
-    input.row.item.type === "user_message" || input.row.item.type === "assistant_message"
-      ? input.row.item.messageId
-      : null;
-  const message =
-    messageId === null
-      ? undefined
-      : input.messagesByThreadId
-          .get(input.row.sourceThreadId)
-          ?.find((candidate) => candidate.id === messageId);
-  return {
-    position: input.row.position,
-    visibility: input.row.visibility,
-    sourceThreadId: input.row.sourceThreadId,
-    itemId: input.row.sourceItemId,
-    ...(input.row.item.type === "subagent" ? { subagentId: input.row.item.subagentId } : {}),
-    ...(task?.role === undefined ? {} : { role: task.role }),
-    ...(task?.modelSelection === undefined ? {} : { modelSelection: task.modelSelection }),
-    ...(task?.parentModelSelection === undefined
-      ? {}
-      : { parentModelSelection: task.parentModelSelection }),
-    runId: input.row.item.runId,
-    messageId,
-    createdBy: message?.createdBy ?? null,
-    creationSource: message?.creationSource ?? null,
-    ...(message?.senderThreadId === undefined ? {} : { senderThreadId: message.senderThreadId }),
-    type: input.row.item.type,
-    status: input.row.item.status,
-    title: input.row.item.title,
-    text: text === null ? null : text.slice(offset, end),
-    textTruncated,
-    nextTextOffset: textTruncated ? end : null,
-    updatedAt: DateTime.formatIso(input.row.item.updatedAt),
-  };
-}
-
 const make = Effect.gen(function* () {
   const permissions = yield* Profiles.PermissionProfiles;
   const fleet = yield* FleetSync.GoatclawFleetSync;
@@ -1022,6 +886,7 @@ const make = Effect.gen(function* () {
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const remoteDispatch = yield* RemoteDispatchCoordinator.RemoteDispatchCoordinator;
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
+  const sqlForRemoteForce = yield* Effect.serviceOption(SqlClient.SqlClient);
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const providerAdapters = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
   const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
@@ -1167,17 +1032,13 @@ const make = Effect.gen(function* () {
   const resolveProjectTarget = (
     parent: Pick<OrchestrationV2ThreadProjection, "thread"> | undefined,
     projectId: ProjectId | undefined,
+    missingMessage = "Pass projectId: this MCP client is not running inside a GOAT thread.",
   ) =>
     projectId !== undefined
       ? Effect.succeed(projectId)
       : parent !== undefined
         ? Effect.succeed(parent.thread.projectId)
-        : Effect.fail(
-            failure(
-              "target_required",
-              "Pass projectId: this MCP client is not running inside a GOAT thread.",
-            ),
-          );
+        : Effect.fail(failure("target_required", missingMessage));
 
   const targetShell = Effect.fn("OrchestratorMcpService.targetShell")(function* (
     threadId: ThreadId,
@@ -1498,6 +1359,96 @@ const make = Effect.gen(function* () {
       ? crypto.randomUUIDv4().pipe(Effect.orDie)
       : Effect.succeed(clientRequestId);
 
+  // The described run's unanswered Stop, which agents otherwise cannot see.
+  const readRunStop = (threadId: ThreadId, runId: RunId | null) =>
+    runId === null
+      ? Effect.succeed(undefined)
+      : threadManagement
+          .getThreadRecords(threadId, ["turnItems"], {
+            turnItemRunIds: [runId],
+            turnItemTypes: [...STOP_TURN_ITEM_TYPES],
+          })
+          .pipe(
+            Effect.mapError(threadManagementFailure),
+            Effect.map((records) => runStop(runId, records.turnItems)),
+          );
+  // goat#2338: ownership of a remote task is decided in forceCancelTask, the rest by its host.
+  const forceCancelRemoteTask = Effect.fn("OrchestratorMcpService.forceCancelRemoteTask")(
+    function* (
+      scope: McpThreadInvocationScope,
+      taskId: NodeId,
+      correlationId: string,
+    ): Effect.fn.Return<OrchestratorMcpTaskCancelResult, OrchestratorMcpFailure> {
+      if (Option.isNone(sqlForRemoteForce))
+        return yield* failure("orchestration_error", "Remote task storage is unavailable.");
+      const forced = yield* forceStopRemoteTask(correlationId, authorizeRemoteWrite(scope)).pipe(
+        Effect.provideService(SqlClient.SqlClient, sqlForRemoteForce.value),
+        Effect.provideService(SshRemoteDispatch.SshRemoteDispatch, ssh),
+      );
+      const task = yield* readTask(scope, taskId);
+      return {
+        taskId,
+        status: isTerminalTaskStatus(task.status) ? task.status : "cancel_requested",
+        forceStop: {
+          outcome: forced.outcome,
+          sharedWithThreadIds: forced.sharedWithThreadIds,
+          note: `The child's run on ${forced.host} was ended by force, so its work may be incomplete. Its result arrives as that host reports it; read it with task.read.`,
+        },
+      };
+    },
+  );
+  const forceCancelTask = Effect.fn("OrchestratorMcpService.forceCancelTask")(function* (
+    scope: McpThreadInvocationScope,
+    taskId: NodeId,
+  ): Effect.fn.Return<OrchestratorMcpTaskCancelResult, OrchestratorMcpFailure> {
+    yield* requireCapability(scope);
+    const { subagents } = yield* threadManagement
+      .getThreadRecords(scope.thread.threadId, ["subagents"], { subagentIds: [taskId] })
+      .pipe(Effect.mapError(threadManagementFailure));
+    const remote = subagents.find(
+      (task) => task.id === taskId && task.origin === "app_owned" && task.promotedAt === undefined,
+    )?.remote;
+    if (remote !== undefined)
+      return yield* forceCancelRemoteTask(scope, taskId, remote.correlationId);
+    const childThreadId = subagents.find((task) => task.id === taskId)?.childThreadId ?? null;
+    // Force writes only to the child, which its user may have raised above the parent's modes.
+    const [parent, child] = yield* Effect.forEach(
+      [scope.thread.threadId, childThreadId],
+      (threadId) =>
+        threadId === null
+          ? Effect.succeed(null)
+          : threadManagement
+              .getThreadShell(threadId)
+              .pipe(Effect.mapError(threadManagementFailure)),
+    );
+    if (parent && child && child.deletedAt === null) {
+      yield* resolveRuntimeMode(parent.runtimeMode, child.runtimeMode).pipe(
+        Effect.andThen(resolveInteractionMode(parent.interactionMode, child.interactionMode)),
+        Effect.mapError((error) => forceModeRefusal(error.message)),
+      );
+    }
+    const forced = yield* threadManagement
+      .forceStopDelegatedTask({ parentThreadId: scope.thread.threadId, taskId })
+      .pipe(
+        Effect.mapError((error) =>
+          error._tag === "DelegatedForceStopRefused"
+            ? failure("task_not_cancellable", error.message)
+            : error._tag === "OrchestrationV2ForceStopThreadError" && error.reason !== undefined
+              ? failure("task_not_cancellable", `${error.reason}: ${error.message}`)
+              : threadManagementFailure(error),
+        ),
+      );
+    const task = yield* readTask(scope, taskId);
+    return {
+      taskId,
+      status: isTerminalTaskStatus(task.status) ? task.status : "cancel_requested",
+      forceStop: {
+        outcome: forced.outcome,
+        sharedWithThreadIds: forced.sharedWithThreadIds,
+        note: "The child's run was ended by force, so its work may be incomplete. Its lane slot is released as the run ends; read it with task.read.",
+      },
+    };
+  });
   const readTask = Effect.fn("OrchestratorMcpService.readTask")(function* (
     scope: McpThreadInvocationScope,
     taskId: NodeId,
@@ -1659,6 +1610,10 @@ const make = Effect.gen(function* () {
             ? "queued"
             : "running";
     const latestRun = ThreadManagementService.latestRun(childControls);
+    const stop = yield* readRunStop(
+      task.childThreadId,
+      (ThreadManagementService.latestActiveRun(childControls) ?? latestRun)?.id ?? null,
+    );
     const questionRunIds = childControls.runs
       .filter(
         (run) =>
@@ -1777,6 +1732,7 @@ const make = Effect.gen(function* () {
         latestTerminalResultContextTransferId === resultContextTransferId
           ? null
           : latestTerminalResultContextTransferId,
+      ...(stop === undefined ? {} : { stop }),
       hasPendingQuestion:
         !isTerminalTaskStatus(status) &&
         childControls.runtimeRequests.some(
@@ -2403,6 +2359,7 @@ const make = Effect.gen(function* () {
           incrementalThreadRead: true,
           scheduledTasks: true,
           maxBatchThreads: 20,
+          taskForceStop: true,
         },
       };
     }),
@@ -3044,6 +3001,7 @@ const make = Effect.gen(function* () {
       }),
     cancelTask: Effect.fn("OrchestratorMcpService.cancelTask")(function* (callerScope, input) {
       const scope = yield* requireThreadScope(callerScope, "task_cancel");
+      if (input.force === true) return yield* forceCancelTask(scope, input.taskId);
       const current = yield* readTask(scope, input.taskId);
       const key = yield* requestKey(input.clientRequestId);
       const parentProjection = yield* threadManagement
@@ -3548,7 +3506,11 @@ const make = Effect.gen(function* () {
         input.allProjects === true ||
         (View.hasLineageFilter(lineage) && input.projectId === undefined)
           ? undefined
-          : yield* resolveProjectTarget(parent, input.projectId);
+          : yield* resolveProjectTarget(
+              parent,
+              input.projectId,
+              "Pass projectId, or allProjects: true for every project. This MCP client is not running inside a GOAT thread.",
+            );
       if (!input.allProjects && input.projectId !== undefined)
         yield* requireProject(input.projectId);
       const listFailure = (error: unknown) =>
@@ -3621,28 +3583,38 @@ const make = Effect.gen(function* () {
       if (
         (summary || input.tail !== undefined) &&
         (input.afterPosition !== undefined ||
+          input.beforePosition !== undefined ||
           input.itemId !== undefined ||
           (summary && input.tail !== undefined))
       )
         return yield* failure(
           "invalid_request",
-          "Pass view summary or tail, not both, and neither with afterPosition or itemId.",
+          "Pass view summary or tail, not both, and neither with afterPosition, beforePosition or itemId.",
         );
       const view = input.view === "activity" ? "activity" : "messages";
       const maxChars = input.maxCharsPerItem ?? DEFAULT_THREAD_ITEM_MAX_CHARS;
+      // Client callers (the CLI, linked environments) page forward from a cursorless read.
+      const newestFirst =
+        input.tail !== undefined ||
+        input.beforePosition !== undefined ||
+        (input.afterPosition === undefined && scope.thread !== undefined);
       const timeline = yield* threadManagement
         .getTimelinePage(input.threadId, {
-          afterPosition: input.afterPosition ?? -1,
+          ...(input.afterPosition === undefined ? {} : { afterPosition: input.afterPosition }),
+          ...(newestFirst && input.tail === undefined
+            ? { beforePosition: input.beforePosition ?? Number.POSITIVE_INFINITY }
+            : {}),
           limit: summary ? 0 : (input.tail ?? input.limit ?? DEFAULT_THREAD_READ_LIMIT),
           view,
           ...(input.tail === undefined ? {} : { tail: true }),
           ...(input.itemId === undefined ? {} : { itemId: input.itemId }),
         })
         .pipe(Effect.mapError(threadManagementFailure));
-      const page = timeline.items;
       const taskSources = [
         ...new Set(
-          page.filter((row) => row.item.type === "subagent").map((row) => row.sourceThreadId),
+          timeline.items
+            .filter((row) => row.item.type === "subagent")
+            .map((row) => row.sourceThreadId),
         ),
       ];
       const tasksByThreadId = new Map(
@@ -3654,7 +3626,7 @@ const make = Effect.gen(function* () {
         ),
       );
       const messageIdsByThread = new Map<ThreadId, Array<MessageId>>();
-      for (const row of page) {
+      for (const row of timeline.items) {
         if (row.item.type !== "user_message" && row.item.type !== "assistant_message") continue;
         const ids = messageIdsByThread.get(row.sourceThreadId) ?? [];
         ids.push(row.item.messageId);
@@ -3670,6 +3642,29 @@ const make = Effect.gen(function* () {
         { concurrency: 1 },
       );
       const messagesByThreadId = new Map(sourceMessages);
+      const thread = View.threadDetail(
+        scope,
+        target,
+        timeline.totalItems,
+        shell,
+        yield* Clock.currentTimeMillis,
+      );
+      const recentRuns = target.runs
+        .toSorted((left, right) => right.ordinal - left.ordinal)
+        .slice(0, input.runLimit ?? (summary ? 1 : DEFAULT_THREAD_RUN_LIMIT))
+        .map(threadRun);
+      const { items, start } = timelineItemsWithinBudget(
+        { thread, recentRuns, nextPosition: null, hasMore: false, earlierPosition: null },
+        timeline.items.map((row) => ({
+          row,
+          maxChars,
+          messagesByThreadId,
+          tasksByThreadId,
+          ...(input.itemId === undefined ? {} : { textOffset: input.textOffset ?? 0 }),
+        })),
+        newestFirst,
+      );
+      const page = timeline.items.slice(start, start + items.length);
       const returnedRunIds = new Set(
         page.filter((row) => row.sourceThreadId === target.thread.id).map((row) => row.item.runId),
       );
@@ -3678,12 +3673,9 @@ const make = Effect.gen(function* () {
         parent === undefined || input.tail !== undefined
           ? []
           : directAppOwnedChildTasks(parent, target, returnedRunIds);
-      if (
-        parent !== undefined &&
-        scope.thread !== undefined &&
-        tasks.length > 0 &&
-        (input.textOffset ?? 0) === 0
-      ) {
+      // A read past the end of an item's text shows the agent nothing to acknowledge.
+      const readPastEnd = (input.textOffset ?? 0) > 0 && items.every((item) => !item.text);
+      if (parent !== undefined && scope.thread !== undefined && tasks.length > 0 && !readPastEnd) {
         for (const task of tasks) {
           const transfer = taskResultTransfer(parent, target, task);
           const resultRunId = transfer?.sourcePoint.runId ?? delegatedTaskRun(target, task)?.id;
@@ -3699,10 +3691,9 @@ const make = Effect.gen(function* () {
           if (
             pageIncludesTerminalTaskResult({
               parent,
-              page,
+              items,
               task,
               target: { ...target, ...resultRecords },
-              maxChars,
             })
           ) {
             yield* readTask(
@@ -3720,33 +3711,21 @@ const make = Effect.gen(function* () {
         target.runs.find((run) => run.id === (shell.activeRunId ?? shell.latestRunId)),
       );
       const summaryDigest = summary ? yield* readSummary(shell, target, timeline.totalItems) : null;
+      const stop = yield* readRunStop(shell.id, shell.activeRunId ?? shell.latestRunId);
       return {
+        ...(stop === undefined ? {} : { stop }),
         ...(cloudTask === undefined ? {} : { cloudTask }),
-        thread: View.threadDetail(
-          scope,
-          target,
-          timeline.totalItems,
-          shell,
-          yield* Clock.currentTimeMillis,
-        ),
-        recentRuns: target.runs
-          .toSorted((left, right) => right.ordinal - left.ordinal)
-          .slice(0, input.runLimit ?? (summary ? 1 : DEFAULT_THREAD_RUN_LIMIT))
-          .map(threadRun),
+        thread,
+        recentRuns,
         ...(summaryDigest === null ? {} : { summaryDigest }),
         ...(input.tail === undefined ? {} : { tailStartPosition: page[0]?.position ?? null }),
-        items: page.map((row) =>
-          timelineItem({
-            row,
-            maxChars,
-            messagesByThreadId,
-            tasksByThreadId,
-            ...(input.itemId === undefined ? {} : { textOffset: input.textOffset ?? 0 }),
-          }),
-        ),
-        nextPosition: page.at(-1)?.position ?? null,
+        items,
+        nextPosition: items.at(-1)?.position ?? null,
         // A summary returns no items, so there is nothing to page through.
-        hasMore: !summary && timeline.hasMore,
+        hasMore:
+          !summary && (timeline.hasMore || (!newestFirst && items.length < timeline.items.length)),
+        earlierPosition:
+          !summary && (timeline.hasEarlier || start > 0) ? (items[0]?.position ?? null) : null,
       } satisfies OrchestratorMcpThreadReadResult;
     }),
     acknowledgeChildRead: Effect.fn("OrchestratorMcpService.acknowledgeChildRead")(
@@ -3930,7 +3909,7 @@ const make = Effect.gen(function* () {
           .getThreadRecords(input.threadId, ["runs", "turnItems", "providerThreads"], {
             runIds,
             turnItemRunIds: runIds,
-            turnItemTypes: ["user_message", "assistant_message", "error"],
+            turnItemTypes: ["user_message", "assistant_message", "error", ...STOP_TURN_ITEM_TYPES],
           })
           .pipe(Effect.mapError(threadManagementFailure));
         const cloudTask = cloudTaskForRun(

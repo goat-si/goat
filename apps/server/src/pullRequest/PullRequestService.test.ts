@@ -7,60 +7,37 @@ import {
   requestFailed,
   fakeProvider,
   keyedByCanonicalKey,
-  sshAliasHost,
   cloudSessionUrl,
   cloudInput,
   cloudResult,
   cloudProject,
+  makeService,
+  FULL_REVIEW,
+  FULL_REVIEWERS,
+  environmentViewedProvider,
+  environmentViewedService,
 } from "./pullRequestTestFixtures.ts";
 import * as Clock from "effect/Clock";
 import { SourceControlProviderKind } from "@goat/contracts";
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as KeyValueStore from "effect/persistence/KeyValueStore";
 import { assert, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import type {
-  OrchestrationProjectShell,
-  PullRequestReviewCapabilities,
-  PullRequestReviewerCapabilities,
-  ProjectId,
-} from "@goat/contracts";
+import type { OrchestrationProjectShell, ProjectId } from "@goat/contracts";
 import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts/settings";
-import type { ServerSettings } from "@goat/contracts";
-import * as ServerSettingsService from "../serverSettings.ts";
 import { PullRequestOperationError } from "@goat/contracts";
 
-import * as ProjectService from "../project/ProjectService.ts";
-import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as PullRequestFilesViewed from "../persistence/PullRequestFilesViewed.ts";
-import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
-import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
-import type { SourceControlProvider } from "@goat/source-control-core/server/SourceControlProvider";
-import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
 import { fakePullRequestProvider } from "@goat/source-control-testing/fakeSourceControlDriver";
 import {
   PullRequestProviderError,
   type PullRequestProviderApi,
 } from "@goat/source-control-core/server/PullRequestProvider";
-import * as PullRequestProviderRegistry from "./PullRequestProviderRegistry.ts";
-import * as PullRequestService from "./PullRequestService.ts";
-import * as PullRequestReadCache from "./PullRequestReadCache.ts";
-
-const FULL_REVIEW: PullRequestReviewCapabilities = {
-  inlineComment: true,
-  reply: true,
-  resolve: true,
-  verdicts: ["comment", "approve", "request-changes"],
-};
-const FULL_REVIEWERS: PullRequestReviewerCapabilities = { request: true, listCandidates: true };
 
 it.effect("reads maintainer edits and changes them through the update command", () =>
   Effect.gen(function* () {
@@ -146,63 +123,6 @@ it.effect("does not wait for an in-flight detail read to display a preview", () 
     yield* Fiber.join(detail);
   }),
 );
-
-export function makeService(input: {
-  readonly settings?: ServerSettings;
-  readonly projects: ReadonlyArray<OrchestrationProjectShell>;
-  readonly providers: ReadonlyArray<PullRequestProviderApi>;
-  readonly resolveHandle?: SourceControlProviderRegistry.SourceControlProviderRegistry["Service"]["resolveHandle"];
-  readonly resolveRepositoryIdentity?: RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]["resolve"];
-  readonly onProjectRead?: () => void;
-}) {
-  // Build in the test scope; per-call Effect.provide would close the marks database on service acquisition.
-  return Effect.flatMap(
-    Layer.build(
-      Layer.mergeAll(
-        Layer.mock(ServerSettingsService.ServerSettingsService)({
-          getSettings: Effect.succeed(input.settings ?? DEFAULT_SERVER_SETTINGS),
-        }),
-        Layer.succeed(
-          PullRequestProviderRegistry.PullRequestProviderRegistry,
-          PullRequestProviderRegistry.fromProviders(input.providers),
-        ),
-        Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
-          resolveLink: () => undefined,
-          resolveHandle:
-            input.resolveHandle ?? (() => Effect.die("Unexpected provider refinement")),
-          get: (kind) =>
-            Effect.succeed(
-              kind === "forgejo" ? sshAliasHost : ({} as SourceControlProvider["Service"]),
-            ),
-        }),
-        Layer.mock(ProjectService.ProjectService)({
-          listShells: (options) =>
-            Effect.sync(() => {
-              input.onProjectRead?.();
-              return input.projects.filter(
-                (project) => options?.projectIds?.includes(project.id) ?? true,
-              );
-            }),
-          getShell: (projectId) =>
-            Effect.sync(() => {
-              input.onProjectRead?.();
-              return Option.fromNullishOr(input.projects.find((p) => p.id === projectId));
-            }),
-        }),
-        Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
-          resolve: input.resolveRepositoryIdentity ?? (() => Effect.succeed(null)),
-        }),
-        SourceControlRateLimit.layer,
-        PullRequestFilesViewed.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
-        Layer.effect(PullRequestReadCache.PullRequestReadCache, PullRequestReadCache.make).pipe(
-          Layer.provide(KeyValueStore.layerMemory),
-          Layer.provide(NodeServices.layer),
-        ),
-      ),
-    ),
-    (context) => Effect.provideContext(PullRequestService.make, context),
-  );
-}
 
 const verifiedCloudCredential: NonNullable<PullRequestProviderApi["withVerifiedCredential"]> = (
   _input,
@@ -2274,6 +2194,72 @@ it.effect("routes a hosted reference to another repository through a project on 
   }),
 );
 
+it.effect("an uncached summary reaches the host despite a cached read in another project", () =>
+  Effect.gen(function* () {
+    const caller = project({
+      id: "caller",
+      title: "caller",
+      workspaceRoot: "/caller",
+      repository: "acme/other",
+    });
+    const target = project({
+      id: "gitlab",
+      title: "gitlab",
+      workspaceRoot: "/gitlab",
+      repository: "team/project",
+      provider: "gitlab",
+    });
+    let missing = false;
+    let reads = 0;
+    const service = yield* makeService({
+      projects: [caller, target],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github")),
+        fakePullRequestProvider(SourceControlProviderKind.make("gitlab"), {
+          getChangeRequestSummary: (input) =>
+            Effect.suspend(() => {
+              reads++;
+              assert.strictEqual(input.cwd, target.workspaceRoot);
+              assert.strictEqual(input.repository, "team/project");
+              assert.strictEqual(input.host, "gitlab.com");
+              return missing
+                ? Effect.fail(
+                    new PullRequestProviderError({
+                      provider: SourceControlProviderKind.make("gitlab"),
+                      operation: "summary",
+                      reason: "missing-tool",
+                      detail: "The hosting CLI is unavailable.",
+                    }),
+                  )
+                : Effect.succeed(changeRequest(42, "2026-07-02T00:00:00Z"));
+            }),
+        }),
+      ],
+    });
+    const reference = {
+      projectId: caller.id,
+      host: "gitlab.com",
+      repository: "team/project",
+      number: 42,
+      allowStale: false,
+    };
+    yield* service.summary(reference, { recoverTransientFailure: false });
+    missing = true;
+    yield* service.summary(reference, { recoverTransientFailure: false });
+    assert.strictEqual(reads, 1);
+
+    const error = yield* service
+      .summary(reference, { recoverTransientFailure: false, bypassCache: true })
+      .pipe(Effect.flip);
+    expect(error).toMatchObject({
+      _tag: "PullRequestUnavailableError",
+      reason: "cli-missing",
+      provider: "gitlab",
+    });
+    assert.strictEqual(reads, 2);
+  }),
+);
+
 it.effect("routes Azure reads and writes through the requested organization's checkout", () =>
   Effect.gen(function* () {
     const seen: string[] = [];
@@ -3472,6 +3458,27 @@ it.effect(
     }),
 );
 
+it.effect("preserves merge queue removal details from the provider", () =>
+  Effect.gen(function* () {
+    const removal = { id: "RMQE_1", removedAt: "2026-07-02T00:00:00Z", reason: "CI failed" };
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          getChangeRequest: () =>
+            Effect.succeed({ ...hostedChangeRequest("body"), mergeQueueRemoval: removal }),
+        }),
+      ],
+    });
+    const detail = yield* service.detail({
+      projectId: "p1" as ProjectId,
+      repository: "acme/web",
+      number: 1,
+    });
+    assert.deepStrictEqual(detail.mergeQueueRemoval, removal);
+  }),
+);
+
 it.effect("notifies linked threads when detail changes draft status in either direction", () =>
   Effect.gen(function* () {
     let isDraft = true;
@@ -4025,57 +4032,6 @@ it.effect("partial host viewed writes invalidate marks but keep the diff cached"
   }),
 );
 
-const environmentViewedProvider = (
-  revisions: Map<string, string>,
-  asked: Array<ReadonlyArray<string>>,
-  unreadable: ReadonlySet<string> = new Set(),
-) =>
-  fakePullRequestProvider(SourceControlProviderKind.make("gitlab"), {
-    capabilities: {
-      diff: true,
-      comment: true,
-      actions: ["merge"],
-      mergeMethods: ["merge"],
-      search: true,
-      reactions: true,
-      viewedFiles: "environment",
-      review: FULL_REVIEW,
-      reviewers: FULL_REVIEWERS,
-    },
-    getFilesViewed: () => Effect.die("the host keeps no marks of its own"),
-    setFilesViewed: () => Effect.die("the host keeps no marks of its own"),
-    getChangeRequest: () => Effect.succeed(hostedChangeRequest("")),
-    getChangeRequestSummary: () => Effect.succeed(changeRequest(1, "2026-07-02T00:00:00Z")),
-    getFileRevisions: (input) => {
-      asked.push(input.paths);
-      return Effect.succeed({
-        revisions: new Map(
-          input.paths.flatMap((path) =>
-            unreadable.has(path) ? [] : [[path, revisions.get(path) ?? ""] as const],
-          ),
-        ),
-      });
-    },
-  });
-
-const environmentViewedService = (
-  revisions: Map<string, string>,
-  asked: Array<ReadonlyArray<string>>,
-  unreadable: ReadonlySet<string> = new Set(),
-) =>
-  makeService({
-    projects: [
-      project({
-        id: "p1",
-        title: "on gitlab",
-        workspaceRoot: "/a",
-        repository: "group/project",
-        provider: SourceControlProviderKind.make("gitlab"),
-      }),
-    ],
-    providers: [environmentViewedProvider(revisions, asked, unreadable)],
-  });
-
 const GITLAB_REFERENCE = {
   projectId: "p1" as ProjectId,
   repository: "group/project",
@@ -4287,35 +4243,6 @@ it.effect("keeps viewed files itself for a host that keeps none of its own", () 
     assert.deepStrictEqual(
       asked.map((paths) => [...paths].toSorted()),
       [["src/a.ts", "src/b.ts"]],
-    );
-  }),
-);
-
-it.effect("reports a file pushed to since it was cleared as changed", () =>
-  Effect.gen(function* () {
-    const revisions = new Map([
-      ["src/a.ts", "blob-a"],
-      ["src/b.ts", "blob-b"],
-    ]);
-    const service = yield* environmentViewedService(revisions, []);
-
-    yield* service.setFilesViewed({
-      ...GITLAB_REFERENCE,
-      files: [
-        { path: "src/a.ts", viewed: true },
-        { path: "src/b.ts", viewed: true },
-      ],
-    });
-    revisions.set("src/a.ts", "blob-a-again");
-    yield* service.invalidate({ reference: GITLAB_REFERENCE });
-    const marked = yield* service.filesViewed(GITLAB_REFERENCE);
-
-    assert.deepStrictEqual(
-      [...marked.files].toSorted((left, right) => left.path.localeCompare(right.path)),
-      [
-        { path: "src/a.ts", state: "dismissed" },
-        { path: "src/b.ts", state: "viewed" },
-      ],
     );
   }),
 );

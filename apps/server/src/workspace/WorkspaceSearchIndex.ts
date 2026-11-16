@@ -461,22 +461,32 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
     }),
   );
 
-  const hasIncompleteInitialScan = () => initialScanTimedOut && finder.isScanning();
+  // fff's isScanning takes the picker lock too, so progress is read off the JS thread.
+  const isScanning = Effect.promise(async () => {
+    try {
+      const progress = await finder.getScanProgressAsync();
+      return !progress.ok || progress.value.isScanning;
+    } catch {
+      return true;
+    }
+  });
+  const hasIncompleteInitialScan = () => (initialScanTimedOut ? isScanning : Effect.succeed(false));
 
   const runSearch = Effect.fn("WorkspaceSearchIndex.runSearch")(function* <A>(
     query: string,
     pageSize: number,
     operation: "directorySearch" | "fileSearch" | "grep" | "mixedSearch",
-    execute: () => Result<A>,
+    execute: () => Promise<Result<A>>,
   ): Effect.fn.Return<A, WorkspaceSearchIndexSearchFailed> {
-    const result = yield* Effect.try({
+    // fff's searches wait on its picker lock, which its watcher can hold for minutes.
+    const result = yield* Effect.tryPromise({
       try: execute,
       catch: (cause) =>
         new WorkspaceSearchIndexSearchFailed({
           cwd,
           queryLength: query.length,
           pageSize,
-          reason: `FileFinder.${operation} threw unexpectedly.`,
+          reason: `FileFinder.${operation} rejected unexpectedly.`,
           cause,
         }),
     });
@@ -496,7 +506,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
     query: string,
     pageSize: number,
     operation: "directorySearch" | "fileSearch" | "mixedSearch",
-    execute: (pageSize: number) => Result<SearchPage<I>>,
+    execute: (pageSize: number) => Promise<Result<SearchPage<I>>>,
     pathOf: (item: I) => string,
   ): Effect.fn.Return<SearchPage<I>, WorkspaceSearchIndexSearchFailed> {
     let size = pageSize;
@@ -524,12 +534,13 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
   const refresh: WorkspaceSearchIndex["Service"]["refresh"] = Effect.fn(
     "WorkspaceSearchIndex.refresh",
   )(function* () {
-    const result = yield* Effect.try({
-      try: () => finder.scanFiles(),
+    // scanFiles waits on fff's picker lock, which its watcher can hold for seconds.
+    const result = yield* Effect.tryPromise({
+      try: () => finder.scanFilesAsync(),
       catch: (cause) =>
         new WorkspaceSearchIndexRefreshFailed({
           cwd,
-          reason: "FileFinder.scanFiles threw unexpectedly.",
+          reason: "FileFinder.scanFilesAsync rejected unexpectedly.",
           cause,
         }),
     });
@@ -556,12 +567,12 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
 
   const list: WorkspaceSearchIndex["Service"]["list"] = Effect.fn("WorkspaceSearchIndex.list")(
     function* () {
-      const incompleteBeforeQuery = hasIncompleteInitialScan();
+      const incompleteBeforeQuery = yield* hasIncompleteInitialScan();
       const result = yield* searchVisible(
         "",
         WORKSPACE_INDEX_PAGE_SIZE,
         "mixedSearch",
-        (pageSize) => finder.mixedSearch("", { pageSize }),
+        (pageSize) => finder.mixedSearchAsync("", { pageSize }),
         mixedItemPath,
       );
       const mapped = mapMixedSearchResult(result, WORKSPACE_INDEX_MAX_ENTRIES, hostIsWindows);
@@ -589,7 +600,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
         query,
         pageSize,
         "fileSearch",
-        (size) => finder.fileSearch(query, { pageSize: size }),
+        (size) => finder.fileSearchAsync(query, { pageSize: size }),
         (item) => item.relativePath,
       );
       return mapFileSearchResult(result, limit, hostIsWindows, imageOnly);
@@ -599,7 +610,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
         query,
         pageSize,
         "directorySearch",
-        (size) => finder.directorySearch(query, { pageSize: size }),
+        (size) => finder.directorySearchAsync(query, { pageSize: size }),
         (item) => item.relativePath,
       );
       return mapDirectorySearchResult(result, limit, hostIsWindows);
@@ -608,7 +619,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
       query,
       pageSize,
       "mixedSearch",
-      (size) => finder.mixedSearch(query, { pageSize: size }),
+      (size) => finder.mixedSearchAsync(query, { pageSize: size }),
       mixedItemPath,
     );
     return mapMixedSearchResult(result, limit, hostIsWindows);
@@ -621,7 +632,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
     // matching is subsequence-based, so dropping them still matches "[id]" and "a{b}" paths.
     // "{" is dropped only when the query finds nothing as a glob, so "*.{ts,tsx}" keeps working.
     const query = rawQuery.replaceAll("[", "");
-    const incompleteBeforeQuery = hasIncompleteInitialScan();
+    const incompleteBeforeQuery = yield* hasIncompleteInitialScan();
     let mapped = yield* searchNames(query, limit, kind, imageOnly);
     if (mapped.entries.length === 0 && query.includes("{")) {
       mapped = yield* searchNames(query.replaceAll("{", ""), limit, kind, imageOnly);
@@ -646,7 +657,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
     do {
       const remainingTimeBudgetMs = Math.max(1, Math.ceil(deadline - performance.now()));
       const result = yield* runSearch(input.query, input.limit, "grep", () =>
-        finder.grep(searchQuery, {
+        finder.grepAsync(searchQuery, {
           mode: regexMode ? "regex" : "plain",
           smartCase: !input.caseSensitive && !regexMode,
           maxMatchesPerFile: Math.min(CONTENT_SEARCH_MAX_MATCHES_PER_FILE, rawPageSize),

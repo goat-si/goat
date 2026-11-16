@@ -1,19 +1,4 @@
-import {
-  CheckpointId,
-  CheckpointScopeId,
-  CommandId,
-  MessageId,
-  NodeId,
-  ProviderSessionId,
-  RunAttemptId,
-  ProviderApprovalDecision,
-  ProviderUserInputAnswers,
-  ProviderThreadId,
-  ProviderTurnId,
-  RunId,
-  RuntimeRequestId,
-  ThreadId,
-} from "@goat/contracts";
+import { CommandId, ProviderTurnId, RunId, ThreadId } from "@goat/contracts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeOS from "node:os";
 import * as Context from "effect/Context";
@@ -37,6 +22,7 @@ export {
   PROCESS_BOUND_EFFECT_TYPES,
   REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS,
 } from "./EffectOutboxEffectTypes.ts";
+import type { EffectRow } from "./effectOutboxRow.ts";
 import * as EffectExecutionFences from "./EffectExecutionFences.ts";
 import { effectTypesForLane } from "./EffectExecutionPolicy.ts";
 import type {
@@ -51,114 +37,14 @@ export type {
 import { forkParked } from "../serverActivation.ts";
 import * as AutomationHold from "../automationHold.ts";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
-export const OrchestrationEffectRequestV2 = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal("provider-runtime.continue"),
-    sourceRunId: RunId,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("provider-session.detach"),
-    providerSessionId: ProviderSessionId,
-    detail: Schema.optional(Schema.String),
-    revokeMcpCredential: Schema.optional(Schema.Boolean),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("provider-turn.reattach"),
-    runId: RunId,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("provider-turn.start"),
-    runId: RunId,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("provider-turn.interrupt"),
-    providerSessionId: ProviderSessionId,
-    providerThreadId: ProviderThreadId,
-    providerTurnId: ProviderTurnId,
-    subagent: Schema.optional(Schema.Struct({ id: NodeId, nativeTaskId: Schema.String })),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("provider-turn.steer"),
-    providerSessionId: ProviderSessionId,
-    providerThreadId: ProviderThreadId,
-    providerTurnId: ProviderTurnId,
-    messageId: MessageId,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("provider-turn.restart"),
-    providerSessionId: ProviderSessionId,
-    providerThreadId: ProviderThreadId,
-    providerTurnId: ProviderTurnId,
-    interruptedAttemptId: RunAttemptId,
-    runId: RunId,
-    sessionTransition: Schema.optional(
-      Schema.Union([
-        Schema.Struct({
-          type: Schema.Literal("replace"),
-          replacementProviderSessionId: ProviderSessionId,
-        }),
-        Schema.Struct({ type: Schema.Literal("detach") }),
-      ]),
-    ),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("runtime-request.respond"),
-    providerSessionId: ProviderSessionId,
-    requestId: RuntimeRequestId,
-    decision: Schema.optional(ProviderApprovalDecision),
-    feedback: Schema.optional(Schema.String),
-    answers: Schema.optional(ProviderUserInputAnswers),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("provider-thread.rollback"),
-    restoreFiles: Schema.optional(Schema.Boolean),
-    providerThreadId: ProviderThreadId,
-    checkpointId: CheckpointId,
-    scopeId: CheckpointScopeId,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("checkpoint.capture"),
-    runId: RunId,
-    scopeId: CheckpointScopeId,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("scheduled-tasks.cleanup"),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("terminal.cleanup"),
-  }),
-  Schema.Struct({ type: Schema.Literal("preview.cleanup") }),
-  Schema.Struct({ type: Schema.Literal("device.release") }),
-  Schema.Struct({
-    type: Schema.Literal("attachment.cleanup"),
-    attachmentIds: Schema.Array(Schema.String),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("thread-title.generate"),
-    kind: Schema.Union([
-      Schema.Struct({ type: Schema.Literal("initial"), messageId: MessageId }),
-      Schema.Struct({ type: Schema.Literal("regenerate") }),
-    ]),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("delegated-tasks.stop"),
-    childThreadIds: Schema.optional(Schema.Array(ThreadId)),
-    reason: Schema.optional(Schema.String),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("computer-use.stop"),
-    cutoff: Schema.optional(Schema.Number),
-  }),
-]);
-export type OrchestrationEffectRequestV2 = typeof OrchestrationEffectRequestV2.Type;
-export const OrchestrationEffectStatusV2 = Schema.Literals([
-  "pending",
-  "running",
-  "succeeded",
-  "failed",
-  "cancelled",
-]);
-export type OrchestrationEffectStatusV2 = typeof OrchestrationEffectStatusV2.Type;
+import {
+  OrchestrationEffectRequestV2,
+  OrchestrationEffectStatusV2,
+} from "./EffectOutboxRequest.ts";
+export {
+  OrchestrationEffectRequestV2,
+  OrchestrationEffectStatusV2,
+} from "./EffectOutboxRequest.ts";
 
 /** Receipts deduplicate retries, and restart re-enqueues need far less than a week. Retain failed rows to keep deleted-thread worktrees. */
 export const SETTLED_EFFECT_RETENTION = Duration.days(7);
@@ -276,23 +162,6 @@ export interface EffectOutboxV2Shape {
 export class EffectOutboxV2 extends Context.Service<EffectOutboxV2, EffectOutboxV2Shape>()(
   "goat/orchestration-v2/EffectOutbox/EffectOutboxV2",
 ) {}
-
-type EffectRow = {
-  readonly effect_id: string;
-  readonly command_id: string;
-  readonly thread_id: string;
-  readonly effect_type: string;
-  readonly payload_json: string;
-  readonly status: string;
-  readonly attempt_count: number;
-  readonly available_at: string;
-  readonly lease_owner: string | null;
-  readonly lease_expires_at: string | null;
-  readonly created_at: string;
-  readonly updated_at: string;
-  readonly completed_at: string | null;
-  readonly last_error: string | null;
-};
 
 const encodeRequest = Schema.encodeSync(Schema.fromJsonString(OrchestrationEffectRequestV2));
 const encodeIds = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));

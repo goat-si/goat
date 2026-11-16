@@ -12,7 +12,6 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
-import * as Types from "effect/Types";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as CodexClient from "effect-codex-app-server/client";
@@ -30,7 +29,15 @@ import type {
 } from "@goat/contracts";
 import { ServerSettingsError } from "@goat/contracts";
 import { applyPreferredCodexDefaultModel } from "./codexModelDefaults.ts";
-import { accountProbeStatus, routesAwayFromOpenAi } from "./CodexProviderAccount.ts";
+import {
+  applyConfiguredCodexCyberAccess,
+  applyConfiguredCodexServiceTier,
+} from "./CodexModelOptionDefaults.ts";
+import {
+  accountProbeStatus,
+  codexRoutesSpendNativeQuota,
+  routesAwayFromOpenAi,
+} from "./CodexProviderAccount.ts";
 export { codexPlanLabel } from "./CodexProviderAccount.ts";
 export { applyPreferredCodexDefaultModel } from "./codexModelDefaults.ts";
 
@@ -57,6 +64,7 @@ import {
   spawnAndCollect,
   spawnFailureMessage,
   type ServerProviderDraft,
+  resolveProviderProbeTimeoutMs,
 } from "@goat/provider-core/server/snapshotProbe";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import { makeUnavailableUsageLimits } from "@goat/provider-core/server/usageLimits";
@@ -68,9 +76,9 @@ import {
 } from "./codexUsageLimits.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import packageJson from "../../package.json" with { type: "json" };
+import { parseCodexSkillsListResponse } from "./codexSkillsList.ts";
 const isHomeRouteUnavailable = Schema.is(HomeRoute.OpenCodexRouteUnavailable);
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
-const RATE_LIMITS_PROBE_TIMEOUT_MS = 3_000;
 
 type CodexRateLimitsProbe =
   | {
@@ -83,6 +91,18 @@ type CodexRateLimitsProbe =
       readonly accountId?: string | null | undefined;
     }
   | { readonly failure: string };
+
+const CodexCyberAccessConfig = Schema.Struct({
+  daybreak: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
+  features: Schema.optionalKey(
+    Schema.NullOr(
+      Schema.Struct({
+        api_key_cyber_access_programs: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
+      }),
+    ),
+  ),
+});
+const decodeCodexCyberAccessConfig = Schema.decodeUnknownOption(CodexCyberAccessConfig);
 
 const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
 const CODEX_CATALOG_REFRESH_TIMEOUT_MS = 3_000;
@@ -107,10 +127,14 @@ const CODEX_PRESENTATION = {
 export interface CodexAppServerProviderSnapshot {
   readonly effectiveBaseUrl?: string;
   readonly account: CodexSchema.V2GetAccountResponse;
+  readonly nativeUsage?: boolean;
   readonly rateLimits?: CodexRateLimitsProbe;
   readonly version: string | undefined;
   readonly models: ReadonlyArray<ServerProviderModel> | undefined;
   readonly serviceTier?: string | undefined;
+  /** Undefined when `config/read` failed, so GOAT cannot know Codex's default program. */
+  readonly daybreakEnabled?: boolean | undefined;
+  readonly cyberAccessProgramsUnavailable?: boolean | undefined;
   readonly skills: ReadonlyArray<ServerProviderSkill>;
 }
 
@@ -129,6 +153,12 @@ const DEFAULT_SERVICE_TIER_ID = "default";
 
 const SERVICE_TIER_DESCRIPTIONS: Readonly<Record<string, string>> = {
   ultrafast: "Even faster, more expensive",
+};
+
+const CYBER_ACCESS_PROGRAM_LABELS: Readonly<Record<string, string>> = {
+  standard: "Standard",
+  daybreakBlue: "Daybreak Blue",
+  daybreakRed: "Daybreak Red",
 };
 
 function reasoningEffortLabel(reasoningEffort: string): string {
@@ -205,6 +235,25 @@ export function mapCodexModelCapabilities(
       currentValue: defaultServiceTier,
     });
   }
+  const cyberAccessPrograms = model.availableAccessPrograms?.cyber ?? [];
+  if (cyberAccessPrograms.length > 0) {
+    const hasStandard = cyberAccessPrograms.includes("standard");
+    const defaultProgram = hasStandard ? "standard" : cyberAccessPrograms[0];
+    optionDescriptors.push({
+      id: "cyberAccessProgram",
+      label: "Cyber Access",
+      type: "select",
+      // Standard stays selectable as an opt-out; Codex rejects it visibly when the login cannot use it.
+      options: (hasStandard ? cyberAccessPrograms : ["standard", ...cyberAccessPrograms]).map(
+        (program) => ({
+          id: program,
+          label: CYBER_ACCESS_PROGRAM_LABELS[program] ?? program,
+          ...(program === defaultProgram ? { isDefault: true } : {}),
+        }),
+      ),
+      ...(defaultProgram === undefined ? {} : { currentValue: defaultProgram }),
+    });
+  }
 
   return createModelCapabilities({
     optionDescriptors,
@@ -223,37 +272,6 @@ function parseCodexModelListResponse(
   }));
 }
 
-function applyConfiguredCodexServiceTier(
-  models: ReadonlyArray<ServerProviderModel>,
-  serviceTier: string | undefined,
-): ReadonlyArray<ServerProviderModel> {
-  if (!serviceTier) return models;
-  return models.map((model) => {
-    if (!model.capabilities?.optionDescriptors) return model;
-    return {
-      ...model,
-      capabilities: {
-        ...model.capabilities,
-        optionDescriptors: model.capabilities.optionDescriptors.map((descriptor) => {
-          if (descriptor.id !== "serviceTier" || descriptor.type !== "select") return descriptor;
-          const value = descriptor.options.find(
-            (option) =>
-              option.id === serviceTier || (serviceTier === "fast" && option.id === "priority"),
-          )?.id;
-          if (!value) return descriptor;
-          return {
-            ...descriptor,
-            currentValue: value,
-            options: descriptor.options.map(({ isDefault: _isDefault, ...option }) =>
-              option.id === value ? { ...option, isDefault: true } : option,
-            ),
-          };
-        }),
-      },
-    };
-  });
-}
-
 /**
  * Codex has no static default capability set, so a bare custom slug borrows
  * the first built-in's descriptors; an entry with its own capabilities keeps
@@ -265,42 +283,6 @@ function appendCustomCodexModels(
 ): ReadonlyArray<ServerProviderModel> {
   const fallbackCapabilities = models.find((model) => model.capabilities)?.capabilities ?? null;
   return providerModelsFromSettings(models, customModels, fallbackCapabilities);
-}
-
-function parseCodexSkillsListResponse(
-  response: CodexSchema.V2SkillsListResponse,
-  cwd: string,
-): ReadonlyArray<ServerProviderSkill> {
-  const matchingEntry = response.data.find((entry) => entry.cwd === cwd);
-  const skills = matchingEntry
-    ? matchingEntry.skills
-    : response.data.flatMap((entry) => entry.skills);
-
-  return skills.map((skill) => {
-    const shortDescription =
-      skill.shortDescription ?? skill.interface?.shortDescription ?? undefined;
-
-    const parsedSkill: Types.Mutable<ServerProviderSkill> = {
-      name: skill.name,
-      path: skill.path,
-      enabled: skill.enabled,
-    };
-
-    if (skill.description) {
-      parsedSkill.description = skill.description;
-    }
-    if (skill.scope) {
-      parsedSkill.scope = skill.scope;
-    }
-    if (skill.interface?.displayName) {
-      parsedSkill.displayName = skill.interface.displayName;
-    }
-    if (shortDescription) {
-      parsedSkill.shortDescription = shortDescription;
-    }
-
-    return parsedSkill;
-  });
 }
 
 const requestAllCodexModels = Effect.fn("requestAllCodexModels")(function* (
@@ -518,6 +500,7 @@ export const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(
 );
 
 const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(function* (input: {
+  readonly probeTimeoutMs: number;
   readonly binaryPath: string;
   readonly homePath?: string;
   readonly launchArgs?: string;
@@ -549,8 +532,8 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   }
 
   // Optional discovery must finish before the outer timeout can discard the account result.
-  const deadlineMs = spawnedAtMs + CODEX_AUTH_PROBE_TIMEOUT_MS - CODEX_DISCOVERY_MARGIN_MS;
-  const [skillsResponse, models, serviceTier, rateLimits] = yield* Effect.all(
+  const deadlineMs = spawnedAtMs + input.probeTimeoutMs - CODEX_DISCOVERY_MARGIN_MS;
+  const [skillsResponse, models, { config, nativeUsage, rateLimits }] = yield* Effect.all(
     [
       withCodexDiscoveryDeadline(client.request("skills/list", { cwds: [input.cwd] }), deadlineMs),
       accountResponse.account?.type === "chatgpt"
@@ -567,46 +550,69 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
         deadlineMs,
         CODEX_CONFIG_PROBE_TIMEOUT_MS,
       ).pipe(
-        Effect.map((response) => response?.config.service_tier ?? undefined),
         Effect.catch(() => Effect.logDebug("Codex config read failed.").pipe(Effect.as(undefined))),
+        Effect.flatMap((config) => {
+          // Only a confirmed native route may probe the login's quota; a verified OpenCodex
+          // route still reads it for the pool's local account, unless that login is an API key.
+          const nativeUsage =
+            !input.skipNativeUsage &&
+            ((input.route?.settings.modelRoute === "opencodex" &&
+              accountResponse.account?.type !== "apiKey") ||
+              (config !== undefined &&
+                codexRoutesSpendNativeQuota(accountResponse, config.config)));
+          // Usage is an enrichment: a failure or a slow answer degrades to "no
+          // usage this probe" rather than costing the account and models.
+          const readUsage: Effect.Effect<CodexRateLimitsProbe | undefined> = !nativeUsage
+            ? Effect.undefined
+            : withCodexDiscoveryDeadline(
+                client.request("account/rateLimits/read", null),
+                deadlineMs,
+              ).pipe(
+                Effect.map((response): CodexRateLimitsProbe =>
+                  response
+                    ? {
+                        snapshot: response.rateLimits,
+                        rateLimitsByLimitId: response.rateLimitsByLimitId,
+                        resetCredits: response.rateLimitResetCredits,
+                        accountId: response.accountId,
+                      }
+                    : { failure: "Codex did not answer the usage request." },
+                ),
+                Effect.catch((error) =>
+                  Effect.logDebug("Codex rate-limit read failed.", { cause: error }).pipe(
+                    Effect.as<CodexRateLimitsProbe>({
+                      failure: codexRateLimitsFailureMessage(error),
+                    }),
+                  ),
+                ),
+              );
+          return readUsage.pipe(
+            Effect.map((rateLimits) => ({
+              config: config?.config,
+              nativeUsage,
+              rateLimits,
+            })),
+          );
+        }),
       ),
-      // Usage is an enrichment: a failure or a slow answer degrades to "no
-      // usage this probe" rather than costing the account and models.
-      input.skipNativeUsage
-        ? // @effect-diagnostics-next-line effectSucceedWithVoid:off - This optional result requires undefined, not the wider void type.
-          Effect.succeed(undefined)
-        : withCodexDiscoveryDeadline(
-            client.request("account/rateLimits/read", null),
-            deadlineMs,
-            RATE_LIMITS_PROBE_TIMEOUT_MS,
-          ).pipe(
-            Effect.map((response): CodexRateLimitsProbe =>
-              response
-                ? {
-                    snapshot: response.rateLimits,
-                    rateLimitsByLimitId: response.rateLimitsByLimitId,
-                    resetCredits: response.rateLimitResetCredits,
-                    accountId: response.accountId,
-                  }
-                : { failure: "Codex did not answer the usage request." },
-            ),
-            Effect.catch((error) =>
-              Effect.logDebug("Codex rate-limit read failed.", { cause: error }).pipe(
-                Effect.as<CodexRateLimitsProbe>({ failure: codexRateLimitsFailureMessage(error) }),
-              ),
-            ),
-          ),
     ],
     { concurrency: "unbounded" },
   );
 
+  const cyberAccess = Option.getOrUndefined(decodeCodexCyberAccessConfig(config));
   return {
     ...(effectiveBaseUrl ? { effectiveBaseUrl } : {}),
     account: accountResponse,
+    nativeUsage,
     ...(rateLimits ? { rateLimits } : {}),
     version,
     models,
-    serviceTier,
+    serviceTier: config?.service_tier ?? undefined,
+    daybreakEnabled: config === undefined ? undefined : cyberAccess?.daybreak === true,
+    // An unread config cannot rule out an API key with the programs turned off.
+    cyberAccessProgramsUnavailable:
+      accountResponse.account?.type === "apiKey" &&
+      (config === undefined || cyberAccess?.features?.api_key_cyber_access_programs === false),
     skills: skillsResponse ? parseCodexSkillsListResponse(skillsResponse, input.cwd) : [],
   } satisfies CodexAppServerProviderSnapshot;
 });
@@ -637,7 +643,12 @@ const probeCodexCliVersion = Effect.fn("probeCodexCliVersion")(
     if (result.code !== 0) return null;
     return CODEX_CLI_VERSION_PATTERN.exec(result.stdout)?.[1] ?? null;
   },
-  Effect.timeoutOption(Duration.millis(DEFAULT_TIMEOUT_MS)),
+  (effect, input) =>
+    effect.pipe(
+      Effect.timeoutOption(
+        resolveProviderProbeTimeoutMs("codex", DEFAULT_TIMEOUT_MS, input.environment),
+      ),
+    ),
   Effect.map(Option.getOrNull),
   // "Not found" is also what a vanished cwd or a missing interpreter gives; only a missing command counts.
   (effect, input) =>
@@ -717,6 +728,7 @@ const makePendingCodexProvider = Effect.fn("CodexProvider.makePendingCodexProvid
 export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(function* (
   codexSettings: CodexSettings,
   probe: (input: {
+    readonly probeTimeoutMs: number;
     readonly binaryPath: string;
     readonly homePath?: string;
     readonly launchArgs?: string;
@@ -826,7 +838,13 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         },
       });
   }
+  const probeTimeoutMs = resolveProviderProbeTimeoutMs(
+    "codex",
+    CODEX_AUTH_PROBE_TIMEOUT_MS,
+    resolvedEnvironment,
+  );
   const probeResult = yield* probe({
+    probeTimeoutMs,
     binaryPath: codexSettings.binaryPath,
     homePath: codexSettings.homePath,
     launchArgs: resolveCodexLaunchArgs(codexSettings.launchArgs, resolvedEnvironment),
@@ -836,7 +854,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     ...(managedAuth ? { skipNativeUsage: true } : {}),
   }).pipe(
     // Process teardown can outlast the work budget without discarding a completed snapshot.
-    Effect.timeoutOption(Duration.millis(CODEX_AUTH_PROBE_TIMEOUT_MS)),
+    Effect.timeoutOption(Duration.millis(probeTimeoutMs)),
     Effect.scoped,
     Effect.result,
   );
@@ -929,8 +947,9 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
           ? expandHomePath(codexSettings.homePath, yield* HostProcess.HomeDirectory)
           : undefined,
       );
+  // Sign-in guidance still applies when Codex itself says it needs an OpenAI login.
   const usageLimits =
-    snapshot.account.account?.type === "apiKey"
+    !snapshot.nativeUsage && !accountStatus.message
       ? makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" })
       : snapshot.rateLimits === undefined || "failure" in snapshot.rateLimits
         ? makeUnavailableUsageLimits({
@@ -950,11 +969,14 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     presentation: CODEX_PRESENTATION,
     enabled: codexSettings.enabled,
     checkedAt,
-    models: applyConfiguredCodexServiceTier(
-      applyPreferredCodexDefaultModel(
-        appendCustomCodexModels(snapshot.models ?? [], codexSettings.customModels),
+    models: applyConfiguredCodexCyberAccess(
+      applyConfiguredCodexServiceTier(
+        applyPreferredCodexDefaultModel(
+          appendCustomCodexModels(snapshot.models ?? [], codexSettings.customModels),
+        ),
+        snapshot.serviceTier,
       ),
-      snapshot.serviceTier,
+      snapshot,
     ),
     skills: snapshot.skills,
     slashCommands: [

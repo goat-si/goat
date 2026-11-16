@@ -12,6 +12,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
+import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 
 const makeTempDir = Effect.fn("test.makeTempDir")(function* (prefix: string) {
   return yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({ prefix });
@@ -44,6 +45,9 @@ const runRecentThreads = (input: {
       AgentSessionScanner.layer.pipe(
         Layer.provide(
           Layer.mergeAll(
+            Layer.mock(ProviderSessionRuntime.ProviderSessionRuntimeRepository)({
+              list: () => Effect.succeed([]),
+            }),
             ServerSettings.layerTest({
               providerInstances: {
                 [ProviderInstanceId.make("claudeAgent")]: {

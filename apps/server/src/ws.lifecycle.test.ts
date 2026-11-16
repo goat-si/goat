@@ -53,6 +53,7 @@ import * as Keybindings from "./keybindings.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as MemoryService from "./memory/MemoryService.ts";
 import * as OtlpEndpointCheck from "./observability/OtlpEndpointCheck.ts";
+import * as SecretCheck from "./secrets/SecretCheck.ts";
 import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
@@ -119,12 +120,20 @@ import { assert, it } from "@effect/vitest";
 import {
   AuthOrchestrationReadScope,
   AuthSessionId,
+  AuthSourceControlWriteScope,
   EnvironmentId,
+  GitCommandError,
+  ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
   WsRpcGroup,
+  type AuthEnvironmentScope,
 } from "@goat/contracts";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
+import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import { Headers } from "effect/http";
 import { RpcGroup, RpcMessage, RpcServer } from "effect/rpc";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
@@ -212,6 +221,7 @@ const layerUnusedLifecycleRpcServices = Layer.mergeAll(
   Layer.mock(OrchestrationEventStore.OrchestrationEventStore)({}),
   Layer.mock(Orchestrator.OrchestratorV2)({}),
   Layer.mock(OtlpEndpointCheck.OtlpEndpointCheck)({}),
+  Layer.mock(SecretCheck.SecretCheck)({}),
   Layer.mock(PairingGrantStore.PairingGrantStore)({}),
   Layer.mock(PortScanner.PortDiscovery)({}),
   Layer.mock(PreviewManager.PreviewManager)({}),
@@ -423,4 +433,179 @@ it.effect.each([
       ),
       Effect.scoped,
     ),
+);
+
+const isGitCommandError = Schema.is(GitCommandError);
+
+// The production RPC layer for one client session, with the services a test drives swapped in.
+const clientRpcLayer = Effect.fn("WsLifecycleTest.clientRpcLayer")(function* <ROut>(
+  scopes: ReadonlyArray<AuthEnvironmentScope>,
+  overrides: Layer.Layer<ROut>,
+) {
+  const services = Layer.mergeAll(
+    layerUnusedLifecycleRpcServices,
+    overrides,
+    Layer.mock(ExternalLauncher.ExternalLauncher)({}),
+    Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+    Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+    Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
+    Layer.mock(DirectEndpoints.DirectEndpoints)({}),
+    Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+    Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: process.cwd() }),
+    Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+    layerLifecycleEnvironment,
+  );
+  return layerWsRpc(
+    {
+      sessionId: AuthSessionId.make("older-client"),
+      subject: "older-client",
+      method: "browser-session-cookie",
+      scopes,
+      principalKind: "person",
+    },
+    {
+      hasHost: Effect.succeed(false),
+      attach: () => Stream.die("unused connection catalog"),
+      respond: () => Effect.die("unused connection catalog"),
+      invoke: () => Effect.die("unused connection catalog"),
+    },
+    { surface: "web" },
+    {},
+    yield* PreviewAutomationBroker.PreviewAutomationBroker,
+    yield* ServerBrowser.ServerBrowser,
+    () => Effect.void,
+  ).pipe(Layer.provide(services));
+});
+
+const removeWorktreeAsClient = Effect.fn("WsLifecycleTest.removeWorktreeAsClient")(function* (
+  path: string,
+) {
+  const removed: Array<string> = [];
+  const rpc = WsRpcGroup.requests.get(WS_METHODS.vcsRemoveWorktree);
+  if (rpc?._tag !== WS_METHODS.vcsRemoveWorktree) {
+    return yield* Effect.die("vcs.removeWorktree is not registered");
+  }
+  const responses = yield* Queue.unbounded<RpcMessage.FromServer<typeof rpc>>();
+  const layer = yield* clientRpcLayer(
+    [AuthSourceControlWriteScope],
+    Layer.mergeAll(
+      Layer.mock(GitWorkflowService.GitWorkflowService)({
+        removeWorktree: (input) => Effect.sync(() => void removed.push(input.path)),
+      }),
+      Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({
+        refreshStatus: () => Effect.interrupt,
+      }),
+    ),
+  );
+  const server = yield* RpcServer.makeNoSerialization(RpcGroup.make(rpc), {
+    ...WS_RPC_SERVER_OPTIONS,
+    onFromServer: (response) => Queue.offer(responses, response).pipe(Effect.asVoid),
+  }).pipe(Effect.provide(layer));
+  // The request an older web or desktop client sends after "Delete the worktree too?".
+  yield* server.write(0, {
+    _tag: "Request",
+    id: RpcMessage.RequestId("remove"),
+    tag: WS_METHODS.vcsRemoveWorktree,
+    payload: { cwd: process.cwd(), path, force: true },
+    headers: Headers.empty,
+  });
+  const response = yield* Queue.take(responses);
+  if (response._tag !== "Exit") return yield* Effect.die("vcs.removeWorktree did not finish");
+  return { exit: response.exit, removed };
+});
+
+const readWorktreeThreadsAsClient = Effect.fn("WsLifecycleTest.readWorktreeThreadsAsClient")(
+  function* (worktreePath: string) {
+    const rpc = WsRpcGroup.requests.get(ORCHESTRATION_V2_WS_METHODS.getWorktreeThreadIds);
+    if (rpc?._tag !== ORCHESTRATION_V2_WS_METHODS.getWorktreeThreadIds) {
+      return yield* Effect.die("orchestration.getWorktreeThreadIds is not registered");
+    }
+    const responses = yield* Queue.unbounded<RpcMessage.FromServer<typeof rpc>>();
+    const layer = yield* clientRpcLayer(
+      [AuthOrchestrationReadScope],
+      Layer.mergeAll(
+        Layer.mock(ThreadManagement.ThreadManagementService)({
+          readShellSnapshot: () =>
+            Effect.succeed(
+              Effect.succeed({
+                schemaVersion: 1,
+                snapshotSequence: 0,
+                threads: [],
+                archivedThreads: [],
+              }),
+            ),
+        }),
+        Layer.mock(OrchestrationEventStore.OrchestrationEventStore)({
+          latestApplicationSequence: Effect.succeed(0),
+        }),
+      ),
+    );
+    const server = yield* RpcServer.makeNoSerialization(RpcGroup.make(rpc), {
+      ...WS_RPC_SERVER_OPTIONS,
+      onFromServer: (response) => Queue.offer(responses, response).pipe(Effect.asVoid),
+    }).pipe(Effect.provide(layer));
+    yield* server.write(0, {
+      _tag: "Request",
+      id: RpcMessage.RequestId("occupants"),
+      tag: ORCHESTRATION_V2_WS_METHODS.getWorktreeThreadIds,
+      payload: { worktreePath },
+      headers: Headers.empty,
+    });
+    const response = yield* Queue.take(responses);
+    if (response._tag !== "Exit") return yield* Effect.die("getWorktreeThreadIds did not finish");
+    return yield* response.exit;
+  },
+);
+
+const layerClientRpcSources = (scope: AuthEnvironmentScope) =>
+  Layer.mergeAll(
+    Layer.fresh(layerLifecycleSources),
+    ServerLifecycleEvents.layer,
+    RpcAuthorization.layer([scope]),
+    Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
+    Layer.mock(ServerBrowser.ServerBrowser)({}),
+  );
+const layerRemoveWorktreeSources = layerClientRpcSources(AuthSourceControlWriteScope);
+
+it.effect(
+  "vcs.removeWorktree refuses a folder outside GOAT's worktrees folder from any client, older ones included",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const userCheckout = yield* fs.makeTempDirectoryScoped({ prefix: "user-checkout-" });
+      const { exit, removed } = yield* removeWorktreeAsClient(userCheckout);
+      assert.deepEqual(removed, []);
+      assert.isTrue(Exit.isFailure(exit));
+      if (!Exit.isFailure(exit)) return;
+      const error = Cause.squash(exit.cause);
+      if (!isGitCommandError(error)) return assert.fail(String(error));
+      assert.include(error.message, "outside GOAT's worktrees folder");
+    }).pipe(Effect.provide(layerRemoveWorktreeSources), Effect.scoped),
+);
+
+it.effect("vcs.removeWorktree still removes a worktree GOAT placed in its worktrees folder", () =>
+  Effect.gen(function* () {
+    const config = yield* ServerConfigModule.ServerConfig;
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory(config.worktreesDir, { recursive: true });
+    const managed = (yield* fs.realPath(config.worktreesDir)) + "/repo/feature";
+    const { exit, removed } = yield* removeWorktreeAsClient(managed);
+    assert.isTrue(Exit.isSuccess(exit));
+    assert.deepEqual(removed, [managed]);
+  }).pipe(Effect.provide(layerRemoveWorktreeSources), Effect.scoped),
+);
+
+it.effect("getWorktreeThreadIds tells clients whether GOAT made the worktree", () =>
+  Effect.gen(function* () {
+    const config = yield* ServerConfigModule.ServerConfig;
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory(config.worktreesDir, { recursive: true });
+    const managed = (yield* fs.realPath(config.worktreesDir)) + "/repo/feature";
+    const userCheckout = yield* fs.makeTempDirectoryScoped({ prefix: "user-checkout-" });
+    assert.deepEqual(yield* readWorktreeThreadsAsClient(managed), { threadIds: [], managed: true });
+    assert.deepEqual(yield* readWorktreeThreadsAsClient(userCheckout), {
+      threadIds: [],
+      managed: false,
+    });
+  }).pipe(Effect.provide(layerClientRpcSources(AuthOrchestrationReadScope)), Effect.scoped),
 );

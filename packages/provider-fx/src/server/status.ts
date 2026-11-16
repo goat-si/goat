@@ -31,6 +31,7 @@ import {
   providerModelsFromSettings,
   type ServerProviderDraft,
   spawnAndCollect,
+  resolveProviderProbeTimeoutMs,
 } from "@goat/provider-core/server/snapshotProbe";
 
 const FX_PRESENTATION = {
@@ -173,7 +174,9 @@ export const checkFxProviderStatus = Effect.fn("checkFxProviderStatus")(function
   const spawnCwd = safeProcessCwd();
   const probeEnvironment = providerProbeEnvironment(environment);
   const versionResult = yield* runFxCli(settings, ["--version"], probeEnvironment, spawnCwd).pipe(
-    Effect.timeoutOption(VERSION_PROBE_TIMEOUT_MS),
+    Effect.timeoutOption(
+      resolveProviderProbeTimeoutMs("fx", VERSION_PROBE_TIMEOUT_MS, environment),
+    ),
     Effect.result,
   );
   if (Result.isFailure(versionResult) || Option.isNone(versionResult.success)) {
@@ -212,7 +215,7 @@ export const checkFxProviderStatus = Effect.fn("checkFxProviderStatus")(function
 
   const read = (args: ReadonlyArray<string>) =>
     runFxCli(settings, args, probeEnvironment).pipe(
-      Effect.timeoutOption(AUTH_PROBE_TIMEOUT_MS),
+      Effect.timeoutOption(resolveProviderProbeTimeoutMs("fx", AUTH_PROBE_TIMEOUT_MS, environment)),
       Effect.map(Option.filter((output) => output.code === 0)),
       Effect.map(Option.map((output) => output.stdout)),
       Effect.orElseSucceed(() => Option.none<string>()),

@@ -1,4 +1,10 @@
 import { assert, it } from "@effect/vitest";
+import {
+  DATABASE_MIGRATION_PROGRESS_MESSAGE,
+  DATABASE_MIGRATIONS_FINISHED_MESSAGE,
+  DATABASE_MIGRATIONS_STARTED_MESSAGE,
+} from "@goat/shared/databaseMigrationLog";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -71,6 +77,95 @@ export function registerStartupProgressTests({
         assert.equal(yield* Queue.size(reports), 0);
       }),
     ),
+  );
+  it.effect.each(["finished", "ready"] as const)(
+    "a backend upgrading its database waits past both startup budgets until %s",
+    (end) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const chunks = yield* Queue.unbounded<Uint8Array, Cause.Done>();
+          const consumed = yield* Queue.unbounded<void>();
+          const reports = yield* Queue.unbounded<string>();
+          const probed = yield* Deferred.make<void>();
+          const serving = yield* Deferred.make<void>();
+          const ready = yield* Deferred.make<void>();
+          const spawnerLayer = Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() =>
+              Effect.gen(function* () {
+                const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+                yield* Scope.addFinalizer(
+                  yield* Scope.Scope,
+                  Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0)).pipe(Effect.asVoid),
+                );
+                return makeProcess({
+                  stderr: Stream.fromQueue(chunks),
+                  exitCode: Deferred.await(exit),
+                });
+              }),
+            ),
+          );
+          const httpClientLayer = Layer.succeed(
+            HttpClient.HttpClient,
+            HttpClient.make((request) =>
+              Deferred.succeed(probed, undefined).pipe(
+                Effect.andThen(Deferred.await(serving)),
+                Effect.as(HttpClientResponse.fromWeb(request, new Response(null, { status: 200 }))),
+              ),
+            ),
+          );
+          const instance = yield* makeTestInstance({
+            spawnerLayer,
+            httpClientLayer,
+            onReady: Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+            onStartupFailure: (failure) => Queue.offer(reports, failure.reason).pipe(Effect.asVoid),
+            backendOutputLog: {
+              writeOutputChunk: () => Queue.offer(consumed, undefined).pipe(Effect.asVoid),
+            },
+          });
+          const print = (text: string) =>
+            Queue.offer(chunks, new TextEncoder().encode(text)).pipe(
+              Effect.andThen(Queue.take(consumed)),
+            );
+          yield* instance.start;
+          yield* Deferred.await(probed);
+          // Enough progress lines that the start line scrolls out of the output tail.
+          yield* print(
+            `INFO ${DATABASE_MIGRATIONS_STARTED_MESSAGE}\n` +
+              Array.from(
+                { length: 80 },
+                (_, index) =>
+                  `INFO ${DATABASE_MIGRATION_PROGRESS_MESSAGE} migration=${index}_Migration progress="${index + 1} of 80"\n`,
+              ).join(""),
+          );
+          // One silent index build that outlasts the stall budget and the ten minute ceiling.
+          yield* TestClock.adjust("15 minutes");
+          const duringUpgrade = yield* Queue.size(reports);
+          if (end === "ready") {
+            yield* Deferred.succeed(serving, undefined);
+            yield* TestClock.adjust("1 second");
+            yield* Deferred.await(ready);
+            yield* TestClock.adjust("15 minutes");
+            const afterUpgrade = yield* Queue.size(reports);
+            yield* Queue.end(chunks);
+            return { duringUpgrade, afterUpgrade };
+          }
+          yield* print(`INFO ${DATABASE_MIGRATIONS_FINISHED_MESSAGE}\n`);
+          yield* TestClock.adjust("60 seconds");
+          const afterUpgrade = yield* Queue.take(reports);
+          yield* Queue.end(chunks);
+          return { duringUpgrade, afterUpgrade };
+        }),
+      ).pipe(
+        // Asserted after the scope closes: a throw inside it stalls teardown on the test clock.
+        Effect.map(({ duringUpgrade, afterUpgrade }) => {
+          assert.equal(duringUpgrade, 0);
+          assert.equal(
+            afterUpgrade,
+            end === "ready" ? 0 : "The server printed nothing for 60 seconds.",
+          );
+        }),
+      ),
   );
   it.effect.each(["ready", "stop"] as const)(
     "startup failure cannot overwrite %s while its snapshot is pending",

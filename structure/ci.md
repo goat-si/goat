@@ -54,8 +54,13 @@ The server suite runs one file at a time, so its selected tests stay in `test-ch
 they fit one six-minute shard. More run as `test-server related` shards, one to four, or as the
 full suite when they carry half of its estimated time: one job of 248 server files hit the
 60-minute job limit (#1928).
-Documentation alone runs only `check`, and a change that selects no tests skips `test-changed`. The
-full suite runs on request: the `ci:full` label, or a manual run of the branch.
+Documentation alone runs only `check`, and a change that selects no tests skips `test-changed`. A
+selection whose file list passes 100 KB runs the full suite instead: `test-changed` receives the
+list in one environment string, which Linux caps at 128 KiB, and
+`packages/shared/src/testing/providerEnv.ts` alone selects every test file. `test-changed` then
+keeps the selected tests that no suite of the matrix runs: those under `scripts` and
+`.github/scripts`, and those of a package without a test script.
+The full suite otherwise runs on request: the `ci:full` label, or a manual run of the branch.
 `goat-scope` always runs `node scripts/goat-rename.ts --check` before task selection, so new upstream product names fail `goat-ci-result`.
 
 The `ci:affected` label replaces the quick run with the tasks the changed files reach through the

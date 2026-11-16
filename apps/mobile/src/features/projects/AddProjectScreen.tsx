@@ -1,6 +1,4 @@
 import { resolvePastedPath } from "@goat/shared/path";
-import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import * as Dialog from "../../components/ui/Dialog";
 import { useConnectHubEntryLabel } from "../connection/useConnectHubEntryLabel";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
@@ -13,9 +11,7 @@ import {
   addProjectRemoteSourcePathHint,
   addProjectRemoteSourceProvider,
   buildAddProjectRemoteSourceReadiness,
-  buildProjectCreateCommand,
   canCreateProjectInEnvironment,
-  findExistingAddProject,
   getCloneDirectoryPath,
   getCloneDirectoryName,
   getDefaultCloneUrl,
@@ -31,10 +27,7 @@ import {
   sortAddProjectProviderSources,
   type AddProjectRemoteSource,
 } from "@goat/client-runtime/operations/projects";
-import {
-  connectionStatusText,
-  type EnvironmentConnectionPhase,
-} from "@goat/client-runtime/connection";
+import { connectionStatusText } from "@goat/client-runtime/connection";
 import {
   filterFilesystemBrowseEntries,
   getFilesystemBrowsePath,
@@ -44,19 +37,12 @@ import { inferProjectTitleFromPath, isWindowsPlatform } from "@goat/client-runti
 import {
   AuthOrchestrationOperateScope,
   AuthSourceControlWriteScope,
-  CommandId,
   type EnvironmentId,
-  type EnvironmentMachineKind,
   ProjectId,
   resolveEnvironmentMachineKind,
   SourceControlProviderKind,
 } from "@goat/contracts";
-import {
-  StackActions,
-  useNavigation,
-  type NavigationState,
-  type ParamListBase,
-} from "@react-navigation/native";
+import { StackActions, useNavigation } from "@react-navigation/native";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { useRef, useState, type ReactNode } from "react";
 import { Platform, Pressable, View } from "react-native";
@@ -66,16 +52,11 @@ import * as Cause from "effect/Cause";
 import * as Order from "effect/Order";
 import { AsyncResult } from "effect/reactivity";
 import { cn } from "../../lib/cn";
-import { useProjects, useServerConfigs, waitForProject } from "../../state/entities";
+import { useServerConfigs, waitForProject } from "../../state/entities";
 import { filesystemEnvironment } from "../../state/filesystem";
 import { projectEnvironment } from "../../state/projects";
 import { useEnvironmentQuery } from "../../state/query";
-import {
-  environmentSession,
-  readEnvironmentProxiedByHub,
-  readEnvironmentScope,
-  useEnvironmentScope,
-} from "../../state/session";
+import { environmentSession, readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { useEnvironmentPresentation } from "../../state/presentation";
 import { sourceControlEnvironment } from "../../state/sourceControl";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
@@ -97,24 +78,13 @@ import {
   resolveAddProjectEnvironment,
 } from "./AddProjectScreen.logic";
 import {
-  createNewTaskDraft,
-  setComposerDraftText,
-  waitForComposerDraftsLoaded,
-} from "../../state/use-composer-drafts";
-
-interface EnvironmentOption {
-  readonly environmentId: EnvironmentId;
-  readonly label: string;
-  readonly platform: string;
-  readonly machine: EnvironmentMachineKind;
-  readonly baseDirectory: string | null;
-  readonly newProjectsRoot: string | null;
-  readonly connectionState: EnvironmentConnectionPhase;
-  readonly connectionError: string | null;
-  readonly connectionErrorTraceId: string | null;
-  readonly supportsCloneTracking: boolean;
-  readonly ghqCloneLayout: boolean;
-}
+  draftWithPrompt,
+  getActiveRoute,
+  useCreateProject,
+  useOpenNewTaskDraft,
+  useOpenExistingProject,
+  type EnvironmentOption,
+} from "./use-create-project";
 
 const environmentOptionOrder = Order.mapInput(
   Order.Struct({
@@ -571,138 +541,6 @@ export function AddProjectSourceScreen(props: { readonly environmentId?: string 
       ) : null}
     </AddProjectShell>
   );
-}
-
-function getActiveRoute(navigation: {
-  getState: () => NavigationState<ParamListBase> | undefined;
-}) {
-  const state = navigation.getState();
-  return state?.routes[state.index];
-}
-
-function useOpenNewTaskDraft() {
-  const navigation = useNavigation<NativeStackNavigationProp<ReactNavigation.RootParamList>>();
-  const selectDetail = useSelectWorkspaceDetail();
-  return (
-    params: {
-      environmentId: EnvironmentId;
-      projectId: ProjectId;
-      title: string;
-      cloning?: "1";
-      draftId?: string;
-    },
-    originRoute: NavigationState<ParamListBase>["routes"][number] | undefined,
-  ) => {
-    const activeRoute = getActiveRoute(navigation);
-    // A warm link can change the task without replacing its native route key.
-    if (
-      !originRoute ||
-      activeRoute?.key !== originRoute.key ||
-      activeRoute.name !== originRoute.name ||
-      activeRoute.params !== originRoute.params
-    )
-      return;
-    selectDetail({ name: "Thread", params: { draft: params } });
-  };
-}
-
-async function draftWithPrompt(
-  environmentId: EnvironmentId,
-  projectId: ProjectId,
-  prompt: string,
-): Promise<string> {
-  await waitForComposerDraftsLoaded();
-  const draftId = createNewTaskDraft({ environmentId, projectId });
-  setComposerDraftText(draftId, prompt);
-  return draftId;
-}
-
-function useCreateProject(environment: EnvironmentOption | null) {
-  const openNewTaskDraft = useOpenNewTaskDraft();
-  const navigation = useNavigation();
-  const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
-  const updateProject = useAtomCommand(projectEnvironment.update, {
-    label: "project unarchive",
-  });
-  const projects = useProjects();
-  return async (workspaceRoot: string, originRoute = getActiveRoute(navigation)) => {
-    if (
-      !environment ||
-      !canCreateProjectInEnvironment(environment.connectionState) ||
-      !readEnvironmentScope(environment.environmentId, AuthOrchestrationOperateScope)
-    ) {
-      Dialog.alert(
-        "Project not added",
-        `This connection cannot add projects right now. Any existing files remain at ${workspaceRoot}.`,
-      );
-      return;
-    }
-    const existing = findExistingAddProject({
-      projects,
-      environmentId: environment.environmentId,
-      path: workspaceRoot,
-    });
-    if (existing) {
-      // Adding an archived project's folder again brings the project back.
-      const unarchived =
-        existing.archivedAt == null ||
-        (
-          await updateProject({
-            environmentId: existing.environmentId,
-            input: { projectId: existing.id, archived: false },
-          })
-        )._tag === "Success";
-      Dialog.alert(
-        "Project already exists",
-        unarchived ? existing.title : `${existing.title} is still archived. Try again later.`,
-      );
-      openNewTaskDraft(
-        {
-          environmentId: existing.environmentId,
-          projectId: existing.id,
-          title: existing.title,
-        },
-        originRoute,
-      );
-      return;
-    }
-    const projectId = ProjectId.make(uuidv4());
-    const command = buildProjectCreateCommand({
-      commandId: CommandId.make(uuidv4()),
-      projectId,
-      workspaceRoot,
-      proxiedByHub: readEnvironmentProxiedByHub(environment.environmentId),
-    });
-    const result = await createProject({
-      environmentId: environment.environmentId,
-      input: command,
-    });
-    if (AsyncResult.isFailure(result)) {
-      return result;
-    }
-    // A successful command can precede its project in the client store. The
-    // draft treats a missing project as a reason to return to the chooser.
-    const project = await waitForProject(
-      { environmentId: environment.environmentId, projectId },
-      15_000,
-    );
-    if (project === null) {
-      Dialog.alert(
-        "Project added",
-        "The project was created but has not reached this device yet. It will appear in the project list once the connection catches up.",
-      );
-      return result;
-    }
-    openNewTaskDraft(
-      {
-        environmentId: environment.environmentId,
-        projectId,
-        title: inferProjectTitleFromPath(workspaceRoot),
-      },
-      originRoute,
-    );
-    return result;
-  };
 }
 
 function useEnvironmentFromParam(
@@ -1178,8 +1016,9 @@ export function AddProjectLocalFolderScreen(props: { readonly environmentId?: st
     environment?.environmentId ?? null,
     AuthOrchestrationOperateScope,
   );
+  const navigation = useNavigation();
   const createProject = useCreateProject(environment);
-  const { isBrowseNavigating, navigateToBrowsePath, pathInput, setPathInput } =
+  const { isBrowseNavigating, navigateToBrowsePath, pathInput, setPathInput, resolveHomePath } =
     useBrowsePathInput(environment);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1196,7 +1035,11 @@ export function AddProjectLocalFolderScreen(props: { readonly environmentId?: st
       return;
     }
     setIsSubmitting(true);
-    const result = await createProject(resolved.path);
+    const originRoute = getActiveRoute(navigation);
+    const lookupPath = resolved.path.startsWith("~")
+      ? await resolveHomePath(resolved.path)
+      : resolved.path;
+    const result = await createProject(resolved.path, originRoute, lookupPath);
     if (result && AsyncResult.isFailure(result)) {
       setError(errorMessage(Cause.squash(result.cause)));
     }
@@ -1266,11 +1109,9 @@ export function AddProjectDestinationScreen(props: {
       ? getCloneDirectoryPath(remoteUrl, true, repositoryName)
       : null;
   const cloneDirectoryName = ghqDirectoryPath?.split("/").at(-1) ?? repositoryName;
-  const { isBrowseNavigating, navigateToBrowsePath, pathInput, setPathInput } = useBrowsePathInput(
-    environment,
-    cloneDirectoryName,
-    ghqDirectoryPath ?? repositoryName,
-  );
+  const { isBrowseNavigating, navigateToBrowsePath, pathInput, setPathInput, resolveHomePath } =
+    useBrowsePathInput(environment, cloneDirectoryName, ghqDirectoryPath ?? repositoryName);
+  const openExistingProject = useOpenExistingProject(environment);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submitPath = async () => {
@@ -1296,13 +1137,21 @@ export function AddProjectDestinationScreen(props: {
     }
     const originRoute = getActiveRoute(navigation);
     setIsSubmitting(true);
+    if (
+      await openExistingProject(await resolveHomePath(resolved.path), originRoute, {
+        remoteUrl,
+        prompt: prompt ?? null,
+      })
+    ) {
+      setIsSubmitting(false);
+      return;
+    }
     if (environment.supportsCloneTracking) {
-      const projectId = ProjectId.make(uuidv4());
       const title = inferProjectTitleFromPath(resolved.path);
       const startResult = await startProjectClone({
         environmentId: environment.environmentId,
         input: {
-          projectId,
+          projectId: ProjectId.make(uuidv4()),
           title,
           createdAt: new Date().toISOString(),
           remoteUrl,
@@ -1312,6 +1161,7 @@ export function AddProjectDestinationScreen(props: {
       if (AsyncResult.isFailure(startResult)) {
         setError(errorMessage(Cause.squash(startResult.cause)));
       } else {
+        const { projectId } = startResult.value;
         // Wait for the create event; the client store otherwise falls back to the project picker and loses clone controls.
         const project = await waitForProject(
           { environmentId: environment.environmentId, projectId },

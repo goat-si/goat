@@ -373,9 +373,13 @@ the published task result. Remote tasks expose summary-only results; a pending
 For local tasks, stops the child thread with the internal `thread.stop` command, then stops every
 task the child delegated, and disposes automatic parent delivery. Like a user Stop,
 `thread.stop` interrupts the running turn, holds queued turns, and ends pull request
-watches. A nonterminal task with no interruptible run is rejected. A terminal task
-returns its existing status, and its child thread still stops, including later
-runs and watch wakes. Published task results remain available. It accepts an
+watches. The task's own queued turn is cancelled even if Stop already held it;
+other queued turns remain held for Resume. A nonterminal task is rejected if it has
+no interruptible run or queued turn of its own and is not waiting for delegated
+work. A terminal task returns its existing status, and its child thread still stops,
+including later runs and watch wakes. A follow-up that lost its child run but still
+appears active on the parent is cancelled there and reported as `cancelled`.
+Published task results remain available. It accepts an
 optional cancellation reason. For remote tasks it requests an interrupt and
 returns `cancel_requested` until the remote run stops; parent Stop does not send
 that interrupt.
@@ -543,8 +547,21 @@ the environment by thread ID. A deleted thread returns `thread_not_found`. The
 default `messages` view returns user messages, assistant
 messages, and proposed plans. The `activity` view also returns summarized tool,
 reasoning, checkpoint, handoff, and runtime-request items. Large item text is
-bounded and reports whether it was truncated. `afterPosition` and
-`nextPosition` support incremental reads.
+bounded and reports whether it was truncated. An agent in a GOAT thread that
+reads without a cursor gets the newest items, and `beforePosition=earlierPosition`
+reads older ones. Client callers (the CLI, linked environments, outside MCP
+clients) start at the oldest item instead, because the CLI and linked
+environments on older versions read that way and follow only `hasMore`. A read
+forwarded to another host is such a client read, so it drops `afterPosition=-1`,
+which older hosts reject, and sends `beforePosition` only as an optional argument.
+`afterPosition=-1` starts any read at the oldest item, and
+`afterPosition=nextPosition` reads newer items. The server stops adding items
+once the result's JSON reaches about 30,000 bytes (bytes, since CJK text runs near
+one token per character) and reports the rest through `earlierPosition` or
+`hasMore`. An item too large for the budget on its own is cut and marked with
+`textTruncated` and `nextTextOffset`; `itemId` with `textOffset` reads the rest.
+Claude Code saves MCP results over its token limit to a file instead of showing
+them, so a read has to fit whatever `limit` an agent asks for.
 
 Thread and message results include required `createdBy` and `creationSource`
 provenance. MCP-created threads and user-role messages use `createdBy: "agent"`

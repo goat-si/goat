@@ -34,7 +34,6 @@ export function hasNativeGoals(
   return (
     session.driver === "codex" ||
     session.driver === "claudeAgent" ||
-    (session.driver === "opencode" &&
-      session.providerSession.capabilities.turns.supportsNativeGoals === true)
+    session.providerSession.capabilities.turns.supportsNativeGoals === true
   );
 }
