@@ -100,6 +100,11 @@ export { ThreadManagementBackgroundWaitError };
  * "steer_when_ready" is how another thread's agent talks to a thread: like steering, whatever
  * mode it asked for. It is server-internal and never crosses the wire.
  */
+type OrchestrationV2DispatchModeType = Extract<
+  OrchestrationV2Command,
+  { readonly type: "message.dispatch" }
+>["dispatchMode"]["type"];
+
 export type ThreadManagementSendMode = "auto" | "queue" | "steer" | "restart" | "steer_when_ready";
 
 /**
@@ -216,6 +221,12 @@ export interface ThreadManagementServiceShape {
   ) => Effect.Effect<void, LegacyV1ThreadImporter.LegacyV1ThreadImportError>;
   readonly dispatch: (
     command: OrchestrationV2ServerCommand,
+    /**
+     * Set by the entry points of a person or an agent: refuse a message to a thread whose missing
+     * worktree GOAT cannot restore. Server-originated sends omit it: they are stored and their
+     * turn fails where a person sees it. Not part of the command, so no client can set it.
+     */
+    options?: { readonly refuseUnrestorableWorktree?: boolean },
   ) => Effect.Effect<
     Orchestrator.OrchestratorV2DispatchResult,
     | Orchestrator.OrchestratorV2Error
@@ -715,6 +726,22 @@ const make = Effect.gen(function* () {
     );
 
   // Turn start would fail after the send reported success; a replay keeps its first answer.
+  const assertSendWorkspace = Effect.fn("ThreadManagementService.assertSendWorkspace")(
+    function* (input: {
+      readonly threadId: ThreadId;
+      readonly commandId: CommandId;
+      readonly dispatchMode: OrchestrationV2DispatchModeType;
+      readonly instanceId: ProviderInstanceId | undefined;
+    }) {
+      // A live steer starts no turn, so it needs no workspace.
+      if (Option.isNone(worktreeSendCheck) || input.dispatchMode === "steer_active") return;
+      const { thread } = yield* orchestrator.getThreadRecords(input.threadId, []);
+      yield* assertWorktreeRestorable(input.commandId, {
+        ...thread,
+        instanceId: input.instanceId ?? thread.modelSelection.instanceId,
+      });
+    },
+  );
   const assertWorktreeRestorable = Effect.fn("ThreadManagementService.assertWorktreeRestorable")(
     function* (commandId: CommandId, thread: WorktreeSendCheck.SendTarget) {
       if (Option.isNone(worktreeSendCheck)) return;
@@ -866,14 +893,7 @@ const make = Effect.gen(function* () {
               projectId: projection.thread.projectId,
               commandId: command.commandId,
               instanceId: (command.modelSelection ?? projection.thread.modelSelection).instanceId,
-            }).pipe(
-              Effect.andThen(
-                // A live steer starts no turn, so it needs no workspace.
-                command.dispatchMode.type === "steer_active"
-                  ? Effect.void
-                  : assertWorktreeRestorable(command.commandId, projection.thread),
-              ),
-            ),
+            }),
           ),
         );
       case "delegated_task.request":
@@ -907,9 +927,19 @@ const make = Effect.gen(function* () {
     }
   };
 
-  const dispatch: ThreadManagementServiceShape["dispatch"] = (command) =>
+  const dispatch: ThreadManagementServiceShape["dispatch"] = (command, options) =>
     ensureCommandTranscripts(command).pipe(
       Effect.andThen(assertDispatchTargetEnabled(command)),
+      Effect.andThen(
+        options?.refuseUnrestorableWorktree === true && command.type === "message.dispatch"
+          ? assertSendWorkspace({
+              threadId: command.threadId,
+              commandId: command.commandId,
+              dispatchMode: command.dispatchMode.type,
+              instanceId: command.modelSelection?.instanceId,
+            })
+          : Effect.void,
+      ),
       Effect.andThen(orchestrator.dispatch(command)),
     );
 
@@ -1086,23 +1116,28 @@ const make = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       const dispatchMode = yield* unattendedSteeringMode(input, requestedMode);
-      const dispatched = yield* dispatch({
-        type: "message.dispatch",
-        memoryGrantCeiling: input.memoryGrantCeiling ?? "none",
-        commandId,
-        threadId: input.threadId,
-        messageId: input.messageId,
-        ...(input.scheduledTaskId === undefined ? {} : { scheduledTaskId: input.scheduledTaskId }),
-        ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
-        text: input.text,
-        ...(input.context === undefined ? {} : { context: input.context }),
-        attachments: input.attachments,
-        ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
-        dispatchMode,
-        ...(input.mode === "auto" ? { deliveryIntent: "auto" } : {}),
-        createdBy: input.createdBy,
-        creationSource: input.creationSource,
-      });
+      const dispatched = yield* dispatch(
+        {
+          type: "message.dispatch",
+          memoryGrantCeiling: input.memoryGrantCeiling ?? "none",
+          commandId,
+          threadId: input.threadId,
+          messageId: input.messageId,
+          ...(input.scheduledTaskId === undefined
+            ? {}
+            : { scheduledTaskId: input.scheduledTaskId }),
+          ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
+          text: input.text,
+          ...(input.context === undefined ? {} : { context: input.context }),
+          attachments: input.attachments,
+          ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+          dispatchMode,
+          ...(input.mode === "auto" ? { deliveryIntent: "auto" } : {}),
+          createdBy: input.createdBy,
+          creationSource: input.creationSource,
+        },
+        { refuseUnrestorableWorktree: input.refuseUnrestorableWorktree === true },
+      );
       return yield* readDelivery(
         input,
         dispatched,
