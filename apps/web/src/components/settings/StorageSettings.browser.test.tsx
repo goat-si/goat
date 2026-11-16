@@ -5,6 +5,7 @@ import {
   type StorageCleanupReport,
   WORKTREE_CLEANUP_OFF,
 } from "@goat/contracts";
+import { AsyncResult } from "effect/reactivity";
 import { type ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -122,8 +123,9 @@ function setup() {
   };
   state.report = null;
   state.run.mockReset();
-  state.respond.mockReset();
-  state.update.mockReset();
+  // Commands resolve to a result, and their callers read it.
+  state.respond.mockReset().mockResolvedValue(AsyncResult.success(null));
+  state.update.mockReset().mockResolvedValue(AsyncResult.success(null));
 }
 
 const panel = () => (
