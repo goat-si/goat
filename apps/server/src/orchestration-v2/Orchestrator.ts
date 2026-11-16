@@ -6,6 +6,7 @@ import { makeReleaseFinishedDelegate } from "./goat/ReleaseFinishedDelegate.ts";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import { runsBehindSteerFollowUp, steerFollowUpQueuePosition } from "./steerFollowUpQueue.ts";
 import { pendingThreadTitleGenerationEffect } from "./threadTitleGenerationEffect.ts";
+import { WORKSPACE_PREPARATION_INPUT, withoutPreparationResult } from "./preparationItem.ts";
 import { threadHasUnfinishedWork } from "./threadUnfinishedWork.ts";
 import { usageLimitHoldsQueue, usageLimitHoldsQueuedRuns } from "./usageLimitQueue.ts";
 import { wakeWorkStartedAt } from "./wakeWorkStartedAt.ts";
@@ -588,16 +589,8 @@ export { isSeparateTurnCommand } from "./SeparateTurnCommand.ts";
 
 const threadPullRequestLinksEqual = Schema.toEquivalence(Schema.NullOr(ThreadLinkedPullRequest));
 
-const WORKSPACE_PREPARATION_INPUT = "Preparing workspace";
 const RUNTIME_REQUEST_DELIVERY_FAILED_MESSAGE =
   "GOAT could not confirm that your answer reached the agent. If the run stays stuck, stop it and try again.";
-
-function withoutPreparationResult(
-  item: Extract<OrchestrationV2TurnItem, { readonly type: "command_execution" }>,
-) {
-  const { output: _output, exitCode: _exitCode, outputIndicatesFailure: _failure, ...rest } = item;
-  return rest;
-}
 
 function nextQueuedRun(
   projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages">,
