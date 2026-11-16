@@ -3372,7 +3372,7 @@ function ThreadFeedLoadEarlierControl(props: ThreadFeedHistoryControls) {
         </View>
       ) : null}
       {/* Mounted with the control so TalkBack announces an error line when it appears. */}
-      <View accessibilityLiveRegion="polite">
+      <View collapsable={false} accessibilityLiveRegion="polite">
         {props.error !== null ? (
           <Text
             className={props.hasMoreHistory ? "mt-1.5 text-center text-xs" : "text-center text-xs"}
