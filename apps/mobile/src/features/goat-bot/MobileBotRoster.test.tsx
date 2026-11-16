@@ -3,6 +3,36 @@ import { createRoot } from "react-dom/client";
 import type { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
+// React DOM's development refresh entry points, the ones Fast Refresh's runtime calls; it must
+// exist before react-dom loads.
+const devtools = vi.hoisted(() => {
+  type Family = { current: unknown };
+  type Renderer = {
+    setRefreshHandler: (handler: ((type: unknown) => Family | undefined) | null) => void;
+    scheduleRefresh: (
+      root: unknown,
+      update: { staleFamilies: Set<Family>; updatedFamilies: Set<Family> },
+    ) => void;
+  };
+  const hook = {
+    renderer: null as Renderer | null,
+    root: null as unknown,
+    supportsFiber: true,
+    inject(renderer: Renderer) {
+      hook.renderer = renderer;
+      return 1;
+    },
+    onCommitFiberRoot(_rendererId: number, root: unknown) {
+      hook.root = root;
+    },
+    onCommitFiberUnmount() {},
+    onPostCommitFiberRoot() {},
+    checkDCE() {},
+  };
+  Object.assign(globalThis, { __REACT_DEVTOOLS_GLOBAL_HOOK__: hook });
+  return hook;
+});
+
 const state = vi.hoisted(() => ({
   alert: vi.fn(),
   members: null as null | Record<string, unknown>,
@@ -611,5 +641,35 @@ it("shows no created bot's row once its computer may no longer be read", async (
   } finally {
     readable.refused.delete(environmentId);
     await view.unmount();
+  }
+});
+it("a menu choice still acts after a development reload re-runs the roster's effects (#3501)", async () => {
+  state.alert.mockClear();
+  state.manage.hide.mockClear();
+  const { renderer } = devtools;
+  if (!renderer) throw new Error("react-dom loaded before the test DevTools hook");
+  const root = createRoot(document.createElement("div"));
+  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
+  // A new version of the same component, as Fast Refresh swaps in an edited module.
+  const Reloaded = (props: Parameters<typeof MobileBotRoster>[0]) => MobileBotRoster(props);
+  const family = { current: Reloaded };
+  renderer.setRefreshHandler((type) =>
+    type === MobileBotRoster || type === Reloaded ? family : undefined,
+  );
+  try {
+    await act(async () =>
+      renderer.scheduleRefresh(devtools.root, {
+        staleFamilies: new Set(),
+        updatedFamilies: new Set([family]),
+      }),
+    );
+    const members = state.members as { onLongPressBot: (entry: object) => void };
+    await act(async () => members.onLongPressBot({ kind: "member", profile: member }));
+    expect(state.alert).toHaveBeenCalledOnce();
+    await act(async () => choose("Hide"));
+    expect(state.manage.hide).toHaveBeenCalledWith(member, true);
+  } finally {
+    renderer.setRefreshHandler(null);
+    await act(async () => root.unmount());
   }
 });
