@@ -185,3 +185,16 @@ it("choosing Important updates again clears the reset notice", async () => {
   expect(editor.container.textContent).not.toContain(RESET_NOTICE);
   expect(editor.labels()).toContain("Notifications, Important updates");
 });
+
+it("New thread each run on an Important updates task shows the notice and drops the choice", async () => {
+  using editor = await renderEditor({
+    threadId: ThreadId.make("bound"),
+    threadMode: "continue",
+    notificationPolicy: "important_updates",
+  });
+  expect(editor.labels()).toContain("Notifications: Important updates");
+  await editor.press("Runs go to: New thread each run");
+  expect(editor.container.textContent).toContain(RESET_NOTICE);
+  expect(editor.labels()).toContain("Notifications, All runs");
+  expect(editor.labels()).not.toContain("Notifications: Important updates");
+});
