@@ -561,12 +561,7 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
   const gated = () =>
     walEnabled !== false &&
     !writer.isTransaction &&
-    (stopped ||
-      recovering ||
-      unknown ||
-      blocked ||
-      truncate !== undefined ||
-      log >= CHECKPOINT_BACKPRESSURE_FRAMES);
+    (stopped || recovering || unknown || blocked || truncate !== undefined);
   const wake = () => {
     if (!gated() && elected === undefined) {
       elected = waiters.shift();
@@ -622,6 +617,8 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
       log = nextLog;
       checkpointed = nextCheckpointed;
       unknown = false;
+      // Past the ceiling, hold writes until the worker judges this WAL; a reader can pin it there.
+      if (log >= CHECKPOINT_BACKPRESSURE_FRAMES) blocked = true;
     } catch {
       unknown = true;
     }
