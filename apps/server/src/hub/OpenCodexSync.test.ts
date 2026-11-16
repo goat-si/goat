@@ -7,6 +7,7 @@ import {
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 
@@ -560,4 +561,40 @@ it.effect("marks an interrupted update sync as failed instead of leaving it sync
       reason: "interrupted",
     });
   }),
+);
+
+it.effect(
+  "a sync whose session ends finishes the machine it is on and skips the machines it has not started",
+  () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet();
+      const started = yield* Deferred.make<void>();
+      const gate = yield* Deferred.make<void>();
+      fleet.onHomeSync = Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Deferred.await(gate)),
+      );
+      const { sync } = yield* setup(fleet);
+      const ended = yield* Ref.make(false);
+      const ending: McpInvocationScope = {
+        ...scope,
+        sessionEnd: { run: (effect) => Effect.asSome(effect), ended: Ref.get(ended) },
+      };
+      const running = yield* sync.run(ending).pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(started);
+      // The session is revoked and the caller's MCP call is cut while ocx syncs this Home.
+      yield* Ref.set(ended, true);
+      yield* Fiber.interrupt(running);
+      yield* Deferred.succeed(gate, undefined);
+      // The next run waits on the permit the cut run holds until it finishes.
+      yield* sync.exclusive(Effect.void);
+      expect(fleet.calls).toEqual(["home sync --restart-codex"]);
+      expect(fleet.holds).toBe(0);
+      const report = yield* sync.latest;
+      expect(report && rows(report)).toEqual([
+        [null, "synced", undefined],
+        ["macmini-ts", "skipped", "interrupted"],
+        ["lidge-ts", "skipped", "interrupted"],
+        ["mac-studio", "skipped", "interrupted"],
+      ]);
+    }),
 );

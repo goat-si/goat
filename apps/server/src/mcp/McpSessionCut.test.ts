@@ -1,0 +1,454 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { expect, it } from "@effect/vitest";
+import {
+  AuthStandardClientScopes,
+  EnvironmentId,
+  MessageId,
+  ProviderInstanceId,
+  RunAttemptId,
+  RunId,
+  ThreadId,
+  type OrchestrationV2Run,
+  type ScreenRunResult,
+} from "@goat/contracts";
+import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts/settings";
+import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+import * as TestClock from "effect/testing/TestClock";
+import { McpSchema, McpServer } from "effect/ai";
+import { HttpServerRequest } from "effect/http";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
+
+import { onMainListener } from "../auth/connectionContext.testkit.ts";
+import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
+import * as McpOAuth from "../auth/McpOAuth.ts";
+import { mcpClientScopes } from "../auth/mcpClientScopes.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as ServerConfig from "../config.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as Sqlite from "../persistence/Sqlite.ts";
+import * as Project from "../project/ProjectService.ts";
+import * as ScreenRunService from "../screenCode/ScreenRunService.ts";
+import * as Settings from "../serverSettings.ts";
+import { catalog, dependencies, serveOverHttp } from "./agentSurface.testkit.ts";
+import * as McpHttpServer from "./McpHttpServer.ts";
+import * as McpInvocationContext from "./McpInvocationContext.ts";
+import {
+  idleThreadProjection,
+  layerPermissionProfilesOff,
+  liveThreadShell,
+} from "./McpToolAccess.testkit.ts";
+
+const layerAuth = EnvironmentAuth.layer.pipe(
+  Layer.provide(Sqlite.layerMemory),
+  Layer.provideMerge(ServerSecretStore.layer),
+  Layer.provideMerge(ServerEnvironment.layerIdentity),
+  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-cut-" })),
+  Layer.provideMerge(NodeServices.layer),
+);
+const environmentId = EnvironmentId.make("environment");
+const mcpClient = McpSchema.McpServerClient.of({
+  clientId: 1,
+  clientCapabilities: {},
+  clientInfo: { name: "session-cut-test", version: "1" },
+  protocolVersion: "2025-06-18",
+  initializePayload: {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    clientInfo: { name: "session-cut-test", version: "1" },
+  },
+  getClient: Effect.die("unused"),
+});
+
+/** What the gated services saw: admitted calls park on the gate until the test opens it. */
+const makeProbe = Effect.all({
+  admitted: Deferred.make<void>(),
+  gate: Deferred.make<void>(),
+  stopped: Deferred.make<void>(),
+  landed: Ref.make<ReadonlyArray<string>>([]),
+});
+type Probe = Effect.Success<typeof makeProbe>;
+const gated = <A>(probe: Probe, name: string, value: A) =>
+  Effect.gen(function* () {
+    if (name.startsWith("gated")) {
+      yield* Deferred.succeed(probe.admitted, undefined);
+      yield* Deferred.await(probe.gate);
+    }
+    yield* Ref.update(probe.landed, (landed) => [...landed, name]);
+    return value;
+  }).pipe(Effect.onInterrupt(() => Deferred.succeed(probe.stopped, undefined)));
+
+const projectRegistrations = (probe: Probe) =>
+  Layer.mergeAll(
+    McpHttpServer.catalogRegistrations.project,
+    McpHttpServer.catalogRegistrations.agentSurface,
+  ).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        dependencies,
+        Sqlite.layerMemory,
+        Layer.mock(Project.ProjectService)({
+          create: (input) =>
+            gated(probe, input.title, {
+              id: input.projectId,
+              title: input.title,
+              workspaceRoot: input.workspaceRoot,
+              defaultModelSelection: null,
+              scripts: [],
+              createdAt: "2026-11-17T00:00:00.000Z",
+              updatedAt: "2026-11-17T00:00:00.000Z",
+              deletedAt: null,
+            }),
+        }),
+      ),
+    ),
+  );
+const served = (probe: Probe) =>
+  projectRegistrations(probe).pipe(Layer.provideMerge(McpServer.McpServer.layer));
+
+/** An MCP client signed in for an hour; its scope is what /mcp builds from its bearer token. */
+const signIn = Effect.gen(function* () {
+  const auth = yield* EnvironmentAuth.EnvironmentAuth;
+  const issued = yield* auth.issueSession({
+    subject: "mcp-client",
+    label: "Outside agent",
+    scopes: mcpClientScopes("full-access"),
+    runtimeModeCeiling: "full-access",
+    ttl: Duration.hours(1),
+  });
+  const authenticator = Effect.gen(function* () {
+    const clients = yield* McpHttpServer.McpClientAuthenticator;
+    const request = new Request("http://127.0.0.1/mcp", {
+      headers: { host: "box.example.ts.net", authorization: "Bearer " + issued.token },
+    });
+    return yield* clients.authenticate(onMainListener(HttpServerRequest.fromWeb(request)));
+  }).pipe(
+    Effect.provide(
+      McpOAuth.layerMcpClientAuthenticator.pipe(
+        Layer.provide(Layer.succeed(EnvironmentAuth.EnvironmentAuth, auth)),
+        Layer.provide(
+          Layer.mock(ServerEnvironment.ServerEnvironment)({
+            getEnvironmentId: Effect.succeed(environmentId),
+          }),
+        ),
+      ),
+    ),
+  );
+  const scope = yield* authenticator;
+  if (scope === undefined) return yield* Effect.die("the MCP client did not authenticate");
+  const settings = yield* auth.issueSession({
+    subject: "settings-page",
+    scopes: AuthStandardClientScopes,
+  });
+  return {
+    scope,
+    revoke: auth.revokeClientSession(settings.sessionId, issued.sessionId),
+    revokeOthers: auth.revokeOtherClientSessions(settings.sessionId),
+  };
+});
+
+const call = (
+  scope: McpInvocationContext.McpInvocationScope,
+  name: string,
+  args: Readonly<Record<string, unknown>>,
+) =>
+  Effect.flatMap(McpServer.McpServer, (server) => server.callTool({ name, arguments: args })).pipe(
+    Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+    Effect.provideService(McpSchema.McpServerClient, mcpClient),
+  );
+const textOf = (result: McpSchema.CallToolResult) =>
+  result.content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
+const CUT = "revoked or expired while the call ran";
+const create = (title: string) => ({ title, workspaceRoot: "/tmp/goat-session-cut/" + title });
+
+it.effect.each(["Settings revoke", "Revoke others"] as const)(
+  "a project create admitted before a %s never lands and returns the cut",
+  (path) =>
+    Effect.gen(function* () {
+      const probe = yield* makeProbe;
+      const client = yield* signIn;
+      yield* Effect.gen(function* () {
+        const running = yield* call(client.scope, "goat_project_create", create("gated")).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Deferred.await(probe.admitted);
+        yield* path === "Settings revoke" ? client.revoke : client.revokeOthers;
+        yield* Deferred.succeed(probe.gate, undefined);
+        const result = yield* Fiber.join(running);
+        expect(yield* Ref.get(probe.landed)).toEqual([]);
+        expect(result.isError).toBe(true);
+        expect(textOf(result)).toContain(CUT);
+        expect(result._meta).toBeUndefined();
+      }).pipe(Effect.provide(served(probe)));
+    }).pipe(Effect.provide(layerAuth)),
+);
+
+it.effect("an eval cut during one step never runs its next step", () =>
+  Effect.gen(function* () {
+    const probe = yield* makeProbe;
+    const client = yield* signIn;
+    yield* Effect.gen(function* () {
+      const program =
+        '(seq (project.create :title "gated-first" :workspaceRoot "/tmp/goat-session-cut/a")' +
+        ' (project.create :title "second" :workspaceRoot "/tmp/goat-session-cut/b"))';
+      const running = yield* call(client.scope, "goat_eval", { program }).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(probe.admitted);
+      yield* client.revoke;
+      yield* Deferred.succeed(probe.gate, undefined);
+      const result = yield* Fiber.join(running);
+      expect(yield* Ref.get(probe.landed)).toEqual([]);
+      expect(textOf(result)).toContain(CUT);
+    }).pipe(Effect.provide(served(probe)));
+  }).pipe(Effect.provide(layerAuth)),
+);
+
+it.effect(
+  "a call whose session was revoked, or expired, before it started is cut without running",
+  () =>
+    Effect.gen(function* () {
+      const probe = yield* makeProbe;
+      const revoked = yield* signIn;
+      const expired = yield* signIn;
+      yield* revoked.revoke;
+      yield* TestClock.adjust(Duration.hours(1));
+      yield* Effect.gen(function* () {
+        for (const client of [revoked, expired]) {
+          const result = yield* call(client.scope, "goat_project_create", create("free"));
+          expect(textOf(result)).toContain(CUT);
+        }
+        expect(yield* Ref.get(probe.landed)).toEqual([]);
+      }).pipe(Effect.provide(served(probe)));
+    }).pipe(Effect.provide(layerAuth)),
+);
+
+it.effect("a running call is cut when its session expires, as a socket is", () =>
+  Effect.gen(function* () {
+    const probe = yield* makeProbe;
+    const client = yield* signIn;
+    yield* Effect.gen(function* () {
+      const running = yield* call(client.scope, "goat_project_create", create("gated")).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(probe.admitted);
+      yield* TestClock.adjust(Duration.hours(1));
+      yield* Deferred.succeed(probe.gate, undefined);
+      const result = yield* Fiber.join(running);
+      expect(yield* Ref.get(probe.landed)).toEqual([]);
+      expect(textOf(result)).toContain(CUT);
+    }).pipe(Effect.provide(served(probe)));
+  }).pipe(Effect.provide(layerAuth)),
+);
+
+it.effect("a thread credential's call is not cut when an unrelated client session is revoked", () =>
+  Effect.gen(function* () {
+    const probe = yield* makeProbe;
+    const client = yield* signIn;
+    const thread: McpInvocationContext.McpInvocationScope = {
+      environmentId,
+      requestNamespace: "provider:thread-session",
+      thread: {
+        threadId: ThreadId.make("thread"),
+        providerSessionId: "thread-session",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      },
+      client: undefined,
+      capabilities: new Set(["orchestration"]),
+      issuedAt: 0,
+    };
+    yield* Effect.gen(function* () {
+      const running = yield* call(thread, "goat_project_create", create("gated")).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(probe.admitted);
+      yield* client.revoke;
+      yield* Deferred.succeed(probe.gate, undefined);
+      const result = yield* Fiber.join(running);
+      expect(yield* Ref.get(probe.landed)).toEqual(["gated"]);
+      expect(textOf(result)).not.toContain(CUT);
+    }).pipe(Effect.provide(served(probe)));
+  }).pipe(Effect.provide(layerAuth)),
+);
+
+it.effect("a client that stops waiting still stops a guarded call, which never lands", () =>
+  Effect.gen(function* () {
+    const probe = yield* makeProbe;
+    const client = yield* signIn;
+    yield* Effect.gen(function* () {
+      const running = yield* call(client.scope, "goat_project_create", create("gated")).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(probe.admitted);
+      // What Effect's RPC server does to the handler on a client abort or notifications/cancelled.
+      yield* Fiber.interrupt(running);
+      expect(yield* Deferred.isDone(probe.stopped)).toBe(true);
+      yield* Deferred.succeed(probe.gate, undefined);
+      yield* client.revoke;
+      expect(yield* Ref.get(probe.landed)).toEqual([]);
+    }).pipe(Effect.provide(served(probe)));
+  }).pipe(Effect.provide(layerAuth)),
+);
+
+const threadId = ThreadId.make("screen-thread");
+
+it.effect.each(["notifications/cancelled", "a client abort"] as const)(
+  "%s over /mcp still stops a guarded call, which never lands",
+  (stop) =>
+    Effect.gen(function* () {
+      const probe = yield* makeProbe;
+      const client = yield* signIn;
+      const http = yield* serveOverHttp({ outside: client.scope }, projectRegistrations(probe));
+      yield* http.listTools("outside");
+      const requestId = http.nextRequestId();
+      const running = yield* http
+        .callTool("outside", "goat_project_create", create("gated"))
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(probe.admitted);
+      if (stop === "notifications/cancelled")
+        yield* http.notify("outside", "notifications/cancelled", { requestId });
+      else yield* Fiber.interrupt(running);
+      yield* Deferred.await(probe.stopped);
+      yield* Fiber.interrupt(running);
+      yield* Deferred.succeed(probe.gate, undefined);
+      expect(yield* Ref.get(probe.landed)).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(layerTestLoopback, layerAuth))),
+);
+
+const providerInstanceId = ProviderInstanceId.make("codex");
+const runId = RunId.make("screen-run");
+const turnId = RunAttemptId.make("screen-attempt");
+const shell = liveThreadShell(threadId, { activeRunId: runId });
+const now = DateTime.makeUnsafe("2026-11-17T00:00:00.000Z");
+const run: OrchestrationV2Run = {
+  id: runId,
+  threadId,
+  ordinal: 1,
+  providerInstanceId,
+  modelSelection: { instanceId: providerInstanceId, model: "test" },
+  providerThreadId: null,
+  userMessageId: MessageId.make("screen-message"),
+  rootNodeId: null,
+  activeAttemptId: turnId,
+  status: "running",
+  requestedAt: now,
+  startedAt: now,
+  completedAt: null,
+  checkpointId: null,
+  contextHandoffId: null,
+};
+const screenResult: ScreenRunResult = {
+  runId,
+  turnId,
+  cellId: "cell-one",
+  status: "completed",
+  console: [],
+  journal: [],
+  truncated: [],
+  availability: [],
+  imageMetadata: [],
+  images: [],
+};
+
+it.effect("an image tool registration (goat_screen_run) is guarded like every toolkit tool", () =>
+  Effect.gen(function* () {
+    const probe = yield* makeProbe;
+    const client = yield* signIn;
+    // Screen runs come from threads; this scope borrows a client's session end to prove the wrapper.
+    const cutBy = client.scope.sessionEnd;
+    const scope: McpInvocationContext.McpInvocationScope = {
+      environmentId,
+      requestNamespace: "screen-test",
+      thread: { threadId, providerInstanceId, providerSessionId: "screen-session" },
+      client: undefined,
+      capabilities: new Set(["preview"]),
+      issuedAt: 0,
+      ...(cutBy === undefined ? {} : { sessionEnd: cutBy }),
+    };
+    const screen = McpHttpServer.catalogRegistrations.screen.pipe(
+      Layer.provide(layerPermissionProfilesOff),
+      Layer.provide(
+        Layer.mock(ThreadManagement.ThreadManagementService)({
+          getThreadShell: () => Effect.succeed(shell),
+          getThreadRecords: (() =>
+            Effect.succeed({
+              thread: idleThreadProjection(shell).thread,
+              runs: [run],
+            })) as ThreadManagement.ThreadManagementService["Service"]["getThreadRecords"],
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(ScreenRunService.ScreenRunService)({
+          runCell: () => gated(probe, "gated-screen", screenResult),
+        }),
+      ),
+      Layer.provideMerge(McpServer.McpServer.layer),
+    );
+    yield* Effect.gen(function* () {
+      const running = yield* call(scope, "goat_screen_run", { code: "return 1" }).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(probe.admitted);
+      yield* client.revoke;
+      yield* Deferred.succeed(probe.gate, undefined);
+      const result = yield* Fiber.join(running);
+      expect(yield* Ref.get(probe.landed)).toEqual([]);
+      expect(textOf(result)).toContain(CUT);
+    }).pipe(Effect.provide(screen));
+  }).pipe(Effect.provide(layerAuth)),
+);
+
+const catalogServer = catalog.pipe(
+  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provide(
+    Layer.mergeAll(
+      dependencies,
+      Layer.mock(Settings.ServerSettingsService)({
+        getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+      }),
+    ),
+  ),
+);
+
+it.effect(
+  "every tool /mcp registers is guarded, and a tool registered outside the wrapper fails this check",
+  () =>
+    Effect.gen(function* () {
+      const client = yield* signIn;
+      yield* Effect.gen(function* () {
+        const server = yield* McpServer.McpServer;
+        // A session that has already ended: a guarded tool answers the cut without its handler.
+        const scope: McpInvocationContext.McpInvocationScope = {
+          ...client.scope,
+          sessionEnd: { run: () => Effect.succeedNone, ended: Effect.succeed(true) },
+        };
+        const unguarded = (names: ReadonlyArray<string>) =>
+          Effect.filter(names, (name) =>
+            call(scope, name, {}).pipe(
+              Effect.map((result) => !textOf(result).includes(CUT)),
+              Effect.catchCause(() => Effect.succeed(true)),
+            ),
+          );
+        const names = server.tools.map(({ tool }) => tool.name);
+        expect(names.length).toBeGreaterThan(100);
+        expect(yield* unguarded(names)).toEqual([]);
+        // oxlint-disable-next-line goat/no-raw-mcp-registration -- deliberately outside the wrapper, to show the check catches it
+        yield* server.addTool({
+          tool: new McpSchema.Tool({
+            name: "goat_unguarded_probe",
+            inputSchema: { type: "object" },
+          }),
+          annotations: Context.empty(),
+          handle: () => Effect.succeed(new McpSchema.CallToolResult({ content: [] })),
+        });
+        expect(yield* unguarded(["goat_unguarded_probe"])).toEqual(["goat_unguarded_probe"]);
+      }).pipe(Effect.provide(catalogServer));
+    }).pipe(Effect.provide(layerAuth)),
+);

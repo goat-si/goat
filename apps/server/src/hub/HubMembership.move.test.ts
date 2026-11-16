@@ -1,6 +1,8 @@
 import { expect, it } from "@effect/vitest";
 import { HubDeviceMcpResult } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 
 import { PINNED, scope, setup, threadScope } from "./HubMembership.testkit.ts";
@@ -297,5 +299,37 @@ it.effect(
       const again = yield* hub.membership.move(scope, { ...move, decisionId: asked.decisionId! });
       expect(again.message).toContain("already linked");
       expect(hub.calls.filter((call) => call.startsWith("home link add"))).toHaveLength(1);
+    }),
+);
+
+it.effect(
+  "a move whose caller is cut after the old link is revoked still links the new alias",
+  () =>
+    Effect.gen(function* () {
+      const revoked = yield* Deferred.make<void>();
+      const gate = yield* Deferred.make<void>();
+      const hub = yield* setup({
+        linked: ["mini"],
+        pin: PINNED,
+        afterRevoke: Deferred.succeed(revoked, undefined).pipe(
+          Effect.andThen(Deferred.await(gate)),
+        ),
+      });
+      const moving = yield* hub.membership
+        .move(scope, move)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(revoked);
+      // The caller's MCP call is cut here, with the device routing through no hub.
+      yield* Fiber.interrupt(moving);
+      yield* Deferred.succeed(gate, undefined);
+      // The next membership change waits on the permit the move holds until it finishes.
+      yield* Effect.exit(hub.membership.move(scope, { fromAlias: "not an alias", toAlias: "x" }));
+      expect(hub.calls).toContain(`home link add pen-mini --expect-fingerprint ${PINNED} --json`);
+      expect((yield* hub.audit).filter(({ action }) => action === "hub.move").at(-1)).toMatchObject(
+        {
+          target: "pen-mini",
+          outcome: "child",
+        },
+      );
     }),
 );
