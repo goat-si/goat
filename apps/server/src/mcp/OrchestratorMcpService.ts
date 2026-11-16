@@ -3823,6 +3823,7 @@ const make = Effect.gen(function* () {
           mode,
           createdBy: "agent",
           creationSource: "mcp",
+          refuseUnrestorableWorktree: true,
         })
         .pipe(
           Effect.mapError((error) =>
