@@ -2,6 +2,8 @@
 
 Lane branch: `chase/t3-261114-adapters-retry`, pushed at `fc3f4f3143` (run 7: review fix round on a862944dbe, merge of 1e67a275fc at f9e0eec071, follow-ups). No PR yet; this file is the lane's full record. Upstream range fa2f4ff2a2..93cbca3fcbd. Deferrals are tracked in #3176.
 
+Merged into #3397 at 590cee0efb (2026-11-16): lane head fc3f4f3143.
+
 ## Decisions
 
 | upstream | decision | GOAT commit | reason |
