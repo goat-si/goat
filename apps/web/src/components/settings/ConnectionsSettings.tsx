@@ -29,6 +29,7 @@ import {
   applyWslEnableSelection,
   isWslSettingsRowVisible,
   resolveTailscaleServeBaseUrl,
+  revokeOthersToast,
 } from "./ConnectionsSettings.logic";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { HeadlessServerSetting } from "./HeadlessServerSetting";
@@ -465,11 +466,7 @@ export function ConnectionsSettings() {
     setDesktopAccessManagementMutationError(null);
     const settled = await settlePromise(async () => {
       const revokedCount = await revokeOtherServerClientSessions();
-      toastManager.add({
-        type: "success",
-        title: revokedCount === 1 ? "Revoked 1 other client" : `Revoked ${revokedCount} clients`,
-        description: "Other paired clients will need a new pairing link before reconnecting.",
-      });
+      toastManager.add(revokeOthersToast(revokedCount, desktopClientSessions));
     });
     if (settled._tag === "Failure") {
       const error = Cause.squash(settled.cause);

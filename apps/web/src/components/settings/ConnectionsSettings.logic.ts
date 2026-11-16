@@ -193,9 +193,40 @@ export function togglePairingScopeSelection(
 }
 
 export function canRevokeOtherClients(
-  clientSessions: ReadonlyArray<{ readonly current: boolean }> | null,
+  clientSessions: ReadonlyArray<
+    Pick<ServerClientSessionRecord, "current" | "keptByRevokeOthers">
+  > | null,
 ): boolean {
-  return clientSessions === null || clientSessions.some((session) => !session.current);
+  return (
+    clientSessions === null ||
+    clientSessions.some((session) => !session.current && session.keptByRevokeOthers === undefined)
+  );
+}
+
+/** Names what Revoke others kept, from the rows the person saw when they pressed it. */
+export function revokeOthersToast(
+  revokedCount: number,
+  sessionsAtPress: ReadonlyArray<Pick<ServerClientSessionRecord, "current" | "keptByRevokeOthers">>,
+) {
+  const others = sessionsAtPress.filter((session) => !session.current);
+  const desktop = others.some((session) => session.keptByRevokeOthers === "desktop");
+  const pen = others.filter((session) => session.keptByRevokeOthers === "pen").length;
+  const kept = [
+    ...(desktop ? ["the desktop app's own session"] : []),
+    ...(pen === 0 ? [] : [pen === 1 ? "1 Pen session" : `${pen} Pen sessions`]),
+  ];
+  const hint =
+    (desktop ? 1 : 0) + pen === 1
+      ? "Revoke it below if you need to."
+      : "Revoke them one by one below if you need to.";
+  return {
+    type: "success" as const,
+    title: revokedCount === 1 ? "Revoked 1 other client" : `Revoked ${revokedCount} clients`,
+    description:
+      kept.length === 0
+        ? "Other paired clients will need a new pairing link before reconnecting."
+        : `Kept ${kept.join(" and ")}. ${hint}`,
+  };
 }
 
 type WslEnableBridge = Pick<DesktopBridge, "setWslBackendEnabled" | "setWslDistro" | "setWslOnly">;

@@ -826,6 +826,11 @@ about 5 seconds. An MCP request that was admitted before the revoke runs to
 completion on the access it was admitted with, and can still write or start work
 until it finishes. More commands are listed by `goat auth --help`.
 
+**Revoke others** keeps the desktop app's own session on that computer and
+sessions Pen members hold; both are marked **Kept by Revoke others**. Revoke them
+one by one if you suspect them. After you revoke the desktop app's session, quit
+and reopen GOAT on that computer.
+
 A session with an open connection stays listed after its access credential
 expires. **Settings → Connections** shows which sessions are connected;
 `goat auth session list` cannot tell.

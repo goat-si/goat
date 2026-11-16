@@ -4,6 +4,7 @@ import type {
   AuthEnvironmentScope,
   AuthGrantScope,
   AuthPairingCredentialResult,
+  AuthRevokeOthersKeep,
   ServerAuthSessionMethod,
   AuthSessionId,
   AuthSessionState,
@@ -125,6 +126,7 @@ export interface ServerClientSessionRecord {
   readonly lastConnectedAt: string | null;
   readonly connected: boolean;
   readonly current: boolean;
+  readonly keptByRevokeOthers?: AuthRevokeOthersKeep;
 }
 
 type ServerAuthGateState =
