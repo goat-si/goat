@@ -380,6 +380,40 @@ describe("vcsActionState", () => {
     }),
   );
 
+  it("reports a stacked action on a computer without a working directory as unavailable", async () => {
+    // The computer is not registered, so reaching the registry would fail with a different tag.
+    const run: EnvironmentRegistry.EnvironmentRegistry["Service"]["run"] = (id) =>
+      Effect.fail(new EnvironmentRegistry.EnvironmentNotRegisteredError({ environmentId: id }));
+    const runtime = Atom.runtime(
+      Layer.merge(
+        Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, {
+          run,
+        } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]),
+        Layer.succeed(
+          Persistence.EnvironmentCacheStore,
+          {} as Persistence.EnvironmentCacheStore["Service"],
+        ),
+      ),
+    );
+    const manager = createVcsActionManager(runtime);
+    const registry = AtomRegistry.make();
+    try {
+      const result = await manager
+        .runStackedAction({ environmentId, cwd: null })
+        .run(registry, { actionId, action });
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") {
+        expect(Cause.squash(result.cause)).toMatchObject({
+          _tag: "VcsActionUnavailableError",
+          environmentId,
+          cwd: null,
+        });
+      }
+    } finally {
+      registry.dispose();
+    }
+  });
+
   it("tracks finite mutations without letting an older completion clear newer state", async () => {
     const runtime = Atom.runtime(Layer.empty) as unknown as Atom.AtomRuntime<
       EnvironmentRegistry.EnvironmentRegistry | Persistence.EnvironmentCacheStore,
