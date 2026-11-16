@@ -193,13 +193,34 @@ describe("orchestrator MCP toolkit", () => {
           },
           CodexOrchestratorReplayHarness,
         );
+        // SQL spans carry no bound parameters, so this records which thread each tool read.
+        const threadRecordReads: Array<{
+          readonly threadId: ThreadId;
+          readonly fields: ReadonlyArray<string>;
+        }> = [];
         const layerOrchestration = Layer.merge(
           layerOrchestrator,
-          ThreadManagementService.layer.pipe(
-            Layer.provide(layerOrchestrator),
-            Layer.provide(ServerSettings.layerTest()),
+          Layer.effect(
+            ThreadManagementService.ThreadManagementService,
+            Effect.gen(function* () {
+              const service = yield* ThreadManagementService.ThreadManagementService;
+              return ThreadManagementService.ThreadManagementService.of({
+                ...service,
+                getThreadRecords: (threadId, fields, filter) =>
+                  Effect.sync(() => threadRecordReads.push({ threadId, fields })).pipe(
+                    Effect.andThen(service.getThreadRecords(threadId, fields, filter)),
+                  ),
+              });
+            }),
+          ).pipe(
             Layer.provide(
-              CommandReceiptStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
+              ThreadManagementService.layer.pipe(
+                Layer.provide(layerOrchestrator),
+                Layer.provide(ServerSettings.layerTest()),
+                Layer.provide(
+                  CommandReceiptStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
+                ),
+              ),
             ),
           ),
         );
@@ -558,7 +579,14 @@ describe("orchestrator MCP toolkit", () => {
           expect(finalStatus.latestTerminalResultContextTransferId).not.toBe(
             delegated.resultContextTransferId,
           );
-          const { tracer, transferReads, messageReads } = projectionQueryTracer();
+          const {
+            tracer,
+            transferReads,
+            messageReads,
+            runReads,
+            projectionTableReads,
+            acknowledgementReads,
+          } = projectionQueryTracer();
           const followupDelivery = orchestrator
             .getThreadProjection(parentThreadId)
             .pipe(
@@ -594,7 +622,7 @@ describe("orchestrator MCP toolkit", () => {
             const text = yield* readRestOfItem({
               page: read.structuredContent,
               threadId: delegated.childThreadId,
-              read: (args) => invoke("goat_thread_read", args),
+              read: (args) => invoke("goat_thread_read", args).pipe(Effect.withTracer(tracer)),
               beforePage: followupDelivery.pipe(
                 Effect.map((state) => expect(state).toBe("claimed")),
               ),
@@ -602,6 +630,18 @@ describe("orchestrator MCP toolkit", () => {
             expect(text).toBe(result);
           }
           expect(yield* followupDelivery).toBe("acknowledged");
+          // The acknowledgement reads the task and its spawning run by id, not the parent's history.
+          expect(acknowledgementReads.length).toBeGreaterThan(0);
+          expect(
+            acknowledgementReads.filter(
+              (query) =>
+                /FROM orchestration_v2_projection_(nodes|run_attempts)\b/.test(query) ||
+                (/FROM orchestration_v2_projection_runs\b/.test(query) &&
+                  !query.includes("AND run_id IN")) ||
+                (/FROM orchestration_v2_projection_subagents\b/.test(query) &&
+                  !query.includes("AND subagent_id IN")),
+            ),
+          ).toEqual([]);
 
           const messageReadsBeforeCapabilities = messageReads.length;
           const capabilities = yield* invoke("goat_schedule_list", {}).pipe(
@@ -609,6 +649,31 @@ describe("orchestrator MCP toolkit", () => {
           );
           expect(capabilities.isError).not.toBe(true);
           expect(messageReads).toHaveLength(messageReadsBeforeCapabilities);
+          const tableReadsBeforeCapabilities = projectionTableReads.length;
+          const providers = yield* invoke("goat_provider_list", {}).pipe(Effect.withTracer(tracer));
+          expect(providers.isError).not.toBe(true);
+          // The caller check reads only the thread row, never its history.
+          expect(new Set(projectionTableReads.slice(tableReadsBeforeCapabilities))).toEqual(
+            new Set(["threads"]),
+          );
+          const runReadsBeforeStatus = runReads.length;
+          const transferReadsBeforeStatus = transferReads.length;
+          const threadRecordReadsBeforeStatus = threadRecordReads.length;
+          const statusAgain = yield* invoke("goat_task_read", { taskId: delegated.taskId }).pipe(
+            Effect.withTracer(tracer),
+          );
+          expect(statusAgain.isError).not.toBe(true);
+          // A task wait reads result transfers and runs from the child; the parent's stay unread.
+          expect(runReads).toHaveLength(runReadsBeforeStatus + 1);
+          expect(transferReads).toHaveLength(transferReadsBeforeStatus + 1);
+          expect(
+            threadRecordReads
+              .slice(threadRecordReadsBeforeStatus)
+              .filter(
+                ({ fields }) => fields.includes("runs") || fields.includes("contextTransfers"),
+              )
+              .map(({ threadId }) => threadId),
+          ).toEqual([delegated.childThreadId]);
         }).pipe(Effect.provide(layerTest));
       }),
     ),

@@ -451,7 +451,15 @@ describe("goat_thread_read summary and tail", () => {
         completedAt: now,
       },
     ],
-    contextTransfers: [],
+    // A thread's transfers include the results it sent, so the child holds the one it returned.
+    contextTransfers: [
+      {
+        type: "subagent_result",
+        sourceThreadId: childId,
+        targetThreadId: parentId,
+        sourcePoint: { runId: childRunId },
+      },
+    ],
     messages: [],
     subagents: [],
     providerThreads: [],
@@ -470,18 +478,7 @@ describe("goat_thread_read summary and tail", () => {
     visibility: "local",
     item: answer,
   };
-  // The parent recorded the child's result, so a read that returns it in full has seen it.
-  const parentWithResult = {
-    ...parentProjection([task]),
-    contextTransfers: [
-      {
-        type: "subagent_result",
-        sourceThreadId: childId,
-        targetThreadId: parentId,
-        sourcePoint: { runId: childRunId },
-      },
-    ],
-  } as unknown as OrchestrationV2ThreadProjection;
+  const parentWithResult = parentProjection([task]);
 
   const sent: Array<OrchestrationV2ServerCommand> = [];
   const makeLayer = (dispatched: Array<OrchestrationV2ServerCommand["type"]>) =>

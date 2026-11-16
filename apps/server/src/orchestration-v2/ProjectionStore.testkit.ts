@@ -18,8 +18,10 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -220,6 +222,22 @@ export const traceSqlStatements = () => {
   });
   return { statements, tracer };
 };
+
+/** The EXPLAIN QUERY PLAN of the first traced statement that reads a projection table. */
+export const queryPlanFor = Effect.fn("queryPlanFor")(function* (
+  statements: ReadonlyArray<string>,
+  table: string,
+) {
+  const query = statements.find((statement) =>
+    statement.includes(`FROM orchestration_v2_projection_${table}`),
+  );
+  // The memory store has no SQL client, so callers check plans only on the SQL store.
+  const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+  if (query === undefined || Option.isNone(sql))
+    return yield* Effect.die(`No traced SQL read of ${table}`);
+  const rows = yield* sql.value.unsafe<{ readonly detail: string }>(`EXPLAIN QUERY PLAN ${query}`);
+  return rows.map((row) => row.detail).join("\n");
+});
 
 export const addRolledBackRecoveryCandidate = Effect.fn("addRolledBackRecoveryCandidate")(
   function* (suffix: string) {

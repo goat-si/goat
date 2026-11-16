@@ -446,7 +446,7 @@ it("taskStatus returns task.providerInstanceId rather than the driver kind", asy
     updatedAt: now,
   } as unknown as OrchestrationV2ThreadProjection;
 
-  const parentMessageRoles: Array<ReadonlyArray<string> | undefined> = [];
+  const parentSections: Array<ReadonlyArray<string>> = [];
   const layer = layerOrchestratorService.pipe(
     Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
     Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
@@ -455,9 +455,9 @@ it("taskStatus returns task.providerInstanceId rather than the driver kind", asy
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           getTimelinePage: () =>
             Effect.succeed({ items: [], totalItems: 0, hasMore: false, hasEarlier: false }),
-          getThreadRecords: (threadId, _sections, options) => {
+          getThreadRecords: (threadId, sections) => {
             if (threadId === parentThreadId) {
-              parentMessageRoles.push(options?.messageRoles);
+              parentSections.push(sections);
               return Effect.succeed({ ...parentProjection, turnItems: [] });
             }
             if (threadId === childThreadId)
@@ -490,7 +490,8 @@ it("taskStatus returns task.providerInstanceId rather than the driver kind", asy
     expect(result.status).toBe("running");
     expect(result.taskId).toBe(taskId);
     expect(result.childThreadId).toBe(childThreadId);
-    expect(parentMessageRoles).toContainEqual([]);
+    // The caller check reads only active runs, so no read asks for the caller's messages.
+    expect(parentSections.flat()).not.toContain("messages");
   }).pipe(Effect.provide(layer), Effect.runPromise);
 });
 
