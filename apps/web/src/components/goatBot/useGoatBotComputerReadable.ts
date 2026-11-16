@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 
 import { primarySessionCheck } from "~/environments/primary/sessionCheck";
 import {
+  type EnvironmentPresentation,
   readEnvironment,
   readPrimaryEnvironmentId,
   useEnvironment,
@@ -37,15 +38,33 @@ export function readGoatBotComputerReadable(environmentId: EnvironmentId): boole
   return readableFrom(readEnvironment(environmentId), ownServer && primarySessionCheck.revoked());
 }
 
+/** The listed computers that refused this device, by the same rule, for GOAT Bot's availability. */
+export function useGoatBotRefusals(
+  environments: ReadonlyArray<EnvironmentPresentation>,
+  primaryEnvironmentId: EnvironmentId | null,
+): ReadonlySet<EnvironmentId> {
+  const revoked = usePrimarySessionRevoked(primaryEnvironmentId !== null);
+  const refused = new Set<EnvironmentId>();
+  for (const presentation of environments) {
+    const ownServer = presentation.environmentId === primaryEnvironmentId;
+    if (refusedFrom(presentation, ownServer && revoked)) refused.add(presentation.environmentId);
+  }
+  return refused;
+}
+
 function useAccess(environmentId: EnvironmentId | null) {
   const presentation = useEnvironment(environmentId);
   const primaryId = usePrimaryEnvironmentId();
   const ownServer = environmentId !== null && primaryId === environmentId;
-  const revoked = useSyncExternalStore(
+  const revoked = usePrimarySessionRevoked(ownServer);
+  return { presentation, revoked };
+}
+
+function usePrimarySessionRevoked(ownServer: boolean): boolean {
+  return useSyncExternalStore(
     ownServer ? primarySessionCheck.subscribe : ignore,
     ownServer ? primarySessionCheck.revoked : notRevoked,
   );
-  return { presentation, revoked };
 }
 
 type Presentation = ReturnType<typeof readEnvironment>;

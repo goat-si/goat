@@ -70,6 +70,8 @@ import {
   canSendToGoatBot,
   goatBotOpenQuestionPlaceholder,
   goatBotNotesRefreshKey,
+  goatBotRefusedBy,
+  goatBotRefusedText,
   type GoatBotAvailability,
   type GoatBotRemoval,
 } from "@goat/client-runtime/goatBot";
@@ -426,6 +428,7 @@ function GoatBotChatViewContent({
           : availability.kind === "ready"
             ? null
             : statusLine(availability);
+  const refusedBy = goatBotRefusedBy(availability);
   return (
     <div ref={viewRef} className="flex min-h-0 min-w-0 flex-1" style={accentStyle}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
@@ -483,11 +486,13 @@ function GoatBotChatViewContent({
             role="status"
             className="border-b border-border px-4 py-2 text-sm text-muted-foreground"
           >
-            {availability.kind === "home_offline"
-              ? offlineHomeCopy(availability, mainName)
-              : availability.kind === "offline"
-                ? `${mainName}'s computer is offline. You can send messages again once it reconnects.`
-                : `Connecting to ${mainName}…`}
+            {refusedBy !== null
+              ? goatBotRefusedText(refusedBy)
+              : availability.kind === "home_offline"
+                ? offlineHomeCopy(availability, mainName)
+                : availability.kind === "offline"
+                  ? `${mainName}'s computer is offline. You can send messages again once it reconnects.`
+                  : `Connecting to ${mainName}…`}
             {/* With no history the notice below carries the same action. */}
             {availability.kind === "home_offline" && homeMove && rows.length > 0 ? (
               <div className="mt-2">
@@ -749,7 +754,7 @@ function statusLine(availability: GoatBotAvailability): string {
       return "Connecting…";
     case "offline":
     case "home_offline":
-      return "Offline";
+      return availability.refused === true ? "Didn't accept this device" : "Offline";
     case "legacy_active":
       return "Waiting for the global agent";
     case "error":
@@ -877,6 +882,13 @@ function noticeCopy(
   description: string;
   retryLabel: string | null;
 } {
+  const refusedBy = goatBotRefusedBy(availability);
+  if (refusedBy !== null)
+    return {
+      title: goatBotRefusedText(refusedBy),
+      description: `Pair this device with ${refusedBy} again to send messages.`,
+      retryLabel: null,
+    };
   switch (availability.kind) {
     case "ready":
       return {

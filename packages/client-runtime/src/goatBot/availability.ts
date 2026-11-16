@@ -17,6 +17,12 @@ export interface GoatBotEnvironmentInput {
   readonly label?: string;
   readonly homeTarget?: GoatBotHomeTarget;
   readonly settingsSnapshot?: object | null;
+  /**
+   * Listed, and refused this device: its connection was blocked for authentication or permission,
+   * or this client's own check said its session is gone. Absent: not known to be refused. Only an
+   * offline result reads it.
+   */
+  readonly refused?: boolean;
 }
 
 export interface GoatBotRef {
@@ -34,17 +40,53 @@ export type GoatBotEnsureState =
 
 export type GoatBotAvailability =
   | { readonly kind: "unsupported" }
-  | { readonly kind: "offline"; readonly environmentId: EnvironmentId }
+  | {
+      readonly kind: "offline";
+      readonly environmentId: EnvironmentId;
+      readonly refused?: undefined;
+    }
+  | {
+      readonly kind: "offline";
+      readonly environmentId: EnvironmentId;
+      readonly refused: true;
+      readonly label: string;
+    }
   | {
       readonly kind: "home_offline";
       readonly known: boolean;
       readonly environmentId: EnvironmentId;
       readonly label: string;
+      readonly refused?: true;
     }
   | { readonly kind: "connecting"; readonly environmentId: EnvironmentId }
   | { readonly kind: "legacy_active"; readonly environmentId: EnvironmentId }
   | { readonly kind: "error"; readonly environmentId: EnvironmentId; readonly message?: string }
   | { readonly kind: "ready"; readonly bot: GoatBotRef };
+
+/** The name of the listed computer GOAT Bot waits on when it refused this device; otherwise null. */
+export function goatBotRefusedBy(availability: GoatBotAvailability): string | null {
+  return (availability.kind === "offline" || availability.kind === "home_offline") &&
+    availability.refused === true
+    ? availability.label
+    : null;
+}
+
+/** The one sentence Connections, the Status card, Profile and the chat use for a refusal. */
+export const goatBotRefusedText = (label: string) => `GOAT on ${label} did not accept this device`;
+
+const environmentLabel = (entry: GoatBotEnvironmentInput) => entry.label ?? entry.environmentId;
+
+/** A listed computer that isn't connected; marked when it refused this device. */
+function offlineOn(entry: GoatBotEnvironmentInput): GoatBotAvailability {
+  return entry.refused === true
+    ? {
+        kind: "offline",
+        environmentId: entry.environmentId,
+        refused: true,
+        label: environmentLabel(entry),
+      }
+    : { kind: "offline", environmentId: entry.environmentId };
+}
 
 /** Resolve home before selecting an environment; absent capabilities preserve old-server behavior. */
 export function resolveGoatBotHomeSelection(
@@ -135,14 +177,19 @@ export function resolveGoatBotAvailabilityBeforeEnsure(input: {
   if (supported) {
     if (resolution.state === "claimed" && !resolution.homeConnected) {
       const environmentId = resolution.claim.environmentId;
+      const home = resolution.homeKnown
+        ? input.environments.find((entry) => entry.environmentId === environmentId)
+        : undefined;
       return {
         kind: "home_offline",
         known: resolution.homeKnown,
         environmentId,
-        label: resolution.homeKnown
-          ? (input.environments.find((entry) => entry.environmentId === environmentId)?.label ??
-            environmentId)
-          : environmentId.slice(0, 8),
+        label: home
+          ? environmentLabel(home)
+          : resolution.homeKnown
+            ? environmentId
+            : environmentId.slice(0, 8),
+        ...(home?.refused === true ? { refused: true as const } : {}),
       };
     }
     if (resolution.state !== "claimed") {
@@ -157,7 +204,7 @@ export function resolveGoatBotAvailabilityBeforeEnsure(input: {
       if (environmentId === undefined) return { kind: "unsupported" };
       const waitingOn = input.environments.find((entry) => entry.environmentId === environmentId);
       return waitingOn?.connected === false
-        ? { kind: "offline", environmentId }
+        ? offlineOn(waitingOn)
         : { kind: "connecting", environmentId };
     }
   }
@@ -166,11 +213,9 @@ export function resolveGoatBotAvailabilityBeforeEnsure(input: {
   const { environmentId } = environment;
   if (!environment.supportsChannelLedger) {
     if (!goatBotSupportUnknown(environment)) return { kind: "unsupported" };
-    return environment.connected
-      ? { kind: "connecting", environmentId }
-      : { kind: "offline", environmentId };
+    return environment.connected ? { kind: "connecting", environmentId } : offlineOn(environment);
   }
-  if (!environment.connected) return { kind: "offline", environmentId };
+  if (!environment.connected) return offlineOn(environment);
   return { kind: "ensure", environmentId };
 }
 
