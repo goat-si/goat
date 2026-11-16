@@ -113,11 +113,6 @@ export function followKeptPerComputerCatalog(registry: AtomRegistry.AtomRegistry
           for (const kind of KEPT_KINDS) startOver(registry, environmentId, kind);
           removed.add(environmentId);
         }
-      for (const environmentId of now)
-        if (!known.has(environmentId) && removed.delete(environmentId)) {
-          registry.set(connectionRefusedAtom(environmentId), false);
-          readded.add(environmentId);
-        }
       known = now;
     },
     { immediate: true },
