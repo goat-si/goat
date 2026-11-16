@@ -1,4 +1,6 @@
 import { DEFAULT_SERVER_SETTINGS, EnvironmentId, WORKTREE_CLEANUP_OFF } from "@goat/contracts";
+import * as Cause from "effect/Cause";
+import { AsyncResult } from "effect/reactivity";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
@@ -72,3 +74,35 @@ it("turns off the three automatic cleanup rules", async () => {
   });
   await act(() => root.unmount());
 });
+
+it.each([
+  ["Turn off", "update"],
+  ["Clean up now", "respond"],
+] as const)(
+  "shows why %s could not reach the computer and clears it when pressed again (#3556)",
+  async (label, command) => {
+    mocks.update.mockReset();
+    mocks.respond.mockReset();
+    mocks[command]
+      .mockResolvedValueOnce(AsyncResult.failure(Cause.fail(new Error("Studio is not connected."))))
+      .mockResolvedValueOnce(AsyncResult.success(undefined));
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(() =>
+      root.render(
+        <WorktreeCleanupSection
+          environmentId={EnvironmentId.make("local")}
+          settings={DEFAULT_SERVER_SETTINGS.storageCleanup}
+        />,
+      ),
+    );
+    const button = () =>
+      [...container.querySelectorAll("button")].find((entry) => entry.textContent === label);
+    await act(async () => button()?.click());
+    expect(container.textContent).toContain("Studio is not connected.");
+    await act(async () => button()?.click());
+    expect(mocks[command]).toHaveBeenCalledTimes(2);
+    expect(container.textContent).not.toContain("Studio is not connected.");
+    await act(() => root.unmount());
+  },
+);

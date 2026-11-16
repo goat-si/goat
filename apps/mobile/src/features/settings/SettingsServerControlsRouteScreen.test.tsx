@@ -1,5 +1,6 @@
 import { DEFAULT_SERVER_SETTINGS, type ServerSettingsPatch } from "@goat/contracts";
 import type { AgentToolListing } from "@goat/contracts/agentSurface/listing";
+import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import type { ReactNode } from "react";
 import { useSyncExternalStore, act } from "react";
@@ -147,7 +148,10 @@ vi.mock("./components/SettingsSwitchRow", () => ({
     </button>
   ),
 }));
-vi.mock("./components/SettingsRow", () => ({ SettingsRow: () => null }));
+vi.mock("./components/SettingsRow", () => ({
+  SettingsRow: ({ label, onPress }: { label: string; onPress?: () => void }) =>
+    onPress ? <button onClick={onPress}>{label}</button> : null,
+}));
 vi.mock("./components/SettingsActionRow", () => ({
   SettingsActionRow: ({ label, onPress }: { label: string; onPress: () => void }) => (
     <button onClick={onPress}>{label}</button>
@@ -364,4 +368,23 @@ it("lets a person enable confirmed browser text retention", async () => {
     environmentId: "local",
     input: { patch: { computerUseKeepTypedText: true } },
   });
+});
+
+it("says why an allowed app could not be removed, and removes it when pressed again (#3556)", async () => {
+  mocks.targets[0]!.serverConfig.settings.cuaAllowedApps = ["Safari"];
+  mocks.updateSettings
+    .mockResolvedValueOnce(AsyncResult.failure(Cause.fail(new Error("Local is not connected."))))
+    .mockResolvedValueOnce(AsyncResult.success(undefined));
+  act(() => render(<SettingsEnvironmentAgentBehaviorRouteScreen />));
+  await act(async () => button("Remove Safari").click());
+  expect(mocks.alert).toHaveBeenCalledExactlyOnceWith(
+    "Could not remove the app",
+    "Local: Local is not connected.",
+  );
+  await act(async () => button("Remove Safari").click());
+  expect(mocks.updateSettings).toHaveBeenLastCalledWith({
+    environmentId: "local",
+    input: { app: "Safari" },
+  });
+  expect(mocks.alert).toHaveBeenCalledOnce();
 });
