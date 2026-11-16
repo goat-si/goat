@@ -69,9 +69,9 @@ export function FoldedSettingsSection({
   return (
     <section id={id} ref={targetRef} tabIndex={-1} className="outline-none">
       <Collapsible open={open} onOpenChange={setOpen} render={<SettingsGroup divided={false} />}>
-        {/* A control too wide to sit beside the title wraps below it instead of covering it. */}
+        {/* On a narrow screen the controls drop below the title instead of covering it. */}
         <div className="flex flex-wrap items-center gap-x-4 px-3 sm:px-4">
-          <CollapsibleTrigger className="flex min-h-11 min-w-0 grow items-center gap-2 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring rounded-md">
+          <CollapsibleTrigger className="flex min-h-11 min-w-0 flex-1 basis-40 items-center gap-2 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring rounded-md">
             <ChevronRightIcon
               aria-hidden
               className={cn(
@@ -85,14 +85,14 @@ export function FoldedSettingsSection({
             ) : null}
           </CollapsibleTrigger>
           {control ? (
-            <div className="ml-auto flex shrink-0 items-center py-2">{control}</div>
+            <div className="ms-auto flex max-w-full items-center py-1.5">{control}</div>
           ) : null}
         </div>
         {!open && collapsedContent ? (
           <div className="border-t border-border/50 empty:hidden">{collapsedContent}</div>
         ) : null}
         <CollapsiblePanel>
-          <div className="border-t border-border/50 [&>*+*]:border-t [&>*+*]:border-border/50">
+          <div className="border-t border-border/50 *:not-first:border-t *:not-first:border-border/50">
             {children}
           </div>
         </CollapsiblePanel>
