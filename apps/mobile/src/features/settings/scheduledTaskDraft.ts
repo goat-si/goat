@@ -340,11 +340,14 @@ export function scheduledTaskContextFields(
   };
 }
 
-/** The save keeps the task's thread: one-thread mode, same project (the server's rule). */
-export const keepsThread = (draft: ScheduledTaskDraft) =>
+/**
+ * The save keeps the task's thread: one-thread mode and, on a server with thread modes, the same
+ * project (its rule); an older server keeps the thread across a project change.
+ */
+export const keepsThread = (draft: ScheduledTaskDraft, threadModes = true) =>
   draft.task?.threadId != null &&
   draft.threadMode !== "new_thread" &&
-  draft.projectId === draft.task.projectId;
+  (!threadModes || draft.projectId === draft.task.projectId);
 
 /** Important updates needs a thread that later runs keep. */
 export const offersImportantUpdates = keepsThread;

@@ -127,17 +127,18 @@ export function ScheduledTaskContextSections({
                   project.id,
                   draft.modelSelection.instanceId,
                 ));
+            const next = {
+              ...draft,
+              modelSelection: keepsExplicitModel
+                ? draft.modelSelection
+                : scheduledTaskDefaultModel(config, project),
+              modelSelectionIsExplicit: keepsExplicitModel,
+            };
+            // Only a server with thread modes moves a task off its thread with its project.
             setDraft(
-              withProject(
-                {
-                  ...draft,
-                  modelSelection: keepsExplicitModel
-                    ? draft.modelSelection
-                    : scheduledTaskDefaultModel(config, project),
-                  modelSelectionIsExplicit: keepsExplicitModel,
-                },
-                project.id,
-              ),
+              config?.environment?.capabilities?.scheduledTaskThreadModes === true
+                ? withProject(next, project.id)
+                : { ...next, projectId: project.id },
             );
           }}
         />

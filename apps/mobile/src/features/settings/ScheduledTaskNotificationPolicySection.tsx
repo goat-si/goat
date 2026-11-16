@@ -9,10 +9,12 @@ const choices = [
 ];
 export function ScheduledTaskNotificationPolicySection({
   draft,
+  threadModes,
   disabled,
   onChange,
 }: {
   draft: ScheduledTaskDraft;
+  threadModes: boolean;
   disabled: boolean;
   /** A chosen policy replaces the reset notice. */
   onChange: (draft: ScheduledTaskDraft) => void;
@@ -28,7 +30,9 @@ export function ScheduledTaskNotificationPolicySection({
           disabled
             ? []
             : choices
-                .filter((c) => c.id !== "important_updates" || offersImportantUpdates(draft))
+                .filter(
+                  (c) => c.id !== "important_updates" || offersImportantUpdates(draft, threadModes),
+                )
                 .map((c) => ({ ...c, state: c.id === draft.notificationPolicy ? "on" : undefined }))
         }
         onSelect={(id) =>

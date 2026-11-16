@@ -152,31 +152,38 @@ const projects = [
   { id: ProjectId.make("other"), title: "Other" },
 ] as never;
 
-function Editor({ initial }: { initial: ScheduledTaskDraft }) {
+function Editor({ initial, threadModes }: { initial: ScheduledTaskDraft; threadModes: boolean }) {
   const [draft, setDraft] = useState(initial);
   return (
     <>
       <ScheduledTaskContextSections
         draft={draft}
         setDraft={setDraft}
-        config={threadModesConfig as never}
+        config={threadModes ? (threadModesConfig as never) : null}
         projects={projects}
         saving={false}
         locked={false}
         onPickModel={vi.fn()}
         onPickBranch={vi.fn()}
       />
-      <ScheduledTaskNotificationPolicySection draft={draft} disabled={false} onChange={setDraft} />
+      <ScheduledTaskNotificationPolicySection
+        draft={draft}
+        threadModes={threadModes}
+        disabled={false}
+        onChange={setDraft}
+      />
     </>
   );
 }
 
-async function renderEditor(overrides: Partial<ScheduledTask>) {
+async function renderEditor(overrides: Partial<ScheduledTask>, threadModes = true) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const container = document.createElement("div");
   const root = createRoot(container);
   await act(async () => {
-    root.render(<Editor initial={editDraft({ ...task(false), ...overrides })} />);
+    root.render(
+      <Editor initial={editDraft({ ...task(false), ...overrides })} threadModes={threadModes} />,
+    );
   });
   const press = async (label: string) => {
     const button = container.querySelector(`[aria-label="${label}"]`);
@@ -228,5 +235,20 @@ it("moving a bound task to another project shows the next run starting a thread 
   expect(editor.labels()).not.toContain("Notifications: Important updates");
   await editor.press("Project: Synthetic");
   expect(editor.container.textContent).toContain("Each run continues this conversation.");
+  expect(editor.labels()).toContain("Notifications: Important updates");
+});
+
+it("without thread modes, a project change keeps Important updates, as an older server keeps the thread", async () => {
+  using editor = await renderEditor(
+    {
+      threadId: ThreadId.make("bound"),
+      threadMode: "continue",
+      notificationPolicy: "important_updates",
+    },
+    false,
+  );
+  await editor.press("Project: Other");
+  expect(editor.container.textContent).not.toContain(RESET_NOTICE);
+  expect(editor.labels()).toContain("Notifications, Important updates");
   expect(editor.labels()).toContain("Notifications: Important updates");
 });
