@@ -22,6 +22,7 @@ import { makeHubNodesHandlers } from "./hubNodes/HubNodes.rpc.ts";
 import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
 import { memoryError } from "./mcp/toolkits/memory/handlers.ts";
 import * as MemoryService from "./memory/MemoryService.ts";
+import { memorySessionPermit } from "./wsMemorySessionPermit.ts";
 import * as SiteNotes from "./preview/SiteNotes.ts";
 import * as MemorySyncService from "./memory/MemorySyncService.ts";
 import { ProviderMemoryImportRuntime } from "./memory/imports/MemoryImportTypes.ts";
@@ -411,21 +412,6 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
 // Middleware added later wraps middleware added earlier, so instrumentation wraps authorization.
-/** SQL-free live scope reads can safely run again after a source wait or inside a transaction. */
-const memorySessionPermit = <E>(
-  liveScopes: Effect.Effect<ReadonlyArray<import("@goat/contracts").AuthEnvironmentScope>, E>,
-  capturedScopes: ReadonlyArray<import("@goat/contracts").AuthEnvironmentScope>,
-  required: ReadonlyArray<import("@goat/contracts").AuthEnvironmentScope>,
-) =>
-  liveScopes.pipe(
-    Effect.flatMap((live) =>
-      required.every((scope) => capturedScopes.includes(scope) && live.includes(scope))
-        ? Effect.void
-        : Effect.fail(new MemoryService.MemoryAccessError({ code: "unavailable" })),
-    ),
-    Effect.mapError(() => new MemoryService.MemoryAccessError({ code: "unavailable" })),
-  );
-
 const isMemoryImportRpcError = Schema.is(MemoryImportRpcError);
 
 /** Shared by the installed websocket route and the transport integration harness. */

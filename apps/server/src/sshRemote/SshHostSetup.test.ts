@@ -35,6 +35,7 @@ import * as DateTime from "effect/DateTime";
 import { TestClock } from "effect/testing";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
+import { probeClient, probeSessionId } from "./SshHostSetup.probe.testkit.ts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import { HttpClient } from "effect/http";
@@ -838,26 +839,6 @@ it.effect(
     }),
 );
 
-const probeSessionId = AuthSessionId.make("probe-reviewer");
-const probeClient = Layer.mock(SessionStore.SessionStore)({
-  cookieName: "test",
-  legacyCookieName: undefined,
-  listActive: () =>
-    Effect.succeed([
-      {
-        sessionId: probeSessionId,
-        subject: "reviewer",
-        method: "browser-session-cookie",
-        scopes: ["settings:write"],
-        client: { label: "Reviewer", deviceType: "unknown" },
-        issuedAt: DateTime.makeUnsafe(0),
-        expiresAt: DateTime.makeUnsafe(9999999999999),
-        lastConnectedAt: null,
-        connected: true,
-        current: true,
-      },
-    ]),
-});
 const processOutput = (stdout: string, stderr = "", code = 0) => ({
   stdout,
   stderr,

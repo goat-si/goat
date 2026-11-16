@@ -1,5 +1,4 @@
 import { tracedToolRegistration } from "./toolSpans.ts";
-import { normalizeMcpHttpResponse } from "./normalizeMcpHttpResponse.ts";
 import {
   boundSnapshotMetadata,
   cutText,
@@ -9,7 +8,7 @@ import {
   type SnapshotMetadata,
   withDeliveredBaseline,
 } from "./toolkits/preview/snapshotTransport.ts";
-import { listingChanges, listingSetting, withCallerListing } from "./toolListing.ts";
+import { listingChanges } from "./toolListing.ts";
 import * as Settings from "../serverSettings.ts";
 import { forwardedContentRegistration } from "./toolkits/agentSurface/forwardedContent.ts";
 import { surfaceArgumentAliases } from "./toolkits/agentSurface/argumentAliases.ts";
@@ -23,12 +22,7 @@ import * as AgentWorkspaceAudit from "./AgentWorkspaceTerminalAudit.ts";
 import * as AgentTerminal from "./AgentTerminalMcpService.ts";
 import { TerminalToolkit } from "./toolkits/terminal/tools.ts";
 import * as TerminalHandlers from "./toolkits/terminal/handlers.ts";
-import {
-  listedRegistration,
-  registeredToolName,
-  ToolDispatch,
-  withServedToolNames,
-} from "./ToolDispatch.ts";
+import { listedRegistration, registeredToolName, ToolDispatch } from "./ToolDispatch.ts";
 import {
   argumentKeys,
   encodeReferenceRefusal,
@@ -57,9 +51,8 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import type * as Types from "effect/Types";
 import { AiError, McpProtocol, McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
+import { HttpRouter, HttpServerRequest } from "effect/http";
 import * as ConnectionHandlers from "./toolkits/connection/handlers.ts";
 import { ConnectionToolkit } from "./toolkits/connection/tools.ts";
 import * as MemoryHandlers from "./toolkits/memory/handlers.ts";
@@ -72,8 +65,6 @@ import { ComputerUseToolkit } from "./toolkits/computerUse/tools.ts";
 import { NoteToolkit } from "./toolkits/note/tools.ts";
 
 import packageJson from "../../package.json" with { type: "json" };
-import { connectionOf } from "../auth/connectionContext.ts";
-import { parseBearerToken } from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as HtmlRender from "../htmlRender/HtmlRender.ts";
@@ -127,7 +118,7 @@ import { imageToolFailure, imageToolSuccess, previewSnapshotFailure } from "./im
 import { decodeAsAdvertised } from "./decodeAsAdvertised.ts";
 import { advertisedJsonSchema, advertisedRegistration } from "./advertisedJsonSchema.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
-import * as McpSessionRegistry from "./McpSessionRegistry.ts";
+import { layerMcpAuthMiddleware, makeMcpAuthMiddleware } from "./McpAuthMiddleware.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import * as ToolAdmission from "./ToolAdmission.ts";
 import * as ChannelSessionReceiptGate from "./ChannelSessionReceiptGate.ts";
@@ -174,8 +165,9 @@ import { BrowserClaimToolkit } from "./toolkits/preview/browserClaims/tools.ts";
 import * as BrowserClaimHandlers from "./toolkits/preview/browserClaims/handlers.ts";
 import * as ScreenHandlers from "./toolkits/screen/handlers.ts";
 import { screenRunTool } from "./toolkits/screen/mcpTool.ts";
-import { credentialRefusalMessage, GENERIC_REFUSAL, refusedToolCallId } from "./mcpAuthResponse.ts";
+import { refusedToolCallId } from "./mcpAuthResponse.ts";
 export { credentialRefusalMessage } from "./mcpAuthResponse.ts";
+export { McpClientAuthenticator } from "./McpAuthMiddleware.ts";
 import {
   PreviewSnapshotTool,
   PreviewSnapshotToolkit,
@@ -205,153 +197,6 @@ import {
   hidePlacementArgument,
   PlacementAdmissionEnabled,
 } from "../fleet/admission/PlacementKey.ts";
-
-const mcpResourceMetadataUrl = (request: HttpServerRequest.HttpServerRequest) =>
-  HttpServerRequest.toURL(request).pipe(
-    Option.map((url) => `${url.origin}/.well-known/oauth-protected-resource/mcp`),
-  );
-
-/** Launched agents cannot open OAuth browsers; OAuth would mint credentials outliving their session. */
-const unauthorized = (input: {
-  readonly request: HttpServerRequest.HttpServerRequest;
-  readonly presentedToken: boolean;
-  readonly offerOAuth: boolean;
-  readonly message?: string;
-}) => {
-  const metadataUrl = input.offerOAuth
-    ? Option.getOrUndefined(mcpResourceMetadataUrl(input.request))
-    : undefined;
-  const challenge = [
-    "Bearer",
-    [
-      ...(metadataUrl === undefined ? [] : [`resource_metadata="${metadataUrl}"`]),
-      ...(input.presentedToken ? ['error="invalid_token"'] : []),
-    ].join(", "),
-  ]
-    .filter((part) => part.length > 0)
-    .join(" ");
-  return HttpServerResponse.jsonUnsafe(
-    {
-      error: "invalid_mcp_credential",
-      message: input.message ?? GENERIC_REFUSAL,
-    },
-    {
-      status: 401,
-      headers: {
-        "cache-control": "no-store",
-        "www-authenticate": challenge,
-      },
-    },
-  );
-};
-
-export class McpClientAuthenticator extends Context.Service<
-  McpClientAuthenticator,
-  {
-    readonly authenticate: (
-      request: HttpServerRequest.HttpServerRequest,
-    ) => Effect.Effect<McpInvocationContext.McpInvocationScope | undefined>;
-  }
->()("goat/mcp/McpHttpServer/McpClientAuthenticator") {}
-
-type AuthenticatedHttpEffect = Effect.Effect<
-  HttpServerResponse.HttpServerResponse,
-  Types.unhandled,
-  McpInvocationContext.McpInvocationContext
->;
-
-type McpAuthMiddleware = (
-  httpEffect: AuthenticatedHttpEffect,
-) => Effect.Effect<
-  HttpServerResponse.HttpServerResponse,
-  Types.unhandled,
-  HttpServerRequest.HttpServerRequest
->;
-
-// Session tokens are `<payload>.<signature>`; registry tokens are a bare base64url secret.
-const looksLikeProviderToken = (token: string) => token.length > 0 && !token.includes(".");
-
-const makeMcpAuthMiddleware = Effect.gen(function* () {
-  const registry = yield* McpSessionRegistry.McpSessionRegistry;
-  const clients = yield* Effect.serviceOption(McpClientAuthenticator);
-  const listing = listingSetting(yield* Effect.serviceOption(Settings.ServerSettingsService));
-  const permissions = yield* Effect.serviceOption(Profiles.PermissionProfiles);
-  const authenticateRequest = Effect.fn("McpHttpServer.authenticateRequest")(function* (
-    request: HttpServerRequest.HttpServerRequest,
-  ) {
-    const token = parseBearerToken(request) ?? "";
-    // A thread credential is not a stored session; it never resolves on a Pen connection (§6).
-    const onPen = connectionOf(request)?.kind === "pen";
-    const invocation =
-      (onPen ? undefined : yield* registry.resolve(token)) ??
-      (Option.isSome(clients) && token.length > 0
-        ? yield* clients.value.authenticate(request)
-        : undefined);
-    if (!invocation) {
-      const refusal: McpSessionRegistry.McpCredentialRefusal = registry.explainRefusal
-        ? yield* registry.explainRefusal(token)
-        : { reason: token.length === 0 ? "missing" : "unknown" };
-      const registryToken = registry.isRegistryToken?.(token) === true;
-      const toolCallId = registryToken ? yield* refusedToolCallId(request) : undefined;
-      const details = {
-        reason: refusal.reason,
-        ...(refusal.threadId === undefined ? {} : { threadId: refusal.threadId }),
-        ...(refusal.providerSessionId === undefined
-          ? {}
-          : { providerSessionId: refusal.providerSessionId }),
-        ...(refusal.providerInstanceId === undefined
-          ? {}
-          : { providerInstanceId: refusal.providerInstanceId }),
-        ...(refusal.endedAt === undefined ? {} : { endedAt: refusal.endedAt }),
-        registryToken,
-        toolCall: toolCallId !== undefined,
-      };
-      yield* Effect.logWarning(
-        "refused an MCP request whose credential does not resolve",
-        details,
-      ).pipe(
-        Effect.withSpan("McpHttpServer.refuseCredential", {
-          attributes: Object.fromEntries(
-            Object.entries(details).map(([key, value]) => [`mcp.credential.${key}`, value]),
-          ),
-        }),
-      );
-      const message = credentialRefusalMessage(refusal.reason);
-      if (toolCallId !== undefined)
-        return HttpServerResponse.jsonUnsafe(
-          {
-            jsonrpc: "2.0",
-            id: toolCallId,
-            result: { content: [{ type: "text", text: message }], isError: true },
-          },
-          { status: 200, headers: { "cache-control": "no-store" } },
-        );
-      return unauthorized({
-        request,
-        presentedToken: token.length > 0,
-        offerOAuth: Option.isSome(clients) && !looksLikeProviderToken(token),
-        message,
-      });
-    }
-    return invocation;
-  });
-  // The HTTP span covers the downstream tool call.
-  return Effect.fnUntraced(function* (httpEffect) {
-    const invocation = yield* authenticateRequest(yield* HttpServerRequest.HttpServerRequest);
-    if (HttpServerResponse.isHttpServerResponse(invocation)) return invocation;
-    return yield* withCallerListing(
-      listing,
-      permissions,
-    )(withServedToolNames(httpEffect)).pipe(
-      Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-      Effect.map(normalizeMcpHttpResponse),
-    );
-  }) satisfies McpAuthMiddleware;
-}).pipe(Effect.withSpan("McpHttpServer.makeAuthMiddleware"));
-
-const layerMcpAuthMiddleware = HttpRouter.middleware<{
-  provides: McpInvocationContext.McpInvocationContext;
-}>()(makeMcpAuthMiddleware).layer;
 
 /**
  * The registry index for agents. Without a credential it lists every path; a

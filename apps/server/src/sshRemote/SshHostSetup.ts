@@ -80,7 +80,7 @@ import {
   type SshHostCaller,
 } from "./SshHostAuthorization.ts";
 import * as Dispatch from "./SshRemoteDispatch.ts";
-import { errorResult, setupFailure } from "./sshHostResults.ts";
+import { dispatchFailure, errorResult, outsideThread, setupFailure } from "./sshHostResults.ts";
 import { makeRefuseDisposable } from "./disposablePreflight.ts";
 import {
   managedAliasRevision,
@@ -142,23 +142,6 @@ export class SshHostSetup extends Context.Service<
     readonly onAlias: (listener: SshAliasListener) => Effect.Effect<void>;
   }
 >()("goat/sshRemote/SshHostSetup") {}
-const dispatchFailure = (error: Dispatch.SshRemoteDispatchError): SshHostResult => ({
-  kind: "error",
-  code:
-    error.reason === "host_unknown" || error.reason === "invalid_request"
-      ? error.reason
-      : error.reason === "host_unavailable"
-        ? "host_unreachable"
-        : "operation_failed",
-  message: error.message.slice(0, 2000),
-  fix: { actor: "agent", instruction: "Try again" },
-});
-const outsideThread = (instruction: string): SshHostResult => ({
-  kind: "error",
-  code: "unsupported",
-  message: instruction,
-  fix: { actor: "human", instruction },
-});
 const aliasFor = (input: SshHostAddInput) =>
   input.alias ??
   `goat-${input.address
