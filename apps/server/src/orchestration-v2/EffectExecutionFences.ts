@@ -16,7 +16,10 @@ export class EffectExecutionFences extends Context.Service<
     readonly revision: Effect.Effect<number>;
     readonly awaitChange: (revision: number) => Effect.Effect<Option.Option<Effect.Effect<void>>>;
     readonly setGeneralCapacity: (count: number) => Effect.Effect<void>;
-    readonly snapshotWith: (input: { readonly startCapacity: number }) => Effect.Effect<{
+    readonly snapshotWith: (input: {
+      readonly startCapacity: number;
+      readonly startSlots: number;
+    }) => Effect.Effect<{
       readonly fullLanes: ReadonlyArray<EffectLane>;
       readonly titleThreads: ReadonlyArray<string>;
       readonly titleAtCapacity: boolean;
@@ -100,7 +103,10 @@ export const layer = Layer.sync(EffectExecutionFences, () => {
         const titleThreads: string[] = [];
         const mainThreads: string[] = [];
         for (const { effect, detached } of active.values()) {
-          if (!detached) counts[EFFECT_LANES[effect.request.type]]++;
+          const lane = EFFECT_LANES[effect.request.type];
+          // Reduced start capacity (critical host pressure) still counts detached starts.
+          if (!detached || (lane === "start" && input.startCapacity < input.startSlots))
+            counts[lane]++;
           (effect.request.type === "thread-title.generate" ? titleThreads : mainThreads).push(
             effect.threadId,
           );

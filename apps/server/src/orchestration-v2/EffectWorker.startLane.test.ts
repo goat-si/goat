@@ -767,3 +767,88 @@ it.effect("a start waits pending once each start slot has detached one hung star
     );
   }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
 );
+
+it.effect(
+  "a hung start keeps counting under critical pressure, so a second start stays pending",
+  () =>
+    Effect.gen(function* () {
+      const monitor = Layer.mock(HostPressureMonitor.HostPressureMonitor)({
+        held: Effect.succeed({
+          level: "critical",
+          since: "2026-01-01T00:00:00.000Z",
+          reasons: [],
+          loadPerCore: null,
+          eventLoopDelayMs: null,
+        }),
+      });
+      yield* Effect.gen(function* () {
+        const outbox = yield* EffectOutbox.EffectOutboxV2;
+        const key = "start-lane:critical-detach";
+        const hungThreadId = ThreadId.make(`${key}:hung`);
+        const secondThreadId = ThreadId.make(`${key}:second`);
+        const hungStarted = yield* Deferred.make<void>();
+        const secondStarted = yield* Deferred.make<void>();
+        const start = (threadId: ThreadId, id: string) => ({
+          id: `${key}:${id}`,
+          commandId: CommandId.make(`${key}:${id}`),
+          threadId,
+          request: { type: "provider-turn.start" as const, runId: RunId.make(`${key}:${id}`) },
+        });
+        const workerLayer = EffectWorker.layer.pipe(
+          Layer.provide(
+            Layer.merge(
+              Layer.succeed(EffectOutbox.EffectOutboxV2, outbox),
+              Layer.mock(EffectWorker.OrchestrationEffectExecutorV2)({
+                execute: (effect) =>
+                  effect.threadId === hungThreadId
+                    ? Deferred.succeed(hungStarted, undefined).pipe(Effect.andThen(Effect.never))
+                    : Deferred.succeed(secondStarted, undefined).pipe(Effect.asVoid),
+              }),
+            ),
+          ),
+        );
+        yield* Effect.gen(function* () {
+          yield* outbox.enqueue([start(hungThreadId, "hung")]);
+          yield* EffectWorker.runDaemonWithOptions({ concurrency: 1 }).pipe(Effect.forkScoped);
+          yield* Deferred.await(hungStarted);
+          yield* outbox.enqueue([start(secondThreadId, "second")]);
+          yield* outbox.notifyAvailable();
+          const second = yield* Deferred.await(secondStarted).pipe(
+            Effect.timeoutOption("1 hour"),
+            Effect.forkChild,
+          );
+          yield* TestClock.adjust("1 hour");
+          assert.isTrue(
+            Option.isNone(yield* Fiber.join(second)),
+            "a second start ran beside a hung one under critical pressure",
+          );
+          assert.deepInclude(Option.getOrThrow(yield* outbox.get(`${key}:second`)), {
+            status: "pending",
+            attemptCount: 0,
+          });
+        }).pipe(
+          Effect.provide(workerLayer),
+          Effect.scoped,
+          Effect.ensuring(
+            Effect.forEach(
+              [hungThreadId, secondThreadId],
+              (threadId) =>
+                outbox.cancelUnsettled({
+                  threadId,
+                  effectTypes: ["provider-turn.start"],
+                  reason: "fixture complete",
+                }),
+              { discard: true },
+            ).pipe(Effect.orDie),
+          ),
+        );
+      }).pipe(
+        Effect.provide(
+          EffectOutbox.layer.pipe(
+            Layer.provide(monitor),
+            Layer.provide(SqlitePersistence.layerMemory),
+          ),
+        ),
+      );
+    }),
+);
