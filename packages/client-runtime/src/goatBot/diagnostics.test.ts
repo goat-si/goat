@@ -107,6 +107,26 @@ describe("diagnoseGoatBot", () => {
     expect(line({ ...offline, moveTarget: null }, "home")?.action).toBeNull();
   });
 
+  it("a refused home says GOAT on <home> did not accept this device, never offline, and shows nothing else read from it (#3532, access)", () => {
+    const refused = healthy({
+      home: { ...healthy().home, homeConnected: false } as GoatBotDiagnosticsInput["home"],
+      homeRefused: true,
+      moveTarget: { environmentId: LAPTOP, label: "MacBook" },
+      turnsWaiting: ["t1"],
+    });
+    const result = diagnoseGoatBot(refused);
+    expect(result.verdict).toBe("down");
+    expect(result.title).toBe("Not working");
+    expect(result.lines.map((entry) => [entry.key, entry.text])).toEqual([
+      ["home", "GOAT on Mac Studio did not accept this device"],
+    ]);
+    expect(result.lines[0]).toMatchObject({
+      tone: "error",
+      action: { kind: "claim_home", environmentId: LAPTOP, label: "Make MacBook the home" },
+    });
+    expect(result.lines.some((entry) => entry.text.includes("offline"))).toBe(false);
+  });
+
   it("reports a connected home that cannot run GOAT Bot", () => {
     const old = healthy({
       home: { ...healthy().home, homeSupportsBot: false } as GoatBotDiagnosticsInput["home"],

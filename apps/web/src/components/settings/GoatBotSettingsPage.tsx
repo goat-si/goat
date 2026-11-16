@@ -62,8 +62,8 @@ function GoatBotProfileSection() {
   }
   if (!supported) return null;
   const label = environment.label ?? "this computer";
-  const refusedLine = `GOAT on ${label} did not accept this device.`;
-  const deniedLine = `GOAT on ${label} did not let this device read the bot's profile.`;
+  const refusedLine = `GOAT on ${label} did not accept this device`;
+  const deniedLine = `GOAT on ${label} did not let this device read the bot's profile`;
   // A refusal swaps the row out, which drops an open dialog and the profile it was read from.
   return (
     <SettingsSection id="goat-bot-profile" title="Profile">
