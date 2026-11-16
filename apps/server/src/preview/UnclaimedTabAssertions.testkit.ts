@@ -2,6 +2,7 @@ import { PreviewTabId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import { expect } from "vite-plus/test";
 import type * as Broker from "../mcp/PreviewAutomationBroker.ts";
+import { classifyBrowserActionOutcome } from "./actionOutcomeSafety.ts";
 import * as Manager from "./Manager.ts";
 
 type Scope = typeof import("./ServerBrowser.test.ts").scope;
@@ -49,6 +50,14 @@ export const assertUnclaimedClose = (
       _tag: "PreviewAutomationExecutionError",
       reason: "This tab has no agent owner. Ask the user to close it in the browser panel.",
     });
+    // The agent hears what preview_close tells it: the close never reached the tab.
+    const safety = classifyBrowserActionOutcome({
+      operation: "close",
+      status: "failed",
+      errorTag: result._tag,
+      ...("dispatched" in result ? { dispatched: result.dispatched } : {}),
+    });
+    expect(safety).toMatchObject({ possibleCommit: false, writeStatus: "rejected_before_commit" });
     expect((yield* manager.list({ threadId: scope.thread.threadId })).sessions).toContainEqual(
       expect.objectContaining({ tabId: tab.tabId }),
     );
