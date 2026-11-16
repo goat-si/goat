@@ -336,13 +336,13 @@ No other expectation in an existing dev test may change in this lane without ask
 
 | Row | Upstream | Commit | State |
 | --- | --- | --- | --- |
-| O23 / L407 Cursor team usage (C4) | 497aac20f7 | 672400a7da33a75a8d2d28c64006ddf6d0df2d82 | code complete, live read owed (the lane's read sent nothing, see (4)); needs a live Cursor check |
+| O23 / L407 Cursor team usage (C4) | 497aac20f7 | 672400a7da33a75a8d2d28c64006ddf6d0df2d82 (port), 49c834520adcfd1e4992a78b1522287f6a5cf7ba (test, review P3-3) | code complete, live read owed (the lane's read sent nothing, see (4)); needs a live Cursor check |
 
 ### What the port does
 
 - packages/provider-cursor/src/server/accountUsage.ts: all three GOAT credential sources (Cursor auth file, macOS Keychain login, API key) now read account history from https://api2.cursor.sh/aiserver.v1.DashboardService/* with `authorization: Bearer <token>` and `connect-protocol-version: 1` (:217-223). GetTeams and GetMe run first, together (:251-254), then GetFilteredUsageEvents for personal history and for each team with teamId and the GetMe userId in the body, two scopes at once (:475-479). Team records carry the team id in their dedupe identity; personal dedupe keys are unchanged (the paginated-history case keeps its exact key). The cursor.com dashboard URL, the Origin header and the WorkosCursorSessionToken cookie are gone, and with them the userId taken from the JWT subject.
 - packages/provider-cursor/src/server/accountCache.ts:88-89: usage-cursor-account-cache-v2.json, version 2, as upstream.
-- GOAT differences from upstream: GOAT keeps its credential sources and readCursorAccountUsage's signature, so CursorAccountReader.ts is unchanged. Added here: an expired token (JWT exp at or before now) returns "Sign in to Cursor again to read account usage." before any request (:205-216); more than 100 teams fails the read before any page (MAX_TEAMS, :116, :258); GetMe/GetTeams failures carry a fixed reason inside their span (:243-249).
+- GOAT differences from upstream (also the cursor.usage.teams span annotation, accountUsage.ts:482, a count only): GOAT keeps its credential sources and readCursorAccountUsage's signature, so CursorAccountReader.ts is unchanged. Added here: an expired token (JWT exp at or before now) returns "Sign in to Cursor again to read account usage." before any request (:205-216); more than 100 teams fails the read before any page (MAX_TEAMS, :116, :258); GetMe/GetTeams failures carry a fixed reason inside their span (:243-249).
 - Left out: upstream's in-memory session cache (makeCursorAccountUsageReader with Cache.makeWith, keyed by API key, TTL up to 5 minutes or the token's exp, invalidated on 401) and its test "reuses discovery for $lifetime, invalidates rejected auth, and isolates API keys". GOAT's reader has no per-layer state and CursorUsageAccounts already limits refreshes to one per credential per CURSOR_ACCOUNT_TTL_MS (60 s); the cost is the two membership requests on every refresh. Also left out: the test helper's API-key exchange shortcut (GOAT's API-key test keeps the exchange in its request list), and the queued:false half of upstream's queued-deadline test (GOAT's "reads the pages behind the first together and keeps them in page order" is that case).
 - Tests carried from upstream: "includes each team's own-user history alongside personal history", "rejects unscoped or incomplete team history without keeping personal totals", "starts personal and team reads together without waiting for either response", "reads concurrent pages in order with a full request deadline after queuing" (queued case).
 
@@ -360,7 +360,7 @@ Only the three authorised assertions changed in an existing test (accountUsage.t
 - 401: a 401/403 on a usage page shows "Sign in to Cursor again to read account usage."; a 401 on GetMe/GetTeams shows "Cursor account usage could not be read." (upstream treats any non-2xx membership answer the same way). Records stay empty. The stored login is not changed: the test "reports a rejected login without changing the stored Cursor login" checks the auth file is byte-identical afterwards; the Keychain service only reads (CursorKeychain.ts:38-46, one accessToken effect) and nothing in packages/provider-cursor writes the item; CursorUsageAccounts records the failure for its TTL and leaves the account cache as it was (CursorUsageAccounts.ts:135-141).
 - Request count for one read: GetTeams 1 + GetMe 1 (+ the API-key exchange 1 for an API key) + pages per scope, summed over personal and each team, so 1 + 1 + pages x (1 + teams) when every scope has the same page count. Limits: teams at most 100 after de-duplication, otherwise an error before any page; pages per scope at most 1000 until Cursor reports a count, then at most 2 x ceil(count / 1000) + 1 (:276); at most 2 scopes at once and 6 page requests in flight across them (:261, :478); each request has a 10 s deadline (membership :247, page :338, the page deadline starts once it holds a slot, :342); the whole read has 60 s (:493).
 - Timeouts and abort: "times out and aborts a membership or team request that never answers" (a hanging GetTeams, and a hanging team page: after 10 s the read fails and every hanging request's AbortSignal fired, 0 left open). The existing "ends like a page-by-page read when a page fails, leaving no request open" covers read-ahead pages.
-- No leaks: "keeps the token and response bodies out of spans, logs and errors" runs a successful team read and five failing reads (401 with the token and a marker in the body, an error envelope holding both, a malformed count, a malformed GetTeams answer holding both, a 500 with the marker) under a recording tracer and logger: no span name, attribute, event or failure cause, no log line, and no returned error contains the token, its payload segment or the marker.
+- No leaks: "keeps the token and response bodies out of spans, logs and errors" runs a successful team read and six failing reads under a recording tracer and logger: a 401 with the token and a marker in the body, an error envelope holding both, a malformed count, a GetTeams answer holding both whose message key stops the read at the error-envelope check before the decoder, a GetTeams answer { teams: [{ id: <marker> }] } with no message key so the teams decoder runs (49c834520a, review P3-3), and a 500 with the marker. No span name, attribute, event or failure cause and no returned error contains the token, its payload segment or the marker. Nothing in the read path logs, so the logger half holds by construction and only guards a future log line. The fixed-reason mapping of membership failures is extra protection: in Effect 4.0.5 a SchemaError names the path and not the value (the reviewer removed the mapping and the tests still passed).
 
 (3) Cache v1 to v2:
 - This build reads and writes only usage-cursor-account-cache-v2.json (accountCache.ts:88; CursorUsageAccounts.ts:63) and accepts only version 2 (accountCache.ts:160). A leftover v1 file is ignored and not removed: no code refers to the v1 name any more. The first scan after the upgrade reads the whole retention window again. Test: CursorUsageAccounts.test.ts "rescans past a v1 or malformed cache and leaves the v1 file for an older build": a fresh v1 file means 1 read and the v1 file is byte-identical afterwards; v1 contents under the v2 name are refused by the version check (1 read); a malformed v2 file means 1 read (CursorUsageAccounts.ts:70-77 falls back to an empty cache); a valid v2 file means 0 reads (control).
@@ -370,7 +370,7 @@ Only the three authorised assertions changed in an existing test (accountUsage.t
 
 ### Fail first
 
-On 780468c0eb with the new tests in place: accountUsage.test.ts 12 failed | 11 passed (the authorised paginated-history case and the 11 new O23 tests); CursorUsageAccounts.test.ts 1 failed | 1 passed ("usage-cursor-account-cache-v1.json ...: expected +0 to equal 1", the v1 file was still read). After the change: packages/provider-cursor src/server 41 files, 380 passed.
+On 780468c0eb with the new tests in place: accountUsage.test.ts 12 failed | 11 passed: the authorised paginated-history case and 11 of the 12 new O23 tests. The twelfth, "starts personal and team reads together without waiting for either response", passes on 780468c0eb because the parent's Keychain read went to cursor.com and the test's transform only holds requests ending in /GetFilteredUsageEvents, so nothing waited. On the new code it still proves the scopes start together: if personal and team ran one after the other, each would wait on the other and the test would hang; CursorUsageAccounts.test.ts 1 failed | 1 passed ("usage-cursor-account-cache-v1.json ...: expected +0 to equal 1", the v1 file was still read). After the change: packages/provider-cursor src/server 41 files, 380 passed.
 
 ### C4 cases
 
@@ -378,7 +378,7 @@ The usage result shape (UsageRecord, CursorAccountUsageReadResult) and every wir
 
 ### Budgets
 
-No entry changed. accountUsage.ts keeps its nonNull 2 (no new non-null assertion, 506 lines); accountUsage.test.ts 986 lines (no entry, under 1000); CursorUsageAccounts.test.ts 132 lines.
+No entry changed. accountUsage.ts keeps its nonNull 2 (no new non-null assertion, 506 lines); accountUsage.test.ts 983 lines at 672400a7da (wc -l and countLines; the earlier 986 was measured before a three-line change in the same commit) and 986 at 49c834520a (no entry, under 1000); CursorUsageAccounts.test.ts 132 lines.
 
 ### Gate (part 3)
 
@@ -393,9 +393,21 @@ Run on pen-macmini at 672400a7da33a75a8d2d28c64006ddf6d0df2d82 (part 2's head 78
 - An expired Keychain or auth-file token shows "Sign in to Cursor again"; GOAT does not refresh Cursor's token.
 - A 401 on GetMe or GetTeams shows the general read error, not the sign-in message (as upstream).
 - An account in more than 100 teams gets an error instead of partial history.
-- The v1 cache file stays on disk after the upgrade.
+- The v1 cache file stays in place after the upgrade, as upstream; nothing removes it. A downgrade continues from it. (Review P3-4; removing it after the first v2 save would be a GOAT difference.)
+- A Cursor login revoked on Cursor's side while its token has not expired now shows "Cursor account usage could not be read." where it showed "Sign in to Cursor again": GetMe and GetTeams answer 401 before any usage page. A team that refuses a member's usage read with 403 fails the whole read, personal history included, with "Sign in to Cursor again", which signing in does not fix. Both as upstream. (Review P3-2.)
+
+### What only the live read can prove (review)
+
+- That DashboardService accepts the Cursor CLI login token as a bearer. A run on macOS proves the Keychain token only, not the auth-file token on Linux or Windows.
+- The response shapes for this kind of token: GetMe's userId and the team ids as JSON numbers.
+- Pagination and counts on real data.
+- No double count: personal history does not include team events.
+- That an ordinary member, not only an admin, gets 200 on their team scope.
+- That a real account finishes within the 60 s read deadline.
 
 ### NOT RUN (part 3)
+
+- check:changed at 49c834520a (test-only commit on top of the gated 672400a7da): focused only, packages/provider-cursor src/server 41 files 380 passed, package typecheck 0, lint and format clean.
 
 - The live personal read with a working login: owed by a person with the one command under "O23 live check for a person" (this session cannot read the login keychain; see (4)).
 - The team fan-out against a real Cursor team account (needs a person with one).
@@ -411,36 +423,51 @@ O23 noted: the live read sent nothing because the lane's session cannot read the
 
 Lane coordinator note: test the script yourself only as far as it can go without the token (it must report the missing login and send nothing, exactly as your run did); send the command lines with goat_origin_report as soon as they exist (before READY if the gate is still running), and READY afterwards.
 
+### O23 review ruling (verbatim)
+
+N9b part 3 (O23) review at 672400a7da: APPROVE WITH NITS, P3 only; the verdict covers the code. Report /Users/jun/handoff-in/chase/next-N9b-O23-review-672400a7.md. The commit still does not merge until a person's live read returns usage. For the part 3 thread, in this order:
+1. O23-P3-1, FIRST and now, before the owner runs it: tighten the live check. In /Users/junny/handoff-in/chase/o23-cursor-live-read.mjs (and its text in next-N9b.md) "personal read: PASS" requires ALL of: the checkout's commit is 672400a7da or a descendant that contains it (print the commit and say which); every request line starts with api2.cursor.sh; a GetTeams line and a GetMe line are present; NO exchange_user_api_key line (if CURSOR_API_KEY or another API-key source is in play the script says "API-key path: this run does not test the Keychain login" and the verdict is NOT TESTED, not PASS); every request 200; at least one event. "team read: PASS" requires at least one team, every "team n" line 200 and a team event count above zero. Print an event count per scope (personal N, team 1 M, ...): counts only. Also print one line saying whether the read used the Keychain or an auth file. Send me the new sha256 and the changed lines at once; the command the owner was given stays the same.
+2. O23-P3-3 (test, optional but small): one scenario where GetTeams returns { teams: [{ id: <secret> }] } with no message key, so the decoder is reached, asserting no span, log or error carries the value; correct the record's sentence about the malformed answer and about logs (nothing in the read path logs).
+3. Record: O23-P3-2 as a Known limit in plain words (a login revoked on Cursor's side while its token has not expired now reads "Cursor account usage could not be read." where it read "Sign in to Cursor again"; a team that refuses a member's read with 403 fails the whole read with "Sign in to Cursor again"; as upstream) and a line in the live-check guide: the person notes whether they are an ordinary member or an admin of the team; O23-P3-4 (the v1 cache file stays in place, as upstream; a downgrade continues from it); O23-P3-5 (accountUsage.test.ts is 983 lines; 11 of the 12 new tests fail on 780468c0eb and "starts personal and team reads together" passes there and why it still proves something; the cursor.usage.teams span annotation at accountUsage.ts:482 is a GOAT addition); what only the live read can prove, as the reviewer lists it (the endpoint accepts the CLI login token as a bearer: a macOS run proves the Keychain token only, not the Linux or Windows auth file; response shapes; pagination on real data; no double count between personal and team history; an ordinary member's team read; a real account inside 60 s).
+4. When I say so (after part 2's head is final), merge origin/chase/t3-261114-n9b2-providers into chase/t3-261114-n9b2-o23 (git merge-tree is clean against 5f857339c8; no shared files).
+
+Review report: /Users/jun/handoff-in/chase/next-N9b-O23-review-672400a7.md (APPROVE WITH NITS at 672400a7da, P3 only; the verdict covers the code).
+
 ### O23 live check for a person
 
-State: code complete, live read owed. The O23 commit merges only after a person's result line is below.
+State: code complete, live read owed. The O23 commits merge only after a person's result line is below.
 
-Script: /Users/junny/handoff-in/chase/o23-cursor-live-read.mjs on pen-macmini, outside the repository (sha256 b8d495ea196a08c47468bfd7ba079784f018e6639caa38fa1c9fa57bdc34871e; full text below for other Macs). It runs the Usage page's path through the new code: CursorUsageAccounts.scan for the default Cursor instance with Keychain usage on, awaiting the refresh, with the real CursorAccountReader and CursorKeychain and a temporary state directory removed at exit. It prints only each request's host, method name, scope (personal, or team 1..n by order) and HTTP status, then the number of requests, events (usage records in the last 30 days) and teams, whether usage-cursor-account-cache-v2.json was written, the reader's fixed error text if any, and two verdicts.
+Script: /Users/junny/handoff-in/chase/o23-cursor-live-read.mjs on pen-macmini, outside the repository (sha256 a60dda56570619a271e2ed1b8e356005e81f5daf70f9946675b2c270757e6304, 181 lines, tightened for review P3-1; the first version was b8d495ea196a08c47468bfd7ba079784f018e6639caa38fa1c9fa57bdc34871e; full text below for other Macs). It runs the Usage page's path through the new code: CursorUsageAccounts.scan for the default Cursor instance with Keychain usage on, awaiting the refresh, with the real CursorAccountReader and CursorKeychain and a temporary state directory removed at exit. It prints only: the checkout's commit and whether it contains 672400a7da; which login was read (Keychain, auth file or API key); each request's host, method name, scope (personal, or team 1..n by order) and HTTP status; the number of requests; billed events per scope (rows with token usage, counted from each 200 page); the usage records after de-duplication; the number of teams; whether usage-cursor-account-cache-v2.json was written; the reader's fixed error text if any; and two verdicts.
 
-The one command, on pen-macmini, in a Terminal window of the logged-in desktop user (not over SSH and not from an agent session, which cannot show the Keychain prompt):
+The one command (unchanged), on pen-macmini, in a Terminal window of the logged-in desktop user (not over SSH and not from an agent session, which cannot show the Keychain prompt):
 
 ```sh
 cd /Volumes/CLIsu/goat-worktrees/goat/chase-t3-261114-n9b-pro-2c6a8c74eb0ff019/packages/provider-cursor && git rev-parse --short HEAD && ~/.local/share/vite-plus/js_runtime/node/26.12.1/bin/node --input-type=module < /Users/junny/handoff-in/chase/o23-cursor-live-read.mjs
 ```
 
-On another Mac (the team-account check): check out chase/t3-261114-n9b2-o23, run `vp i`, save the script below as o23-cursor-live-read.mjs outside the checkout, and run the same command from <checkout>/packages/provider-cursor with Node 26.12.1 (or any Node 22.18 or newer) and the script's path.
+On another Mac (the team-account check): check out chase/t3-261114-n9b2-o23, run `vp i`, save the script below as o23-cursor-live-read.mjs outside the checkout, and run the same command from <checkout>/packages/provider-cursor with Node 26.12.1 (or any Node 22.18 or newer) and the script's path. Unset CURSOR_API_KEY first, or the run tests the API-key path instead.
 
 What the person sees: a macOS Keychain dialog saying node wants to use the confidential information stored in "cursor-access-token" in the keychain (it may ask for the login password). Click Allow (once) within 30 seconds. After 30 seconds the read stops with "error: Allow Keychain access on the Mac running GOAT, then refresh."; run the command again.
 
-Reading the output: lines such as `api2.cursor.sh GetTeams 200`, `api2.cursor.sh GetMe 200`, `api2.cursor.sh GetFilteredUsageEvents personal 200`, `api2.cursor.sh GetFilteredUsageEvents team 1 200`, then `requests:`, `events:`, `teams:`, `usage-cursor-account-cache-v2.json written:` and the verdicts.
-- Pass: every request 200 and at least one event for an account that has usage; the script prints "personal read: PASS". "REQUESTS OK, NO EVENTS" means the account had no usage in the last 30 days: the requests are proven, usage is not.
-- Team pass: GetTeams gives at least one team (`teams:` 1 or more) and every "team n" read answers 200; the script prints "team read: PASS".
-- The output holds no token, event content, team name or team id. Paste it whole, with the commit line and the Mac, as the person's result line below.
+Reading the output: `commit: <sha> (contains O23 672400a7da: yes)`, `login read: Keychain`, then lines such as `api2.cursor.sh GetTeams 200`, `api2.cursor.sh GetMe 200`, `api2.cursor.sh GetFilteredUsageEvents personal 200`, `api2.cursor.sh GetFilteredUsageEvents team 1 200`, then `requests:`, `events: personal N, team 1 M`, `usage records after de-duplication:`, `teams:`, `usage-cursor-account-cache-v2.json written:` and the verdicts.
+- "personal read: PASS" needs all of: the commit contains 672400a7da; every request line starts with api2.cursor.sh; a GetTeams line and a GetMe line; no exchange_user_api_key line; every request 200; the v2 cache written; at least one event. "REQUESTS OK, NO EVENTS (no usage in the last 30 days)" proves the requests but not usage.
+- "team read: PASS" needs the same request checks, at least one team, every "team n" line 200 and a team event count above zero. Compare each team's count with Cursor's dashboard if you can.
+- "NOT TESTED (this checkout does not contain 672400a7da)" or "NOT TESTED (API-key path)", with "API-key path: this run does not test the Keychain login", means the run proves nothing for O23: an API key was in play (CURSOR_API_KEY set, an API-key login, or an exchange_user_api_key line), or the checkout is wrong.
+- For the team check, the person notes whether they are an ordinary member or an admin of the team. If an ordinary member gets 403 on a team line, that goes to a follow-up issue (review P3-2).
+- The output holds no token, event content, team name or team id. Paste it whole, with the command's first line (the short commit), the Mac and the member or admin note, as the person's result line below.
 
-Tested in the lane only without the token: "requests: 0", "events: 0", "teams: 0", "usage-cursor-account-cache-v2.json written: no", "error: Cursor account history needs a macOS Keychain CLI login on this server.", "personal read: FAIL", "team read: NOT CHECKED (nothing was read)"; nothing was sent.
+Tested in the lane:
+- Real run here, without a usable token: "commit: 672400a7da33a75a8d2d28c64006ddf6d0df2d82 (contains O23 672400a7da: yes)", "login read: Keychain", "requests: 0", "events: personal 0", "usage records after de-duplication: 0", "teams: 0", "usage-cursor-account-cache-v2.json written: no", "error: Cursor account history needs a macOS Keychain CLI login on this server.", "personal read: FAIL", "team read: NOT CHECKED (nothing was read)"; nothing was sent.
+- A harness copy with only the Keychain reader and fetch replaced by fakes (not Cursor's API): a team account gave PASS / PASS with "events: personal 1, team 1 1"; a team with no events gave personal PASS, team FAIL; a team page 403 gave FAIL / FAIL with "Sign in to Cursor again"; no team gave PASS / NOT CHECKED (no team on this account); CURSOR_API_KEY set gave "login read: API key", an exchange_user_api_key line, the API-key line and NOT TESTED / NOT TESTED; a commit not in the checkout gave NOT TESTED / NOT TESTED.
 
 Person's result line: (owed)
 
 ```js
 // O23 live check: one Cursor account read through GOAT's Usage path (CursorUsageAccounts.scan,
-// the Keychain login, api2 bearer requests). Prints request method names, HTTP statuses and counts
-// only: never the token, an event's content or a team's name or id.
+// the Keychain login, api2 bearer requests). Prints the commit, request method names, HTTP statuses
+// and counts only: never the token, an event's content or a team's name or id.
 // Run from <checkout>/packages/provider-cursor:  node --input-type=module < o23-cursor-live-read.mjs
+import { execFileSync } from "node:child_process";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProviderInstanceId } from "@goat/contracts";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
@@ -451,28 +478,62 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { CURSOR_ACCOUNT_CACHE_FILE_NAME } from "./src/server/accountCache.ts";
 import * as CursorAccountReader from "./src/server/CursorAccountReader.ts";
 import * as CursorKeychain from "./src/server/CursorKeychain.ts";
 import * as CursorUsageAccounts from "./src/server/CursorUsageAccounts.ts";
 
+const O23 = "672400a7da33a75a8d2d28c64006ddf6d0df2d82";
+const git = (...args) => {
+  try {
+    return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return null;
+  }
+};
+const head = git("rev-parse", "HEAD") ?? "unknown";
+const containsO23 = git("merge-base", "--is-ancestor", O23, "HEAD") !== null;
+
 const lines = [];
 const teamLabels = new Map();
+const events = new Map();
 const scopeOf = (request) => {
   if (!request.url.endsWith("/GetFilteredUsageEvents") || request.body._tag !== "Uint8Array") return "";
   const teamId = JSON.parse(new TextDecoder().decode(request.body.body)).teamId;
-  if (teamId === undefined) return " personal";
+  if (teamId === undefined) return "personal";
   if (!teamLabels.has(teamId)) teamLabels.set(teamId, teamLabels.size + 1);
-  return ` team ${teamLabels.get(teamId)}`;
+  return `team ${teamLabels.get(teamId)}`;
 };
 const name = (request) => new URL(request.url).host + " " + request.url.split("/").at(-1);
+// Counts billed rows per scope; the body is handed on unchanged and never printed.
+const countRows = (scope, response) =>
+  response.text.pipe(
+    Effect.map((text) => {
+      try {
+        const rows = JSON.parse(text).usageEventsDisplay;
+        const billed = Array.isArray(rows)
+          ? rows.filter((row) => row !== null && typeof row === "object" && row.tokenUsage != null).length
+          : 0;
+        events.set(scope, (events.get(scope) ?? 0) + billed);
+      } catch {}
+      return HttpClientResponse.fromWeb(
+        response.request,
+        new Response(text, { status: response.status, headers: response.headers }),
+      );
+    }),
+  );
 const counting = Layer.effect(
   HttpClient.HttpClient,
   Effect.map(HttpClient.HttpClient, (client) =>
-    HttpClient.make((request, url, signal, fiber) => {
-      const label = name(request) + scopeOf(request);
+    HttpClient.make((request) => {
+      const scope = scopeOf(request);
+      const label = name(request) + (scope ? ` ${scope}` : "");
       return client.execute(request).pipe(
         Effect.tap((response) => Effect.sync(() => lines.push(`${label} ${response.status}`))),
+        Effect.flatMap((response) =>
+          scope && response.status === 200 ? countRows(scope, response) : Effect.succeed(response),
+        ),
         Effect.tapError(() => Effect.sync(() => lines.push(`${label} no HTTP response`))),
       );
     }),
@@ -480,17 +541,25 @@ const counting = Layer.effect(
 ).pipe(Layer.provide(FetchHttpClient.layer));
 
 let read = null;
+let source = "none (no read)";
 const reader = Layer.effect(
   CursorAccountReader.CursorAccountReader,
   Effect.map(CursorAccountReader.CursorAccountReader, (real) => ({
-    read: (...args) =>
-      real.read(...args).pipe(
+    read: (credentialSource, ...rest) => {
+      source =
+        typeof credentialSource === "string"
+          ? "auth file"
+          : credentialSource.kind === "keychain"
+            ? "Keychain"
+            : "API key";
+      return real.read(credentialSource, ...rest).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
-            read = { events: result.records.length, missing: result.missing, error: result.error };
+            read = { records: result.records.length, missing: result.missing, error: result.error };
           }),
         ),
-      ),
+      );
+    },
   })),
 ).pipe(
   Layer.provide(CursorAccountReader.layer),
@@ -512,22 +581,56 @@ const program = Effect.gen(function* () {
   const host = yield* ProviderHost.ProviderHost;
   const cachePath = (yield* Path.Path).join(host.paths.stateDir, CURSOR_ACCOUNT_CACHE_FILE_NAME);
   const cacheWritten = yield* (yield* FileSystem.FileSystem).exists(cachePath);
+
+  console.log(`commit: ${head} (contains O23 672400a7da: ${containsO23 ? "yes" : "NO"})`);
+  console.log(`login read: ${source}`);
   for (const line of lines) console.log(line);
-  const statuses = lines.map((line) => line.split(" ").at(-1));
-  const everyOk = lines.length > 0 && statuses.every((status) => status === "200");
-  const teamReads = lines.filter((line) => / team \d+ /.test(line));
+  const methods = lines.map((line) => line.split(" ")[1]);
+  const apiKeyPath =
+    source === "API key" ||
+    methods.includes("exchange_user_api_key") ||
+    Boolean(process.env.CURSOR_API_KEY?.trim());
+  const allApi2 = lines.every((line) => line.startsWith("api2.cursor.sh "));
+  const everyOk = lines.length > 0 && lines.every((line) => line.endsWith(" 200"));
+  const membership = methods.includes("GetTeams") && methods.includes("GetMe");
+  const teamScopes = [...teamLabels.values()].map((index) => `team ${index}`);
+  const teamEvents = teamScopes.reduce((sum, scope) => sum + (events.get(scope) ?? 0), 0);
+  const totalEvents = [...events.values()].reduce((sum, count) => sum + count, 0);
   console.log(`requests: ${lines.length}`);
-  console.log(`events: ${read === null ? "no read" : read.events}`);
+  console.log(
+    `events: ${["personal", ...teamScopes].map((scope) => `${scope} ${events.get(scope) ?? 0}`).join(", ")}`,
+  );
+  console.log(`usage records after de-duplication: ${read === null ? "no read" : read.records}`);
   console.log(`teams: ${teamLabels.size}`);
   console.log(`${CURSOR_ACCOUNT_CACHE_FILE_NAME} written: ${cacheWritten ? "yes" : "no"}`);
   if (read?.error) console.log(`error: ${read.error}`);
-  if (read === null) console.log(`note: ${scans.map((scan) => scan.message ?? "no Cursor login found").join("; ") || "no Cursor login found"}`);
-  console.log(
-    `personal read: ${!everyOk || !cacheWritten ? "FAIL" : read?.events > 0 ? "PASS" : "REQUESTS OK, NO EVENTS (no usage in the last 30 days)"}`,
-  );
-  console.log(
-    `team read: ${lines.length === 0 ? "NOT CHECKED (nothing was read)" : teamLabels.size === 0 ? "NOT CHECKED (no team on this account)" : everyOk && teamReads.every((line) => line.endsWith(" 200")) ? "PASS" : "FAIL"}`,
-  );
+  if (read === null)
+    console.log(`note: ${scans.map((scan) => scan.message ?? "no Cursor login found").join("; ") || "no Cursor login found"}`);
+  if (apiKeyPath) console.log("API-key path: this run does not test the Keychain login");
+
+  const notTested = !containsO23
+    ? "NOT TESTED (this checkout does not contain 672400a7da)"
+    : apiKeyPath
+      ? "NOT TESTED (API-key path)"
+      : null;
+  const personal =
+    notTested ??
+    (!(allApi2 && membership && everyOk && cacheWritten)
+      ? "FAIL"
+      : totalEvents > 0
+        ? "PASS"
+        : "REQUESTS OK, NO EVENTS (no usage in the last 30 days)");
+  const team =
+    notTested ??
+    (lines.length === 0
+      ? "NOT CHECKED (nothing was read)"
+      : teamLabels.size === 0
+        ? "NOT CHECKED (no team on this account)"
+        : allApi2 && membership && everyOk && teamEvents > 0
+          ? "PASS"
+          : "FAIL");
+  console.log(`personal read: ${personal}`);
+  console.log(`team read: ${team}`);
 });
 
 await Effect.runPromise(
