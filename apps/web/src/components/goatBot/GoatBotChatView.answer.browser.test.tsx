@@ -264,3 +264,26 @@ it("guard: the task recording an answer while the field is focused and empty end
   await vi.waitFor(() => expect(document.activeElement).toBe(row));
   expect(navigationBlocked()).toBe(false);
 });
+
+it("words the gate held become editable again when the card's choices come back (#3442)", async () => {
+  setup();
+  const onSendToTask = vi.fn(() => true);
+  const { answerQuestionId: _question, ...noQuestionId } = question;
+  const sending: BotRow = {
+    ...noQuestionId,
+    options: [],
+    answer: "Keep",
+    answerIndex: 0,
+    answerSending: true,
+  };
+  await using screen = await render(chat({ rows: [noQuestionId], onSendToTask }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Something else" }), TYPED);
+  await screen.rerender(chat({ rows: [sending], onSendToTask }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Something else" }), "{Enter}");
+  await expect.element(screen.getByText("Not sent: “" + TYPED + "”")).toBeVisible();
+  // The pick failed: the choices are back.
+  await screen.rerender(chat({ rows: [noQuestionId], onSendToTask }));
+  await expect.element(screen.getByRole("textbox", { name: "Something else" })).toHaveValue(TYPED);
+  expect(screen.container.textContent).not.toContain("Not sent");
+  expect(onSendToTask).not.toHaveBeenCalled();
+});
