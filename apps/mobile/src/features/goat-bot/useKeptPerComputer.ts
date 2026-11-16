@@ -99,6 +99,10 @@ export function followKeptPerComputerCatalog(registry: AtomRegistry.AtomRegistry
     for (const read of readsOf(environmentId, kind)) registry.refresh(read);
   });
   let known = new Set<EnvironmentId>();
+  const removed = new Set<EnvironmentId>();
+  // Added back after a removal: its presentation can still carry the removed connection's last
+  // state until the new connection reports, so a refusal counts only after that.
+  const readded = new Set<EnvironmentId>();
   const stopCatalog = registry.subscribe(
     environmentCatalog.catalogValueAtom,
     (catalog) => {
@@ -107,6 +111,12 @@ export function followKeptPerComputerCatalog(registry: AtomRegistry.AtomRegistry
         if (!now.has(environmentId)) {
           registry.set(connectionRefusedAtom(environmentId), false);
           for (const kind of KEPT_KINDS) startOver(registry, environmentId, kind);
+          removed.add(environmentId);
+        }
+      for (const environmentId of now)
+        if (!known.has(environmentId) && removed.delete(environmentId)) {
+          registry.set(connectionRefusedAtom(environmentId), false);
+          readded.add(environmentId);
         }
       known = now;
     },
@@ -118,15 +128,21 @@ export function followKeptPerComputerCatalog(registry: AtomRegistry.AtomRegistry
     (presentations) => {
       for (const [environmentId, { connection }] of presentations) {
         const refused = connectionRefusedAtom(environmentId);
+        const reason = "failure" in connection ? connection.failure?.reason : null;
+        const blocked =
+          connection.phase !== "connected" &&
+          (reason === "authentication" || reason === "permission");
+        if (readded.has(environmentId)) {
+          if (blocked) continue;
+          readded.delete(environmentId);
+        }
         if (connection.phase === "connected") {
           if (!connected.has(environmentId) && registry.get(refused)) registry.set(refused, false);
           connected.add(environmentId);
           continue;
         }
         connected.delete(environmentId);
-        const reason = "failure" in connection ? connection.failure?.reason : null;
-        if ((reason === "authentication" || reason === "permission") && !registry.get(refused))
-          refuseConnection(registry, environmentId);
+        if (blocked && !registry.get(refused)) refuseConnection(registry, environmentId);
       }
     },
     { immediate: true },
@@ -232,8 +248,9 @@ export function useComputerStartingOver(environmentId: EnvironmentId | null): bo
 }
 
 /**
- * Whether the computer's connection refused this phone, for authentication or permission, since it
- * last connected; only while it is still one of the app's computers.
+ * Whether this phone counts the computer as refusing it: its connection, in its current listing,
+ * was blocked for authentication or permission, or a sign-out left it reachable only through the
+ * relay. Holds until it next connects, and only while it is one of the app's computers.
  */
 export function useComputerRefused(environmentId: EnvironmentId | null): boolean {
   return useAtomValue(
