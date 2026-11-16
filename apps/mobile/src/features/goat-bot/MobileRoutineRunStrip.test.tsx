@@ -8,9 +8,11 @@ vi.mock("react-native", () => ({
   View: (props: Props & { accessibilityLabel?: string }) => (
     <div aria-label={props.accessibilityLabel}>{props.children}</div>
   ),
-  // A text that asks for its layout hears its line count: about forty characters a line.
+  // A text that asks for its layout hears its line count: about forty characters a line, and no
+  // more than it may show, as a clamped native text reports.
   Text: (
     props: Props & {
+      numberOfLines?: number;
       onTextLayout?: (event: { nativeEvent: { lines: unknown[] } }) => void;
     },
   ) => (
@@ -18,7 +20,12 @@ vi.mock("react-native", () => ({
       ref={() =>
         props.onTextLayout?.({
           nativeEvent: {
-            lines: Array.from({ length: Math.ceil(String(props.children).length / 40) }),
+            lines: Array.from({
+              length: Math.min(
+                Math.ceil(String(props.children).length / 40),
+                props.numberOfLines ?? Infinity,
+              ),
+            }),
           },
         })
       }

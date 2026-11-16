@@ -120,19 +120,21 @@ function MobileRoutineRunPanel(props: {
           {body}
         </Text>
         {/* An unclamped copy, unseen and unread, measures whether the reply needs more lines. */}
-        <View
-          pointerEvents="none"
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-          className="absolute left-0 right-0 top-0 opacity-0"
-        >
-          <Text
-            className="text-foreground-muted"
-            onTextLayout={(event) => setLong(event.nativeEvent.lines.length > 6)}
+        {expanded ? null : (
+          <View
+            pointerEvents="none"
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            className="absolute left-0 right-0 top-0 opacity-0"
           >
-            {body}
-          </Text>
-        </View>
+            <Text
+              className="text-foreground-muted"
+              onTextLayout={(event) => setLong(event.nativeEvent.lines.length > 6)}
+            >
+              {body}
+            </Text>
+          </View>
+        )}
       </View>
       {long ? (
         <Pressable

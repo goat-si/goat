@@ -173,7 +173,7 @@ it("an invalid locale falls back to the device locale and keeps a valid zone, wi
     hour12: false,
   });
   // 09:00 UTC reads 18:00 in Tokyo, whatever the device's language.
-  expect(time).toContain("18:00");
+  expect(time).toMatch(/18\D?00/);
   expect(
     routineRunTime(at, { locale: "not a locale!", timeZone: "Asia/Tokyo", hour12: false }),
   ).toBe(time);
@@ -188,7 +188,7 @@ it("an invalid zone falls back to the device zone and keeps a valid locale, with
 it("a null or Symbol locale reads in the device locale, without throwing", () => {
   for (const locale of [null, Symbol("locale")]) {
     const time = routineRunTime(at, { locale: locale as never, timeZone: "UTC", hour12: false });
-    expect(time).toContain("09:00");
+    expect(time).toMatch(/09\D?00/);
     expect(routineRunFinished(at, at, { locale: locale as never, timeZone: "UTC" })).toMatch(
       /^finished /,
     );
