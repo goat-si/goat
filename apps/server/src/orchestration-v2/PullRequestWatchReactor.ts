@@ -774,11 +774,15 @@ export const make = Effect.gen(function* () {
 
   // One feed per pull request: the host keeps one subscription per pull request and account.
   const follow = Effect.fnUntraced(function* (feeds: FiberMap.FiberMap<string>) {
-    const wanted = feedsToFollow(
+    // Only pull requests whose host has a feed take one of the capped slots.
+    const candidates = yield* Effect.filter(
       currentGroups.flatMap((group) =>
         group.targets.slice(0, 1).map(({ link }) => [threadPullRequestKeyOf(link), group] as const),
       ),
+      ([, group]) => pullRequests.followsChanges(referenceOf(group)),
+      { concurrency: 8 },
     );
+    const wanted = feedsToFollow(candidates);
     const stale = Array.from(feeds, ([pullRequest]) => pullRequest).filter(
       (pullRequest) => !wanted.has(pullRequest),
     );
