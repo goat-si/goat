@@ -1,5 +1,5 @@
 diff --git a/lib/Artifacts.js b/lib/Artifacts.js
-index 648209c..c66b543 100644
+index 648209c089f984dc45bd5eba0788130c9813a1d6..c66b5433427498ced6c91ee7c371ad8295f6205a 100644
 --- a/lib/Artifacts.js
 +++ b/lib/Artifacts.js
 @@ -81,8 +81,8 @@ export const cached = (id) => (eff) => Effect.gen(function* () {
