@@ -834,3 +834,35 @@ it("Save in an open Edit sheet sends nothing once a bot-list refusal reaches the
   });
   expect(state.manage.update).not.toHaveBeenCalled();
 });
+
+/** A roster that may read its computer and lists no bots yet, with a create that records each send. */
+async function creatableRoster(environmentId: string) {
+  state.roster.listedBots = [];
+  state.rosterError = null;
+  state.manage.create.mockReset();
+  const view = await refusableRoster(environmentId);
+  await view.link({ phase: "connected" });
+  await view.answerList(AsyncResult.success({ bots: [] }));
+  return view;
+}
+
+it("New bot sends no create once a bot-list refusal reaches the store, before it renders", async () => {
+  await using view = await creatableRoster("env-new-refused");
+  view.answerListNow(refusedList);
+  await act(async () => (state.members as { onNewBot: () => void }).onNewBot());
+  expect(state.manage.create).not.toHaveBeenCalled();
+});
+
+it("Retry sends no create once a bot-list refusal reaches the store, before it renders", async () => {
+  await using view = await creatableRoster("env-retry-refused");
+  state.manage.create.mockResolvedValueOnce("The server could not create the bot.");
+  await act(async () => (state.members as { onNewBot: () => void }).onNewBot());
+  expect(state.manage.create).toHaveBeenCalledOnce();
+  const retry = [...view.container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Retry",
+  );
+  expect(retry).toBeDefined();
+  view.answerListNow(refusedList);
+  await act(async () => retry?.click());
+  expect(state.manage.create).toHaveBeenCalledOnce();
+});
