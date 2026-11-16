@@ -202,6 +202,8 @@ Focused runs on the lane, beyond the gate: the eight suites around provider swit
 
 5c92dee0bc was merged into the integration branch at e1c031a498. The fresh C4 review of 5c92dee0bc gave APPROVE WITH NITS (one P2 with no code change, seven P3). The follow-up head is e74a5be3894b88a720081589cb5bf2398a947c03. It merges the integration branch at 44d7d60d20 (with N7 part 1) and contains it.
 
+e74a5be389 merged into the integration branch at 8540be97ac (44d7d60d20 plus e74a5be389; its tree equals the lane head's tree).
+
 | Item | Commit | What |
 | --- | --- | --- |
 | N6-P3-3 | 89f7f6dd83 | only a person's or an agent's send is refused for a worktree GOAT cannot restore; server-originated sends are stored as on dev |
