@@ -16,17 +16,30 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 /** Why a remote task's Force stop was refused here or by its host; nothing was stopped. */
 const refused = (message: string) =>
   new OrchestratorMcpFailure({ code: "task_not_cancellable", message });
+const MODE_CEILING_CODES = new Set([
+  "runtime_mode_escalation_denied",
+  "interaction_mode_escalation_denied",
+]);
+/** The child runs in a broader mode than the caller may write to; only a person can force it. */
+export const forceModeRefusal = (detail: string, host?: string) =>
+  refused(
+    `mode: Force stop was refused: ${detail} A person${host === undefined ? "" : ` on ${host}`} must use Force stop on that thread.`,
+  );
 const unreadable = (message: string) => () =>
   new OrchestratorMcpFailure({ code: "orchestration_error", message });
 const decodeCapabilities = Schema.decodeUnknownEffect(OrchestratorMcpCapabilitiesResult);
 const decodeResult = Schema.decodeUnknownEffect(OriginBoundForceStopResult);
 /** The host's own refusal is the caller's answer; a transport failure keeps its host facts. */
-const fromHost = <E>(error: E | SshRemoteDispatch.SshRemoteDispatchError) =>
-  error instanceof SshRemoteDispatch.SshRemoteDispatchError
-    ? error.reason === "remote_refused"
-      ? refused(error.message)
-      : hostFailure(error)
-    : error;
+const fromHost =
+  (host: string) =>
+  <E>(error: E | SshRemoteDispatch.SshRemoteDispatchError) =>
+    error instanceof SshRemoteDispatch.SshRemoteDispatchError
+      ? error.reason === "remote_refused"
+        ? MODE_CEILING_CODES.has(error.remoteCode ?? "")
+          ? forceModeRefusal(error.message, host)
+          : refused(error.message)
+        : hostFailure(error)
+      : error;
 
 /**
  * goat#2338: the parent's Force stop of its remote task, carried out by the host. Only a host
@@ -90,7 +103,7 @@ export const forceStopRemoteTask = Effect.fn("remoteReports.forceStopRemoteTask"
       },
       authorize,
     )
-    .pipe(Effect.mapError(fromHost));
+    .pipe(Effect.mapError(fromHost(host)));
   const forced = yield* decodeResult(answer).pipe(
     Effect.mapError(
       unreadable(

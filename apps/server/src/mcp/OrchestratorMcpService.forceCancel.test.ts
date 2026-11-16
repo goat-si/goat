@@ -1,11 +1,12 @@
 import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { EnvironmentId, ProviderInstanceId, type ThreadId } from "@goat/contracts";
+import { CommandId, EnvironmentId, ProviderInstanceId, type ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import {
   interruptResult,
@@ -117,6 +118,25 @@ it.effect.each([
     ).pipe(Effect.flip);
     assert.equal(error.code, "task_not_cancellable");
     assert.match(error.message, row.cloud ? /^cloud: /u : /^not_unresponsive: /u);
+    assert.deepEqual(yield* runStatuses(task.childThreadId), ["running"]);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("task.cancel with force: true above the parent's mode is refused for a person", () =>
+  Effect.gen(function* () {
+    const task = yield* parentWithTask("mcp-force-mode", "unanswered");
+    // A person lowered the parent below the child it started.
+    yield* (yield* Orchestrator.OrchestratorV2).dispatch({
+      type: "thread.runtime-mode.set",
+      commandId: CommandId.make("mcp-force-mode:lower"),
+      threadId: task.parentThreadId,
+      runtimeMode: "approval-required",
+    });
+    const error = yield* withService((service) =>
+      service.cancelTask(scopeOf(task.parentThreadId), { taskId: task.taskId, force: true }),
+    ).pipe(Effect.flip);
+    assert.equal(error.code, "task_not_cancellable");
+    assert.match(error.message, /^mode: Force stop was refused: .+ A person must use Force stop/u);
     assert.deepEqual(yield* runStatuses(task.childThreadId), ["running"]);
   }).pipe(Effect.provide(layerTest)),
 );

@@ -129,6 +129,34 @@ it.effect("force on a host with taskForceStop asks it to force stop the task's o
   }).pipe(Effect.provide(database)),
 );
 
+it.effect("the host's mode-ceiling refusal tells the caller a person must force stop there", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    f.hostCatalog(newerHost);
+    yield* Effect.gen(function* () {
+      const { service, taskId } = yield* runningTask(f);
+      const forcing = yield* service
+        .cancelTask(scope, { taskId, force: true })
+        .pipe(Effect.forkChild);
+      const call = yield* Queue.take(f.calls);
+      yield* Deferred.fail(
+        call.reply,
+        new SshRemoteDispatch.SshRemoteDispatchError({
+          reason: "remote_refused",
+          remoteCode: "runtime_mode_escalation_denied",
+          message: "Child runtime mode full-access is broader than parent mode approval-required.",
+        }),
+      );
+      const error = yield* Fiber.join(forcing).pipe(Effect.flip);
+      assert.equal(error.code, "task_not_cancellable");
+      assert.match(
+        error.message,
+        /^mode: Force stop was refused: .+ A person on box must use Force stop/u,
+      );
+    }).pipe(Effect.provide(f.layer));
+  }).pipe(Effect.provide(database)),
+);
+
 it.effect("the host's refusal reaches the caller as task_not_cancellable", () =>
   Effect.gen(function* () {
     const f = yield* fixture;

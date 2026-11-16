@@ -105,7 +105,7 @@ import {
 import * as ReviewExport from "./reviewExport.ts";
 import { recordRemoteTaskResult } from "../remoteReports/recordRemoteTaskResult.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
-import { forceStopRemoteTask } from "../remoteReports/remoteTaskForceStop.ts";
+import { forceModeRefusal, forceStopRemoteTask } from "../remoteReports/remoteTaskForceStop.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { cloudTaskForRun } from "./cloudTaskView.ts";
 import { hostFailure } from "./hostFailure.ts";
@@ -1429,8 +1429,10 @@ const make = Effect.gen(function* () {
               .pipe(Effect.mapError(threadManagementFailure)),
     );
     if (parent && child && child.deletedAt === null) {
-      yield* resolveRuntimeMode(parent.runtimeMode, child.runtimeMode);
-      yield* resolveInteractionMode(parent.interactionMode, child.interactionMode);
+      yield* resolveRuntimeMode(parent.runtimeMode, child.runtimeMode).pipe(
+        Effect.andThen(resolveInteractionMode(parent.interactionMode, child.interactionMode)),
+        Effect.mapError((error) => forceModeRefusal(error.message)),
+      );
     }
     const forced = yield* threadManagement
       .forceStopDelegatedTask({ parentThreadId: scope.thread.threadId, taskId })
