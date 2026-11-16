@@ -107,14 +107,24 @@ function MobileRoutineRunPanel(props: {
   const word = dot.word.charAt(0).toUpperCase() + dot.word.slice(1);
   const finished = routineRunFinished(dot.requestedAt, dot.completedAt, props.timeOptions);
   const body = runBody({ ...props, state, quiet, inputId, read });
-  const [expanded, setExpanded] = useState(false);
-  const [long, setLong] = useState(false);
   return (
     <View className="gap-1 pb-1">
       <Text className="text-foreground">
         {word} · {routineRunTime(dot.requestedAt, props.timeOptions)}
         {finished === null ? "" : `, ${finished}`}
       </Text>
+      {/* A changed reply (an error, another answer) starts collapsed and is measured again. */}
+      <MobileRunReply key={body} body={body} />
+    </View>
+  );
+}
+
+function MobileRunReply(props: { readonly body: string }) {
+  const { body } = props;
+  const [expanded, setExpanded] = useState(false);
+  const [long, setLong] = useState(false);
+  return (
+    <>
       <View>
         <Text numberOfLines={expanded ? undefined : 6} className="text-foreground-muted">
           {body}
@@ -149,7 +159,7 @@ function MobileRoutineRunPanel(props: {
           </Text>
         </Pressable>
       ) : null}
-    </View>
+    </>
   );
 }
 
