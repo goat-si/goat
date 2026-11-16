@@ -24,7 +24,9 @@ import {
 } from "@goat/client-runtime/goatBot";
 import type { BotProfile, ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import { useNavigation, type NavigationProp, type ParamListBase } from "@react-navigation/native";
-import { Alert, type AlertButton, AppState, Pressable, Text, View } from "react-native";
+import * as Haptics from "expo-haptics";
+import { Alert, type AlertButton, AppState, Platform, Pressable, Text, View } from "react-native";
+import { AndroidAnchoredMenu } from "../../components/ui/AndroidAnchoredMenu";
 import { uuidv4 } from "../../lib/uuid";
 import { MobileBotEditSheet } from "./MobileBotEditSheet";
 import { MobileBotRosterView } from "./MobileBotRosterView";
@@ -58,7 +60,8 @@ export function MobileBotRoster(props: {
   // that computer may not be read.
   if (editing !== null && (editing.environmentId !== roster.environmentId || !rosterReadable))
     setEditing(null);
-  // A row's action menu is a native alert: open from the long press until a choice or dismissal.
+  // A row's action menu (a native alert, or Android's anchored menu): open from the long press
+  // until a choice or dismissal.
   const [menuOpen, setMenuOpen] = useState(false);
   const registry = useContext(RegistryContext);
   // Every control the roster hands out reads the store when pressed: a refusal that has reached
@@ -67,6 +70,13 @@ export function MobileBotRoster(props: {
     const now = mount.current;
     const live = environmentId !== null && isComputerReadable(registry, environmentId);
     return now.mounted && now.visible && live;
+  };
+  // A menu cannot be withdrawn: a choice acts only while this roster is mounted and visible, on
+  // the computer the menu opened on, and may read it, as the store says now.
+  const choiceAllowed = (openedOn: EnvironmentId | null) => {
+    const now = mount.current;
+    const live = openedOn !== null && isComputerReadable(registry, openedOn);
+    return now.mounted && now.visible && now.environmentId === openedOn && now.readable && live;
   };
   const menu = (
     title: string,
@@ -83,12 +93,7 @@ export function MobileBotRoster(props: {
         ...button,
         onPress: () => {
           setMenuOpen(false);
-          // An alert cannot be withdrawn: a choice acts only while this roster is mounted and
-          // visible, on its computer, and may read it, as the store says now.
-          const now = mount.current;
-          const live = openedOn !== null && isComputerReadable(registry, openedOn);
-          const shown = now.mounted && now.visible;
-          if (shown && now.environmentId === openedOn && now.readable && live) button.onPress?.();
+          if (choiceAllowed(openedOn)) button.onPress?.();
         },
       })),
       { cancelable: true, onDismiss: () => setMenuOpen(false) },
@@ -161,34 +166,84 @@ export function MobileBotRoster(props: {
     for (const bot of unlisted) refreshedFor.current.add(bot.botId);
     refreshBots();
   }, [environmentId, listed, created, refreshBots]);
-  const askAbout = (entry: BotRosterEntry) => {
+  const cancel = { text: "Cancel", style: "cancel" as const };
+  // What a row's long press offers; null when it offers nothing.
+  const actionsFor = (entry: BotRosterEntry): ReadonlyArray<RowAction> | null => {
     const bot = entry.profile;
-    if (bot === null) return;
-    const edit = { text: "Edit", onPress: () => setEditing({ profile: bot, environmentId }) };
-    const cancel = { text: "Cancel", style: "cancel" as const };
-    if (entry.kind === "main") {
-      if (manage.canEdit) menu(bot.name, undefined, [edit, cancel]);
-      return;
-    }
-    if (!manage.canManage) return;
-    menu(bot.name, undefined, [
+    if (bot === null) return null;
+    const edit = {
+      id: "edit",
+      title: "Edit",
+      act: () => setEditing({ profile: bot, environmentId }),
+    };
+    if (entry.kind === "main") return manage.canEdit ? [edit] : null;
+    if (!manage.canManage) return null;
+    return [
       ...(manage.canEdit ? [edit] : []),
       {
-        text: bot.hidden === true ? "Show" : "Hide",
-        onPress: () => void manage.hide(bot, bot.hidden !== true),
+        id: "hide",
+        title: bot.hidden === true ? "Show" : "Hide",
+        act: () => void manage.hide(bot, bot.hidden !== true),
       },
       {
-        text: "Delete",
-        style: "destructive",
-        onPress: () =>
+        id: "delete",
+        title: "Delete",
+        destructive: true,
+        act: () =>
           menu(`Delete ${bot.name}?`, "Its conversation is archived; you can restore it.", [
             cancel,
             { text: "Delete", style: "destructive", onPress: () => void manage.remove(bot) },
           ]),
       },
+    ];
+  };
+  const askAbout = (entry: BotRosterEntry) => {
+    const actions = actionsFor(entry);
+    if (actions === null || entry.profile === null) return;
+    menu(entry.profile.name, undefined, [
+      ...actions.map(({ title, destructive, act }) => ({
+        text: title,
+        ...(destructive === true ? { style: "destructive" as const } : {}),
+        onPress: act,
+      })),
       cancel,
     ]);
   };
+  // Android's alert holds three buttons, so there the row opens an anchored menu with every choice;
+  // Back or a tap outside closes it.
+  const openedOn = useRef<EnvironmentId | null>(null);
+  const menuRow =
+    Platform.OS === "android"
+      ? (entry: BotRosterEntry, row: (onLongPress: () => void) => ReactNode) => {
+          const actions = actionsFor(entry);
+          if (actions === null) return row(() => {});
+          return (
+            // No title: with a title header, TalkBack loses the row's focus when Back closes the menu.
+            <AndroidAnchoredMenu
+              actions={actions.map(({ id, title, destructive }) => ({
+                id,
+                title,
+                ...(destructive === true ? { attributes: { destructive: true } } : {}),
+              }))}
+              onClose={() => setMenuOpen(false)}
+              onPressAction={({ nativeEvent }) => {
+                if (choiceAllowed(openedOn.current))
+                  actions.find((action) => action.id === nativeEvent.event)?.act();
+              }}
+            >
+              {(open) =>
+                row(() => {
+                  if (!readableNow()) return;
+                  openedOn.current = environmentId;
+                  setMenuOpen(true);
+                  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  open();
+                })
+              }
+            </AndroidAnchoredMenu>
+          );
+        }
+      : undefined;
   return (
     <View className="flex-1">
       <MobileBotRosterView
@@ -234,6 +289,7 @@ export function MobileBotRoster(props: {
                 onLongPressBot: (entry) => {
                   if (readableNow()) askAbout(entry);
                 },
+                ...(menuRow ? { menuRow } : {}),
                 canRestore: manage.mayManage,
                 onRestoreDeleted: (bot) => {
                   if (readableNow())
@@ -302,6 +358,12 @@ export function MobileBotRoster(props: {
   );
 }
 
+type RowAction = {
+  readonly id: string;
+  readonly title: string;
+  readonly destructive?: boolean;
+  readonly act: () => void;
+};
 type Navigation = Omit<NavigationProp<ParamListBase>, "getParent"> & {
   getParent: () => Navigation | undefined;
 };

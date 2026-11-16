@@ -1,6 +1,6 @@
 import type { MenuAction, MenuComponentProps } from "@react-native-menu/menu";
 import type { ReactNode } from "react";
-import { use, useRef, useState } from "react";
+import { use, useEffect, useEffectEvent, useRef, useState } from "react";
 import type { StyleProp, ViewInstance, ViewStyle } from "react-native";
 import { Pressable, ScrollView, View } from "react-native";
 import { useKeyboardState } from "react-native-keyboard-controller";
@@ -35,10 +35,35 @@ export type AndroidAnchoredMenuProps = {
   readonly actions: readonly MenuAction[];
   readonly title?: string;
   readonly onPressAction?: MenuComponentProps["onPressAction"];
+  /** The menu closed: a choice (before `onPressAction`), an outside tap, Back, or its owner unmounting it. */
+  readonly onClose?: () => void;
   readonly className?: string;
   readonly style?: StyleProp<ViewStyle>;
   readonly children: ReactNode | ((open: () => void) => ReactNode);
 };
+
+/**
+ * An open counts from its request until it settles, once: a choice, Back, an outside tap, an anchor
+ * that cannot be measured, or the menu unmounting, whichever comes first. Each request has a token,
+ * so only the latest one's measurement can open or settle the menu.
+ */
+function useOwedOpen(onClose: (() => void) | undefined) {
+  const owed = useRef<number | null>(null);
+  const latest = useRef(0);
+  return {
+    request: () => {
+      latest.current += 1;
+      owed.current = latest.current;
+      return latest.current;
+    },
+    isCurrent: (token: number) => owed.current === token,
+    settle: () => {
+      if (owed.current === null) return;
+      owed.current = null;
+      onClose?.();
+    },
+  };
+}
 
 export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
   const { scale, menuWidth: desiredMenuWidth } = useAndroidControlSizing();
@@ -54,15 +79,32 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
 
   const keyboardVisible = useKeyboardState((state) => state.isVisible);
   const keyboardHeight = useKeyboardState((state) => state.height);
+  const owed = useOwedOpen(props.onClose);
   const close = () => {
     setAnchor(null);
     setPath([]);
     setOverlay(null);
     setRootHeight(null);
+    owed.settle();
   };
+  const closeOnCleanup = useEffectEvent(close);
+  // oxlint-disable-next-line goat/react-effect-budget -- A menu whose row leaves, or whose tab hides it, closes and settles its open with its owner.
+  useEffect(() => () => closeOnCleanup(), []);
 
   const open = () => {
-    anchorNode?.measureInWindow((x, y, width, height) => {
+    const token = owed.request();
+    if (anchorNode === null) {
+      owed.settle();
+      return;
+    }
+    // A mounted host view always calls back, with zeros on failure; only an unmounted one does not.
+    anchorNode.measureInWindow((x, y, width, height) => {
+      // Closed, unmounted or superseded meanwhile, or nothing to anchor to: no menu.
+      if (!owed.isCurrent(token)) return;
+      if (width <= 0 || height <= 0) {
+        owed.settle();
+        return;
+      }
       setAnchor({ x, y, width, height, keyboardWasVisible: keyboardVisible });
     });
   };

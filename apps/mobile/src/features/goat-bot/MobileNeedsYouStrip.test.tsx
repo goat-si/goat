@@ -26,6 +26,12 @@ function measurer(rect: () => Rect): { measureInWindow: Measure } {
 }
 // Home's work signals on bot rows are not under test here.
 vi.mock("./useMobileBotRowSignals", () => ({ useMobileBotRowSignals: () => null }));
+// The roster panel's Android row menu and its haptic; these tests run as iOS and never draw it.
+vi.mock("../../components/ui/AndroidAnchoredMenu", () => ({ AndroidAnchoredMenu: () => null }));
+vi.mock("expo-haptics", () => ({
+  impactAsync: async () => {},
+  ImpactFeedbackStyle: { Medium: "medium" },
+}));
 vi.mock("react-native", () => ({
   Platform: { OS: "ios" },
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
