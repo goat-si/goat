@@ -2,7 +2,12 @@ import type { EnvironmentId } from "@goat/contracts";
 import { useSyncExternalStore } from "react";
 
 import { primarySessionCheck } from "~/environments/primary/sessionCheck";
-import { useEnvironment, usePrimaryEnvironmentId } from "~/state/environments";
+import {
+  readEnvironment,
+  readPrimaryEnvironmentId,
+  useEnvironment,
+  usePrimaryEnvironmentId,
+} from "~/state/environments";
 
 const ignore = () => () => {};
 const notRevoked = () => false;
@@ -20,6 +25,16 @@ export function useGoatBotComputerReadable(environmentId: EnvironmentId | null):
     ownServer ? primarySessionCheck.subscribe : ignore,
     ownServer ? primarySessionCheck.revoked : notRevoked,
   );
+  return readableFrom(presentation, revoked);
+}
+
+/** The same rule read from the store now, for a press the screen has not caught up with. */
+export function readGoatBotComputerReadable(environmentId: EnvironmentId): boolean {
+  const ownServer = readPrimaryEnvironmentId() === environmentId;
+  return readableFrom(readEnvironment(environmentId), ownServer && primarySessionCheck.revoked());
+}
+
+function readableFrom(presentation: ReturnType<typeof readEnvironment>, revoked: boolean): boolean {
   if (presentation === null) return false;
   const reason = presentation.connection.failure?.reason;
   if (reason === "authentication" || reason === "permission") return false;
