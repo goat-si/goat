@@ -624,6 +624,7 @@ export const mockExecution = () => ({
   admissions: Effect.succeed([]),
   begin: (claim: EffectOutbox.OrchestrationEffectV2) => Effect.succeedSome(claim),
   warnSlowCleanup: () => Effect.void,
+  detach: () => Effect.succeed(false),
   retireJoined: () => Effect.void,
   retireAdmission: () => Effect.void,
   admitClaim: () => Effect.void,

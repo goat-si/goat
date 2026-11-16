@@ -91,8 +91,3 @@ export const hasLargeBinding = (params: ReadonlyArray<unknown>): boolean => {
     return true;
   }
 };
-
-export const readSafeSqliteInteger = (value: unknown) => {
-  const number = typeof value === "bigint" ? Number(value) : value;
-  return typeof number === "number" && Number.isSafeInteger(number) ? number : undefined;
-};
