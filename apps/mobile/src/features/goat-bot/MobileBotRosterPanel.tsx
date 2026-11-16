@@ -72,10 +72,10 @@ export function MobileBotRoster(props: {
         ...button,
         onPress: () => {
           setMenuOpen(false);
-          // An alert cannot be withdrawn: a choice acts only while the roster is on its computer
-          // and may read it.
+          // An alert cannot be withdrawn: a choice acts only while this roster is still shown, on
+          // its computer, and may read it.
           const now = mount.current;
-          if (now.environmentId === openedOn && now.readable) button.onPress?.();
+          if (now.mounted && now.environmentId === openedOn && now.readable) button.onPress?.();
         },
       })),
       { cancelable: true, onDismiss: () => setMenuOpen(false) },
