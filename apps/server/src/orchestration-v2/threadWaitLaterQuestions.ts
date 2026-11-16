@@ -1,32 +1,27 @@
-import type {
-  OrchestrationV2Run,
-  OrchestrationV2ThreadProjection,
-  RunId,
-  RuntimeRequestId,
-} from "@goat/contracts";
+import type { OrchestrationV2Run, ProjectId, RuntimeRequestId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
-type Records = Pick<OrchestrationV2ThreadProjection, "turnItems" | "runtimeRequests">;
+import type { ThreadManagementServiceShape } from "./ThreadManagementService.ts";
 
 /**
  * Pending user-input questions of runs after `run`: with untilDelegatedWorkSettled, a run the
  * thread's background work woke can ask one while the wait still holds. Reads only the thread's
  * pending requests and, when one is a question, the question items of those later runs.
  */
-export const laterRunQuestions = Effect.fn("ThreadManagementService.laterRunQuestions")(function* <
-  E,
->(input: {
-  readonly runs: ReadonlyArray<OrchestrationV2Run>;
-  readonly run: OrchestrationV2Run;
-  readonly ignored: ReadonlySet<RuntimeRequestId>;
-  readonly pendingRequests: Effect.Effect<Pick<Records, "runtimeRequests">, E>;
-  readonly questionItems: (
-    runIds: ReadonlyArray<RunId>,
-  ) => Effect.Effect<Pick<Records, "turnItems">, E>;
-}) {
+export const laterRunQuestions = Effect.fn("ThreadManagementService.laterRunQuestions")(function* (
+  read: ThreadManagementServiceShape["getProjectThreadRecords"],
+  target: { readonly projectId: ProjectId; readonly threadId: ThreadId },
+  input: {
+    readonly runs: ReadonlyArray<OrchestrationV2Run>;
+    readonly run: OrchestrationV2Run;
+    readonly ignored: ReadonlySet<RuntimeRequestId>;
+  },
+) {
   const later = input.runs.filter((candidate) => candidate.ordinal > input.run.ordinal);
   if (later.length === 0) return [];
-  const { runtimeRequests } = yield* input.pendingRequests;
+  const { runtimeRequests } = yield* read(target, ["runtimeRequests"], {
+    runtimeRequestStatuses: ["pending"],
+  });
   const asked = new Set(
     runtimeRequests
       .filter(
@@ -39,7 +34,10 @@ export const laterRunQuestions = Effect.fn("ThreadManagementService.laterRunQues
   );
   if (asked.size === 0) return [];
   const laterIds = new Set(later.map((candidate) => candidate.id));
-  const { turnItems } = yield* input.questionItems([...laterIds]);
+  const { turnItems } = yield* read(target, ["turnItems"], {
+    turnItemTypes: ["user_input_request"],
+    turnItemRunIds: [...laterIds],
+  });
   return turnItems
     .flatMap((item) =>
       item.type === "user_input_request" &&
