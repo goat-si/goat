@@ -434,10 +434,16 @@ function GoatBotChatViewContent({
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
         <WorkspacePageHeader electron={isElectron} className="surface-glass relative">
           <div aria-hidden className="flex-1 basis-0" />
-          <div className="flex max-w-[60%] min-w-0 items-center gap-2">
+          <div
+            className={cn(
+              "flex min-w-0 items-center gap-2",
+              headerStatus ? "max-w-[75%]" : "max-w-[60%]",
+            )}
+          >
             <h1
               className={cn(
                 "flex min-w-0 shrink-0",
+                // Every header status is at least 2rem minus the gap (32px); a shorter one would cut a name that fits.
                 headerStatus ? "max-w-[calc(100%-2.5rem)]" : "max-w-full",
               )}
             >
