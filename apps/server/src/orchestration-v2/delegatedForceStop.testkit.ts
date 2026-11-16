@@ -125,6 +125,15 @@ export const runStatuses = (threadId: ThreadId) =>
     return (yield* orchestrator.getThreadProjection(threadId)).runs.map((run) => run.status);
   });
 
+/** Why each run ended, as thread.status reports it. */
+export const runCauses = (threadId: ThreadId) =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    return (yield* orchestrator.getThreadProjection(threadId)).runs.map(
+      (run) => run.terminationCause?.kind,
+    );
+  });
+
 export const refusal = (input: { parentThreadId: ThreadId; taskId: NodeId }) =>
   Effect.gen(function* () {
     const threads = yield* ThreadManagementService.ThreadManagementService;

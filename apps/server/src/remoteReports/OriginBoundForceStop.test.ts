@@ -8,6 +8,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import {
   interruptResult,
+  runCauses,
   runStatuses,
   stopRequested,
 } from "../orchestration-v2/delegatedForceStop.testkit.ts";
@@ -42,6 +43,7 @@ it.effect(
       const result = yield* originBoundForceStop(bound, limits);
       assert.deepEqual(result, { outcome: "released", sharedWithThreadIds: [] });
       assert.deepEqual(yield* runStatuses(bound.threadId), ["interrupted"]);
+      assert.deepEqual(yield* runCauses(bound.threadId), ["agent_stop"]);
       assert.equal(
         yield* interruptResult(bound.threadId),
         "Force stopped by its origin task owner on origin-mac",

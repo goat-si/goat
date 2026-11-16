@@ -12,6 +12,7 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 
 import type * as Orchestrator from "./Orchestrator.ts";
+import { PARENT_FORCE_STOP_PREFIX } from "./runTerminationCause.ts";
 import { isActiveRun, latestActiveRun } from "./ThreadManagementService.ts";
 
 /** Why a Force stop an agent or another machine asked for was refused; nothing was stopped. */
@@ -129,7 +130,7 @@ export const forceStopDelegatedTask = Effect.fn("ThreadManagementService.forceSt
     const parentName = parent?.title ? `"${parent.title}"` : input.parentThreadId;
     const result = yield* forceStopUnresponsiveRun(deps, {
       threadId: childThreadId,
-      reason: `Force stopped by parent thread ${parentName}`,
+      reason: `${PARENT_FORCE_STOP_PREFIX}${parentName}`,
       subject: `task ${input.taskId}`,
     });
     return { ...result, childThreadId };

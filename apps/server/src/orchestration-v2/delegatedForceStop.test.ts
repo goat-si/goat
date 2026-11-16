@@ -21,6 +21,7 @@ import {
   interruptResult,
   parentWithTask,
   refusal,
+  runCauses,
   runStatuses,
   stopRequested,
   updateChildProviderThread,
@@ -46,6 +47,8 @@ it.effect("the parent's Force stop ends its task's child after Stop went unanswe
     const forced = yield* threads.forceStopDelegatedTask({ parentThreadId, taskId });
     assert.equal(forced.childThreadId, childThreadId);
     assert.deepEqual(yield* runStatuses(childThreadId), ["interrupted"]);
+    // Status says an agent stopped it, unlike a person's Force stop.
+    assert.deepEqual(yield* runCauses(childThreadId), ["agent_stop"]);
     const result = (yield* orchestrator.getThreadProjection(childThreadId)).turnItems.find(
       (item) => item.type === "run_interrupt_result",
     );

@@ -8,6 +8,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import { assertTargetWithinLimits, type CallerLimits, unavailable } from "../mcp/threadAccess.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import { ORIGIN_FORCE_STOP_PREFIX } from "../orchestration-v2/runTerminationCause.ts";
 import { boundOriginLabel } from "./originBinding.ts";
 
 /**
@@ -32,7 +33,7 @@ export const originBoundForceStop = Effect.fn("remoteReports.originBoundForceSto
     .forceStopUnresponsiveRun({
       threadId: input.threadId,
       runId: input.runId,
-      reason: `Force stopped by its origin task owner on ${originLabel}`,
+      reason: `${ORIGIN_FORCE_STOP_PREFIX}${originLabel}`,
       subject: `thread ${input.threadId}`,
     })
     .pipe(

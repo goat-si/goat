@@ -10232,7 +10232,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           kind:
             input.command.type === "run.interrupt"
               ? stopTerminationKind(interruptReason)
-              : "unknown",
+              : classifyStopTerminationKind(input.command.reason),
         },
         completedAt: input.now,
       },
