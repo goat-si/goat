@@ -56,6 +56,8 @@ export function useMobileBotManage(environmentId: EnvironmentId | null, botName 
     mayManage,
     /** The bot's computer is connected; bot writes wait for it. */
     connected,
+    /** Why a write is off while the computer is offline, in the words a failed one shows. */
+    offlineReason: offline,
     /** Resolves to the new bot, or to the message to show in the sheet. */
     create: async (
       changes: Partial<BotProfileValues>,

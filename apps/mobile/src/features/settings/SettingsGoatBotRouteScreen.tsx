@@ -11,6 +11,7 @@ import { MobileBotProfileSheet } from "../goat-bot/MobileBotProfileSheet";
 import {
   isComputerReadable,
   useComputerReadable,
+  useComputerStartingOver,
   useKeptPerComputer,
 } from "../goat-bot/useKeptPerComputer";
 import { useMobileBotManage } from "../goat-bot/useMobileBotManage";
@@ -135,21 +136,26 @@ function GoatBotProfileSection({
   );
   const listed = useKeptPerComputer("bots", environmentId, profiles, !connected);
   const readable = useComputerReadable(environmentId);
+  const startingOver = useComputerStartingOver(environmentId);
   const mayEdit = useAtomValue(channelEnvironment.updateBot.permissionAtom(environmentId));
-  const manage = useMobileBotManage(environmentId);
+  const main = listed?.bots.find((bot) => bot.role === "main");
+  const manage = useMobileBotManage(environmentId, main?.name);
   // The sheet holds the bot's profile, so a list read again on reconnect keeps it open; it closes
   // for good once this computer may not be read.
   const [editing, setEditing] = useState<BotProfile | null>(null);
   if (editing !== null && !readable) setEditing(null);
   if (!supported) return null;
-  const main = listed?.bots.find((bot) => bot.role === "main");
+  // Starting over, a refusal being asked again is still loading; one that stands is not.
+  const loadFailed = startingOver
+    ? profiles.error !== null && !profiles.isPending
+    : !readable || profiles.error !== null;
   return (
     <SettingsSection title="Profile">
       <SettingsRow
         icon="person.crop.circle"
         label={main === undefined ? "GOAT Bot" : [main.avatar, main.name].filter(Boolean).join(" ")}
         value={
-          !readable || profiles.error
+          loadFailed
             ? "Couldn't load"
             : !connected
               ? "Offline"
@@ -172,6 +178,7 @@ function GoatBotProfileSection({
           mode="edit"
           initial={editing}
           canSubmit={manage.canEdit}
+          unavailableReason={manage.connected ? undefined : manage.offlineReason}
           onClose={() => setEditing(null)}
           // Save reads the store when pressed: a refusal not yet rendered sends nothing.
           onSubmit={(changes) =>

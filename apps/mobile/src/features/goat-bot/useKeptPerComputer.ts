@@ -28,6 +28,10 @@ export { resetKeptPerComputerForTests } from "./keptPerComputerStore";
 const NO_KEPT = Atom.make<unknown>(null);
 const NOT_STALE = Atom.make<number | null>(null);
 const NOT_READABLE = Atom.make(false);
+const NOT_STARTING_OVER = Atom.make(false);
+// The bot list the roster reads, shared by every reader of a computer.
+const botListOf = (environmentId: EnvironmentId, members: boolean) =>
+  channelEnvironment.listBots({ environmentId, input: members ? { includeDeleted: true } : {} });
 // Derived in the same pass as the roster's own read, so no reader shows a line after a refusal.
 const readableAtom = Atom.family((key: string) => {
   const environmentId = key.slice(key.indexOf(":") + 1) as EnvironmentId;
@@ -43,14 +47,23 @@ const readableAtom = Atom.family((key: string) => {
     if (capabilities.goatBotProfiles !== true) return true;
     if (restarting) return false;
     if (presentation?.connection.phase !== "connected") return true;
-    // The bot list the roster reads, shared: refused in the render it arrives.
-    const list = get(
-      channelEnvironment.listBots({
-        environmentId,
-        input: capabilities.goatBotMembers === true ? { includeDeleted: true } : {},
-      }),
-    );
+    // Refused in the render the answer arrives.
+    const list = get(botListOf(environmentId, capabilities.goatBotMembers === true));
     return !(list._tag === "Failure" && accessDenied(Cause.squash(list.cause)));
+  });
+});
+// Unreadable only because a restart's fresh bot list has not answered: nothing refuses it now.
+const startingOverAtom = Atom.family((key: string) => {
+  const environmentId = key.slice(key.indexOf(":") + 1) as EnvironmentId;
+  return Atom.make((get) => {
+    if (get(staleAtom("bots", environmentId)) === null) return false;
+    if (!get(environmentCatalog.catalogValueAtom).entries.has(environmentId)) return false;
+    if (get(connectionRefusedAtom(environmentId))) return false;
+    const capabilities = get(environmentPresentations.presentationsAtom).get(environmentId)
+      ?.serverConfig?.environment.capabilities;
+    if (capabilities?.goatBotProfiles !== true) return true;
+    const list = get(botListOf(environmentId, capabilities.goatBotMembers === true));
+    return !(list._tag === "Failure" && !list.waiting && accessDenied(Cause.squash(list.cause)));
   });
 });
 
@@ -196,4 +209,14 @@ export function isComputerReadable(
   environmentId: EnvironmentId,
 ): boolean {
   return registry.get(readableAtom(computerKey(environmentId)));
+}
+
+/**
+ * Unreadable while a refusal or removal starts the computer over, but only until its fresh bot
+ * list answers: the connection is not refused and the list is not a settled refusal.
+ */
+export function useComputerStartingOver(environmentId: EnvironmentId | null): boolean {
+  return useAtomValue(
+    environmentId === null ? NOT_STARTING_OVER : startingOverAtom(computerKey(environmentId)),
+  );
 }
