@@ -13,7 +13,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import { threadHasUnfinishedWork } from "../orchestration-v2/Orchestrator.ts";
+import { threadHasUnfinishedWork } from "../orchestration-v2/threadUnfinishedWork.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ManagedProjectFolders from "./ManagedProjectFolders.ts";
