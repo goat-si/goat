@@ -424,7 +424,11 @@ const fixture = Effect.fn("childWorkTest.fixture")(function* (
                 }))
               : Effect.void,
           ),
-          Effect.andThen(Effect.fail(new Error("simulated dispatch failure") as never)),
+          Effect.andThen(
+            command.type === "delegated_task.request" && command.task.includes("no task")
+              ? Effect.succeed({ sequence: 1, storedEvents: [] } as never)
+              : Effect.fail(new Error("simulated dispatch failure") as never),
+          ),
         ),
     }),
     Layer.mock(ProviderRegistry.ProviderRegistry)({
@@ -524,6 +528,7 @@ const fixture = Effect.fn("childWorkTest.fixture")(function* (
         Effect.provide(channelContext),
       ),
     lanes: () => sql`SELECT id FROM goatclaw_lane_reservations`,
+    pending: () => sql`SELECT pending FROM goatclaw_lane_reservations`,
   };
 });
 
@@ -563,6 +568,18 @@ describe("OrchestratorMcpService delegate child work", () => {
           );
         }),
       ),
+  );
+
+  it.effect("a delegation that commits without a task projection still settles its lane", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = yield* fixture({ goatclaw: true });
+        const failed = yield* f.delegate("commits no task projection");
+        assert.match(failed.message, /did not produce a task projection/u);
+        // A pending local reservation counts against the lane limit until it is updated.
+        assert.deepEqual(yield* f.pending(), [{ pending: 0 }]);
+      }),
+    ),
   );
 
   it.effect("regression #1387: a task stop before the claim refuses a local delegation", () =>
