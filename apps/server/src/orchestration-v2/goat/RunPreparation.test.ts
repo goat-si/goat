@@ -3,10 +3,12 @@ import { CommandId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
+import type * as CommandReceiptStore from "../CommandReceiptStore.ts";
 import { EventSinkWriteError } from "../EventSink.ts";
 import * as EventSinkBatch from "../EventSinkBatch.ts";
 import type * as ThreadManagement from "../ThreadManagementService.ts";
@@ -39,12 +41,19 @@ it.effect(
         )
         .pipe(Effect.forkChild);
       yield* Deferred.await(providerStarted);
-      const threads = {
-        receiptStatus: () =>
-          Ref.get(accepted).pipe(Effect.map((done) => (done ? ("accepted" as const) : null))),
-      } as unknown as ThreadManagement.ThreadManagementService["Service"];
+      const receipts = {
+        getByCommandId: () =>
+          Ref.get(accepted).pipe(
+            Effect.map((done) =>
+              done
+                ? Option.some({ status: "accepted" } as CommandReceiptStore.CommandReceiptV2)
+                : Option.none(),
+            ),
+          ),
+      } as unknown as CommandReceiptStore.CommandReceiptStoreV2["Service"];
       const runs = makeRunPreparation({
-        threads,
+        threads: {} as ThreadManagement.ThreadManagementService["Service"],
+        receipts,
         reservePreparation: () => Effect.die("not reached"),
         releasePreparation: () => Effect.die("not reached"),
         schedulePreparation: () => Effect.die("not reached"),

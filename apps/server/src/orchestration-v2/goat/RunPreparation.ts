@@ -8,6 +8,8 @@ import type {
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
+import type * as CommandReceiptStore from "../CommandReceiptStore.ts";
 import type * as ThreadManagement from "../ThreadManagementService.ts";
 import type {
   PreparationInput,
@@ -17,11 +19,20 @@ import type {
 
 type Restore = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 
-/** Whether the command committed, here or in an earlier attempt. */
+/** Whether the command committed, here or in an earlier attempt; an unreadable receipt is logged. */
 const commandAccepted = (
-  threads: ThreadManagement.ThreadManagementService["Service"],
+  receipts: CommandReceiptStore.CommandReceiptStoreV2["Service"],
   commandId: CommandId,
-) => threads.receiptStatus(commandId).pipe(Effect.map((status) => status === "accepted"));
+) =>
+  receipts.getByCommandId(commandId).pipe(
+    Effect.map((receipt) => Option.isSome(receipt) && receipt.value.status === "accepted"),
+    Effect.catch((error) =>
+      Effect.logWarning("Could not read a cut dispatch's receipt", {
+        commandId,
+        tag: error._tag,
+      }).pipe(Effect.as(false)),
+    ),
+  );
 
 /**
  * Runs, inside an uninterruptible region, a dispatch that leaves a run "preparing". A cut while
@@ -63,12 +74,13 @@ export const makeRunPreparation = <ES>(deps: {
   ) => Effect.Effect<void>;
   /** The event sink's `settled`: every commit already on the batch worker has settled. */
   readonly settled: Effect.Effect<void>;
+  readonly receipts: CommandReceiptStore.CommandReceiptStoreV2["Service"];
 }) => {
   const { threads, reservePreparation, releasePreparation } = deps;
 
   /** Whether a cut dispatch's command committed, once a commit it started on the worker settled. */
   const committed = (commandId: CommandId) =>
-    deps.settled.pipe(Effect.andThen(commandAccepted(threads, commandId)));
+    deps.settled.pipe(Effect.andThen(commandAccepted(deps.receipts, commandId)));
 
   const scheduleRunPreparation = Effect.fn("ThreadLaunchService.scheduleRunPreparation")(function* (
     input: ThreadLaunchPreparationInput,
