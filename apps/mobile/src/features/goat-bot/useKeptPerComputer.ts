@@ -29,6 +29,7 @@ const NO_KEPT = Atom.make<unknown>(null);
 const NOT_STALE = Atom.make<number | null>(null);
 const NOT_READABLE = Atom.make(false);
 const NOT_STARTING_OVER = Atom.make(false);
+const NOT_REFUSED = Atom.make(false);
 // The bot list the roster reads, shared by every reader of a computer.
 const botListOf = (environmentId: EnvironmentId, members: boolean) =>
   channelEnvironment.listBots({ environmentId, input: members ? { includeDeleted: true } : {} });
@@ -65,6 +66,15 @@ const startingOverAtom = Atom.family((key: string) => {
     const list = get(botListOf(environmentId, capabilities.goatBotMembers === true));
     return !(list._tag === "Failure" && !list.waiting && accessDenied(Cause.squash(list.cause)));
   });
+});
+// A removed computer's presentation can outlive its catalog entry and report the refusal again.
+const refusedAtom = Atom.family((key: string) => {
+  const environmentId = key.slice(key.indexOf(":") + 1) as EnvironmentId;
+  return Atom.make(
+    (get) =>
+      get(environmentCatalog.catalogValueAtom).entries.has(environmentId) &&
+      get(connectionRefusedAtom(environmentId)),
+  );
 });
 
 // The reads of each kind; a refresh replaces whatever request of theirs is in flight.
@@ -218,5 +228,15 @@ export function isComputerReadable(
 export function useComputerStartingOver(environmentId: EnvironmentId | null): boolean {
   return useAtomValue(
     environmentId === null ? NOT_STARTING_OVER : startingOverAtom(computerKey(environmentId)),
+  );
+}
+
+/**
+ * Whether the computer's connection refused this phone, for authentication or permission, since it
+ * last connected; only while it is still one of the app's computers.
+ */
+export function useComputerRefused(environmentId: EnvironmentId | null): boolean {
+  return useAtomValue(
+    environmentId === null ? NOT_REFUSED : refusedAtom(computerKey(environmentId)),
   );
 }
