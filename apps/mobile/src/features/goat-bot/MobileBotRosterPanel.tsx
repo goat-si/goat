@@ -258,7 +258,15 @@ export function MobileBotRoster(props: {
           key={editing.profile.botId}
           bot={editing.profile}
           environmentId={editing.environmentId}
-          manage={manage}
+          manage={{
+            ...manage,
+            // Save reads the store when pressed: a refusal not yet rendered sends nothing, and
+            // the sheet closes on that render.
+            update: (...args: Parameters<typeof manage.update>) =>
+              editing.environmentId !== null && isComputerReadable(registry, editing.environmentId)
+                ? manage.update(...args)
+                : Promise.resolve(null),
+          }}
           mainName={mainName}
           onClose={() => setEditing(null)}
         />
