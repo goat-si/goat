@@ -1,6 +1,6 @@
 # N5 Usage, L09 retry 2 (lane record)
 
-Lane branch: `chase/t3-261114-n5-usage`, based on dev `c66dc0f1fd`, merged with dev `9fa40ff1f3` last (head `51b9ca4e924e2af4c3cf2a6c43dc8e25b86c54b4` after the review fix round, verified on origin; the first READY was `ef033514e9bd2442db614f63964fc4efa690ebb3`). Host pen-macmini (Node 26.12.1). Rows from #3176: `7fab4ef978`, `9a614e34a6`, L311 `a09e54a363` (decision C26 A). Class C4: stored scan-cache format (v14 to v15, plus `coveredSince`) and contract fields (`UsageSummaryInput.provisional`, `UsageLimitSourceSnapshot.origin`, `ServerProviderAuth.endpoint`).
+Lane branch: `chase/t3-261114-n5-usage`, based on dev `c66dc0f1fd`, merged with dev `3ed0b802b6` last (head `f7e90419eb4858e083e45e0020d9464801a9243c` after the review follow-up, verified on origin; fix round `51b9ca4e92` merged into the integration branch `chase/t3-261114-next` at `0f43887b43`; the first READY was `ef033514e9bd2442db614f63964fc4efa690ebb3`). Host pen-macmini (Node 26.12.1). Rows from #3176: `7fab4ef978`, `9a614e34a6`, L311 `a09e54a363` (decision C26 A). Class C4: stored scan-cache format (v14 to v15, plus `coveredSince`) and contract fields (`UsageSummaryInput.provisional`, `UsageLimitSourceSnapshot.origin`, `ServerProviderAuth.endpoint`).
 
 ## Rows and commits
 
@@ -10,11 +10,11 @@ Lane branch: `chase/t3-261114-n5-usage`, based on dev `c66dc0f1fd`, merged with 
 | `7fab4ef978` | the Usage page shows cost and tokens at once (#33993) | `e175f8c684f63ccd24be9f096414b79bbcc8b6be` | ported; UsageService.ts 858 lines |
 | `9a614e34a6` | bill Codex requests whose counters rewind (#29366) | `418ac2046b179f62a791d97039d978a3356c4f41` | ported; scan cache v14 to v15 |
 | L311 `a09e54a363` | proxied usage limits take their reset from the hub (#36238) | `753cb3212f77cb339ce3edac734e7310e6031707` | ported with C26 A |
-
 | N5-P3-2 | none | `5bfd8939ceb2fc45f304402052e8439775094a71` | verbatim move of the GOAT pool-first order into opencodexQuotaPool.ts |
 | N5-P2-1 | none | `bf21697ed7a46bbadccf91ccd43c24ec50c2e814` | the pool answers with paused, reauth or exhausted accounts in it |
 | N5-P3-4 | none | `91686cf9b6086188c66b7c5653b2dd329c3e3c5f` | goat_environment_usage keeps refreshing sources at the 32-source cut |
 | N5-P3-3 | none | `f97954990d42133981ca357b4dcce61b1db2da62` | GOAT codexEndpoint cases in their own test |
+| N5F-P3-1 | none | `1b5e096f609ceb73f0ef988884c2511c908eca74` | the pool judges its windows by GOAT quota verdict (model scope, exhausted flag) |
 
 ## Decisions and adaptations
 
@@ -25,6 +25,8 @@ Lane branch: `chase/t3-261114-n5-usage`, based on dev `c66dc0f1fd`, merged with 
 
 - Fix round (review at ef033514e9): N5-P2-1, the pool pass drops paused and reauth accounts (the contract says they are shown but not counted), and an account marked exhausted whose windows never reach 100% counts as spent with no known reset: it adds no time, so the other accounts' earliest refill answers, and alone it leaves the pool without an answer (then the hub). The tradeoff: if that exhausted account refills first, the scheduled continuation starts later than it could; the user can still continue by hand. Upstream hubPoolResetAt is unchanged. N5-P3-2, LOOPBACK_HOSTS, servesEndpoint and the pool-first split live in GOAT's opencodexQuotaPool.ts (poolFirstResetAt takes the answering function, so no import cycle); resetAt calls it once. N5-P3-4, goat_environment_usage puts refreshing sources first when it cuts sources at 32. N5-P3-3, GOAT's three codexEndpoint assertions have their own test; the four codexCustomEndpoint assertions inside "reports native quota only for an OpenAI login on a native route" are upstream a09e54a363's own edit of that test (its CodexProvider.test.ts diff), carried as upstream wrote them.
 
+- Follow-up (fix review at 51b9ca4e92, N5F-P3-1, refines N5-P2-1): poolFirstResetAt takes the model and now; per pool account it drops windows where `appliesToModel(scopeModel, model)` is false and reads a window as spent when `isWindowExhausted(window, now)` (packages/shared/src/quotaVerdict.ts:29, :47; the producer's exhausted flag decides before the percentage), then calls upstream's untouched hubPoolResetAt. A Sonnet run on its 5-hour limit through the pool now gets the 5-hour reset, not the Opus weekly one; a window OpenCodex marks exhausted at 98% answers with its reset. An exhausted account with no exhausted window stays as ruled (spent, no known reset).
+
 ## Fail-first
 
 - 7fab4ef978 (tests on dev code): `answers a provisional read ...` AssertionError: expected 12 to equal 5; `credits the same copy of a duplicate ...` expected false to be true; client `reads usage in full when the saved answer cannot be read` expected [ undefined ] to deeply equal [ true, undefined ]; client refresh-failure test (inputs); contracts `rejects a provisional flag that is not a boolean` expected [Function] to throw, and the newer-server round trip. Server: 2 failed | 8 passed; client: 2 failed | 3 passed; contracts: 2 failed | 1 passed. The transcript-order test passes on dev too (dev walks sequentially); it guards the concurrent walk.
@@ -32,6 +34,7 @@ Lane branch: `chase/t3-261114-n5-usage`, based on dev `c66dc0f1fd`, merged with 
 - C26: 18 failed | 3 passed (hubPoolResetAt is not a function; layerResetFallback undefined; codexCustomEndpoint is not a function; contracts 2 failed), plus verbose: limited-user snooze ×, hub origin ×, ingestor ×, the three existing snooze kinds ✓.
 - Fix round N5-P2-1: reset fallback order rows "a paused pool account with room is not counted", "a pool account that needs sign-in again is not counted", "an exhausted pool account below 100% is spent with no known reset": AssertionError: expected null to be '2026-11-13T14:00:00.000Z' (3 failed | 7 passed); "a pool whose only account is exhausted below 100% knows no reset" passes before and after.
 - Fix round N5-P3-4: ScopedReadMcp.test.ts "keeps refreshing usage sources when more than 32 sources are cut": AssertionError: expected [] to have a length of 3 but got +0.
+- Follow-up N5F-P3-1, "reset fallback verdict" rows (3 failed | 12 passed): "a Sonnet run on its 5-hour limit is not given the Opus weekly reset": AssertionError: expected '2026-11-16T12:00:00.000Z' to be '2026-11-13T14:00:00.000Z'; "a window OpenCodex marks exhausted at 98% answers with its reset" and "a window marked exhausted at 98% beside another spent account gives the earlier reset": AssertionError: expected null to be '2026-11-13T13:00:00.000Z'. "an Opus run waits for the Opus weekly reset" passes before and after.
 - Runtime transcript (server rows, functions called directly with Node on the lane head): pool spent 2h -> 2026-11-13T14:00:00.000Z; pool room -> null; codexCustomEndpoint(hub) -> https://hub.example.com; codexEndpoint({}, home route) -> http://127.0.0.1:4318.
 
 ## C4
@@ -53,6 +56,8 @@ Coordinator authorisation, 2026-11-16, rule 3, lane N5 (usage), second request: 
 pen-macmini, no other check:changed running at start, after merging dev `5688d26760` last: `node scripts/goat-rename.ts --check` 0; `set -o pipefail; vp run check:changed` GATE_EXIT=0: format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget, typecheck (39 packages), test (340 files) all pass; Test Files 340 passed (340), Tests 4467 passed (4467). No known issue was hit. The first gate (head with dev `330c1837f6`) failed one test, apps/server/src/mcp/toolkits/agentSurface/discovery.test.ts `describes every argument of the paths goat_call lists` (environment.usage: [ 'provisional' ]), fixed in the 7fab4ef978 commit by describing the argument.
 
 Fix round, pen-macmini, no other check:changed running at start, after merging dev `9fa40ff1f3` last (head `51b9ca4e92`): `node scripts/goat-rename.ts --check` 0, `node scripts/agent-surface/audit.ts --check` 0; `set -o pipefail; vp run check:changed` GATE_EXIT=0: format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget, typecheck (39 packages), test (340 files) all pass; Test Files 340 passed (340), Tests 4473 passed (4473). No known issue was hit. Dev moved during the gate to `dfc7a597d1` (#3545, two apps/mobile/src/features/goat-bot files); it shares no file with this lane and merges cleanly (`git merge-tree`); not merged into the lane.
+
+Follow-up, pen-macmini, no other check:changed running at start, after merging dev `3ed0b802b6` last (head `f7e90419eb`): `node scripts/goat-rename.ts --check` 0; `set -o pipefail; vp run check:changed` GATE_EXIT=0: format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget, typecheck (39 packages), test (340 files) all pass; Test Files 340 passed (340), Tests 4477 passed (4477). Dev moved after the push to `97c0dd32c4` (#3547, one apps/mobile Android file); it shares no file with this lane and merges cleanly; not merged.
 
 ## Surfaces
 
@@ -79,6 +84,10 @@ oxlint-plugin-goat/code-budgets.json: packages/client-runtime/src/state/server.t
 
 - Before: /tmp/n5-usage-cold-before-dev.mp4 (dev 9fa40ff1f3, about 3.7 s).
 - After: /tmp/n5-usage-cold-after-lane.mp4 (lane f97954990d, about 6 s).
-- Kept in /tmp until the lane is merged into #3519, then node scripts/pr-assets.ts upload 3519 /tmp/n5-usage-cold-before-dev.mp4 /tmp/n5-usage-cold-after-lane.mp4.
+- Uploaded to #3519 with node scripts/pr-assets.ts upload 3519 (branch pr-assets). The videos are served as application/octet-stream, so GitHub links them but does not play them inline; GIF copies of the same recordings render inline:
+  - before video: https://raw.githubusercontent.com/goat-si/goat/af3e726384b7d41da936942fee7bc4e4b3c1a9eb/3519/n5-usage-cold-before-dev.mp4
+  - after video: https://raw.githubusercontent.com/goat-si/goat/af3e726384b7d41da936942fee7bc4e4b3c1a9eb/3519/n5-usage-cold-after-lane.mp4
+  - before GIF: https://raw.githubusercontent.com/goat-si/goat/60d9c3c33f5a7d3e353b2fba8ae71efe590d9f21/3519/n5-usage-cold-before-dev.gif
+  - after GIF: https://raw.githubusercontent.com/goat-si/goat/60d9c3c33f5a7d3e353b2fba8ae71efe590d9f21/3519/n5-usage-cold-after-lane.gif
 
 NOT RUN: desktop and mobile Usage pages; a live CLIProxyAPI hub or OpenCodex pool; a v14 file written by dev's own build; ci:full.
