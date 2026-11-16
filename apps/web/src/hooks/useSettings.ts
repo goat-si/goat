@@ -43,7 +43,7 @@ import {
   supportsSharedSettingsSync,
 } from "@goat/client-runtime/state/shared-settings";
 import { ensureLocalApi } from "~/localApi";
-import { runWithStorageLock } from "~/lib/storageLock";
+import { persistOverOtherTabs } from "~/hooks/clientSettingsMerge";
 import {
   readBrowserClientSettings,
   subscribeBrowserClientSettingsWrites,
@@ -149,7 +149,6 @@ let deferredClientSettingsPatchCount = 0;
 let unsubscribeOtherTabClientSettings: (() => void) | null = null;
 /** This tab's settings as of its last write or read; keys still equal to it were not edited here. */
 let clientSettingsMergeBaseline: ClientSettings | null = null;
-const CLIENT_SETTINGS_LOCK_KEY = "goat:client-settings:v1";
 
 function emitClientSettingsChange() {
   for (const listener of clientSettingsListeners) {
@@ -276,36 +275,6 @@ function refreshClientSettingsFromOtherTab(): void {
   });
 }
 
-/**
- * Under a lock shared by every tab, writes the keys this tab edited over what the store holds now,
- * so a key another tab saved since this tab last read or wrote survives.
- */
-function persistOverOtherTabs(
-  settings: ClientSettings,
-  editedKeys: ReadonlySet<string>,
-  persist: (settings: ClientSettings) => Promise<void>,
-): Promise<void> {
-  // Only the default store can be read back; a caller's own persist writes elsewhere.
-  if (persist !== defaultClientSettingsPersistence) return persist(settings);
-  return runWithStorageLock(CLIENT_SETTINGS_LOCK_KEY, async () => {
-    const baseline = clientSettingsMergeBaseline;
-    const stored = baseline ? await ensureLocalApi().persistence.getClientSettings() : null;
-    let merged = settings;
-    if (stored && baseline) {
-      const saved: ClientSettings = { ...DEFAULT_CLIENT_SETTINGS, ...stored };
-      const untouchedKeys = Struct.keys(settings).filter(
-        (key) => !editedKeys.has(key) && Equal.equals(settings[key], baseline[key]),
-      );
-      merged = {
-        ...settings,
-        ...Object.fromEntries(untouchedKeys.map((key) => [key, saved[key]])),
-      };
-    }
-    await persist(merged);
-    clientSettingsMergeBaseline = settings;
-  });
-}
-
 let lastPersistedClientSettings: ClientSettings | null = null;
 const clientSettingsPersistedListeners = new Set<
   (previous: ClientSettings, next: ClientSettings) => void
@@ -375,7 +344,13 @@ export function persistClientSettingsPatch(
       ) {
         replaceClientSettingsSnapshot({ ...current, ...patch });
       }
-      await persistOverOtherTabs(getClientSettingsSnapshot(), new Set(Object.keys(patch)), persist);
+      clientSettingsMergeBaseline = await persistOverOtherTabs({
+        settings: getClientSettingsSnapshot(),
+        editedKeys: new Set(Object.keys(patch)),
+        baseline: clientSettingsMergeBaseline,
+        persist,
+        readsBack: persist === defaultClientSettingsPersistence,
+      });
     } catch (error) {
       if (previous) {
         const current = getClientSettingsSnapshot();
@@ -413,7 +388,13 @@ export async function persistClientSettingsUpdate(
       const editedKeys = new Set(
         Struct.keys(next).filter((key) => !Equal.equals(next[key], current[key])),
       );
-      await persistOverOtherTabs(next, editedKeys, persist);
+      clientSettingsMergeBaseline = await persistOverOtherTabs({
+        settings: next,
+        editedKeys,
+        baseline: clientSettingsMergeBaseline,
+        persist,
+        readsBack: persist === defaultClientSettingsPersistence,
+      });
       if (getClientSettingsSnapshot() === current) {
         replaceClientSettingsSnapshot(next);
         return next;
