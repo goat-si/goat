@@ -224,10 +224,12 @@ function steps(host: string, located: Located, failure: ConnectionAttemptError |
           ]
         : [`Make sure ${host} is awake and online.`, checkHost];
     case "server":
-      return [
-        `Make sure GOAT is running on ${host}.`,
-        "Retry. If it keeps failing, copy the diagnostics.",
-      ];
+      return failure?._tag === "ConnectionBlockedError" && failure.sessionEnded === true
+        ? ["Reload this page, then pair this browser again."]
+        : [
+            `Make sure GOAT is running on ${host}.`,
+            "Retry. If it keeps failing, copy the diagnostics.",
+          ];
   }
 }
 

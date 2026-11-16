@@ -213,6 +213,7 @@ const makeHarness = Effect.fn("TestSshAuthorization.makeHarness")(function* (opt
     Effect.provide(common),
   );
   const driver = yield* Driver.make.pipe(
+    Effect.provideService(Capabilities.PrimaryEnvironmentAuth, { bearerToken: Effect.succeedNone }),
     Effect.provideService(Resolver.ConnectionResolver, resolver),
     Effect.provideService(Session.RpcSessionFactory, {
       openProbe: () => Effect.die("unused"),

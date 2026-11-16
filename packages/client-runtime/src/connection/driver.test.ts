@@ -55,15 +55,18 @@ const session: RpcSession.RpcSession = {
   closed: Effect.never,
 };
 
+/** Desktop's primary: signed in by bearer, so the driver never asks for its session. */
+const bearerOnly = Layer.succeed(ClientCapabilities.PrimaryEnvironmentAuth, {
+  bearerToken: Effect.succeedNone,
+});
+
 function driverWith(prepare: Resolver.ConnectionResolver["Service"]["prepare"]) {
   return Driver.make.pipe(
     Effect.provide(
       Layer.mergeAll(
         Layer.mock(Resolver.ConnectionResolver)({ prepare }),
         Layer.mock(RpcSession.RpcSessionFactory)({ connect: () => Effect.succeed(session) }),
-        Layer.succeed(ClientCapabilities.PrimaryEnvironmentAuth, {
-          bearerToken: Effect.succeedNone,
-        }),
+        bearerOnly,
         RpcHttp.layerRemoteHttpClient(() => Promise.reject(new Error("No HTTP request expected."))),
       ),
     ),
@@ -428,6 +431,7 @@ describe("live host checks", () => {
         const driver = yield* Driver.make.pipe(
           Effect.provide(
             Layer.mergeAll(
+              bearerOnly,
               Layer.mock(Resolver.ConnectionResolver)({}),
               Layer.mock(RpcSession.RpcSessionFactory)({}),
               RpcHttp.layerRemoteHttpClient((url, init) => {
@@ -479,6 +483,7 @@ it.effect("identity mismatch -> no Authorization header sent, kept", () =>
       const driver = yield* Driver.make.pipe(
         Effect.provide(
           Layer.mergeAll(
+            bearerOnly,
             Layer.mock(Resolver.ConnectionResolver)({ prepare: () => Effect.succeed(bearer) }),
             Layer.mock(RpcSession.RpcSessionFactory)({ connect: () => Effect.succeed(session) }),
             RpcHttp.layerRemoteHttpClient((_url, init) => {
@@ -519,6 +524,7 @@ it.effect("SSH lease opens a probe socket without re-preparing", () =>
       const driver = yield* Driver.make.pipe(
         Effect.provide(
           Layer.mergeAll(
+            bearerOnly,
             Layer.mock(Resolver.ConnectionResolver)({
               prepare: () =>
                 Effect.sync(() => {
