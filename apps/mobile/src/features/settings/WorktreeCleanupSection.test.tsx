@@ -22,7 +22,24 @@ vi.mock("@effect/atom-react", () => ({
 }));
 vi.mock("react-native", () => ({
   View: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  TextInput: () => null,
+  TextInput: ({
+    accessibilityLabel,
+    value,
+    onChangeText,
+    onEndEditing,
+  }: {
+    accessibilityLabel: string;
+    value: string;
+    onChangeText: (value: string) => void;
+    onEndEditing: () => void;
+  }) => (
+    <input
+      aria-label={accessibilityLabel}
+      value={value}
+      onChange={(event) => onChangeText(event.target.value)}
+      onBlur={onEndEditing}
+    />
+  ),
 }));
 vi.mock("../../components/ui/AppText", () => ({
   AppText: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
@@ -107,3 +124,37 @@ it.each([
     await act(() => root.unmount());
   },
 );
+
+it("puts a number back to the saved value when saving it fails (#3556)", async () => {
+  mocks.update.mockReset();
+  mocks.update.mockResolvedValueOnce(
+    AsyncResult.failure(Cause.fail(new Error("Studio is not connected."))),
+  );
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(() =>
+    root.render(
+      <WorktreeCleanupSection
+        environmentId={EnvironmentId.make("local")}
+        settings={{ ...DEFAULT_SERVER_SETTINGS.storageCleanup, worktreeKeepRecent: 15 }}
+      />,
+    ),
+  );
+  const field = container.querySelector<HTMLInputElement>(
+    'input[aria-label="Keep most recent worktrees"]',
+  );
+  if (!field) throw new Error("Missing field");
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  await act(async () => {
+    field.focus();
+    setValue?.call(field, "40");
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => field.blur());
+  expect(mocks.update).toHaveBeenCalledOnce();
+  expect(container.textContent).toContain("Studio is not connected.");
+  expect(field.value).toBe("15");
+  await act(() => root.unmount());
+  container.remove();
+});

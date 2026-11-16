@@ -382,6 +382,7 @@ it("says why an allowed app could not be removed, and removes it when pressed ag
     "Local: Local is not connected.",
   );
   await act(async () => button("Remove Safari").click());
+  expect(mocks.updateSettings).toHaveBeenCalledTimes(2);
   expect(mocks.updateSettings).toHaveBeenLastCalledWith({
     environmentId: "local",
     input: { app: "Safari" },
