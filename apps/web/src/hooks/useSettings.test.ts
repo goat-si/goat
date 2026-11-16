@@ -217,7 +217,7 @@ describe("persistClientSettingsPatch", () => {
     await Promise.resolve();
     const later = persistClientSettingsPatch({ snapShotFlash: false });
     expect(getClientSettings()).toMatchObject({ wordWrap: false, snapShotFlash: false });
-    expect(persistenceMocks.setClientSettings).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(persistenceMocks.setClientSettings).toHaveBeenCalledTimes(1));
 
     const rejection = expect(failed).rejects.toBe(failure);
     rejectWrite(failure);
