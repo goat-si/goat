@@ -150,7 +150,6 @@ export function useKeptPerComputer<A>(
   kind: Kind,
   environmentId: EnvironmentId | null,
   live: EnvironmentQueryView<A>,
-
   /** Keeps one answer per part of the computer (a member's status, by bot id). */
   part?: string,
 ): A | null {
@@ -185,11 +184,12 @@ export function useKeptPerComputer<A>(
       if (stored !== null) store(null);
       return;
     }
-    // The computer may have left the catalog since this render, and even come back: its answer from
-    // before is not kept then.
+    // The computer may have left the catalog since this render, and even come back, or refused this
+    // phone: its answer from before is not kept then.
     const unchanged =
       registry.get(environmentCatalog.catalogValueAtom).entries.has(environmentId) &&
-      removalsOf(registry, environmentId) === removalsAtRender;
+      removalsOf(registry, environmentId) === removalsAtRender &&
+      !registry.get(deniedAtom(deniedKeyOf(environmentId)));
     if (!unchanged || settled === null || settled === stored) return;
     if (part !== undefined && typeof settled === "object" && evicted.has(settled)) return;
     store(settled);

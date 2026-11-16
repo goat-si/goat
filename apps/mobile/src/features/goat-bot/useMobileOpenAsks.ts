@@ -36,6 +36,8 @@ export type MobileOpenAsks =
       readonly staleRetry: (() => void) | null;
       /** The computer is offline; these are the asks last read from it. */
       readonly offline: boolean;
+      /** Back online, the first read has not answered; these are the asks last read before. */
+      readonly pending: boolean;
     };
 
 /**
@@ -77,6 +79,7 @@ export function useMobileOpenAsks(
       truncated: kept.truncated,
       staleRetry: null,
       offline: true,
+      pending: false,
     };
   }
   // The kept answer is the live one while connected, and nothing once access is refused.
@@ -92,6 +95,8 @@ export function useMobileOpenAsks(
       truncated: earlier.truncated,
       staleRetry: failed ? refresh : null,
       offline: false,
+      // The hook keeps the last answer until the first read after a reconnect answers.
+      pending: asks.data === null && !failed,
     };
   return { state: "loading" };
 }
