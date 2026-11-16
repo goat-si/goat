@@ -218,8 +218,8 @@ export function MobileBotRoster(props: {
           const actions = actionsFor(entry);
           if (actions === null) return row(() => {});
           return (
+            // No title: with a title header, TalkBack loses the row's focus when Back closes the menu.
             <AndroidAnchoredMenu
-              title={entry.profile?.name}
               actions={actions.map(({ id, title, destructive }) => ({
                 id,
                 title,
