@@ -121,3 +121,38 @@ it("guard: a load with nothing to load ends the jump instead of trying again (#3
   expect(mocks.load).toHaveBeenCalledOnce();
   expect(pendingThreadMessageJump(threadKey)).toBeNull();
 });
+
+it("an earlier jump's failed load doesn't end a newer jump in the same thread, which then loads down to its own message (#3556)", async () => {
+  await using _screen = await mountThread();
+  const first = Promise.withResolvers<Result>();
+  mocks.load.mockReturnValueOnce(first.promise);
+  await act(async () => requestThreadMessageJump(threadKey, message));
+  const newer = MessageId.make("message-2");
+  await act(async () => requestThreadMessageJump(threadKey, newer));
+  expect(mocks.load).toHaveBeenCalledOnce();
+  mocks.load.mockReturnValueOnce(Promise.withResolvers<Result>().promise);
+  await act(async () => first.resolve(offline()));
+  expect(pendingThreadMessageJump(threadKey)).toBe(newer);
+  expect(mocks.load).toHaveBeenCalledTimes(2);
+  expect(mocks.load).toHaveBeenLastCalledWith({
+    environmentId: thread.environmentId,
+    input: { threadId: thread.id, throughEntryId: newer },
+  });
+  await act(async () => finishThreadMessageJump(threadKey));
+});
+
+it("picking the same message again while its first jump is loading makes a second attempt when the first fails (#3556)", async () => {
+  await using _screen = await mountThread();
+  const first = Promise.withResolvers<Result>();
+  mocks.load.mockReturnValueOnce(first.promise);
+  await act(async () => requestThreadMessageJump(threadKey, message));
+  await act(async () => requestThreadMessageJump(threadKey, message));
+  expect(mocks.load).toHaveBeenCalledOnce();
+  const second = Promise.withResolvers<Result>();
+  mocks.load.mockReturnValueOnce(second.promise);
+  await act(async () => first.resolve(offline()));
+  expect(pendingThreadMessageJump(threadKey)).toBe(message);
+  expect(mocks.load).toHaveBeenCalledTimes(2);
+  await act(async () => second.resolve(offline()));
+  expect(pendingThreadMessageJump(threadKey)).toBeNull();
+});
