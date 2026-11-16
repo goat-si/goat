@@ -186,6 +186,19 @@ export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQu
   };
 }
 
+/**
+ * The status a reply's badge names, if any: an interrupted reply says so wherever it sits in its
+ * turn, and any other unfinished reply only in the meta row that closes the turn.
+ */
+export function assistantReplyStatusBadge(
+  projectedItem: OrchestrationV2ProjectedTurnItem | undefined,
+  inMetaRow: boolean,
+): string | null {
+  const status = projectedItem?.item.status;
+  if (status === undefined || status === "completed") return null;
+  return inMetaRow || status === "interrupted" ? status : null;
+}
+
 export function canForkProjectedAssistantItem(input: {
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
   readonly capabilities?: OrchestrationV2ProviderCapabilities | undefined;
