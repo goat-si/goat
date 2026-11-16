@@ -1,13 +1,22 @@
 import { NativeThemeHost } from "./NativeThemeHost.android";
 import { Switch as ComposeSwitch } from "@expo/ui/jetpack-compose";
 import { Pressable, View } from "react-native";
+import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import type { ThemedSwitchProps } from "./NativeSwitch.types";
 
 import { useControlTheme } from "./useControlTheme";
 
+// Material's disabled emphasis; left unset, Compose's defaults ignore the switch tokens.
+const DISABLED_ALPHA = 0.38;
+
 /** RN Pressable must own touch: Compose-handled switch taps can activate the parent row instead. */
 export function NativeSwitch(props: ThemedSwitchProps) {
   const { colors } = useControlTheme();
+  const activeTrack = colors["--color-switch-active-track"];
+  const activeThumb = colors["--color-switch-active-thumb"];
+  const inactiveTrack = colors["--color-switch-inactive-track"];
+  const inactiveThumb = colors["--color-switch-inactive-thumb"];
+  const dim = (color: string) => themeColorWithAlpha(color, DISABLED_ALPHA);
 
   return (
     <Pressable
@@ -26,12 +35,18 @@ export function NativeSwitch(props: ThemedSwitchProps) {
             value={Boolean(props.value)}
             enabled={!props.disabled}
             colors={{
-              checkedTrackColor: colors["--color-switch-active-track"],
-              checkedThumbColor: colors["--color-switch-active-thumb"],
-              checkedBorderColor: colors["--color-switch-active-track"],
-              uncheckedTrackColor: colors["--color-switch-inactive-track"],
-              uncheckedThumbColor: colors["--color-switch-inactive-thumb"],
-              uncheckedBorderColor: colors["--color-switch-inactive-thumb"],
+              checkedTrackColor: activeTrack,
+              checkedThumbColor: activeThumb,
+              checkedBorderColor: activeTrack,
+              uncheckedTrackColor: inactiveTrack,
+              uncheckedThumbColor: inactiveThumb,
+              uncheckedBorderColor: inactiveThumb,
+              disabledCheckedTrackColor: dim(activeTrack),
+              disabledCheckedThumbColor: dim(activeThumb),
+              disabledCheckedBorderColor: dim(activeTrack),
+              disabledUncheckedTrackColor: dim(inactiveTrack),
+              disabledUncheckedThumbColor: dim(inactiveThumb),
+              disabledUncheckedBorderColor: dim(inactiveThumb),
             }}
           />
         </NativeThemeHost>
