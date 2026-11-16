@@ -312,3 +312,29 @@ it("gate-held words become editable when the question id arrives during the pick
   await userEvent.type(field, "{Enter}");
   expect(onSendToTask).toHaveBeenCalledWith("task-1", TYPED, [], "q-1");
 });
+
+it("gate-held words whose question id arrives during the pick show as Not sent once the task records that question (#3442)", async () => {
+  setup();
+  const onSendToTask = vi.fn(() => true);
+  const { answerQuestionId: _question, ...noQuestionId } = question;
+  const sending: BotRow = {
+    ...noQuestionId,
+    options: [],
+    answer: "Keep",
+    answerIndex: 0,
+    answerSending: true,
+  };
+  await using screen = await render(chat({ rows: [noQuestionId], onSendToTask }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Something else" }), TYPED);
+  await screen.rerender(chat({ rows: [sending], onSendToTask }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Something else" }), "{Enter}");
+  await screen.rerender(chat({ rows: [{ ...sending, answerQuestionId: "q-1" }], onSendToTask }));
+  await expect.element(screen.getByRole("textbox", { name: "Something else" })).toHaveValue(TYPED);
+  // The task records an answer to that question before the person types again.
+  const answered: BotRow = { ...question, options: [], answer: "Keep", answerIndex: 0 };
+  await screen.rerender(
+    chat({ rows: [answered], items: [chipItem("task-1", 4, ["q-1"])], onSendToTask }),
+  );
+  await expect.element(screen.getByText("Not sent: “" + TYPED + "”")).toBeVisible();
+  expect(onSendToTask).not.toHaveBeenCalled();
+});
