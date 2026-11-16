@@ -146,3 +146,22 @@ Coordinator rulings: /Users/jun/handoff-in/chase/next-N11-coordinator-rulings.md
 - A real remote host without gzip or without network; covered by the runner script tests on a stubbed PATH.
 - Full suite (`ci:full`).
 - `vp run check:changed` on the follow-up head: other lanes' vitest runs were active on pen-macbookair (N6 and another lane's server tests), so only the touched files were run.
+
+## N11b: terminal cap (goat#3539)
+
+Branch `chase/t3-261114-n11b-terminal-cap`, from the integration branch `chase/t3-261114-next` at `e7b14604c2` (coordinator decision: a server buffer without a limit is forbidden by docs/internals/server-resilience.md, "Every buffer the server holds has a bound"). Head `417bf95ef6ea2c40e98bca3abd11721f38b87ded`, pushed, not merged yet. Host pen-macbookair. goat#3538 stays an issue only.
+
+| commit       | change                                                                                                              |
+| ------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `417bf95ef6` | fix(server): an unterminated control sequence no longer grows the terminal history buffer without limit (goat#3539) |
+
+- Upstream: pingdotgg/t3code main at `dfeaf7b137` has the same sanitizer (apps/server/src/terminal/Manager.ts:1374) with no cap, and no commit since `93cbca3fcb` touches it (`git log -S pendingControlSequence` and a message search are empty). Nothing to port; this is a GOAT fix.
+- Fix: `MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH` (1 MiB of UTF-16 code units) in apps/server/src/terminal/terminalHistoryReplay.ts. The exported `sanitizeTerminalHistoryChunk` wraps upstream's sanitizer, now the private `sanitizeChunk`, which is unchanged. When the pending sequence it would return is longer than the cap, the sequence is dropped (a terminal shows none of an unfinished sequence) and parsing continues from ground state. 1 MiB is 16 times the largest payloads the existing test keeps whole ("preserves large chunked OSC 52 and DCS strings across reopen", 64 KiB each, still passing).
+- Client: no matching buffer. client-runtime keeps only a parser state number for cut sequences (packages/client-runtime/src/state/terminalOutput.ts:21, `sequenceState`), so no client cap is needed.
+- server-resilience.md: unchanged. It already states the rule, and the named constant shows this bound.
+- Fail-first (apps/server/src/terminal/terminalHistoryReplay.test.ts, "drops an OSC / a DCS / a CSI left unterminated past the pending cap and returns to ground", fed just over the cap in 64 KiB chunks), with only the constant present: 3 failed, `expected 1048580 to be less than or equal to 1048576`, `expected 1048579 …`, `expected 1048578 …`. After the fix: the terminal suites pass (13 files, 153 tests).
+- Probe (/tmp/n11-probe/pending64.mts, 64 MiB of an unterminated OSC in 64 KiB chunks): before, 64 MiB pending, RSS 198 → 635 MiB, 0.27 → 5.6 ms per chunk, 4.0 s, then 67,108,874 characters released at BEL. After: pending 0 once past the cap, RSS 195 → 204 MiB, 5 ms in total.
+- Rule 3: no existing expectation changed; the new test is added beside the module's existing ones.
+- Checks on 417bf95ef6: `vp test run src/terminal/` 153 passed; `vp run typecheck` in apps/server 0; lint of the two files clean; `node scripts/goat-rename.ts --check` 0 (no test file moved).
+- Known limit: after the cap the parser is in ground state while a real terminal is still inside the sequence. The rest of that sequence's payload, up to its terminator, is kept as history text that the live terminal never showed; it is bounded by the history byte cap. On the probe, 66,060,288 characters of the payload reached history this way. Tracking "inside a dropped sequence until its terminator" would need a separate state beside the pending string, and the ruling asked for a return to ground.
+- NOT RUN: `vp run check:changed` (lane N6 holds the heavy slot on pen-macbookair); a real-client pass; `ci:full`.
