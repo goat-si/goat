@@ -6,6 +6,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import * as Scope from "effect/Scope";
 import { ClaimSlot } from "./EffectExecutionFences.ts";
 import {
   OrchestrationEffectWorkerV2,
@@ -28,7 +29,8 @@ export const runDaemonWithOptions = (options: OrchestrationEffectDaemonOptions =
   Effect.scoped(
     Effect.gen(function* () {
       const worker = yield* OrchestrationEffectWorkerV2;
-      const scope = yield* Effect.scope;
+      // Shutdown interrupts in-flight executions together, as the slots themselves are.
+      const scope = yield* Scope.fork(yield* Effect.scope, "parallel");
       const requestedConcurrency = options.concurrency ?? DEFAULT_EFFECT_WORKER_CONCURRENCY;
       const concurrency = Number.isFinite(requestedConcurrency)
         ? Math.max(1, Math.floor(requestedConcurrency))
