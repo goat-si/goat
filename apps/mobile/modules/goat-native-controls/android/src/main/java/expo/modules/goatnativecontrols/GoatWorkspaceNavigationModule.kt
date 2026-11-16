@@ -188,7 +188,7 @@ class GoatWorkspaceNavigationView(
                     onClick = { onTabSelected(mapOf("tab" to tab)) },
                     icon = { Icon(tabIconPainter(tab), contentDescription = null) },
                     label = {
-                      // Autosize kept its old size when only GOAT's text size changed.
+                      // autoSize isn't in Text's element equality; re-key so new bounds apply.
                       key(textScale) {
                         Text(
                           tabTitle(tab),
@@ -365,12 +365,12 @@ class GoatWorkspaceNavigationView(
 
   @Composable
   private fun railLabel(text: String, fraction: Float, color: Color = Color.Unspecified) {
-    // Autosize kept its old size when only GOAT's text size changed.
+    // autoSize isn't in Text's element equality; re-key so new bounds apply.
     key(textScale) {
       Text(
         text,
         Modifier
-          .padding(start = 12.dp)
+          .padding(start = LABEL_GAP)
           // Sized against the open rail, not the animating row, so autosize settles once.
           .wrapContentWidth(Alignment.Start, unbounded = true)
           .widthIn(max = RAIL_LABEL_WIDTH)
@@ -418,8 +418,9 @@ class GoatWorkspaceNavigationView(
     val ITEM_HEIGHT = 48.dp
     val FAB_SIZE = 48.dp
     val ICON_SIZE = 24.dp
+    val LABEL_GAP = 12.dp
     val RAIL_LABEL_WIDTH =
-      EXPANDED_RAIL_WIDTH - RAIL_INSET * 2 - (ITEM_HEIGHT - ICON_SIZE) / 2 - ICON_SIZE - 12.dp
+      EXPANDED_RAIL_WIDTH - RAIL_INSET * 2 - (ITEM_HEIGHT - ICON_SIZE) / 2 - ICON_SIZE - LABEL_GAP
     val RAIL_SHADOW = 6.dp
     val RAIL_EXPANDED_SHAPE = RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp)
     const val DISABLED_ALPHA = 0.4f
