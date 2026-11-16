@@ -757,7 +757,7 @@
   "packages/provider-core/src/server/memoryContext.ts": { "nonNull": 1 },
   "packages/provider-cursor/src/server/accountUsage.ts": { "nonNull": 2 },
   "packages/provider-cursor/src/server/adapter.test.ts": { "lines": 1891 },
-  "packages/provider-cursor/src/server/adapter.ts": { "lines": 2434, "nonNull": 1 },
+  "packages/provider-cursor/src/server/adapter.ts": { "lines": 2417, "nonNull": 1 },
   "packages/provider-cursor/src/server/cloud/adapter.test.ts": { "lines": 1253 },
   "packages/provider-cursor/src/server/cloud/adapter.ts": { "nonNull": 10 },
   "packages/provider-cursor/src/server/cloud/credentials.ts": { "nonNull": 1 },
