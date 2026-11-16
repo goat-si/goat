@@ -16,7 +16,18 @@ import * as Schema from "effect/Schema";
 import { act, useSyncExternalStore } from "react";
 import { expect, it, vi } from "vite-plus/test";
 // Home's work signals on bot rows are not under test here.
+// Keeping answers for offline is not under test here: the live answer, from a readable computer.
+vi.mock("./useKeptPerComputer", () => ({
+  useKeptPerComputer: (_kind: string, _environmentId: unknown, live: { data: unknown }) =>
+    live.data,
+  useComputerReadable: () => true,
+}));
 vi.mock("./useMobileBotRowSignals", () => ({ useMobileBotRowSignals: () => null }));
+// No computer connected here: the preview reads no bot list.
+vi.mock("../../state/presentation", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return { environmentPresentations: { presentationsAtom: Atom.make(new Map()) } };
+});
 vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));
 
 // A member's chat opened through its route and read, then its roster row: the route, the real

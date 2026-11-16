@@ -91,6 +91,8 @@ export function MobileBotRosterView(props: {
   slackEnabled: boolean;
   preview?: string;
   unread?: boolean;
+  /** The main bot's computer may no longer be read here (refused or removed): its tile rests. */
+  mainUnreadable?: boolean;
   /** The main bot's computer, whose Home may govern its work signals. */
   mainEnvironmentId?: EnvironmentId | null;
   onOpenBot: (bot: BotRosterEntry) => void;
@@ -123,7 +125,12 @@ export function MobileBotRosterView(props: {
   const bottomClearance =
     Math.max(insets.bottom, useWorkspaceTabs()?.bottomClearance ?? 0) -
     (Platform.OS === "ios" ? insets.bottom : 0);
-  const mainFace = useMobileGoatBotFace(null);
+  const mainFace = useMobileGoatBotFace(
+    null,
+    props.mainUnreadable ? null : undefined,
+    undefined,
+    props.mainUnreadable,
+  );
   const mainSignals = useMobileBotRowSignals({
     environmentId: props.mainEnvironmentId ?? null,
     botId: BotId.make("main"),
@@ -380,9 +387,11 @@ function MemberRow(props: {
   const waitingCount = stale ? 0 : member.waitingCount;
   const face = useMobileGoatBotFace(
     null,
-    { environmentId: bot.environmentId, threadId: bot.sessionThreadId },
+    // A member this phone may no longer read rests: its retained conversation says nothing.
+    member.unreadable ? null : { environmentId: bot.environmentId, threadId: bot.sessionThreadId },
     // A status whose refresh failed is not read for the face either; it keeps the face it had.
     { status: stale ? null : status },
+    member.unreadable,
   );
   const latestText = latest === undefined ? "" : goatBotPreviewText(latest.text);
   const line =

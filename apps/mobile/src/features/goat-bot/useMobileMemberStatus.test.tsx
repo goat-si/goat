@@ -1,6 +1,8 @@
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { BotProfile } from "@goat/contracts";
+import { RegistryContext } from "@effect/atom-react";
+import { AsyncResult, type Atom, AtomRegistry } from "effect/reactivity";
+import { BotProfile, EnvironmentId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -11,6 +13,16 @@ const member = vi.hoisted(() => ({
   // A refresh that failed after an earlier answer: the query keeps that answer beside the error.
   error: null as string | null,
   capabilities: {} as Record<string, boolean>,
+  connected: true,
+  // What the status read answers; offline it reads nothing.
+  answer: null as null | object,
+  cause: null as unknown,
+  failure: null as null | { kind: string; reason: string },
+  // The bots the roster's list answers with; a deleted one is listed with its state.
+  listed: [{ botId: "scout" }] as ReadonlyArray<{ botId: string; state?: string }>,
+  // Open asks, kept per computer for offline, and whether their reader is on screen.
+  asks: { asks: [{ text: "Which machine?" }], total: 1 } as object,
+  asksShown: false,
 }));
 const visitAware = {
   goatBotMembers: true,
@@ -24,7 +36,10 @@ vi.mock("../../state/environments", () => ({
       [
         "env",
         {
-          connection: { phase: "connected" },
+          connection:
+            member.failure !== null
+              ? { phase: "error", failure: member.failure }
+              : { phase: member.connected ? "connected" : "disconnected" },
           serverConfig: {
             environment: { capabilities: { ...visitAware, ...member.capabilities } },
           },
@@ -33,17 +48,56 @@ vi.mock("../../state/environments", () => ({
     ]),
   }),
 }));
-vi.mock("../../state/channels", () => ({ channelEnvironment: { botStatus: () => "status" } }));
+vi.mock("../../state/channels", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const idle = Atom.make(AsyncResult.initial());
+  return { channelEnvironment: { botStatus: () => "status", listBots: () => idle } };
+});
+// Needs you's open asks read, refreshed when a computer refuses or leaves; idle here.
+vi.mock("./openAsksRead", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const idle = Atom.make(AsyncResult.initial());
+  return { openAsks: () => idle };
+});
+// The presentations the follower watches; each show sets the computer's connection.
+vi.mock("../../state/presentation", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return { environmentPresentations: { presentationsAtom: Atom.make(new Map()) } };
+});
 vi.mock("../../state/query", () => ({
-  useEnvironmentQuery: () => ({
-    data: { waitingCount: 0, ...(member.latest ? { latest: member.latest } : {}) },
-    error: member.error,
-    refresh: member.refresh,
-  }),
+  useEnvironmentQuery: (query: string | null) => {
+    // Like a real read, an answer keeps its identity; a refused one keeps the earlier answer beside it.
+    member.answer ??= { waitingCount: 0, ...(member.latest ? { latest: member.latest } : {}) };
+    const data = query === null ? null : member.answer;
+    return {
+      data,
+      successResult: data !== null && member.cause === null ? { value: data } : null,
+      cause: query === null ? null : member.cause,
+      error: member.error,
+      isPending: false,
+      isSuccess: data !== null && member.cause === null,
+      refresh: member.refresh,
+    };
+  },
 }));
+// The app's computers; "env" is listed unless a test removes it.
+const catalog = vi.hoisted(() => ({
+  atom: null as null | import("effect/reactivity").Atom.Writable<unknown>,
+}));
+vi.mock("../../connection/catalog", async () => {
+  const { Atom } = await import("effect/reactivity");
+  catalog.atom = Atom.make<unknown>({ isReady: true, entries: new Map([["env", {}]]) });
+  return { environmentCatalog: { catalogValueAtom: catalog.atom } };
+});
 vi.mock("../../state/entities", () => ({ useThreadShell: () => member.shell }));
 
+import { environmentPresentations } from "../../state/presentation";
 import { useMobileMemberStatus } from "./useMobileMemberStatus";
+import {
+  followKeptPerComputerCatalog,
+  resetKeptPerComputerForTests,
+  useKeptPerComputer,
+} from "./useKeptPerComputer";
 
 const scout = Schema.decodeUnknownSync(BotProfile)({
   botId: "scout",
@@ -65,6 +119,13 @@ function setup() {
   member.refresh.mockClear();
   member.error = null;
   member.capabilities = {};
+  member.connected = true;
+  member.answer = null;
+  member.cause = null;
+  member.failure = null;
+  member.listed = [{ botId: "scout" }];
+  member.asksShown = false;
+  resetKeptPerComputerForTests();
 }
 
 async function unread() {
@@ -136,4 +197,184 @@ it("a waiting count from a server that cannot count by visit is unavailable", as
     await act(async () => root.unmount());
     expect(value?.waitingState, missing).toBe("unavailable");
   }
+});
+
+const refused = { _tag: "EnvironmentAuthorizationError", message: "Not allowed." };
+const listed = (ids: string[]) => ({
+  isReady: true,
+  entries: new Map(ids.map((id) => [id, { enabled: true }])),
+});
+
+/** Renders Scout's row status in one registry that follows the app's computers, as the app does. */
+function rosterRow(bot = scout) {
+  const registry = AtomRegistry.make();
+  const connections = environmentPresentations.presentationsAtom as unknown as Atom.Writable<
+    ReadonlyMap<string, object>
+  >;
+  const stop = followKeptPerComputerCatalog(registry);
+  registry.set(catalog.atom!, listed(["env"]));
+  let value: ReturnType<typeof useMobileMemberStatus> | undefined;
+  let asks: unknown = null;
+  // Needs you's own kept read of the computer's open asks.
+  function Asks() {
+    const live = member.connected ? member.asks : null;
+    asks = useKeptPerComputer(
+      "asks",
+      EnvironmentId.make("env"),
+      {
+        data: live,
+        successResult: null,
+        cause: null,
+        error: null,
+        isPending: false,
+        isSuccess: live !== null,
+        refresh: () => {},
+      },
+      !member.connected,
+    );
+    return null;
+  }
+  function Probe(props: { readonly bot: typeof scout }) {
+    value = useMobileMemberStatus(props.bot);
+    return null;
+  }
+  // The roster's own bot-list read, which says whether this phone may still read the computer.
+  function BotList(props: { readonly cause: unknown }) {
+    useKeptPerComputer(
+      "bots",
+      EnvironmentId.make("env"),
+      {
+        // As in the app, a bot list reads nothing while its computer is offline or refuses it.
+        data: props.cause === null && member.connected ? listOf(member.listed) : null,
+        successResult:
+          props.cause === null && member.connected
+            ? AsyncResult.success(listOf(member.listed))
+            : null,
+        cause: props.cause,
+        error: null,
+        isPending: false,
+        isSuccess: props.cause === null && member.connected,
+        refresh: () => {},
+      },
+      !member.connected,
+    );
+    return null;
+  }
+  const root = createRoot(document.createElement("div"));
+  const view = (children: ReactNode) => (
+    <RegistryContext value={registry}>{children}</RegistryContext>
+  );
+  return {
+    get value() {
+      return value;
+    },
+    get asks() {
+      return asks;
+    },
+    show: (botListCause: unknown = null, shown: typeof scout | null = bot) =>
+      act(async () => {
+        registry.set(
+          connections,
+          new Map([
+            [
+              "env",
+              {
+                connection:
+                  member.failure === null
+                    ? { phase: member.connected ? "connected" : "disconnected" }
+                    : { phase: "error", failure: member.failure },
+                // A computer that lists bots: its bot list says whether it may be read.
+                serverConfig: { environment: { capabilities: { goatBotProfiles: true } } },
+              },
+            ],
+          ]),
+        );
+        root.render(
+          view(
+            <>
+              <BotList cause={botListCause} />
+              {shown === null ? null : <Probe bot={shown} />}
+              {member.asksShown ? <Asks /> : null}
+            </>,
+          ),
+        );
+      }),
+    setComputers: (ids: string[]) => act(async () => registry.set(catalog.atom!, listed(ids))),
+    [Symbol.asyncDispose]: async () => {
+      await act(async () => root.unmount());
+      stop();
+    },
+  };
+}
+// One answer per listed set, so an unchanged list keeps its identity as a real read does.
+const lists = new Map<string, object>();
+const listOf = (listed: ReadonlyArray<{ botId: string; state?: string }>) => {
+  const key = JSON.stringify(listed);
+  let list = lists.get(key);
+  if (list === undefined)
+    lists.set(key, (list = { bots: listed.map((bot) => ({ ...scout, ...bot })) }));
+  return list;
+};
+const reply = {
+  text: "Which machine should I check?",
+  at: "2026-11-11T10:05:00.000Z",
+  author: "bot" as const,
+};
+
+it("offline, a member's row shows no line or waiting count from before", async () => {
+  setup();
+  member.answer = { waitingCount: 2, latest: reply, tasks: { active: true } };
+  await using row = rosterRow();
+  await row.show();
+  expect(row.value?.latest).toEqual(reply);
+  member.connected = false;
+  await row.show();
+  expect(row.value?.latest).toBeUndefined();
+  expect(row.value?.waitingCount).toBe(0);
+  expect(row.value?.status).toBeNull();
+});
+
+it("a member's status read refused for access shows nothing of the earlier answer it still holds", async () => {
+  setup();
+  member.answer = { waitingCount: 1, latest: reply };
+  await using row = rosterRow();
+  await row.show();
+  expect(row.value?.latest).toEqual(reply);
+  expect(row.value?.unreadable).toBe(false);
+  member.cause = refused;
+  await row.show();
+  expect(row.value?.latest).toBeUndefined();
+  expect(row.value?.waitingCount).toBe(0);
+  expect(row.value?.unreadable).toBe(true);
+});
+
+it("a member is unreadable once its bot list is refused, and once its computer refuses this phone", async () => {
+  setup();
+  member.answer = { waitingCount: 1, latest: reply };
+  await using row = rosterRow();
+  await row.show(refused);
+  expect(row.value?.unreadable).toBe(true);
+  await row.show();
+  expect(row.value?.unreadable).toBe(false);
+  member.connected = false;
+  member.failure = { kind: "blocked", reason: "authentication" };
+  await row.show();
+  expect(row.value?.unreadable).toBe(true);
+});
+
+it("a refused bot list forgets the open asks kept for its computer, on screen or not", async () => {
+  setup();
+  member.asksShown = true;
+  await using row = rosterRow();
+  await row.show();
+  expect(row.asks).not.toBeNull();
+  // Needs you leaves the screen; then the bot list is refused, then answers again.
+  member.asksShown = false;
+  await row.show(null, null);
+  await row.show(refused, null);
+  await row.show(null, null);
+  member.connected = false;
+  member.asksShown = true;
+  await row.show();
+  expect(row.asks).toBeNull();
 });
