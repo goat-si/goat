@@ -43,7 +43,11 @@ import {
 } from "./sqliteCheckpointWorker.ts";
 
 import { makeWriter } from "./nodeSqliteWriter.ts";
-import { hasLargeBinding, sqliteParameters } from "./nodeSqliteParameters.ts";
+import {
+  hasLargeBinding,
+  readSafeSqliteInteger,
+  sqliteParameters,
+} from "./nodeSqliteParameters.ts";
 import { waitForWalRecovery } from "./nodeSqliteWalRecovery.ts";
 
 const ATTR_DB_SYSTEM_NAME = "db.system.name";
@@ -487,11 +491,6 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (options: SqliteClie
         : ("idle" as const);
   return { acquire, state } satisfies ReaderSlot;
 });
-
-const readSafeSqliteInteger = (value: unknown) => {
-  const number = typeof value === "bigint" ? Number(value) : value;
-  return typeof number === "number" && Number.isSafeInteger(number) ? number : undefined;
-};
 
 const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
   filename: string,
