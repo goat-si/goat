@@ -391,13 +391,14 @@ it("says why an allowed app could not be removed, and removes it when pressed ag
 });
 
 it.each([
-  ["a failure that isn't an Error", { reason: "internal" }],
-  ["an Error with no message", new Error("")],
-])(
+  ["a failure that isn't an Error", Cause.fail({ reason: "internal" })],
+  ["an Error with no message", Cause.fail(new Error(""))],
+  ["a defect", Cause.die(new Error("boom: unexpected internal state"))],
+] as ReadonlyArray<readonly [string, Cause.Cause<unknown>]>)(
   "says the change was not saved when removing an allowed app fails with %s (#3556)",
-  async (_case, failure) => {
+  async (_case, cause) => {
     mocks.targets[0]!.serverConfig.settings.cuaAllowedApps = ["Safari"];
-    mocks.updateSettings.mockResolvedValueOnce(AsyncResult.failure(Cause.fail(failure)));
+    mocks.updateSettings.mockResolvedValueOnce(AsyncResult.failure(cause));
     act(() => render(<SettingsEnvironmentAgentBehaviorRouteScreen />));
     await act(async () => button("Remove Safari").click());
     expect(mocks.alert).toHaveBeenCalledExactlyOnceWith(
