@@ -76,9 +76,6 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
   const keyboardVisible = useKeyboardState((state) => state.isVisible);
   const keyboardHeight = useKeyboardState((state) => state.height);
   const owed = useOwedOpen(props.onClose);
-  const settleOnUnmount = useEffectEvent(owed.settle);
-  // oxlint-disable-next-line goat/react-effect-budget -- A menu whose row leaves while its open is pending or shown still settles that open with its owner.
-  useEffect(() => () => settleOnUnmount(), []);
   const close = () => {
     setAnchor(null);
     setPath([]);
@@ -86,6 +83,9 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
     setRootHeight(null);
     owed.settle();
   };
+  const closeOnCleanup = useEffectEvent(close);
+  // oxlint-disable-next-line goat/react-effect-budget -- A menu whose row leaves, or whose tab hides it, closes and settles its open with its owner.
+  useEffect(() => () => closeOnCleanup(), []);
 
   const open = () => {
     owed.request();
