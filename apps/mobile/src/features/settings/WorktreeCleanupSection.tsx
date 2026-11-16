@@ -5,7 +5,7 @@ import {
   isAtomCommandInterrupted,
 } from "@goat/client-runtime/state/runtime";
 import type { EnvironmentId, StorageCleanupSettings } from "@goat/contracts";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TextInput, View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -32,18 +32,41 @@ function NumberRow({
   readonly emptyLabel?: string;
   readonly onSave: (value: number | null) => Promise<boolean>;
 }) {
-  // Null shows the saved value; a newer saved value replaces whatever was typed.
+  // Null shows the saved value. A newer saved value replaces the draft only outside the field.
   const [draft, setDraft] = useState<string | null>(null);
+  const [focused, setFocused] = useState(false);
   const [savedValue, setSavedValue] = useState(value);
-  if (savedValue !== value) {
+  if (!focused && savedValue !== value) {
     setSavedValue(value);
     setDraft(null);
   }
+  const pending = useRef<{ readonly id: number; readonly value: number | null }[]>([]);
+  const lastSubmission = useRef(0);
+  const typedSinceSubmission = useRef(false);
   const shown = draft ?? (value === null ? "" : String(value));
-  const save = (next: number | null) => {
-    const submitted = shown;
+  const endEditing = () => {
+    setFocused(false);
+    if (draft === null) return;
+    const inFlight = pending.current.at(-1);
+    const next = draft.trim() === "" ? null : Number(draft);
+    if (next === (inFlight ? inFlight.value : value)) {
+      // The same number as the newest save still in flight, or as the saved one: nothing to send.
+      typedSinceSubmission.current = false;
+      if (!inFlight) setDraft(null);
+      return;
+    }
+    if (next !== null && !(Number.isInteger(next) && next >= 1 && next <= maximum)) {
+      typedSinceSubmission.current = false;
+      setDraft(inFlight ? String(inFlight.value ?? "") : null);
+      return;
+    }
+    const id = ++lastSubmission.current;
+    pending.current = [...pending.current, { id, value: next }];
+    typedSinceSubmission.current = false;
+    setSavedValue(value);
     void onSave(next).then((saved) => {
-      if (!saved) setDraft((current) => (current === submitted ? null : current));
+      pending.current = pending.current.filter((entry) => entry.id !== id);
+      if (!saved && id === lastSubmission.current && !typedSinceSubmission.current) setDraft(null);
     });
   };
   return (
@@ -55,15 +78,12 @@ function NumberRow({
         editable={!disabled}
         value={shown}
         placeholder={emptyLabel}
-        onChangeText={setDraft}
-        onEndEditing={() => {
-          if (draft === null) return;
-          const number = draft.trim() === "" ? null : Number(draft);
-          if (number === value) setDraft(null);
-          else if (number === null) save(null);
-          else if (Number.isInteger(number) && number >= 1 && number <= maximum) save(number);
-          else setDraft(null);
+        onFocus={() => setFocused(true)}
+        onChangeText={(text) => {
+          typedSinceSubmission.current = true;
+          setDraft(text);
         }}
+        onEndEditing={endEditing}
       />
     </View>
   );
