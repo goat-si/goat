@@ -81,3 +81,46 @@ it.effect("stopping the daemon interrupts its in-flight executions together", ()
     }).pipe(Effect.provide(layer));
   }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
 );
+
+it.effect(
+  "a hung general effect detaches; another thread runs, its own thread waits, then it settles",
+  () =>
+    Effect.gen(function* () {
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const key = "daemon:general-detach";
+      const hung = capture(key, "hung");
+      const sameThread = { ...capture(key, "same"), threadId: hung.threadId };
+      const other = capture(key, "other");
+      const hungStarted = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const ran = { same: yield* Deferred.make<void>(), other: yield* Deferred.make<void>() };
+      const layer = workerLayer(outbox, (effect) =>
+        effect.id === hung.id
+          ? Deferred.succeed(hungStarted, undefined).pipe(Effect.andThen(Deferred.await(release)))
+          : Deferred.succeed(effect.id === other.id ? ran.other : ran.same, undefined).pipe(
+              Effect.asVoid,
+            ),
+      );
+      const within = <A>(effect: Effect.Effect<A>) =>
+        Effect.gen(function* () {
+          const fiber = yield* effect.pipe(Effect.timeoutOption("1 hour"), Effect.forkChild);
+          yield* TestClock.adjust("1 hour");
+          return yield* Fiber.join(fiber);
+        });
+      yield* outbox.enqueue([hung]);
+      yield* Effect.gen(function* () {
+        yield* EffectWorker.runDaemonWithOptions({ concurrency: 1 }).pipe(Effect.forkScoped);
+        yield* Deferred.await(hungStarted);
+        yield* outbox.enqueue([sameThread, other]);
+        yield* outbox.notifyAvailable();
+        assert.isTrue(Option.isSome(yield* within(Deferred.await(ran.other))));
+        assert.isFalse(yield* Deferred.isDone(ran.same), "the hung effect's thread ran past it");
+        assert.equal(Option.getOrThrow(yield* outbox.get(sameThread.id)).status, "pending");
+
+        yield* Deferred.succeed(release, undefined);
+        yield* outbox.awaitSettled(hung.id);
+        assert.equal(Option.getOrThrow(yield* outbox.get(hung.id)).status, "succeeded");
+        assert.isTrue(Option.isSome(yield* within(Deferred.await(ran.same))));
+      }).pipe(Effect.provide(layer), Effect.scoped);
+    }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
+);

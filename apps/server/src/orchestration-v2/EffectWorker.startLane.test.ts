@@ -695,6 +695,7 @@ it.effect("a start waits pending once each start slot has detached one hung star
     const otherThreadId = ThreadId.make(`${key}:other`);
     const allWedged = yield* Deferred.make<void>();
     const releaseFirst = yield* Deferred.make<void>();
+    const firstNextRan = yield* Deferred.make<void>();
     const otherStarted = yield* Deferred.make<void>();
     const wedgedCount = yield* Ref.make(0);
     const start = (threadId: ThreadId, id: string) => ({
@@ -709,20 +710,22 @@ it.effect("a start waits pending once each start slot has detached one hung star
           Layer.succeed(EffectOutbox.EffectOutboxV2, outbox),
           Layer.mock(EffectWorker.OrchestrationEffectExecutorV2)({
             execute: (effect) =>
-              effect.threadId === otherThreadId
-                ? Deferred.succeed(otherStarted, undefined).pipe(Effect.asVoid)
-                : Ref.updateAndGet(wedgedCount, (count) => count + 1).pipe(
-                    Effect.flatMap((count) =>
-                      count === wedgedThreadIds.length
-                        ? Deferred.succeed(allWedged, undefined)
-                        : Effect.void,
+              effect.id === `${key}:w0-next`
+                ? Deferred.succeed(firstNextRan, undefined).pipe(Effect.asVoid)
+                : effect.threadId === otherThreadId
+                  ? Deferred.succeed(otherStarted, undefined).pipe(Effect.asVoid)
+                  : Ref.updateAndGet(wedgedCount, (count) => count + 1).pipe(
+                      Effect.flatMap((count) =>
+                        count === wedgedThreadIds.length
+                          ? Deferred.succeed(allWedged, undefined)
+                          : Effect.void,
+                      ),
+                      Effect.andThen(
+                        effect.threadId === wedgedThreadIds[0]
+                          ? Deferred.await(releaseFirst)
+                          : Effect.never,
+                      ),
                     ),
-                    Effect.andThen(
-                      effect.threadId === wedgedThreadIds[0]
-                        ? Deferred.await(releaseFirst)
-                        : Effect.never,
-                    ),
-                  ),
           }),
         ),
       ),
@@ -749,6 +752,12 @@ it.effect("a start waits pending once each start slot has detached one hung star
       yield* Deferred.succeed(releaseFirst, undefined);
       assert.isTrue(Option.isSome(yield* within(Deferred.await(otherStarted))));
       assert.equal(yield* Ref.get(wedgedCount), wedgedThreadIds.length);
+      // The released start was detached; it still settles its own row and frees its thread.
+      yield* outbox.awaitSettled(`${key}:w0`);
+      assert.equal(Option.getOrThrow(yield* outbox.get(`${key}:w0`)).status, "succeeded");
+      yield* outbox.enqueue([start(wedgedThreadIds[0]!, "w0-next")]);
+      yield* outbox.notifyAvailable();
+      assert.isTrue(Option.isSome(yield* within(Deferred.await(firstNextRan))));
     }).pipe(
       Effect.provide(workerLayer),
       Effect.scoped,
