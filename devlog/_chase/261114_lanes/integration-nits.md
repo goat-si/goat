@@ -2,6 +2,8 @@
 
 Branch: `chase/t3-261114-integration-nits`, from `chase/t3-261114-all` at 590cee0efb, pushed at `384c097e19` (part B, part A's INT-A-P3-1, merge of 4e096afdb0).
 
+Merged into #3397 at 3d4a4192b4 (2026-11-16): lane head 384c097e19.
+
 ## Part B (integration review at 590cee0efb: APPROVE WITH NITS, two P3)
 
 | finding | commit | change |
