@@ -16,6 +16,7 @@ import { registerCommands, registerMenuAction } from "~/shortcuts/dispatcher";
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironment } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
+import { useGoatBotComputerReadable } from "./useGoatBotComputerReadable";
 import { useGoatBotTaskChanges } from "./useGoatBotTaskChanges";
 
 /** One ask: a task can wait on several, each its own question or request. */
@@ -32,6 +33,7 @@ export function GoatBotNeedsYou({
   visible: boolean;
 }) {
   const environment = useEnvironment(environmentId);
+  const readable = useGoatBotComputerReadable(environmentId);
   // A client without the read grant sees nothing here, not a failure.
   const permitted = useAtomValue(channelEnvironment.listOpenAsksPermission(environmentId));
   const supported =
@@ -85,7 +87,8 @@ export function GoatBotNeedsYou({
     });
   };
   const openNext = useStableCallback(() => {
-    if (!asks?.length) return false;
+    // The registration goes in a passive effect; until then the gate stops it here.
+    if (!readable || !asks?.length) return false;
     const previous = asks.findIndex((ask) => askKey(ask) === lastAsk.current);
     if (previous === asks.length - 1 && (canShowMore || reading)) {
       if (canShowMore) showMore();
@@ -97,7 +100,7 @@ export function GoatBotNeedsYou({
   });
   // oxlint-disable-next-line goat/react-effect-budget -- Register the shared keybinding and palette action while this environment is available.
   useEffect(() => {
-    if (!supported) return;
+    if (!supported || !readable) return;
     const stopKey = registerCommands({
       "goatBot.nextAsk": (event) => {
         if (openNext() === false) return false;
@@ -111,8 +114,9 @@ export function GoatBotNeedsYou({
       stopKey();
       stopAction();
     };
-  }, [supported, openNext]);
-  if (!supported || !visible) return null;
+  }, [supported, readable, openNext]);
+  // Kept asks are this computer's content; a client that may no longer read it shows none.
+  if (!supported || !visible || !readable) return null;
   if (data === null) {
     if (query.error === null) return null;
     return (
