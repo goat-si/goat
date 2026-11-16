@@ -175,6 +175,10 @@ export const make = Effect.gen(function* () {
         return response.stream.pipe(
           Stream.timeoutOrElse({ duration: SILENCE_LIMIT, orElse: () => Stream.fail("silent") }),
           Stream.decodeText,
+          // The decoder fails the stream on a retry: field; reconnects keep their own backoff.
+          Stream.splitLines,
+          Stream.filter((line) => line !== "retry" && !line.startsWith("retry:")),
+          Stream.map((line) => `${line}\n`),
           Stream.pipeThroughChannel(Sse.decode()),
           Stream.map((frame): "changed" | Ending =>
             frame.event === "github.stream.end" ? endingOf(frame.data) : "changed",

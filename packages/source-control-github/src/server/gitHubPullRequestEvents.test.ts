@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Redacted from "effect/Redacted";
@@ -325,4 +326,40 @@ it.effect.each([401, 403, 404])(
       yield* Fiber.join(other);
       assert.equal(posts.length, 2, "other pull requests still subscribe");
     }),
+);
+
+it.effect("keeps a stream open across a retry: line, without counting a failure or a change", () =>
+  Effect.gen(function* () {
+    const { rest } = fakeRest(subscription);
+    const connected = yield* Deferred.make<void>();
+    let connections = 0;
+    const httpClient = HttpClient.make((request) =>
+      Deferred.succeed(connected, undefined).pipe(
+        Effect.as(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(
+              new ReadableStream({
+                start(controller) {
+                  connections += 1;
+                  controller.enqueue(new TextEncoder().encode("retry: 5000\n\n"));
+                },
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+    let changes = 0;
+    const events = yield* eventsOf(rest, httpClient);
+    const fiber = yield* events(target).pipe(
+      Stream.runForEach(() => Effect.sync(() => (changes += 1))),
+      Effect.forkChild,
+    );
+    yield* Deferred.await(connected);
+    yield* TestClock.adjust("10 seconds");
+    assert.equal(connections, 1, "the retry: line ended the connection");
+    assert.equal(changes, 1, "only the opening counts as a change");
+    yield* Fiber.interrupt(fiber);
+  }),
 );
