@@ -166,47 +166,49 @@ describe("queued commands at the registry and request boundary", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("two registries in one page do not refuse each other's commands", () =>
-    Effect.gen(function* () {
-      const sessions = recordingSessions();
-      const secondConnects = yield* Deferred.make<void>();
-      const first = yield* makeLane(
-        (yield* makeHarness([TARGET], [], [], { sessionClient: sessions.sessionClient })).layer,
-      );
-      const second = yield* makeLane(
-        (yield* makeHarness([SECOND_TARGET], [], [], {
-          sessionClient: sessions.sessionClient,
-          beforeSessionConnect: () => Deferred.await(secondConnects),
-        })).layer,
-      );
-      const one = TARGET.environmentId;
-      const two = SECOND_TARGET.environmentId;
-      yield* first.registry.start;
-      yield* connected(first.registry, one);
-      yield* second.registry.start;
+  it.effect(
+    "two registries in one page, for different computers, do not refuse each other's commands",
+    () =>
+      Effect.gen(function* () {
+        const sessions = recordingSessions();
+        const secondConnects = yield* Deferred.make<void>();
+        const first = yield* makeLane(
+          (yield* makeHarness([TARGET], [], [], { sessionClient: sessions.sessionClient })).layer,
+        );
+        const second = yield* makeLane(
+          (yield* makeHarness([SECOND_TARGET], [], [], {
+            sessionClient: sessions.sessionClient,
+            beforeSessionConnect: () => Deferred.await(secondConnects),
+          })).layer,
+        );
+        const one = TARGET.environmentId;
+        const two = SECOND_TARGET.environmentId;
+        yield* first.registry.start;
+        yield* connected(first.registry, one);
+        yield* second.registry.start;
 
-      // Pressed before the second computer's first session, while the first computer reconnects.
-      const beforeFirst = yield* second.hold(two);
-      const pressedBeforeFirst = second.press(two);
-      yield* first.registry.reconnect(one);
-      yield* connected(first.registry, one, 2);
-      yield* Deferred.succeed(secondConnects, undefined);
-      yield* connected(second.registry, two);
-      yield* beforeFirst.release;
-      expect((yield* settled(beforeFirst.result))._tag).toBe("Success");
-      expect((yield* settled(pressedBeforeFirst))._tag).toBe("Success");
+        // Pressed before the second computer's first session, while the first computer reconnects.
+        const beforeFirst = yield* second.hold(two);
+        const pressedBeforeFirst = second.press(two);
+        yield* first.registry.reconnect(one);
+        yield* connected(first.registry, one, 2);
+        yield* Deferred.succeed(secondConnects, undefined);
+        yield* connected(second.registry, two);
+        yield* beforeFirst.release;
+        expect((yield* settled(beforeFirst.result))._tag).toBe("Success");
+        expect((yield* settled(pressedBeforeFirst))._tag).toBe("Success");
 
-      // Pressed on the second computer's session, while the first computer reconnects again.
-      const onSession = yield* second.hold(two);
-      const pressedOnSession = second.press(two);
-      yield* first.registry.reconnect(one);
-      yield* connected(first.registry, one, 3);
-      yield* onSession.release;
-      expect((yield* settled(onSession.result))._tag).toBe("Success");
-      expect((yield* settled(pressedOnSession))._tag).toBe("Success");
+        // Pressed on the second computer's session, while the first computer reconnects again.
+        const onSession = yield* second.hold(two);
+        const pressedOnSession = second.press(two);
+        yield* first.registry.reconnect(one);
+        yield* connected(first.registry, one, 3);
+        yield* onSession.release;
+        expect((yield* settled(onSession.result))._tag).toBe("Success");
+        expect((yield* settled(pressedOnSession))._tag).toBe("Success");
 
-      expect(sessions.received).toEqual([`${two}#1`, `${two}#1`]);
-    }).pipe(Effect.scoped),
+        expect(sessions.received).toEqual([`${two}#1`, `${two}#1`]);
+      }).pipe(Effect.scoped),
   );
 
   it.effect(
