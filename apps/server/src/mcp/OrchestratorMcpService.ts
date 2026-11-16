@@ -129,6 +129,7 @@ import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterReg
 import { delegatedTaskResultRun, runOutcome } from "../orchestration-v2/RestartBackgroundNote.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import { dispatchThenPrepare } from "../orchestration-v2/goat/RunPreparation.ts";
+import { settleDelegatedChild } from "./goat/DelegatedChild.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { delegatedTaskRevision } from "../orchestration-v2/DelegatedTaskRevision.ts";
 import { isSnoozed } from "../orchestration-v2/ThreadSettlementService.ts";
@@ -2777,6 +2778,13 @@ const make = Effect.gen(function* () {
       );
       const runtimeMode = admitted.runtimeMode;
       const rootNodeId = parentRun.rootNodeId;
+      const settleChild = settleDelegatedChild({
+        commandId,
+        threads: threadManagement,
+        launches: threadLaunch,
+        bind: (threadId) => bindChildWork(channelChildWork, admission, { threadId }),
+        completeLane: admitted.enabled ? permissions.complete(commandId) : Effect.void,
+      });
       // A cut before the commit stops the delegation; one after it still prepares the child run.
       const taskId = yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
@@ -2840,47 +2848,21 @@ const make = Effect.gen(function* () {
                 Effect.scoped,
               ),
             threadLaunch.committed(commandId),
-            Effect.gen(function* () {
-              const threadId = derive.delegatedTaskThread({ commandId });
-              yield* bindChildWork(channelChildWork, admission, { threadId });
-              for (const run of (yield* threadManagement.getThreadRecords(threadId, ["runs"])).runs)
-                yield* threadLaunch.prepareRun({ commandId, threadId, runId: run.id });
-              if (admitted.enabled) yield* permissions.complete(commandId);
-            }),
+            settleChild,
           );
           const taskEvent = result.storedEvents.find(
             (stored) =>
               stored.event.type === "subagent.updated" &&
               stored.event.payload.origin === "app_owned",
           );
+          yield* settleChild;
           if (taskEvent?.event.type !== "subagent.updated") {
             return yield* failure(
               "orchestration_error",
               "Delegated task command did not produce a task projection.",
             );
           }
-          const taskId = taskEvent.event.payload.id;
-          const childThreadId = taskEvent.event.payload.childThreadId;
-          if (childThreadId !== null)
-            yield* bindChildWork(channelChildWork, admission, { threadId: childThreadId });
-          const childRunEvent = result.storedEvents.find(
-            (stored) =>
-              stored.event.type === "run.created" && stored.event.threadId === childThreadId,
-          );
-          if (
-            childThreadId !== null &&
-            childRunEvent?.event.type === "run.created" &&
-            childRunEvent.event.payload.workspacePreparation !== undefined
-          ) {
-            yield* threadLaunch.prepareRun({
-              commandId,
-              threadId: childThreadId,
-              runId: childRunEvent.event.payload.id,
-            });
-          }
-          // Last, so a failed lane update cannot leave the child run unprepared.
-          if (admitted.enabled) yield* permissions.complete(commandId);
-          return taskId;
+          return taskEvent.event.payload.id;
         }),
       );
       return yield* finishTaskWait(scope, taskId, key, input);
