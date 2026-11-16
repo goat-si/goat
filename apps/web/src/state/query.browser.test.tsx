@@ -1,4 +1,3 @@
-import "~/index.css";
 import { RegistryContext } from "@effect/atom-react";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -31,7 +30,7 @@ function Probe(props: {
   return null;
 }
 
-it("exposes the settled success as an object that changes only when a read succeeds: null while a refetch waits or after it fails, a new object even for the same value (behavior)", async () => {
+it("the settled success changes only when a read succeeds: null while a refetch waits or after it fails, a new object for the same value (contract)", async () => {
   const registry = AtomRegistry.make();
   let read = pendingRead();
   const list = Atom.make(
