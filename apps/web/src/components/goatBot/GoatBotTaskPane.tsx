@@ -36,6 +36,7 @@ import { useGoatBotHiddenChatNotice } from "./GoatBotHiddenChatNotice";
 import { useBotTaskLookup } from "./useBotTaskLookup";
 import { useAcknowledgeTaskRead } from "./useAcknowledgeTaskRead";
 import type { GoatBotLocalSubmission } from "./useGoatBotFollow";
+import { GoatBotTypedAnswersScope } from "./GoatBotTypedAnswers";
 
 export function GoatBotTaskPane({
   environmentId,
@@ -115,10 +116,10 @@ export function GoatBotTaskPane({
   const memberDeleted = member?.state === "deleted";
   const canSend = !memberDeleted && canSendToGoatBot(session.availability, session.canOperate);
   // A draft belongs to the task and bot it was written for; opening another one empties the box.
-  const destination = `${environmentId}:${
+  const thread =
     member?.sessionThreadId ??
-    (session.availability.kind === "ready" ? session.availability.bot.threadId : "")
-  }:${taskId}`;
+    (session.availability.kind === "ready" ? session.availability.bot.threadId : null);
+  const destination = `${environmentId}:${thread ?? ""}:${taskId}`;
   const timelineRows = session.rowsForTask(taskId);
   const sourceIdentity = session.source?.identity ?? null;
   const [local, setLocal] = useState<{
@@ -380,35 +381,41 @@ export function GoatBotTaskPane({
         taskId={taskId}
       >
         <GoatBotStepsReader rows={timelineRows}>
-          <GoatBotTimeline
-            key={`${session.source?.identity ?? ""}:${taskId}`}
-            taskDetails
-            rows={timelineRows}
-            baselineIds={session.source?.baselineIds}
-            sourceIds={session.source?.sourceIds}
-            submissions={
-              local.taskId === taskId && local.sourceIdentity === sourceIdentity
-                ? local.submissions
-                : []
-            }
-            committedSends={session.source?.committedSends}
-            environmentId={environmentId}
-            onRetry={session.onRetryInput}
-            onDiscard={session.onDiscardInput}
-            onPick={
-              canSend
-                ? (text, answerTask, questionId) =>
-                    // A question id goes only with the task that asked it.
-                    send(
-                      text,
-                      [],
-                      answerTask === taskId && questionId !== undefined
-                        ? ChannelQuestionId.make(questionId)
-                        : undefined,
-                    )
-                : undefined
-            }
-          />
+          {/* Typed answers stay through a reconnect, while the bot's thread is unknown. */}
+          <GoatBotTypedAnswersScope
+            destination={thread === null ? null : destination}
+            visibleTurnItems={session.visibleTurnItems}
+          >
+            <GoatBotTimeline
+              key={`${session.source?.identity ?? ""}:${taskId}`}
+              taskDetails
+              rows={timelineRows}
+              baselineIds={session.source?.baselineIds}
+              sourceIds={session.source?.sourceIds}
+              submissions={
+                local.taskId === taskId && local.sourceIdentity === sourceIdentity
+                  ? local.submissions
+                  : []
+              }
+              committedSends={session.source?.committedSends}
+              environmentId={environmentId}
+              onRetry={session.onRetryInput}
+              onDiscard={session.onDiscardInput}
+              onPick={
+                canSend
+                  ? (text, answerTask, questionId) =>
+                      // A question id goes only with the task that asked it.
+                      send(
+                        text,
+                        [],
+                        answerTask === taskId && questionId !== undefined
+                          ? ChannelQuestionId.make(questionId)
+                          : undefined,
+                      )
+                  : undefined
+              }
+            />
+          </GoatBotTypedAnswersScope>
         </GoatBotStepsReader>
       </GoatBotStepsProvider>
       <GoatBotComposer
