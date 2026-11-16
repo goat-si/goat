@@ -126,6 +126,8 @@ export const makeCheckProbe = Effect.gen(function* () {
   const mode = yield* Ref.make<CheckOutcome>("read");
   const started = yield* Ref.make(0);
   const finished = yield* Queue.unbounded<CheckOutcome>();
+  // When set, the next listUnrevoked call waits on it after it starts, so its pass settles nothing.
+  const gate = yield* Ref.make<Deferred.Deferred<void> | undefined>(undefined);
   const next = Effect.gen(function* () {
     yield* TestClock.adjust(Duration.seconds(5));
     if ((yield* Ref.getAndSet(started, 0)) === 0) return "none" as const;
@@ -135,6 +137,8 @@ export const makeCheckProbe = Effect.gen(function* () {
     ...repository,
     listUnrevoked: (input) =>
       Ref.update(started, (count) => count + 1).pipe(
+        Effect.andThen(Ref.get(gate)),
+        Effect.flatMap((held) => (held === undefined ? Effect.void : Deferred.await(held))),
         Effect.andThen(Ref.get(mode)),
         Effect.flatMap((outcome) => {
           if (outcome === "fail")
@@ -164,15 +168,22 @@ export const makeCheckProbe = Effect.gen(function* () {
     /** Advances one interval; the check's outcome once its read returned, or "none" if none ran. */
     next,
     /**
-     * Runs one check, then waits for the next check's read. Checks run one after another in one
-     * fiber (DurableRevocations.ts:65), so that read proves the first check, settle included, ended.
-     * The next read needs a live session, so a test using this keeps one.
+     * Runs one check, then lets the next check start its read and holds that read open while
+     * `assertions` run. Checks run one after another in one fiber (DurableRevocations.ts:65), so
+     * the first check, settle included, has ended and the second has settled nothing. With no
+     * check at all the assertions run at once. A test using this keeps one session live.
      */
-    pass: Effect.gen(function* () {
-      const outcome = yield* next;
-      if (outcome === "none") return outcome;
-      // Without a later read nothing proves the first check ended, so report none.
-      return (yield* next) === "none" ? ("none" as const) : outcome;
-    }),
+    pass: <E, R>(assertions: Effect.Effect<void, E, R>) =>
+      Effect.gen(function* () {
+        if ((yield* next) === "none") return yield* assertions;
+        const held = yield* Deferred.make<void>();
+        yield* Ref.set(gate, held);
+        yield* TestClock.adjust(Duration.seconds(5));
+        yield* Ref.set(gate, undefined);
+        const secondStarted = (yield* Ref.getAndSet(started, 0)) > 0;
+        yield* assertions;
+        yield* Deferred.succeed(held, undefined);
+        if (secondStarted) yield* Queue.take(finished);
+      }),
   };
 });

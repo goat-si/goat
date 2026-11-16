@@ -170,14 +170,16 @@ it.effect(
         yield* Queue.offer(updates, "update before revoke");
         yield* fromCli((cli) => cli.revoke(token.sessionId));
         yield* Queue.offer(updates, "update after revoke");
-        yield* probe.pass;
-        expect(
-          yield* sessions
-            .readActiveScopes(token.sessionId)
-            .pipe(Effect.match({ onFailure: (error) => error._tag, onSuccess: () => "live" })),
-        ).toBe("UnknownSessionTokenError");
-        // Reached only after the settle removed the grant and, in the same step, published the
-        // removal; the socket's lifetime ends on that event, so its close always follows.
+        yield* probe.pass(
+          Effect.gen(function* () {
+            expect(
+              yield* sessions
+                .readActiveScopes(token.sessionId)
+                .pipe(Effect.match({ onFailure: (error) => error._tag, onSuccess: () => "live" })),
+            ).toBe("UnknownSessionTokenError");
+          }),
+        );
+        // The socket's lifetime subscribed at admission, before the removal was published.
         yield* Effect.promise(() => closed.promise);
         expect(isClosed).toBe(true);
 
