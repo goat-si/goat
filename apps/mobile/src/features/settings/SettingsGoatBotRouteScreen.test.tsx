@@ -504,7 +504,7 @@ it("offline, Messages, Workers and Model keep their last values with every contr
   expect(screen.shown("Changes need Studio connected.")).toEqual([]);
 });
 
-it("guard: once the connection is refused, Messages, Workers and Model show none of that computer's settings (#3503)", async () => {
+it("once the connection is refused, Messages, Workers and Model show none of that computer's settings and say they couldn't load (#3503)", async () => {
   await using screen = await settings(config);
   expect(screen.toggle("Answer with the bot session")).not.toBe(null);
   await screen.refuseConnection();
@@ -512,7 +512,7 @@ it("guard: once the connection is refused, Messages, Workers and Model show none
   expect(screen.toggle("Automatically choose a worker computer")).toBe(null);
   expect(screen.modelRow).toBe(null);
   expect(screen.titles).toEqual(["Profile", "Computers", "Messages", "Workers", "Model"]);
-  expect(screen.shown("Couldn't load")).toHaveLength(1);
+  expect(screen.shown("Couldn't load these settings from Studio.")).toHaveLength(1);
 });
 
 it("offline with no config ever loaded, Messages, Workers and Model keep their titles and say they show when the computer connects (#3503)", async () => {

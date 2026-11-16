@@ -218,14 +218,16 @@ function GoatBotModelSection({
   if (!model || !(connected || readable)) {
     return (
       <>
+        <Text className="text-foreground-muted">
+          {readable
+            ? `Shown when ${computer} connects.`
+            : `Couldn't load these settings from ${computer}.`}
+        </Text>
         {["Messages", "Workers", "Model"].map((title) => (
           <SettingsSection key={title} title={title}>
             {null}
           </SettingsSection>
         ))}
-        <Text className="text-foreground-muted">
-          {readable ? `Shown when ${computer} connects.` : "Couldn't load"}
-        </Text>
       </>
     );
   }
