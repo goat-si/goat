@@ -1303,7 +1303,7 @@ function ScheduledTaskEditorForm({
             threadMode={draft.threadMode}
             onThreadModeChange={
               offersThreadModes
-                ? (threadMode) => setDraft((current) => withThreadMode(current, threadMode))
+                ? (mode) => setDraft((current) => withThreadMode(current, mode, liveTask))
                 : undefined
             }
             botRoutine={botRoutine}

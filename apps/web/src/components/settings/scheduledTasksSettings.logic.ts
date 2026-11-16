@@ -361,11 +361,23 @@ export function workspaceStrategyFromDraft(
   };
 }
 
-/** Important updates needs a thread, so choosing a new thread each run drops it to All runs. */
-export const withThreadMode = (draft: DraftState, threadMode: ScheduledTaskThreadMode) =>
-  threadMode === "new_thread" && draft.notificationPolicy === "important_updates"
-    ? { ...draft, threadMode, notificationPolicy: "all_runs", notificationPolicyReset: true }
-    : { ...draft, threadMode };
+/**
+ * Destination shows what the save stores. Important updates needs a thread, so a new thread each
+ * run drops it to All runs. A one-thread mode keeps the saved thread unless the project changed,
+ * as the server does, so a draft cleared by "Run in new threads" gets it back.
+ */
+export const withThreadMode = (
+  draft: DraftState,
+  threadMode: ScheduledTaskThreadMode,
+  saved?: Pick<ScheduledTask, "threadId" | "projectId"> | null,
+): DraftState =>
+  threadMode === "new_thread"
+    ? draft.notificationPolicy === "important_updates"
+      ? { ...draft, threadMode, notificationPolicy: "all_runs", notificationPolicyReset: true }
+      : { ...draft, threadMode }
+    : draft.threadId === "" && saved?.threadId && draft.projectId === saved.projectId
+      ? { ...draft, threadMode, threadId: saved.threadId }
+      : { ...draft, threadMode };
 
 // Still bound to its GOAT Bot conversation; moved to new threads it is an ordinary task again.
 export const isBotRoutineDraft = (

@@ -71,7 +71,7 @@ export function ScheduledTaskNotificationPolicyField({
           This environment uses a newer policy. It stays saved unless you choose another option.
         </p>
       ) : null}
-      {draft.threadId ? (
+      {draft.threadId && draft.threadMode !== "new_thread" ? (
         <Button
           variant="ghost"
           size="sm"

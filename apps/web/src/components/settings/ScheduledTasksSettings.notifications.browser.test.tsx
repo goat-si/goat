@@ -371,3 +371,59 @@ it("a routine from a server that does not mark GOAT Bot routines keeps the full 
     .element(dialog.getByText("GOAT Bot's model", { exact: true }))
     .not.toBeInTheDocument();
 });
+
+// What Destination says is what the save stores: a one-thread mode keeps the saved thread.
+it("with thread modes, a one-thread choice after Run in new threads keeps the task's thread", async () => {
+  const task = setup("all_runs", true, { threadMode: "continue" }, true);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  await userEvent.click(page.getByRole("button", { name: "Run in new threads" }));
+  await userEvent.click(page.getByRole("combobox", { name: "Destination" }));
+  await userEvent.click(
+    page.getByRole("option", { name: "One thread, continuing the conversation" }),
+  );
+  await expect
+    .element(page.getByText("Each run continues this conversation", { exact: false }))
+    .toBeVisible();
+  await userEvent.click(page.getByRole("button", { name: "Save task" }));
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  expect(state.tasks[0]).toMatchObject({ threadId: "bound", threadMode: "continue" });
+});
+
+it("with thread modes, Run in new threads is not offered once Destination is New thread each run", async () => {
+  const task = setup("all_runs", true, { threadMode: "fresh_session" }, true);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  const destination = page.getByRole("combobox", { name: "Destination" });
+  await userEvent.click(destination);
+  await userEvent.click(page.getByRole("option", { name: "New thread each run" }));
+  await expect
+    .element(page.getByRole("button", { name: "Run in new threads" }))
+    .not.toBeInTheDocument();
+  await userEvent.click(destination);
+  await userEvent.click(page.getByRole("option", { name: "One thread, fresh session each run" }));
+  await expect
+    .element(page.getByText("Each run starts a fresh session in this thread", { exact: false }))
+    .toBeVisible();
+  await userEvent.click(page.getByRole("button", { name: "Save task" }));
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  expect(state.tasks[0]).toMatchObject({ threadId: "bound", threadMode: "fresh_session" });
+});
+
+it("with thread modes, a GOAT Bot routine returned to one thread shows its Bot view again", async () => {
+  const task = setup("all_runs", true, { ...botRoutine, threadMode: "continue" }, true);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  const dialog = page.getByRole("dialog");
+  await userEvent.click(dialog.getByRole("button", { name: "Run in new threads" }));
+  await expect.element(dialog.getByRole("combobox", { name: "Project" })).toBeVisible();
+  await userEvent.click(dialog.getByRole("combobox", { name: "Destination" }));
+  await userEvent.click(
+    page.getByRole("option", { name: "One thread, continuing the conversation" }),
+  );
+  await expect.element(dialog.getByText("GOAT Bot's model", { exact: true })).toBeVisible();
+  await expect.element(dialog.getByRole("combobox", { name: "Project" })).not.toBeInTheDocument();
+});
