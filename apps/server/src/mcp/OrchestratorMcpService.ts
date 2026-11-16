@@ -39,7 +39,6 @@ import {
   type RuntimeMode,
   type ScheduledTask,
   type ScheduledTaskUpsertInput,
-  scheduledTaskThreadMode,
   type ServerProvider,
   ThreadId,
 } from "@goat/contracts";
@@ -136,7 +135,7 @@ import { runStop, STOP_TURN_ITEM_TYPES, statusFromShell, threadRun } from "./thr
 import * as View from "./threadListView.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 import type { OrchestratorMcpServiceShape } from "./OrchestratorMcpServiceShape.ts";
-import { scheduledTaskSummary } from "./scheduledTaskSummary.ts";
+import { scheduledTaskSummary, updatedThreadMode } from "./scheduledTaskSummary.ts";
 
 // Resolved per call: RemoteDispatchCoordinator → LaunchWatchService → PressureNudger →
 // HostStatusMcpService → HostThreadsMcpService → this module is an import cycle, so the
@@ -2024,18 +2023,7 @@ const make = Effect.gen(function* () {
           : { notificationPolicy: input.notificationPolicy }),
         projectId: existing.projectId,
         threadId,
-        threadMode:
-          input.freshSession === undefined && input.bindToCurrentThread === undefined
-            ? scheduledTaskThreadMode(existing)
-            : (input.freshSession ??
-                (input.bindToCurrentThread !== false &&
-                  scheduledTaskThreadMode(existing) === "fresh_session"))
-              ? "fresh_session"
-              : threadId === null &&
-                  (input.bindToCurrentThread === false ||
-                    scheduledTaskThreadMode(existing) === "new_thread")
-                ? "new_thread"
-                : "continue",
+        threadMode: updatedThreadMode(input, existing, threadId),
         workspaceStrategy,
         modelSelection: existing.modelSelection,
         runtimeMode: existing.runtimeMode,

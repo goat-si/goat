@@ -1,7 +1,10 @@
 import {
   type OrchestratorMcpScheduledTask,
+  type OrchestratorMcpUpdateScheduledTaskInput,
   type ScheduledTask,
+  type ScheduledTaskThreadMode,
   type ScheduledTaskWebhookUrlUnavailableReason,
+  type ThreadId,
   scheduledTaskThreadMode,
 } from "@goat/contracts";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
@@ -89,3 +92,21 @@ export function scheduledTaskSummary(
       : { webhookSignatureSecretRef: task.webhook.secretRef }),
   };
 }
+
+/** The mode an update saves; a save that names neither choice keeps the stored mode. */
+export const updatedThreadMode = (
+  input: Pick<OrchestratorMcpUpdateScheduledTaskInput, "freshSession" | "bindToCurrentThread">,
+  existing: ScheduledTask,
+  threadId: ThreadId | null,
+): ScheduledTaskThreadMode =>
+  input.freshSession === undefined && input.bindToCurrentThread === undefined
+    ? scheduledTaskThreadMode(existing)
+    : (input.freshSession ??
+        (input.bindToCurrentThread !== false &&
+          scheduledTaskThreadMode(existing) === "fresh_session"))
+      ? "fresh_session"
+      : threadId === null &&
+          (input.bindToCurrentThread === false ||
+            scheduledTaskThreadMode(existing) === "new_thread")
+        ? "new_thread"
+        : "continue";
