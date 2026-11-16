@@ -435,7 +435,12 @@ function GoatBotChatViewContent({
         <WorkspacePageHeader electron={isElectron} className="surface-glass relative">
           <div aria-hidden className="flex-1 basis-0" />
           <div className="flex max-w-[60%] min-w-0 items-center gap-2">
-            <h1 className="flex min-w-0">
+            <h1
+              className={cn(
+                "flex min-w-0 shrink-0",
+                headerStatus ? "max-w-[calc(100%-2.5rem)]" : "max-w-full",
+              )}
+            >
               <button
                 type="button"
                 ref={homeRef}
