@@ -101,20 +101,21 @@ export function useGoatBotTypedAnswer(row: QuestionRow) {
       ? { taskId: answer?.taskId, questionId: answer?.questionId }
       : { taskId: row.answerTaskId, questionId: row.answerQuestionId };
   const ended = isRecorded(answer, scope.recorded);
+  // A closed card's Enter would send a task message the main chat hides, so the words are held.
+  const gated =
+    scope.mainChat &&
+    row.options.length === 0 &&
+    target.taskId !== undefined &&
+    target.questionId === undefined;
   return {
     text: answer?.text ?? "",
     kept: answer !== undefined,
     /** The task recorded an answer to this question, so the words can no longer answer it. */
     ended,
     /** The words stay visible, unsent, until the person discards them. */
-    unsent: hasWords(answer) && (ended || (answer?.held === true && row.options.length === 0)),
+    unsent: hasWords(answer) && (ended || (answer?.held === true && gated)),
     target,
-    /** A closed card's Enter would send a task message the main chat hides, so the words are held. */
-    gated:
-      scope.mainChat &&
-      row.options.length === 0 &&
-      target.taskId !== undefined &&
-      target.questionId === undefined,
+    gated,
     set: (text: string) => scope.update(row.id, { text, ...target }),
     hold: () => {
       if (answer !== undefined) scope.update(row.id, { ...answer, held: true });
