@@ -210,7 +210,12 @@ export function ThreadSettingsSessionProvider(
         },
       },
     });
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result))
+    // A later toggle of the same model replaces this one; only the latest says why it failed.
+    if (
+      result._tag === "Failure" &&
+      !isAtomCommandInterrupted(result) &&
+      pendingFavorites.current.get(key) === pending
+    )
       Dialog.alert("Favorites not saved", commandFailureText(result));
     if (
       AsyncResult.isSuccess(result) &&

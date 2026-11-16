@@ -1,12 +1,12 @@
 import type { EnvironmentId, ThreadId } from "@goat/contracts";
 import { isAtomCommandInterrupted } from "@goat/client-runtime/state/runtime";
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { AccessibilityInfo, Platform } from "react-native";
 
+import { commandFailureText } from "../../lib/commandFailureText";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import type { useSelectedThreadDetailState } from "../../state/use-thread-detail";
-import { commandFailureText } from "../../lib/commandFailureText";
 import type { ThreadFeedHistoryControls } from "./ThreadFeed";
 
 type ThreadHistory = ReturnType<typeof useSelectedThreadDetailState>["history"];
@@ -24,36 +24,49 @@ export function useThreadHistoryControls(
     reportFailure: false,
   });
   const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
-  const latestPress = useRef(0);
-  if (!thread) {
+  const presses = useRef(0);
+  const latestPressByThread = useRef(new Map<string, number>());
+  const showing = useRef<string | null>(null);
+  const key = thread ? JSON.stringify([thread.environmentId, thread.id]) : null;
+  // oxlint-disable-next-line goat/react-effect-budget -- The thread screen is reused across threads; a load settling after a switch or close must not report on what is showing then.
+  useLayoutEffect(() => {
+    showing.current = key;
+    return () => {
+      showing.current = null;
+    };
+  }, [key]);
+  if (!thread || key === null) {
     return undefined;
   }
   if (!history.hasMoreHistory && history.error === null) {
     return undefined;
   }
-  const key = JSON.stringify([thread.environmentId, thread.id]);
-  const load = (throughEntryId?: string) => {
-    const press = ++latestPress.current;
+  const load = (throughEntryId?: string): Promise<boolean> => {
+    const press = ++presses.current;
+    latestPressByThread.current.set(key, press);
     setFailure(null);
-    void loadEarlierHistory({
+    return loadEarlierHistory({
       environmentId: thread.environmentId,
       input:
         throughEntryId === undefined
           ? { threadId: thread.id }
           : { threadId: thread.id, throughEntryId },
     }).then((result) => {
-      if (press !== latestPress.current || result._tag !== "Failure") return;
-      if (isAtomCommandInterrupted(result)) return;
+      if (result._tag === "Success")
+        return result.value._tag === "loaded" || result.value._tag === "busy";
+      if (isAtomCommandInterrupted(result)) return false;
+      if (latestPressByThread.current.get(key) !== press || showing.current !== key) return false;
       const message = commandFailureText(result, "Could not load earlier activity.");
       setFailure({ key, message });
       if (Platform.OS === "ios") AccessibilityInfo.announceForAccessibility(message);
+      return false;
     });
   };
   return {
     hasMoreHistory: history.hasMoreHistory,
     loading: history.loading,
     error: (failure?.key === key ? failure.message : null) ?? history.error,
-    onLoadEarlier: () => load(),
-    onLoadThrough: (throughEntryId: string) => load(throughEntryId),
+    onLoadEarlier: () => void load(),
+    onLoadThrough: load,
   };
 }

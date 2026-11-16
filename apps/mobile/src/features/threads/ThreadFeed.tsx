@@ -309,7 +309,8 @@ export interface ThreadFeedHistoryControls {
   readonly error: string | null;
   readonly onLoadEarlier: () => void;
   /** Loads earlier history down to the entry, in one request. */
-  readonly onLoadThrough: (entryId: string) => void;
+  /** Resolves whether that load brought history in; a failure ends a message jump. */
+  readonly onLoadThrough: (entryId: string) => Promise<boolean>;
 }
 
 export interface ThreadFeedHandle {
