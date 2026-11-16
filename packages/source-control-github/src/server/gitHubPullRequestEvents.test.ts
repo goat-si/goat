@@ -476,3 +476,39 @@ it.effect("ten feeds starting together against a refusing account send one POST"
     );
   }),
 );
+
+it.effect("ends a connection whose event grows past 10 MiB without a line end", () =>
+  Effect.gen(function* () {
+    const { rest } = fakeRest(subscription);
+    const cancelled = yield* Deferred.make<void>();
+    const chunk = new TextEncoder().encode("a".repeat(1024 * 1024));
+    let connections = 0;
+    const httpClient = HttpClient.make((request) =>
+      Effect.sync(() => {
+        connections += 1;
+        if (connections > 1) {
+          return HttpClientResponse.fromWeb(request, new Response(null, { status: 403 }));
+        }
+        return HttpClientResponse.fromWeb(
+          request,
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                for (let index = 0; index < 12; index += 1) controller.enqueue(chunk);
+              },
+              cancel() {
+                Deferred.doneUnsafe(cancelled, Effect.void);
+              },
+            }),
+          ),
+        );
+      }),
+    );
+    const events = yield* eventsOf(rest, httpClient);
+    // Detached: a stream that never ends must fail this test, not hang its teardown.
+    yield* events(target).pipe(Stream.runDrain, Effect.forkDetach);
+    // The body is read without the test clock, so the size limit alone can end it.
+    yield* Deferred.await(cancelled);
+    assert.equal(connections, 1);
+  }),
+);

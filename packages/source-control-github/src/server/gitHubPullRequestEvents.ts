@@ -66,6 +66,29 @@ const resourceUrlOf = (input: PullRequestEventsInput) =>
   `https://${input.host}/${input.repository}/pull/${input.number}`;
 
 /**
+ * SSE events of a text stream. A retry: field is ignored (Sse.decode fails the stream on it;
+ * reconnects keep their own backoff), and an event past the parser's 10 MiB limit fails it.
+ */
+const sseEvents = <E, R>(
+  text: Stream.Stream<string, E, R>,
+): Stream.Stream<Sse.Event, E | Sse.SseError, R> =>
+  Stream.suspend(() => {
+    let parsed: Array<Sse.Event> = [];
+    const parser = Sse.makeParser((event) => {
+      if (event._tag === "Event") parsed.push(event);
+    });
+    return text.pipe(
+      Stream.flatMap((chunk) => {
+        const error = parser.feed(chunk);
+        if (error !== undefined) return Stream.fail(error);
+        const events = parsed;
+        parsed = [];
+        return Stream.fromIterable(events);
+      }),
+    );
+  });
+
+/**
  * Pauses belong to the credential that earned them, by its fingerprint (a hash, never the token),
  * so a replaced token or another account is asked again.
  */
@@ -198,11 +221,7 @@ export const make = Effect.gen(function* () {
         return response.stream.pipe(
           Stream.timeoutOrElse({ duration: SILENCE_LIMIT, orElse: () => Stream.fail("silent") }),
           Stream.decodeText,
-          // The decoder fails the stream on a retry: field; reconnects keep their own backoff.
-          Stream.splitLines,
-          Stream.filter((line) => line !== "retry" && !line.startsWith("retry:")),
-          Stream.map((line) => `${line}\n`),
-          Stream.pipeThroughChannel(Sse.decode()),
+          sseEvents,
           Stream.map((frame): "changed" | Ending =>
             frame.event === "github.stream.end" ? endingOf(frame.data) : "changed",
           ),
