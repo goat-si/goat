@@ -94,4 +94,65 @@ describe("ReadOnlySourcePreview", () => {
     await userEvent.click(rows()[1]!);
     expect(copiedText(rows()[0]!)).toBeNull();
   });
+
+  function stubComposedRanges(value: unknown) {
+    const descriptor = Object.getOwnPropertyDescriptor(Selection.prototype, "getComposedRanges");
+    Object.defineProperty(Selection.prototype, "getComposedRanges", { value, configurable: true });
+    return {
+      [Symbol.dispose]: () => {
+        if (descriptor) Object.defineProperty(Selection.prototype, "getComposedRanges", descriptor);
+      },
+    };
+  }
+
+  const preview = (name: string, contents: string) => (
+    <div className="flex h-[400px] flex-col">
+      <ReadOnlySourcePreview name={name} text={contents} wordWrap={false} />
+    </div>
+  );
+
+  async function selectAll(screen: { container: HTMLElement }) {
+    const root = screen.container.querySelector("diffs-container")!.shadowRoot!;
+    const rows = () => root.querySelectorAll("[data-line]");
+    await vi.waitFor(() => expect(rows()[0]?.textContent).toMatch(/^line 1|^other 1/));
+    await userEvent.click(rows()[0]!);
+    await userEvent.keyboard("{ControlOrMeta>}a{/ControlOrMeta}");
+    return rows;
+  }
+
+  it("keeps a remembered Select All only across the copy shortcut", async () => {
+    using _stub = stubComposedRanges(undefined);
+    await getSyntaxHighlighterPromise("text");
+    await using screen = await render(preview("notes.txt", text));
+    const rows = await selectAll(screen);
+    await userEvent.keyboard("{ControlOrMeta>}c{/ControlOrMeta}");
+    expect(copiedText(rows()[0]!)).toBe(text);
+
+    // Shrinking the selection from the keyboard leaves the visible selection to the browser.
+    await userEvent.keyboard("{ControlOrMeta>}{Shift>}{ArrowUp}{/Shift}{/ControlOrMeta}");
+    expect(copiedText(rows()[0]!)).toBeNull();
+  });
+
+  it("drops a remembered Select All when the preview shows another file", async () => {
+    using _stub = stubComposedRanges(undefined);
+    await getSyntaxHighlighterPromise("text");
+    await using screen = await render(preview("notes.txt", text));
+    await selectAll(screen);
+    const other = `${Array.from({ length: 5 }, (_, index) => `other ${index + 1}`).join("\n")}\n`;
+    await screen.rerender(preview("other.txt", other));
+    const root = screen.container.querySelector("diffs-container")!.shadowRoot!;
+    await vi.waitFor(() => expect(root.querySelector("[data-line]")?.textContent).toBe("other 1"));
+    expect(copiedText(root.querySelector("[data-line]")!)).toBeNull();
+  });
+
+  it("falls back to the remembered Select All where composed ranges reject their argument", async () => {
+    using _stub = stubComposedRanges(function (this: Selection, options?: unknown) {
+      if (options !== undefined) throw new TypeError("shadow root list expected");
+      return [];
+    });
+    await getSyntaxHighlighterPromise("text");
+    await using screen = await render(preview("notes.txt", text));
+    const rows = await selectAll(screen);
+    expect(copiedText(rows()[0]!)).toBe(text);
+  });
 });

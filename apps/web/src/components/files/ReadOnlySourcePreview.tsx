@@ -38,6 +38,8 @@ function selectsEveryMountedRow(root: ShadowRoot): boolean | null {
   }
 }
 
+const MODIFIER_KEYS = new Set(["Meta", "Control", "Shift", "Alt"]);
+
 export default function ReadOnlySourcePreview(props: {
   readonly name: string;
   readonly text: string;
@@ -53,26 +55,55 @@ export default function ReadOnlySourcePreview(props: {
   const selectedAllRef = useRef(false);
   // oxlint-disable-next-line goat/react-effect-budget -- Where a shadow-tree selection cannot be read, remember a Select All pressed after a press in this preview.
   useEffect(() => {
-    if (typeof Selection.prototype.getComposedRanges === "function") return;
+    try {
+      // One probe with the dictionary argument: an engine may lack the method or reject the form.
+      document.getSelection()?.getComposedRanges({ shadowRoots: [] });
+      return;
+    } catch {
+      // Fall through to remembering Select All.
+    }
     let pressedInside = false;
+    let held: readonly [Node | null, number, Node | null, number] | null = null;
     const notePress = (event: PointerEvent) => {
       pressedInside = event.target instanceof Node && !!wrapperRef.current?.contains(event.target);
       selectedAllRef.current = false;
     };
-    // Modified keys such as the copy shortcut keep the selection; plain keys may change it.
+    // Only the copy shortcut and bare modifier keys keep a remembered Select All.
     const noteKey = (event: globalThis.KeyboardEvent) => {
-      const modified = event.metaKey || event.ctrlKey;
-      if (modified && !event.altKey && event.key.toLowerCase() === "a") {
+      const shortcut = (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey;
+      const key = event.key.toLowerCase();
+      if (shortcut && key === "a") {
         selectedAllRef.current = pressedInside;
-      } else if (!modified) selectedAllRef.current = false;
+        held = null;
+      } else if (!(shortcut && key === "c") && !MODIFIER_KEYS.has(event.key)) {
+        selectedAllRef.current = false;
+      }
+    };
+    // The first change after Select All is its own; any later one ends it.
+    const noteSelection = () => {
+      if (!selectedAllRef.current) return;
+      const selection = document.getSelection();
+      const now = [
+        selection?.anchorNode ?? null,
+        selection?.anchorOffset ?? 0,
+        selection?.focusNode ?? null,
+        selection?.focusOffset ?? 0,
+      ] as const;
+      const previous = held;
+      if (previous === null) held = now;
+      else if (now.some((part, index) => part !== previous[index])) selectedAllRef.current = false;
     };
     document.addEventListener("pointerdown", notePress, true);
     document.addEventListener("keydown", noteKey, true);
+    document.addEventListener("selectionchange", noteSelection);
     return () => {
+      selectedAllRef.current = false;
       document.removeEventListener("pointerdown", notePress, true);
       document.removeEventListener("keydown", noteKey, true);
+      document.removeEventListener("selectionchange", noteSelection);
     };
-  }, []);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Showing another file drops a remembered Select All.
+  }, [props.name, props.text]);
   const copyWholeFile = (event: ClipboardEvent<HTMLDivElement>) => {
     const root = event.currentTarget.querySelector("diffs-container")?.shadowRoot;
     if (!root || !(selectsEveryMountedRow(root) ?? selectedAllRef.current)) return;
