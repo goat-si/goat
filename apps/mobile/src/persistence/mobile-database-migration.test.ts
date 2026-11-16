@@ -8,6 +8,8 @@ const native = vi.hoisted(() => {
   const files = new Map<string, string>();
   const events: string[] = [];
   const directory = { value: "file:///sqlite" };
+  // How the next publishing move ends: done, copied partly then interrupted, or refused untouched.
+  const nextMove = { value: "done" as "done" | "partial" | "refused" };
   const pathOf = (name: string) =>
     `${decodeURIComponent(directory.value.replace(/^file:\/\//, ""))}/${name}`;
   const databases = new Map<
@@ -18,6 +20,7 @@ const native = vi.hoisted(() => {
     files,
     events,
     directory,
+    nextMove,
     pathOf,
     databases,
     backup: vi.fn(
@@ -83,6 +86,10 @@ vi.mock("expo-file-system", () => {
       get exists() {
         return native.files.has(diskPath(this.uri));
       }
+      create() {
+        native.events.push(`create:${this.name}`);
+        native.files.set(diskPath(this.uri), "");
+      }
       delete() {
         const path = diskPath(this.uri);
         native.events.push(`delete:${this.name}`);
@@ -94,6 +101,13 @@ vi.mock("expo-file-system", () => {
         native.events.push(`move:${target.name}`);
         await Promise.resolve();
         if (native.files.has(to)) throw new Error(`Destination '${to}' already exists`);
+        const outcome = native.nextMove.value;
+        native.nextMove.value = "done";
+        if (outcome === "refused") throw new Error("No space left on device");
+        if (outcome === "partial") {
+          native.files.set(to, (native.files.get(from) ?? "").slice(0, 4));
+          throw new Error("No space left on device");
+        }
         native.files.set(to, native.files.get(from) ?? "");
         native.files.delete(from);
       }
@@ -112,6 +126,7 @@ beforeEach(() => {
   native.events.length = 0;
   native.databases.clear();
   native.directory.value = "file:///sqlite";
+  native.nextMove.value = "done";
   native.open.mockClear();
   native.backup.mockReset().mockImplementation(copyBackup);
 });
@@ -193,4 +208,35 @@ describe("mobile SQLite namespace copy", () => {
       expect(has(LEGACY_MOBILE_DATABASE_NAME)).toBe(true);
     },
   );
+
+  it("a publication interrupted after writing part of goat-client.db is redone from the old database on the next launch (#3549)", async () => {
+    put(LEGACY_MOBILE_DATABASE_NAME, "rows kept from the old name");
+    native.nextMove.value = "partial";
+    await expect(openMigratedMobileDatabase()).rejects.toThrow("No space left on device");
+    await openMigratedMobileDatabase();
+    expect(native.files.get(native.pathOf("goat-client.db"))).toBe("rows kept from the old name");
+    expect(native.files.get(native.pathOf(LEGACY_MOBILE_DATABASE_NAME))).toBe(
+      "rows kept from the old name",
+    );
+  });
+
+  it("guard: a publication refused before writing leaves no goat-client.db and the open fails (#3549)", async () => {
+    put(LEGACY_MOBILE_DATABASE_NAME, "rows kept from the old name");
+    native.nextMove.value = "refused";
+    await expect(openMigratedMobileDatabase()).rejects.toThrow("No space left on device");
+    expect(has("goat-client.db")).toBe(false);
+    expect(native.events).not.toContain("open:goat-client.db");
+    expect(has(LEGACY_MOBILE_DATABASE_NAME)).toBe(true);
+  });
+
+  it("guard: a completed migration is kept and not redone on later launches (#3549)", async () => {
+    put(LEGACY_MOBILE_DATABASE_NAME, "rows kept from the old name");
+    await openMigratedMobileDatabase();
+    put("goat-client.db", "rows written after the migration");
+    await openMigratedMobileDatabase();
+    expect(native.files.get(native.pathOf("goat-client.db"))).toBe(
+      "rows written after the migration",
+    );
+    expect(native.backup).toHaveBeenCalledTimes(1);
+  });
 });
