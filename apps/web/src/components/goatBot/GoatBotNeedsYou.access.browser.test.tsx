@@ -1,4 +1,5 @@
 import { EnvironmentId } from "@goat/contracts";
+import { useLayoutEffect } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { act, render } from "../../../test/render";
 
@@ -125,6 +126,49 @@ it("guard: Needs you keeps its asks and next ask while its computer cannot be re
     failure: { kind: "retrying", reason: "host-unreachable", detail: "Unreachable" },
   });
   await using screen = await render(view());
+  await expect.element(screen.getByText(/Approve the deploy\?/)).toBeVisible();
+  await act(() => dispatchMenuAction("goatBot.nextAsk"));
+  expect(state.navigate).toHaveBeenCalledWith({ to: "/bot", search: { task: "task-1" } });
+});
+
+const REFUSED = {
+  phase: "error",
+  failure: { kind: "blocked", reason: "authentication", detail: "Refused" },
+} as const;
+
+/** Sends the next-ask action from a layout effect: after the commit, before passive cleanup. */
+function NextAskOnCommit({ send }: { send: boolean }) {
+  useLayoutEffect(() => {
+    if (send) dispatchMenuAction("goatBot.nextAsk");
+  }, [send]);
+  return null;
+}
+
+it("the next-ask action opens nothing in the commit that closes the gate, before its registration is removed", async () => {
+  setup({ phase: "connected" });
+  await using screen = await render(
+    <>
+      {view()}
+      <NextAskOnCommit send={false} />
+    </>,
+  );
+  await expect.element(screen.getByText(/Approve the deploy\?/)).toBeVisible();
+  state.connection = REFUSED;
+  await screen.rerender(
+    <>
+      {view()}
+      <NextAskOnCommit send />
+    </>,
+  );
+  expect(state.navigate).not.toHaveBeenCalled();
+});
+
+it("Needs you shows its asks and offers next ask again once access is restored, without a reload", async () => {
+  setup(REFUSED);
+  await using screen = await render(view());
+  expect(screen.container.textContent).toBe("");
+  state.connection = { phase: "connected" };
+  await screen.rerender(view());
   await expect.element(screen.getByText(/Approve the deploy\?/)).toBeVisible();
   await act(() => dispatchMenuAction("goatBot.nextAsk"));
   expect(state.navigate).toHaveBeenCalledWith({ to: "/bot", search: { task: "task-1" } });

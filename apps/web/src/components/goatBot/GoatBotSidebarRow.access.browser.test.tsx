@@ -222,10 +222,12 @@ function setup({ primary = false }: { primary?: boolean } = {}) {
 }
 
 async function renderRow() {
+  await using stack = new AsyncDisposableStack();
   // The mocked router isolates the sidebar row.
-  const screen = await render(<GoatBotSidebarRow />, { router: false });
+  const screen = stack.use(await render(<GoatBotSidebarRow />, { router: false }));
   await expect.element(screen.getByText(LINE)).toBeVisible();
   await expect.element(screen.getByRole("img", { name: "2 waiting for you" })).toBeVisible();
+  stack.move();
   return screen;
 }
 
@@ -241,6 +243,8 @@ function expectClosed(screen: Awaited<ReturnType<typeof render>>) {
       .map((badge) => badge.textContent),
   ).toEqual(["Main"]);
   expect(screen.getByRole("link").query()).not.toBeNull();
+  // The link's accessible name says the bot's name and "Main" only: no old line, time or count.
+  expect(screen.getByRole("link", { name: /^GOAT Bot\s*Main$/ }).query()).not.toBeNull();
 }
 
 it.each([

@@ -190,3 +190,97 @@ it("keeps its schedule when the last reader unmounts and another mounts", async 
   await seconds(1);
   expect(tab.probes).toBe(2);
 });
+
+it("a read that fell due while hidden runs once when a reader mounts in a tab that is visible again", async () => {
+  using _timers = fakeTimers();
+  const { tab, check, hold } = primary();
+  tab.answer = () => Promise.resolve("revoked");
+  const first = hold();
+  tab.set(CONNECTED);
+  tab.set(DROPPED);
+  tab.show(false);
+  await seconds(5);
+  first[Symbol.dispose]();
+  tab.show(true);
+  await seconds(60);
+  expect(tab.probes).toBe(0);
+  using _again = hold();
+  await seconds(0);
+  expect(tab.probes).toBe(1);
+  expect(check.revoked()).toBe(true);
+});
+
+it("a reconnect and a new drop while no reader is mounted start a fresh episode after a signed-in answer", async () => {
+  using _timers = fakeTimers();
+  const { tab, hold } = primary();
+  tab.answer = () => Promise.resolve("signed-in");
+  const first = hold();
+  tab.set(CONNECTED);
+  tab.set(DROPPED);
+  await seconds(5);
+  expect(tab.probes).toBe(1);
+  first[Symbol.dispose]();
+  tab.set(CONNECTED);
+  tab.set(DROPPED);
+  using _again = hold();
+  await seconds(4);
+  expect(tab.probes).toBe(1);
+  await seconds(1);
+  expect(tab.probes).toBe(2);
+});
+
+it("a revoked answer still in flight across an unwatched reconnect does not close the gate for the next drop", async () => {
+  using _timers = fakeTimers();
+  const { tab, check, hold } = primary();
+  let answer: (value: PrimarySessionAnswer) => void = () => {};
+  tab.answer = () =>
+    new Promise((resolve) => {
+      answer = resolve;
+    });
+  const first = hold();
+  tab.set(CONNECTED);
+  tab.set(DROPPED);
+  await seconds(5);
+  first[Symbol.dispose]();
+  tab.set(CONNECTED);
+  tab.set(DROPPED);
+  answer("revoked");
+  await seconds(0);
+  expect(check.revoked()).toBe(false);
+  using _again = hold();
+  expect(check.revoked()).toBe(false);
+  await seconds(5);
+  expect(tab.probes).toBe(2);
+});
+
+it("the first answer after a remount already reflects a reconnect made while no reader was mounted", async () => {
+  using _timers = fakeTimers();
+  const { tab, check, hold } = primary();
+  tab.answer = () => Promise.resolve("revoked");
+  const first = hold();
+  tab.set(CONNECTED);
+  tab.set(DROPPED);
+  await seconds(5);
+  expect(check.revoked()).toBe(true);
+  first[Symbol.dispose]();
+  tab.set(CONNECTED);
+  expect(check.revoked()).toBe(false);
+});
+
+it("a new outage after an unwatched reconnect starts at 5 s, and nothing is read while no reader is mounted", async () => {
+  using _timers = fakeTimers();
+  const { tab, hold } = primary();
+  const first = hold();
+  tab.set(CONNECTED);
+  tab.set(DROPPED);
+  await seconds(315);
+  expect(tab.probes).toBe(6);
+  first[Symbol.dispose]();
+  tab.set(CONNECTED);
+  tab.set(DROPPED);
+  await seconds(5);
+  expect(tab.probes).toBe(6);
+  using _again = hold();
+  await seconds(0);
+  expect(tab.probes).toBe(7);
+});

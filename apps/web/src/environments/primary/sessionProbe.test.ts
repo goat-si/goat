@@ -3,6 +3,7 @@ import { layerRemoteHttpClient, makeEnvironmentHttpApiClient } from "@goat/clien
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import { FetchHttpClient } from "effect/http";
 import * as TestClock from "effect/testing/TestClock";
 import { expect } from "vite-plus/test";
 
@@ -19,15 +20,17 @@ const AUTH = {
 /** This tab's own server, answering every request with `respond`. */
 function primaryAnswering(respond: typeof fetch) {
   const requests: Array<Request> = [];
+  const inits: Array<RequestInit | undefined> = [];
   const fetchFn: typeof fetch = (input, init) => {
     requests.push(new Request(input, init));
+    inits.push(init);
     return respond(input, init);
   };
   const layer = Layer.effect(
     PrimaryEnvironmentHttpClient,
     makeEnvironmentHttpApiClient("http://primary.test/"),
   ).pipe(Layer.provide(layerRemoteHttpClient(fetchFn)));
-  return { requests, layer };
+  return { requests, inits, layer };
 }
 
 const json = (status: number, body: unknown) => () =>
@@ -45,11 +48,15 @@ it.effect.each([
     json(200, { authenticated: false, auth: AUTH }),
   ],
   ["the session is signed in", "signed-in", json(200, { authenticated: true, auth: AUTH })],
-  ["the request fails", "unknown", () => Promise.reject(new TypeError("Failed to fetch"))],
+  [
+    "a failed request, which is also how fetch reports a refused redirect",
+    "unknown",
+    () => Promise.reject(new TypeError("Failed to fetch")),
+  ],
   ["the server fails (500)", "unknown", json(500, { message: "database unavailable" })],
   ["the server is unavailable (503)", "unknown", json(503, { message: "restarting" })],
   [
-    "a proxy redirects to its sign-in page",
+    "a 3xx response that reaches the client unfollowed",
     "unknown",
     () =>
       Promise.resolve(
@@ -79,6 +86,21 @@ it.effect.each([
       expect(
         primary.requests.map((request) => [request.method, new URL(request.url).pathname]),
       ).toEqual([["GET", "/api/auth/session"]]);
+    }),
+);
+
+it.effect(
+  "the read refuses redirects, so a proxy's or another server's answer is never read, and keeps the caller's other fetch options",
+  () =>
+    Effect.gen(function* () {
+      const primary = primaryAnswering(json(200, { authenticated: true, auth: AUTH }));
+      yield* readPrimarySessionAnswer.pipe(
+        Effect.provide(primary.layer),
+        Effect.provideService(FetchHttpClient.RequestInit, { credentials: "include" }),
+      );
+      expect(primary.inits.map((init) => [init?.redirect, init?.credentials])).toEqual([
+        ["error", "include"],
+      ]);
     }),
 );
 
