@@ -214,10 +214,12 @@ it("a device zone change while the app is open reads the next time in the new zo
   const before = process.env.TZ;
   try {
     process.env.TZ = "Asia/Tokyo";
+    // @effect-diagnostics-next-line globalDate:off -- the zone's offset at the fixed test instant.
     const tokyo = new Date(at).getTimezoneOffset();
     expect(routineRunTime(at, { locale: "en-US", hour12: false })).toBe("Nov 14, 18:00");
     process.env.TZ = "America/New_York";
     // The guard: Node read the new zone, so a stale formatter is what the next line would catch.
+    // @effect-diagnostics-next-line globalDate:off -- the zone's offset at the fixed test instant.
     expect(new Date(at).getTimezoneOffset()).not.toBe(tokyo);
     expect(routineRunTime(at, { locale: "en-US", hour12: false })).toBe("Nov 14, 04:00");
   } finally {
