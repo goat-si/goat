@@ -218,6 +218,8 @@ describe("GitHub media URLs", () => {
       "/a.png",
       "docs//a.png",
       "",
+      // An unpaired surrogate has no URL encoding.
+      "docs/\uD800.png",
     ]) {
       expect(
         definition.rawFileUrl?.({ repositoryUrl: "https://github.com/owner/repo", sha, path }),

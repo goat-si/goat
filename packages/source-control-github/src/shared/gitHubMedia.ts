@@ -76,9 +76,10 @@ export function gitHubRawFileUrl(input: {
   if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
     return null;
   }
-  const path = segments.map(encodeURIComponent).join("/");
   let url: URL;
   try {
+    // encodeURIComponent throws on an unpaired surrogate.
+    const path = segments.map(encodeURIComponent).join("/");
     url = new URL(`${input.repositoryUrl}/raw/${input.sha}/${path}`);
   } catch {
     return null;
