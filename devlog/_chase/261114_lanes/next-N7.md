@@ -318,3 +318,67 @@ Coordinator rulings for the second fix round (verbatim):
 - The integration branch is at 5c798a3072 (frozen until N3), which touches no file of this lane; not merged, per the ruling.
 - NOT RUN: web, desktop and mobile captures (owed to #3519's integrated pass); PostgreSQL relay tests; the Effect 4.1 adaptation (after N3 merges).
 
+
+## Part 2 third fix round (2026-11-17, review BLOCK at fa71640504)
+
+Coordinator ruling for the third fix round (verbatim):
+
+> Fresh narrow review of N7 part 2's second fix round at fa71640504: BLOCK on one P2, three P3; no P0 or P1. Report /Users/jun/handoff-in/chase/next-N7b-fix2-review-fa716405.md. On a server that has thread modes the rule now holds in every state of both editors (the reviewer walked every order of up to four actions: 5,308 web states and 3,818 mobile states, and undid each fix to see its test fail). The block is about OLDER servers, and it comes from my own ruling N7bF-P3-3, which assumed every server moves a task off its thread when its project changes; only servers with this lane do. Third fix round on chase/t3-261114-n7b-scheduler, one commit per item, test first, no force push:
+> 1. N7bF2-P2-1 (code, test first; web). The project rule applies only when the server advertises scheduledTaskThreadModes. ScheduledTasksSettings.tsx:1320 calls withProject(current, projectId ?? "", liveTask) whatever the server is; against a server without the capability that clears the draft's thread, the save sends threadId null and no threadMode, and an older server stores exactly that (origin/dev ScheduledTaskService.ts:1187): the task is unbound for good and starts a new thread on every run (:811), while Destination says "The first run starts a thread... Later runs continue that conversation", and Important updates is reset although the older server would have kept the thread and the policy. At 132a0f1f6f the same edit kept the thread and said so. Test first, in ScheduledTasksSettings.notifications.browser.test.tsx with the capability OFF (setup("all_runs", true, {}, false)): a bound task; choose the other project; Destination still reads "Each run continues this conversation"; no reset notice; save; the request carries threadId "bound" and no threadMode. It fails at fa71640504. Fix: pass the saved task to withProject only when offersThreadModes is true (the reviewer's one-argument change), keeping ScheduledTasksSettings.tsx within its 1747 entry.
+> 2. N7bF2-P3-1 (code, test first; mobile). The same gate: without the capability a project change does not reset Important updates, does not show the notice, and the choice stays offered for a bound task (offersImportantUpdates as it was: the task has a thread and the mode is not new_thread). One rendered case with the capability off.
+> 3. The general rule, to state in the record and to check once more over this lane's client code: against a server WITHOUT the capability both editors behave exactly as they do on dev, apart from text; every piece of editor logic this lane added (the mode restore, the project rule, the policy filter, the reset notice, the hidden button) is either gated on the capability or provably the same on an older server. List each with path:line and its gate. The first review's older-server rows (no selector; an unbind sends threadId null and no mode; the Important updates check as on dev) are the reference.
+> 4. N7bF2-P3-2 (code, test first; web and mobile). The branches that put the thread back (scheduledTasksSettings.logic.ts:378-379 and :393-396; scheduledTaskDraft.ts:353-372) also clear notificationPolicyReset, so the notice never names a reason that is no longer true. One web case and one mobile case: leave the thread (the notice shows), come back (the notice is gone, the policy stays All runs until the person chooses otherwise).
+> 5. N7bF2-P3-3 (nit). ScheduledTaskContextSections.test.tsx:149-155: move const projects above the harness's doc comment.
+> 6. Then: goat-rename --check; format, lint, typecheck of web and mobile; both ScheduledTasksSettings browser test files and the three mobile test files; vp run check:changed on the final head (pen-macbookpro2's heavy slot); records (this text quoted, the gate list of item 3); READY with the head. A narrow fresh review of this round runs before the merge. The branch does not merge origin/chase/t3-261114-next now: it waits for lane N3 under the freeze and then merges the post-N3 head.
+
+| item | GOAT commit | result |
+| --- | --- | --- |
+| N7bF2-P2-1 | `b36bcef6e26fab99219e63bdcabbbe5b6e66361c` | web: withProject gets the saved task only when the server offers thread modes; ScheduledTasksSettings.tsx 1747 of 1747 |
+| N7bF2-P3-1 | `db96a5451fb298c5c2c934e96b0ec1c329eac589` | mobile: the project rule (withProject) and its Important updates filter apply only with the capability; the route screen reads it once (1181 of 1181) |
+| N7bF2-P3-2 | `52630c1a2e832f5664df60a78e4d04074d72dab6` | web and mobile: each branch that brings the thread back clears the reset notice (settleNotice) |
+| N7bF2-P3-3 | `645abbd7b7247afbf0f66cd287590ec757e1fa7a` | mobile test: the harness's doc comment sits on the harness |
+
+- Fail-first:
+  - N7bF2-P2-1: the web case with the capability off (bound Important updates task, another project: "Each run continues this conversation", no notice, the request carries threadId "bound", its policy and no threadMode) failed at fa71640504.
+  - N7bF2-P3-1: the rendered mobile case with the capability off (no notice, Important updates kept and offered) failed at b36bcef6e2.
+  - N7bF2-P3-2: the web and mobile cases (leave by mode and come back; choose Important updates; leave by project and come back; the notice goes, All runs stays) failed with the two logic files restored to db96a5451f.
+- Undoing each fix makes its test fail. The reviewer's table at fa71640504 still holds for the earlier fixes (the tests are unchanged). New since then:
+  - the withProject capability gate on web: the no-capability web case;
+  - the mobile capability gate: the no-capability rendered case;
+  - settleNotice: both coming-back cases.
+
+### Older servers (item 3): every piece of editor logic this lane added, and its gate
+
+Against a server without scheduledTaskThreadModes both editors behave as on dev, apart from text. The first review's older-server rows are the reference: no selector; an unbind sends threadId null and no mode; the Important updates check as on dev.
+
+Web:
+
+- **The save:** apps/web/src/components/settings/ScheduledTasksSettings.tsx:1171 sends threadMode only with the capability (`offersThreadModes`, read at :1001).
+- **The mode restore and the new-thread reset:** withThreadMode at scheduledTasksSettings.logic.ts:375 is reached only through Destination's onThreadModeChange. ScheduledTasksSettings.tsx:1306-1307 passes it only with the capability, and ScheduledTaskDestination.tsx:50 renders the selector only when that handler is set. Never runs on an older server.
+- **The project rule:** withProject (scheduledTasksSettings.logic.ts:395) gets the saved task only with the capability (ScheduledTasksSettings.tsx:1321). Without it, a project change only sets the project, as on dev.
+- **The policy filter:** ScheduledTaskNotificationPolicyField.tsx:57-61 offers Important updates when `draft.threadId !== "" && draft.threadMode !== "new_thread"`. This is the same as dev's `draft.threadId !== ""` on an older server. There, threadMode is written only by taskToDraft (logic.ts:225, from the task's thread), EMPTY_DRAFT (:331, no thread, new_thread) and the button (Field :78-86, which clears the thread with new_thread). So the mode is new_thread exactly when the draft has no thread.
+- **The hidden button:** ScheduledTaskNotificationPolicyField.tsx:74 (`draft.threadId && draft.threadMode !== "new_thread"`) is the same as dev's `draft.threadId` by the same argument.
+- **The reset notice:** set by the button (as on dev) and by withThreadMode and withProject (capability only). Cleared by a policy pick (Field :49) and by settleNotice (logic.ts:365, inside the capability-only helpers). On an older server the notice appears exactly when it did on dev, and a policy pick now hides it (text only).
+- **isBotRoutineDraft:** logic.ts, moved verbatim from the screen; unchanged behaviour.
+
+Mobile:
+
+- **The save:** apps/mobile/src/features/settings/SettingsScheduledTasksRouteScreen.tsx:608 sends threadMode only with the capability (`threadModes` at :514). threadId is always the stored thread, as on dev (:607).
+- **The mode restore and reset:** withThreadMode (scheduledTaskDraft.ts:360) is called only from the Destination row (ScheduledTaskContextSections.tsx:189), which renders only with the capability (:162).
+- **The project rule:** withProject (scheduledTaskDraft.ts:369) is called only with the capability (ScheduledTaskContextSections.tsx:139-141). Otherwise the project is set as on dev.
+- **The policy filter:** ScheduledTaskNotificationPolicySection.tsx:34 uses `offersImportantUpdates(draft, threadModes)`, which is keepsThread (scheduledTaskDraft.ts:347). Without the capability it is `task.threadId != null && threadMode !== "new_thread"`. That is the same as dev's `task.threadId != null`, because editDraft (:281) derives the mode from the stored thread and nothing else writes it on an older server.
+- **The reset notice:** set only by withThreadMode and withProject (capability only); cleared by a policy pick (Section :39) and by settleNotice (:356). It never shows on an older server.
+- **The Destination footer:** inside the capability-only section (:162).
+
+### Checks on 645abbd7b7247afbf0f66cd287590ec757e1fa7a
+
+- `node scripts/goat-rename.ts --check` 0.
+- Format and lint pass. Typecheck of apps/web and apps/mobile exits 0, and `check:changed` typechecked 42 packages.
+- Both web ScheduledTasksSettings browser test files: 21 passed. The three mobile test files (scheduledTaskDraft, ScheduledTaskContextSections, scheduled-task-editor): 39 passed.
+- `set -o pipefail; vp run check:changed` on pen-macbookpro2 (the heavy slot was free at the start; another worktree's check:changed started 53 minutes in): exit 1.
+  - Unused patches, format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget and typecheck (42 packages) pass.
+  - vp test, 1345 files: 2 failed, 1339 passed, 4 skipped; 20710 tests passed, 2 failed. Both are the known failures of the last gate: goat#3363 (packages/ssh/src/runtimeFactsScripts.test.ts) and goat#3560 (the flaky AttachmentFilePreview Mermaid case; this round touches nothing under apps/web/src/components/files).
+- Budgets: ScheduledTasksSettings.tsx 1747 of 1747 and the mobile route screen 1181 of 1181; the other changed files are under 1000 lines with no entry; none raised.
+- Not merged: origin/chase/t3-261114-next, frozen until N3 (per the ruling).
+- NOT RUN: web, desktop and mobile captures (owed to #3519's integrated pass); PostgreSQL relay tests; the Effect 4.1 adaptation (after N3 merges).
+
