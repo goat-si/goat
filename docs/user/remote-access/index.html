@@ -658,10 +658,15 @@ threads on an environment through its MCP server. See
 <h2 id="manage-or-revoke-access">Manage or revoke access</h2>
 <p>On the host, <strong>Settings → Connections</strong> lets authorized administrators create
 pairing links and revoke client sessions. Revoking an unused link prevents new
-pairings; revoke a device’s session to remove its existing access. Command-line
-management is available through <code>goat auth --help</code>.</p>
+pairings; revoke a device’s session to remove its existing access.
+<code>goat auth session revoke &lt;id&gt;</code> does the same from the command line: the session
+is refused at once, and a running server closes its open connections within
+about 5 seconds. An MCP request that was admitted before the revoke runs to
+completion on the access it was admitted with, and can still write or start work
+until it finishes. More commands are listed by <code>goat auth --help</code>.</p>
 <p>A session with an open connection stays listed after its access credential
-expires.</p>
+expires. <strong>Settings → Connections</strong> shows which sessions are connected;
+<code>goat auth session list</code> cannot tell.</p>
 <p>To choose a token’s permissions, pass <code>--scope</code> once for each scope you want:</p>
 <pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="sh"><code><span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> pair</span><span style="color:#79B8FF"> --scope</span><span style="color:#9ECBFF"> orchestration:read</span><span style="color:#79B8FF"> --scope</span><span style="color:#9ECBFF"> relay:read</span></span></code></pre>
 <p>The selected scopes replace the default permissions. The same option works with
