@@ -4,29 +4,90 @@ import {
   sanitizeTerminalHistoryChunk,
 } from "./terminalHistoryReplay.ts";
 
-it.each([
-  ["an OSC", "\u001b]0;", "x"],
-  ["a DCS", "\u001bPq", "?"],
-  ["a CSI", "\u001b[", "1;"],
-])("drops %s left unterminated past the pending cap and returns to ground", (_, start, unit) => {
+const CAP = MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH;
+
+// Feeds chunks as the manager does and records what history keeps.
+function historyFeed() {
   let pending = "";
   let visible = "";
-  const feed = (data: string) => {
-    const result = sanitizeTerminalHistoryChunk(pending, data);
-    pending = result.pendingControlSequence;
-    visible += result.visibleText;
+  return {
+    feed(...chunks: string[]) {
+      for (const data of chunks) {
+        const result = sanitizeTerminalHistoryChunk(pending, data);
+        pending = result.pendingControlSequence;
+        visible += result.visibleText;
+        // At most the cap plus one chunk is ever held, and O(1) once a sequence is past it.
+        expect(pending.length).toBeLessThanOrEqual(CAP);
+      }
+    },
+    get pending() {
+      return pending;
+    },
+    get visible() {
+      return visible;
+    },
   };
-  feed(start);
-  // Just over the cap, in the 64 KiB chunks a PTY delivers.
-  const payload = unit.repeat(Math.ceil(MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH / unit.length));
+}
+
+// Just over the cap, in the 64 KiB chunks a PTY delivers.
+function overCap(start: string, unit: string): string[] {
+  const payload = unit.repeat(Math.ceil((CAP + 1 - start.length) / unit.length));
+  const chunks = [start];
   for (let offset = 0; offset < payload.length; offset += 64 * 1024) {
-    feed(payload.slice(offset, offset + 64 * 1024));
-    expect(pending.length).toBeLessThanOrEqual(MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH);
+    chunks.push(payload.slice(offset, offset + 64 * 1024));
   }
-  expect(pending).toBe("");
-  expect(visible).toBe("");
-  feed("after\n");
-  expect(visible).toBe("after\n");
+  return chunks;
+}
+
+it.each([
+  ["an OSC ended by BEL", "\u001b]1337;File=:", "QUJD", "\u0007"],
+  ["an OSC ended by ST", "\u001b]52;c;", "QUJD", "\u001b\\"],
+  ["a DCS ended by ST", "\u001bPq", "#0;2;0;0;0~", "\u001b\\"],
+  ["a CSI ended by its final byte", "\u001b[", "1;", "m"],
+])(
+  "swallows the rest of %s past the pending cap, then keeps what follows",
+  (_, start, unit, end) => {
+    const history = historyFeed();
+    history.feed("before", ...overCap(start, unit), unit.repeat(1000), end + "after\n");
+    expect(history.visible).toBe("beforeafter\n");
+    expect(history.pending).toBe("");
+  },
+);
+
+it.each([
+  ["OSC", "\u001b]1337;File=:", "QUJD"],
+  ["DCS", "\u001bPq", "#0;2;0;0;0~"],
+])("ends a swallowed %s at an ST split across chunks", (_, start, unit) => {
+  const history = historyFeed();
+  history.feed("before", ...overCap(start, unit), unit + "\u001b", "\\after\n");
+  expect(history.visible).toBe("beforeafter\n");
+  expect(history.pending).toBe("");
+});
+
+it("keeps the sequence that an ESC starts after a swallowed one, also across chunks", () => {
+  const history = historyFeed();
+  history.feed(...overCap("\u001b]1337;File=:", "QUJD"), "QUJD\u001b[31mred\n");
+  history.feed(...overCap("\u001bPq", "?"), "??\u001b", "[0mplain\n");
+  expect(history.visible).toBe("\u001b[31mred\n\u001b[0mplain\n");
+  expect(history.pending).toBe("");
+});
+
+it("swallows everything after a sequence that never terminates, as a terminal shows nothing", () => {
+  const history = historyFeed();
+  history.feed("before", ...overCap("\u001b]1337;File=:", "QUJD"));
+  for (let index = 0; index < 48; index += 1) history.feed("x".repeat(64 * 1024) + "\nline\n");
+  expect(history.visible).toBe("before");
+  expect(history.pending.length).toBeLessThan(16);
+});
+
+it("keeps a sequence exactly at the pending cap whole", () => {
+  const start = "\u001b]0;";
+  const payload = "t".repeat(CAP - start.length);
+  const history = historyFeed();
+  history.feed(start, payload);
+  expect(history.pending.length).toBe(CAP);
+  history.feed("\u0007after");
+  expect(history.visible).toBe(start + payload + "\u0007after");
 });
 
 it("retains text after an unfinished OSC is interrupted by a new escape across chunks", () => {
