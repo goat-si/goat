@@ -289,7 +289,7 @@ it.effect.each([
             type: "thread.model-selection.set",
             commandId: CommandId.make("model"),
             threadId,
-            modelSelection: composerSelection,
+            modelSelection: { ...runSelection, model: "other-model" },
           });
           yield* worker.drain();
           yield* orchestrator.resumeQueuedRuns;
