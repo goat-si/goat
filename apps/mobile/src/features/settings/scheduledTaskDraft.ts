@@ -352,6 +352,10 @@ export const keepsThread = (draft: ScheduledTaskDraft, threadModes = true) =>
 /** Important updates needs a thread that later runs keep. */
 export const offersImportantUpdates = keepsThread;
 
+/** A draft that keeps a thread again drops the reset notice: its reason no longer holds. */
+const settleNotice = (draft: ScheduledTaskDraft): ScheduledTaskDraft =>
+  keepsThread(draft) ? { ...draft, notificationPolicyReset: false } : draft;
+
 /** Choosing a new thread each run drops Important updates to All runs. */
 export const withThreadMode = (
   draft: ScheduledTaskDraft,
@@ -359,7 +363,7 @@ export const withThreadMode = (
 ): ScheduledTaskDraft =>
   threadMode === "new_thread" && draft.notificationPolicy === "important_updates"
     ? { ...draft, threadMode, notificationPolicy: "all_runs", notificationPolicyReset: true }
-    : { ...draft, threadMode };
+    : settleNotice({ ...draft, threadMode });
 
 /** Moving a bound task to another project leaves its thread, so Important updates drops too. */
 export const withProject = (
@@ -371,5 +375,5 @@ export const withProject = (
     !keepsThread(moved) &&
     draft.notificationPolicy === "important_updates"
     ? { ...moved, notificationPolicy: "all_runs", notificationPolicyReset: true }
-    : moved;
+    : settleNotice(moved);
 };

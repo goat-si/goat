@@ -252,3 +252,22 @@ it("without thread modes, a project change keeps Important updates, as an older 
   expect(editor.labels()).toContain("Notifications, Important updates");
   expect(editor.labels()).toContain("Notifications: Important updates");
 });
+
+it("coming back to the thread clears the reset notice and keeps All runs", async () => {
+  using editor = await renderEditor({
+    threadId: ThreadId.make("bound"),
+    threadMode: "continue",
+    notificationPolicy: "important_updates",
+  });
+  await editor.press("Runs go to: New thread each run");
+  expect(editor.container.textContent).toContain(RESET_NOTICE);
+  await editor.press("Runs go to: One thread, same conversation");
+  expect(editor.container.textContent).not.toContain(RESET_NOTICE);
+  expect(editor.labels()).toContain("Notifications, All runs");
+  await editor.press("Notifications: Important updates");
+  await editor.press("Project: Other");
+  expect(editor.container.textContent).toContain(RESET_NOTICE);
+  await editor.press("Project: Synthetic");
+  expect(editor.container.textContent).not.toContain(RESET_NOTICE);
+  expect(editor.labels()).toContain("Notifications, All runs");
+});

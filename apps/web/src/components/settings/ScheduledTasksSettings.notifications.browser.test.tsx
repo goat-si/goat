@@ -511,3 +511,35 @@ it("without thread modes, moving a bound task to another project keeps its threa
   expect(sent).toMatchObject({ threadId: "bound", notificationPolicy: "important_updates" });
   expect(sent).not.toHaveProperty("threadMode");
 });
+
+it("with thread modes, coming back to the thread clears the reset notice and keeps All runs", async () => {
+  const task = setup("important_updates", true, { threadMode: "continue" }, true);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  const notice = page.getByText("Notifications changed to All runs", { exact: false });
+  const destination = page.getByRole("combobox", { name: "Destination" });
+  await userEvent.click(destination);
+  await userEvent.click(page.getByRole("option", { name: "New thread each run" }));
+  await expect.element(notice).toBeVisible();
+  await userEvent.click(destination);
+  await userEvent.click(
+    page.getByRole("option", { name: "One thread, continuing the conversation" }),
+  );
+  await expect.element(notice).not.toBeInTheDocument();
+  await expect
+    .element(page.getByRole("combobox", { name: "Notifications" }))
+    .toHaveTextContent("All runs");
+  await userEvent.click(page.getByRole("combobox", { name: "Notifications" }));
+  await userEvent.click(page.getByRole("option", { name: "Important updates" }));
+  const projectPicker = page.getByRole("combobox", { name: "Project" });
+  await userEvent.click(projectPicker);
+  await userEvent.click(page.getByRole("option", { name: "Other" }));
+  await expect.element(notice).toBeVisible();
+  await userEvent.click(projectPicker);
+  await userEvent.click(page.getByRole("option", { name: "Synthetic" }));
+  await expect.element(notice).not.toBeInTheDocument();
+  await expect
+    .element(page.getByRole("combobox", { name: "Notifications" }))
+    .toHaveTextContent("All runs");
+});

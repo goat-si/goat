@@ -361,6 +361,12 @@ export function workspaceStrategyFromDraft(
   };
 }
 
+/** A draft that keeps a thread again drops the reset notice: its reason no longer holds. */
+const settleNotice = (draft: DraftState): DraftState =>
+  draft.threadId !== "" && draft.threadMode !== "new_thread"
+    ? { ...draft, notificationPolicyReset: false }
+    : draft;
+
 /**
  * Destination shows what the save stores. Important updates needs a thread, so a new thread each
  * run drops it to All runs. A one-thread mode keeps the saved thread unless the project changed,
@@ -375,13 +381,16 @@ export const withThreadMode = (
     ? draft.notificationPolicy === "important_updates"
       ? { ...draft, threadMode, notificationPolicy: "all_runs", notificationPolicyReset: true }
       : { ...draft, threadMode }
-    : draft.threadId === "" && saved?.threadId && draft.projectId === saved.projectId
-      ? { ...draft, threadMode, threadId: saved.threadId }
-      : { ...draft, threadMode };
+    : settleNotice(
+        draft.threadId === "" && saved?.threadId && draft.projectId === saved.projectId
+          ? { ...draft, threadMode, threadId: saved.threadId }
+          : { ...draft, threadMode },
+      );
 
 /**
  * A task moved to another project leaves its thread on save, as the server does, so the draft
- * leaves it now, with the same Important updates reset; the saved project gets it back.
+ * leaves it now, with the same Important updates reset; the saved project gets it back. Callers
+ * pass the saved task only for a server with thread modes; an older server keeps the thread.
  */
 export const withProject = (
   draft: DraftState,
@@ -392,7 +401,7 @@ export const withProject = (
   if (!saved?.threadId) return moved;
   if (projectId === saved.projectId)
     return draft.threadId === "" && draft.threadMode !== "new_thread"
-      ? { ...moved, threadId: saved.threadId }
+      ? settleNotice({ ...moved, threadId: saved.threadId })
       : moved;
   if (draft.threadId === "") return moved;
   return draft.notificationPolicy === "important_updates"
