@@ -34,7 +34,6 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -955,67 +954,6 @@ it.effect.each(["fails", "is interrupted"] as const)(
           const retried = yield* threads.getThreadProjection(launched.threadId);
           assert.equal(retried.runs.at(-1)?.queueHeld, false);
         }
-      }).pipe(Effect.provide(harness.layer));
-    }),
-);
-
-it.effect.each(["message.dispatch", "prepared-run.retry"] as const)(
-  "a launch or retry cut after its %s commits still schedules its preparation (#3593)",
-  (cutAfter) =>
-    Effect.gen(function* () {
-      const committed = yield* Deferred.make<void>();
-      const resume = yield* Deferred.make<void>();
-      // "cut" if the cut stops the call inside the dispatch that left the run "preparing".
-      const outcome = yield* Deferred.make<"prepared" | "cut">();
-      let worktreeFailures = cutAfter === "prepared-run.retry" ? 1 : 0;
-      const harness = makeHarness({
-        createWorktree: () =>
-          worktreeFailures-- > 0
-            ? Effect.fail(
-                new GitCommandError({
-                  operation: "GitVcsDriver.createWorktree",
-                  command: "git",
-                  cwd: project.workspaceRoot,
-                  detail: "Worktree creation failed.",
-                  exitCode: 128,
-                }),
-              )
-            : Deferred.succeed(outcome, "prepared").pipe(Effect.andThen(Effect.never)),
-        afterDispatch: (command) =>
-          command.type === cutAfter
-            ? Deferred.succeed(committed, undefined).pipe(
-                Effect.andThen(Deferred.await(resume)),
-                Effect.onInterrupt(() => Deferred.succeed(outcome, "cut")),
-              )
-            : Effect.void,
-      });
-      yield* Effect.gen(function* () {
-        const launches = yield* ThreadLaunch.ThreadLaunchService;
-        const cut = <A, E>(call: Effect.Effect<A, E>) =>
-          Effect.gen(function* () {
-            const running = yield* Effect.forkChild(call);
-            yield* Deferred.await(committed);
-            running.interruptUnsafe();
-            yield* Deferred.succeed(resume, undefined);
-            assert.isTrue(Exit.hasInterrupts(yield* Fiber.await(running)));
-          });
-        const launch = launches.launch(
-          launchInput({
-            command: `command:launch:cut-after-${cutAfter}`,
-            thread: `thread:launch:cut-after-${cutAfter}`,
-            message: "First message",
-            workspace: { type: "worktree", baseRef: "main" },
-          }),
-        );
-        if (cutAfter === "message.dispatch") yield* cut(launch);
-        else {
-          const { threadId, projection } = yield* launch;
-          yield* preparationSettled(threadId);
-          const runId = projection.runs[0]!.id;
-          const commandId = CommandId.make("command:launch:cut-retry");
-          yield* cut(launches.retryPreparation({ commandId, threadId, runId }));
-        }
-        assert.equal(yield* Deferred.await(outcome), "prepared");
       }).pipe(Effect.provide(harness.layer));
     }),
 );

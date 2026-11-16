@@ -33,6 +33,7 @@ import * as CommandReceiptStore from "../CommandReceiptStore.ts";
 import * as EffectOutbox from "../EffectOutbox.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
+import * as ThreadCommandExecutor from "../ThreadCommandExecutor.ts";
 import * as ThreadLaunch from "../ThreadLaunchService.ts";
 import * as ThreadManagement from "../ThreadManagementService.ts";
 import * as ThreadTitleRegeneration from "../ThreadTitleRegenerationService.ts";
@@ -115,6 +116,10 @@ interface HarnessOptions {
   ) => ThreadManagement.ThreadManagementService["Service"]["streamStoredEventsFrom"];
   /** The provider CLI gate the launch service is built with; none unless given. */
   readonly providerCliGate?: Layer.Layer<ProviderCliGate.ProviderCliGate>;
+  /** Runs in the launch service's dispatch before the command reaches the orchestrator. */
+  readonly beforeDispatch?: (
+    command: Parameters<ThreadManagement.ThreadManagementService["Service"]["dispatch"]>[0],
+  ) => Effect.Effect<void>;
   /** Runs in the launch service's dispatch after a command commits, before the result returns. */
   readonly afterDispatch?: (
     command: Parameters<ThreadManagement.ThreadManagementService["Service"]["dispatch"]>[0],
@@ -250,7 +255,8 @@ export function makeHarness(options: HarnessOptions = {}) {
         layerExternalServices,
         prepared === undefined &&
           options.launchEvents === undefined &&
-          options.afterDispatch === undefined
+          options.afterDispatch === undefined &&
+          options.beforeDispatch === undefined
           ? layerThreadManagement
           : Layer.effect(
               ThreadManagement.ThreadManagementService,
@@ -262,7 +268,8 @@ export function makeHarness(options: HarnessOptions = {}) {
                     options.launchEvents?.(service.streamStoredEventsFrom) ??
                     service.streamStoredEventsFrom,
                   dispatch: (command) =>
-                    service.dispatch(command).pipe(
+                    (options.beforeDispatch?.(command) ?? Effect.void).pipe(
+                      Effect.andThen(service.dispatch(command)),
                       Effect.tap(() =>
                         prepared !== undefined && command.type === "prepared-run.release"
                           ? Deferred.succeed(prepared, undefined)
@@ -323,6 +330,8 @@ export function makeHarness(options: HarnessOptions = {}) {
       layerOutbox,
       layerDatabase,
       layerExternalServices,
+      // The orchestrator's own thread locks: the layer is memoized within one build.
+      ThreadCommandExecutor.layer,
     ),
     createWorktree,
     removeWorktree,
