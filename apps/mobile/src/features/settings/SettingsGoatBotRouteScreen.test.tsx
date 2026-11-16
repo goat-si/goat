@@ -502,6 +502,7 @@ it("once the connection is refused the row reads Couldn't load, not Offline or L
 });
 
 it("offline, Messages, Workers and Model keep their last values with every control off and the reason read first, an open picker closes, and reconnecting turns them back on (#3503)", async () => {
+  const offline = "Last read from Studio, so these may be out of date. Changes need it connected.";
   await using screen = await settings(config);
   await screen.openModel();
   expect(screen.choices).toEqual(["Automatic", "Fast"]);
@@ -513,8 +514,8 @@ it("offline, Messages, Workers and Model keep their last values with every contr
   });
   expect(screen.modelRow).toEqual({ label: "GOAT Bot model, Automatic", disabled: true });
   expect(screen.choices).toEqual([]);
-  expect(screen.shown("Changes need Studio connected.")).toHaveLength(1);
-  expect(screen.readsBefore("Changes need Studio connected.", "Messages")).toBe(true);
+  expect(screen.shown(offline)).toHaveLength(1);
+  expect(screen.readsBefore(offline, "Messages")).toBe(true);
   await screen.reconnect();
   expect(screen.toggle("Answer with the bot session")).toEqual({ checked: true, disabled: false });
   expect(screen.toggle("Automatically choose a worker computer")).toEqual({
@@ -523,7 +524,7 @@ it("offline, Messages, Workers and Model keep their last values with every contr
   });
   expect(screen.modelRow).toEqual({ label: "GOAT Bot model, Automatic", disabled: false });
   expect(screen.choices).toEqual([]);
-  expect(screen.shown("Changes need Studio connected.")).toEqual([]);
+  expect(screen.shown(offline)).toEqual([]);
 });
 
 it("once the connection is refused, Messages, Workers and Model show none of that computer's settings and say they couldn't load (#3503)", async () => {

@@ -57,9 +57,12 @@ export function useMobileGoatBotMemberModelMenu(
 ) {
   const environmentId = member?.environmentId ?? null;
   const config = useEnvironmentServerConfig(environmentId);
+  const { environments } = useEnvironments();
   const { supported, editable, offline } = useMobileGoatBotMemberModelEditable(environmentId);
   const [saving, setSaving] = useState(false);
   if (member === null || !config) return null;
+  const computer =
+    environments.find((entry) => entry.environmentId === environmentId)?.label ?? "its computer";
   const state = deriveGoatBotModelSettings({
     settings: config.settings,
     providers: config.providers,
@@ -72,7 +75,7 @@ export function useMobileGoatBotMemberModelMenu(
     title: editable
       ? `${member.name}'s model`
       : offline
-        ? `${member.name}'s model can't change while its computer is offline`
+        ? `Last read from ${computer}, so ${member.name}'s model may be out of date. Changes need it connected.`
         : supported
           ? `You can't change ${member.name}'s model`
           : `Update GOAT on ${member.name}'s computer to change its model`,
