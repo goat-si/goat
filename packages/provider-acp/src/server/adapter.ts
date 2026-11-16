@@ -55,6 +55,7 @@ import {
   type ThreadId,
 } from "@goat/contracts";
 import { AgentScope, AgentScopeThreadId } from "@goat/shared/AgentScope";
+import { forkInScope } from "@goat/shared/forkInScope";
 import { HTML_RENDER_TOOL_NAME } from "@goat/shared/htmlRender";
 import { modelSelectionsEqual } from "@goat/shared/model";
 import {
@@ -8248,7 +8249,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     );
                   }).pipe(
                     Effect.ensuring(runtimeTransitionPermit.release(1)),
-                    Effect.forkIn(sessionScope, { startImmediately: true, uninterruptible: true }),
+                    forkInScope(sessionScope, { startImmediately: true, uninterruptible: true }),
                   );
                   return yield* restore(Fiber.join(transitionFiber)).pipe(
                     Effect.onInterrupt(() =>

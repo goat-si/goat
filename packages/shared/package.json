@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./forkInScope": {
+      "types": "./src/forkInScope.ts",
+      "import": "./src/forkInScope.ts"
+    },
     "./nodeServicesWithCrypto": {
       "types": "./src/nodeServicesWithCrypto.ts",
       "import": "./src/nodeServicesWithCrypto.ts"

@@ -1,3 +1,4 @@
+import { forkInScope } from "@goat/shared/forkInScope";
 import * as Effect from "effect/Effect";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
@@ -473,7 +474,7 @@ export const adoptSurvivor = Effect.fn("CodexSurvivorContinuation.adopt")(functi
     context,
   }).pipe(
     Effect.ensuring(Deferred.succeed(done, undefined)),
-    Effect.forkIn(input.continuation.scope, { startImmediately: true }),
+    forkInScope(input.continuation.scope, { startImmediately: true }),
   );
   return true;
 });
