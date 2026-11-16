@@ -1056,12 +1056,10 @@ function MemoryDetails({
   const [notice, setNotice] = useState<string | null>(null);
   const [retry, setRetry] = useState(false);
   const mounted = useRef(true);
-  useEffect(
-    () => () => {
-      mounted.current = false;
-    },
-    [],
-  );
+  useEffect(() => {
+    mounted.current = true;
+    return () => void (mounted.current = false);
+  }, []);
   const [hadItem, setHadItem] = useState(item !== null);
   if (hadItem !== (item !== null)) {
     setHadItem(item !== null);
@@ -1650,6 +1648,7 @@ function MemoryEditor({
   const busy = useRef(false);
   const mounted = useRef(true);
   useEffect(() => {
+    mounted.current = true;
     registry.set(draftAtom, { text: item?.payload.text ?? "", memoryIds: item ? [id] : [] });
     return () => {
       mounted.current = false;
