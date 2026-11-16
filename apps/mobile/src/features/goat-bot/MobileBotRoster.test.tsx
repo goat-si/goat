@@ -651,7 +651,11 @@ it("a menu choice still acts after a development reload re-runs the roster's eff
   const root = createRoot(document.createElement("div"));
   await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
   // A new version of the same component, as Fast Refresh swaps in an edited module.
-  const Reloaded = (props: Parameters<typeof MobileBotRoster>[0]) => MobileBotRoster(props);
+  const reloaded = vi.fn();
+  const Reloaded = (props: Parameters<typeof MobileBotRoster>[0]) => {
+    reloaded();
+    return MobileBotRoster(props);
+  };
   const family = { current: Reloaded };
   renderer.setRefreshHandler((type) =>
     type === MobileBotRoster || type === Reloaded ? family : undefined,
@@ -663,6 +667,7 @@ it("a menu choice still acts after a development reload re-runs the roster's eff
         updatedFamilies: new Set([family]),
       }),
     );
+    expect(reloaded).toHaveBeenCalled();
     const members = state.members as { onLongPressBot: (entry: object) => void };
     await act(async () => members.onLongPressBot({ kind: "member", profile: member }));
     expect(state.alert).toHaveBeenCalledOnce();
