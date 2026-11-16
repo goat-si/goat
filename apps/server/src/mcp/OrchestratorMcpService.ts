@@ -153,16 +153,16 @@ const TASK_WAKE_EVENTS = [
   { thread: "child", eventType: "runtime-request.updated" },
   { thread: "child", eventType: "turn-item.updated" },
 ] as const;
-const DEFAULT_THREAD_LIST_LIMIT = 50;
+const DEFAULT_THREAD_LIST_LIMIT = 10;
 const TERMINAL_THREAD_STATUSES: ReadonlySet<string> = new Set([
   "completed",
   "failed",
   "cancelled",
   "interrupted",
 ]);
-const DEFAULT_THREAD_READ_LIMIT = 50;
+const DEFAULT_THREAD_READ_LIMIT = 10;
 const DEFAULT_THREAD_RUN_LIMIT = 10;
-const DEFAULT_THREAD_ITEM_MAX_CHARS = 20_000;
+const DEFAULT_THREAD_ITEM_MAX_CHARS = 500;
 
 interface ResolvedTarget {
   readonly modelSelection: ModelSelection;
