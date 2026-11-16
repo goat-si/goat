@@ -1,4 +1,5 @@
 import "~/index.css";
+import type { EnvironmentConnectionPresentation } from "@goat/client-runtime/connection";
 import {
   EnvironmentId,
   MessageId,
@@ -19,12 +20,13 @@ import type { PrimarySessionAnswer } from "~/environments/primary/auth";
 
 vi.unmock("./useGoatBotComputerReadable");
 
-type Failure = { kind: "blocked" | "retrying"; reason: string; detail: string };
+type Connection = Pick<EnvironmentConnectionPresentation, "phase" | "failure">;
+type Failure = NonNullable<Connection["failure"]>;
 const state = vi.hoisted(() => ({
   botRef: null as { environmentId: EnvironmentId; threadId: ThreadId } | null,
   items: [] as ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
   presentation: null as null | {
-    connection: { phase: string; failure?: Failure };
+    connection: Connection;
     serverConfig: { environment: { capabilities: object } };
   },
   primaryId: null as EnvironmentId | null,
@@ -185,7 +187,7 @@ function projectedBot(id: string, at: string, text: string): OrchestrationV2Proj
   };
 }
 
-function connection(phase: string, failure?: Failure) {
+function connection(phase: Connection["phase"], failure?: Failure) {
   return {
     connection: failure === undefined ? { phase } : { phase, failure },
     serverConfig: { environment: { capabilities: {} } },
