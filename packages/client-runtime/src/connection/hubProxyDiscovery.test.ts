@@ -137,6 +137,8 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
   readonly onStrongRead?: (stored: Map<string, BearerConnectionCredential>) => void;
   /** Adds a device reached through the hub whose last attempt was refused. */
   readonly blockedDevice?: boolean;
+  /** The hub never sends a node list, so it can refuse before its first one. */
+  readonly silentNodes?: boolean;
   /** Credential reads and writes that fail before the store answers again. */
   readonly failStoreReads?: number;
   readonly failStoreWrites?: number;
@@ -232,7 +234,9 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
                       options.subscriptionError ??
                         new HubNodesError({ reason: "host_unavailable", detail: "Try again" }),
                     )
-                  : Stream.make(snapshot).pipe(Stream.concat(Stream.never));
+                  : options.silentNodes
+                    ? Stream.never
+                    : Stream.make(snapshot).pipe(Stream.concat(Stream.never));
               }),
             ),
         } as unknown as WsRpcProtocolClient),
@@ -396,6 +400,7 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
     firstRead,
     subscribed,
     reconciled,
+    removed: h.removed,
     config,
     configs,
     counts: () => ({ reads, subscriptions }),
@@ -771,4 +776,35 @@ it.effect("definitive permission loss removes only routes owned by that hub conn
     expect(yield* Deferred.isDone(h.removed)).toBe(true);
     expect(yield* Deferred.await(h.removed)).toBe("hub:hub:node");
   }),
+);
+it.effect.each([
+  ["marked as this browser's ended session", true],
+  ["unmarked", false],
+] as const)(
+  "a hub's authentication refusal before its first node list keeps the routes reached through it only when %s (#3473, guard)",
+  ([_marker, sessionEnded]) =>
+    Effect.gen(function* () {
+      const h = yield* makeConnectedDiscovery({ blockedDevice: true, silentNodes: true });
+      yield* Deferred.await(h.subscribed);
+      // Refused from a timer: adjust returns once everything the refusal woke has settled.
+      yield* Effect.forkChild(
+        Effect.sleep("1 millis").pipe(
+          Effect.andThen(
+            SubscriptionRef.set(h.supervisor.state, {
+              ...AVAILABLE_CONNECTION_STATE,
+              phase: "blocked",
+              lastFailure: new ConnectionBlockedError({
+                reason: "authentication",
+                detail: "This browser is no longer signed in to Hub.",
+                hop: "server",
+                via: "direct",
+                ...(sessionEnded ? { sessionEnded } : {}),
+              }),
+            }),
+          ),
+        ),
+      );
+      yield* TestClock.adjust("1 millis");
+      expect(yield* Deferred.isDone(h.removed)).toBe(!sessionEnded);
+    }).pipe(Effect.scoped),
 );

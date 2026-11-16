@@ -71,6 +71,12 @@ export class PrimaryEnvironmentAuth extends Context.Service<
   PrimaryEnvironmentAuth,
   {
     readonly bearerToken: Effect.Effect<Option.Option<string>, ConnectionAttemptError>;
+    /**
+     * One read of the session at httpBaseUrl, for a primary signed in by this page's cookie: true
+     * only when that server's decoded answer says this browser is not signed in. Absent where the
+     * primary signs in by bearer.
+     */
+    readonly sessionEnded?: (httpBaseUrl: string) => Effect.Effect<boolean>;
   }
 >()("@goat/client-runtime/platform/capabilities/PrimaryEnvironmentAuth") {}
 
