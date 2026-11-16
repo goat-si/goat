@@ -1,3 +1,4 @@
+import * as Clock from "effect/Clock";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
@@ -75,6 +76,34 @@ export const acceptsPrivateNetworkConnection = (socket: {
   [socket.localAddress, socket.remoteAddress].every(
     (address) => address !== undefined && isPrivateNetworkAddress(address),
   );
+
+const CONNECTION_REJECTION_LOG_INTERVAL = 60_000_000_000n;
+
+export const makePrivateNetworkConnectionHandler = Effect.gen(function* () {
+  const clock = yield* Clock.Clock;
+  const log = Effect.runSyncExitWith(yield* Effect.context<never>());
+  let nextLogAt: bigint | undefined;
+  let closedSinceLastLog = 0;
+  return (socket: Parameters<typeof acceptsPrivateNetworkConnection>[0] & { destroy(): void }) => {
+    if (acceptsPrivateNetworkConnection(socket)) return;
+    const { localAddress, remoteAddress } = socket;
+    socket.destroy();
+    const now = clock.monotonicTimeNanosUnsafe();
+    if (nextLogAt !== undefined && now < nextLogAt) {
+      closedSinceLastLog = Math.min(Number.MAX_SAFE_INTEGER, closedSinceLastLog + 1);
+      return;
+    }
+    nextLogAt = now + CONNECTION_REJECTION_LOG_INTERVAL;
+    log(
+      Effect.logWarning("closed a connection outside the private network", {
+        localAddress,
+        remoteAddress,
+        ...(closedSinceLastLog > 0 ? { closedSinceLastLog } : {}),
+      }),
+    );
+    closedSinceLastLog = 0;
+  };
+});
 
 export const loopbackUrlHostForAddress = (address: NetAddress.InetAddress): string =>
   NetAddress.isUnspecified(address.address)

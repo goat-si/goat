@@ -236,7 +236,7 @@ import * as BrowserClaimBindModule from "./preview/BrowserClaimBind.ts";
 import * as AgentScopeLive from "./process/agentScope.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { makePersistedServerRuntimeState } from "./serverRuntimeState.ts";
-import { acceptsPrivateNetworkConnection } from "./startupAccess.ts";
+import { makePrivateNetworkConnectionHandler } from "./startupAccess.ts";
 import * as ProjectHttp from "./project/http.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as CodexManagedTokenBroker from "./provider/CodexManagedTokenBroker.ts";
@@ -366,17 +366,14 @@ export const layerHttpServer = Layer.unwrap(
     const config = yield* ServerConfig.ServerConfig;
     const main = yield* PenServer.MainHttpServer;
     yield* Effect.forkScoped(heartbeat);
+    const privateNetworkHandler = config.privateNetworkOnly
+      ? yield* makePrivateNetworkConnectionHandler
+      : undefined;
     return NodeHttpServer.layer(
       () => {
         const server = createGuardedHttpServer();
+        if (privateNetworkHandler) server.on("connection", privateNetworkHandler);
         Deferred.doneUnsafe(main.server, Effect.succeed(server));
-        if (config.privateNetworkOnly) {
-          server.on("connection", (socket) => {
-            if (!acceptsPrivateNetworkConnection(socket)) {
-              socket.destroy();
-            }
-          });
-        }
         return server;
       },
       {
