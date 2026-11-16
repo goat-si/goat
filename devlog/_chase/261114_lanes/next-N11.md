@@ -1,6 +1,6 @@
 # N11: terminal and SSH (lane record)
 
-Lane branch: `chase/t3-261114-n11-terminal-ssh`, from origin/dev `02511156b0`, merged with origin/dev at `621e059da4` (merge `8e5d3cd774`). Lane head `8e5d3cd774e5ebc8d132376346db191f039bdda3` (fresh C4 review: APPROVE WITH NITS, P3 only) merged into the integration branch `chase/t3-261114-next` at `79b1f53bca` (draft PR [#3519](https://github.com/goat-si/goat/pull/3519)); not in dev until #3519 merges. Follow-up head `f5e6eea548c24e19f4f4734e5f3edd3fb097dcc9` (the review's nits, merged with origin/dev at `5688d26760`), pushed, not merged yet; see Follow-up. Host pen-macbookair. Class: C4 for L27 (`93cbca3fcb`, persisted terminal log rewritten on load); the other rows are C3 or below.
+Lane branch: `chase/t3-261114-n11-terminal-ssh`, from origin/dev `02511156b0`, merged with origin/dev at `621e059da4` (merge `8e5d3cd774`). Lane head `8e5d3cd774e5ebc8d132376346db191f039bdda3` (fresh C4 review: APPROVE WITH NITS, P3 only) merged into the integration branch `chase/t3-261114-next` at `79b1f53bca` (draft PR [#3519](https://github.com/goat-si/goat/pull/3519)); not in dev until #3519 merges. Follow-up head `f5e6eea548c24e19f4f4734e5f3edd3fb097dcc9` (the review's nits, merged with origin/dev at `5688d26760`); follow-up f5e6eea548 merged into the integration branch at `e7b14604c2`; see Follow-up. Host pen-macbookair. Class: C4 for L27 (`93cbca3fcb`, persisted terminal log rewritten on load); the other rows are C3 or below.
 
 ## Rows
 
@@ -122,7 +122,7 @@ Owed to #3519's integrated pass, by surface:
 
 ## Follow-up (review of 8e5d3cd774)
 
-Coordinator rulings: /Users/jun/handoff-in/chase/next-N11-coordinator-rulings.md (section "Review verdict and follow-up"); report: next-N11-review-8e5d3cd7.md. One commit per code or test item on top of 8e5d3cd774, then origin/dev merged last.
+Coordinator rulings: /Users/jun/handoff-in/chase/next-N11-coordinator-rulings.md (section "Review verdict and follow-up"); report: next-N11-review-8e5d3cd7.md. One commit per code or test item on top of 8e5d3cd774, then origin/dev merged last. Follow-up f5e6eea548 merged into the integration branch at `e7b14604c2` (which carries dev through `5688d26760`).
 
 | item     | commit       | change                                                                                                                                                                            |
 | -------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
