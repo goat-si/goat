@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import * as Random from "effect/Random";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as Sse from "effect/encoding/Sse";
 import { HttpClient, HttpClientRequest } from "effect/http";
@@ -82,6 +83,10 @@ export const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   /** Keyed by credential for account-wide refusals, and by pull request for one it cannot read. */
   const pausedUntil = new Map<string, number>();
+  // A pause is read before the POST and written after GitHub answers, so subscribes run one at a
+  // time: feeds starting together on an account without event streams send one refused POST.
+  // Only github.com gets feeds, so one permit covers each of its credentials.
+  const subscribes = Semaphore.makeUnsafe(1);
   const pause = (key: string, duration: Duration.Duration) =>
     Clock.currentTimeMillis.pipe(
       Effect.map((now) => {
@@ -163,7 +168,7 @@ export const make = Effect.gen(function* () {
     if (Option.isSome(id)) yield* unsubscribe(input.host, id.value.id);
     yield* pause(keys.account, REFUSED_PAUSE);
     return Option.none();
-  });
+  }, subscribes.withPermit);
 
   /** One SSE connection: "changed" when it opens and per event, and last, how it ended. */
   const connection = (host: string, eventsUrl: string): Stream.Stream<"changed" | Ending> =>

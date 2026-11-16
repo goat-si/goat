@@ -442,3 +442,37 @@ it.effect("a replaced credential lifts the pauses the previous one earned", () =
     assert.equal(missing.posts.length, 2, "the pull request stays paused for the new credential");
   }),
 );
+
+it.effect("ten feeds starting together against a refusing account send one POST", () =>
+  Effect.gen(function* () {
+    const posted = yield* Deferred.make<void>();
+    const { rest, posts } = fakeRest(() =>
+      Deferred.succeed(posted, undefined).pipe(
+        Effect.andThen(Effect.sleep("1 second")),
+        Effect.andThen(
+          Effect.fail(
+            new GitHubApiResponseError({
+              host: "github.com",
+              operation: "subscribePullRequestEvents",
+              status: 403,
+            }),
+          ),
+        ),
+      ),
+    );
+    const events = yield* eventsOf(rest, noStream);
+    // Detached: on a failure the feeds still sleeping must not hang this test's teardown.
+    const feeds = yield* Effect.forEach(
+      Array.from({ length: 10 }, (_, index) => index),
+      (index) => Stream.runCount(events({ ...target, number: 100 + index })),
+      { concurrency: "unbounded" },
+    ).pipe(Effect.forkDetach);
+    yield* Deferred.await(posted);
+    yield* TestClock.adjust("1 second");
+    assert.equal(posts.length, 1, "each feed sent its own refused POST");
+    assert.deepEqual(
+      yield* Fiber.join(feeds),
+      Array.from({ length: 10 }, () => 0),
+    );
+  }),
+);
