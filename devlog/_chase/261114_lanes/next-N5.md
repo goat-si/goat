@@ -1,0 +1,67 @@
+# N5 Usage, L09 retry 2 (lane record)
+
+Lane branch: `chase/t3-261114-n5-usage`, based on dev `c66dc0f1fd`, merged with dev `5688d26760` last (head `ef033514e9bd2442db614f63964fc4efa690ebb3`, verified on origin). Host pen-macmini (Node 26.12.1). Rows from #3176: `7fab4ef978`, `9a614e34a6`, L311 `a09e54a363` (decision C26 A). Class C4: stored scan-cache format (v14 to v15, plus `coveredSince`) and contract fields (`UsageSummaryInput.provisional`, `UsageLimitSourceSnapshot.origin`, `ServerProviderAuth.endpoint`).
+
+## Rows and commits
+
+| row | upstream | GOAT commit | result |
+| --- | --- | --- | --- |
+| move-out | none | `ebf3a631ce2463859f8630102246052d717adc1c` | UsageService.ts 997 to 731 lines; module-level readers and cache schemas, ScannedDir, host id, usageInstances, superseded cache cleanup and readFileRecords move unchanged (bodies cut by exact text) to apps/server/src/usage/usageServiceSupport.ts |
+| `7fab4ef978` | the Usage page shows cost and tokens at once (#33993) | `e175f8c684f63ccd24be9f096414b79bbcc8b6be` | ported; UsageService.ts 858 lines |
+| `9a614e34a6` | bill Codex requests whose counters rewind (#29366) | `418ac2046b179f62a791d97039d978a3356c4f41` | ported; scan cache v14 to v15 |
+| L311 `a09e54a363` | proxied usage limits take their reset from the hub (#36238) | `753cb3212f77cb339ce3edac734e7310e6031707` | ported with C26 A |
+
+## Decisions and adaptations
+
+- 7fab4ef978: decodeCachedSources and ScannedDir edits land in usageServiceSupport.ts. Upstream's reorder loop used three non-null assertions; rewritten without them (same order, code budget). The client read flow moves to packages/client-runtime/src/state/serverUsageSummary.ts so state/server.ts stays under its entry (entry lowered 1796 to 1776, its real length). Upstream's two UsageService tests go to usageProvisional.testkit.ts (UsageService.test.ts has 65 lines left of its 3119 entry). GOAT difference: the test layer's PI_CODING_AGENT_DIR is also OmO's fallback, so Pi and OmO read one directory there and upstream's rule (a directory two providers read is never answered from memory) refused every provisional answer; the testkit gives OmO its own OMO_CODING_AGENT_DIR, as its default (~/.omo/agent) does outside tests. A user who points both at one directory gets no provisional answer, by upstream's rule. The `environment.usage` agent entry describes `provisional` (packages/contracts/src/agentSurface/entries/environment.ts; the first gate failed discovery.test.ts on the undescribed argument) and docs/internals/agent-surface-audit.md is regenerated.
+- 9a614e34a6: the readFileRecords hunk lands in usageServiceSupport.ts; the new UsageService test goes to usageCodexTierReparse.testkit.ts (seedCodexHistory exported) with Schema JSON codecs instead of JSON.parse. Coordinator condition on (3)/(4): the v14 upgrade case starts from a v14 file as a GOAT v14 server writes it; the testkit strips the two fields dev never writes (Codex state `latestCumulativeAtMs` from this row, document `coveredSince` from 7fab4ef978). No other format difference: dev's writer (usageScanCache.ts makeScanCacheWriter) is unchanged by both rows.
+- C26 A: GOAT's UsageLimitSources already lists the OpenCodex quota pool beside the hubs; the pool source now carries its loopback origin (`http://127.0.0.1:<port>`) and serves any loopback host on that port. UsageLimitResetFallback picks the sources serving the instance's endpoint, refreshes them (5 s cap), then asks the pool first and the CLIProxyAPI hubs second (hubPoolResetAt). Codex endpoint: upstream's codexCustomEndpoint in CodexProviderAccount.ts, plus codexEndpoint falling back to the Home route's effectiveBaseUrl, which GOAT sets outside the config. Upstream's snooze change ships with the row: the check is usageLimitHoldsQueuedRuns in orchestration-v2/usageLimitQueue.ts so Orchestrator.ts stays within its entry (13905 of 13908). Every upstream C26 test passes with its expectations as upstream wrote them; the pool-first order is tested only by GOAT's new tests.
+- Left out: nothing from the three upstream commits.
+
+## Fail-first
+
+- 7fab4ef978 (tests on dev code): `answers a provisional read ...` AssertionError: expected 12 to equal 5; `credits the same copy of a duplicate ...` expected false to be true; client `reads usage in full when the saved answer cannot be read` expected [ undefined ] to deeply equal [ true, undefined ]; client refresh-failure test (inputs); contracts `rejects a provisional flag that is not a boolean` expected [Function] to throw, and the newer-server round trip. Server: 2 failed | 8 passed; client: 2 failed | 3 passed; contracts: 2 failed | 1 passed. The transcript-order test passes on dev too (dev walks sequentially); it guards the concurrent walk.
+- 9a614e34a6: 12 failed | 3 passed: upgrades v4..v14 (expected 'usage-scan-cache-v14.json' to equal 'usage-scan-cache-v15.json'; v14 also expected 20 to equal 30), `bills a later request that continues from an earlier snapshot when cumulative counters rewind`, `re-parses a v14 Codex entry that skipped records ...` (size 10 vs -1). The tier re-parse test passes on dev (clean v14 entries resumed there); it guards the whole re-parse path.
+- C26: 18 failed | 3 passed (hubPoolResetAt is not a function; layerResetFallback undefined; codexCustomEndpoint is not a function; contracts 2 failed), plus verbose: limited-user snooze ×, hub origin ×, ingestor ×, the three existing snooze kinds ✓.
+- Runtime transcript (server rows, functions called directly with Node on the lane head): pool spent 2h -> 2026-11-13T14:00:00.000Z; pool room -> null; codexCustomEndpoint(hub) -> https://hub.example.com; codexEndpoint({}, home route) -> http://127.0.0.1:4318.
+
+## C4
+
+- Scan cache v14 to v15 (rule of card 10.025): v15 is GOAT's next version; tests start from a v14 file (`upgrades a v14 cache`, written as dev writes it, and the round-trip `re-parses a v14 Codex entry`). Downgrade: dev's reader opens only usage-scan-cache-v14.json and older names (dev apps/server/src/usage/usageScanCache.ts:21-22, UsageService.ts:403-404), so it never reads the v15 file and rescans transcripts; a v15 document is refused by decodeScanCache (dev usageScanCache.ts:197; same path tested by `treats a corrupt or foreign document as an empty cache` with version 999). Dev does not delete the v15 file, so a re-upgrade reads it again.
+- `coveredSince` (7fab4ef978, no version bump): dev decodes sources with a Struct that ignores it (dev UsageService.ts:144) and rewrites the file without it (:456), so a re-upgraded server finds no coverage and scans in full once. Coverage loads only from the current file name with every entry decoded.
+- UsageSummaryInput.provisional: an older server ignores the flag and scans in full (contract test with dev's field set; client test keeps that answer after one request); a newer server reads an older client's input as a plain, exact read (contract round trip; server test after a restart); a non-boolean flag is rejected.
+- UsageLimitSourceSnapshot.origin and ServerProviderAuth.endpoint (packages/contracts/src/usageLimitEndpoint.test.ts): an older peer decodes both as absent; a newer peer reads an older snapshot without them; blank values are rejected. An older server sends no endpoint, so the fallback is not asked and the provider's own reset (null) stays.
+
+## Rule 3 authorisations
+
+Coordinator authorisation, 2026-11-16, rule 3, lane N5 (usage). I read each upstream diff before answering; all four are upstream's own edits to its own tests and are authorised as upstream wrote them (yes, yes, yes, yes). (1) Upstream 7fab4ef978, apps/server/src/usage/UsageService.test.ts, the price-race test: the mocked rates change from Response.json({}) to the "example-model" entry (input_cost_per_token 1e-6, output_cost_per_token 1e-5) and assert.strictEqual(original.buckets[0]?.costUsd, 0) becomes assert.isAbove(original.buckets[0]?.costUsd ?? 0, 0). (2) Upstream 7fab4ef978, packages/client-runtime/src/state/serverUsage.test.ts, "keeps the cached usage summary when the awaited refresh fails": expect(harness.requests()).toBe(2) becomes upstream's expectation on harness.inputs() ({provisional: true}, plain, {awaitRefresh: true}) with its settings-change check, and the harness's cursor source gains scannedFiles: 0 on provisional reads. (3) Upstream 9a614e34a6, the cache-upgrade test (in GOAT apps/server/src/usage/usageCacheUpgrade.testkit.ts): it.live.each([4, 5, 6, 7, 8, 10, 11, 12, 13]) gains 14. (4) Upstream 9a614e34a6, the same test: SCAN_CACHE_FILE_NAME is expected to be "usage-scan-cache-v15.json" instead of "usage-scan-cache-v14.json"; GOAT dev is at v14, so the version moves 14 to 15 as upstream's does, under the closed card's scan-cache rule. Conditions: no existing assertion is deleted or loosened beyond what the upstream diff does; the v14 to v15 upgrade case must really start from a v14 file as a GOAT server of today writes it (C4: stored data); no other expectation in an existing dev test may change in this lane without asking.
+
+Coordinator authorisation, 2026-11-16, rule 3, lane N5 (usage), second request: yes to 5, 6 and 7. I read upstream a09e54a363's test diff before answering; each is upstream's own edit. (5) apps/server/src/orchestration-v2/ProviderEventIngestor.test.ts: "refreshes the failing instance snapshot after a committed usage_limit terminal" is renamed "takes a hub's reset for an unreset usage_limit, then refreshes the snapshot"; getSnapshot returns the authenticated snapshot with endpoint "http://hub.test:8317" instead of Effect.die("unused"); lookups is expected to be [instance.instanceId, instance.instanceId]; the resetAt and hubLookups assertions are added, with the model taken from GOAT's fixture where upstream wrote "gpt-5.4"; the run provides a mocked UsageLimitResetFallback. (6) apps/server/src/orchestration-v2/runtimeLayer.test.ts: the it.effect.each list gains "limited-user", the title becomes "only user messages block snooze with a queued %s run, unless a usage limit holds them", and the queued-run assertion becomes (run.status === "queued" && (kind === "limited-user" || run.queueHeld)); the three existing kinds keep their assertions. (7) apps/server/src/usage/UsageLimitSources.test.ts "keeps malformed source URLs encodable for config subscribers": upstream's one added assertion on origins; nothing removed. Conditions: no existing assertion is deleted or loosened beyond what the upstream diff does; ruling C26 A (the pool answers resets first, then the hub) is tested by GOAT's own new tests, and where C26 A makes GOAT's order differ from what an upstream test expects, stop and ask before changing that expectation.
+
+## Gate
+
+pen-macmini, no other check:changed running at start, after merging dev `5688d26760` last: `node scripts/goat-rename.ts --check` 0; `set -o pipefail; vp run check:changed` GATE_EXIT=0: format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget, typecheck (39 packages), test (340 files) all pass; Test Files 340 passed (340), Tests 4467 passed (4467). No known issue was hit. The first gate (head with dev `330c1837f6`) failed one test, apps/server/src/mcp/toolkits/agentSurface/discovery.test.ts `describes every argument of the paths goat_call lists` (environment.usage: [ 'provisional' ]), fixed in the 7fab4ef978 commit by describing the argument.
+
+## Surfaces
+
+- Clients: the provisional read lives in packages/client-runtime (serverUsageSummary.ts), so web, desktop and mobile's Usage screens all ask for the saved answer first. No UI component changed.
+- Providers: transcript usage for every reader (provisional coverage is per directory); Codex billing (9a614e34a6); reset fallback for Codex (custom endpoint or OpenCodex Home route) and Claude (custom endpoint). Other drivers set no endpoint and keep their own reset.
+- Agents: goat_environment_usage gains a described `provisional` argument (audit regenerated; context-budget --check passes).
+- Reverse states: a provisional answer is always marked refreshing and followed by an exact read; a saved answer that cannot be read falls back to the plain read.
+- Settings, docs: none change.
+
+## Budgets
+
+oxlint-plugin-goat/code-budgets.json: packages/client-runtime/src/state/server.ts lines 1796 to 1776 (shrank). No other entry changes. UsageService.ts (no entry) 997 to 858; Orchestrator.ts 13901 to 13905 (entry 13908); CodexProvider.ts 1011 to 1016 (entry 1038); runtimeLayer.test.ts 9969 (entry 10003); UsageService.test.ts 3066 (entry 3119); ProviderEventIngestor.ts 951 to 983 (no entry).
+
+## Known limits
+
+- A provisional answer is refused when two providers resolve one transcript directory (upstream's rule); in GOAT this happens when PI_CODING_AGENT_DIR is set and OmO has no own directory.
+- While downgraded to dev, usage of transcripts deleted since the upgrade is not shown (dev never reads the v15 file); it returns after a re-upgrade.
+- The C26 pool is matched by its loopback origin; an OpenCodex reached through another host name is not matched.
+
+## UI captures
+
+None: 7fab4ef978 changes when figures appear (a saved answer before the scan finishes, then the exact one), not how the page looks; a still capture after load is identical before and after. Showing it needs a cold-scan recording on seeded data.
+
+NOT RUN: before/after recording of the Usage page; real-client pass (test-goat-app) of the Usage page; a live CLIProxyAPI hub or OpenCodex pool; ci:full.
