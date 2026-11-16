@@ -34,6 +34,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -954,6 +955,46 @@ it.effect.each(["fails", "is interrupted"] as const)(
           const retried = yield* threads.getThreadProjection(launched.threadId);
           assert.equal(retried.runs.at(-1)?.queueHeld, false);
         }
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
+
+it.effect(
+  "a launch cut after its first message commits still schedules its preparation (#3593)",
+  () =>
+    Effect.gen(function* () {
+      const committed = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      // "cut" if the cut stops the launch inside the dispatch that committed the first message.
+      const outcome = yield* Deferred.make<"prepared" | "cut">();
+      const harness = makeHarness({
+        createWorktree: () =>
+          Deferred.succeed(outcome, "prepared").pipe(Effect.andThen(Effect.never)),
+        afterDispatch: (command) =>
+          command.type === "message.dispatch"
+            ? Deferred.succeed(committed, undefined).pipe(
+                Effect.andThen(Deferred.await(resume)),
+                Effect.onInterrupt(() => Deferred.succeed(outcome, "cut")),
+              )
+            : Effect.void,
+      });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const launching = yield* launches
+          .launch(
+            launchInput({
+              command: "command:launch:cut-after-message",
+              thread: "thread:launch:cut-after-message",
+              message: "First message",
+              workspace: { type: "worktree", baseRef: "main" },
+            }),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(committed);
+        launching.interruptUnsafe();
+        yield* Deferred.succeed(resume, undefined);
+        assert.isTrue(Exit.hasInterrupts(yield* Fiber.await(launching)));
+        assert.equal(yield* Deferred.await(outcome), "prepared");
       }).pipe(Effect.provide(harness.layer));
     }),
 );

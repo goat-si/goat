@@ -115,6 +115,10 @@ interface HarnessOptions {
   ) => ThreadManagement.ThreadManagementService["Service"]["streamStoredEventsFrom"];
   /** The provider CLI gate the launch service is built with; none unless given. */
   readonly providerCliGate?: Layer.Layer<ProviderCliGate.ProviderCliGate>;
+  /** Runs in the launch service's dispatch after a command commits, before the result returns. */
+  readonly afterDispatch?: (
+    command: Parameters<ThreadManagement.ThreadManagementService["Service"]["dispatch"]>[0],
+  ) => Effect.Effect<void>;
 }
 
 export function makeHarness(options: HarnessOptions = {}) {
@@ -244,7 +248,9 @@ export function makeHarness(options: HarnessOptions = {}) {
         layerOrchestrator,
         layerRegistry,
         layerExternalServices,
-        prepared === undefined && options.launchEvents === undefined
+        prepared === undefined &&
+          options.launchEvents === undefined &&
+          options.afterDispatch === undefined
           ? layerThreadManagement
           : Layer.effect(
               ThreadManagement.ThreadManagementService,
@@ -256,15 +262,14 @@ export function makeHarness(options: HarnessOptions = {}) {
                     options.launchEvents?.(service.streamStoredEventsFrom) ??
                     service.streamStoredEventsFrom,
                   dispatch: (command) =>
-                    service
-                      .dispatch(command)
-                      .pipe(
-                        Effect.tap(() =>
-                          prepared !== undefined && command.type === "prepared-run.release"
-                            ? Deferred.succeed(prepared, undefined)
-                            : Effect.void,
-                        ),
+                    service.dispatch(command).pipe(
+                      Effect.tap(() =>
+                        prepared !== undefined && command.type === "prepared-run.release"
+                          ? Deferred.succeed(prepared, undefined)
+                          : Effect.void,
                       ),
+                      Effect.tap(() => options.afterDispatch?.(command) ?? Effect.void),
+                    ),
                 });
               }),
             ).pipe(Layer.provide(layerThreadManagement)),

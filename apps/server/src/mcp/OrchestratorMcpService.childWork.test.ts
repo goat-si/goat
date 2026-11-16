@@ -21,8 +21,12 @@ import {
   type ServerProvider,
 } from "@goat/contracts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -777,6 +781,113 @@ describe("OrchestratorMcpService delegate child work", () => {
           // Initial parent read (1) + initial readTask (2) + subagent.updated readTask (3, kept waiting)
           // + steered user_message readTask (4, unblocked); queued_turn was filtered out.
           assert.equal(parentReads, 4);
+        }),
+      ),
+  );
+
+  it.effect(
+    "a delegation cut after its dispatch commits still prepares the child run (#3593)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const committed = yield* Deferred.make<void>();
+          const resume = yield* Deferred.make<void>();
+          const prepared = yield* Ref.make<ReadonlyArray<RunId>>([]);
+          const childThreadId = ThreadId.make("thread:oms-cw-cut-child");
+          const childRunId = RunId.make("run:oms-cw-cut-child");
+          const serviceLayer = OrchestratorMcpService.layer.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                NodeServices.layer,
+                Layer.mock(ThreadManagementService.ThreadManagementService)({
+                  hasReceipt: () => Effect.succeed(false),
+                  getThreadShell: () =>
+                    Effect.succeed(liveThreadShell(callerThreadId, { activeRunId: parentRunId })),
+                  getThreadRecords: (threadId) =>
+                    Effect.succeed(
+                      threadId === callerThreadId ? parentProjection : childProjection,
+                    ),
+                  isProviderInstanceEnabledForProject: () => Effect.succeed(true),
+                  assertProviderInstanceEnabled: () => Effect.void,
+                  dispatch: (command) =>
+                    command.type !== "delegated_task.request"
+                      ? Effect.succeed({ sequence: 12, storedEvents: [] } as never)
+                      : Deferred.succeed(committed, undefined).pipe(
+                          Effect.andThen(Deferred.await(resume)),
+                          Effect.as({
+                            sequence: 11,
+                            storedEvents: [
+                              {
+                                sequence: 10,
+                                event: {
+                                  type: "subagent.updated",
+                                  threadId: callerThreadId,
+                                  payload: {
+                                    id: NodeId.make("subagent:oms-cw-cut"),
+                                    origin: "app_owned",
+                                    childThreadId,
+                                  },
+                                },
+                              },
+                              {
+                                sequence: 11,
+                                event: {
+                                  type: "run.created",
+                                  threadId: childThreadId,
+                                  payload: {
+                                    id: childRunId,
+                                    status: "preparing",
+                                    workspacePreparation: { type: "worktree", baseRef: "main" },
+                                  },
+                                },
+                              },
+                            ],
+                          } as never),
+                        ),
+                }),
+                Layer.mock(ProviderRegistry.ProviderRegistry)({
+                  getProviders: Effect.succeed([providerSnapshot]),
+                  refreshInstance: () => Effect.succeed([providerSnapshot]),
+                }),
+                Layer.succeed(
+                  ProviderAdapterRegistry.ProviderAdapterRegistryV2,
+                  ProviderAdapterRegistry.ProviderAdapterRegistryV2.of({
+                    list: () => Effect.succeed([codexInstanceId]),
+                    get: () =>
+                      Effect.succeed({
+                        instanceId: codexInstanceId,
+                        getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
+                      } as unknown as ProviderAdapter.ProviderAdapterV2["Service"]),
+                  }),
+                ),
+                Layer.mock(ProjectService.ProjectService)({}),
+                Layer.mock(SecretRequests.SecretRequests)({}),
+                Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+                Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+                  prepareRun: (input) => Ref.update(prepared, (runs) => [...runs, input.runId]),
+                }),
+                Layer.mock(GitVcsDriver.GitVcsDriver)({}),
+                Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
+                Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({}),
+                Layer.mock(FleetSync.GoatclawFleetSync)({}),
+                SqlitePersistence.layerMemory,
+                ServerSettings.layerTest({}),
+              ),
+            ),
+          );
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
+            Effect.provide(serviceLayer),
+          );
+          const delegating = yield* service
+            .delegateTask(scope, { task: "Cut after commit", mode: "async" })
+            .pipe(Effect.forkChild);
+          yield* Deferred.await(committed);
+          // The cut lands while the dispatch that committed the delegation is still returning.
+          delegating.interruptUnsafe();
+          yield* Deferred.succeed(resume, undefined);
+          const exit = yield* Fiber.await(delegating);
+          assert.isTrue(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
+          assert.deepEqual(yield* Ref.get(prepared), [childRunId]);
         }),
       ),
   );
