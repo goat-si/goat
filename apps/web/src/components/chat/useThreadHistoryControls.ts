@@ -1,3 +1,4 @@
+import { EnvironmentNotRegisteredError } from "@goat/client-runtime/connection";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -7,11 +8,14 @@ import {
   type ThreadHistoryMeta,
 } from "@goat/client-runtime/state/threads";
 import type { ScopedThreadRef } from "@goat/contracts";
+import * as Schema from "effect/Schema";
 
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { toastManager } from "../ui/toast";
 import type { MessagesTimelineHistoryControls } from "./MessagesTimeline";
+
+const isUnregistered = Schema.is(EnvironmentNotRegisteredError);
 
 /** The timeline's "Load earlier" control for a thread, or undefined when there is nothing to load. */
 export function useThreadHistoryControls(
@@ -41,7 +45,11 @@ export function useThreadHistoryControls(
         toastManager.add({
           type: "error",
           title: "Could not load earlier messages",
-          description: error instanceof Error ? error.message : String(error),
+          description: isUnregistered(error)
+            ? "This computer is no longer available."
+            : error instanceof Error
+              ? error.message
+              : String(error),
         });
       });
     },
