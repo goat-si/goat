@@ -145,8 +145,7 @@ it.effect(
         });
         assert.isAtLeast(Number((logs[1]?.[1] as { elapsedMs?: unknown })?.elapsedMs), 30_000);
       }).pipe(
-        Effect.provide(layer),
-        Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+        Effect.provide(Layer.merge(layer, Logger.layer([logger], { mergeWithExisting: false }))),
         Effect.scoped,
       );
     }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
