@@ -192,15 +192,15 @@ vi.mock("../goat-bot/useMobileGoatBotHomeSettings", async () => {
 vi.mock("../goat-bot/useMobileGoatBotModel", async () => {
   const { Atom } = await import("effect/reactivity");
   const config = Atom.make<object | null>(null);
+  const save = vi.fn((_patch: object) => Promise.resolve(true));
   return {
     useMobileGoatBotModel: Object.assign(
       (_environmentId: string | null, canWrite: boolean) => {
         const loaded = useAtomValue(config);
         if (loaded === null) return null;
-        const save = () => Promise.resolve(true);
         return { ...loaded, saving: false, error: null, allowed: canWrite, save };
       },
-      { config },
+      { config, save },
     ),
   };
 });
@@ -225,8 +225,11 @@ const botListAtom = channelEnvironment.listBots({
 const mayEditAtom = channelEnvironment.updateBot.permissionAtom(
   "env" as never,
 ) as unknown as Atom.Writable<boolean>;
-const configAtom = (useMobileGoatBotModel as unknown as { config: Atom.Writable<object | null> })
-  .config;
+const model = useMobileGoatBotModel as unknown as {
+  config: Atom.Writable<object | null>;
+  save: ReturnType<typeof vi.fn>;
+};
+const configAtom = model.config;
 const config = {
   settings: { goatBotSessionRouting: "session", channelAutoPlacement: true },
   state: {
@@ -274,6 +277,7 @@ async function settings(loaded: object | null = null) {
   registry.set(botListAtom, AsyncResult.initial());
   registry.set(mayEditAtom, true);
   registry.set(configAtom, loaded);
+  model.save.mockClear();
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -346,6 +350,24 @@ async function settings(loaded: object | null = null) {
         .map((span) => ({ hiddenFromReader: span.getAttribute("aria-hidden") === "true" })),
     answer: (result: AsyncResult.AsyncResult<unknown, unknown>) =>
       act(async () => registry.set(botListAtom, result)),
+    /** The answer reaches the store; the screen has not rendered it yet. */
+    answerNow: (result: AsyncResult.AsyncResult<unknown, unknown>) =>
+      registry.set(botListAtom, result),
+    /** The computer drops in the store; the screen has not rendered it yet. */
+    dropNow: () => registry.set(presentationsAtom, home("offline")),
+    flip: (label: string) =>
+      act(async () =>
+        container.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)?.click(),
+      ),
+    choose: (label: string) =>
+      act(async () =>
+        container
+          .querySelector<HTMLButtonElement>(`[data-choice-row][aria-label="${label}"]`)
+          ?.click(),
+      ),
+    get saves() {
+      return model.save.mock.calls.length;
+    },
     openRow: () => act(async () => row()?.click()),
     openModel: () => act(async () => modelRow()?.click()),
     typePurpose: (value: string) =>
@@ -520,4 +542,55 @@ it("offline with no config ever loaded, Messages, Workers and Model keep their t
   await screen.drop();
   expect(screen.titles).toEqual(["Profile", "Computers", "Messages", "Workers", "Model"]);
   expect(screen.shown("Shown when Studio connects.")).toHaveLength(1);
+});
+
+it("connected, a bot-list refusal hides Messages, Workers and Model and closes an open picker; asked again they read Loading, or wait for the computer offline, and return once the list answers (#3503)", async () => {
+  await using screen = await settings(config);
+  await screen.answer(AsyncResult.success(botList));
+  await screen.openModel();
+  expect(screen.choices).toEqual(["Automatic", "Fast"]);
+  const refusal = AsyncResult.failure(Cause.fail(refused), {
+    previousSuccess: Option.some(AsyncResult.success(botList)),
+  });
+  await screen.answer(refusal);
+  expect(screen.toggle("Answer with the bot session")).toBe(null);
+  expect(screen.toggle("Automatically choose a worker computer")).toBe(null);
+  expect(screen.modelRow).toBe(null);
+  expect(screen.choices).toEqual([]);
+  expect(screen.titles).toEqual(["Profile", "Computers", "Messages", "Workers", "Model"]);
+  expect(screen.shown("Couldn't load these settings from Studio.")).toHaveLength(1);
+  // Access back: the list is asked again and has not answered.
+  await screen.answer(AsyncResult.waitingFrom(Option.some(refusal)));
+  expect(screen.toggle("Answer with the bot session")).toBe(null);
+  expect(screen.shown("Couldn't load these settings from Studio.")).toEqual([]);
+  expect(screen.shown("Loading…")).toHaveLength(1);
+  // The fresh list fails for another reason: that is a failure to load, as Profile says.
+  await screen.answer(AsyncResult.failure(Cause.fail({ _tag: "RequestTimeout" })));
+  expect(screen.shown("Couldn't load these settings from Studio.")).toHaveLength(1);
+  await screen.drop();
+  expect(screen.shown("Shown when Studio connects.")).toHaveLength(1);
+  expect(screen.shown("Couldn't load these settings from Studio.")).toEqual([]);
+  await screen.reconnect();
+  await screen.answer(AsyncResult.success(botList));
+  expect(screen.toggle("Answer with the bot session")).toEqual({ checked: true, disabled: false });
+  expect(screen.modelRow).toEqual({ label: "GOAT Bot model, Automatic", disabled: false });
+  expect(screen.shown("Loading…")).toEqual([]);
+});
+
+it("a switch or model choice pressed after a bot-list refusal or a drop reaches the store, before the screen renders it, saves nothing (#3503)", async () => {
+  await using screen = await settings(config);
+  await screen.answer(AsyncResult.success(botList));
+  await screen.openModel();
+  screen.answerNow(
+    AsyncResult.failure(Cause.fail(refused), {
+      previousSuccess: Option.some(AsyncResult.success(botList)),
+    }),
+  );
+  await screen.flip("Answer with the bot session");
+  expect(screen.saves).toBe(0);
+  await screen.answer(AsyncResult.success(botList));
+  await screen.openModel();
+  screen.dropNow();
+  await screen.choose("Fast");
+  expect(screen.saves).toBe(0);
 });
