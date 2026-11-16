@@ -73,6 +73,10 @@ Rulings: /Users/jun/handoff-in/chase/next-N1-coordinator-rulings.md; report: nex
 | N1-P3-4          | `6ca002a2f8` | the cleared-draft test gives the other tab a copy of alpha before it is cleared                                                                                               |
 | N1-P2-2, N1-P3-3 | record       | the authorisation quoted under Decisions (C1); three Known limits below                                                                                                       |
 
+Test-edit authorisation (asked under the coordinator's new rule after round 1; the head was already pushed):
+
+> Coordinator authorisation, 2026-11-16, rule 3, lane N1, answering the lane's request (both yes): (1) apps/web/src/components/chat/useComposerSend.question.browser.test.tsx (1dd6ac8850): the existing test "sends a question answer through turn blockers and preserves it under answer guards" may take its setup from the new openQuestion helper, with requests read through requests(), and its closing announcer call may pass [{ id: requestId, status: "resolved" }] instead of [], because upstream 94f7984d2c makes the tracker take request statuses; every expectation of that test stays as it was. (2) apps/web/src/hooks/settingsPersistence.hook.browser.test.tsx (f4044724aa): the one added line that waits, through vi.waitFor, for setClientSettings to have been called once before the write is rejected may stay, because ruling C1 B starts a settings save once the cross-tab lock is granted; nothing in that test is removed or rewritten. No other expectation in an existing dev test may change in this lane.
+
 Fail-first, round 1:
 
 - P2-1 (useSettings.test.ts "keeps a first-run answer stored under the legacy key when another setting is saved", on 817ade3a2c): `AssertionError: expected 'pending' to be 'answered'`, 1 failed, 33 passed.
