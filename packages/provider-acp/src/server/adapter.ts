@@ -987,7 +987,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const promptInstructionStates = yield* Ref.make(new Map<string, GoatAcpInstructionState>());
         // Unique markers keep delayed prompt completions from clearing later compactions.
         const compactionMarkers = yield* Ref.make(new Map<string, symbol>());
-        const latestAdvertisedCommands = yield* Ref.make<AdvertisedCommands.Latest | null>(null);
+        const advertisedCommandsBySession = yield* Ref.make(AdvertisedCommands.empty);
         const compactsContext =
           flavor.supportsCompaction === true || flavor.compactViaAdvertisedCommand === true;
         const runtimeRestartRequired = yield* Ref.make(false);
@@ -5385,9 +5385,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               if (notification.update.sessionUpdate === "available_commands_update") {
                 const sessionId = rawNotification.sessionId;
                 const advertisedCommands = notification.update.availableCommands;
-                yield* Ref.set(
-                  latestAdvertisedCommands,
-                  AdvertisedCommands.remember(sessionId, advertisedCommands),
+                yield* Ref.update(advertisedCommandsBySession, (current) =>
+                  AdvertisedCommands.remember(current, sessionId, advertisedCommands),
                 );
                 yield* flavor.onAvailableCommandsUpdate?.(advertisedCommands) ?? Effect.void;
               }
@@ -7215,7 +7214,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               turnInput.message.text.trim() === "/compact" &&
               turnInput.message.attachments.length === 0 &&
               !AdvertisedCommands.advertises(
-                yield* Ref.get(latestAdvertisedCommands),
+                yield* Ref.get(advertisedCommandsBySession),
                 requestedSessionId,
                 "compact",
               )
