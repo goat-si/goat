@@ -584,6 +584,7 @@ export const layerMcpClientAuthenticator = Layer.effect(
                     ? {}
                     : { grantedScopes: client.grantedScopes }),
                   ...(client.reauthorize === undefined ? {} : { reauthorize: client.reauthorize }),
+                  ...(client.sessionEnd === undefined ? {} : { sessionEnd: client.sessionEnd }),
                   ...(client.childSetupPurpose === undefined
                     ? {}
                     : { childSetupPurpose: client.childSetupPurpose }),

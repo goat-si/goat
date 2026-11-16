@@ -58,6 +58,7 @@ import { DESKTOP_RENDERER_ORIGINS } from "../httpCors.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { MCP_CLIENT_SUBJECT } from "./mcpClientSubject.ts";
 import { mcpClientScopes } from "./mcpClientScopes.ts";
+import type { SessionEnd } from "./SessionEndLatches.ts";
 import { ADMINISTRATIVE_BOOTSTRAP_SUBJECT, canDelegateHubProxy } from "./hubProxyDelegation.ts";
 
 export { mcpClientScopes };
@@ -100,6 +101,7 @@ export interface McpClientSession {
   readonly reauthorize?: (
     required: ReadonlyArray<AuthEnvironmentScope>,
   ) => Effect.Effect<void, EnvironmentAuthorizationError>;
+  readonly sessionEnd?: SessionEnd;
 }
 
 export interface AuthenticatedSession {
@@ -975,21 +977,26 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((session) =>
         session.subject === MCP_CLIENT_SUBJECT && session.method === "bearer-access-token"
           ? sessions.markUsed(session.sessionId).pipe(
-              Effect.as({
-                sessionId: session.sessionId,
-                label: session.client.label ?? "MCP client",
-                access: session.scopes.includes(AuthOrchestrationOperateScope)
-                  ? (session.runtimeModeCeiling ?? "approval-required")
-                  : "read-only",
-                grantedScopes: session.scopes,
-                ...(session.childSetupPurpose
-                  ? { childSetupPurpose: session.childSetupPurpose }
-                  : {}),
-                reauthorize: reauthorizeSession(sessions, session.sessionId),
-                approvals:
-                  session.scopes.includes(AuthOrchestrationOperateScope) &&
-                  session.scopes.includes(AuthOrchestrationApproveScope),
-              } satisfies McpClientSession),
+              Effect.andThen(sessions.sessionEnd(session.sessionId)),
+              Effect.map(
+                (sessionEnd) =>
+                  ({
+                    sessionId: session.sessionId,
+                    label: session.client.label ?? "MCP client",
+                    access: session.scopes.includes(AuthOrchestrationOperateScope)
+                      ? (session.runtimeModeCeiling ?? "approval-required")
+                      : "read-only",
+                    grantedScopes: session.scopes,
+                    ...(session.childSetupPurpose
+                      ? { childSetupPurpose: session.childSetupPurpose }
+                      : {}),
+                    reauthorize: reauthorizeSession(sessions, session.sessionId),
+                    sessionEnd,
+                    approvals:
+                      session.scopes.includes(AuthOrchestrationOperateScope) &&
+                      session.scopes.includes(AuthOrchestrationApproveScope),
+                  }) satisfies McpClientSession,
+              ),
             )
           : Effect.fail(
               new ServerAuthInvalidCredentialError({

@@ -7,6 +7,7 @@ import {
 } from "./sessionClaims.ts";
 import * as CloudSessionFence from "./CloudSessionFence.ts";
 import * as DurableRevocations from "./DurableRevocations.ts";
+import * as SessionEndLatches from "./SessionEndLatches.ts";
 import {
   AuthSessionId,
   AuthStandardClientScopes,
@@ -199,6 +200,11 @@ export class SessionStore extends Context.Service<
     readonly awaitInvalidation: (
       sessionId: AuthSessionId,
     ) => Effect.Effect<void, SessionCredentialVerificationError>;
+    /**
+     * Guards calls on this session's authority; every removal of its live grant cuts them. A verify
+     * that raced a removal leaves no live grant (the fences below), so its call is cut at once.
+     */
+    readonly sessionEnd: (sessionId: AuthSessionId) => Effect.Effect<SessionEndLatches.SessionEnd>;
     readonly revoke: (
       sessionId: AuthSessionId,
     ) => Effect.Effect<boolean, SessionCredentialInternalError>;
@@ -320,6 +326,9 @@ export const make = Effect.gen(function* () {
   const authorityLock = yield* Semaphore.make(1);
   const emitUpsert = (clientSession: AuthClientSession) =>
     PubSub.publish(changesPubSub, { type: "clientUpserted", clientSession }).pipe(Effect.asVoid);
+  const sessionEnds = SessionEndLatches.make((sessionId) =>
+    Effect.map(Ref.get(activeScopes), (s) => s.records.get(sessionId)?.expiresAt.epochMilliseconds),
+  );
 
   /** Removes the grants in one update, fenced against running verifies, then announces each. */
   const removeGrants = (sessionIds: ReadonlyArray<AuthSessionId>) =>
@@ -333,6 +342,7 @@ export const make = Effect.gen(function* () {
       }
       return { ...current, records, removals, removed: neededFences(removed, current.verifying) };
     }).pipe(
+      Effect.andThen(sessionEnds.cut(sessionIds)),
       Effect.andThen(
         PubSub.publishAll(
           changesPubSub,
@@ -1108,6 +1118,7 @@ export const make = Effect.gen(function* () {
       ),
     listActive,
     awaitInvalidation,
+    sessionEnd: (sessionId) => Effect.sync(() => sessionEnds.sessionEnd(sessionId)),
     get streamChanges() {
       return Stream.fromPubSub(changesPubSub);
     },
