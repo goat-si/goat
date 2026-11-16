@@ -1,4 +1,6 @@
+import { RegistryContext } from "@effect/atom-react";
 import {
+  useContext,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -31,7 +33,7 @@ import { useMobileBotRoster } from "./useMobileBotRoster";
 import { useMobileBotPreview } from "./useMobileBotPreview";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileBotManage } from "./useMobileBotManage";
-import { useComputerReadable } from "./useKeptPerComputer";
+import { isComputerReadable, useComputerReadable } from "./useKeptPerComputer";
 
 export function MobileBotRoster(props: {
   header?: ReactNode;
@@ -58,6 +60,7 @@ export function MobileBotRoster(props: {
     setEditing(null);
   // A row's action menu is a native alert: open from the long press until a choice or dismissal.
   const [menuOpen, setMenuOpen] = useState(false);
+  const registry = useContext(RegistryContext);
   const menu = (
     title: string,
     message: string | undefined,
@@ -73,9 +76,11 @@ export function MobileBotRoster(props: {
         onPress: () => {
           setMenuOpen(false);
           // An alert cannot be withdrawn: a choice acts only while this roster is still shown, on
-          // its computer, and may read it.
+          // its computer, and may read it, as the store says now, ahead of the next render.
           const now = mount.current;
-          if (now.mounted && now.environmentId === openedOn && now.readable) button.onPress?.();
+          const live = openedOn !== null && isComputerReadable(registry, openedOn);
+          if (now.mounted && now.environmentId === openedOn && now.readable && live)
+            button.onPress?.();
         },
       })),
       { cancelable: true, onDismiss: () => setMenuOpen(false) },

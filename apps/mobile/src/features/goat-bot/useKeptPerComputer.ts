@@ -189,3 +189,11 @@ export function useComputerReadable(environmentId: EnvironmentId | null): boolea
     environmentId === null ? NOT_READABLE : readableAtom(computerKey(environmentId)),
   );
 }
+
+/** The same check, read from the store when a callback acts, ahead of the next render. */
+export function isComputerReadable(
+  registry: AtomRegistry.AtomRegistry,
+  environmentId: EnvironmentId,
+): boolean {
+  return registry.get(readableAtom(computerKey(environmentId)));
+}
