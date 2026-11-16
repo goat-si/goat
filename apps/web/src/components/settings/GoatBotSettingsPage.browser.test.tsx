@@ -445,11 +445,19 @@ it("after a refusal, access coming back shows Loading… and nothing read before
 });
 
 it.each([
-  { change: "the home dropped", connection: RECONNECTING },
-  { change: "the home refused this device", connection: BLOCKED },
+  {
+    change: "the home dropped",
+    connection: RECONNECTING,
+    why: "Goatie's computer isn't connected.",
+  },
+  {
+    change: "the home refused this device",
+    connection: BLOCKED,
+    why: "GOAT on Mac Studio did not accept this device.",
+  },
 ])(
-  "Save (Enter in the form) after $change reached the store, before the screen re-rendered, sends nothing (#3504, access)",
-  async ({ connection }) => {
+  "Save (Enter in the form) after $change reached the store, before the screen re-rendered, sends nothing and says why (#3504, access)",
+  async ({ connection, why }) => {
     setup();
     await using screen = await render(<GoatBotSettingsPanel />);
     await editWithDraft(screen);
@@ -461,12 +469,27 @@ it.each([
     await userEvent.type(dialog.getByRole("textbox", { name: "Name" }), "{Enter}");
 
     expect(state.persist).not.toHaveBeenCalled();
-    await expect.element(page.getByRole("dialog").getByRole("alert")).toBeVisible();
-    await expect
-      .element(page.getByRole("dialog").getByRole("textbox", { name: "Name" }))
-      .toHaveValue("Draft name");
+    await expect.element(dialog.getByRole("alert")).toHaveTextContent(why);
+    await expect.element(dialog.getByRole("textbox", { name: "Name" })).toHaveValue("Draft name");
   },
 );
+
+it("once the screen catches up with a drop, the reason a press already gave is not repeated beside Save (#3504, behavior)", async () => {
+  setup();
+  await using screen = await render(<GoatBotSettingsPanel />);
+  await editWithDraft(screen);
+  home(RECONNECTING, kept());
+  const dialog = page.getByRole("dialog");
+  await userEvent.type(dialog.getByRole("textbox", { name: "Name" }), "{Enter}");
+  await expect
+    .element(dialog.getByRole("alert"))
+    .toHaveTextContent("Goatie's computer isn't connected.");
+
+  await change(() => {});
+
+  await expect.element(dialog.getByRole("button", { name: "Save" })).toBeDisabled();
+  expect(dialog.getByText("Goatie's computer isn't connected.").elements()).toHaveLength(1);
+});
 
 it("the profile row reads Loading… while its first read is pending (#3504, behavior)", async () => {
   setup();

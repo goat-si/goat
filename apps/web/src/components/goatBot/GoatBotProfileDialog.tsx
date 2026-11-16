@@ -59,7 +59,11 @@ export function GoatBotProfileDialog(props: {
   const nameMissing = blankName && nameChecked;
   const nameRef = useRef<HTMLInputElement>(null);
   const reasonId = useId();
-  const unavailable = !busy && !props.canSubmit ? props.unavailableReason : undefined;
+  // A failed save that already says why is not repeated beside Save.
+  const unavailable =
+    !busy && !props.canSubmit && error !== props.unavailableReason
+      ? props.unavailableReason
+      : undefined;
 
   async function submit(event: FormEvent) {
     event.preventDefault();

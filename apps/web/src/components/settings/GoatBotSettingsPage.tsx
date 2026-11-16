@@ -37,8 +37,8 @@ function GoatBotProfileSection() {
       ? channelEnvironment.listBots({ environmentId: environment.environmentId, input: {} })
       : null,
   );
-  // At a refusal, note when the answer then held had settled; that answer and older ones stay
-  // hidden until a read settles after access returns (none is sent while refused).
+  // At a refusal, note the held answer's settle time; it changes only when a read succeeds, and
+  // none is sent while refused, so a different time means a read since access returned.
   const [seen, setSeen] = useState(() => ({
     environmentId,
     readable,
@@ -49,11 +49,7 @@ function GoatBotProfileSection() {
     setSeen({
       environmentId,
       readable,
-      heldAtRefusal: readable
-        ? sameComputer
-          ? seen.heldAtRefusal
-          : null
-        : Math.max(profiles.dataUpdatedAt, sameComputer ? (seen.heldAtRefusal ?? 0) : 0),
+      heldAtRefusal: readable ? (sameComputer ? seen.heldAtRefusal : null) : profiles.dataUpdatedAt,
     });
   }
   if (!supported) return null;
@@ -88,7 +84,7 @@ function GoatBotProfileRow({
 }: {
   readonly environmentId: EnvironmentId;
   readonly phase: EnvironmentConnectionPhase;
-  /** Set after a refusal: only an answer that settled later than this shows. */
+  /** Set after a refusal: the answer held then, by its settle time, stays hidden. */
   readonly readAfter: number | null;
   readonly refusedLine: string;
 }) {
@@ -102,7 +98,7 @@ function GoatBotProfileRow({
   const starting = phase === "connecting";
   const offline = !connected && !starting;
   const canEdit = mayEdit && connected;
-  const answer = readAfter === null || profiles.dataUpdatedAt > readAfter ? profiles.data : null;
+  const answer = readAfter === null || profiles.dataUpdatedAt !== readAfter ? profiles.data : null;
   const main = answer?.bots.find((bot) => bot.role === "main");
   return (
     <>
