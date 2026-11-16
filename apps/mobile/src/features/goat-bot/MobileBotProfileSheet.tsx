@@ -2,6 +2,7 @@ import { botProfileChanges, type BotProfileValues } from "@goat/client-runtime/s
 import { useRef, useState, type ReactNode } from "react";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { MobileBotColorField } from "./MobileBotColorField";
+import { MobileSheetSafeArea } from "./MobileSheetSafeArea";
 import {
   Modal,
   Pressable,
@@ -83,128 +84,130 @@ export function MobileBotProfileSheet(props: {
         if (!busy) props.onClose();
       }}
     >
-      <View className="flex-1 bg-screen px-4 pt-4">
-        <View className="flex-row items-center justify-between">
-          <Pressable
-            accessibilityRole="button"
-            disabled={busy}
-            onPress={props.onClose}
-            className="min-h-[44px] justify-center px-2"
-          >
-            <Text className="text-foreground">Cancel</Text>
-          </Pressable>
-          <Text accessibilityRole="header" className="text-base font-semibold text-foreground">
-            {props.mode === "create" ? "New bot" : "Edit bot"}
-          </Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={saveLabel}
-            // A value, not a hint: hints can be turned off, and this is why Save is off.
-            accessibilityValue={unavailable === undefined ? undefined : { text: unavailable }}
-            accessibilityState={{ disabled: saveDisabled }}
-            disabled={saveDisabled}
-            onPress={() => void save()}
-            className="min-h-[44px] justify-center px-2"
-          >
-            <Text className={saveDisabled ? "text-foreground-muted" : "text-foreground"}>
-              {saveLabel}
-            </Text>
-          </Pressable>
-        </View>
-        {unavailable ? (
-          // Save says it; this line is skipped so a screen reader says it once, at Save.
-          <Text
-            accessibilityElementsHidden
-            importantForAccessibility="no-hide-descendants"
-            className="text-right text-foreground-muted"
-          >
-            {unavailable}
-          </Text>
-        ) : null}
-        <ScrollView keyboardShouldPersistTaps="handled" contentContainerClassName="gap-3 py-4">
-          <Text className="text-foreground-muted">
-            {props.mode === "create"
-              ? "The bot gets its own conversation."
-              : "Changes reach the bot when it starts its next conversation session."}
-          </Text>
-          <Text className="text-foreground">Name</Text>
-          <TextInput
-            ref={nameRef}
-            accessibilityLabel="Name"
-            accessibilityHint={nameMissing ? "The bot needs a name." : undefined}
-            value={name}
-            maxLength={64}
-            editable={!busy}
-            onChangeText={(next) => {
-              setName(next);
-              setNameTyped(true);
-            }}
-            // Leaving a name the person never typed in, say to open More, is not a mistake yet; one
-            // typed and cleared again is.
-            onBlur={() => {
-              if (nameTyped) setNameChecked(true);
-            }}
-            className={INPUT}
-          />
-          {nameMissing ? (
-            <Text accessibilityLiveRegion="polite" className="text-foreground-muted">
-              The bot needs a name.
-            </Text>
-          ) : null}
-          <Text className="text-foreground">Avatar</Text>
-          <TextInput
-            accessibilityLabel="Avatar"
-            value={avatar}
-            maxLength={16}
-            editable={!busy}
-            placeholder="An emoji, or empty for the default face"
-            placeholderTextColorClassName="accent-placeholder"
-            onChangeText={setAvatar}
-            className={INPUT}
-          />
-          {props.colorEditable === true ? (
-            <MobileBotColorField value={color} onChange={setColor} disabled={busy} />
-          ) : null}
-          {create ? (
+      <MobileSheetSafeArea>
+        <View className="flex-1 bg-screen px-4 pt-4">
+          <View className="flex-row items-center justify-between">
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="More"
-              accessibilityState={{ expanded: moreOpen }}
-              onPress={() => setMoreOpen((open) => !open)}
-              className="min-h-[44px] flex-row items-center gap-1 self-start"
+              disabled={busy}
+              onPress={props.onClose}
+              className="min-h-[44px] justify-center px-2"
             >
-              <SymbolView
-                name={moreOpen ? "chevron.down" : "chevron.right"}
-                size={12}
-                tintColorClassName="accent-icon-muted"
-              />
-              <Text className="text-foreground-muted">More</Text>
+              <Text className="text-foreground">Cancel</Text>
             </Pressable>
-          ) : null}
-          {moreOpen ? (
-            <>
-              <Text className="text-foreground">Purpose</Text>
-              <TextInput
-                accessibilityLabel="Purpose"
-                value={purpose}
-                maxLength={4000}
-                editable={!busy}
-                multiline
-                placeholder="What should this bot help with?"
-                placeholderTextColorClassName="accent-placeholder"
-                onChangeText={setPurpose}
-                className={INPUT + " min-h-[120px]"}
-              />
-              {props.children}
-            </>
-          ) : null}
-          {error ? (
-            <Text accessibilityRole="alert" className="text-danger-foreground">
-              {error}
+            <Text accessibilityRole="header" className="text-base font-semibold text-foreground">
+              {props.mode === "create" ? "New bot" : "Edit bot"}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={saveLabel}
+              // A value, not a hint: hints can be turned off, and this is why Save is off.
+              accessibilityValue={unavailable === undefined ? undefined : { text: unavailable }}
+              accessibilityState={{ disabled: saveDisabled }}
+              disabled={saveDisabled}
+              onPress={() => void save()}
+              className="min-h-[44px] justify-center px-2"
+            >
+              <Text className={saveDisabled ? "text-foreground-muted" : "text-foreground"}>
+                {saveLabel}
+              </Text>
+            </Pressable>
+          </View>
+          {unavailable ? (
+            // Save says it; this line is skipped so a screen reader says it once, at Save.
+            <Text
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+              className="text-right text-foreground-muted"
+            >
+              {unavailable}
             </Text>
           ) : null}
-        </ScrollView>
-      </View>
+          <ScrollView keyboardShouldPersistTaps="handled" contentContainerClassName="gap-3 py-4">
+            <Text className="text-foreground-muted">
+              {props.mode === "create"
+                ? "The bot gets its own conversation."
+                : "Changes reach the bot when it starts its next conversation session."}
+            </Text>
+            <Text className="text-foreground">Name</Text>
+            <TextInput
+              ref={nameRef}
+              accessibilityLabel="Name"
+              accessibilityHint={nameMissing ? "The bot needs a name." : undefined}
+              value={name}
+              maxLength={64}
+              editable={!busy}
+              onChangeText={(next) => {
+                setName(next);
+                setNameTyped(true);
+              }}
+              // Leaving a name the person never typed in, say to open More, is not a mistake yet; one
+              // typed and cleared again is.
+              onBlur={() => {
+                if (nameTyped) setNameChecked(true);
+              }}
+              className={INPUT}
+            />
+            {nameMissing ? (
+              <Text accessibilityLiveRegion="polite" className="text-foreground-muted">
+                The bot needs a name.
+              </Text>
+            ) : null}
+            <Text className="text-foreground">Avatar</Text>
+            <TextInput
+              accessibilityLabel="Avatar"
+              value={avatar}
+              maxLength={16}
+              editable={!busy}
+              placeholder="An emoji, or empty for the default face"
+              placeholderTextColorClassName="accent-placeholder"
+              onChangeText={setAvatar}
+              className={INPUT}
+            />
+            {props.colorEditable === true ? (
+              <MobileBotColorField value={color} onChange={setColor} disabled={busy} />
+            ) : null}
+            {create ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="More"
+                accessibilityState={{ expanded: moreOpen }}
+                onPress={() => setMoreOpen((open) => !open)}
+                className="min-h-[44px] flex-row items-center gap-1 self-start"
+              >
+                <SymbolView
+                  name={moreOpen ? "chevron.down" : "chevron.right"}
+                  size={12}
+                  tintColorClassName="accent-icon-muted"
+                />
+                <Text className="text-foreground-muted">More</Text>
+              </Pressable>
+            ) : null}
+            {moreOpen ? (
+              <>
+                <Text className="text-foreground">Purpose</Text>
+                <TextInput
+                  accessibilityLabel="Purpose"
+                  value={purpose}
+                  maxLength={4000}
+                  editable={!busy}
+                  multiline
+                  placeholder="What should this bot help with?"
+                  placeholderTextColorClassName="accent-placeholder"
+                  onChangeText={setPurpose}
+                  className={INPUT + " min-h-[120px]"}
+                />
+                {props.children}
+              </>
+            ) : null}
+            {error ? (
+              <Text accessibilityRole="alert" className="text-danger-foreground">
+                {error}
+              </Text>
+            ) : null}
+          </ScrollView>
+        </View>
+      </MobileSheetSafeArea>
     </Modal>
   );
 }
