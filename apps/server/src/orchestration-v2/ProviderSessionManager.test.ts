@@ -3204,6 +3204,62 @@ it.effect("ProviderSessionManagerV2 releases sessions when provider event stream
     );
   }),
 );
+// regression: upstream #36360 only a detach names its thread, so a handoff run can settle on it;
+// a provider failure leaves the field absent and the run fails as before.
+it.effect.each(["detach", "stream failure"] as const)(
+  "ProviderSessionManagerV2 names the detached thread only when a %s ends the stream",
+  (release) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make(`thread-provider-session-manager-named-${release}`);
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+        const runtime = yield* manager.open({
+          threadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const consumer = yield* runtime.events.pipe(
+          Stream.runDrain,
+          Effect.exit,
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        if (release === "detach") {
+          yield* manager.detach({ providerSessionId, threadId, detail: "Workspace changed." });
+        }
+        const consumed = yield* Fiber.join(consumer);
+        assert.isTrue(Exit.isFailure(consumed));
+        const failure = Exit.isFailure(consumed) ? Cause.squash(consumed.cause) : undefined;
+        assert.equal(
+          (failure as ProviderAdapter.ProviderAdapterEventStreamError | undefined)
+            ?.detachedThreadId,
+          release === "detach" ? threadId : undefined,
+        );
+      });
+      yield* effect.pipe(
+        Effect.provide(
+          // Exclusive, as Claude and Pi run: the last detach closes the session.
+          layerTest({
+            state,
+            idleTimeoutMs: 1000,
+            capabilities: ExclusiveCapabilities,
+            failEventStream: release === "stream failure",
+          }),
+        ),
+      );
+    }),
+);
 it.effect("ProviderSessionManagerV2 marks pending runtime requests non-live on release", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);

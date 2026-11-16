@@ -32,6 +32,7 @@ export { shouldPrepareLegacyImportHandoff } from "./ProviderContextBoundaries.ts
 import {
   cancelledAppOwnedTask,
   mayStartSubagentFollowup,
+  metadataUpdateContinuation,
   isBlockingRun,
   isLiveRun,
   hasLiveRun,
@@ -8470,7 +8471,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
-  const { dispatchThreadNoticeRecord, dispatchChannelTimelineRecord, refuseChannelOnlyMessage } =
+  const { dispatchThreadNoticeRecord, dispatchChannelTimelineRecord, refuseMessageTarget } =
     makeTimelineRecords({
       projectionStore,
       botDirectory,
@@ -8478,6 +8479,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       OrchestratorCommandRejectedError,
       OrchestratorDispatchError,
       OrchestratorProjectionError,
+      OrchestratorSubagentThreadReadOnlyError,
     });
 
   const dispatchRuntimeRequestRespond = Effect.fn("Orchestrator.dispatchRuntimeRequestRespond")(
@@ -12742,7 +12744,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.pin.reorder":
       case "thread.active.reorder":
       case "thread.mark-unread":
-      case "thread.metadata.update":
       case "thread.pull-request.link":
       case "thread.pull-request.sync":
       case "thread.title.regeneration.complete":
@@ -12752,6 +12753,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "provider.switch":
         yield* dispatchThreadMutation(command, events, effects);
         break;
+      case "thread.metadata.update": {
+        const continuation = metadataUpdateContinuation(command);
+        if (continuation !== undefined) yield* refuseMessageTarget(continuation);
+        yield* dispatchThreadMutation(command, events, effects);
+        if (continuation === undefined) break;
+        cancelUnsettledEffects = yield* dispatchMessage(continuation, events, effects);
+        yield* recordSubagentFollowup(continuation, events).pipe(mapDispatchError(command));
+        break;
+      }
       case "thread.pull-request.watch":
       case "thread.pull-request.unlink":
       case "thread.pull-request-link.sync":
@@ -12775,21 +12785,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         yield* dispatchThreadProjectAdoptFolder(command, events);
         break;
       case "message.dispatch": {
-        // Providers own native subagent conversations; messages cannot target them, and adapters ask questions on the parent.
-        const thread = yield* projectionStore
-          .getThread(command.threadId)
-          .pipe(
-            Effect.mapError(
-              (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
-            ),
-          );
-        if (isProviderNativeSubagentThread(thread)) {
-          return yield* new OrchestratorSubagentThreadReadOnlyError({
-            commandId: command.commandId,
-            threadId: command.threadId,
-          });
-        }
-        yield* refuseChannelOnlyMessage(command);
+        const thread = yield* refuseMessageTarget(command);
         const guestSend =
           command.guestMessageId === undefined
             ? undefined
@@ -13331,10 +13327,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         admitDispatch(command, withReviewChildLock(command, dispatchWithReceiptEffect(command))),
       ),
     );
+    const continuation =
+      command.type === "thread.metadata.update" ? metadataUpdateContinuation(command) : undefined;
     const serializesOnParent =
       command.type === "thread.promote" ||
       command.type === "runtime-request.respond" ||
-      (command.type === "message.dispatch" && mayStartSubagentFollowup(command));
+      (command.type === "message.dispatch" && mayStartSubagentFollowup(command)) ||
+      (command.type === "thread.metadata.update" &&
+        continuation !== undefined &&
+        mayStartSubagentFollowup(continuation));
     if (!serializesOnParent) return yield* dispatch;
     const parentThreadId = yield* appOwnedSubagentParentThreadId(command.threadId).pipe(
       Effect.mapError(
@@ -13348,7 +13349,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   });
 
   const dispatchWithReceipt = (command: OrchestrationV2ServerCommand) =>
-    command.type === "message.dispatch"
+    command.type === "message.dispatch" ||
+    (command.type === "thread.metadata.update" && command.continuation !== undefined)
       ? messageIntake.withLock(command.threadId, dispatchWithParent(command))
       : dispatchWithParent(command);
 

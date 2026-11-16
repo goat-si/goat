@@ -423,6 +423,8 @@ export class ProviderAdapterEventStreamError extends Schema.TaggedError<Provider
     driver: ProviderDriverKind,
     providerSessionId: ProviderSessionId,
     source: Schema.optional(Schema.Literal("provider_process_exit")),
+    /** Set when GOAT closed the session because this thread detached from it, not the provider. */
+    detachedThreadId: Schema.optional(ThreadId),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
