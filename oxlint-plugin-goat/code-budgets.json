@@ -198,7 +198,7 @@
   "apps/server/src/imageMime.ts": { "nonNull": 2 },
   "apps/server/src/mcp/HostThreadsMcpService.test.ts": { "lines": 1171 },
   "apps/server/src/mcp/LaunchWatchService.test.ts": { "lines": 2695 },
-  "apps/server/src/mcp/LaunchWatchService.ts": { "lines": 2049, "nonNull": 4 },
+  "apps/server/src/mcp/LaunchWatchService.ts": { "lines": 2023, "nonNull": 4 },
   "apps/server/src/mcp/McpHttpServer.test.ts": { "lines": 1334 },
   "apps/server/src/mcp/McpHttpServer.ts": { "lines": 1222 },
   "apps/server/src/mcp/McpSessionRegistry.ts": { "nonNull": 1 },

@@ -252,7 +252,7 @@ export const EXCERPT_MAX_CHARS = 1_500;
 /** A wake quotes only the start of the last message; the thread holds the rest. */
 const WAKE_EXCERPT_LINES = 4;
 const WAKE_EXCERPT_MAX_CHARS = 400;
-const SUMMARY_MAX_CHARS = 120;
+export const SUMMARY_MAX_CHARS = 120;
 
 /** Run statuses after which a run does no more work. */
 const TERMINAL_RUN_STATUSES = [
@@ -721,18 +721,18 @@ export interface LaunchWatchWake {
   readonly notification: OrchestrationV2Notification;
 }
 
-const truncate = (text: string, max: number) =>
+export const truncate = (text: string, max: number) =>
   text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
 
 const where = (watch: LaunchWatch) =>
   watch.host === null ? "this environment" : `host ${watch.host}`;
 
-const named = (watch: LaunchWatch, title: string | null) => {
+export const named = (watch: LaunchWatch, title: string | null) => {
   const label = title ?? watch.title;
   return label === null ? "Launched thread" : `Launched thread "${label}"`;
 };
 
-const identity = (watch: LaunchWatch) => `threadId ${watch.threadId}, ${where(watch)}`;
+export const identity = (watch: LaunchWatch) => `threadId ${watch.threadId}, ${where(watch)}`;
 
 const toolArgs = (watch: LaunchWatch) =>
   watch.host === null
@@ -764,7 +764,7 @@ function briefExcerpt(text: string): { readonly text: string; readonly cut: bool
 /** Every launch-watch wake's message id starts here; TurnDigest reads the lane from it. */
 export const LAUNCH_WATCH_MESSAGE_PREFIX = "message:launch-watch:";
 
-const wakeIds = (watch: LaunchWatch, event: string) => ({
+export const wakeIds = (watch: LaunchWatch, event: string) => ({
   commandId: CommandId.make(`server:launch-watch:${watch.id}:${event}`),
   messageId: MessageId.make(`${LAUNCH_WATCH_MESSAGE_PREFIX}${watch.id}:${event}`),
 });

@@ -85,7 +85,7 @@ import {
   watchExpired as expired,
 } from "./launchWatch.ts";
 import { quietEnd } from "./launchWatchEnds.ts";
-import type { StepResult } from "./launchWatchFollower.ts";
+import { lostTrackWake, restartOnDefect, type StepResult } from "./launchWatchFollower.ts";
 import { isPermanentDispatchFailure, wakeThread } from "./threadWake.ts";
 
 /**
@@ -1644,12 +1644,14 @@ export const make = Effect.gen(function* () {
         if (pause > 0) yield* Effect.sleep(pause);
       }
     }).pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.interrupt
-          : Effect.logError("launch watch follower stopped", { watchId, cause }).pipe(
-              Effect.andThen(locked(Effect.sync(() => releaseSlot(watchId, incarnation)))),
-            ),
+      restartOnDefect(watchId, () =>
+        locked(
+          Effect.suspend(() => {
+            releaseSlot(watchId, incarnation);
+            const watch = current(watchId, incarnation);
+            return watch === undefined ? Effect.void : deliver(watch, lostTrackWake(watch));
+          }),
+        ),
       ),
     );
 
