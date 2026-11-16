@@ -1,4 +1,4 @@
-import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { ThreadId, type EnvironmentId } from "@goat/contracts";
 import { cloneElement, type ReactElement, type ReactNode, useSyncExternalStore } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { act, render } from "../../../test/render";
@@ -10,6 +10,11 @@ const state = vi.hoisted(() => ({
   status: true,
   waitingRead: true,
   tracking: true,
+  // false: connected, but the computer's config has not arrived yet.
+  configKnown: true,
+  // The hook keeps counts per environment in module state, so a test that needs a clean count
+  // uses its own id.
+  environmentId: "main-row-waiting" as EnvironmentId,
   getStatus: vi.fn(async (): Promise<{ bot: null; waitingCount: number }> => ({
     bot: null,
     waitingCount: 3,
@@ -32,7 +37,6 @@ const useTick = () =>
     },
     () => state.version,
   );
-const environmentId = EnvironmentId.make("main-row-waiting");
 const port = { getBotStatus: state.getStatus, listTasks: state.listTasks };
 vi.mock("./useGoatBotSession", () => ({
   useGoatBotEnabled: () => {
@@ -41,7 +45,12 @@ vi.mock("./useGoatBotSession", () => ({
       enabled: true,
       generation: 1,
       port,
-      environment: { environmentId, connected: true, supportsBotStatus: state.status },
+      environment: {
+        environmentId: state.environmentId,
+        connected: true,
+        supportsBotStatus: state.status && state.configKnown,
+        homeTarget: { settingsLoaded: state.configKnown },
+      },
     };
   },
 }));
@@ -58,7 +67,7 @@ vi.mock("@effect/atom-react", async (original) => {
       if (atom === "configs")
         return new Map([
           [
-            environmentId,
+            state.environmentId,
             {
               environment: {
                 capabilities: {
@@ -94,7 +103,7 @@ vi.mock("~/state/environments", async (original) => ({
 vi.mock("~/globalAgentStore", () => ({
   useGlobalAgentStore: Object.assign(
     (select: (value: object) => unknown) =>
-      select({ botRef: { environmentId, threadId: ThreadId.make("bot") } }),
+      select({ botRef: { environmentId: state.environmentId, threadId: ThreadId.make("bot") } }),
     { getState: () => ({ botRef: null }) },
   ),
 }));
@@ -151,7 +160,11 @@ function setup() {
   state.status = true;
   state.waitingRead = true;
   state.tracking = true;
+  state.configKnown = true;
+  state.environmentId = "main-row-waiting" as EnvironmentId;
   state.getStatus.mockResolvedValue({ bot: null, waitingCount: 3 });
+  state.getStatus.mockClear();
+  state.listTasks.mockClear();
 }
 const change = (edit: () => void) => act(() => (edit(), publish()));
 const counted = (count: number) => new RegExp(`^${count} waiting for you\\s*GOAT Bot`);
@@ -162,7 +175,7 @@ it("a governed main row counts only a successful visit-aware read, and marks the
   await expect.element(screen.getByRole("link", { name: counted(3) })).toBeVisible();
   expect(screen.getByLabelText(/unavailable/i).query()).toBeNull();
   state.getStatus.mockRejectedValueOnce(new Error("offline"));
-  await act(() => refreshGoatBotWaitingCount(environmentId, "failed"));
+  await act(() => refreshGoatBotWaitingCount(state.environmentId, "failed"));
   await expect.element(screen.getByLabelText("waiting unavailable")).toBeVisible();
   expect(screen.getByRole("link", { name: /waiting for you/ }).query()).toBeNull();
   await change(() => (state.waitingRead = false));
@@ -193,4 +206,23 @@ it("an older server's main row keeps its legacy count with no marks", async () =
   await using screen = await render(<GoatBotSidebarRow />, { router: false });
   await expect.element(screen.getByRole("link", { name: counted(1) })).toBeVisible();
   expect(screen.getByLabelText(/unavailable/i).query()).toBeNull();
+});
+
+it("the main row's count reads nothing while the computer's config is unknown, never the unscoped page, and keeps its last count (#3448)", async () => {
+  setup();
+  state.environmentId = "main-row-config-unknown" as EnvironmentId;
+  state.governed = false;
+  state.configKnown = false;
+  await using screen = await render(<GoatBotSidebarRow />, { router: false });
+  await expect.element(screen.getByRole("link", { name: /GOAT Bot/ })).toBeVisible();
+  expect(state.listTasks).not.toHaveBeenCalled();
+  expect(state.getStatus).not.toHaveBeenCalled();
+  expect(screen.getByRole("link", { name: /waiting for you/ }).query()).toBeNull();
+  await change(() => (state.configKnown = true));
+  await expect.element(screen.getByRole("link", { name: counted(3) })).toBeVisible();
+  expect(state.getStatus).toHaveBeenCalledTimes(1);
+  await change(() => (state.configKnown = false));
+  await expect.element(screen.getByRole("link", { name: counted(3) })).toBeVisible();
+  expect(state.getStatus).toHaveBeenCalledTimes(1);
+  expect(state.listTasks).not.toHaveBeenCalled();
 });
