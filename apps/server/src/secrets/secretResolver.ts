@@ -87,17 +87,22 @@ export function makeSecretResolver(read: typeof readOnePassword = readOnePasswor
     if (existing) return existing;
     if (pending.size >= MAX_ACTIVE_READS) throw new Error("Secret provider is busy");
     if (cache.size + pending.size >= 128) throw new Error("Secret provider cache is full");
-    const operation = withSecretReadAdmission(() => resolveSecret(providers, reference, read))
+    // A Check may replace this read while it waits; then its late result is the caller's alone.
+    const current = () => currentGeneration === generation && pending.get(key) === operation;
+    const operation: Promise<string> = withSecretReadAdmission(() =>
+      resolveSecret(providers, reference, read),
+    )
       .then((value) => {
-        if (currentGeneration !== generation) return value;
-        cache.set(key, { ok: true, value });
+        if (current()) cache.set(key, { ok: true, value });
         return value;
       })
       .catch(() => {
-        if (currentGeneration === generation) cache.set(key, { ok: false });
+        if (current()) cache.set(key, { ok: false });
         throw new Error("Could not read secret from 1Password");
       })
-      .finally(() => pending.delete(key));
+      .finally(() => {
+        if (pending.get(key) === operation) pending.delete(key);
+      });
     pending.set(key, operation);
     return operation;
   };
@@ -114,10 +119,11 @@ export function makeSecretResolver(read: typeof readOnePassword = readOnePasswor
     ) => {
       const provider = providers[reference.provider];
       if (provider?.kind !== "one_password" || !isOnePasswordConfig(provider.config)) return;
-      cache.set(cacheKey(generation, reference.provider, provider.config.account, reference), {
-        ok: true,
-        value,
-      });
+      const key = cacheKey(generation, reference.provider, provider.config.account, reference);
+      const replaces = cache.has(key) || pending.has(key);
+      if (!replaces && cache.size + pending.size >= 128) return;
+      pending.delete(key);
+      cache.set(key, { ok: true, value });
     },
   });
 }
