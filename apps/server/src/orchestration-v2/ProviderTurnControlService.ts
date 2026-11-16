@@ -16,7 +16,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
-import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { providerTextWithSkills } from "../skills/GoatSkillText.ts";
@@ -32,6 +32,7 @@ export class ProviderTurnControlError extends Schema.TaggedError<ProviderTurnCon
     providerTurnId: ProviderTurnId,
     turnCompleted: Schema.optional(Schema.Boolean),
     reason: Schema.optional(Schema.Literal("tracking-unavailable")),
+    steerDeclined: Schema.optional(Schema.Boolean),
     /** The provider never confirmed the stop; Force stop is the way out. */
     unresponsive: Schema.optional(Schema.Boolean),
     cause: Schema.optional(Schema.Defect()),
@@ -490,17 +491,31 @@ export const layer: Layer.Layer<
               },
             })
             .pipe(
+              Effect.catchTags({
+                ProviderAdapterSteerDeclinedError: (cause) =>
+                  Effect.fail(
+                    new ProviderTurnControlError({
+                      threadId: input.threadId,
+                      operation: "steer",
+                      providerTurnId: input.providerTurnId,
+                      steerDeclined: true,
+                      cause,
+                    }),
+                  ),
+              }),
               Effect.catch((cause) =>
                 Effect.gen(function* () {
+                  if (isProviderTurnControlError(cause)) return yield* cause;
                   const current = yield* projections.getProviderControlContext(
                     input.threadId,
                     input,
                   );
+                  const status = current.providerTurn?.status;
                   return yield* new ProviderTurnControlError({
                     threadId: input.threadId,
                     operation: "steer",
                     providerTurnId: input.providerTurnId,
-                    turnCompleted: current.providerTurn?.status === "completed",
+                    turnCompleted: status === "completed",
                     cause,
                   });
                 }),

@@ -120,6 +120,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.serverCleanUpStrayProcesses]: AuthEnvironmentMaintainScope,
   [WS_METHODS.serverCleanUpStorageItems]: AuthEnvironmentMaintainScope,
   [WS_METHODS.serverCheckOtlpEndpoint]: AuthSettingsWriteScope,
+  // Reading a secret can prompt the store and reloads providers that use it.
+  [WS_METHODS.serverCheckSecretSource]: AuthSettingsWriteScope,
   [WS_METHODS.pullRequestsRunAction]: AuthSourceControlWriteScope,
   [WS_METHODS.pullRequestsUpdate]: AuthSourceControlWriteScope,
   [WS_METHODS.pullRequestsComment]: AuthSourceControlWriteScope,

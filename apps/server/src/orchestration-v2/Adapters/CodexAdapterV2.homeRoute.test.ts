@@ -27,6 +27,7 @@ import {
   withReplayRequestId,
 } from "./CodexAdapterV2.testkit.ts";
 import { codexReplayPreamble, makeCodexReplayTranscript } from "./CodexReplay.testkit.ts";
+import { withConfigReads } from "./CodexReplay.testkit.ts";
 
 const decodeSettings = Schema.decodeSync(CodexSettings);
 const BASE_URL = "http://127.0.0.1:10100/v1";
@@ -177,7 +178,7 @@ describe("OpenCodex Home provider on native threads", () => {
             },
           ],
         });
-        const driver = yield* CodexReplay.makeReplayDriver(transcript);
+        const driver = yield* CodexReplay.makeReplayDriver(withConfigReads(transcript));
         const adapter = yield* CodexAdapterV2.makeCodexAdapterV2({
           instanceId: CODEX_TEST_MODEL_SELECTION.instanceId,
           settings,
@@ -358,7 +359,7 @@ describe("OpenCodex Home routing", () => {
             },
           ],
         });
-        const driver = yield* CodexReplay.makeReplayDriver(transcript);
+        const driver = yield* CodexReplay.makeReplayDriver(withConfigReads(transcript));
         let disconnected = false;
         let opens = 0;
         const adapter = yield* CodexAdapterV2.makeCodexAdapterV2({

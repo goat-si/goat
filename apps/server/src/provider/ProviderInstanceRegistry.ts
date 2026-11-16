@@ -37,7 +37,14 @@ export class ProviderInstanceRegistry extends Context.Service<
     /** streamChanges subscribes on consumption; use subscribeChanges before forking to avoid missing the next publish. */
     readonly streamChanges: Stream.Stream<void>;
     readonly subscribeChanges: Effect.Effect<PubSub.Subscription<void>, never, Scope.Scope>;
-    readonly reloadSecrets?: (instanceId?: ProviderInstanceId) => Effect.Effect<void>;
+    /**
+     * Re-reads the instances' secrets. With `checked`, the value Settings' Check just read is
+     * used for that reference and nothing else is invalidated, so it is not read a second time.
+     */
+    readonly reloadSecrets?: (
+      instanceId?: ProviderInstanceId,
+      checked?: ProviderInstanceRegistryMutator.CheckedSecret,
+    ) => Effect.Effect<void>;
   }
 >()("goat/provider/ProviderInstanceRegistry") {}
 
@@ -501,7 +508,11 @@ export const makeProviderInstanceRegistry = Effect.fn(
 
   yield* reconcile(input.configMap, input.secretProviders, input.deferSecrets);
 
-  const refreshSecrets = (instanceId: ProviderInstanceId | undefined, invalidate: boolean) =>
+  const refreshSecrets = (
+    instanceId: ProviderInstanceId | undefined,
+    invalidate: boolean,
+    checked?: ProviderInstanceRegistryMutator.CheckedSecret,
+  ) =>
     reconcileSemaphore.withPermits(1)(
       Effect.gen(function* () {
         if (invalidate) input.invalidateSecrets?.();
@@ -509,6 +520,7 @@ export const makeProviderInstanceRegistry = Effect.fn(
         const liveEntries = yield* Ref.get(entries);
         const rebuild = new Set<ProviderInstanceId>();
         const outcomes = new Map<string, string | null>();
+        if (checked !== undefined) outcomes.set(referenceKey(checked.reference), checked.value);
         const completed = new Set<ProviderInstanceId>();
         const targets: Array<{
           id: ProviderInstanceId;
@@ -577,7 +589,10 @@ export const makeProviderInstanceRegistry = Effect.fn(
       }),
     );
 
-  const reloadSecrets = (instanceId?: ProviderInstanceId) => refreshSecrets(instanceId, true);
+  const reloadSecrets = (
+    instanceId?: ProviderInstanceId,
+    checked?: ProviderInstanceRegistryMutator.CheckedSecret,
+  ) => refreshSecrets(instanceId, checked === undefined, checked);
 
   const registry: ProviderInstanceRegistry["Service"] = {
     getInstance: (id) => Ref.get(entries).pipe(Effect.map((map) => map.get(id)?.instance)),

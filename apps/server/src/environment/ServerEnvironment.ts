@@ -289,6 +289,7 @@ export const make = Effect.gen(function* () {
       worktreeRestore: true,
       databaseStorage: true,
       otlpEndpointCheck: true,
+      secretSourceCheck: true,
       projectWorktreeCleanup: true,
       settledWorktreeCleanup: true,
       worktreesDirectory: true,

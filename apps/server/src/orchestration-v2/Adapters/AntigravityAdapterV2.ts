@@ -83,6 +83,7 @@ export interface AntigravityAdapterV2Options {
   >;
   readonly withProcess: AntigravityAuth["withProcess"];
   readonly defaultModel: Effect.Effect<string | undefined>;
+  readonly supportsNativeGoals?: Effect.Effect<boolean>;
   readonly onSessionStarted?: (
     started: AcpSessionRuntime.AcpSessionRuntimeStartResult,
     cwd: string,
@@ -208,6 +209,7 @@ export function makeAntigravityAcpAdapterFlavor(
     driver: ANTIGRAVITY_PROVIDER,
     runtimeHarness: "Antigravity",
     capabilities: AntigravityProviderCapabilitiesV2,
+    supportsNativeGoals: options.supportsNativeGoals ?? Effect.succeed(false),
     ...(options.resolveSessionLaunch === undefined
       ? {}
       : { resolveSessionLaunch: options.resolveSessionLaunch }),

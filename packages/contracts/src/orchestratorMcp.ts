@@ -38,6 +38,7 @@ import {
 } from "./providerPolicy.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { OrchestratorMcpRunFailure } from "./orchestratorMcpFailure.ts";
+import { OrchestratorMcpRunStop, OrchestratorMcpTaskForce } from "./orchestratorMcpStop.ts";
 import { HostPressureAdvice } from "./hostPressure.ts";
 import { OrchestratorMcpCloudTask } from "./orchestratorMcpCloudTask.ts";
 import { OrchestratorMcpReconcileFields } from "./orchestratorMcpReconcile.ts";
@@ -286,6 +287,7 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   ).annotate({
     description: "Oldest pending approval, or null. Ends a wait. Grants no approval rights.",
   }),
+  stop: Schema.optional(OrchestratorMcpRunStop),
   waitTimedOut: Schema.Boolean.annotate({
     description: "True only on the timed-out wait call. The child keeps running.",
   }),
@@ -342,15 +344,10 @@ export type OrchestratorMcpTaskStatusInput = typeof OrchestratorMcpTaskStatusInp
 export const OrchestratorMcpTaskCancelInput = Schema.Struct({
   taskId: NodeId,
   reason: Schema.optional(Schema.String.check(Schema.isMaxLength(2_000))),
+  force: OrchestratorMcpTaskForce,
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
 });
 export type OrchestratorMcpTaskCancelInput = typeof OrchestratorMcpTaskCancelInput.Type;
-
-export const OrchestratorMcpTaskCancelResult = Schema.Struct({
-  taskId: NodeId,
-  status: Schema.Literals(["cancel_requested", "completed", "failed", "cancelled", "interrupted"]),
-});
-export type OrchestratorMcpTaskCancelResult = typeof OrchestratorMcpTaskCancelResult.Type;
 
 export const OrchestratorMcpCreateThreadRequest = Schema.Struct({
   prompt: Schema.optional(OrchestratorMcpPrompt),
@@ -685,9 +682,8 @@ export const OrchestratorMcpThreadSearchResult = Schema.Struct({
   ),
 });
 export type OrchestratorMcpThreadSearchResult = typeof OrchestratorMcpThreadSearchResult.Type;
-// Codex hides `minimum` and `maximum` from the model, so a value above the maximum clamps on
-// decode instead of failing the call; pagination returns the rest. Values below 1 still fail:
-// 0 asks for nothing, and answering it with one item would be a different request.
+// Codex hides `minimum` and `maximum` from the model, so a value above the maximum clamps on decode
+// (pagination returns the rest). Below 1 still fails: 0 asks for nothing, so one item would differ.
 const clampedPositiveInt = (maximum: number) =>
   PositiveInt.pipe(
     Schema.decodeTo(
@@ -788,6 +784,7 @@ export const OrchestratorMcpThreadTimelineItem = Schema.Struct({
 export type OrchestratorMcpThreadTimelineItem = typeof OrchestratorMcpThreadTimelineItem.Type;
 
 export const OrchestratorMcpThreadReadResult = Schema.Struct({
+  stop: Schema.optional(OrchestratorMcpRunStop),
   replicaStatus: Schema.optional(ThreadReplicaStatus),
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),
   host: OrchestratorMcpResultHost,
@@ -890,6 +887,7 @@ export type OrchestratorMcpThreadStatusInput = typeof OrchestratorMcpThreadStatu
  * else, or one of the terminal run statuses.
  */
 export const OrchestratorMcpThreadStatusResult = Schema.Struct({
+  stop: Schema.optional(OrchestratorMcpRunStop),
   remoteUnavailable: Schema.optional(Schema.Boolean),
   replicaStatus: Schema.optional(ThreadReplicaStatus),
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),
@@ -1099,6 +1097,7 @@ export const OrchestratorMcpCapabilitiesResult = Schema.Struct({
     incrementalThreadRead: Schema.Boolean,
     scheduledTasks: Schema.Boolean,
     maxBatchThreads: Schema.Number,
+    taskForceStop: Schema.optional(Schema.Boolean),
   }),
 });
 export type OrchestratorMcpCapabilitiesResult = typeof OrchestratorMcpCapabilitiesResult.Type;

@@ -307,7 +307,7 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
       yield* codex.resolve({ managedOnly: true }).pipe(
         Effect.catch(() =>
           Effect.gen(function* () {
-            const started = yield* codex.startManagedOnly;
+            const started = yield* codex.startManagedOnly({ allowUpdate: false });
             const terminal = TERMINAL.has(started.phase)
               ? started
               : yield* codex.changes.pipe(

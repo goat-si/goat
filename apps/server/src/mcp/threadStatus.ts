@@ -9,6 +9,7 @@ import {
   type OrchestrationV2ThreadShell,
   type OrchestrationV2TurnItem,
   type OrchestratorMcpRunFailure,
+  type OrchestratorMcpRunStop,
   type OrchestratorMcpThreadPhase,
   type OrchestratorMcpThreadReadResult,
   type OrchestratorMcpThreadStatusResult,
@@ -110,6 +111,28 @@ export function runFailure(
   };
 }
 
+/** The turn items that say whether a run's Stop is still unanswered. */
+export const STOP_TURN_ITEM_TYPES = ["run_interrupt_request", "run_interrupt_result"] as const;
+
+/**
+ * A Stop the run's provider did not confirm in time, as clients show it ("Not responding to
+ * Stop"). The run stays open until its provider ends it or a person uses Force stop.
+ */
+export function runStop(
+  runId: string | null,
+  items: ReadonlyArray<OrchestrationV2TurnItem>,
+): OrchestratorMcpRunStop | undefined {
+  let unresponsiveAt: DateTime.Utc | undefined;
+  for (const item of items) {
+    if (runId === null || item.runId !== runId) continue;
+    if (item.type === "run_interrupt_result") return undefined;
+    if (item.type === "run_interrupt_request") unresponsiveAt = item.unresponsiveAt;
+  }
+  return unresponsiveAt === undefined
+    ? undefined
+    : { state: "unresponsive", since: DateTime.formatIso(unresponsiveAt) };
+}
+
 /** Keeps the end of a log, where the failure is. */
 function logTail(log: string): string {
   return log.length <= ORCHESTRATION_V2_PROVIDER_FAILURE_LOG_MAX_CHARS
@@ -192,6 +215,7 @@ export function statusFromShell(
   const request = live ? shell.pendingRuntimeRequest : null;
   const phase = threadPhase(runStatus, request?.kind ?? null);
   // Shell rows carry no message bodies, so the latest message comes from the runs' items.
+  const stop = runStop(describedRunId, items);
   const message =
     items
       .flatMap((item) =>
@@ -203,6 +227,7 @@ export function statusFromShell(
       .toSorted((left, right) => left.ordinal - right.ordinal)
       .at(-1) ?? null;
   return boundedStatus({
+    ...(stop === undefined ? {} : { stop }),
     threadId: shell.id,
     title: shell.title,
     phase,
@@ -267,6 +292,7 @@ export function statusFromRead(
   const pending = thread.pendingRequestCount > 0 && (status === "running" || status === "waiting");
   const phase = pending ? "waiting" : threadPhase(status, null);
   return {
+    ...(read.stop === undefined ? {} : { stop: read.stop }),
     ...(read.cloudTask === undefined ? {} : { cloudTask: read.cloudTask }),
     ...(read.host === undefined ? {} : { host: read.host }),
     threadId: thread.threadId,

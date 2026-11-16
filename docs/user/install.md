@@ -348,6 +348,19 @@ Antigravity update with GOAT. Homebrew and Chocolatey installs compare against
 the version their package manager offers, which can trail the npm release;
 update Claude installed with Chocolatey through Chocolatey.
 
+The managed Codex runtime for Codex connected through ChatGPT first installs
+the release GOAT tested. When GOAT finds a newer compatible release, its setup
+in **Settings → Providers** offers an update.
+
+The managed Antigravity runtime works the same way. While provider update checks
+are on (**Settings → Maintenance**), opening Antigravity setup checks Google's CLI
+release channel at most once an hour, and setup then shows the new version with
+**Update Antigravity**. Installing or reinstalling checks the channel too. Nothing
+installs until you choose it, GOAT offers only releases its compatibility list marks
+supported, and it installs one only after its download matches the SHA-512 digest
+Google publishes for it. When the channel is unreachable or offers nothing supported,
+setup offers the release GOAT tested, or keeps your installed release if it is newer.
+
 Add another provider instance for a separate account or configuration. Each
 instance can have its own environment variables, such as API keys or a custom
 base URL. Mark secret values as sensitive; after saving, GOAT does not display

@@ -1,5 +1,5 @@
-import { carrySavedAntigravityAccount } from "./ProviderSavedAccount.ts";
 import { loadBootProviderSnapshots } from "./ProviderRegistryBoot.ts";
+import { mergeProviderSnapshot } from "./ProviderSnapshotMerge.ts";
 import * as GlobalSkillRegistry from "../skills/GlobalSkillsRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
@@ -40,10 +40,6 @@ import { applyProviderCompatibility } from "./providerCompatibility.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import {
-  mergeProviderModels,
-  shouldRetainMissingOpenCodeMetadata,
-} from "./ProviderModelRetention.ts";
-import {
   orderProviderSnapshots,
   resolveProviderStatusCachePath,
   writeProviderStatusCache,
@@ -81,6 +77,7 @@ export class ProviderRegistry extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
     readonly reloadSecretsAndRefresh?: (
       instanceId?: ProviderInstanceId,
+      checked?: import("./ProviderInstanceRegistryMutator.ts").CheckedSecret,
     ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
     /** Only refreshed instances can verify an update; the published list still includes every row. */
@@ -119,6 +116,7 @@ export class ProviderRegistry extends Context.Service<
       readonly instanceId: ProviderInstanceId;
       readonly action: ProviderMaintenanceActionKind;
       readonly state: ServerProviderUpdateState | null;
+      readonly targetVersion?: string | undefined;
     }) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
     readonly streamChanges: Stream.Stream<ReadonlyArray<ServerProvider>>;
@@ -144,44 +142,6 @@ const makeManualProviderMaintenanceCapabilities = (provider: ProviderDriverKind)
     provider,
     packageName: null,
   });
-
-export const mergeProviderSnapshot = (
-  previousProvider: ServerProvider | undefined,
-  nextProvider: ServerProvider,
-): ServerProvider => {
-  if (!previousProvider) {
-    return nextProvider;
-  }
-  const savedAccount = carrySavedAntigravityAccount(previousProvider, nextProvider);
-  const { message: _uncheckedMessage, ...nextWithoutMessage } = nextProvider;
-  const models = mergeProviderModels(nextProvider, previousProvider.models, nextProvider.models);
-  // Folder catalogs were compared with the old machine catalog, so every folder rescans.
-  const previousWorkspaceSnapshots = Equal.equals(models, previousProvider.models)
-    ? previousProvider.workspaceSnapshots
-    : previousProvider.workspaceSnapshots?.map((snapshot) => ({
-        ...snapshot,
-        modelsPending: true,
-      }));
-  return {
-    ...(savedAccount?.status === "ready" ? nextWithoutMessage : nextProvider),
-    ...savedAccount,
-    models,
-    ...(nextProvider.workspaceSnapshots !== undefined
-      ? { workspaceSnapshots: nextProvider.workspaceSnapshots }
-      : previousWorkspaceSnapshots !== undefined
-        ? { workspaceSnapshots: previousWorkspaceSnapshots }
-        : {}),
-    ...(shouldRetainMissingOpenCodeMetadata(nextProvider)
-      ? {
-          slashCommands:
-            nextProvider.slashCommands.length === 0
-              ? previousProvider.slashCommands
-              : nextProvider.slashCommands,
-          skills: nextProvider.skills.length === 0 ? previousProvider.skills : nextProvider.skills,
-        }
-      : {}),
-  };
-};
 
 const haveProvidersChanged = (
   previousProviders: ReadonlyArray<ServerProvider>,
@@ -221,6 +181,8 @@ const buildSnapshotSource = (instance: ProviderInstance): ProviderSnapshotSource
   refresh: instance.snapshot.refresh,
   streamChanges: instance.snapshot.streamChanges,
 });
+
+export { mergeProviderSnapshot };
 
 export const layer = Layer.effect(
   ProviderRegistry,
@@ -271,7 +233,10 @@ export const layer = Layer.effect(
       ReadonlyMap<ProviderInstance, ReadonlyMap<string, Deferred.Deferred<void>>>
     >(new Map());
     const maintenanceActionStatesRef = yield* Ref.make<
-      ReadonlyMap<ProviderInstanceId, { readonly update?: ServerProviderUpdateState | undefined }>
+      ReadonlyMap<
+        ProviderInstanceId,
+        { readonly update?: ServerProviderUpdateState; readonly targetVersion?: string | undefined }
+      >
     >(new Map());
 
     const liveSubsRef = yield* Ref.make<ReadonlyMap<ProviderInstanceId, ProviderInstance>>(
@@ -400,6 +365,21 @@ export const layer = Layer.effect(
       const previous = (yield* Ref.get(providersRef)).find(
         (candidate) => candidate.instanceId === provider.instanceId,
       );
+      // Latest-version status cannot resolve a failed recommended-version install.
+      if (provider.versionAdvisory?.status === "current") {
+        yield* Ref.update(maintenanceActionStatesRef, (previous) => {
+          const action = previous.get(provider.instanceId);
+          if (
+            action?.targetVersion !== undefined ||
+            (action?.update?.status !== "unchanged" && action?.update?.status !== "failed")
+          ) {
+            return previous;
+          }
+          const next = new Map(previous);
+          next.delete(provider.instanceId);
+          return next;
+        });
+      }
       const providers = yield* upsertProviders([provider], options);
       yield* GlobalSkillRegistry.refreshDependentAuth(
         previous,
@@ -417,21 +397,14 @@ export const layer = Layer.effect(
         readonly instanceId: ProviderInstanceId;
         readonly action: "update";
         readonly state: ServerProviderUpdateState | null;
+        readonly targetVersion?: string | undefined;
       }) {
         yield* Ref.update(maintenanceActionStatesRef, (previous) => {
-          const previousActions = previous.get(input.instanceId);
-          const nextActions = { ...previousActions };
-          if (input.state === null || input.state.status === "idle") {
-            delete nextActions[input.action];
-          } else {
-            nextActions[input.action] = input.state;
-          }
-
           const next = new Map(previous);
-          if (Object.keys(nextActions).length === 0) {
+          if (input.state === null || input.state.status === "idle") {
             next.delete(input.instanceId);
           } else {
-            next.set(input.instanceId, nextActions);
+            next.set(input.instanceId, { update: input.state, targetVersion: input.targetVersion });
           }
           return next;
         });
@@ -974,8 +947,8 @@ export const layer = Layer.effect(
       awaitInFlightRefresh,
       refreshInstance: (instanceId: ProviderInstanceId) =>
         refreshInstance(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
-      reloadSecretsAndRefresh: (instanceId?: ProviderInstanceId) =>
-        (instanceRegistry.reloadSecrets?.(instanceId) ?? Effect.void).pipe(
+      reloadSecretsAndRefresh: (instanceId, checked) =>
+        (instanceRegistry.reloadSecrets?.(instanceId, checked) ?? Effect.void).pipe(
           Effect.andThen(syncLiveSourcesAndContinue),
           Effect.andThen(instanceId === undefined ? refresh() : refreshInstance(instanceId)),
           Effect.catchCause(recoverRefreshFailure),

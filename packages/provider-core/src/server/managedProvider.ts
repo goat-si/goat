@@ -157,7 +157,7 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     const previousSettings = yield* Ref.get(settingsRef);
     const settingsChanged =
       options?.forceRefresh === true || input.haveSettingsChanged(previousSettings, nextSettings);
-    // Nothing watches credential files, so any settings apply rechecks a failed sign-in.
+    // Only Codex watches its auth.json; other drivers recheck a failed sign-in on any settings apply.
     const { snapshot: currentSnapshot } = yield* Ref.get(snapshotStateRef);
     const forceRefresh =
       options?.forceRefresh === true ||

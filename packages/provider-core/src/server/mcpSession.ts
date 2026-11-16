@@ -1,5 +1,6 @@
 export { goatSdkServers, goatCodexServers, goatAcpServers } from "./goatMcpServers.ts";
 import { withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
+import type * as Effect from "effect/Effect";
 import type {
   AuthEnvironmentScope,
   BuiltInSkillName,
@@ -77,6 +78,8 @@ export interface McpProviderSessionConfig {
    * browser preview. Absent where the server's own environment already names a BROWSER.
    */
   readonly urlOpener?: string;
+  /** True while a delegated task this thread started will wake it with its result. */
+  readonly hasPendingWake?: Effect.Effect<boolean>;
 }
 
 /** Server name every provider sees for the managed Cua Driver. */

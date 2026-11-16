@@ -38,6 +38,9 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
   canSteer = true,
   turnCapabilities: Partial<typeof CodexProviderCapabilitiesV2.turns> = {},
   nativeGoals?: boolean,
+  onSteer: (
+    turn: ProviderAdapter.ProviderAdapterV2SteerInput,
+  ) => Effect.Effect<void, ProviderAdapter.ProviderAdapterV2Error> = () => Effect.void,
 ) {
   const driver = ProviderDriverKind.make(nativeGoals === undefined ? "codex" : "opencode");
   const cwd = yield* checkpointWorkspace(name);
@@ -129,7 +132,7 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
         steerTurn: (turn) =>
           Effect.sync(() => {
             steered.push(turn.message.text);
-          }),
+          }).pipe(Effect.andThen(onSteer(turn))),
         interruptTurn: ({ providerTurnId }) =>
           Effect.sync(() => {
             interrupted.push(providerTurnId);
