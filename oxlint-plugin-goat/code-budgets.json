@@ -798,7 +798,7 @@
   "packages/shared/src/mcpApp.ts": { "nonNull": 1 },
   "packages/shared/src/mobileAppIdentity.ts": { "nonNull": 1 },
   "packages/shared/src/nodeSqliteClient.test.ts": { "lines": 1299 },
-  "packages/shared/src/nodeSqliteClient.ts": { "lines": 1307, "nonNull": 1, "asAny": 2 },
+  "packages/shared/src/nodeSqliteClient.ts": { "lines": 1306, "nonNull": 1, "asAny": 2 },
   "packages/shared/src/opencodexCompat.ts": { "nonNull": 3 },
   "packages/shared/src/paletteSearch.ts": { "lines": 1250, "nonNull": 12 },
   "packages/shared/src/path.ts": { "nonNull": 3 },

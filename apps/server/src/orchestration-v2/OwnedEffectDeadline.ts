@@ -1,9 +1,10 @@
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
-import type * as Fences from "./EffectExecutionFences.ts";
+import * as Fences from "./EffectExecutionFences.ts";
 import type { OrchestrationEffectV2 } from "./EffectOutbox.ts";
 
 class CurrentExecution extends Context.Reference<
@@ -42,6 +43,8 @@ export const runClaim = Effect.fn("OwnedEffectDeadline.runClaim")(function* <A, 
       // Cancellation may retire admission before the executor is entered.
       if (Option.isNone(admission)) return "cancelled" as const;
       const token = admission.value;
+      const slot = yield* Fences.ClaimSlot;
+      if (slot !== undefined) slot.current = { claim: token, fences: input.fences };
       // Retirement follows scope closure, including an interrupted owner's join of the original.
       return yield* restore(
         Effect.scoped(
@@ -66,7 +69,18 @@ export const runClaim = Effect.fn("OwnedEffectDeadline.runClaim")(function* <A, 
             return "cancelled" as const;
           }),
         ),
-      ).pipe(Effect.ensuring(input.fences.retireJoined(token)));
+      ).pipe(
+        Effect.onExit((exit) =>
+          input.fences.retireJoined(
+            token,
+            Exit.isSuccess(exit)
+              ? exit.value
+              : Cause.hasInterruptsOnly(exit.cause)
+                ? "interrupted"
+                : "failed",
+          ),
+        ),
+      );
     }),
   );
 });
