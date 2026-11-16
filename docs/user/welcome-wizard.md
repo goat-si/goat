@@ -89,8 +89,9 @@ message text and metadata it keeps need more than 32 MiB of memory. Tool output
 does not count toward that limit. It ignores malformed records and sessions
 without visible messages. It skips unreadable or unparseable conversations.
 
-Each import attempt reads up to 100 conversations and 4 GiB per project, with up
-to 100,000 input records per file. Empty sessions count toward the byte limit.
+Each import attempt reads up to 100 conversations and 4 GiB per project. Empty
+sessions count toward the byte limit. Codex and Pi transcripts can keep up to
+100,000 records per file. For Claude, GOAT keeps a rolling window of messages.
 Run import again to continue a large batch.
 Completed conversations are not imported again. You can continue without the
 remaining history.
