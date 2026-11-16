@@ -358,6 +358,28 @@ describe("orchestration V2 contracts", () => {
   });
 });
 
+describe("handoff continuation from older or newer peers", () => {
+  const binding = {
+    type: "thread.metadata.update",
+    commandId: "command-handoff",
+    threadId: "thread-handoff",
+    branch: "goat/handoff",
+    worktreePath: "/worktrees/handoff",
+  } as const;
+
+  it("decodes a binding from a server that predates continuation without inventing one", () => {
+    const command = decodeOrchestrationV2Command(binding);
+    expect(command.type === "thread.metadata.update" && "continuation" in command).toBe(false);
+  });
+
+  it("round-trips the continuation a newer server commits with its binding", () => {
+    const continuation = { messageId: "message-handoff", text: "Keep going." };
+    expect(decodeOrchestrationV2Command({ ...binding, continuation })).toMatchObject({
+      continuation,
+    });
+  });
+});
+
 describe("thread open stats", () => {
   it("reads a thread whose open stats this build cannot read, without them", () => {
     const shell = {

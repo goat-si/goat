@@ -754,10 +754,12 @@ export const layerWithOptions = (
         detail: string,
         afterDrain: Effect.Effect<void>,
         cause?: Cause.Cause<ProviderAdapter.ProviderAdapterV2Error>,
+        detachedThreadId?: ThreadId,
       ) {
         const error = new ProviderAdapter.ProviderAdapterEventStreamError({
           driver: entry.runtime.driver,
           providerSessionId: entry.runtime.providerSessionId,
+          ...detachedThreadField(detachedThreadId),
           cause: detail,
         });
         const subscribers = yield* Ref.getAndSet(entry.eventSubscribers, new Map());
@@ -1165,6 +1167,7 @@ export const layerWithOptions = (
                       input.detail ?? `Provider session released: ${input.reason}.`,
                       afterDrain,
                       input.eventStreamCause,
+                      input.detachedThreadId,
                     );
                   }
                   const closeExit = yield* closeScopeWithin(entry.scope, {
