@@ -606,7 +606,7 @@
   "apps/web/src/composer-rich-text-doc.ts": { "lines": 1666, "nonNull": 41 },
   "apps/web/src/composer-rich-text.ts": { "nonNull": 3 },
   "apps/web/src/composerDraftStore.test.ts": { "lines": 2407 },
-  "apps/web/src/composerDraftStore.ts": { "lines": 4508 },
+  "apps/web/src/composerDraftStore.ts": { "lines": 4477 },
   "apps/web/src/connection/platform.ts": { "lines": 1316 },
   "apps/web/src/connection/storage.ts": { "lines": 1038, "nonNull": 3 },
   "apps/web/src/contextMenuFallback.ts": { "nonNull": 1 },
