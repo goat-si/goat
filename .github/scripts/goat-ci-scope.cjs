@@ -259,6 +259,15 @@ function packageSuiteManifests(root) {
 const packageSuites = (root) => packageSuiteManifests(root).map(([, name]) => name);
 
 /**
+ * Selected tests no task of the full matrix runs. The matrix runs package suites, so a test under
+ * scripts, .github/scripts or a package without a test script runs only when test-changed gets it.
+ */
+function testsOutsideSuites(root, tests) {
+  const suites = [...OWNED_SUITES, ...packageSuiteManifests(root).map(([dir]) => dir)];
+  return tests.filter((file) => !suites.some((dir) => file.startsWith(dir + "/")));
+}
+
+/**
  * apps/server lists @goat/web only so its build runs after the web build. Server
  * tests never load the web app, so test tasks skip that edge; build keeps it.
  */
@@ -718,7 +727,16 @@ function quickRun(changed, root) {
   };
   if (Buffer.byteLength(JSON.stringify(changedTests.vitest)) > CHANGED_TESTS_MAX_BYTES) {
     const why = tests.length + " test files for the changes, more than test-changed takes";
-    return { ...laneRun("all"), reasons: new Map([["full", why]]) };
+    const left = testsOutsideSuites(root, tests);
+    return {
+      ...laneRun("all"),
+      tasks: MATRIX_ORDER.filter((task) => task !== CHANGED_TESTS_TASK || left.length > 0),
+      reasons: new Map([["full", why]]),
+      changedTests: {
+        vitest: left.filter((file) => !NODE_TEST_RE.test(file)),
+        node: left.filter((file) => NODE_TEST_RE.test(file)),
+      },
+    };
   }
   if (tests.length > 0) {
     reasons.set(CHANGED_TESTS_TASK, tests.length + " test file(s) for the changes");

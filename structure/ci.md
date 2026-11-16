@@ -57,7 +57,9 @@ full suite when they carry half of its estimated time: one job of 248 server fil
 Documentation alone runs only `check`, and a change that selects no tests skips `test-changed`. A
 selection whose file list passes 100 KB runs the full suite instead: `test-changed` receives the
 list in one environment string, which Linux caps at 128 KiB, and
-`packages/shared/src/testing/providerEnv.ts` alone selects every test file.
+`packages/shared/src/testing/providerEnv.ts` alone selects every test file. `test-changed` then
+keeps the selected tests that no suite of the matrix runs: those under `scripts` and
+`.github/scripts`, and those of a package without a test script.
 The full suite otherwise runs on request: the `ci:full` label, or a manual run of the branch.
 `goat-scope` always runs `node scripts/goat-rename.ts --check` before task selection, so new upstream product names fail `goat-ci-result`.
 
