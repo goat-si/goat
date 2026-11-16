@@ -332,7 +332,8 @@ it("says waiting once, with the count, on a member whose tasks wait for the pers
   setup();
   server.waiting = { research: 2 };
   await using screen = await render(<Roster />, { router: false });
-  const link = screen.getByRole("link", { name: /^2 waiting for you\s*Research/ });
+  // End-anchored: the row's visible waiting mark stays out of its spoken name.
+  const link = screen.getByRole("link", { name: /^2 waiting for you\s*Research$/ });
   await expect.element(link).toBeVisible();
   await expect.element(link).not.toHaveAccessibleName(/waiting[\s\S]*waiting/i);
 });
