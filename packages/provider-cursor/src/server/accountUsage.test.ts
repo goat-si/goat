@@ -843,6 +843,8 @@ describe("Cursor account history through Cursor's API (O23)", () => {
         [() => Response.json({ error: secret, message: accessToken }), undefined],
         [() => Response.json({ totalUsageEventsCount: secret }), undefined],
         [twoPages, () => Response.json({ teams: [{ id: secret }], message: accessToken })],
+        // No message key, so the teams decoder sees the value.
+        [twoPages, () => Response.json({ teams: [{ id: secret }] })],
         [twoPages, () => new Response(secret, { status: 500 })],
       ];
       for (const [answer, membership] of scenarios) {
@@ -862,6 +864,7 @@ describe("Cursor account history through Cursor's API (O23)", () => {
       assert.deepStrictEqual(errors, [
         null,
         "Sign in to Cursor again to read account usage.",
+        "Cursor account usage could not be read.",
         "Cursor account usage could not be read.",
         "Cursor account usage could not be read.",
         "Cursor account usage could not be read.",
