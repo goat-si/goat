@@ -56,9 +56,15 @@ it.effect(
           ...f.projection.subagents[index]!,
           promotedAt: yield* DateTime.now,
         };
-        const error = yield* service.cancelTask(scope, { taskId, force: true }).pipe(Effect.flip);
-        assert.equal(error.code, "task_not_cancellable");
-        assert.match(error.message, /^not_owner: /u);
+        // Whichever comes first: the refusal, or a request reaching the host.
+        const first = yield* Effect.raceFirst(
+          service.cancelTask(scope, { taskId, force: true }).pipe(
+            Effect.flip,
+            Effect.map((error) => `refused ${error.code} ${error.message.split(":")[0]}`),
+          ),
+          Queue.take(f.calls).pipe(Effect.map((call) => `host asked for ${call.input.tool}`)),
+        );
+        assert.equal(first, "refused task_not_cancellable not_owner");
         assert.equal(yield* Queue.size(f.calls), 0);
       }).pipe(Effect.provide(f.layer));
     }).pipe(Effect.provide(database)),
