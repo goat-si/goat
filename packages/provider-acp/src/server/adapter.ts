@@ -1,4 +1,8 @@
 import { ACP_PROMPT_ACTIVITY_UPDATES } from "./capabilities.ts";
+import {
+  acpSubagentStatusBlocksTurnSettlement,
+  acpSubagentStatusIsTerminal,
+} from "./acpSubagentStatus.ts";
 import { launchEnvironment } from "./sessionLaunchEnvironment.ts";
 import { negotiatedCapabilities, nativeThreadId, makeProviderThread } from "./capabilities.ts";
 export { AcpProviderCapabilitiesV2 } from "./capabilities.ts";
@@ -623,20 +627,6 @@ interface AcpNativeChildSession {
   subagent: ActiveAcpSubagent | undefined;
   owner: ActiveAcpTurn | undefined;
   readonly pending: Array<EffectAcpSchema.SessionNotification>;
-}
-
-function acpSubagentStatusIsTerminal(status: OrchestrationV2Subagent["status"]): boolean {
-  return (
-    status === "completed" ||
-    status === "failed" ||
-    status === "interrupted" ||
-    status === "cancelled" ||
-    status === "idle"
-  );
-}
-
-function acpSubagentStatusBlocksTurnSettlement(status: OrchestrationV2Subagent["status"]): boolean {
-  return status === "running" || status === "pending";
 }
 
 function acpSubagentHasPendingBackgroundWork(subagent: ActiveAcpSubagent): boolean {
