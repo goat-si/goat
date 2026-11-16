@@ -54,8 +54,9 @@ const notRun = (environmentId: string) =>
     ),
   );
 const RAN_AND_FAILED = AsyncResult.success({ _tag: "error", message: "History is unavailable." });
+const NO_LONGER_AVAILABLE = "This computer is no longer available.";
 
-it("shows why a load that could not run failed", async () => {
+it("says in plain words that a removed computer could not load earlier messages", async () => {
   setup(notRun("removed-computer"));
   await using screen = await render(
     <ToastProvider timeout={0}>
@@ -64,12 +65,13 @@ it("shows why a load that could not run failed", async () => {
   );
   await userEvent.click(screen.getByRole("button", { name: "Load earlier" }));
   await expect.element(page.getByText("Could not load earlier messages")).toBeVisible();
-  await expect.element(page.getByText(/removed-computer/)).toBeVisible();
+  await expect.element(page.getByText(NO_LONGER_AVAILABLE)).toBeVisible();
+  expect(page.getByText(/removed-computer/).elements()).toHaveLength(0);
 });
 
 // The timeline shows a failed load from history.error, so a toast would say it twice.
 it("leaves a load that ran and failed to the history state", async () => {
-  setup(RAN_AND_FAILED, notRun("second-press"));
+  setup(RAN_AND_FAILED, notRun("removed-computer"));
   await using screen = await render(
     <ToastProvider timeout={0}>
       <LoadEarlier />
@@ -79,7 +81,7 @@ it("leaves a load that ran and failed to the history state", async () => {
   await userEvent.click(button);
   // The second press settles after the first, so its toast marks the first one as settled.
   await userEvent.click(button);
-  await expect.element(page.getByText(/second-press/)).toBeVisible();
+  await expect.element(page.getByText(NO_LONGER_AVAILABLE)).toBeVisible();
   expect(page.getByText("Could not load earlier messages").elements()).toHaveLength(1);
   expect(page.getByText("History is unavailable.").elements()).toHaveLength(0);
 });
