@@ -34,7 +34,9 @@ export interface FakePi {
   /** Pi before 0.99 acknowledges prompts without a disposition. */
   readonly omitPromptDisposition: () => void;
   readonly failNextThinking: () => void;
-  readonly deferNextLifecycle: (type: "switch_session" | "new_session" | "fork" | "abort") => void;
+  readonly deferNextLifecycle: (
+    type: "switch_session" | "new_session" | "fork" | "prompt" | "abort",
+  ) => void;
   readonly deferNextModelSelection: () => void;
   readonly queueModels: (models: ReadonlyArray<unknown>) => void;
   readonly vetoNextNewSession: () => void;

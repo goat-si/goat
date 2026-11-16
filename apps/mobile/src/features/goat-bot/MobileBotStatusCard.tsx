@@ -26,6 +26,7 @@ import { useEnvironmentServerConfig, useThreadShell } from "../../state/entities
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { useMobileGoatBotHomeSettings } from "./useMobileGoatBotHomeSettings";
+import { useComputerRefused } from "./useKeptPerComputer";
 
 const NO_SLACK_EVENT = Atom.make<AsyncResult.AsyncResult<SlackChannelStatusEvent, unknown>>(
   AsyncResult.initial(),
@@ -68,6 +69,7 @@ export function MobileBotStatusCard(props: {
   const environmentId = homeId ?? props.environmentId;
   const rowsFromHome = homeId === null || homeId === props.environmentId;
   const config = useEnvironmentServerConfig(environmentId);
+  const homeRefused = useComputerRefused(homeId);
   const { presentationById } = useEnvironments();
   const presentation = environmentId === null ? undefined : presentationById.get(environmentId);
   const slackSupported =
@@ -104,6 +106,7 @@ export function MobileBotStatusCard(props: {
   const now = useNowMinuteMs();
   const diagnostics = diagnoseGoatBot({
     home: home.resolution,
+    homeRefused,
     homeLabel:
       homeId === null
         ? ""
