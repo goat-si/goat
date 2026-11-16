@@ -822,7 +822,8 @@ pairing links and revoke client sessions. Revoking an unused link prevents new
 pairings; revoke a device's session to remove its existing access.
 `goat auth session revoke <id>` does the same from the command line: the session
 is refused at once, and a running server closes its open connections within
-about 5 seconds. More commands are listed by `goat auth --help`.
+about 5 seconds. A request that is already running still finishes. More commands
+are listed by `goat auth --help`.
 
 A session with an open connection stays listed after its access credential
 expires. **Settings → Connections** shows which sessions are connected;
