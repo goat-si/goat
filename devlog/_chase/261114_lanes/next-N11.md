@@ -149,19 +149,47 @@ Coordinator rulings: /Users/jun/handoff-in/chase/next-N11-coordinator-rulings.md
 
 ## N11b: terminal cap (goat#3539)
 
-Branch `chase/t3-261114-n11b-terminal-cap`, from the integration branch `chase/t3-261114-next` at `e7b14604c2` (coordinator decision: a server buffer without a limit is forbidden by docs/internals/server-resilience.md, "Every buffer the server holds has a bound"). Head `417bf95ef6ea2c40e98bca3abd11721f38b87ded`, pushed, not merged yet. Host pen-macbookair. goat#3538 stays an issue only.
+Branch `chase/t3-261114-n11b-terminal-cap`, from the integration branch `chase/t3-261114-next` at `e7b14604c2` (coordinator decision: a server buffer without a limit is forbidden by docs/internals/server-resilience.md, "Every buffer the server holds has a bound"). Head `24e0d39ad7a454af7c4cdbf147e726c5a5c79529`, pushed, not merged yet; a fresh narrow review is due. Host pen-macbookair. goat#3538 stays an issue only.
 
-| commit       | change                                                                                                              |
-| ------------ | ------------------------------------------------------------------------------------------------------------------- |
-| `417bf95ef6` | fix(server): an unterminated control sequence no longer grows the terminal history buffer without limit (goat#3539) |
+| commit       | change                                                                                                                |
+| ------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `417bf95ef6` | fix(server): an unterminated control sequence no longer grows the terminal history buffer without limit (goat#3539)   |
+| `24e0d39ad7` | fix(server): a terminal sequence past the history cap is swallowed to its end instead of replayed as text (goat#3539) |
+
+The coordinator ruling on 417bf95ef6, verbatim:
+
+```text
+Coordinator ruling, 2026-11-16, lane N11b (goat#3539), on 417bf95ef6: the cap is right, the recovery is not yet. Not merged; one more commit, then READY, then a fresh narrow review (this is new parser code on untrusted terminal output).
+Problem: past the cap the code drops what it held and returns to ground state, so the REST of that sequence's payload becomes visible history text. Real programs send sequences larger than 1 MiB of UTF-16 units in one piece (an iTerm2 inline image through OSC 1337 File=, a sixel picture in a DCS, a large OSC 52 copy); after this change a reconnect or a second device would replay up to the history cap of base64 or sixel bytes as text in the scrollback, where dev replays the picture or nothing. The Known limit you recorded is that defect.
+Required: (1) the server holds at most the cap plus one chunk for an unfinished sequence (as now); (2) once a sequence passes the cap, the remainder of THAT sequence, up to the terminator the sanitizer already recognises for its kind (BEL or ST for OSC; ST for DCS, APC, PM, SOS; the final byte for CSI; and whatever the sanitizer treats as a restart or abort), is swallowed: it is emitted neither as visible text nor as a truncated sequence; the state kept while swallowing is O(1) (the kind of sequence and, if needed, a possible ESC before a backslash split across chunks), never the payload; (3) after the terminator, text and sequences are kept again exactly as before; (4) a sequence that never terminates swallows what follows, as a terminal in string state shows nothing either; say so in the record. If the session's pending state must change shape for this (a flag beside the string), keep it server-internal and in a GOAT-owned module where it fits; upstream's sanitizer body stays as it is.
+Tests first, deterministic: an over-cap OSC, DCS and CSI each followed by its terminator and then "after": history holds the text before and "after", nothing of the payload, and the pending state is empty; the terminator split across two chunks (ESC at the end of one, backslash at the start of the next); an over-cap sequence followed by a second ESC that starts a new sequence; a sequence exactly at the cap is still kept whole (the existing 64 KiB OSC 52 and DCS test keeps passing); the 64 MiB probe again for memory. The comment on the constant must not claim the cap is above every real payload: say what happens to a larger one (history drops it; the live terminal already drew it).
+```
 
 - Upstream: pingdotgg/t3code main at `dfeaf7b137` has the same sanitizer (apps/server/src/terminal/Manager.ts:1374) with no cap, and no commit since `93cbca3fcb` touches it (`git log -S pendingControlSequence` and a message search are empty). Nothing to port; this is a GOAT fix.
-- Fix: `MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH` (1 MiB of UTF-16 code units) in apps/server/src/terminal/terminalHistoryReplay.ts. The exported `sanitizeTerminalHistoryChunk` wraps upstream's sanitizer, now the private `sanitizeChunk`, which is unchanged. When the pending sequence it would return is longer than the cap, the sequence is dropped (a terminal shows none of an unfinished sequence) and parsing continues from ground state. 1 MiB is 16 times the largest payloads the existing test keeps whole ("preserves large chunked OSC 52 and DCS strings across reopen", 64 KiB each, still passing).
+- Cap: `MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH` (1 MiB of UTF-16 code units) in apps/server/src/terminal/terminalHistoryReplay.ts, a GOAT module (upstream keeps the sanitizer in Manager.ts). The server holds at most the cap plus one chunk for an unfinished sequence. A sequence exactly at the cap is kept whole; the existing 64 KiB OSC 52 and DCS test still passes. The constant's comment says what happens to a longer sequence: history leaves it out whole, since the live terminal already drew it.
+- Swallowing (24e0d39ad7): once a sequence passes the cap, the rest of it is swallowed up to the end the sanitizer already recognises for its kind:
+  - OSC: `findStringEnd` (BEL, ST, CAN/SUB, or an ESC that starts the next sequence).
+  - DCS, PM and APC: `findStringEnd` (ST, CAN/SUB, an ESC that starts the next sequence, or a C1 control code point). SOS is not a string in this sanitizer (`ESC X` is a plain escape), so it ends like one.
+  - CSI: the same ends as the CSI loop (final byte, CAN/SUB, an ESC that starts the next sequence, or a C1 control).
+  - Plain escape: its final byte, or the first byte that is not an intermediate.
+- What is emitted: nothing of the swallowed part, neither text nor a truncated sequence. A C1 control that ends it keeps the effect upstream keeps (`c1Effect`'s replayable effect and the sequence it starts). After the end, text and sequences are kept exactly as before.
+- State while swallowing: the marker `swallowing:`, the kind, and at most one code unit split across chunks (an ESC that may begin ST, or a high surrogate that may begin a C1 code point). It is never the payload. It stays in the session's existing pending string. A held unfinished sequence always starts with ESC, so the marker cannot be confused with one, and Manager.ts and its resets to `""` are unchanged.
+- Upstream's sanitizer body (now the private `sanitizeChunk`) is byte-identical to the integration branch's; only its header was renamed in 417bf95ef6.
+- A sequence that never terminates swallows everything after it, as a terminal in string state shows nothing either. History stays as it was before the sequence until a terminator arrives or the terminal is cleared or restarted (both reset the pending state).
 - Client: no matching buffer. client-runtime keeps only a parser state number for cut sequences (packages/client-runtime/src/state/terminalOutput.ts:21, `sequenceState`), so no client cap is needed.
 - server-resilience.md: unchanged. It already states the rule, and the named constant shows this bound.
-- Fail-first (apps/server/src/terminal/terminalHistoryReplay.test.ts, "drops an OSC / a DCS / a CSI left unterminated past the pending cap and returns to ground", fed just over the cap in 64 KiB chunks), with only the constant present: 3 failed, `expected 1048580 to be less than or equal to 1048576`, `expected 1048579 …`, `expected 1048578 …`. After the fix: the terminal suites pass (13 files, 153 tests).
-- Probe (/tmp/n11-probe/pending64.mts, 64 MiB of an unterminated OSC in 64 KiB chunks): before, 64 MiB pending, RSS 198 → 635 MiB, 0.27 → 5.6 ms per chunk, 4.0 s, then 67,108,874 characters released at BEL. After: pending 0 once past the cap, RSS 195 → 204 MiB, 5 ms in total.
-- Rule 3: no existing expectation changed; the new test is added beside the module's existing ones.
-- Checks on 417bf95ef6: `vp test run src/terminal/` 153 passed; `vp run typecheck` in apps/server 0; lint of the two files clean; `node scripts/goat-rename.ts --check` 0 (no test file moved).
-- Known limit: after the cap the parser is in ground state while a real terminal is still inside the sequence. The rest of that sequence's payload, up to its terminator, is kept as history text that the live terminal never showed; it is bounded by the history byte cap. On the probe, 66,060,288 characters of the payload reached history this way. Tracking "inside a dropped sequence until its terminator" would need a separate state beside the pending string, and the ruling asked for a return to ground.
-- NOT RUN: `vp run check:changed` (lane N6 holds the heavy slot on pen-macbookair); a real-client pass; `ci:full`.
+- Fail-first, 417bf95ef6 (only the constant present): 3 failed, `expected 1048580 to be less than or equal to 1048576`, `expected 1048579 …`, `expected 1048578 …`.
+- Fail-first, 24e0d39ad7 (the new tests in terminalHistoryReplay.test.ts, on head 417bf95ef6): 8 failed, 14 passed.
+  - "swallows the rest of an OSC ended by BEL / an OSC ended by ST / a DCS ended by ST / a CSI ended by its final byte past the pending cap, then keeps what follows": `expected 'beforeQUJDQUJD…' to be 'beforeafter\n'` (DCS `'before#0;2;0;0;0~…'`, CSI `'before1;1;1;…'`).
+  - "ends a swallowed OSC / DCS at an ST split across chunks": `expected 'beforeQUJD\u001b\after\n' to be 'beforeafter\n'` (DCS `'before#0;2;0;0;0~\u001b\after\n'`).
+  - "keeps the sequence that an ESC starts after a swallowed one, also across chunks": `expected 'QUJD\u001b[31mred\n??\u001b[0mplain\n' to be '\u001b[31mred\n\u001b[0mplain\n'`.
+  - "swallows everything after a sequence that never terminates, as a terminal shows nothing": `expected 'beforexxxx…' to be 'before'`.
+  - "keeps a sequence exactly at the pending cap whole" passed before and after.
+  - The earlier N11b test, which expected "after" to be kept after a sequence that never ended, is replaced. It was this lane's own unmerged test, so rule 3 does not apply.
+- Probe (/tmp/n11-probe/pending64.mts, 64 MiB of an unterminated OSC in 64 KiB chunks):
+  - dev: 64 MiB pending, RSS 198 → 635 MiB, 0.27 → 5.6 ms per chunk, 4.0 s, then 67,108,874 characters released at BEL.
+  - 417bf95ef6: no pending, 66,060,288 payload characters kept as text.
+  - 24e0d39ad7: nothing visible while open, the held state is a few characters, RSS 197 → 207 MiB, 0.17 ms per chunk, 177 ms in total, and only "after" kept after BEL.
+- Rule 3: no existing dev expectation changed.
+- Checks on 24e0d39ad7: `vp test run src/terminal/` 159 passed (13 files); terminalHistoryReplay.test.ts 22 passed; `vp run typecheck` in apps/server 0; lint of the two files clean; `node scripts/goat-rename.ts --check` 0 (no test file moved).
+- NOT RUN: `vp run check:changed` (lane N6 holds the heavy slot on pen-macbookair); a real-client pass (an inline image or sixel over 1 MiB in a GOAT terminal, then a reload); `ci:full`.
