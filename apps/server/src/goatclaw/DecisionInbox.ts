@@ -161,6 +161,7 @@ interface PendingRow {
   runtime_request_id: string;
   kind: string;
   status: string;
+  decision: string | null;
   created_at: string;
   resolved_at: string | null;
   item_json: string | null;
@@ -364,7 +365,7 @@ const make = Effect.gen(function* () {
       status:
         row.status === "pending"
           ? "open"
-          : row.status === "resolved"
+          : row.status === "resolved" && row.decision !== "cancel"
             ? "answered"
             : row.status === "expired"
               ? "expired"
@@ -403,7 +404,7 @@ const make = Effect.gen(function* () {
             catch: () => invalid("The decision was not found."),
           });
     // Match the existing request index instead of hydrating every thread transcript.
-    return yield* sql<PendingRow>`SELECT r.thread_id, r.runtime_request_id, r.kind, r.status, r.created_at, r.resolved_at,
+    return yield* sql<PendingRow>`SELECT r.thread_id, r.runtime_request_id, r.kind, r.status, json_extract(r.payload_json, '$.decision') AS decision, r.created_at, r.resolved_at,
       t.title, t.runtime_mode, t.interaction_mode, t.archived_at,
       (SELECT i.payload_json FROM orchestration_v2_projection_turn_items i
        WHERE i.thread_id = r.thread_id AND i.type IN ('user_input_request', 'approval_request')

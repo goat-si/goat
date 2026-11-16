@@ -60,6 +60,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { projectedRowEncodedBytes } from "./threadHistoryPaging.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import * as WorktreeSendCheck from "./goat/WorktreeSendCheck.ts";
 import { runsInCloud, tearDownForceStoppedRun } from "./ForceStopTeardown.ts";
 import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
 import { projectTranscriptRowForClient, projectTurnItemForDetail } from "./WireProjection.ts";
@@ -82,6 +83,7 @@ import {
   ThreadManagementProjectThreadsListError,
   ThreadManagementDurableRunProjectionError,
   ThreadManagementProviderInstanceDisabledError,
+  ThreadManagementWorktreeUnrestorableError,
   ThreadManagementError,
 } from "./ThreadManagementErrors.ts";
 import { ThreadManagementBackgroundWaitError } from "./threadManagementBackgroundWait.ts";
@@ -216,11 +218,14 @@ export interface ThreadManagementServiceShape {
     command: OrchestrationV2ServerCommand,
   ) => Effect.Effect<
     Orchestrator.OrchestratorV2DispatchResult,
-    Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
+    | Orchestrator.OrchestratorV2Error
+    | ThreadManagementProviderInstanceDisabledError
+    | ThreadManagementWorktreeUnrestorableError
   >;
   readonly getThreadHistoryPage: Orchestrator.OrchestratorV2["Service"]["getThreadHistoryPage"];
   readonly getTimelinePage: Orchestrator.OrchestratorV2["Service"]["getTimelinePage"];
   readonly getMessageCount: Orchestrator.OrchestratorV2["Service"]["getMessageCount"];
+  readonly getMessagesById: Orchestrator.OrchestratorV2["Service"]["getMessagesById"];
   readonly getTurnItem: (input: {
     readonly threadId: ThreadId;
     readonly itemId: TurnItemId;
@@ -315,7 +320,9 @@ export interface ThreadManagementServiceShape {
     readonly byOwnAgent: boolean;
   }) => Effect.Effect<
     { readonly sequence: number } | { readonly settlesWhenTurnEnds: true },
-    Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
+    | Orchestrator.OrchestratorV2Error
+    | ThreadManagementProviderInstanceDisabledError
+    | ThreadManagementWorktreeUnrestorableError
   >;
   readonly interruptThread: (
     input: ThreadManagementInterruptInput,
@@ -376,7 +383,9 @@ export interface ThreadManagementServiceShape {
     readonly stopCascadeFrom?: ThreadId | undefined;
   }) => Effect.Effect<
     void,
-    Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
+    | Orchestrator.OrchestratorV2Error
+    | ThreadManagementProviderInstanceDisabledError
+    | ThreadManagementWorktreeUnrestorableError
   >;
   readonly getThreadEventSequence: Orchestrator.OrchestratorV2["Service"]["getThreadEventSequence"];
   readonly recoverDelegatedTask: Orchestrator.OrchestratorV2["Service"]["recoverDelegatedTask"];
@@ -391,13 +400,15 @@ export class ThreadManagementService extends Context.Service<
   ThreadManagementServiceShape
 >()("goat/orchestration-v2/ThreadManagementService") {}
 
+export const ACTIVE_RUN_STATUSES = [
+  "preparing",
+  "starting",
+  "running",
+  "waiting",
+] as const satisfies ReadonlyArray<OrchestrationV2Run["status"]>;
+
 export function isActiveRun(run: OrchestrationV2Run): boolean {
-  return (
-    run.status === "preparing" ||
-    run.status === "starting" ||
-    run.status === "running" ||
-    run.status === "waiting"
-  );
+  return (ACTIVE_RUN_STATUSES as ReadonlyArray<OrchestrationV2Run["status"]>).includes(run.status);
 }
 
 /** Joins question items to their runs without loading execution nodes or transcripts. */
@@ -468,7 +479,9 @@ export function makeStopDelegatedTasks(deps: {
   )(function* (input) {
     const { subagents } = yield* deps.getThreadRecords(input.threadId, ["subagents"]);
     const failures: Array<
-      Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
+      | Orchestrator.OrchestratorV2Error
+      | ThreadManagementProviderInstanceDisabledError
+      | ThreadManagementWorktreeUnrestorableError
     > = [];
     const stopCascadeFrom = input.stopCascadeFrom ?? input.threadId;
     for (const task of subagents) {
@@ -540,6 +553,8 @@ const make = Effect.gen(function* () {
   const legacyImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+  // Optional: harnesses without a view of projects skip the check, as servers before it did.
+  const worktreeSendCheck = yield* Effect.serviceOption(WorktreeSendCheck.WorktreeSendCheck);
   const memoryPolicy = yield* Effect.serviceOption(ServerSettings.MemoryProviderCommittedPolicy);
   const readMemoryPolicy = Option.isSome(memoryPolicy)
     ? memoryPolicy.value.read
@@ -699,6 +714,19 @@ const make = Effect.gen(function* () {
       Effect.map(Option.isSome),
     );
 
+  // Turn start would fail after the send reported success; a replay keeps its first answer.
+  const assertWorktreeRestorable = Effect.fn("ThreadManagementService.assertWorktreeRestorable")(
+    function* (commandId: CommandId, thread: WorktreeSendCheck.SendTarget) {
+      if (Option.isNone(worktreeSendCheck)) return;
+      const refusal = yield* worktreeSendCheck.value.refusal(thread);
+      if (refusal === undefined || (yield* hasReceipt(commandId))) return;
+      return yield* new ThreadManagementWorktreeUnrestorableError({
+        threadId: thread.id,
+        detail: refusal,
+      });
+    },
+  );
+
   const receiptStatus: ThreadManagementServiceShape["receiptStatus"] = (commandId) =>
     receipts.getByCommandId(commandId).pipe(
       Effect.map((receipt) => (Option.isSome(receipt) ? receipt.value.status : null)),
@@ -838,7 +866,14 @@ const make = Effect.gen(function* () {
               projectId: projection.thread.projectId,
               commandId: command.commandId,
               instanceId: (command.modelSelection ?? projection.thread.modelSelection).instanceId,
-            }),
+            }).pipe(
+              Effect.andThen(
+                // A live steer starts no turn, so it needs no workspace.
+                command.dispatchMode.type === "steer_active"
+                  ? Effect.void
+                  : assertWorktreeRestorable(command.commandId, projection.thread),
+              ),
+            ),
           ),
         );
       case "delegated_task.request":
@@ -1955,6 +1990,13 @@ const make = Effect.gen(function* () {
         Effect.andThen(orchestrator.getMessageCount(threadId)),
       );
     }),
+    getMessagesById: Effect.fn("ThreadManagementService.getMessagesById")(
+      function (threadId, messageIds) {
+        return ensureProjectionTranscript(threadId).pipe(
+          Effect.andThen(orchestrator.getMessagesById(threadId, messageIds)),
+        );
+      },
+    ),
     getTurnItem: Effect.fn("ThreadManagementService.getTurnItem")(function (input) {
       return ensureProjectionTranscript(input.threadId).pipe(
         Effect.andThen(orchestrator.getTurnItem(input)),
