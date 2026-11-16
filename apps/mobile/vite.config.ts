@@ -182,6 +182,7 @@ const devCompiledSources = [
   "/features/goat-bot/GoatBotScreen.tsx",
   "/features/goat-bot/MobileBotWork.tsx",
   "/features/goat-bot/MobileBotRowMenu.tsx",
+  "/features/threads/useThreadHistoryControls.ts",
 ];
 const require = NodeModule.createRequire(import.meta.url);
 const babel: {
