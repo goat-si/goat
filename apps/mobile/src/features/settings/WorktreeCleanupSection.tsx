@@ -1,5 +1,10 @@
 import { WORKTREE_CLEANUP_OFF } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
+import {
+  type AtomCommandResult,
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@goat/client-runtime/state/runtime";
 import type { EnvironmentId, StorageCleanupSettings } from "@goat/contracts";
 import { useEffect, useState } from "react";
 import { TextInput, View } from "react-native";
@@ -59,6 +64,7 @@ export function WorktreeCleanupSection({
   const report = useAtomValue(serverEnvironment.storageCleanupReport({ environmentId, input: {} }));
   const update = useAtomCommand(serverEnvironment.updateSettings);
   const respond = useAtomCommand(serverEnvironment.respondWorktreeCleanupPreview);
+  const [error, setError] = useState<string | null>(null);
   const preview = report._tag === "Success" ? report.value?.worktreePreview : undefined;
   const previewId = preview?.id;
   const seenAt = preview?.seenAt;
@@ -67,8 +73,15 @@ export function WorktreeCleanupSection({
     if (previewId !== undefined && seenAt === null)
       void respond({ environmentId, input: { previewId, response: "seen" } });
   }, [environmentId, previewId, seenAt, respond]);
+  const run = async (action: () => Promise<AtomCommandResult<unknown, unknown>>) => {
+    setError(null);
+    const result = await action();
+    if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
+    const failure = squashAtomCommandFailure(result);
+    setError(failure instanceof Error ? failure.message : "The change was not saved. Try again.");
+  };
   const write = (patch: Partial<StorageCleanupSettings>) =>
-    void update({ environmentId, input: { patch: { storageCleanup: patch } } });
+    void run(() => update({ environmentId, input: { patch: { storageCleanup: patch } } }));
   return (
     <SettingsSection title="Worktree cleanup">
       <NumberRow
@@ -126,7 +139,9 @@ export function WorktreeCleanupSection({
             label="Clean up now"
             disabled={!allowed}
             onPress={() =>
-              void respond({ environmentId, input: { previewId: preview.id, response: "confirm" } })
+              void run(() =>
+                respond({ environmentId, input: { previewId: preview.id, response: "confirm" } }),
+              )
             }
           />
           <SettingsActionRow
@@ -135,6 +150,11 @@ export function WorktreeCleanupSection({
             onPress={() => write(WORKTREE_CLEANUP_OFF)}
           />
         </>
+      ) : null}
+      {error ? (
+        <Text selectable className="px-4 pb-4 text-sm text-danger-foreground">
+          {error}
+        </Text>
       ) : null}
     </SettingsSection>
   );

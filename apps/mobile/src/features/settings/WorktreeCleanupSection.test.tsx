@@ -50,6 +50,7 @@ vi.mock("../../state/use-atom-command", () => ({
 import { WorktreeCleanupSection } from "./WorktreeCleanupSection";
 
 it("turns off the three automatic cleanup rules", async () => {
+  mocks.update.mockResolvedValue(AsyncResult.success(undefined));
   const container = document.createElement("div");
   const root = createRoot(container);
   await act(() =>

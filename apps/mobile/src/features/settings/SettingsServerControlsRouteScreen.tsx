@@ -1,4 +1,9 @@
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@goat/client-runtime/state/runtime";
+import * as Dialog from "../../components/ui/Dialog";
 import { SettingsRow } from "./components/SettingsRow";
 import { AllowedApps } from "./computerUse/AllowedApps";
 import {
@@ -735,10 +740,24 @@ function ServerSettingsDetail(props: {
                             return;
                           writeInFlight.current = true;
                           setPendingWrites((count) => count + 1);
-                          void removeAllowedApp({ environmentId, input: { app } }).finally(() => {
-                            writeInFlight.current = false;
-                            setPendingWrites((count) => count - 1);
-                          });
+                          void removeAllowedApp({ environmentId, input: { app } })
+                            .then((result) => {
+                              if (result._tag !== "Failure" || isAtomCommandInterrupted(result))
+                                return;
+                              const label =
+                                displayTargets.find(
+                                  (target) => target.environment.environmentId === environmentId,
+                                )?.environment.label ?? environmentId;
+                              const error = squashAtomCommandFailure(result);
+                              Dialog.alert(
+                                "Could not remove the app",
+                                `${label}: ${error instanceof Error ? error.message : String(error)}`,
+                              );
+                            })
+                            .finally(() => {
+                              writeInFlight.current = false;
+                              setPendingWrites((count) => count - 1);
+                            });
                         }}
                       />
                     ) : null}
