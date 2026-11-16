@@ -263,6 +263,9 @@ export const makeMove = (deps: MoveDeps) =>
           });
         }
       }
+      // The move runs on as a server job when its call is cut; it never starts after its session ended.
+      if (yield* scope.sessionEnd?.ended ?? Effect.succeed(false))
+        return stop("Move stopped before changing anything: the session that asked for it ended.");
       yield* deps.audit(caller, to, "started", input.decisionId);
       mutating = true;
       if (record !== undefined) {

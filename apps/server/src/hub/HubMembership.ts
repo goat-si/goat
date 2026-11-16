@@ -17,6 +17,7 @@ import { windowsRemoteLinkRelease } from "@goat/shared/opencodexRelease";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -173,6 +174,7 @@ const make = Effect.gen(function* () {
   const releases = yield* ReleaseCatalog;
   // One hub, one link store: membership changes never interleave.
   const permit = yield* Semaphore.make(1);
+  const serviceScope = yield* Effect.scope;
 
   const audit = Effect.fn("HubMembership.audit")(function* (
     caller: { readonly actor: string; readonly profile: string },
@@ -876,7 +878,11 @@ const make = Effect.gen(function* () {
     join: (scope, input, person) => permit.withPermits(1)(join(scope, input, person)),
     leave: (scope, input, person) => permit.withPermits(1)(leave(scope, input, person)),
     repair: (scope, input, person) => permit.withPermits(1)(repair(scope, input, person)),
-    move: (scope, input, person) => permit.withPermits(1)(move(scope, input, person)),
+    // A cut call stops waiting; the move keeps its permit and finishes, so no device is left unlinked.
+    move: (scope, input, person) =>
+      permit
+        .withPermits(1)(move(scope, input, person))
+        .pipe(Effect.forkIn(serviceScope), Effect.flatMap(Fiber.join)),
     routes: routes.list,
     updateRoutes: (scope, input, person) =>
       permit.withPermits(1)(routes.update(scope, input, person)),
