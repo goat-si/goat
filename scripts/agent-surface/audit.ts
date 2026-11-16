@@ -775,7 +775,7 @@ export function render(inventory: Inventory): string {
       ".",
     "- " +
       code("goat auth client revoke") +
-      ' reuses the session revoke command under a second parent, so its help reads "Revoke a session." (' +
+      ' reuses the session revoke command under a second parent, so its help begins "Revoke a session." (' +
       ref(command("goat auth client revoke")?.source ?? null) +
       ").",
     "- Server flags such as " +
