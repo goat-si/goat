@@ -1121,22 +1121,6 @@ export type OrchestratorMcpScheduleTaskInput = typeof OrchestratorMcpScheduleTas
 export const OrchestratorMcpScheduleTaskResult = OrchestratorMcpScheduledTask;
 export type OrchestratorMcpScheduleTaskResult = typeof OrchestratorMcpScheduleTaskResult.Type;
 
-export const OrchestratorMcpListScheduledTasksInput = Schema.Struct({
-  projectId: Schema.optional(
-    ProjectId.annotate({
-      description: "Default: your thread's project, or all outside a thread.",
-    }),
-  ),
-});
-export type OrchestratorMcpListScheduledTasksInput =
-  typeof OrchestratorMcpListScheduledTasksInput.Type;
-
-export const OrchestratorMcpListScheduledTasksResult = Schema.Struct({
-  tasks: Schema.Array(OrchestratorMcpScheduledTask),
-});
-export type OrchestratorMcpListScheduledTasksResult =
-  typeof OrchestratorMcpListScheduledTasksResult.Type;
-
 export const OrchestratorMcpUpdateScheduledTaskInput = Schema.Struct({
   scheduledTaskId: ScheduledTaskId,
   prompt: Schema.optional(OrchestratorMcpPrompt),
@@ -1157,4 +1141,6 @@ export {
 export {
   OrchestratorMcpDeleteScheduledTaskInput,
   OrchestratorMcpDeleteScheduledTaskResult,
+  OrchestratorMcpListScheduledTasksInput,
+  OrchestratorMcpListScheduledTasksResult,
 } from "./orchestratorMcpScheduledTask.ts";
