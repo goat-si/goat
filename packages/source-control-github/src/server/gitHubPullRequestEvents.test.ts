@@ -31,6 +31,7 @@ function fakeRest(
 ) {
   const posts: Array<unknown> = [];
   const deletes: Array<string> = [];
+  const credential = { fingerprint: "github.com:host" };
   const rest = GitHubRest.GitHubRest.of({
     rest: (input) =>
       input.method === "DELETE"
@@ -50,9 +51,13 @@ function fakeRest(
               invalidUtf8: false,
             })),
           ),
-    credential: () => Effect.succeed({ token: Redacted.make("host-token"), fingerprint: "host" }),
+    credential: () =>
+      Effect.sync(() => ({
+        token: Redacted.make("host-token"),
+        fingerprint: credential.fingerprint,
+      })),
   });
-  return { rest, posts, deletes };
+  return { rest, posts, deletes, credential };
 }
 
 const eventsOf = (rest: GitHubRest.GitHubRest["Service"], httpClient: HttpClient.HttpClient) =>
@@ -409,5 +414,31 @@ it.effect("reconnects when a stream request gets no answer within the silence li
     assert.equal(connections, 2, "the stream request waited without a deadline");
     assert.equal(yield* Fiber.join(fiber), 0);
     assert.equal(posts.length, 1);
+  }),
+);
+
+it.effect("a replaced credential lifts the pauses the previous one earned", () =>
+  Effect.gen(function* () {
+    const refused = refusing(403);
+    const refusedEvents = yield* eventsOf(refused.rest, noStream);
+    assert.equal(yield* Stream.runCount(refusedEvents(target)), 0);
+    assert.equal(yield* Stream.runCount(refusedEvents(target)), 0);
+    assert.equal(refused.posts.length, 1);
+    refused.credential.fingerprint = "github.com:replaced";
+    assert.equal(yield* Stream.runCount(refusedEvents(target)), 0);
+    assert.equal(refused.posts.length, 2, "the host stays paused for the new credential");
+
+    const missing = fakeRest(() =>
+      Effect.fail(
+        new GitHubApiNotFoundError({ host: "github.com", operation: "subscribePullRequestEvents" }),
+      ),
+    );
+    const missingEvents = yield* eventsOf(missing.rest, noStream);
+    assert.equal(yield* Stream.runCount(missingEvents(target)), 0);
+    assert.equal(yield* Stream.runCount(missingEvents(target)), 0);
+    assert.equal(missing.posts.length, 1);
+    missing.credential.fingerprint = "github.com:replaced";
+    assert.equal(yield* Stream.runCount(missingEvents(target)), 0);
+    assert.equal(missing.posts.length, 2, "the pull request stays paused for the new credential");
   }),
 );

@@ -65,13 +65,22 @@ const resourceUrlOf = (input: PullRequestEventsInput) =>
   `https://${input.host}/${input.repository}/pull/${input.number}`;
 
 /**
+ * Pauses belong to the credential that earned them, by its fingerprint (a hash, never the token),
+ * so a replaced token or another account is asked again.
+ */
+const pauseKeys = (fingerprint: string, input: PullRequestEventsInput) => ({
+  account: fingerprint,
+  pullRequest: `${fingerprint} ${resourceUrlOf(input)}`,
+});
+
+/**
  * Emits when a connection opens, so a reader catches up on what it missed, then once per change
  * GitHub reports. Ends quietly when GitHub refuses the subscription; the caller polls meanwhile.
  */
 export const make = Effect.gen(function* () {
   const rest = yield* GitHubRest.GitHubRest;
   const httpClient = yield* HttpClient.HttpClient;
-  /** Keyed by host for account-wide refusals, and by pull request for one it cannot read. */
+  /** Keyed by credential for account-wide refusals, and by pull request for one it cannot read. */
   const pausedUntil = new Map<string, number>();
   const pause = (key: string, duration: Duration.Duration) =>
     Clock.currentTimeMillis.pipe(
@@ -101,9 +110,13 @@ export const make = Effect.gen(function* () {
   const subscribe = Effect.fn("GitHubPullRequestEvents.subscribe")(function* (
     input: PullRequestEventsInput,
   ) {
-    const resourceUrl = resourceUrlOf(input);
+    const held = yield* rest.credential(input.host).pipe(Effect.option);
+    if (Option.isNone(held)) return Option.none();
+    const keys = pauseKeys(held.value.fingerprint, input);
     const now = yield* Clock.currentTimeMillis;
-    if (Math.max(pausedUntil.get(input.host) ?? 0, pausedUntil.get(resourceUrl) ?? 0) > now) {
+    if (
+      Math.max(pausedUntil.get(keys.account) ?? 0, pausedUntil.get(keys.pullRequest) ?? 0) > now
+    ) {
       return Option.none();
     }
     const response = yield* rest
@@ -112,21 +125,21 @@ export const make = Effect.gen(function* () {
         operation: "subscribePullRequestEvents",
         method: "POST",
         path: "event-subscriptions",
-        body: { resource_url: resourceUrl, event_types: EVENT_TYPES },
+        body: { resource_url: resourceUrlOf(input), event_types: EVENT_TYPES },
       })
       .pipe(
         Effect.asSome,
         Effect.catchTags({
           GitHubApiAuthenticationError: () =>
-            pause(input.host, REFUSED_PAUSE).pipe(Effect.as(Option.none())),
+            pause(keys.account, REFUSED_PAUSE).pipe(Effect.as(Option.none())),
           GitHubApiNotFoundError: () =>
-            pause(resourceUrl, REFUSED_PAUSE).pipe(Effect.as(Option.none())),
+            pause(keys.pullRequest, REFUSED_PAUSE).pipe(Effect.as(Option.none())),
           GitHubApiResponseError: (error) =>
             // Other refusals are not asked again for an hour; server errors are.
             (error.status === 422
-              ? pause(input.host, LIMIT_PAUSE)
+              ? pause(keys.account, LIMIT_PAUSE)
               : error.status >= 400 && error.status < 500 && error.status !== 429
-                ? pause(input.host, REFUSED_PAUSE)
+                ? pause(keys.account, REFUSED_PAUSE)
                 : Effect.void
             ).pipe(Effect.as(Option.none())),
         }),
@@ -148,7 +161,7 @@ export const make = Effect.gen(function* () {
     }
     // A subscription GOAT cannot follow is deleted, and the host is not asked again for a while.
     if (Option.isSome(id)) yield* unsubscribe(input.host, id.value.id);
-    yield* pause(input.host, REFUSED_PAUSE);
+    yield* pause(keys.account, REFUSED_PAUSE);
     return Option.none();
   });
 
@@ -246,7 +259,15 @@ export const make = Effect.gen(function* () {
                       switch (ending) {
                         case "stop":
                           return Stream.fromEffectDrain(
-                            pause(resourceUrlOf(target), REFUSED_PAUSE),
+                            rest.credential(target.host).pipe(
+                              Effect.flatMap((held) =>
+                                pause(
+                                  pauseKeys(held.fingerprint, target).pullRequest,
+                                  REFUSED_PAUSE,
+                                ),
+                              ),
+                              Effect.ignore,
+                            ),
                           );
                         case "renew":
                           session.renew = true;
