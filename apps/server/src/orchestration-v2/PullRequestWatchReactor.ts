@@ -55,6 +55,11 @@ const SWEEP_MINUTES = 2;
 const READ_FAILURE_LIMIT = 8;
 /** Each feed holds a host connection and subscription; watches past the cap rely on the sweep. */
 export const MAX_EVENT_FEEDS = 64;
+/**
+ * A wake costs the user a provider turn, so a burst of host events (check suites, a review's
+ * comments) settles into one read; the sweep still reads every two minutes.
+ */
+const EVENT_SETTLE = "20 seconds";
 
 /** The first feeds by key, so the same pull requests keep theirs from sweep to sweep. */
 export const feedsToFollow = <A>(candidates: Iterable<readonly [string, A]>) =>
@@ -799,7 +804,8 @@ export const make = Effect.gen(function* () {
       // An ended feed restarts here, so a host that refused it is asked again each sweep.
       yield* FiberMap.run(feeds, pullRequest, { onlyIfMissing: true })(
         pullRequests.changes(referenceOf(group)).pipe(
-          // A review sends an event per comment; those landing during a read queue one more.
+          Stream.debounce(EVENT_SETTLE),
+          // Events that settle during a read queue one more.
           Stream.buffer({ capacity: 1, strategy: "sliding" }),
           Stream.runForEach(() => readOnChange(pullRequest)),
         ),

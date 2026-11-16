@@ -202,6 +202,44 @@ describe("pull request watch host events", () => {
       assert.isTrue(yield* Fiber.join(opened), "the reactor never opened a host feed");
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
+
+  it.effect("reads once for a burst of host events that lands inside the 20-second settle", () =>
+    Effect.gen(function* () {
+      const { projectId } = yield* watchPullRequest("pr-watch-host-burst", 17);
+      const following = yield* Deferred.make<void>();
+      const detailReads = yield* Queue.unbounded<void>();
+      const events = yield* Queue.unbounded<void>();
+      const received = yield* Queue.unbounded<void>();
+      const reactor = yield* PullRequestWatchReactor.make.pipe(
+        Effect.provide(
+          fakeHost({
+            projectId,
+            number: 17,
+            detailReads,
+            changes: () =>
+              Stream.fromEffectDrain(Deferred.succeed(following, undefined)).pipe(
+                Stream.concat(
+                  Stream.fromQueue(events).pipe(Stream.tap(() => Queue.offer(received, undefined))),
+                ),
+              ),
+          }),
+        ),
+      );
+      yield* reactor.start();
+      yield* Deferred.await(following);
+      yield* Queue.take(detailReads);
+
+      yield* Queue.offerAll(events, [undefined, undefined, undefined]);
+      yield* Queue.takeN(received, 3);
+      yield* TestClock.adjust("19 seconds");
+      assert.equal(yield* Queue.size(detailReads), 0, "a host event was read before it settled");
+      yield* TestClock.adjust("1 second");
+      yield* Queue.take(detailReads);
+      // A sweep waits for the change read in flight, then reads once itself.
+      yield* reactor.sweep;
+      assert.equal(yield* Queue.size(detailReads), 1, "the burst was read more than once");
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
   it.effect(
     "reads a watched pull request when the host reports a change, and wakes once per change",
     () =>
@@ -245,6 +283,7 @@ describe("pull request watch host events", () => {
         ];
         let fingerprints = 0;
         const events = yield* Queue.unbounded<void>();
+        const received = yield* Queue.unbounded<void>();
         const following = yield* Deferred.make<void>();
         const detailReads = yield* Queue.unbounded<void>();
         const host = Layer.mergeAll(
@@ -278,7 +317,9 @@ describe("pull request watch host events", () => {
             invalidate: () => Effect.void,
             changes: () =>
               Stream.fromEffectDrain(Deferred.succeed(following, undefined)).pipe(
-                Stream.concat(Stream.fromQueue(events)),
+                Stream.concat(
+                  Stream.fromQueue(events).pipe(Stream.tap(() => Queue.offer(received, undefined))),
+                ),
               ),
           }),
         );
@@ -300,10 +341,14 @@ describe("pull request watch host events", () => {
           { name: "lint", status: "failure", description: null, url: null, required: true },
         ];
         yield* Queue.offer(events, undefined);
-        // The clock never moves, so no sweep can be the one that reads the failure.
+        // The clock moves only through the settle, so no sweep can be the one that reads the failure.
+        yield* Queue.take(received);
+        yield* TestClock.adjust("20 seconds");
         yield* Queue.take(detailReads);
         // Nothing new: this read must compare against the watch the last one recorded.
         yield* Queue.offer(events, undefined);
+        yield* Queue.take(received);
+        yield* TestClock.adjust("20 seconds");
         yield* Queue.take(detailReads);
         // A sweep waits for the change read in flight.
         yield* reactor.sweep;

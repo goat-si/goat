@@ -366,8 +366,9 @@ turn off automatic watching. Automatic watches can wake the agent without keepin
 with `goat_call {path:"pull_request.watch"}` and keep the thread working between wakes.
 
 The server checks every two minutes. On github.com, when GitHub offers your account pull request
-event streams, it also checks as soon as GitHub reports a push, review, state change, merge
-conflict, or finished check suite. Checks waiting for workflow approval are reported once and
+event streams, it also checks about 20 seconds after GitHub reports a push, review, state change,
+merge conflict, or finished check suite, so a burst of updates is read once. Checks waiting for
+workflow approval are reported once and
 follow the failed-check notification setting. By default, failed checks, passing required checks, and other
 people's comments or reviews wake the agent. On github.com, the merge queue dropping the pull request
 without merging it follows the failed-check setting and carries GitHub's reason. Your own comments do not. Bot comments are ignored
