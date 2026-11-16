@@ -209,3 +209,58 @@ it("guard: a typed answer stays with the bot it was typed for (#3442)", async ()
   await expect.element(screen.getByRole("textbox", { name: "Something else" })).toHaveValue("");
   expect(navigationBlocked()).toBe(false);
 });
+
+it("in the main chat, Enter in a closed card whose task question has no id keeps the words as Not sent (#3442)", async () => {
+  setup();
+  const onSendToTask = vi.fn(() => true);
+  const { answerQuestionId: _question, ...noQuestionId } = question;
+  await using screen = await render(chat({ rows: [noQuestionId], onSendToTask }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Something else" }), TYPED);
+  // A pick sending keeps the row's task id; this server named no question.
+  const sending: BotRow = {
+    ...noQuestionId,
+    options: [],
+    answer: "Keep",
+    answerIndex: 0,
+    answerSending: true,
+  };
+  await screen.rerender(chat({ rows: [sending], onSendToTask }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Something else" }), "{Enter}");
+  await expect.element(screen.getByText("Not sent: “" + TYPED + "”")).toBeVisible();
+  expect(onSendToTask).not.toHaveBeenCalled();
+});
+
+it("a closed card's field left with only spaces ends when it loses focus (#3442)", async () => {
+  setup();
+  const sending: BotRow = {
+    ...question,
+    options: [],
+    answer: "Keep",
+    answerIndex: 0,
+    answerSending: true,
+  };
+  await using screen = await render(chat({ rows: [question] }));
+  const field = () => screen.getByRole("textbox", { name: "Something else" });
+  await userEvent.type(field(), TYPED);
+  await screen.rerender(chat({ rows: [sending] }));
+  await userEvent.clear(field());
+  await userEvent.type(field(), "   ");
+  await userEvent.click(screen.getByText("Which cache should the build use?"));
+  await expect.element(field()).not.toBeInTheDocument();
+  expect(navigationBlocked()).toBe(false);
+});
+
+it("guard: the task recording an answer while the field is focused and empty ends it with focus on the row (#3442)", async () => {
+  setup();
+  await using screen = await render(chat({ rows: [question] }));
+  const field = screen.getByRole("textbox", { name: "Something else" });
+  await userEvent.type(field, "x");
+  await userEvent.clear(field);
+  const answered: BotRow = { ...question, options: [], answer: "Keep", answerIndex: 0 };
+  await screen.rerender(chat({ rows: [answered], items: [chipItem("task-1", 4, ["q-1"])] }));
+  await expect.element(field).not.toBeInTheDocument();
+  expect(screen.container.textContent).not.toContain("Not sent");
+  const row = screen.container.querySelector('[data-bot-row="q"]');
+  await vi.waitFor(() => expect(document.activeElement).toBe(row));
+  expect(navigationBlocked()).toBe(false);
+});
