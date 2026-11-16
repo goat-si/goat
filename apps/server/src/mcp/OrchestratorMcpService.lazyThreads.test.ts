@@ -451,7 +451,15 @@ describe("goat_thread_read summary and tail", () => {
         completedAt: now,
       },
     ],
-    contextTransfers: [],
+    // A thread's transfers include the results it sent, so the child holds the one it returned.
+    contextTransfers: [
+      {
+        type: "subagent_result",
+        sourceThreadId: childId,
+        targetThreadId: parentId,
+        sourcePoint: { runId: childRunId },
+      },
+    ],
     messages: [],
     subagents: [],
     providerThreads: [],
@@ -470,18 +478,7 @@ describe("goat_thread_read summary and tail", () => {
     visibility: "local",
     item: answer,
   };
-  // The parent recorded the child's result, so a read that returns it in full has seen it.
-  const parentWithResult = {
-    ...parentProjection([task]),
-    contextTransfers: [
-      {
-        type: "subagent_result",
-        sourceThreadId: childId,
-        targetThreadId: parentId,
-        sourcePoint: { runId: childRunId },
-      },
-    ],
-  } as unknown as OrchestrationV2ThreadProjection;
+  const parentWithResult = parentProjection([task]);
 
   const sent: Array<OrchestrationV2ServerCommand> = [];
   const makeLayer = (dispatched: Array<OrchestrationV2ServerCommand["type"]>) =>
@@ -628,7 +625,11 @@ describe("goat_thread_read through HostThreadsMcpService", () => {
     activeRunId: null,
     latestRunId: RunId.make("run:lazy-host"),
   } as const;
-  const read = (failResult: boolean, input: OrchestratorMcpThreadReadInput) => {
+  const read = (
+    failResult: boolean,
+    input: OrchestratorMcpThreadReadInput,
+    items: ReadonlyArray<unknown> = [],
+  ) => {
     const acknowledged: Array<unknown> = [];
     const layer = HostThreadsMcpService.layer.pipe(
       Layer.provide(
@@ -652,7 +653,7 @@ describe("goat_thread_read through HostThreadsMcpService", () => {
             Effect.succeed({
               thread: observed,
               recentRuns: [],
-              items: [],
+              items,
               nextPosition: null,
               hasMore: false,
             } as unknown as OrchestratorMcpThreadReadResult),
@@ -683,6 +684,38 @@ describe("goat_thread_read through HostThreadsMcpService", () => {
       assert.equal(result._tag, "Success");
       assert.deepEqual(acknowledged, acknowledges ? [[input, observed]] : []);
     }),
+  );
+
+  const item = (position: number, type: string, textTruncated: boolean) => ({
+    position,
+    sourceThreadId: childId,
+    itemId: "item-" + position,
+    runId: observed.latestRunId,
+    type,
+    text: "x".repeat(500),
+    textTruncated,
+    nextTextOffset: textTruncated ? 500 : null,
+  });
+
+  it.effect(
+    "a tail read that cuts the child's result leaves its completion wake to deliver it whole",
+    () =>
+      Effect.gen(function* () {
+        const input = { threadId: childId, tail: 2 };
+        const cut = yield* read(false, input, [
+          item(1, "command", false),
+          item(2, "assistant_message", true),
+        ]);
+        assert.deepEqual(cut.acknowledged, []);
+        const failed = yield* read(false, input, [item(1, "error", true)]);
+        assert.deepEqual(failed.acknowledged, []);
+        // Only an older item is cut; the result itself was shown whole.
+        const whole = yield* read(false, input, [
+          item(1, "assistant_message", true),
+          item(2, "assistant_message", false),
+        ]);
+        assert.deepEqual(whole.acknowledged, [[input, observed]]);
+      }),
   );
 
   it.effect("a summary read whose result fails leaves the completion delivery open", () =>

@@ -225,6 +225,7 @@ export interface ThreadManagementServiceShape {
   readonly getThreadHistoryPage: Orchestrator.OrchestratorV2["Service"]["getThreadHistoryPage"];
   readonly getTimelinePage: Orchestrator.OrchestratorV2["Service"]["getTimelinePage"];
   readonly getMessageCount: Orchestrator.OrchestratorV2["Service"]["getMessageCount"];
+  readonly getMessagesById: Orchestrator.OrchestratorV2["Service"]["getMessagesById"];
   readonly getTurnItem: (input: {
     readonly threadId: ThreadId;
     readonly itemId: TurnItemId;
@@ -399,13 +400,15 @@ export class ThreadManagementService extends Context.Service<
   ThreadManagementServiceShape
 >()("goat/orchestration-v2/ThreadManagementService") {}
 
+export const ACTIVE_RUN_STATUSES = [
+  "preparing",
+  "starting",
+  "running",
+  "waiting",
+] as const satisfies ReadonlyArray<OrchestrationV2Run["status"]>;
+
 export function isActiveRun(run: OrchestrationV2Run): boolean {
-  return (
-    run.status === "preparing" ||
-    run.status === "starting" ||
-    run.status === "running" ||
-    run.status === "waiting"
-  );
+  return (ACTIVE_RUN_STATUSES as ReadonlyArray<OrchestrationV2Run["status"]>).includes(run.status);
 }
 
 /** Joins question items to their runs without loading execution nodes or transcripts. */
@@ -1987,6 +1990,13 @@ const make = Effect.gen(function* () {
         Effect.andThen(orchestrator.getMessageCount(threadId)),
       );
     }),
+    getMessagesById: Effect.fn("ThreadManagementService.getMessagesById")(
+      function (threadId, messageIds) {
+        return ensureProjectionTranscript(threadId).pipe(
+          Effect.andThen(orchestrator.getMessagesById(threadId, messageIds)),
+        );
+      },
+    ),
     getTurnItem: Effect.fn("ThreadManagementService.getTurnItem")(function (input) {
       return ensureProjectionTranscript(input.threadId).pipe(
         Effect.andThen(orchestrator.getTurnItem(input)),
