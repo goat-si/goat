@@ -570,6 +570,13 @@ it("reports native quota only for an OpenAI login on a native route", () => {
   );
   assert.strictEqual(codexCustomEndpoint({ openai_base_url: "https://chatgpt.com/x" }), undefined);
   assert.strictEqual(codexCustomEndpoint({}), undefined);
+});
+
+it("takes the Codex endpoint from the config, else from GOAT's OpenCodex Home route", () => {
+  const hub = {
+    model_provider: "hub",
+    model_providers: { hub: { base_url: "https://hub.example.com/v1" } },
+  };
   // GOAT's OpenCodex Home route sets the base URL outside the config.
   assert.strictEqual(codexEndpoint({}, "http://127.0.0.1:4318/v1"), "http://127.0.0.1:4318");
   assert.strictEqual(codexEndpoint(hub, "http://127.0.0.1:4318/v1"), "https://hub.example.com");
