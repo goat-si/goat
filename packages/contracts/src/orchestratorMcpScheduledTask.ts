@@ -21,7 +21,8 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   enabled: Schema.Boolean,
   projectId: ProjectId,
   boundThreadId: Schema.NullOr(ThreadId),
-  freshSession: Schema.Boolean,
+  // Optional so a newer reader still decodes an older server's tasks, which lack it.
+  freshSession: Schema.optional(Schema.Boolean),
   schedule: ScheduledTaskSchedule,
   notificationPolicy: Schema.optional(Schema.String),
   nextRunAt: Schema.NullOr(IsoDateTime),
