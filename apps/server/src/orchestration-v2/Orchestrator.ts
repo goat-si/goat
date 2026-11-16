@@ -263,6 +263,7 @@ import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import { makeHumanHandoffs } from "./goat/HumanHandoffs.ts";
 import { makeThreadRecordDispatches } from "./goat/ThreadRecordDispatches.ts";
 import { makeStaleQuestionWakes } from "./goat/StaleQuestionWake.ts";
+import { activeTurnRefusal } from "./goat/ActiveTurnRefusals.ts";
 import {
   endOrphanedNativeSubagent,
   endRunlessRootTurns,
@@ -3131,6 +3132,23 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         session.status !== "stopped" &&
         session.status !== "error",
     );
+    if (
+      (command.type === "thread.model-selection.set" || command.type === "provider.switch") &&
+      liveSessions.length > 0
+    ) {
+      const { runs } = yield* loadProjectionForCommand(command, ["runs"], { turnItemTypes: [] });
+      const refusal = activeTurnRefusal({
+        command,
+        releasesLiveSession: true,
+        hasActiveRun: runs.some(isBlockingRun),
+      });
+      if (refusal !== undefined)
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: refusal,
+        });
+    }
     if (
       command.type !== "thread.archive" &&
       command.type !== "thread.settle" &&
