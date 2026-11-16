@@ -21,6 +21,7 @@ import {
   type ServerAuthSessionMethod,
   type SessionPrincipalKind,
 } from "@goat/contracts";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -1029,28 +1030,30 @@ export const make = Effect.gen(function* () {
           (cause) => new OtherSessionsRevocationError({ currentSessionId: sessionId, cause }),
         ),
       );
-    // A live id the press neither revoked nor kept was ended elsewhere earlier or added after its
-    // transaction; only its row may end it. Unreadable rows wait for the durable check.
     const classified = new Set([sessionId, ...revoked, ...kept.map((row) => row.sessionId)]);
     const live = yield* liveSessionIds;
+    yield* settleEnded(revoked);
+    // A live id the press neither revoked nor kept was ended elsewhere earlier or added after its
+    // transaction; only its row may end it. Unreadable rows wait for the durable check.
     const unclassified = live.filter((id) => !classified.has(id));
-    const unrevoked = new Set(
-      unclassified.length === 0
-        ? []
-        : yield* authSessions
-            .listUnrevoked({ sessionIds: unclassified })
-            .pipe(
-              Effect.catch(() =>
-                Effect.as(
-                  Effect.logWarning(
-                    "Revoke others left sessions it could not read to the next check",
-                  ),
-                  unclassified,
-                ),
-              ),
+    if (unclassified.length > 0) {
+      yield* authSessions.listUnrevoked({ sessionIds: unclassified }).pipe(
+        Effect.flatMap((rows) => {
+          const unrevoked = new Set(rows);
+          return settleEnded(unclassified.filter((id) => !unrevoked.has(id)));
+        }),
+        // The press is uninterruptible, so a cause here is a failure or a defect.
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Revoke others left sessions it could not read to the next check", {
+            // A bounded category only, as in DurableRevocations.
+            reason: Option.getOrElse(
+              Option.map(Cause.findErrorOption(cause), (error) => error._tag),
+              () => "defect",
             ),
-    );
-    yield* settleEnded([...revoked, ...unclassified.filter((id) => !unrevoked.has(id))]);
+          }),
+        ),
+      );
+    }
     // Counted as the list shows rows: unexpired, or expired but still connected.
     const connected = yield* Ref.get(connectedSessionsRef);
     const shown = kept.filter(

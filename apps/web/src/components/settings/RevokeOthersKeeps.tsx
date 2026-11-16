@@ -10,8 +10,8 @@ function keptExplanation(kept: AuthRevokeOthersKeep, servedByEnvironment: boolea
   if (kept === "pen")
     return "A Pen member holds this session, and it works only over that member's Pen connection. Revoke it here; to stop the member asking for another, remove it from Pen.";
   return servedByEnvironment
-    ? "Signed in with the desktop app's built-in credential, normally the GOAT desktop app on this computer. If you do not recognise it or suspect it, revoke it by itself; that signs the desktop app out until you quit and reopen it."
-    : "Signed in with the desktop app's built-in credential, normally the GOAT desktop app on that computer. If you do not recognise it or suspect it, revoke it by itself; that signs the desktop app out until someone quits and reopens it on that computer.";
+    ? "Signed in with the desktop app's built-in credential, normally the GOAT desktop app on this computer. If you do not recognise it or suspect it, revoke it by itself; if it is the desktop app's session, that signs the app out until you quit and reopen it."
+    : "Signed in with the desktop app's built-in credential, normally the GOAT desktop app on that computer. If you do not recognise it or suspect it, revoke it by itself; if it is the desktop app's session, that signs the app out until someone quits and reopens it on that computer.";
 }
 
 // A popover on a real button opens on hover, on Enter or Space after a Tab, and on tap.

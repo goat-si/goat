@@ -204,15 +204,19 @@ export function canRevokeOtherClients(
   );
 }
 
-/** Names what the server says Revoke others kept; the list on screen can be missing or stale. */
-export function revokeOthersToast({ revokedCount, kept }: AuthOtherClientSessionsRevokeResult) {
+/** Names what the server says Revoke others kept; the list on screen can be missing or stale.
+ * A caller who cannot read the list is pointed to someone who can, never "below". */
+export function revokeOthersToast(
+  { revokedCount, kept }: AuthOtherClientSessionsRevokeResult,
+  { listShown }: { readonly listShown: boolean },
+) {
   const title = revokedCount === 1 ? "Revoked 1 other client" : `Revoked ${revokedCount} clients`;
+  const asker = "Ask someone who can see the authorized clients on this computer";
   if (kept === undefined)
     return {
       type: "success" as const,
       title,
-      description:
-        "Revoke others may keep sessions signed in with the desktop app's built-in credential and Pen members' sessions. Check the list below for what is still signed in.",
+      description: `Revoke others may keep sessions signed in with the desktop app's built-in credential and Pen members' sessions. ${listShown ? "Check the list below for" : asker} what is still signed in.`,
     };
   const parts = [
     ...(kept.desktop === 0
@@ -222,10 +226,12 @@ export function revokeOthersToast({ revokedCount, kept }: AuthOtherClientSession
         ]),
     ...(kept.pen === 0 ? [] : [`${kept.pen} Pen ${kept.pen === 1 ? "session" : "sessions"}`]),
   ];
-  const hint =
-    kept.desktop + kept.pen === 1
+  const one = kept.desktop + kept.pen === 1;
+  const hint = listShown
+    ? one
       ? "Revoke it below if you do not recognise it."
-      : "Revoke them one by one below if you do not recognise them.";
+      : "Revoke them one by one below if you do not recognise them."
+    : `${asker} to revoke ${one ? "it" : "them"} if you do not recognise ${one ? "it" : "them"}.`;
   return {
     type: "success" as const,
     title,
