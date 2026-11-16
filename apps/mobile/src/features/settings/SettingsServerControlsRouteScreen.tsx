@@ -1,5 +1,8 @@
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
+import { isAtomCommandInterrupted } from "@goat/client-runtime/state/runtime";
+import * as Dialog from "../../components/ui/Dialog";
 import { SettingsRow } from "./components/SettingsRow";
+import { commandFailureText } from "./commandFailureText";
 import { AllowedApps } from "./computerUse/AllowedApps";
 import {
   AuthSettingsWriteScope,
@@ -735,10 +738,23 @@ function ServerSettingsDetail(props: {
                             return;
                           writeInFlight.current = true;
                           setPendingWrites((count) => count + 1);
-                          void removeAllowedApp({ environmentId, input: { app } }).finally(() => {
-                            writeInFlight.current = false;
-                            setPendingWrites((count) => count - 1);
-                          });
+                          void removeAllowedApp({ environmentId, input: { app } })
+                            .then((result) => {
+                              if (result._tag !== "Failure" || isAtomCommandInterrupted(result))
+                                return;
+                              const label =
+                                displayTargets.find(
+                                  (target) => target.environment.environmentId === environmentId,
+                                )?.environment.label ?? environmentId;
+                              Dialog.alert(
+                                "Could not remove the app",
+                                `${label}: ${commandFailureText(result)}`,
+                              );
+                            })
+                            .finally(() => {
+                              writeInFlight.current = false;
+                              setPendingWrites((count) => count - 1);
+                            });
                         }}
                       />
                     ) : null}
