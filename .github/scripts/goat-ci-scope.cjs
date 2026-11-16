@@ -114,6 +114,11 @@ const PEN_WINDOWS_TASK = "test-pen-windows";
 const WINDOWS_RUNNER_TASKS = new Set([WINDOWS_TASK, PEN_WINDOWS_TASK]);
 /** The quick run's selected tests. */
 const CHANGED_TESTS_TASK = "test-changed";
+/**
+ * goat-ci.yml hands test-changed its list in one environment string, which Linux caps at 128 KiB.
+ * A list near that is most of the tests, more than one job runs inside its time limit.
+ */
+const CHANGED_TESTS_MAX_BYTES = 100_000;
 /** CI script tests use node:test, not Vitest. */
 const NODE_TEST_RE = /^\.github\/scripts\/[^/]+\.test\.cjs$/;
 const CODE_RE = /\.[cm]?[jt]sx?$/;
@@ -711,6 +716,10 @@ function quickRun(changed, root) {
     vitest: tests.filter((file) => !NODE_TEST_RE.test(file)),
     node: tests.filter((file) => NODE_TEST_RE.test(file)),
   };
+  if (Buffer.byteLength(JSON.stringify(changedTests.vitest)) > CHANGED_TESTS_MAX_BYTES) {
+    const why = tests.length + " test files for the changes, more than test-changed takes";
+    return { ...laneRun("all"), reasons: new Map([["full", why]]) };
+  }
   if (tests.length > 0) {
     reasons.set(CHANGED_TESTS_TASK, tests.length + " test file(s) for the changes");
   }

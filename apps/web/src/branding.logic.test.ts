@@ -21,6 +21,23 @@ describe("window title", () => {
       "GOAT (Nightly)",
     );
   });
+  it("leads the screen reader title with the thread's status, then thread, then project", () => {
+    const input = {
+      appDisplayName: "GOAT (Nightly)",
+      projectTitle: "Project",
+      threadTitle: "Thread",
+    };
+    const working = { threadStatus: "Working" };
+    expect(resolveWindowTitle({ ...input, screenReader: working, desktop: true })).toBe(
+      "Working: Thread - Project",
+    );
+    expect(resolveWindowTitle({ ...input, screenReader: working, desktop: false })).toBe(
+      "Working: Thread - Project - GOAT (Nightly)",
+    );
+    expect(
+      resolveWindowTitle({ ...input, screenReader: { threadStatus: null }, desktop: true }),
+    ).toBe("Thread - Project");
+  });
   it("names hosted builds by the channel the release workflow sets, and dev builds Dev", () => {
     const name = (env: Parameters<typeof resolveWebAppStageLabel>[0]) =>
       formatAppDisplayName({ baseName: "GOAT", stageLabel: resolveWebAppStageLabel(env) });

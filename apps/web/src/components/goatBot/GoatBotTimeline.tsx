@@ -34,6 +34,7 @@ import { observeResize } from "~/lib/observeResize";
 import { formatShortTimestamp } from "~/timestampFormat";
 
 import { MemorySettingsEntry } from "../settings/MemorySettings";
+import { focusGoatBotRow } from "./goatBotRunRow";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotReplyFiles } from "./GoatBotReplyFiles";
 import {
@@ -112,8 +113,10 @@ export function GoatBotTimeline({
   /** How to open, by id, a routine an event line names; undefined when it no longer exists. */
   readonly onOpenRoutine?: ((routineId: string) => (() => void) | undefined) | undefined;
   readonly onDiscard?: ((clientKey: string) => void) | undefined;
-  /** Sends a question's choice as the user's answer; absent while the bot can't take messages. */
-  readonly onPick?: ((answer: string, taskId?: string, questionId?: string) => void) | undefined;
+  /** Sends a question's answer and says whether it went in; absent while the bot can't take messages. */
+  readonly onPick?:
+    | ((answer: string, taskId?: string, questionId?: string) => boolean | void)
+    | undefined;
 }) {
   const lastCopy = useRef<{ clear: () => void } | null>(null);
   const selectCopy = useStableCallback((owner: { clear: () => void }) => {
@@ -387,13 +390,7 @@ export function GoatBotTimeline({
                     <button
                       type="button"
                       className={style}
-                      onClick={() => {
-                        const element = Array.from(
-                          listRef.current?.querySelectorAll<HTMLElement>("[data-bot-row]") ?? [],
-                        ).find((node) => node.dataset.botRow === source.id);
-                        element?.scrollIntoView({ block: "center" });
-                        element?.focus({ preventScroll: true });
-                      }}
+                      onClick={() => focusGoatBotRow(listRef.current, source.id)}
                     >
                       {goatBotPreviewText(row.quote)}
                     </button>

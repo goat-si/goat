@@ -20,6 +20,12 @@ import { cn } from "~/lib/utils";
 import { Sheet, SheetPopup, SheetTitle } from "../ui/sheet";
 import { GoatBotFileViewer } from "./GoatBotFileViewer";
 import { GoatBotOpenFileContext } from "./GoatBotReplyFiles";
+import {
+  centerGoatBotRow,
+  focusGoatBotRow,
+  GoatBotRunInChat,
+  goatBotRunReplyRow,
+} from "./goatBotRunRow";
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 import { useGoatBotRoutineLanding } from "./useGoatBotRoutineLanding";
 
@@ -51,6 +57,7 @@ import { GoatBotModelPicker } from "./GoatBotModelPicker";
 import { GoatBotNameRow } from "./GoatBotNameRow";
 import { GoatBotRemovedNotice } from "./GoatBotRemovedNotice";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
+import { GoatBotTypedAnswersScope } from "./GoatBotTypedAnswers";
 import { GoatBotActivityStatus } from "./GoatBotActivityStatus";
 import { GoatBotReplyStatus } from "./GoatBotReplyStatus";
 import { GoatBotStepsReader } from "./GoatBotStepsProvider";
@@ -66,6 +73,7 @@ import {
   type GoatBotAvailability,
   type GoatBotRemoval,
 } from "@goat/client-runtime/goatBot";
+const NO_ITEMS: ReadonlyArray<OrchestrationV2ProjectedTurnItem> = [];
 const EXAMPLES = [
   "Fix the flaky test in my project",
   "Review the latest changes",
@@ -159,6 +167,7 @@ function GoatBotChatViewWithSource(props: GoatBotChatViewProps) {
 function GoatBotChatViewContent({
   source,
   projectionRef,
+  visibleTurnItems,
   unreadSince,
   supportsTaskThreads = false,
   supportsTaskRetry = false,
@@ -203,13 +212,18 @@ function GoatBotChatViewContent({
   const acceptsFiles = canSend && attachmentSupport !== null;
   const composerRef = useRef<GoatBotComposerHandle>(null);
   const homeRef = useRef<HTMLButtonElement>(null);
+  const conversationRef = useRef<HTMLDivElement>(null);
   // Why the narrow sheet last closed: a draft action leaves focus in the message box and a file
-  // takes focus itself; plain dismissal returns focus to the chip that opened the sheet.
-  const sheetClosedFor = useRef<"draft" | "file" | null>(null);
+  // takes focus itself, and Show in chat lands on its row; plain dismissal returns focus to the
+  // chip that opened the sheet.
+  const sheetClosedFor = useRef<"draft" | "file" | { readonly row: string } | null>(null);
   const sheetFinalFocus = () => {
     const reason = sheetClosedFor.current;
     sheetClosedFor.current = null;
     if (reason === "file") return false;
+    if (typeof reason === "object" && reason !== null) {
+      return centerGoatBotRow(conversationRef.current, reason.row) ?? homeRef.current ?? true;
+    }
     const field = reason === "draft" ? composerRef.current?.field() : null;
     if (!field) return homeRef.current ?? true;
     field.setSelectionRange(field.value.length, field.value.length);
@@ -352,6 +366,21 @@ function GoatBotChatViewContent({
     viewing.threadId === bot.threadId
       ? viewing
       : null;
+  // A routine run's reply in this chat, for Home's run popover; none while the chat is out of view.
+  const showRunInChat = (inputId: string) => {
+    if (hidden || shownFile !== null) return undefined;
+    const rowId = goatBotRunReplyRow(visibleTurnItems ?? [], rows, inputId);
+    if (rowId === null) return undefined;
+    return () => {
+      if (narrow) {
+        sheetClosedFor.current = { row: rowId };
+        setHomeReturn(null);
+        setPanelOpen(false);
+      } else {
+        focusGoatBotRow(conversationRef.current, rowId);
+      }
+    };
+  };
   const [dragActive, setDragActive] = useState(false);
   // One value per bot server, so the reply file cards under every message skip re-rendering.
   const openFileStable = useStableCallback(openFile);
@@ -516,80 +545,89 @@ function GoatBotChatViewContent({
             sends={local.identity === timelineIdentity ? local.sends : 0}
           />
           {/* The conversation stays mounted under an open file, so closing it keeps its place. */}
-          <div className={cn("flex min-h-0 flex-1 flex-col", shownFile !== null && "hidden")}>
+          <div
+            ref={conversationRef}
+            className={cn("flex min-h-0 flex-1 flex-col", shownFile !== null && "hidden")}
+          >
             {/* An open file covers the conversation, so its activity lines stop reading. */}
             <GoatBotStepsReader rows={rows} paused={shownFile !== null || hidden}>
               <GoatBotOpenFileContext value={fileOpening}>
-                {rows.length > 0 ? (
-                  // History stays readable while the bot is unavailable; only sending stops.
-                  <GoatBotTimeline
-                    key={timelineIdentity}
-                    rows={rows}
-                    baselineIds={source.baselineIds}
-                    sourceIds={source.sourceIds}
-                    onExposure={onExposure}
-                    committedSends={source.committedSends}
-                    submissions={local.identity === timelineIdentity ? local.submissions : []}
-                    unreadSince={unreadSince}
-                    onReply={
-                      canSend
-                        ? (text) => {
-                            setReplyState({ botIdentity, text });
-                            composerRef.current?.focus();
-                          }
-                        : undefined
-                    }
-                    environmentId={environmentId}
-                    onOpenRoutine={routineLanding.openRoutine}
-                    taskThreads={supportsTaskThreads}
-                    retryEnvironmentId={supportsTaskRetry ? environmentId : null}
-                    replyingSince={removed ? null : replyingSince}
-                    onRetry={onRetryInput}
-                    onDiscard={onDiscardInput}
-                    onPick={
-                      canSend
-                        ? (answer, taskId, questionId) => {
-                            const result =
-                              taskId !== undefined && onSendToTask !== undefined
-                                ? onSendToTask(
-                                    ChannelTaskId.make(taskId),
-                                    answer,
-                                    [],
-                                    questionId === undefined
-                                      ? undefined
-                                      : ChannelQuestionId.make(questionId),
-                                  )
-                                : onSend(answer);
-                            recordSubmission(result);
-                          }
-                        : undefined
-                    }
-                  />
-                ) : removal !== null ? (
-                  <GoatBotRemovedNotice
-                    removal={removal}
-                    availability={availability}
-                    onRetryAvailability={onRetryAvailability}
-                    canOpenCurrentBot={canOpenCurrentBot}
-                    onUnarchive={onUnarchive}
-                    onRestore={member ? onRestore : undefined}
-                    memberName={member?.name ?? null}
-                    onCheckAgain={onCheckAgain}
-                  />
-                ) : (
-                  <GoatBotNotice
-                    availability={availability}
-                    homeMove={homeMove}
-                    onRetryAvailability={onRetryAvailability}
-                    legacyAgentRoute={legacyAgentRoute}
-                    onSelectExample={
-                      canSend
-                        ? (text) =>
-                            setSeed((previous) => ({ text, nonce: (previous?.nonce ?? 0) + 1 }))
-                        : undefined
-                    }
-                  />
-                )}
+                <GoatBotTypedAnswersScope
+                  destination={destination}
+                  visibleTurnItems={visibleTurnItems ?? NO_ITEMS}
+                  mainChat
+                >
+                  {rows.length > 0 ? (
+                    // History stays readable while the bot is unavailable; only sending stops.
+                    <GoatBotTimeline
+                      key={timelineIdentity}
+                      rows={rows}
+                      baselineIds={source.baselineIds}
+                      sourceIds={source.sourceIds}
+                      onExposure={onExposure}
+                      committedSends={source.committedSends}
+                      submissions={local.identity === timelineIdentity ? local.submissions : []}
+                      unreadSince={unreadSince}
+                      onReply={
+                        canSend
+                          ? (text) => {
+                              setReplyState({ botIdentity, text });
+                              composerRef.current?.focus();
+                            }
+                          : undefined
+                      }
+                      environmentId={environmentId}
+                      onOpenRoutine={routineLanding.openRoutine}
+                      taskThreads={supportsTaskThreads}
+                      retryEnvironmentId={supportsTaskRetry ? environmentId : null}
+                      replyingSince={removed ? null : replyingSince}
+                      onRetry={onRetryInput}
+                      onDiscard={onDiscardInput}
+                      onPick={
+                        canSend
+                          ? (answer, taskId, questionId) => {
+                              const result =
+                                taskId !== undefined && onSendToTask !== undefined
+                                  ? onSendToTask(
+                                      ChannelTaskId.make(taskId),
+                                      answer,
+                                      [],
+                                      questionId === undefined
+                                        ? undefined
+                                        : ChannelQuestionId.make(questionId),
+                                    )
+                                  : onSend(answer);
+                              return recordSubmission(result);
+                            }
+                          : undefined
+                      }
+                    />
+                  ) : removal !== null ? (
+                    <GoatBotRemovedNotice
+                      removal={removal}
+                      availability={availability}
+                      onRetryAvailability={onRetryAvailability}
+                      canOpenCurrentBot={canOpenCurrentBot}
+                      onUnarchive={onUnarchive}
+                      onRestore={member ? onRestore : undefined}
+                      memberName={member?.name ?? null}
+                      onCheckAgain={onCheckAgain}
+                    />
+                  ) : (
+                    <GoatBotNotice
+                      availability={availability}
+                      homeMove={homeMove}
+                      onRetryAvailability={onRetryAvailability}
+                      legacyAgentRoute={legacyAgentRoute}
+                      onSelectExample={
+                        canSend
+                          ? (text) =>
+                              setSeed((previous) => ({ text, nonce: (previous?.nonce ?? 0) + 1 }))
+                          : undefined
+                      }
+                    />
+                  )}
+                </GoatBotTypedAnswersScope>
               </GoatBotOpenFileContext>
             </GoatBotStepsReader>
           </div>
@@ -635,27 +673,29 @@ function GoatBotChatViewContent({
           className="flex shrink-0 border-l border-border"
           style={{ width: GOAT_BOT_HOME_DOCKED_WIDTH }}
         >
-          <GoatBotWorkPanel
-            key={homeKey}
-            environmentId={bot.environmentId}
-            threadId={bot.threadId}
-            onDraft={onDraft}
-            notesRefreshKey={notesRefreshKey}
-            onClose={() => {
-              setHomeReturn(null);
-              setPanelOpen(false);
-              // The chip says whether the panel is open, so closing hands control back to it.
-              homeRef.current?.focus();
-            }}
-            peekRows={rowsForTask}
-            peekSource={source}
-            onRetryInput={onRetryInput}
-            openFile={shownFile?.file.relativePath ?? null}
-            onOpenFile={openFile}
-            routineLanding={routineLanding.landing}
-            homeReturn={homeReturn}
-            onHomeReturnConsumed={() => setHomeReturn(null)}
-          />
+          <GoatBotRunInChat value={showRunInChat}>
+            <GoatBotWorkPanel
+              key={homeKey}
+              environmentId={bot.environmentId}
+              threadId={bot.threadId}
+              onDraft={onDraft}
+              notesRefreshKey={notesRefreshKey}
+              onClose={() => {
+                setHomeReturn(null);
+                setPanelOpen(false);
+                // The chip says whether the panel is open, so closing hands control back to it.
+                homeRef.current?.focus();
+              }}
+              peekRows={rowsForTask}
+              peekSource={source}
+              onRetryInput={onRetryInput}
+              openFile={shownFile?.file.relativePath ?? null}
+              onOpenFile={openFile}
+              routineLanding={routineLanding.landing}
+              homeReturn={homeReturn}
+              onHomeReturnConsumed={() => setHomeReturn(null)}
+            />
+          </GoatBotRunInChat>
         </aside>
       )}
       {bot && narrow && (
@@ -673,25 +713,27 @@ function GoatBotChatViewContent({
             className="max-sm:w-full max-sm:max-w-none"
           >
             <SheetTitle className="sr-only">{title} work</SheetTitle>
-            <GoatBotWorkPanel
-              key={homeKey}
-              environmentId={bot.environmentId}
-              threadId={bot.threadId}
-              onDraft={onDraft}
-              notesRefreshKey={notesRefreshKey}
-              onShowChat={() => {
-                setHomeReturn(null);
-                setPanelOpen(false);
-              }}
-              peekRows={rowsForTask}
-              peekSource={source}
-              onRetryInput={onRetryInput}
-              openFile={shownFile?.file.relativePath ?? null}
-              onOpenFile={openFile}
-              routineLanding={routineLanding.landing}
-              homeReturn={homeReturn}
-              onHomeReturnConsumed={() => setHomeReturn(null)}
-            />
+            <GoatBotRunInChat value={showRunInChat}>
+              <GoatBotWorkPanel
+                key={homeKey}
+                environmentId={bot.environmentId}
+                threadId={bot.threadId}
+                onDraft={onDraft}
+                notesRefreshKey={notesRefreshKey}
+                onShowChat={() => {
+                  setHomeReturn(null);
+                  setPanelOpen(false);
+                }}
+                peekRows={rowsForTask}
+                peekSource={source}
+                onRetryInput={onRetryInput}
+                openFile={shownFile?.file.relativePath ?? null}
+                onOpenFile={openFile}
+                routineLanding={routineLanding.landing}
+                homeReturn={homeReturn}
+                onHomeReturnConsumed={() => setHomeReturn(null)}
+              />
+            </GoatBotRunInChat>
           </SheetPopup>
         </Sheet>
       )}

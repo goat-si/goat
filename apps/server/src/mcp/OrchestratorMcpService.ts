@@ -15,6 +15,7 @@ import {
   type OrchestrationV2ThreadShell,
   OrchestratorMcpCapabilitiesResult,
   type OrchestratorMcpCreatedThread,
+  type OrchestratorMcpThreadTimelineItem,
   type OrchestratorMcpCapabilitiesInput,
   type OrchestratorMcpModelOption,
   type OrchestratorMcpCreateThreadsInput,
@@ -87,7 +88,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
-import { textPageEnd, timelineItem, turnItemText } from "./threadReadItems.ts";
+import { timelineItemsWithinBudget } from "./threadReadItems.ts";
 import * as Stream from "effect/Stream";
 import * as CloudSource from "../orchestration-v2/CloudTaskSourceService.ts";
 import * as ChannelChildWork from "../channels/ChannelChildWork.ts";
@@ -183,10 +184,6 @@ const TERMINAL_THREAD_STATUSES: ReadonlySet<string> = new Set([
   "interrupted",
 ]);
 const DEFAULT_THREAD_READ_LIMIT = 50;
-// Claude Code saves MCP results over ~25k tokens to a file instead of showing them. Thread JSON
-// runs about 2 chars per token, so a read stops adding items here and reports the rest as more.
-const THREAD_READ_BUDGET_CHARS = 30_000;
-const encodeJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const DEFAULT_THREAD_RUN_LIMIT = 10;
 const DEFAULT_THREAD_ITEM_MAX_CHARS = 20_000;
 
@@ -685,13 +682,12 @@ function taskResultTransfer(
 
 function pageIncludesTerminalTaskResult(input: {
   readonly parent: Pick<OrchestrationV2ThreadProjection, "thread" | "contextTransfers">;
-  readonly page: ReadonlyArray<OrchestrationV2ThreadProjection["visibleTurnItems"][number]>;
+  readonly items: ReadonlyArray<OrchestratorMcpThreadTimelineItem>;
   readonly task: OrchestrationV2Subagent;
   readonly target: Pick<
     OrchestrationV2ThreadProjection,
     "thread" | "runs" | "contextTransfers" | "messages" | "turnItems"
   >;
-  readonly maxChars: number;
 }): boolean {
   const transfer = taskResultTransfer(input.parent, input.target, input.task);
   if (transfer === undefined) return false;
@@ -704,17 +700,14 @@ function pageIncludesTerminalTaskResult(input: {
   const result = subagentResultForRun(input.target, run);
   if (result.messageId === null && result.turnItemId === null) return false;
 
-  return input.page.some((row) => {
-    if (row.sourceThreadId !== input.target.thread.id) return false;
+  return input.items.some((item) => {
+    if (item.sourceThreadId !== input.target.thread.id) return false;
     const matchesResult =
-      (result.turnItemId !== null && row.sourceItemId === result.turnItemId) ||
+      (result.turnItemId !== null && item.itemId === result.turnItemId) ||
       (result.messageId !== null &&
-        row.item.type === "assistant_message" &&
-        row.item.messageId === result.messageId);
-    if (!matchesResult) return false;
-
-    const text = turnItemText(row.item);
-    return text !== null && text.length <= textPageEnd(text, 0, input.maxChars);
+        item.type === "assistant_message" &&
+        item.messageId === result.messageId);
+    return matchesResult && item.text !== null && !item.textTruncated;
   });
 }
 
@@ -3660,26 +3653,18 @@ const make = Effect.gen(function* () {
         .toSorted((left, right) => right.ordinal - left.ordinal)
         .slice(0, input.runLimit ?? (summary ? 1 : DEFAULT_THREAD_RUN_LIMIT))
         .map(threadRun);
-      const allItems = timeline.items.map((row) =>
-        timelineItem({
+      const { items, start } = timelineItemsWithinBudget(
+        { thread, recentRuns, nextPosition: null, hasMore: false, earlierPosition: null },
+        timeline.items.map((row) => ({
           row,
           maxChars,
           messagesByThreadId,
           tasksByThreadId,
           ...(input.itemId === undefined ? {} : { textOffset: input.textOffset ?? 0 }),
-        }),
+        })),
+        newestFirst,
       );
-      // Keep the end of the page the caller is reading toward, and at least one item.
-      let size = encodeJsonText({ thread, recentRuns }).length;
-      let kept = 0;
-      for (const item of newestFirst ? allItems.toReversed() : allItems) {
-        size += encodeJsonText(item).length + 1;
-        if (kept > 0 && size > THREAD_READ_BUDGET_CHARS) break;
-        kept++;
-      }
-      const start = newestFirst ? allItems.length - kept : 0;
-      const items = allItems.slice(start, start + kept);
-      const page = timeline.items.slice(start, start + kept);
+      const page = timeline.items.slice(start, start + items.length);
       const returnedRunIds = new Set(
         page.filter((row) => row.sourceThreadId === target.thread.id).map((row) => row.item.runId),
       );
@@ -3688,12 +3673,9 @@ const make = Effect.gen(function* () {
         parent === undefined || input.tail !== undefined
           ? []
           : directAppOwnedChildTasks(parent, target, returnedRunIds);
-      if (
-        parent !== undefined &&
-        scope.thread !== undefined &&
-        tasks.length > 0 &&
-        (input.textOffset ?? 0) === 0
-      ) {
+      // A read past the end of an item's text shows the agent nothing to acknowledge.
+      const readPastEnd = (input.textOffset ?? 0) > 0 && items.every((item) => !item.text);
+      if (parent !== undefined && scope.thread !== undefined && tasks.length > 0 && !readPastEnd) {
         for (const task of tasks) {
           const transfer = taskResultTransfer(parent, target, task);
           const resultRunId = transfer?.sourcePoint.runId ?? delegatedTaskRun(target, task)?.id;
@@ -3709,10 +3691,9 @@ const make = Effect.gen(function* () {
           if (
             pageIncludesTerminalTaskResult({
               parent,
-              page,
+              items,
               task,
               target: { ...target, ...resultRecords },
-              maxChars,
             })
           ) {
             yield* readTask(
@@ -3741,7 +3722,8 @@ const make = Effect.gen(function* () {
         items,
         nextPosition: items.at(-1)?.position ?? null,
         // A summary returns no items, so there is nothing to page through.
-        hasMore: !summary && (timeline.hasMore || (!newestFirst && kept < allItems.length)),
+        hasMore:
+          !summary && (timeline.hasMore || (!newestFirst && items.length < timeline.items.length)),
         earlierPosition:
           !summary && (timeline.hasEarlier || start > 0) ? (items[0]?.position ?? null) : null,
       } satisfies OrchestratorMcpThreadReadResult;
