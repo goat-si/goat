@@ -57,6 +57,9 @@ vi.mock("~/state/environments", () => ({
         }
       : null,
   usePrimaryEnvironmentId: () => null,
+  // The gate's press-time read; Needs you never presses through it.
+  readEnvironment: () => null,
+  readPrimaryEnvironmentId: () => null,
 }));
 vi.mock("~/environments/primary/sessionCheck", () => ({
   primarySessionCheck: { subscribe: () => () => {}, revoked: () => false },
