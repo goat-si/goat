@@ -804,8 +804,8 @@ export async function boundedArchive(input: Extract<OfficeWorkerRequest, { type:
     for (const path of mediaSizes.keys()) if (!usedImages.has(path)) archive.remove(path);
     archive.file("word/document.xml", documents[0]!);
   }
-  const truncatedSheets = input.kind === "xlsx" ? await boundWorkbook(archive) : [];
-  return { archive, word, truncatedSheets };
+  const workbook = input.kind === "xlsx" ? await boundWorkbook(archive) : undefined;
+  return { archive, word, workbook };
 }
 
 export async function prepareOffice(
@@ -860,7 +860,14 @@ export async function prepareOffice(
   }
   return {
     bytes: await result.archive.generateAsync({ type: "arraybuffer", compression: "STORE" }),
-    truncated: result.word?.truncated || result.truncatedSheets.some(Boolean) || false,
+    truncated:
+      result.word?.truncated || result.workbook?.sheets.some((sheet) => sheet.truncated) || false,
+    view: result.workbook && {
+      hiddenGridlines: result.workbook.sheets.flatMap((sheet, index) =>
+        sheet.gridlines ? [] : [index],
+      ),
+      themeFonts: result.workbook.themeFonts,
+    },
   };
 }
 
