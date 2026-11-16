@@ -33,6 +33,7 @@ const withDispatch = <A, E>(
     readonly ready?: CloudMachineErrorReason;
     readonly stdout?: string;
     readonly profile?: string;
+    readonly hosts?: ReadonlyArray<{ readonly alias: string; readonly port: number | null }>;
   },
   body: (dispatch: SshRemoteDispatch.SshRemoteDispatch["Service"]) => Effect.Effect<A, E>,
 ) =>
@@ -89,13 +90,27 @@ const withDispatch = <A, E>(
       onAliasInvalidated: (listener: (alias: string) => Effect.Effect<void>) =>
         Effect.sync(() => void listeners.push(listener)),
     } as unknown as CloudMachineService.CloudMachineService["Service"];
-    const discoverHosts = vi
-      .spyOn(SshConfig, "discoverSshHosts")
-      .mockReturnValue(
-        Effect.succeed([
-          { alias: FOREIGN, hostname: FOREIGN, username: null, port: null, source: "ssh-config" },
-        ]),
-      );
+    const discoverHosts = vi.spyOn(SshConfig, "discoverSshHosts").mockReturnValue(
+      Effect.succeed(
+        options.hosts === undefined
+          ? [
+              {
+                alias: FOREIGN,
+                hostname: FOREIGN,
+                username: null,
+                port: null,
+                source: "ssh-config",
+              },
+            ]
+          : options.hosts.map(({ alias, port }) => ({
+              alias,
+              hostname: alias,
+              username: null,
+              port,
+              source: "known-hosts" as const,
+            })),
+      ),
+    );
     const managerLayer = vi
       .spyOn(SshTunnel.SshEnvironmentManager, "layer")
       .mockReturnValue(Layer.succeed(SshTunnel.SshEnvironmentManager, manager));
@@ -187,6 +202,28 @@ describe("SshRemoteDispatch with cloud machines", () => {
       expect(listeners).toHaveLength(1);
       yield* listeners[0]!(OWNED);
       expect(events).toEqual([`disconnect:${OWNED}`]);
+    }),
+  );
+
+  it.effect("lists and probes a host once when known_hosts has it on several ports", () =>
+    Effect.gen(function* () {
+      const { result, events } = yield* withDispatch(
+        {
+          hosts: [
+            { alias: "box.example", port: 2222 },
+            { alias: "box.example", port: 2223 },
+          ],
+        },
+        (dispatch) => dispatch.listHosts({ probe: true }),
+      );
+      expect(events).toEqual(["ssh:box.example"]);
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: [
+          { alias: "box.example", source: "known-hosts", reachable: false },
+          { alias: OWNED, source: "cloud-machine" },
+        ],
+      });
     }),
   );
 });

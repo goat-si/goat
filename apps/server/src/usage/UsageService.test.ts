@@ -5,6 +5,8 @@ import { registerMusePendingTest } from "./usageMusePending.testkit.ts";
 import { registerCacheUpgradeTest } from "./usageCacheUpgrade.testkit.ts";
 import { registerCompressedRolloutTest } from "./usageCompressedRollout.testkit.ts";
 import { registerClaudeCopiesTests } from "./usageClaudeCopies.testkit.ts";
+import { registerProvisionalTests } from "./usageProvisional.testkit.ts";
+import { registerCodexTierReparseTest } from "./usageCodexTierReparse.testkit.ts";
 // @effect-diagnostics nodeBuiltinImport:off - the suite seeds and grows real transcript trees on disk, outside the service's Effect FileSystem
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
@@ -294,7 +296,7 @@ const writeCursorLogin = (home: string) =>
     await NodeFSP.writeFile(authPath, "{}");
   });
 
-const seedCodexHistory = (input: {
+export const seedCodexHistory = (input: {
   id: string;
   nativeTurnId?: string;
   sessionId?: string;
@@ -2449,6 +2451,8 @@ describe("UsageService", () => {
   );
 
   registerClaudeCopiesTests(setup, layerService, claudeLine);
+  registerProvisionalTests(setup, layerService, claudeLine);
+  registerCodexTierReparseTest(setup, layerService, seedCodexHistory);
   it.effect(
     "keeps large-record totals and costs exact through append, dedupe, restart and cleanup",
     () =>
@@ -2888,7 +2892,14 @@ describe("UsageService", () => {
             HttpClient.HttpClient,
             HttpClient.make((request) =>
               Deferred.await(releaseRates).pipe(
-                Effect.as(HttpClientResponse.fromWeb(request, Response.json({}))),
+                Effect.as(
+                  HttpClientResponse.fromWeb(
+                    request,
+                    Response.json({
+                      "example-model": { input_cost_per_token: 1e-6, output_cost_per_token: 1e-5 },
+                    }),
+                  ),
+                ),
               ),
             ),
           ),
@@ -2907,7 +2918,8 @@ describe("UsageService", () => {
 
         const original = yield* Fiber.join(first);
         const updated = yield* Fiber.join(second);
-        assert.strictEqual(original.buckets[0]?.costUsd, 0);
+        // Fetched rates price the first read, so scans must start while the fetch is pending.
+        assert.isAbove(original.buckets[0]?.costUsd ?? 0, 0);
         assert.closeTo(updated.buckets[0]?.costUsd ?? -1, 0.00006, 1e-12);
       }).pipe(
         Effect.provide(layerService({ prefix: "usage-service-price-race-test", home, settings })),

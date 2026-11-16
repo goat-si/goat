@@ -98,6 +98,8 @@ const encodePreview = Schema.encodeSync(Schema.toCodecJson(ReadSchemas.DiffPrevi
 const withinBudget = <A>(encode: (value: A) => unknown, value: A) =>
   Buffer.byteLength(JSON.stringify(encode(value))) <= RESPONSE_BYTES;
 
+const USAGE_SOURCE_LIMIT = 32;
+
 export const usage = Effect.fn("ScopedReadMcp.usage")(function* (
   scope: McpInvocationScope,
   input: UsageSummaryInput,
@@ -123,6 +125,14 @@ export const usage = Effect.fn("ScopedReadMcp.usage")(function* (
         error.reason === "invalidWindow" ? invalid(error.detail) : unavailable(),
       ),
     );
+  // A provisional answer's refreshing mark must survive the source limit.
+  const sources =
+    data.sources.length > USAGE_SOURCE_LIMIT
+      ? [
+          ...data.sources.filter((source) => source.refreshing === true),
+          ...data.sources.filter((source) => source.refreshing !== true),
+        ]
+      : data.sources;
   const b = budget();
   const result = {
     ...data,
@@ -134,7 +144,7 @@ export const usage = Effect.fn("ScopedReadMcp.usage")(function* (
       fetchedAt: data.pricing.fetchedAt === null ? null : b.text(data.pricing.fetchedAt),
     },
     buckets: b.rows(data.buckets, 256),
-    sources: b.rows(data.sources, 32),
+    sources: b.rows(sources, USAGE_SOURCE_LIMIT),
     truncated: false,
   };
   result.truncated = b.truncated;

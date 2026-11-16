@@ -18,6 +18,7 @@ import {
   type OrchestrationV2Subagent,
   type ServerProvider,
 } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -344,6 +345,8 @@ export interface ServiceOptions {
   readonly race?: { current: Effect.Effect<void> | undefined };
   /** The next read of the parent's tasks returns these, as a call that read before a commit. */
   readonly staleTasks?: { current: ReadonlyArray<OrchestrationV2Subagent> | undefined };
+  /** Completed by the next runs-only read of the parent: a call's caller check, its last read before the continue lock. */
+  readonly beforeLock?: { current: Deferred.Deferred<void> | undefined };
 }
 
 const serviceLayer = ({ orchestrator, store }: Fixture, options: ServiceOptions = {}) =>
@@ -351,7 +354,7 @@ const serviceLayer = ({ orchestrator, store }: Fixture, options: ServiceOptions 
     const receipts = yield* Effect.serviceOption(CommandReceiptStore.CommandReceiptStoreV2);
     const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
     const ownerProfile = yield* required(BUILTIN_PERMISSION_PROFILES.owner, "the owner profile");
-    const { race: raceRef, staleTasks } = options;
+    const { race: raceRef, staleTasks, beforeLock } = options;
     const dependencies = Layer.mergeAll(
       NodeServices.layer,
       ServerSettings.layerTest({
@@ -385,6 +388,13 @@ const serviceLayer = ({ orchestrator, store }: Fixture, options: ServiceOptions 
         getThreadRecords: (id, fields, filter) =>
           store.getThreadRecords(id, fields, filter).pipe(
             Effect.orDie,
+            Effect.tap(() => {
+              const reached = beforeLock?.current;
+              if (reached === undefined || id !== parentId || fields.join() !== "runs")
+                return Effect.void;
+              if (beforeLock !== undefined) beforeLock.current = undefined;
+              return Deferred.succeed(reached, undefined);
+            }),
             Effect.map((records) => {
               const stale = staleTasks?.current;
               if (

@@ -17,7 +17,15 @@ import {
   type AgentTerminalSession,
   type AgentTerminalMutateInput,
 } from "./AgentTerminalState.ts";
-import { BoundedTerminalHistory, DEFAULT_HISTORY_BYTE_LIMIT } from "./BoundedTerminalHistory.ts";
+import {
+  BoundedTerminalHistory,
+  DEFAULT_HISTORY_BYTE_LIMIT,
+  type TerminalHistoryPersistenceCursor,
+} from "./BoundedTerminalHistory.ts";
+import {
+  readTerminalHistoryTail,
+  TERMINAL_HISTORY_COMPACTION_NOTICE,
+} from "./terminalHistoryFile.ts";
 import {
   neutralizeInheritedHistory,
   sanitizeTerminalHistoryChunk,
@@ -1379,6 +1387,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     yield* registerKillFiber(process, fiber);
   });
 
+  const persistedHistory = new WeakMap<BoundedTerminalHistory, TerminalHistoryPersistenceCursor>();
   const persistWorker = yield* makeKeyedCoalescingWorker<
     string,
     PersistHistoryRequest,
@@ -1399,9 +1408,19 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         return;
       }
 
+      const update = request.history.persistenceUpdate(
+        request.immediate ? undefined : persistedHistory.get(request.history),
+      );
+      if (update.append && update.data.length === 0) return;
+      // An append may partially succeed before failing. Retry from a full snapshot,
+      // never from an uncertain file offset.
+      persistedHistory.delete(request.history);
       yield* fileSystem
-        .writeFileString(historyPath(threadId, terminalId), request.history.value())
+        .writeFileString(historyPath(threadId, terminalId), update.data, {
+          flag: update.append ? "a" : "w",
+        })
         .pipe(
+          Effect.tap(() => Effect.sync(() => persistedHistory.set(request.history, update.cursor))),
           Effect.catch((error) =>
             Effect.logWarning("failed to persist terminal history", {
               threadId,
@@ -1443,30 +1462,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     yield* flushPersist(threadId, terminalId);
   });
 
-  const readHistoryTail = Effect.fn("terminal.readHistoryTail")(function* (filePath: string) {
-    const file = yield* fileSystem.open(filePath, { flag: "r" });
-    const info = yield* file.stat;
-    const limit = BigInt(historyByteLimit);
-    const offset = info.size > limit ? info.size - limit : 0n;
-    yield* file.seek(offset, "start");
-    const bytes = new Uint8Array(Number(info.size - offset));
-    let length = 0;
-    while (length < bytes.length) {
-      const read = Number(yield* file.read(bytes.subarray(length)));
-      if (read === 0) break;
-      length += read;
-    }
-    let start = 0;
-    if (offset > 0n) {
-      // A tail read can start inside a UTF-8 code point. Skip its remaining bytes.
-      while (start < length && ((bytes[start] ?? 0) & 0xc0) === 0x80) start += 1;
-    }
-    return {
-      history: new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes.subarray(start, length)),
-      truncated: offset > 0n,
-    };
-  });
-
   const readHistory = Effect.fn("terminal.readHistory")(function* (
     threadId: string,
     terminalId: string,
@@ -1483,7 +1478,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         ))
       )
         continue;
-      const { history: raw, truncated } = yield* readHistoryTail(sourcePath).pipe(
+      const { history: raw, truncated } = yield* readTerminalHistoryTail(
+        fileSystem,
+        sourcePath,
+        historyByteLimit,
+      ).pipe(
         Effect.scoped,
         Effect.mapError(
           (cause) => new TerminalHistoryError({ operation, threadId, terminalId, cause }),
@@ -1492,17 +1491,15 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       const history = new BoundedTerminalHistory(historyLineLimit, raw, historyByteLimit);
       const capped = history.value();
       if (migrating || truncated || capped !== raw) {
-        const write = migrating
-          ? Effect.gen(function* () {
-              const temporaryPath = yield* fileSystem.makeTempFileScoped({
-                directory: logsDir,
-                prefix: ".history-",
-              });
-              yield* fileSystem.writeFileString(temporaryPath, capped);
-              yield* fileSystem.rename(temporaryPath, nextPath);
-            }).pipe(Effect.scoped)
-          : fileSystem.writeFileString(nextPath, capped);
-        yield* write.pipe(
+        const write = Effect.gen(function* () {
+          const temporaryPath = yield* fileSystem.makeTempFileScoped({
+            directory: logsDir,
+            prefix: ".history-",
+          });
+          yield* fileSystem.writeFileString(temporaryPath, capped);
+          yield* fileSystem.rename(temporaryPath, nextPath);
+        }).pipe(
+          Effect.scoped,
           Effect.mapError(
             (cause) =>
               new TerminalHistoryError({
@@ -1513,6 +1510,22 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
               }),
           ),
         );
+        // The file keeps its old bytes, so the next full save compacts it instead.
+        yield* migrating
+          ? write
+          : write.pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("failed to compact terminal history", {
+                  threadId,
+                  terminalId,
+                  error,
+                }).pipe(
+                  Effect.andThen(
+                    Effect.sync(() => history.append(TERMINAL_HISTORY_COMPACTION_NOTICE)),
+                  ),
+                ),
+              ),
+            );
       }
       if (migrating) {
         yield* fileSystem.remove(sourcePath, { force: true }).pipe(

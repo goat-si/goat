@@ -101,9 +101,12 @@ import {
 } from "./lib/draftSshDestination";
 export { draftSshDestinationsEqual, type DraftSshDestination } from "./lib/draftSshDestination";
 import { create } from "zustand";
-import { persist, type PersistStorage, type StorageValue } from "zustand/middleware";
+import { persist } from "zustand/middleware";
+import {
+  createComposerPersistStorage,
+  type ComposerPersistState,
+} from "./composerDraftPersistStorage";
 import { useShallow } from "zustand/react/shallow";
-import { createDeferredStorage, createMemoryStorage } from "./lib/storage";
 import { getDefaultServerModel } from "./providerModels";
 import {
   replaceComposerContextReferences,
@@ -130,42 +133,7 @@ export type DraftThreadEnvMode = typeof DraftThreadEnvModeSchema.Type;
 export const DraftId = Schema.String.pipe(Schema.brand("DraftId"));
 export type DraftId = typeof DraftId.Type;
 
-const COMPOSER_PERSIST_DEBOUNCE_MS = 300;
-
-type ComposerPersistState =
-  | { capturedState: ComposerDraftStoreState }
-  | PersistedComposerDraftStoreState;
-
-const composerDebouncedStorage = createDeferredStorage<StorageValue<ComposerPersistState>>(
-  typeof localStorage !== "undefined" ? localStorage : createMemoryStorage(),
-  (value) =>
-    JSON.stringify({
-      state:
-        "capturedState" in value.state
-          ? partializeComposerDraftStoreState(value.state.capturedState)
-          : value.state,
-      version: value.version,
-    }),
-  COMPOSER_PERSIST_DEBOUNCE_MS,
-);
-
-const composerPersistStorage: PersistStorage<ComposerPersistState> = {
-  getItem: (name) => {
-    const raw = composerDebouncedStorage.getItem(name);
-    if (typeof raw !== "string") {
-      return null;
-    }
-    return JSON.parse(raw) as StorageValue<ComposerPersistState>;
-  },
-  setItem: (name, value) => composerDebouncedStorage.setItem(name, value),
-  removeItem: (name) => composerDebouncedStorage.removeItem(name),
-};
-
-if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-  window.addEventListener("beforeunload", () => {
-    composerDebouncedStorage.flush();
-  });
-}
+const composerPersist = createComposerPersistStorage(partializeComposerDraftStoreState);
 
 export const PersistedComposerImageAttachment = Schema.Struct({
   id: Schema.String,
@@ -355,7 +323,7 @@ const PersistedComposerDraftStoreState = Schema.Struct({
   ),
   stickyActiveProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
 });
-type PersistedComposerDraftStoreState = typeof PersistedComposerDraftStoreState.Type;
+export type PersistedComposerDraftStoreState = typeof PersistedComposerDraftStoreState.Type;
 
 const PersistedComposerDraftStoreStorage = Schema.Struct({
   version: Schema.Number,
@@ -437,7 +405,7 @@ interface ProjectDraftSession extends DraftSessionState {
 
 export type ComposerThreadTarget = ScopedThreadRef | DraftId;
 
-interface ComposerDraftStoreState extends PreviewTabDraftActions {
+export interface ComposerDraftStoreState extends PreviewTabDraftActions {
   draftsByThreadKey: Record<string, ComposerThreadDraftState>;
   draftThreadsByThreadKey: Record<string, DraftThreadState>;
   logicalProjectDraftThreadKeyByLogicalProjectKey: Record<string, string>;
@@ -2340,7 +2308,7 @@ function verifyPersistedAttachments(
 ): void {
   let persistedIdSet = new Set<string>();
   try {
-    composerDebouncedStorage.flush();
+    composerPersist.flush();
     persistedIdSet = new Set(readPersistedAttachmentIdsFromStorage(threadKey));
   } catch {
     persistedIdSet = new Set();
@@ -4235,7 +4203,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
     {
       name: COMPOSER_DRAFT_STORAGE_KEY,
       version: COMPOSER_DRAFT_STORAGE_VERSION,
-      storage: composerPersistStorage,
+      storage: composerPersist.storage,
       migrate: migratePersistedComposerDraftStoreState,
       partialize: (state): ComposerPersistState => ({ capturedState: state }),
       merge: (persistedState, currentState) => {
@@ -4267,6 +4235,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
   ),
 );
 
+composerPersist.markLoaded(composerDraftStore.getState());
 export const useComposerDraftStore = composerDraftStore;
 
 export function subscribeComposerDraftModelReconciliation(input: {
@@ -4428,7 +4397,7 @@ export function clearComposerDraftsEnvironment(environmentId: EnvironmentId): vo
       ),
     };
   });
-  composerDebouncedStorage.flush();
+  composerPersist.flush();
 }
 
 export function useComposerThreadDraft(threadRef: ComposerThreadTarget): ComposerThreadDraftState {

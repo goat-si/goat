@@ -46,7 +46,11 @@ const layerTest = Layer.mergeAll(
   Layer.provide(layerPlatformTest),
 );
 it.layer(layerTest)("limited provider queue", (it) => {
-  it.effect.each(["the reset passes", "the user resumes"] as const)(
+  it.effect.each([
+    "the reset passes",
+    "the user resumes",
+    "the mode changes after the reset",
+  ] as const)(
     "holds a limited provider's queue through another provider's turn until %s",
     (release) =>
       Effect.gen(function* () {
@@ -163,7 +167,25 @@ it.layer(layerTest)("limited provider queue", (it) => {
         const held = yield* orchestrator.getThreadProjection(threadId);
         assert.equal(held.runs.find((run) => run.id === queued.id)?.status, "queued");
 
-        if (release === "the reset passes") {
+        if (release === "the mode changes after the reset") {
+          // A mode change wakes the queue as an automatic start: the limit still holds it.
+          const setMode = (runtimeMode: "approval-required" | "full-access") =>
+            orchestrator.dispatch({
+              type: "thread.runtime-mode.set",
+              commandId: CommandId.make(`${threadId}:mode:${runtimeMode}`),
+              threadId,
+              runtimeMode,
+            });
+          yield* setMode("approval-required");
+          assert.equal(
+            (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+              (run) => run.id === queued.id,
+            )?.status,
+            "queued",
+          );
+          yield* TestClock.adjust("61 minutes");
+          yield* setMode("full-access");
+        } else if (release === "the reset passes") {
           yield* TestClock.adjust("61 minutes");
           yield* orchestrator.resumeQueuedRuns;
         } else {

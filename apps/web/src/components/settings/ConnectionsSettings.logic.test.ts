@@ -7,7 +7,9 @@ import {
   applyWslEnableSelection,
   resolveTailscaleServeBaseUrl,
   selectQrEndpointOption,
+  sshHostSuggestionValue,
   togglePairingScopeSelection,
+  unsavedSshHostSuggestions,
 } from "./ConnectionsSettings.logic";
 
 describe("togglePairingScopeSelection", () => {
@@ -599,4 +601,38 @@ it("does not apply coherent evidence from a different saved SSH route to this ro
   });
   expect(result.tone).toBe("error");
   expect(result.text).toContain("did not respond");
+});
+
+describe("unsavedSshHostSuggestions", () => {
+  const knownHost = (port: number | null) => ({
+    alias: "100.64.0.1",
+    hostname: "100.64.0.1",
+    username: null,
+    port,
+    source: "known-hosts" as const,
+  });
+
+  it("keeps a known_hosts port that a host saved on another port does not use", () => {
+    const hosts = [knownHost(null), knownHost(2222), knownHost(2223)];
+    // Saving the bare host stores its alias and its address under the same key.
+    const saved = new Set(["100.64.0.1", "100.64.0.1:2223"]);
+    expect(unsavedSshHostSuggestions(hosts, saved).map((host) => host.port)).toEqual([2222]);
+    expect(hosts.map(sshHostSuggestionValue)).toEqual([
+      "100.64.0.1",
+      "[100.64.0.1]:2222",
+      "[100.64.0.1]:2223",
+    ]);
+  });
+
+  it("hides a saved configured alias and keeps its value bare", () => {
+    const configured = {
+      alias: "devbox",
+      hostname: "devbox.local",
+      username: "ubuntu",
+      port: 2222,
+      source: "ssh-config" as const,
+    };
+    expect(unsavedSshHostSuggestions([configured], new Set(["devbox"]))).toEqual([]);
+    expect(sshHostSuggestionValue(configured)).toBe("devbox");
+  });
 });

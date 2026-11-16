@@ -26,6 +26,8 @@ import {
   parseRemotePairingFields,
   savedConnectionPresentation,
   savedConnectionSshRoute,
+  sshHostSuggestionValue,
+  unsavedSshHostSuggestions,
 } from "./ConnectionsSettings.logic";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { SessionPermissions } from "./SessionPermissions";
@@ -840,13 +842,10 @@ export function ConnectionEnvironmentsSection({
         target.source === "ssh-config" &&
         target.alias.toLowerCase() === savedBackendSshHost.trim().toLowerCase(),
     );
-  const unsavedDiscoveredSshHosts = discoveredSshHosts.filter((target) => {
-    const address = formatDesktopSshTarget(target);
-    return (
-      !savedDesktopSshEnvironmentKeys.has(target.alias) &&
-      (target.source === "ssh-config" || !savedDesktopSshEnvironmentKeys.has(address))
-    );
-  });
+  const unsavedDiscoveredSshHosts = unsavedSshHostSuggestions(
+    discoveredSshHosts,
+    savedDesktopSshEnvironmentKeys,
+  );
   const filteredDiscoveredSshHosts = filterDiscoveredSshHosts(
     unsavedDiscoveredSshHosts,
     savedBackendSshHost,
@@ -1187,12 +1186,14 @@ export function ConnectionEnvironmentsSection({
     invalidateSshPreflight();
     setSavedBackendSshHost(target.alias);
     setSavedBackendSshUsername("");
-    setSavedBackendSshPort("");
+    // Only a known_hosts entry's port is an override; a configured alias resolves its own Port.
+    const port = target.source === "known-hosts" ? target.port : null;
+    setSavedBackendSshPort(port === null ? "" : String(port));
     await checkSavedBackendSshTarget({
       alias: target.alias,
       hostname: target.alias,
       username: null,
-      port: null,
+      port,
     });
   };
 
@@ -1508,7 +1509,7 @@ export function ConnectionEnvironmentsSection({
           </label>
           <Autocomplete
             items={filteredDiscoveredSshHosts}
-            itemToStringValue={(target) => target.alias}
+            itemToStringValue={sshHostSuggestionValue}
             mode="none"
             openOnInputClick
             open={sshHostSuggestionsOpen}
@@ -1522,7 +1523,9 @@ export function ConnectionEnvironmentsSection({
               setSavedBackendSshHost(value);
               if (eventDetails.reason !== "item-press") return;
 
-              const target = filteredDiscoveredSshHosts.find((host) => host.alias === value);
+              const target = filteredDiscoveredSshHosts.find(
+                (host) => sshHostSuggestionValue(host) === value,
+              );
               if (target) void handleSelectSshHostSuggestion(target);
             }}
           >

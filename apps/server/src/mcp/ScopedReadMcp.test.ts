@@ -544,6 +544,34 @@ it.effect(
     }),
 );
 
+it.effect("keeps refreshing usage sources when more than 32 sources are cut", () =>
+  Effect.gen(function* () {
+    const f = fixture(true);
+    const base = yield* Usage.UsageService.pipe(
+      Effect.flatMap((service) => service.readSummary(usageInput)),
+      Effect.provide(f.layer),
+    );
+    // A provisional answer marks the sources still scanning; truncation must not drop the mark.
+    const summary = {
+      ...base,
+      sources: base.sources.map((source, index) =>
+        index >= base.sources.length - 3 ? { ...source, refreshing: true as const } : source,
+      ),
+    };
+    const result = yield* Reads.usage(client(), { ...usageInput, provisional: true }).pipe(
+      Effect.provide(
+        Layer.merge(
+          f.layer,
+          Layer.mock(Usage.UsageService)({ readSummary: () => Effect.succeed(summary) }),
+        ),
+      ),
+    );
+    expect(result.truncated).toBe(true);
+    expect(result.sources).toHaveLength(32);
+    expect(result.sources.filter((source) => source.refreshing === true)).toHaveLength(3);
+  }),
+);
+
 it.effect("stops usage rows at the total byte budget before the count limit", () =>
   Effect.gen(function* () {
     const f = fixture(true, true);

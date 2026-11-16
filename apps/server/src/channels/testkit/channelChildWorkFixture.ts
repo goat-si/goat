@@ -142,6 +142,7 @@ const threadsLayer = (
       getThreadHistoryPage: unused,
       getTimelinePage: unused,
       getMessageCount: unused,
+      getMessagesById: unused,
       getTurnItem: unused,
       getReviewLedgerEntries: unused,
       getThreadRecords: ((threadId: ThreadId) =>
