@@ -95,6 +95,8 @@ Fresh review at `8f7ba4655f`: BLOCK, three P2 and six P3, all in L105's event fe
 
 ## Known limits
 
+- On an ordinary github.com account the feed never runs: GitHub refuses the subscription with 403 "Event subscriptions are not enabled for this account" (the live probe), so such an account gets only the two-minute sweep, plus one refused POST per hour per credential per server. Coordinator decision 2026-11-16: L105 and L118 stay in the lane; ruling C11 A stands.
+- No live event stream has been seen. The stream handling (SSE frames, retry: lines, end frames, silence, reconnects, renewals) is proven only against a fake HTTP client in gitHubPullRequestEvents.test.ts.
 - Two GOAT servers on one github.com account each hold their own feed and subscription; whether GitHub lets the second subscribe or ends the first is unknown (the probed account has no event streams).
 - Users cannot turn the feed off; an account without event streams costs one refused POST per hour per server.
 - Events closer than 20 seconds apart keep deferring the event read; the two-minute sweep still reads.
