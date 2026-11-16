@@ -297,7 +297,7 @@
   "apps/server/src/orchestration-v2/IdleCompaction.ts": { "nonNull": 1 },
   "apps/server/src/orchestration-v2/LiveStreamBudget.ts": { "nonNull": 1 },
   "apps/server/src/orchestration-v2/Orchestrator.control-reads.test.ts": { "lines": 1655 },
-  "apps/server/src/orchestration-v2/Orchestrator.ts": { "lines": 13541, "nonNull": 11 },
+  "apps/server/src/orchestration-v2/Orchestrator.ts": { "lines": 13537, "nonNull": 11 },
   "apps/server/src/orchestration-v2/ProjectionMaintenance.ts": { "nonNull": 5 },
   "apps/server/src/orchestration-v2/ProjectionRecovery.test.ts": { "lines": 1377 },
   "apps/server/src/orchestration-v2/ProjectionStore.test.ts": { "lines": 7673 },
