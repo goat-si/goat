@@ -6,6 +6,8 @@ Merged into #3397 at 17af62cba1 (2026-11-16): lane head bc66da99d9 (round 3).
 
 Merged into #3397 at 6eb4322bf5 (2026-11-16): lane head 731b575aeb (follow-up, 49b8e72219).
 
+Merged into #3397 at 9253116afa (2026-11-16): lane head 9d7281d0c4
+
 Count: 10 ported, 1 landed in L03m, 5 real deferrals, 0 not attempted (16 upstream commits), plus the 3376c8da92 partial row. Round 3 also ports 77f40aff37 (#3176:195, deferred on becc7d3510). Delta: `06bd84623b` ported, `476fc9be66` ported in part; its stale shell resume check stays open on 9557ab46c5 (deferred in cycle 261109).
 
 ## Decisions
