@@ -86,3 +86,38 @@ it("bounds long partial lines and joins surrogate pairs across chunk boundaries"
     expect(Buffer.byteLength(history.value())).toBeLessThanOrEqual(maxBytes);
   }
 });
+
+it("restores bounded history across append compaction, clears and split Unicode", () => {
+  const maxBytes = 64;
+  const history = new TerminalManager.BoundedTerminalHistory(3, "", maxBytes);
+  let cursor: ReturnType<typeof history.persistenceUpdate>["cursor"] | undefined;
+  let persisted = "";
+  let compactions = 0;
+  const flush = () => {
+    const update = history.persistenceUpdate(cursor);
+    if (!update.append) compactions += 1;
+    const encoded = Buffer.from(update.data).toString();
+    persisted = update.append ? persisted + encoded : encoded;
+    cursor = update.cursor;
+    expect(Buffer.byteLength(persisted)).toBeLessThanOrEqual(maxBytes * 2);
+    expect(retainedHistory(persisted, 3, maxBytes)).toBe(Buffer.from(history.value()).toString());
+  };
+  for (let index = 0; index < 100; index += 1) {
+    history.append(`line ${index} 名\n`);
+    flush();
+  }
+  expect(compactions).toBeGreaterThan(1);
+  expect(compactions).toBeLessThan(50);
+  history.clear();
+  flush();
+  expect(persisted).toBe("");
+  history.append("\ud83d");
+  flush();
+  history.append("\ude80");
+  flush();
+  expect(persisted).toBe("🚀");
+  // More output than the retained window between flushes must replace the file.
+  history.append("z".repeat(maxBytes * 3));
+  flush();
+  expect(persisted).toBe("z".repeat(maxBytes));
+});

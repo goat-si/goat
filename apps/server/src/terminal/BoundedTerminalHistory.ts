@@ -7,6 +7,12 @@ interface TerminalHistoryChunk {
   lineBreaks: number;
 }
 
+export interface TerminalHistoryPersistenceCursor {
+  readonly generation: number;
+  readonly offset: number;
+  readonly fileBytes: number;
+}
+
 export class BoundedTerminalHistory {
   private readonly maxLines: number;
   private readonly maxBytes: number;
@@ -20,6 +26,7 @@ export class BoundedTerminalHistory {
   // Reading the old string's tail on each append can force chunk concatenation.
   private lastCodeUnit: number | undefined;
   private cachedValue: string | null = "";
+  private generation = 0;
 
   constructor(maxLines: number, initial: string, maxBytes = DEFAULT_HISTORY_BYTE_LIMIT) {
     this.maxLines = maxLines;
@@ -56,6 +63,8 @@ export class BoundedTerminalHistory {
       firstCode <= 0xdfff
     ) {
       // Joining a split surrogate changes its UTF-8 size from 3 to 4 bytes.
+      // The previous flush may have encoded the lone surrogate as a replacement character.
+      this.generation += 1;
       previous.data += text[0];
       previous.byteLength += 1;
       this.byteLength += 1;
@@ -181,6 +190,7 @@ export class BoundedTerminalHistory {
   }
 
   clear(): void {
+    this.generation += 1;
     this.chunks = [];
     this.start = 0;
     this.endPosition = 0;
@@ -189,6 +199,39 @@ export class BoundedTerminalHistory {
     this.lineBreaks = 0;
     this.lastCodeUnit = undefined;
     this.cachedValue = "";
+  }
+
+  persistenceUpdate(previous?: TerminalHistoryPersistenceCursor) {
+    const offset = this.endPosition;
+    let data: string | undefined;
+    if (previous?.generation === this.generation) {
+      let remaining = offset - previous.offset;
+      const tail: string[] = [];
+      for (let index = this.chunks.length - 1; remaining > 0 && index >= this.start; index -= 1) {
+        const chunk = this.chunks[index];
+        if (!chunk) throw new Error("Terminal history chunk invariant");
+        const suffix = chunk.data.slice(Math.max(0, chunk.data.length - remaining));
+        tail.push(suffix);
+        remaining -= suffix.length;
+      }
+      if (remaining === 0) data = tail.toReversed().join("");
+    }
+    // Keep the on-disk log bounded while amortizing compaction across new output.
+    // Readers already cap the plain-text tail by bytes and lines.
+    const append =
+      data !== undefined &&
+      previous !== undefined &&
+      previous.fileBytes + Buffer.byteLength(data) <= this.maxBytes * 2;
+    const output = append && data !== undefined ? data : this.value();
+    return {
+      data: output,
+      append,
+      cursor: {
+        generation: this.generation,
+        offset,
+        fileBytes: (append ? previous.fileBytes : 0) + Buffer.byteLength(output),
+      },
+    };
   }
 
   get position(): number {

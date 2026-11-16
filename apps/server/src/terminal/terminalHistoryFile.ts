@@ -28,3 +28,7 @@ export const readTerminalHistoryTail = Effect.fn("terminal.readHistoryTail")(fun
     truncated: offset > 0n,
   };
 });
+
+// One line in the terminal itself, so a failed compaction is not hidden in the server log.
+export const TERMINAL_HISTORY_COMPACTION_NOTICE =
+  "\r\n[GOAT] Could not shrink this terminal's saved history; it will be rewritten on the next save.\r\n";

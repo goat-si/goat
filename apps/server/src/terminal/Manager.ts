@@ -17,8 +17,15 @@ import {
   type AgentTerminalSession,
   type AgentTerminalMutateInput,
 } from "./AgentTerminalState.ts";
-import { BoundedTerminalHistory, DEFAULT_HISTORY_BYTE_LIMIT } from "./BoundedTerminalHistory.ts";
-import { readTerminalHistoryTail } from "./terminalHistoryFile.ts";
+import {
+  BoundedTerminalHistory,
+  DEFAULT_HISTORY_BYTE_LIMIT,
+  type TerminalHistoryPersistenceCursor,
+} from "./BoundedTerminalHistory.ts";
+import {
+  readTerminalHistoryTail,
+  TERMINAL_HISTORY_COMPACTION_NOTICE,
+} from "./terminalHistoryFile.ts";
 import {
   neutralizeInheritedHistory,
   sanitizeTerminalHistoryChunk,
@@ -1380,6 +1387,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     yield* registerKillFiber(process, fiber);
   });
 
+  const persistedHistory = new WeakMap<BoundedTerminalHistory, TerminalHistoryPersistenceCursor>();
   const persistWorker = yield* makeKeyedCoalescingWorker<
     string,
     PersistHistoryRequest,
@@ -1400,9 +1408,19 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         return;
       }
 
+      const update = request.history.persistenceUpdate(
+        request.immediate ? undefined : persistedHistory.get(request.history),
+      );
+      if (update.append && update.data.length === 0) return;
+      // An append may partially succeed before failing. Retry from a full snapshot,
+      // never from an uncertain file offset.
+      persistedHistory.delete(request.history);
       yield* fileSystem
-        .writeFileString(historyPath(threadId, terminalId), request.history.value())
+        .writeFileString(historyPath(threadId, terminalId), update.data, {
+          flag: update.append ? "a" : "w",
+        })
         .pipe(
+          Effect.tap(() => Effect.sync(() => persistedHistory.set(request.history, update.cursor))),
           Effect.catch((error) =>
             Effect.logWarning("failed to persist terminal history", {
               threadId,
@@ -1473,17 +1491,15 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       const history = new BoundedTerminalHistory(historyLineLimit, raw, historyByteLimit);
       const capped = history.value();
       if (migrating || truncated || capped !== raw) {
-        const write = migrating
-          ? Effect.gen(function* () {
-              const temporaryPath = yield* fileSystem.makeTempFileScoped({
-                directory: logsDir,
-                prefix: ".history-",
-              });
-              yield* fileSystem.writeFileString(temporaryPath, capped);
-              yield* fileSystem.rename(temporaryPath, nextPath);
-            }).pipe(Effect.scoped)
-          : fileSystem.writeFileString(nextPath, capped);
-        yield* write.pipe(
+        const write = Effect.gen(function* () {
+          const temporaryPath = yield* fileSystem.makeTempFileScoped({
+            directory: logsDir,
+            prefix: ".history-",
+          });
+          yield* fileSystem.writeFileString(temporaryPath, capped);
+          yield* fileSystem.rename(temporaryPath, nextPath);
+        }).pipe(
+          Effect.scoped,
           Effect.mapError(
             (cause) =>
               new TerminalHistoryError({
@@ -1494,6 +1510,22 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
               }),
           ),
         );
+        // The file keeps its old bytes, so the next full save compacts it instead.
+        yield* migrating
+          ? write
+          : write.pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("failed to compact terminal history", {
+                  threadId,
+                  terminalId,
+                  error,
+                }).pipe(
+                  Effect.andThen(
+                    Effect.sync(() => history.append(TERMINAL_HISTORY_COMPACTION_NOTICE)),
+                  ),
+                ),
+              ),
+            );
       }
       if (migrating) {
         yield* fileSystem.remove(sourcePath, { force: true }).pipe(
