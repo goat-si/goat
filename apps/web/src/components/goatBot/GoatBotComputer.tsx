@@ -51,7 +51,7 @@ export function GoatBotComputer({
       : null,
   );
   const refresh = tasks.refresh;
-  // oxlint-disable-next-line goat/react-effect-budget -- Work starts and moves between machines on the server; read the list again each time the tab opens.
+  // oxlint-disable-next-line goat/react-effect-budget -- Work starts and moves between machines on the server; read the list again when the card opens, when the bot's work changes, and when it learns which bot to ask for.
   useEffect(() => {
     if (known && changes) refresh();
   }, [known, refresh, changes]);
@@ -63,7 +63,8 @@ export function GoatBotComputer({
         />
       </Inset>
     );
-  if (!known)
+  // Only a connected computer without a config is a dead end; before that, the config may arrive.
+  if (!known && environment?.connection.phase === "connected")
     return (
       <Inset>
         <GoatBotPanelFailure message="Machines can't be listed from this server right now." />

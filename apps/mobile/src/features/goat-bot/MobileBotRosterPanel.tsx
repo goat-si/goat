@@ -61,11 +61,19 @@ export function MobileBotRoster(props: {
   // A row's action menu is a native alert: open from the long press until a choice or dismissal.
   const [menuOpen, setMenuOpen] = useState(false);
   const registry = useContext(RegistryContext);
+  // Every control the roster hands out reads the store when pressed: a refusal that has reached
+  // it before React renders it opens, asks or starts nothing.
+  const readableNow = () => {
+    const now = mount.current;
+    const live = environmentId !== null && isComputerReadable(registry, environmentId);
+    return now.mounted && now.visible && live;
+  };
   const menu = (
     title: string,
     message: string | undefined,
     buttons: ReadonlyArray<AlertButton>,
   ) => {
+    if (!readableNow()) return;
     setMenuOpen(true);
     const openedOn = environmentId;
     Alert.alert(
@@ -91,7 +99,7 @@ export function MobileBotRoster(props: {
   const operation = slot.operation;
   const create: CreateNewBot = (name, clientRequestId) =>
     manage.create({ name, avatar: null, purpose: "" }, null, clientRequestId);
-  const { onOpenBot } = props;
+  const { onOpenBot, onOpenTask } = props;
   const navigation = useNavigation();
   // This roster mount as it is now: mounted, on screen, presenting a sheet or menu of its own, its
   // environment and whether it may be read. A create's answer and a menu choice read it then.
@@ -129,7 +137,9 @@ export function MobileBotRoster(props: {
         now.visible &&
         !now.presenting &&
         whereNow(navigation) === tapped &&
-        now.environmentId === sentTo
+        now.environmentId === sentTo &&
+        // The store when the answer arrives: a refusal not yet rendered opens nothing.
+        isComputerReadable(registry, sentTo)
       )
         onOpenBot({ kind: "member", profile: bot });
     };
@@ -218,21 +228,20 @@ export function MobileBotRoster(props: {
                           : `Unavailable while ${roster.computerLabel ?? "its computer"} is offline`,
                     }),
                 onNewBot: () => {
-                  // Read the store when pressed: a refusal not yet rendered starts nothing.
-                  if (
-                    environmentId !== null &&
-                    listed !== null &&
-                    isComputerReadable(registry, environmentId)
-                  )
+                  if (readableNow() && environmentId !== null && listed !== null)
                     startNewBot(environmentId, listed, create, openIfStillHere(), mount, uuidv4);
                 },
-                onLongPressBot: askAbout,
+                onLongPressBot: (entry) => {
+                  if (readableNow()) askAbout(entry);
+                },
                 canRestore: manage.mayManage,
-                onRestoreDeleted: (bot) =>
-                  menu(`Restore ${bot.name}?`, "Its conversation comes back.", [
-                    { text: "Cancel", style: "cancel" },
-                    { text: "Restore", onPress: () => void manage.restore(bot) },
-                  ]),
+                onRestoreDeleted: (bot) => {
+                  if (readableNow())
+                    menu(`Restore ${bot.name}?`, "Its conversation comes back.", [
+                      { text: "Cancel", style: "cancel" },
+                      { text: "Restore", onPress: () => void manage.restore(bot) },
+                    ]);
+                },
               }
             : undefined
         }
@@ -241,8 +250,17 @@ export function MobileBotRoster(props: {
         mainUnreadable={!mainReadable}
         unread={preview?.unread}
         mainEnvironmentId={rosterReadable ? environmentId : null}
-        onOpenBot={props.onOpenBot}
-        onOpenTask={props.onOpenTask}
+        // The main tile stays pressable while unreadable, as on web; a guard would silently
+        // disable it, and before any computer is chosen too. What its chat shows is the chat's.
+        onOpenBot={(bot) => {
+          if (bot.kind === "main" || readableNow()) onOpenBot(bot);
+        }}
+        onOpenTask={
+          onOpenTask &&
+          ((bot, taskId) => {
+            if (readableNow()) onOpenTask(bot, taskId);
+          })
+        }
         onUnknownBot={roster.refreshBots ?? undefined}
         visible={props.visible}
         newBotRow={
@@ -251,12 +269,12 @@ export function MobileBotRoster(props: {
               operation={operation}
               created={created}
               onRetry={() => {
-                // Read the store when pressed: a refusal not yet rendered sends nothing.
-                if (isComputerReadable(registry, environmentId))
-                  retryNewBot(environmentId, create, openIfStillHere(), mount);
+                if (readableNow()) retryNewBot(environmentId, create, openIfStillHere(), mount);
               }}
               onDismiss={() => dismissNewBot(environmentId)}
-              onOpen={(bot) => onOpenBot({ kind: "member", profile: bot })}
+              onOpen={(bot) => {
+                if (readableNow()) onOpenBot({ kind: "member", profile: bot });
+              }}
               onDismissCreated={(bot) => dismissCreatedBot(environmentId, bot.botId)}
             />
           ) : null

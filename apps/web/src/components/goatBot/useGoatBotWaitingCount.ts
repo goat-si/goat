@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { goatBotSupportUnknown } from "@goat/client-runtime/goatBot";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -98,12 +99,22 @@ export function useGoatBotWaitingCount() {
   const environmentId = environment?.environmentId ?? null;
   const connected = environment?.connected === true;
   const supportsStatus = environment?.supportsBotStatus === true;
+  // Without the config, the server may hold member bots, and an unscoped page counts their work.
+  const configUnknown = goatBotSupportUnknown(environment);
   const count = useCounts((state) =>
     environmentId === null ? undefined : state.counts.get(environmentId),
   );
   useRefreshOnBotVisit(environmentId);
   useEffect(() => {
-    if (!enabled || !connected || !port || environmentId === null || generation === 0) return;
+    if (
+      !enabled ||
+      !connected ||
+      !port ||
+      environmentId === null ||
+      generation === 0 ||
+      configUnknown
+    )
+      return;
     let observer = observers.get(environmentId);
     if (
       observer &&
@@ -195,7 +206,7 @@ export function useGoatBotWaitingCount() {
         observers.delete(environmentId);
       }
     };
-  }, [enabled, connected, environmentId, port, generation, supportsStatus]);
+  }, [enabled, connected, environmentId, port, generation, supportsStatus, configUnknown]);
   return enabled && connected ? count : undefined;
 }
 
