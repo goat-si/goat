@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
+import type { EnvironmentConnectionPhase } from "@goat/client-runtime/connection";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
-import { Atom } from "effect/reactivity";
+import type { BotProfile, EnvironmentId } from "@goat/contracts";
 import { useState } from "react";
 
 import { persistClientSettingsPatch, useClientSettings } from "../../hooks/useSettings";
@@ -9,6 +10,7 @@ import { useEnvironment } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { GoatBotProfileDialog } from "../goatBot/GoatBotProfileDialog";
+import { useGoatBotComputerReadable } from "../goatBot/useGoatBotComputerReadable";
 import { useGoatBotEnabled } from "../goatBot/useGoatBotSession";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
@@ -18,61 +20,94 @@ import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsL
 import { searchableSetting } from "./settingsSearch";
 import { SlackChannelSettings } from "./SlackChannelSettings";
 
-const NO_PERMISSION = Atom.make(false);
-
 /** The main bot's name, avatar and purpose, on the computer GOAT Bot runs on. */
 function GoatBotProfileSection() {
   const { environment } = useGoatBotEnabled();
   const environmentId = environment?.environmentId ?? null;
   const presentation = useEnvironment(environmentId);
-  const supported =
-    environmentId !== null &&
-    presentation?.connection.phase === "connected" &&
-    presentation.serverConfig?.environment.capabilities.goatBotProfileEdit === true;
-  const profiles = useEnvironmentQuery(
-    supported ? channelEnvironment.listBots({ environmentId, input: {} }) : null,
-  );
-  const canEdit = useAtomValue(
-    environmentId === null
-      ? NO_PERMISSION
-      : channelEnvironment.updateBot.permissionAtom(environmentId),
-  );
-  const update = useAtomCommand(channelEnvironment.updateBot, { reportFailure: false });
-  const [editing, setEditing] = useState(false);
-  if (!supported) return null;
-  const main = profiles.data?.bots.find((bot) => bot.role === "main");
+  const readable = useGoatBotComputerReadable(environmentId);
+  if (
+    environment === null ||
+    presentation?.serverConfig?.environment.capabilities.goatBotProfileEdit !== true
+  ) {
+    return null;
+  }
+  // A refusal swaps the row out, which drops an open dialog and the profile it was read from.
   return (
     <SettingsSection id="goat-bot-profile" title="Profile">
+      {readable ? (
+        <GoatBotProfileRow
+          key={environment.environmentId}
+          environmentId={environment.environmentId}
+          phase={presentation.connection.phase}
+        />
+      ) : (
+        <SettingsRow
+          {...searchableSetting("goat-bot-profile")}
+          title="GOAT Bot"
+          status={`GOAT on ${environment.label} did not accept this device.`}
+        />
+      )}
+    </SettingsSection>
+  );
+}
+
+function GoatBotProfileRow({
+  environmentId,
+  phase,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly phase: EnvironmentConnectionPhase;
+}) {
+  // Read in every phase: offline the query keeps its last answer and sends nothing.
+  const profiles = useEnvironmentQuery(channelEnvironment.listBots({ environmentId, input: {} }));
+  const mayEdit = useAtomValue(channelEnvironment.updateBot.permissionAtom(environmentId));
+  const update = useAtomCommand(channelEnvironment.updateBot, { reportFailure: false });
+  const [editing, setEditing] = useState<BotProfile | null>(null);
+  const connected = phase === "connected";
+  // The first attempt has failed nothing yet, so it reads as loading rather than offline.
+  const starting = phase === "connecting";
+  const offline = !connected && !starting;
+  const canEdit = mayEdit && connected;
+  const main = profiles.data?.bots.find((bot) => bot.role === "main");
+  return (
+    <>
       <SettingsRow
         {...searchableSetting("goat-bot-profile")}
         title={main === undefined ? "GOAT Bot" : [main.avatar, main.name].filter(Boolean).join(" ")}
         description={
-          profiles.error
-            ? "Could not load the bot's profile."
-            : main === undefined
-              ? "The profile appears once GOAT Bot has started."
-              : main.purpose || "No purpose yet."
+          main !== undefined
+            ? main.purpose || "No purpose yet."
+            : offline
+              ? undefined
+              : profiles.error
+                ? "Could not load the bot's profile."
+                : starting || profiles.isPending
+                  ? "Loading…"
+                  : "The profile appears once GOAT Bot has started."
         }
+        status={offline ? "Offline" : undefined}
         control={
           <Button
             size="sm"
             variant="outline"
             disabled={main === undefined || !canEdit}
-            onClick={() => setEditing(true)}
+            onClick={() => setEditing(main ?? null)}
           >
             Edit
           </Button>
         }
       />
-      {editing && main !== undefined ? (
+      {editing !== null ? (
         <GoatBotProfileDialog
-          initial={main}
+          initial={editing}
           canSubmit={canEdit}
-          onClose={() => setEditing(false)}
+          unavailableReason={connected ? undefined : `${editing.name}'s computer isn't connected.`}
+          onClose={() => setEditing(null)}
           onSubmit={async (changes) => {
             const result = await update({
               environmentId,
-              input: { botId: main.botId, ...changes },
+              input: { botId: editing.botId, ...changes },
             });
             if (result._tag === "Success") return null;
             const failure = squashAtomCommandFailure(result);
@@ -80,7 +115,7 @@ function GoatBotProfileSection() {
           }}
         />
       ) : null}
-    </SettingsSection>
+    </>
   );
 }
 
