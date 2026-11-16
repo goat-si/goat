@@ -33,6 +33,7 @@ function dispatchWasNotAccepted(
     case "OrchestratorSubagentThreadReadOnlyError":
     case "OrchestratorThreadAboveModeLimitError":
     case "ThreadManagementProviderInstanceDisabledError":
+    case "ThreadManagementWorktreeUnrestorableError":
       return true;
     default:
       return false;

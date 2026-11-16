@@ -380,6 +380,7 @@ function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
     case "ThreadManagementThreadArchivedError":
     case "ThreadManagementNoSteerableRunError":
     case "ThreadManagementTargetStoppedError":
+    case "ThreadManagementWorktreeUnrestorableError":
       return failure("thread_not_sendable", error.message);
     case "ThreadManagementThreadNotInterruptibleError":
       return failure("thread_not_interruptible", error.message);
