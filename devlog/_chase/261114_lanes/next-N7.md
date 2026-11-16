@@ -124,3 +124,100 @@ NOT RUN at this head: `vp run check:changed` and the full vitest suite (part 2 r
 Merge: part 1 370a3b3c0d merged into the integration branch at 44d7d60d20 (#3519).
 
 Full goat-ci on the integration head 44d7d60d20 (the N6 + N7 part 1 tree): SUCCESS, the coordinator's manual workflow_dispatch run https://github.com/goat-si/goat/actions/runs/43881838566 (head 44d7d60d20923485898e915f5cb504750ce1da3a; goat-ci-result success; of 28 jobs, 25 succeeded and 3 were skipped by their event conditions: the ignored-event branch, the screenshot gate and the republish refresh).
+
+## Part 2: L13 4aab23cd72, 18866e52e4 and 591188471a (branch chase/t3-261114-n7b-scheduler)
+
+Branch `chase/t3-261114-n7b-scheduler`, from part 1 (`370a3b3c0d`), merged with the integration branch at `44d7d60d20` (frozen until N3) and with dev `26847e90dc` last. Host pen-macbookpro2. Head: `4b455545a09413d1f4fd1d6e98919799af64e10d`.
+
+### Rulings (verbatim)
+
+FULL ruling (decision:6b2f71ab):
+
+> Coordinator decision, 2026-11-16, lane N7, decision:6b2f71ab-c94e-4724-8b26-20b6559cc990 (row L13 4aab23cd72 with 18866e52e4; a backlog row whose note "keep the continue/new_thread invariant" was written before the upstream feature was read in full): FULL. Upstream 4aab23cd72 is the feature "scheduled tasks can run in one thread with a fresh session each run"; GOAT already has its migration (080) and its writer, so the reader, resolveThreadMode, the first-run bind, the contract field and the web and mobile settings are ported. The invariant is restated: a save without threadMode (every older client and every existing row) stores continue exactly when thread_id is set; new_thread never has a thread; continue and fresh_session may be saved unbound and are bound once, by the first run that launches their thread. The two fixtures the sheet names (ChannelRoutines.test.ts:79, scheduledTaskCompletion.test.ts:81) are fixed to the restated invariant.
+> Conditions (C4, contracts and stored rows): (a) older peers both ways: an older client's save and read (no threadMode) behave exactly as on dev; an older server that receives threadMode from a newer client (ignored or rejected: say which, and what the newer client shows); a row written by this server and read by an older server after a downgrade (a fresh_session row with a thread: what does dev's reader do with it: it must not crash or run the task in the wrong mode silently: say what it does); (b) tests: an unbound continue task and an unbound fresh_session task each bind on their first run and only once (two overlapping first runs do not create two threads); a fresh_session task with a thread starts a new provider session each run and keeps the thread; new_thread is unchanged; GOAT's channel routines and Bot scheduled tasks (GOAT-only callers of ScheduledTaskService) keep their mode; (c) agent surface: the schedule_task tool's new parameter and 18866e52e4's update path; every description within 400 characters; the audit and context-budget checks pass WITHOUT raising any budget (the ACP instruction block has one byte of room): if upstream's change to agentContextBudget.json cannot be met inside GOAT's budget, stop and ask; (d) settings: this is a per-task field, not a server setting, so no SETTINGS_ACCESS entry: confirm; (e) surfaces: web and mobile scheduled-task settings get captures (before and after, the new mode control, one unbound task after its first run); if the lane cannot run a real client, they are owed to #3519's integrated pass and listed per surface; docs/user/project-settings.md updated as upstream; strings follow the neighbouring strings' translation practice; (f) budgets: ScheduledTaskService.ts (2313 entry) and OrchestratorMcpService.ts within their entries; move code out first if needed.
+
+Part 2 rule 3 authorisation:
+
+> Coordinator authorisation, 2026-11-16, rule 3, lane N7 part 2 (L13 4aab23cd72): authorised, and condition (a) of the FULL ruling is amended. In apps/server/src/scheduledTasks/ScheduledTaskService.test.ts, "saves thread_mode by the same rule as migration 080 on create and every edit" (:454), the edit that returns the task to new_thread may pass threadMode: "new_thread" beside threadId: null; its expectation assert.deepEqual(yield* mode, ["new_thread"]) stays. Reason, checked in upstream's diff here: resolveThreadMode returns the STORED mode when a save omits threadMode ("const stored = existing === null ? \"new_thread\" : scheduledTaskThreadMode(existing)"), and the stored thread is kept ("keptThreadId = input.threadId ?? existingTask?.threadId ?? null"), so a save that omits threadMode and sends threadId null no longer unbinds an existing task. Conditions: (1) add a case in the same test with the OLD call shape (threadMode omitted, threadId null, on a task that has a thread) asserting that the thread and the mode are kept: that pins the changed behaviour; and a case that a CREATE with threadMode omitted and threadId null is still new_thread, and with a threadId is still continue. (2) Amendment to condition (a): "an older client's save behaves exactly as on dev" does not hold for one case, which follows upstream: an older client (an older mobile build, an agent calling the scheduling tool without the new parameter, an older server relaying the save) that edits a bound task and sends threadId null without threadMode used to turn it into new_thread and now leaves it bound. Record this in next-N7.md as a C4 difference from dev, with who can hit it and what they see (the edit appears to save and the task keeps running in its thread). (3) The agent-facing description of the scheduling tool must say how to unbind (threadMode "new_thread"), inside the 400-character limit and the context budget; if there is no room, stop and ask. (4) GOAT's own callers that unbind by sending threadId null (search ScheduledTaskService.upsert callers: channel routines, the Bot, the CLI, MCP handlers, web and mobile settings) each send threadMode explicitly after this port, or the record says why they need not. No other expectation in an existing dev test may change in this lane without asking; upstream's own edits to its ScheduledTaskService.test.ts and the runtimeLayer test edit carried into runtimeLayer.projectDeletion.test.ts are carried as upstream wrote them and named in the record.
+
+Downgrade decision:
+
+> Coordinator decision, 2026-11-16, lane N7 part 2, condition (a) of the FULL ruling, the downgrade case: (A), a recorded C4 Known limit. Nothing on this side can change what a dev build does, and the only way to make dev refuse is a database migration, after which every downgrade of a server that has this lane would fail to start (DatabaseNewerThanBuildError): far heavier than the harm. The record states the two cases in plain words: after a downgrade to a build without this lane, (1) a fresh_session task that already has its thread runs in that thread WITH its earlier context, as a continue task, with no warning; (2) a continue or fresh_session task saved before its first run (no thread yet) starts a new thread on every run. Nothing is deleted; the stored mode survives, and on a current build the first run binds normally and fresh_session starts fresh again. Recovery to state: return to a current build; no re-save is needed unless the older build's editor saved the task meanwhile (say what an older editor's save does to thread_mode: if it overwrites the mode, say so and that the task must then be set again). Condition (a) is amended to match. The same sentence goes into the user guide only if the guide speaks of downgrades at all; otherwise the record is enough.
+> Also accepted from the part 2 report: condition (3) is met through goat_schedule_update's bindToCurrentThread=false (no threadMode parameter on the agent tool), since its description says how to unbind and the budgets hold; GOAT Bot routines are always stored as continue with the control hidden; the important-updates check refuses a save when either side has no thread: each is named in the record as a GOAT difference.
+
+### Rows and commits
+
+| row | upstream | GOAT commit | result |
+| --- | --- | --- | --- |
+| move-out | none | `5c2107718598734063a99fba56aa4d0fee5da677` | scheduled task row decoding moves unchanged to scheduledTaskRowDecode.ts (ScheduledTaskService.ts 2313 to 2212) |
+| move-out | none | `4d16ea0f0e131f6ecf4ecbc06c6378b833adcfee` | the MCP scheduled task summary moves unchanged to mcp/scheduledTaskSummary.ts (OrchestratorMcpService.ts 3949 to 3867) |
+| move-out | none | `d09c8299a9dc673d23e7ff3a577538f240244943` | the list_scheduled_tasks schemas move unchanged to orchestratorMcpScheduledTask.ts (orchestratorMcp.ts 1160 to 1146) |
+| `4aab23cd72` | scheduled tasks can run in one thread with a fresh session each run | `847a6b9450da53f87e7c8465454e3b906f7b15cf` | ported FULL: reader, resolveThreadMode, first-run bind, contract field, capability flag, web and mobile Destination control, user guide |
+| `18866e52e4` | schedule_task updates apply freshSession | `92115ee40f5bc8cd4104b03b33a4be9b8ecb791b` | test only: GOAT's update handler already passes the whole input, so upstream's dropped field has no GOAT counterpart |
+| merge | none | `df173bc5a8ee28d27354ba77ac00c728db302238` | integration head 44d7d60d20 |
+| move-out | none | `a635c9a47a16a4a676dea0c638518dba671f4699` | GOAT-only disposeTaskCompletionDeliveries to goat/TaskCompletionDisposal.ts and dropQueuedPullRequestWakes to goat/PullRequestWakeDrops.ts, as factories (Orchestrator.ts 13556 to 13497); text unchanged except that the moved comment drops its issue numbers (goat/no-low-value-comments refuses them in a new file) |
+| `591188471a` | sending to a long compacted thread waits about 3x less on its history read | `02cf071a7f130cec918d72043345fa2cb7ae4860` | ported |
+| budgets | none | `7c9b19cf2b128184f00fa6613823fdf3f9e1b516` | lowered to real length: OrchestratorMcpService.ts 3957 to 3905, Orchestrator.ts 13556 to 13547, ScheduledTaskService.ts 2313 to 2274, orchestratorMcp.ts 1161 to 1151; none raised |
+| merge | none | `256703ea48a6ffa23610565b9f14205ae6063498` | dev 26847e90dc (clean) |
+| docs | none | `e156ca4275e53add19944df9ea7c988633ccd8a9` | user guide: going back to an older GOAT (downgrade decision) |
+| fix | none | `4b455545a09413d1f4fd1d6e98919799af64e10d` | the MCP scheduled task output keeps freshSession optional, so a newer reader decodes an older server's task (upstream makes it required); found by the gate in orchestratorMcp.test.ts |
+
+Each move-out was checked against the removed text (diff empty, apart from the one comment named). scripts/lib/goat-rename names no moved test file or title; `node scripts/goat-rename.ts --check` 0.
+
+### 591188471a adaptations
+
+- The provider-switch full reread sits after GOAT's cloud follow-up admission check (ensureFollowUp reads only runs and provider threads, which the window does not narrow). dispatchMessage reads the same narrowed records as upstream's (messages and providerTurns at the same sites).
+- Upstream's ProjectionStore.test.ts case is carried verbatim into the new ProjectionStore.sinceLastCompaction.test.ts (ProjectionStore.test.ts is at its entry). Upstream's SteeringCompletion.integration.test.ts edit goes to SteeringCompletionWake.integration.test.ts, where GOAT keeps restartCompletionWake; the only change is the harness call: upstream's (name, canRestart true, canSteer false) is GOAT's (name, true, Effect.void, false, undefined, false), as the neighbouring tests call it. Carried in upstream's order, canSteer stays true, the steer joins natively, and the restart case waits until the project timeout.
+- Fail-first on the unported source: the ProjectionStore case fails (attempts and messages include runs 3, 5 and 6 that the window drops); both steering cases pass before and after, as upstream wrote them (they guard keepRunIds).
+- EXPLAIN QUERY PLAN of the new compaction query (SQL store): `SEARCH item USING INDEX orchestration_v2_projection_turn_items_conversation_idx (thread_id=?)`. The windowed reads name their index with INDEXED BY (nodes_thread_run_idx, messages_run_idx).
+- Focused: 34 orchestration test files touching compaction, steering and ProjectionStore, 1402 tests pass.
+
+### L13 fail-first and tests
+
+- Final tests against the unported source: 12 failed, 54 passed; each failure is a missing mode or binding. ScheduledTaskService.test.ts:454 fails with `expected [ null, [ 'new_thread' ] ] to deeply equal [ 'bound', [ 'continue' ] ]`, the behaviour change it pins.
+- After the port: 42 server test files (513 tests), 34 web and 26 mobile tests pass; server, web and mobile typecheck clean.
+- Fixtures named in the FULL ruling: before, ChannelRoutines.test.ts and scheduledTaskCompletion.test.ts inserted a bound task without thread_mode; after, they store thread_mode 'continue' with their thread.
+- Upstream's own test edits carried as written: its ScheduledTaskService.test.ts cases, and the runtimeLayer edit carried into runtimeLayer.projectDeletion.test.ts (sets threadMode).
+- Rule 3 (1): :454 passes threadMode "new_thread" for the unbind edit; added cases pin the old call shape (no mode, threadId null on a bound task keeps thread and mode) and a create (no mode: new_thread without a thread, continue with one).
+- No new SQL statement in L13 needs an EXPLAIN line: bindThread updates one row by its key.
+
+### C4 cases
+
+- Older client, both ways: a save without threadMode stores continue exactly when thread_id is set (the 080 rule); reads add a field older clients ignore.
+- Difference from dev (rule 3 amendment): an older client (an older mobile build, an agent calling the scheduling tool without the new parameter, an older server relaying the save) that edits a bound task and sends threadId null without threadMode used to turn it into new_thread and now leaves it bound. The edit appears to save and the task keeps running in its thread.
+- Older server receiving threadMode: decoding a newer client's save with dev's contracts accepts it and drops threadMode (ignored, not rejected). Newer clients send the field only when the server reports the capability, so against an older server they show no mode control.
+- Newer reader, older server (accepted by the coordinator as a GOAT difference from upstream 4aab23cd72): an older server's MCP scheduled task output has no freshSession. GOAT's output schema keeps the field optional (packages/contracts/src/orchestratorMcpScheduledTask.ts, commit 4b455545a0), where upstream requires it, so a newer reader decodes the task and treats the missing field as not fresh-session, which is how that server runs it (an older server has no fresh-session mode; it runs such a row as continue). No code reads the field from the output; an agent simply sees no freshSession key. Before 4b455545a0 the first gate failed three tests in packages/contracts/src/orchestratorMcp.test.ts with `SchemaError: Missing key at ["freshSession"]`: "preserves lastRun in MCP JSON and keeps legacy and future nested outcomes readable", "adds lastRunError to MCP task output without breaking an older reader" and "retains notification policy in MCP writes and future-policy task output"; they pass after it, with no expectation changed.
+- Downgrade: a Known limit by decision (A), below.
+- Settings: thread_mode is a per-task field, not a server setting; no SETTINGS_ACCESS entry (confirmed).
+- Unbind callers (rule 3 (4)): both MCP paths and the web and mobile editors send an explicit mode; the Bot check-in forms always name the Bot thread and never unbind; no CLI or channel code calls upsert.
+
+### GOAT differences
+
+- sendToThread passes freshContext through; the orchestrator already queues a fresh steer.
+- GOAT Bot routines are always stored as continue, and the web and mobile editors hide the mode control for them.
+- The important-updates check refuses a save when either the request or the kept binding has no thread.
+- freshSession is optional in the MCP scheduled task output (upstream: required), for older servers' output.
+- Condition (3) is met through goat_schedule_update's bindToCurrentThread=false (the agent tool has no threadMode parameter); its description says that is the only way to unbind (380 characters). Agent surface audit and context budget pass, no budget raised.
+
+### Known limits
+
+- Downgrade to a build without this lane (decision (A)): (1) a fresh_session task that already has its thread runs in that thread with its earlier context, as a continue task, with no warning; (2) a continue or fresh_session task saved before its first run (no thread yet) starts a new thread on every run. Nothing is deleted: the stored mode survives, and on a current build the first run binds normally and fresh_session starts fresh again. Recovery: return to a current build; no re-save is needed. An older build's editor save does overwrite the mode: dev's writer stores continue when the task has a thread and new_thread when not (the thread_mode value of the upsert in dev's ScheduledTaskService.ts), so a fresh_session task saved there becomes continue, an unbound one becomes new_thread, and the task must be set again after updating. The user guide says the same under Destination in docs/user/project-settings.md, since the guide speaks of going back to an older GOAT (docs/user/goat-bot.md).
+- 591188471a: an idle compaction and a provider switch still read the whole history.
+
+### Surfaces
+
+Server (scheduled task service, orchestrator reads), contracts (threadMode field, capability flag), web and mobile scheduled-task settings (Destination control), agent tools (schedule_task and goat_schedule_update descriptions), user guide. Captures (before and after, the new mode control, one unbound task after its first run) for web and for mobile: owed to #3519's integrated pass; no real client ran in this lane.
+
+### Gate
+
+pen-macbookpro2, one heavy job: before each run no other check:changed or vitest was running. A third worktree's check:changed (goat-bot-w-3556) started first once; my run, launched in the same call, was stopped through its own session within seconds and restarted after theirs ended. During gate 1 another worktree's check (lane-m-3383) ran alongside for a few minutes.
+
+- Gate 1, tree 256703ea48 plus e156ca4275 (lane head merged with integration 44d7d60d20 and dev 26847e90dc): `node scripts/goat-rename.ts --check` 0 ("0 lines with T3 residue"). `set -o pipefail; vp run check:changed`: exit 1. format, lint (code budget included), knip 1/2 and 2/2, graphql, agent surface audit, agent context budget, typecheck (39 packages) pass. vp test 1293 files: 2 failed, 1287 passed, 4 skipped; 4 failed, 20161 passed. Three failures were this lane's (orchestratorMcp.test.ts, Missing key freshSession; fixed in 4b455545a0, see C4). One was goat#3363: packages/ssh/src/runtimeFactsScripts.test.ts "reads a built runner in one call and parses only the lines before its end line" (macOS /bin/bash 3.2).
+- Gate 2, head 4b455545a09413d1f4fd1d6e98919799af64e10d: `set -o pipefail; vp run check:changed`: exit 1. format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget, typecheck (39 packages) pass. vp test 1293 files: 1 failed, 1288 passed, 4 skipped; 1 failed, 20164 passed, 12 skipped. The one failure is goat#3363, the same test and assertion (expected +0 to equal 1). No other known issue was hit.
+- Budgets on the merged tree: `node oxlint-plugin-goat/update-code-budgets.ts` reports no file over budget (run on a copy; only the four lane entries were lowered, in 7c9b19cf2b). Orchestrator.ts 13547 of 13547, ProjectionStore.ts 8823 of 8836, ScheduledTaskService.ts 2274, OrchestratorMcpService.ts 3905, orchestratorMcp.ts 1151; new files ProjectionStore.sinceLastCompaction.test.ts 458, goat/TaskCompletionDisposal.ts and goat/PullRequestWakeDrops.ts under 60.
+
+### NOT RUN
+
+- Web captures and mobile captures (owed to #3519's integrated pass).
+- PostgreSQL-backed relay tests (no PostgreSQL on this Mac).
+- The merge of N3's Effect 4.1 integration head and its adaptation (after N3 merges).
