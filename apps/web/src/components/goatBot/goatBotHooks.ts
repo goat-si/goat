@@ -6,13 +6,16 @@ import { useGlobalAgentStore } from "~/globalAgentStore";
 import { useThreadShell } from "~/state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import { goatBotEnvironmentInputs } from "./goatBotEnvironmentInputs";
+import { useGoatBotRefusals } from "./useGoatBotComputerReadable";
 
 import type { GoatBotEnvironmentInput } from "@goat/client-runtime/goatBot";
 
-/** Every machine as GOAT Bot sees it: connected, offering channels, primary. */
+/** Every machine as GOAT Bot sees it: connected, refused, offering channels, primary. */
 export function useGoatBotEnvironments(): ReadonlyArray<GoatBotEnvironmentInput> {
   const { environments } = useEnvironments();
-  return goatBotEnvironmentInputs(environments, usePrimaryEnvironmentId());
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const refused = useGoatBotRefusals(environments, primaryEnvironmentId);
+  return goatBotEnvironmentInputs(environments, primaryEnvironmentId, refused);
 }
 
 /** Where the old global agent still opens in its coding view, if anywhere. */

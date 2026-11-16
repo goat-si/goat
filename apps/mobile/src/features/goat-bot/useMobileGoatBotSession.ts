@@ -4,6 +4,7 @@ import {
   createGoatBotSendQueue,
   goatBotItemReaders,
   goatBotHomeReadBack,
+  goatBotRefusedBy,
   resolveGoatBotAvailability,
   canSendToGoatBot,
   goatBotActivity,
@@ -748,6 +749,7 @@ export function useMobileGoatBotSession(
           botRef: home.botRef,
           ensure,
         });
+  const refusedBy = goatBotRefusedBy(resolved);
   const availability: GoatBotAvailability["kind"] | "permission" =
     resolved.kind === "ready" || resolved.kind === "connecting"
       ? connected && capable && (!canEnsure || !canIngest)
@@ -838,6 +840,8 @@ export function useMobileGoatBotSession(
     availability,
     homeKnown: resolved.kind === "home_offline" ? resolved.known : false,
     homeLabel: resolved.kind === "home_offline" ? resolved.label : null,
+    /** The listed computer GOAT Bot waits on, when it refused this device; otherwise null. */
+    refusedBy,
     error:
       ensure.state === "failed"
         ? (ensure.message ?? null)

@@ -58,7 +58,7 @@ import { FetchHttpClient } from "effect/http";
 
 import { APP_VERSION } from "../branding";
 import { parseOAuthScope } from "@goat/shared/oauthScope";
-import { readDesktopPrimaryBearerToken } from "../environments/primary/desktopAuth";
+import { primaryEnvironmentAuth } from "../environments/primary/sessionEnded";
 import * as PrimaryEnvironmentHttpLayer from "../environments/primary/httpLayer";
 import {
   readPrimaryEnvironmentTarget,
@@ -795,16 +795,7 @@ const layerCapabilities = Layer.effectContext(
     const identity = ClientCapabilities.RelayDeviceIdentity.of({
       deviceId: Effect.succeedNone,
     });
-    const primaryAuth = ClientCapabilities.PrimaryEnvironmentAuth.of({
-      bearerToken: Effect.tryPromise({
-        try: readDesktopPrimaryBearerToken,
-        catch: (cause) =>
-          new ConnectionTransientError({
-            reason: "remote-unavailable",
-            detail: `Could not load the desktop primary credential: ${String(cause)}`,
-          }),
-      }).pipe(Effect.map(Option.fromNullishOr)),
-    });
+    const primaryAuth = ClientCapabilities.PrimaryEnvironmentAuth.of(primaryEnvironmentAuth);
     const ssh = ClientCapabilities.SshEnvironmentGateway.of({
       provision: Effect.fn("web.connectionPlatform.ssh.provision")(
         function* (target, expectedEnvironmentId, options) {

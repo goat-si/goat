@@ -70,6 +70,9 @@ import {
   canSendToGoatBot,
   goatBotOpenQuestionPlaceholder,
   goatBotNotesRefreshKey,
+  goatBotRefusalStep,
+  goatBotRefusedBy,
+  goatBotRefusedText,
   type GoatBotAvailability,
   type GoatBotRemoval,
 } from "@goat/client-runtime/goatBot";
@@ -426,13 +429,26 @@ function GoatBotChatViewContent({
           : availability.kind === "ready"
             ? null
             : statusLine(availability);
+  const refusedBy = goatBotRefusedBy(availability);
+  const refusalStep = goatBotRefusalStep(availability);
   return (
     <div ref={viewRef} className="flex min-h-0 min-w-0 flex-1" style={accentStyle}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
         <WorkspacePageHeader electron={isElectron} className="surface-glass relative">
           <div aria-hidden className="flex-1 basis-0" />
-          <div className="flex max-w-[60%] min-w-0 items-center gap-2">
-            <h1 className="flex min-w-0">
+          <div
+            className={cn(
+              "flex min-w-0 items-center gap-2",
+              headerStatus ? "max-w-[75%]" : "max-w-[60%]",
+            )}
+          >
+            <h1
+              className={cn(
+                "flex min-w-0 shrink-0",
+                // Every header status is at least 2rem (32px) wide; a shorter one would cut a name that fits.
+                headerStatus ? "max-w-[calc(100%-2.5rem)]" : "max-w-full",
+              )}
+            >
               <button
                 type="button"
                 ref={homeRef}
@@ -483,11 +499,14 @@ function GoatBotChatViewContent({
             role="status"
             className="border-b border-border px-4 py-2 text-sm text-muted-foreground"
           >
-            {availability.kind === "home_offline"
-              ? offlineHomeCopy(availability, mainName)
-              : availability.kind === "offline"
-                ? `${mainName}'s computer is offline. You can send messages again once it reconnects.`
-                : `Connecting to ${mainName}…`}
+            {refusedBy !== null
+              ? goatBotRefusedText(refusedBy)
+              : availability.kind === "home_offline"
+                ? offlineHomeCopy(availability, mainName)
+                : availability.kind === "offline"
+                  ? `${mainName}'s computer is offline. You can send messages again once it reconnects.`
+                  : `Connecting to ${mainName}…`}
+            {refusalStep === null ? null : <span className="block">{refusalStep}</span>}
             {/* With no history the notice below carries the same action. */}
             {availability.kind === "home_offline" && homeMove && rows.length > 0 ? (
               <div className="mt-2">
@@ -749,7 +768,7 @@ function statusLine(availability: GoatBotAvailability): string {
       return "Connecting…";
     case "offline":
     case "home_offline":
-      return "Offline";
+      return availability.refused === true ? "Not accepted" : "Offline";
     case "legacy_active":
       return "Waiting for the global agent";
     case "error":
@@ -877,6 +896,16 @@ function noticeCopy(
   description: string;
   retryLabel: string | null;
 } {
+  const refusedBy = goatBotRefusedBy(availability);
+  if (refusedBy !== null)
+    return {
+      title: goatBotRefusedText(refusedBy),
+      // A browser whose session ended pairs again through a reload.
+      description:
+        goatBotRefusalStep(availability) ??
+        `Pair this device with ${refusedBy} again to send messages.`,
+      retryLabel: null,
+    };
   switch (availability.kind) {
     case "ready":
       return {

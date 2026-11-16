@@ -269,7 +269,9 @@ const sessionRevokeCommand = Command.make("revoke", {
     Argument.withSchema(AuthSessionId),
   ),
 }).pipe(
-  Command.withDescription("Revoke an active session."),
+  Command.withDescription(
+    "Revoke a session. A running server ends its open connections within about 5 seconds.",
+  ),
   Command.withHandler((flags) =>
     runWithEnvironmentAuth(flags, (environmentAuth) =>
       Effect.gen(function* () {

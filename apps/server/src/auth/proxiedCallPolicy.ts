@@ -92,8 +92,9 @@ export const refuseProxiedCall = (
 
 /**
  * RPC authorization for one socket's session. A Pen member proxy's every call also passes the hub
- * proxy's frame policy, judged on the session's current scopes, so a revocation or narrowing
- * applies on the next frame (mesh link design §5); other sessions keep the plain scope check.
+ * proxy's frame policy, judged on the session's live grant (mesh link design §5): a revocation by
+ * this server applies on the next frame, one by another process within 5 seconds. Other sessions
+ * keep the plain scope check and end when their socket closes.
  */
 export const layerFor = (
   session: {

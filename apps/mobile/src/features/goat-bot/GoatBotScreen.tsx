@@ -6,6 +6,7 @@ import {
   goatBotEventSubjectSpan,
   goatBotName,
   goatBotNotesRefreshKey,
+  goatBotRefusedText,
   hasGoatBotMarkdown,
   type GoatBotAccent,
   type GoatBotReplyRepository,
@@ -740,13 +741,15 @@ export function GoatBotScreen(props: {
             style={{ paddingTop: 12 }}
           >
             <Text className="text-sm text-foreground-muted">
-              {session.availability === "home_offline"
-                ? session.homeKnown
-                  ? `${mainName} runs on ${session.homeLabel}, which isn't connected.`
-                  : `${mainName}'s home (${session.homeLabel}) isn't a computer this app knows.`
-                : session.availability === "error"
-                  ? (session.error ?? copy.error)
-                  : copy[session.availability]}
+              {session.refusedBy !== null
+                ? goatBotRefusedText(session.refusedBy)
+                : session.availability === "home_offline"
+                  ? session.homeKnown
+                    ? `${mainName} runs on ${session.homeLabel}, which isn't connected.`
+                    : `${mainName}'s home (${session.homeLabel}) isn't a computer this app knows.`
+                  : session.availability === "error"
+                    ? (session.error ?? copy.error)
+                    : copy[session.availability]}
             </Text>
             {session.availability === "home_offline" && moveTarget ? (
               <Pressable
@@ -820,7 +823,9 @@ export function GoatBotScreen(props: {
               <Text className="py-6 text-center text-foreground-muted">
                 {taskId
                   ? "Messages for this task will appear here."
-                  : `Ask ${title} for anything. It answers here and starts work in its own threads.`}
+                  : session.refusedBy !== null
+                    ? `Pair this device with ${session.refusedBy} again to send messages.`
+                    : `Ask ${title} for anything. It answers here and starts work in its own threads.`}
               </Text>
             }
             ListFooterComponent={

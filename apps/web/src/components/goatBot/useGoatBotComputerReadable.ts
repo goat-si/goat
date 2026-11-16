@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 
 import { primarySessionCheck } from "~/environments/primary/sessionCheck";
 import {
+  type EnvironmentPresentation,
   readEnvironment,
   readPrimaryEnvironmentId,
   useEnvironment,
@@ -37,15 +38,39 @@ export function readGoatBotComputerReadable(environmentId: EnvironmentId): boole
   return readableFrom(readEnvironment(environmentId), ownServer && primarySessionCheck.revoked());
 }
 
+/** How a listed computer refused this device; "session-ended" when this browser can reload back in. */
+export type GoatBotRefusal = "refused" | "session-ended";
+
+/** The listed computers that refused this device, by the same rule, for GOAT Bot's availability. */
+export function useGoatBotRefusals(
+  environments: ReadonlyArray<EnvironmentPresentation>,
+  primaryEnvironmentId: EnvironmentId | null,
+): ReadonlyMap<EnvironmentId, GoatBotRefusal> {
+  const revoked = usePrimarySessionRevoked(primaryEnvironmentId !== null);
+  const refused = new Map<EnvironmentId, GoatBotRefusal>();
+  for (const presentation of environments) {
+    const held = presentation.environmentId === primaryEnvironmentId && revoked;
+    if (!refusedFrom(presentation, held)) continue;
+    // The follower holds only a cookie tab's ended session, through Retry's cleared failure.
+    const ended = held || presentation.connection.failure?.sessionEnded === true;
+    refused.set(presentation.environmentId, ended ? "session-ended" : "refused");
+  }
+  return refused;
+}
+
 function useAccess(environmentId: EnvironmentId | null) {
   const presentation = useEnvironment(environmentId);
   const primaryId = usePrimaryEnvironmentId();
   const ownServer = environmentId !== null && primaryId === environmentId;
-  const revoked = useSyncExternalStore(
+  const revoked = usePrimarySessionRevoked(ownServer);
+  return { presentation, revoked };
+}
+
+function usePrimarySessionRevoked(ownServer: boolean): boolean {
+  return useSyncExternalStore(
     ownServer ? primarySessionCheck.subscribe : ignore,
     ownServer ? primarySessionCheck.revoked : notRevoked,
   );
-  return { presentation, revoked };
 }
 
 type Presentation = ReturnType<typeof readEnvironment>;

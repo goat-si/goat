@@ -125,6 +125,7 @@ const reactTests = [
   "src/features/goat-bot/MobileGoatBotHomeWorker.test.tsx",
   "src/features/goat-bot/useMobileGoatBotHomeSettings.test.tsx",
   "src/features/goat-bot/useMobileGoatBotSession.test.tsx",
+  "src/features/goat-bot/useMobileGoatBotEnvironments.test.tsx",
   "src/features/goat-bot/useMobileGoatBotSession.offline.test.tsx",
   "src/features/goat-bot/useReplying.test.tsx",
   "src/features/settings/MemorySyncDiagnostics.test.tsx",
