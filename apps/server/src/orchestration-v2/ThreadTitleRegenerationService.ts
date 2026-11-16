@@ -43,6 +43,7 @@ export class ThreadTitleRegenerationService extends Context.Service<
       | ProjectStore.ProjectStoreV2Error
       | ServerSettingsError
       | ThreadManagementService.ThreadManagementProviderInstanceDisabledError
+      | ThreadManagementService.ThreadManagementWorktreeUnrestorableError
     >;
   }
 >()("goat/orchestration-v2/ThreadTitleRegenerationService") {}
