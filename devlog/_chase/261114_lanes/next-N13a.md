@@ -141,3 +141,16 @@ Run on the lane head `6216af3736`, pen-macmini, after lane N16's gate had finish
 - The dev server was stopped through its own session; the tailnet mapping it left for port 7149 was removed with `tailscale serve --https=7149 off`; apps/web/dist was removed.
 
 Desktop NOT RUN: the built renderer loads only in a production run (`isDevelopment` is false when `VITE_DEV_SERVER_URL` is empty), and there `GOAT_DEV_INSECURE_SECRET_STORAGE` does not apply (apps/desktop/src/app/DesktopDevSecretStorage.ts:27-32), so the unsigned app would open the macOS keychain's shared safe-storage item and macOS would prompt for the login password; `vp run dev:desktop` loads the Vite dev renderer instead of the built one, and apps/desktop has no package build script (its `dist-electron/main.cjs` comes from the vite `build` task or the artifact build). The coordinator carries the desktop PowerPoint check before stable promotion.
+
+## Coordinator rulings (2026-11-16)
+
+Quoted verbatim from the coordinator, relayed by the lane coordinator.
+
+### Rule 3 authorisation
+
+Coordinator authorisation, 2026-11-16, rule 3, lane N13a. I read upstream c8e8b58ee6's diff of apps/web/src/components/files/AttachmentFilePreview.browser.test.tsx before answering; both edits are upstream's own and are authorised as upstream wrote them: (1) in "bounds spreadsheet cells at %s before padding", the case list gains "XFD300" and expect(result.truncated).toBe(ref !== "AX500") becomes toBe(ref === "XFD200" || ref === "XFD300"); (2) in "preserves %sworksheet metadata with relationship target %s", expect(columns).toHaveLength(1) and its two min/max checks are replaced by upstream's toEqual of the [min, max, width] spans, with upstream's comment that the engine ignores defaultColWidth. The 787c59c802 (WORD_LIMITS) test edits are covered by the ruling at line 933 of the closed card devlog/_chase/_fin/10/10.025_t3_chase_cycle_261114.md ("upstream's own commit edits these ... all to read its new WORD_LIMITS"); the fresh review of 6216af3736 confirmed each named edit is present and matches upstream. No other expectation in an existing dev test may change in this lane.
+
+### State
+
+- Review at 6216af3736: APPROVE WITH NITS. P2-3 closed by the built-web pptx smoke (PASS, pen-macmini). P2-1 recorded, goat#3513. P3-2 goat#3514. Desktop built-renderer check: carried by the coordinator as a pre-stable check on the first nightly that contains N13a.
+- OPEN: the owner's answer on whether O18 covers the installer growth (P2-2). N13a and N13b do not merge before it.
