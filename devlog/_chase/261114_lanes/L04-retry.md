@@ -283,7 +283,7 @@ Model: anthropic/claude-opus-5-5 via Codex in GOAT on pen-mac-studio, coordinate
 
 ## af9b4e41de delta
 
-Lane branch: chase/t3-261114-orchestrator-handoff, based on origin/chase/t3-261114-all `50b8ca19dd`. Reviewed head: `ce488830ec5391354d61e4b4f8ada3d9092397c5` (fresh C4 review: APPROVE WITH NITS, no P0 to P2), merged into chase/t3-261114-all at `9acccf123d` (#3397). Follow-up head after the review nits: `cbff6775a9` (see Review and merge).
+Lane branch: chase/t3-261114-orchestrator-handoff, based on origin/chase/t3-261114-all `50b8ca19dd`. Reviewed head: `ce488830ec5391354d61e4b4f8ada3d9092397c5` (fresh C4 review: APPROVE WITH NITS, no P0 to P2), merged into chase/t3-261114-all at `9acccf123d` (#3397). The review nit follow-up `cbff6775a9` is merged at `d370a376b3`, the final head of #3397 (see Review and merge).
 
 Commits:
 
@@ -375,7 +375,7 @@ NOT RUN: the full vitest suite to completion on either head (stopped; CI's full 
 
 ### Review and merge
 
-The fresh C4 review of `ce488830ec` returned APPROVE WITH NITS with no P0 to P2 and three P3s. The coordinator merged `ce488830ec` into chase/t3-261114-all at `9acccf123d` (#3397). The lane branch fast-forwarded to `9acccf123d`, and one follow-up closes the nits:
+The fresh C4 review of `ce488830ec` returned APPROVE WITH NITS with no P0 to P2 and three P3s. The coordinator merged `ce488830ec` into chase/t3-261114-all at `9acccf123d` (#3397). The lane branch fast-forwarded to `9acccf123d`, and one follow-up closes the nits; it is merged at `d370a376b3`, the final head of #3397:
 
 - `cbff6775a9` docs(contracts): goat_worktree_handoff says a continuation that cannot be queued fails the handoff (L04D-P3-1). The description now reads "Setup can fail after the move succeeds; check its status." and the guide "If the continuation cannot be queued, the handoff fails and removes the new worktree." (packages/contracts/src/agentSurface/entries/worktree.ts:98, :100). `WorktreeMcpContinuationStatus` keeps its "failed" variant, which older servers return. Checks: `node scripts/agent-surface/audit.ts --check` exit 0; `node scripts/agent-surface/context-budget.ts --check` exit 0 with ACP unchanged at 6,143 of 6,144 B, because the tool description is not in the injected instructions, so both sentences fit; contracts agentSurface tests 7 files, 48 tests pass; format and lint clean; the audit generator's output is unchanged, so docs/internals/agent-surface-audit.md is not regenerated; `node scripts/goat-rename.ts --check` 0. No test file moved.
 - L04D-P3-2 and P3-3 are corrected in this section: both Force stop branches (part B item 2), where a waiting continuation shows (item 3), the failed workspace read under GOAT adaptations, the restart and re-sent call under Known limits, and the line about this row near the top of the file.
