@@ -30,6 +30,7 @@ import { Button } from "../ui/button";
 import { goatBotSearch, useGoatBotMainName, useGoatBotName } from "./goatBotMemberContext";
 import { useGoatBotHomeSettings } from "./useGoatBotHome";
 import { GoatBotSectionCard } from "./GoatBotSectionCard";
+import { useGoatBotComputerRefused } from "./useGoatBotComputerReadable";
 
 const NO_PERMISSION = Atom.make(false);
 const NO_SETTINGS = Atom.make<ServerSettings | null>(null);
@@ -78,6 +79,7 @@ export function GoatBotStatusCard({
   // Read at the home the card names, never at another machine the caller happens to show.
   const environmentId = homeId ?? callerEnvironmentId;
   const presentation = useEnvironment(environmentId);
+  const homeRefused = useGoatBotComputerRefused(homeId);
   const settings = useAtomValue(
     environmentId === null ? NO_SETTINGS : serverEnvironment.settingsValueAtom(environmentId),
   );
@@ -117,6 +119,7 @@ export function GoatBotStatusCard({
         ? ""
         : (home.environments.find((entry) => entry.environmentId === homeId)?.label ??
           homeId.slice(0, 8)),
+    homeRefused,
     moveTarget: home.moveTarget,
     member: member !== null,
     mainBotName,

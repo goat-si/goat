@@ -90,6 +90,8 @@ export interface GoatBotDiagnosticsInput {
   readonly home: GoatBotHomeResolution;
   /** The claimed home machine's name. */
   readonly homeLabel: string;
+  /** The claimed home is in this app's list and refused this device. Absent: not known to be refused. */
+  readonly homeRefused?: boolean;
   /** A connected machine the viewer may make the home; null when there is none. */
   readonly moveTarget: { readonly environmentId: EnvironmentId; readonly label: string } | null;
   readonly member: boolean;
@@ -122,6 +124,15 @@ export interface GoatBotDiagnosticsInput {
 /** Whether the bot can work right now, and why not, as lines with at most one fix each. */
 export function diagnoseGoatBot(input: GoatBotDiagnosticsInput): GoatBotDiagnostics {
   const homeId = input.home.state === "claimed" ? input.home.claim.environmentId : null;
+  // Model, work and Slack would be read from the computer that refused this device.
+  if (input.home.state === "claimed" && input.homeRefused === true && !input.home.homeConnected) {
+    const text = `GOAT on ${input.homeLabel} did not accept this device`;
+    return {
+      verdict: "down",
+      title: "Not working",
+      lines: [{ key: "home", tone: "error", text, action: moveAction(input) }],
+    };
+  }
   const lines = [
     homeLine(input),
     modelLine(input, homeId),
@@ -133,6 +144,16 @@ export function diagnoseGoatBot(input: GoatBotDiagnosticsInput): GoatBotDiagnost
   if (has("warn")) return { verdict: "attention", title: "Needs attention", lines };
   if (has("pending")) return { verdict: "checking", title: "Checking…", lines };
   return { verdict: "ready", title: "Ready", lines };
+}
+
+function moveAction(input: GoatBotDiagnosticsInput): GoatBotDiagnosticAction | null {
+  return input.moveTarget === null
+    ? null
+    : {
+        kind: "claim_home",
+        environmentId: input.moveTarget.environmentId,
+        label: `Make ${input.moveTarget.label} the home`,
+      };
 }
 
 function homeLine(input: GoatBotDiagnosticsInput): GoatBotDiagnosticLine {
@@ -147,14 +168,7 @@ function homeLine(input: GoatBotDiagnosticsInput): GoatBotDiagnosticLine {
     case "unclaimed":
       return line("pending", "Choosing a home machine…");
     case "claimed": {
-      const move: GoatBotDiagnosticAction | null =
-        input.moveTarget === null
-          ? null
-          : {
-              kind: "claim_home",
-              environmentId: input.moveTarget.environmentId,
-              label: `Make ${input.moveTarget.label} the home`,
-            };
+      const move = moveAction(input);
       if (!input.home.homeConnected)
         return line("error", `Home machine is offline (${input.homeLabel})`, move);
       if (!input.home.homeSupportsBot)

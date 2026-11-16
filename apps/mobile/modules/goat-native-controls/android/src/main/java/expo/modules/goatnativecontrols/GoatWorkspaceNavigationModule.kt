@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
@@ -36,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -185,18 +188,20 @@ class GoatWorkspaceNavigationView(
                     onClick = { onTabSelected(mapOf("tab" to tab)) },
                     icon = { Icon(tabIconPainter(tab), contentDescription = null) },
                     label = {
-                      // One line that shrinks to fit its item at large font scales, then ellipsizes.
-                      Text(
-                        tabTitle(tab),
-                        maxLines = 1,
-                        softWrap = false,
-                        overflow = TextOverflow.Ellipsis,
-                        autoSize = TextAutoSize.StepBased(
-                          minFontSize = (8 * textScale).sp,
-                          maxFontSize = (12 * textScale).sp,
-                          stepSize = 0.5.sp,
-                        ),
-                      )
+                      // autoSize isn't in Text's element equality; re-key so new bounds apply.
+                      key(textScale) {
+                        Text(
+                          tabTitle(tab),
+                          maxLines = 1,
+                          softWrap = false,
+                          overflow = TextOverflow.Ellipsis,
+                          autoSize = TextAutoSize.StepBased(
+                            minFontSize = (8 * textScale).sp,
+                            maxFontSize = (12 * textScale).sp,
+                            stepSize = 0.5.sp,
+                          ),
+                        )
+                      }
                     },
                     colors = NavigationBarItemDefaults.colors(
                       selectedIconColor = Color(selectedColor),
@@ -324,14 +329,7 @@ class GoatWorkspaceNavigationView(
         verticalAlignment = Alignment.CenterVertically,
       ) {
         Icon(painterResource(R.drawable.goat_new_thread), contentDescription = null)
-        Text(
-          "New thread",
-          Modifier.padding(start = 12.dp).alpha(labelAlpha(fraction)).clearAndSetSemantics {},
-          style = MaterialTheme.typography.labelLarge,
-          fontSize = (14 * textScale).sp,
-          maxLines = 1,
-          softWrap = false,
-        )
+        railLabel("New thread", fraction)
       }
     }
   }
@@ -360,16 +358,35 @@ class GoatWorkspaceNavigationView(
         verticalAlignment = Alignment.CenterVertically,
       ) {
         Icon(tabIconPainter(tab), contentDescription = null, tint = tint)
-        Text(
-          title,
-          Modifier.padding(start = 12.dp).alpha(labelAlpha(fraction)).clearAndSetSemantics {},
-          color = tint,
-          style = MaterialTheme.typography.labelLarge,
-          fontSize = (14 * textScale).sp,
-          maxLines = 1,
-          softWrap = false,
-        )
+        railLabel(title, fraction, tint)
       }
+    }
+  }
+
+  @Composable
+  private fun railLabel(text: String, fraction: Float, color: Color = Color.Unspecified) {
+    // autoSize isn't in Text's element equality; re-key so new bounds apply.
+    key(textScale) {
+      Text(
+        text,
+        Modifier
+          .padding(start = LABEL_GAP)
+          // Sized against the open rail, not the animating row, so autosize settles once.
+          .wrapContentWidth(Alignment.Start, unbounded = true)
+          .widthIn(max = RAIL_LABEL_WIDTH)
+          .alpha(labelAlpha(fraction))
+          .clearAndSetSemantics {},
+        color = color,
+        style = MaterialTheme.typography.labelLarge,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Ellipsis,
+        autoSize = TextAutoSize.StepBased(
+          minFontSize = (10 * textScale).sp,
+          maxFontSize = (14 * textScale).sp,
+          stepSize = 0.5.sp,
+        ),
+      )
     }
   }
 
@@ -401,6 +418,9 @@ class GoatWorkspaceNavigationView(
     val ITEM_HEIGHT = 48.dp
     val FAB_SIZE = 48.dp
     val ICON_SIZE = 24.dp
+    val LABEL_GAP = 12.dp
+    val RAIL_LABEL_WIDTH =
+      EXPANDED_RAIL_WIDTH - RAIL_INSET * 2 - (ITEM_HEIGHT - ICON_SIZE) / 2 - ICON_SIZE - LABEL_GAP
     val RAIL_SHADOW = 6.dp
     val RAIL_EXPANDED_SHAPE = RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp)
     const val DISABLED_ALPHA = 0.4f

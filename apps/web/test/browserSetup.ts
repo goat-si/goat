@@ -13,9 +13,10 @@ declare module "vite-plus/test/browser" {
 
 installMockFactoryFailureReport();
 
-// Faces, the main row and Needs you read this gate; a test that is about it unmocks it.
+// Faces, the main row, Needs you and the Status card read this gate; a test about it unmocks it.
 vi.mock("../src/components/goatBot/useGoatBotComputerReadable", () => ({
   useGoatBotComputerReadable: () => true,
+  useGoatBotComputerRefused: () => false,
   readGoatBotComputerReadable: () => true,
 }));
 
