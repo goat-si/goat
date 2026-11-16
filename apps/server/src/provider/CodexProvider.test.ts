@@ -3,7 +3,11 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as HomeRoute from "./OpenCodexRoute.ts";
-import { codexRoutesSpendNativeQuota } from "./CodexProviderAccount.ts";
+import {
+  codexCustomEndpoint,
+  codexEndpoint,
+  codexRoutesSpendNativeQuota,
+} from "./CodexProviderAccount.ts";
 import { fixture as routeFixture } from "./OpenCodexRoute.testkit.ts";
 import { checkCodexProviderStatus } from "./CodexProvider.ts";
 // Recorded from the pinned Codex 0.156.1 config/read in an isolated home.
@@ -558,4 +562,16 @@ it("reports native quota only for an OpenAI login on a native route", () => {
       name,
     );
   }
+  // The custom endpoint is what a usage-limit hub is matched against.
+  assert.strictEqual(codexCustomEndpoint(hub), "https://hub.example.com");
+  assert.strictEqual(
+    codexCustomEndpoint({ openai_base_url: "http://127.0.0.1:8317/v1" }),
+    "http://127.0.0.1:8317",
+  );
+  assert.strictEqual(codexCustomEndpoint({ openai_base_url: "https://chatgpt.com/x" }), undefined);
+  assert.strictEqual(codexCustomEndpoint({}), undefined);
+  // GOAT's OpenCodex Home route sets the base URL outside the config.
+  assert.strictEqual(codexEndpoint({}, "http://127.0.0.1:4318/v1"), "http://127.0.0.1:4318");
+  assert.strictEqual(codexEndpoint(hub, "http://127.0.0.1:4318/v1"), "https://hub.example.com");
+  assert.strictEqual(codexEndpoint({}, "https://chatgpt.com/backend-api/codex"), undefined);
 });

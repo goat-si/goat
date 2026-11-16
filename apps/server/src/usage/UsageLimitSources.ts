@@ -3,6 +3,7 @@ import {
   UsageLimitSourceError,
   type UsageLimitSourceConsumeResetCreditInput,
   type ProviderConsumeResetCreditResult,
+  type ProviderDriverKind,
   type ServerSettings,
   type SecretReference,
   type UsageLimitSourceConfig,
@@ -25,6 +26,7 @@ import * as Stream from "effect/Stream";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as Settings from "../serverSettings.ts";
+import { windowLimitsModel } from "../provider/claudeUsageLimits.ts";
 import { makeCliproxyApi } from "./cliproxyApi.ts";
 import { makeOpenCodexQuotaPool, quotaPoolSource } from "./opencodexQuotaPool.ts";
 import { cachedResolveSecret } from "../secrets/secretResolver.ts";
@@ -86,7 +88,14 @@ export const make = Effect.gen(function* () {
     settings: ServerSettings,
   ) {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    const base = { id, kind: config.kind, label: sourceLabel(id, config), checkedAt } as const;
+    const url = URL.parse(config.url);
+    const base = {
+      id,
+      kind: config.kind,
+      label: sourceLabel(id, config),
+      ...(url && /^https?:$/.test(url.protocol) ? { origin: url.origin } : {}),
+      checkedAt,
+    } as const;
     const resolved = yield* Effect.tryPromise(() =>
       resolveUsageManagementKey(settings, config),
     ).pipe(Effect.result);
@@ -139,7 +148,9 @@ export const make = Effect.gen(function* () {
     const pool = yield* opencodex.read();
     const previous = yield* Ref.getAndSet(poolRef, pool);
     yield* publish(
-      pool?.pool === undefined ? snapshots : [...snapshots, quotaPoolSource(pool.pool)],
+      pool?.pool === undefined
+        ? snapshots
+        : [...snapshots, { ...quotaPoolSource(pool.pool), origin: pool.origin }],
       !Equal.equals(previous, pool),
     );
   }).pipe(refreshLock.withPermits(1), Effect.ignoreCause({ log: true }));
@@ -241,3 +252,92 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(UsageLimitSources, make);
+
+/** A hub answers with a usage limit only when every account it routes the driver to is spent. */
+export function hubPoolResetAt(
+  sources: ReadonlyArray<UsageLimitSourceSnapshot>,
+  driver: ProviderDriverKind,
+  model: string | null,
+  now: number,
+): string | null {
+  let earliest: number | null = null;
+  for (const source of sources) {
+    for (const account of source.accounts) {
+      if (account.driver !== driver) continue;
+      // An unread account may be the one still blocked, so its refill is unknown.
+      if (account.usageLimits.unavailable) return null;
+      const spent = account.usageLimits.windows.filter(
+        (window) => window.usedPercent >= 100 && windowLimitsModel(window, model),
+      );
+      if (spent.length === 0) return null;
+      const resets = spent.map((window) => Date.parse(window.resetsAt ?? ""));
+      if (resets.some((reset) => !Number.isFinite(reset))) return null;
+      const recoversAt = Math.max(...resets);
+      if (recoversAt <= now) return null;
+      earliest = earliest === null ? recoversAt : Math.min(earliest, recoversAt);
+    }
+  }
+  return earliest === null ? null : DateTime.formatIso(DateTime.makeUnsafe(earliest));
+}
+
+const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "[::1]"];
+
+// OpenCodex listens on loopback, which an instance may name by any loopback host.
+function servesEndpoint(source: UsageLimitSourceSnapshot, endpoint: string): boolean {
+  if (source.origin === endpoint) return true;
+  if (source.kind !== "opencodex" || source.origin === undefined) return false;
+  const served = URL.parse(source.origin);
+  const requested = URL.parse(endpoint);
+  return (
+    served !== null &&
+    requested !== null &&
+    requested.protocol === served.protocol &&
+    requested.port === served.port &&
+    LOOPBACK_HOSTS.includes(requested.hostname)
+  );
+}
+
+export class UsageLimitResetFallback extends Context.Reference<{
+  readonly resetAt: (
+    driver: ProviderDriverKind,
+    endpoint: string,
+    model: string | null,
+  ) => Effect.Effect<string | null>;
+}>("goat/usage/UsageLimitResetFallback", {
+  defaultValue: () => ({ resetAt: () => Effect.succeed(null) }),
+}) {}
+
+export const layerResetFallback = Layer.effect(
+  UsageLimitResetFallback,
+  Effect.gen(function* () {
+    const sources = yield* UsageLimitSources;
+    return {
+      resetAt: Effect.fn("UsageLimitResetFallback.resetAt")(function* (driver, endpoint, model) {
+        // Only the hub or pool at the instance's endpoint serves its turns.
+        const atEndpoint = Effect.map(sources.current, (current) =>
+          current.filter((source) => servesEndpoint(source, endpoint)),
+        );
+        if ((yield* atEndpoint).length === 0) return null;
+        // The pool usually ran out after the last poll, so the cached accounts still show room.
+        yield* sources.refresh.pipe(Effect.timeout("5 seconds"), Effect.ignore);
+        const serving = yield* atEndpoint;
+        const now = DateTime.toEpochMillis(yield* DateTime.now);
+        // The OpenCodex pool answers when it knows the reset; otherwise a CLIProxyAPI hub does.
+        return (
+          hubPoolResetAt(
+            serving.filter((source) => source.kind === "opencodex"),
+            driver,
+            model,
+            now,
+          ) ??
+          hubPoolResetAt(
+            serving.filter((source) => source.kind !== "opencodex"),
+            driver,
+            model,
+            now,
+          )
+        );
+      }),
+    };
+  }),
+);
