@@ -17,7 +17,6 @@ import * as CloudProviderAutoSetup from "./provider/CloudProviderAutoSetup.ts";
 import * as ProviderPathRefresh from "./provider/ProviderPathRefresh.ts";
 import * as ProviderSettings from "./provider/ProviderSettings.ts";
 import * as SshDeviceAdd from "./sshRemote/SshDeviceAdd.ts";
-import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import type * as SecureRandom from "effect/crypto/SecureRandom";
 import type * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -247,7 +246,7 @@ import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as CodexManagedTokenBroker from "./provider/CodexManagedTokenBroker.ts";
 import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
 import { MuseUsageHome } from "@goat/provider-muse/server";
-import * as EventNdjsonLogger from "./provider/EventNdjsonLogger.ts";
+import { layerProviderEventLoggers } from "./provider/ProviderEventLoggersLayer.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
 import * as ProviderDiagnosisService from "./provider/ProviderDiagnosisService.ts";
 import * as ResetCreditCoordinator from "./provider/resetCreditCoordinator.ts";
@@ -298,27 +297,6 @@ const layerApplicationObservability = EventLoopMonitor.layer.pipe(
   Layer.provideMerge(layerResourceAttribution),
 );
 
-// Share rotation state so driver loggers cannot race.
-const layerProviderEventLoggers = Layer.effect(
-  ProviderEventLoggers.ProviderEventLoggers,
-  Effect.gen(function* () {
-    const { providerEventLogPath } = yield* ServerConfig.ServerConfig;
-    const attribution = yield* ResourceAttribution.ResourceAttribution;
-    const store = yield* EventNdjsonLogger.makeEventNdjsonLogStore(providerEventLogPath, {
-      attribution,
-    }).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning(error.message, { error }).pipe(
-          Effect.annotateLogs({ scope: "provider-observability" }),
-          Effect.as(undefined),
-        ),
-      ),
-    );
-    if (!store) return ProviderEventLoggers.NoOpProviderEventLoggers;
-    yield* Effect.addFinalizer(() => store.close());
-    return { native: store.logger("native"), canonical: store.logger("canonical") };
-  }),
-);
 const layerPtyAdapter = NodePtyAdapter.layer;
 
 export const layerServerSettings = ServerSettings.layer.pipe(
