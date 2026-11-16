@@ -3372,7 +3372,11 @@ function ThreadFeedLoadEarlierControl(props: ThreadFeedHistoryControls) {
         </View>
       ) : null}
       {props.error !== null ? (
-        <Text className="text-center text-xs" style={{ color: mutedColor }}>
+        <Text
+          className="text-center text-xs"
+          style={{ color: mutedColor }}
+          accessibilityLiveRegion="polite"
+        >
           {props.error}
         </Text>
       ) : null}

@@ -18,6 +18,7 @@ import * as Haptics from "expo-haptics";
 import { AsyncResult } from "effect/reactivity";
 import { createContext, use, useEffect, useRef, useState, type ReactNode } from "react";
 
+import { isAtomCommandInterrupted } from "@goat/client-runtime/state/runtime";
 import * as Dialog from "../../components/ui/Dialog";
 import { environmentCatalog } from "../../connection/catalog";
 import {
@@ -37,6 +38,7 @@ import {
   compatibleRuntimeModeForChoices,
   runtimeModeChoicesForSupportedModes,
 } from "./thread-settings-options";
+import { commandFailureText } from "./commandFailureText";
 import { canSelectModel, modelFavoriteKey } from "./thread-settings-sheet-state";
 
 const EMPTY_MODEL_FAVORITES: ReadonlyArray<{
@@ -102,6 +104,8 @@ export type ThreadSettingsSessionValue = {
   /** The provider whose catalog for this folder the picker keeps fresh. */
   readonly workspaceScan: { readonly instanceId: ProviderInstanceId; readonly cwd: string } | null;
 };
+
+const NOT_SAVED = "The change was not saved. Try again.";
 
 const ThreadSettingsSessionContext = createContext<ThreadSettingsSessionValue | null>(null);
 
@@ -208,6 +212,8 @@ export function ThreadSettingsSessionProvider(
         },
       },
     });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result))
+      Dialog.alert("Favorites not saved", commandFailureText(result, NOT_SAVED));
     if (
       AsyncResult.isSuccess(result) &&
       registry.get(environmentServerConfigsAtom).get(environmentId)?.settings.favorites ===
@@ -252,9 +258,14 @@ export function ThreadSettingsSessionProvider(
           ],
         },
       },
-    }).then(() => {
+    }).then((result) => {
       pendingHidden.current.delete(option.key);
       setPendingHiddenKeys(new Set(pendingHidden.current));
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result))
+        Dialog.alert(
+          option.isHidden ? "Could not show the model" : "Could not hide the model",
+          commandFailureText(result, NOT_SAVED),
+        );
     });
   };
   const [showLegacyToggle, setShowLegacyToggle] = useState(false);
