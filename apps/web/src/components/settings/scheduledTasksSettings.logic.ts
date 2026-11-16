@@ -70,6 +70,8 @@ export interface DraftState {
   readonly projectId: string;
   readonly threadId: string;
   readonly threadMode: ScheduledTaskThreadMode;
+  /** Set when leaving the thread dropped Important updates, so the form can say so. */
+  readonly notificationPolicyReset?: boolean;
   readonly workspaceMode: WorkspaceMode;
   readonly baseRef: string;
   readonly startFromOrigin: boolean;
@@ -358,3 +360,9 @@ export function workspaceStrategyFromDraft(
     startFromOrigin: draft.startFromOrigin,
   };
 }
+
+/** Important updates needs a thread, so choosing a new thread each run drops it to All runs. */
+export const withThreadMode = (draft: DraftState, threadMode: ScheduledTaskThreadMode) =>
+  threadMode === "new_thread" && draft.notificationPolicy === "important_updates"
+    ? { ...draft, threadMode, notificationPolicy: "all_runs", notificationPolicyReset: true }
+    : { ...draft, threadMode };

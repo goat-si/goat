@@ -240,6 +240,35 @@ it("with thread modes, Run in new threads saves the task as a new thread each ru
     .toHaveTextContent("New thread each run");
 });
 
+it("with thread modes, New thread each run drops Important updates with the button's notice", async () => {
+  const task = setup("important_updates", true, { threadMode: "continue" }, true);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  await userEvent.click(page.getByRole("combobox", { name: "Destination" }));
+  await userEvent.click(page.getByRole("option", { name: "New thread each run" }));
+  await expect
+    .element(
+      page.getByText(
+        "Notifications changed to All runs because Important updates requires an existing thread.",
+      ),
+    )
+    .toBeVisible();
+  await userEvent.click(page.getByRole("combobox", { name: "Notifications" }));
+  await expect.element(page.getByRole("option", { name: "Failed runs only" })).toBeVisible();
+  await expect
+    .element(page.getByRole("option", { name: "Important updates" }))
+    .not.toBeInTheDocument();
+  await userEvent.click(page.getByRole("option", { name: "All runs" }));
+  await userEvent.click(page.getByRole("button", { name: "Save task" }));
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  expect(state.tasks[0]).toMatchObject({
+    threadId: null,
+    threadMode: "new_thread",
+    notificationPolicy: "all_runs",
+  });
+});
+
 it("keeps the editor open when an older host drops the requested policy", async () => {
   const task = setup();
   state.dropPolicy = true;

@@ -100,6 +100,7 @@ import {
   scheduledTaskDefaultModel,
   taskToDraft,
   type DraftState,
+  withThreadMode,
   workspaceStrategyFromDraft,
   type ScheduleMode,
   type WorkspaceMode,
@@ -1305,7 +1306,7 @@ function ScheduledTaskEditorForm({
             threadMode={draft.threadMode}
             onThreadModeChange={
               offersThreadModes
-                ? (threadMode) => setDraft((current) => ({ ...current, threadMode }))
+                ? (threadMode) => setDraft((current) => withThreadMode(current, threadMode))
                 : undefined
             }
             botRoutine={botRoutine}

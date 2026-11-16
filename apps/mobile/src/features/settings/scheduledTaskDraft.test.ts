@@ -7,6 +7,7 @@ import {
   ProjectId,
   type ScheduledTask,
   ScheduledTaskId,
+  ThreadId,
 } from "@goat/contracts";
 import {
   scheduledTaskDefaultModel,
@@ -17,6 +18,8 @@ import {
   createDraft,
   hasScheduledTaskDraftChanges,
   scheduledTaskContextFields,
+  offersImportantUpdates,
+  withThreadMode,
 } from "./scheduledTaskDraft";
 
 describe("scheduleDraftForTask", () => {
@@ -310,4 +313,27 @@ describe("scheduledTaskContextFields", () => {
       workspaceStrategy: { type: "root" },
     });
   });
+});
+
+it("leaving the thread drops Important updates, which needs one, and says so", () => {
+  const bound = editDraft(
+    routine({
+      threadId: ThreadId.make("bound"),
+      threadMode: "continue",
+      notificationPolicy: "important_updates",
+    }),
+  );
+  expect(offersImportantUpdates(bound)).toBe(true);
+  const unbound = withThreadMode(bound, "new_thread");
+  expect(unbound).toMatchObject({
+    threadMode: "new_thread",
+    notificationPolicy: "all_runs",
+    notificationPolicyReset: true,
+  });
+  expect(offersImportantUpdates(unbound)).toBe(false);
+  expect(withThreadMode(bound, "fresh_session")).toMatchObject({
+    threadMode: "fresh_session",
+    notificationPolicy: "important_updates",
+  });
+  expect(offersImportantUpdates(editDraft(routine()))).toBe(false);
 });

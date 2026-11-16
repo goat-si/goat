@@ -13,7 +13,11 @@ import { buildModelOptions } from "../../lib/modelOptions";
 import { resolveNewTaskBranchLabel } from "../threads/new-task-context-presentation";
 import { SettingsSection } from "./components/SettingsSection";
 import { FormField, SelectRow } from "./ScheduledTaskFormFields";
-import { scheduledTaskDefaultModel, type ScheduledTaskDraft as Draft } from "./scheduledTaskDraft";
+import {
+  scheduledTaskDefaultModel,
+  type ScheduledTaskDraft as Draft,
+  withThreadMode,
+} from "./scheduledTaskDraft";
 
 const THREAD_MODE_LABELS: Record<ScheduledTaskThreadMode, string> = {
   new_thread: "New thread each run",
@@ -170,7 +174,7 @@ export function ScheduledTaskContextSections({
             }))}
             onSelect={(id) => {
               if (id === "new_thread" || id === "continue" || id === "fresh_session")
-                setDraft({ ...draft, threadMode: id });
+                setDraft(withThreadMode(draft, id));
             }}
           />
         </SettingsSection>

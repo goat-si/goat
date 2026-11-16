@@ -198,6 +198,8 @@ export type ScheduledTaskDraft = {
   readonly modelSelectionIsExplicit: boolean;
   readonly schedule: ScheduleDraft;
   readonly threadMode: ScheduledTaskThreadMode;
+  /** Set when leaving the thread dropped Important updates, so the form can say so. */
+  readonly notificationPolicyReset?: boolean;
   readonly workspace: Workspace;
   readonly baseRef: string;
   readonly checkoutPath: string;
@@ -337,3 +339,16 @@ export function scheduledTaskContextFields(
             },
   };
 }
+
+/** Important updates needs a thread that later runs keep. */
+export const offersImportantUpdates = (draft: ScheduledTaskDraft) =>
+  draft.task?.threadId != null && draft.threadMode !== "new_thread";
+
+/** Choosing a new thread each run drops Important updates to All runs. */
+export const withThreadMode = (
+  draft: ScheduledTaskDraft,
+  threadMode: ScheduledTaskThreadMode,
+): ScheduledTaskDraft =>
+  threadMode === "new_thread" && draft.notificationPolicy === "important_updates"
+    ? { ...draft, threadMode, notificationPolicy: "all_runs", notificationPolicyReset: true }
+    : { ...draft, threadMode };
