@@ -20,7 +20,7 @@ import {
   type CreateNewBot,
   type OpenIfStillHere,
 } from "@goat/client-runtime/goatBot";
-import type { BotProfile, ChannelTaskId } from "@goat/contracts";
+import type { BotProfile, ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import { useNavigation, type NavigationProp, type ParamListBase } from "@react-navigation/native";
 import { Alert, type AlertButton, AppState, Pressable, Text, View } from "react-native";
 import { uuidv4 } from "../../lib/uuid";
@@ -47,9 +47,15 @@ export function MobileBotRoster(props: {
   const rosterReadable = useComputerReadable(roster.environmentId);
   const mainName = goatBotName(roster.groups.main);
   const manage = useMobileBotManage(roster.environmentId, mainName);
-  const [editing, setEditing] = useState<BotProfile | null>(null);
-  // The sheet holds the bot's profile: it closes for good once its computer may not be read.
-  if (editing !== null && !rosterReadable) setEditing(null);
+  // A sheet or menu belongs to the roster computer it was opened on.
+  const [editing, setEditing] = useState<{
+    readonly profile: BotProfile;
+    readonly environmentId: EnvironmentId | null;
+  } | null>(null);
+  // The sheet holds the bot's profile: it closes for good once the roster leaves its computer or
+  // that computer may not be read.
+  if (editing !== null && (editing.environmentId !== roster.environmentId || !rosterReadable))
+    setEditing(null);
   // A row's action menu is a native alert: open from the long press until a choice or dismissal.
   const [menuOpen, setMenuOpen] = useState(false);
   const menu = (
@@ -58,6 +64,7 @@ export function MobileBotRoster(props: {
     buttons: ReadonlyArray<AlertButton>,
   ) => {
     setMenuOpen(true);
+    const openedOn = environmentId;
     Alert.alert(
       title,
       message,
@@ -65,8 +72,10 @@ export function MobileBotRoster(props: {
         ...button,
         onPress: () => {
           setMenuOpen(false);
-          // An alert cannot be withdrawn; a choice pressed after a refusal does nothing.
-          if (mount.current.readable) button.onPress?.();
+          // An alert cannot be withdrawn: a choice acts only while the roster is on its computer
+          // and may read it.
+          const now = mount.current;
+          if (now.environmentId === openedOn && now.readable) button.onPress?.();
         },
       })),
       { cancelable: true, onDismiss: () => setMenuOpen(false) },
@@ -140,7 +149,7 @@ export function MobileBotRoster(props: {
   const askAbout = (entry: BotRosterEntry) => {
     const bot = entry.profile;
     if (bot === null) return;
-    const edit = { text: "Edit", onPress: () => setEditing(bot) };
+    const edit = { text: "Edit", onPress: () => setEditing({ profile: bot, environmentId }) };
     const cancel = { text: "Cancel", style: "cancel" as const };
     if (entry.kind === "main") {
       if (manage.canEdit) menu(bot.name, undefined, [edit, cancel]);
@@ -239,11 +248,11 @@ export function MobileBotRoster(props: {
           ) : null
         }
       />
-      {editing !== null && environmentId !== null ? (
+      {editing !== null && editing.environmentId !== null ? (
         <MobileBotEditSheet
-          key={editing.botId}
-          bot={editing}
-          environmentId={environmentId}
+          key={editing.profile.botId}
+          bot={editing.profile}
+          environmentId={editing.environmentId}
           manage={manage}
           mainName={mainName}
           onClose={() => setEditing(null)}
