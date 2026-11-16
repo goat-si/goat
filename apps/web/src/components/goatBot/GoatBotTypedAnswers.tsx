@@ -63,14 +63,16 @@ export function GoatBotTypedAnswersScope({
   const [state, setState] = useState({ destination, answers: NO_ANSWERS });
   const tracking = state.answers.size > 0;
   const recorded = tracking ? recordedQuestions(visibleTurnItems) : NO_RECORDS;
+  // An answer its task recorded while the field held no words has ended; nothing is left to show.
+  const endedEmpty = (answer: TypedAnswer) => !hasWords(answer) && isRecorded(answer, recorded);
   if (destination !== null && destination !== state.destination) {
     setState({ destination, answers: state.destination === null ? state.answers : NO_ANSWERS });
-  } else if (tracking) {
-    // An answer its task recorded while the field held no words has ended; nothing is left to show.
-    const answers = new Map(state.answers);
-    for (const [rowId, answer] of state.answers)
-      if (!hasWords(answer) && isRecorded(answer, recorded)) answers.delete(rowId);
-    if (answers.size !== state.answers.size) setState({ destination: state.destination, answers });
+  } else if (tracking && [...state.answers.values()].some(endedEmpty)) {
+    setState((previous) => {
+      const answers = new Map(previous.answers);
+      for (const [rowId, answer] of previous.answers) if (endedEmpty(answer)) answers.delete(rowId);
+      return { destination: previous.destination, answers };
+    });
   }
   const holding = [...state.answers.values()].some(hasWords);
   const update = (rowId: string, next: TypedAnswer | null) =>
@@ -105,7 +107,7 @@ export function useGoatBotTypedAnswer(row: QuestionRow) {
     /** The task recorded an answer to this question, so the words can no longer answer it. */
     ended,
     /** The words stay visible, unsent, until the person discards them. */
-    unsent: hasWords(answer) && (ended || answer?.held === true),
+    unsent: hasWords(answer) && (ended || (answer?.held === true && row.options.length === 0)),
     target,
     /** A closed card's Enter would send a task message the main chat hides, so the words are held. */
     gated:
