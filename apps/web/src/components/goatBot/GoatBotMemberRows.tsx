@@ -25,7 +25,6 @@ import {
   AlertDialogPopup,
   AlertDialogTitle,
 } from "../ui/alert-dialog";
-import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
@@ -35,7 +34,7 @@ import { GoatBotProfileDialog } from "./GoatBotProfileDialog";
 import { HoldsNavigation } from "~/lib/navigationHolds";
 import { useBotManage } from "./useBotManage";
 import { useGoatBotMemberStatus } from "./useGoatBotMemberStatus";
-import { GoatBotRowSignals } from "./GoatBotRowSignals";
+import { GoatBotRowSignals, GoatBotWaitingMark } from "./GoatBotRowSignals";
 import { goatBotGovernedAtom } from "./goatBotGoverned";
 
 const NO_PERMISSION = Atom.make(false);
@@ -221,11 +220,7 @@ function GoatBotMemberRow({
               waiting={count}
               waitingState={status.sidebarWaitingState}
             />
-            {count !== undefined && count > 0 ? (
-              <Badge size="sm" variant="secondary" aria-hidden>
-                {count}
-              </Badge>
-            ) : null}
+            <GoatBotWaitingMark count={count} />
           </span>
           {line ? (
             <span className="min-w-0 truncate text-xs font-normal text-sidebar-muted-foreground">

@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import * as Random from "effect/Random";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as Sse from "effect/encoding/Sse";
 import { HttpClient, HttpClientRequest } from "effect/http";
@@ -65,6 +66,29 @@ const resourceUrlOf = (input: PullRequestEventsInput) =>
   `https://${input.host}/${input.repository}/pull/${input.number}`;
 
 /**
+ * SSE events of a text stream. A retry: field is ignored (Sse.decode fails the stream on it;
+ * reconnects keep their own backoff), and an event past the parser's 10 MiB limit fails it.
+ */
+const sseEvents = <E, R>(
+  text: Stream.Stream<string, E, R>,
+): Stream.Stream<Sse.Event, E | Sse.SseError, R> =>
+  Stream.suspend(() => {
+    let parsed: Array<Sse.Event> = [];
+    const parser = Sse.makeParser((event) => {
+      if (event._tag === "Event") parsed.push(event);
+    });
+    return text.pipe(
+      Stream.flatMap((chunk) => {
+        const error = parser.feed(chunk);
+        if (error !== undefined) return Stream.fail(error);
+        const events = parsed;
+        parsed = [];
+        return Stream.fromIterable(events);
+      }),
+    );
+  });
+
+/**
  * Pauses belong to the credential that earned them, by its fingerprint (a hash, never the token),
  * so a replaced token or another account is asked again.
  */
@@ -82,6 +106,10 @@ export const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   /** Keyed by credential for account-wide refusals, and by pull request for one it cannot read. */
   const pausedUntil = new Map<string, number>();
+  // A pause is read before the POST and written after GitHub answers, so subscribes run one at a
+  // time: feeds starting together on an account without event streams send one refused POST.
+  // Only github.com gets feeds, so one permit covers each of its credentials.
+  const subscribes = Semaphore.makeUnsafe(1);
   const pause = (key: string, duration: Duration.Duration) =>
     Clock.currentTimeMillis.pipe(
       Effect.map((now) => {
@@ -163,7 +191,7 @@ export const make = Effect.gen(function* () {
     if (Option.isSome(id)) yield* unsubscribe(input.host, id.value.id);
     yield* pause(keys.account, REFUSED_PAUSE);
     return Option.none();
-  });
+  }, subscribes.withPermit);
 
   /** One SSE connection: "changed" when it opens and per event, and last, how it ended. */
   const connection = (host: string, eventsUrl: string): Stream.Stream<"changed" | Ending> =>
@@ -186,18 +214,15 @@ export const make = Effect.gen(function* () {
             Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
             Effect.timeout(SILENCE_LIMIT),
           );
-        if (response.status === 401 || response.status === 403 || response.status === 404) {
+        // A refusal stops the feed; a rate limit or a server error is reconnected with backoff.
+        if (response.status >= 400 && response.status < 500 && response.status !== 429) {
           return Stream.succeed<Ending>("stop");
         }
         if (response.status !== 200) return Stream.succeed<Ending>("reconnect");
         return response.stream.pipe(
           Stream.timeoutOrElse({ duration: SILENCE_LIMIT, orElse: () => Stream.fail("silent") }),
           Stream.decodeText,
-          // The decoder fails the stream on a retry: field; reconnects keep their own backoff.
-          Stream.splitLines,
-          Stream.filter((line) => line !== "retry" && !line.startsWith("retry:")),
-          Stream.map((line) => `${line}\n`),
-          Stream.pipeThroughChannel(Sse.decode()),
+          sseEvents,
           Stream.map((frame): "changed" | Ending =>
             frame.event === "github.stream.end" ? endingOf(frame.data) : "changed",
           ),

@@ -28,6 +28,7 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as PullRequestWatchReactor from "./PullRequestWatchReactor.ts";
+import * as PullRequestEventFeeds from "./goat/PullRequestEventFeeds.ts";
 import * as RuntimeLayer from "./runtimeLayer.ts";
 import {
   layerCheckpointStoreTest,
@@ -138,7 +139,8 @@ const fakeHost = (input: {
   readonly projectId: ProjectId;
   readonly number: number;
   readonly detailReads: Queue.Queue<void>;
-  readonly changes: () => Stream.Stream<void>;
+  readonly changes: (input: { readonly host?: string | undefined }) => Stream.Stream<void>;
+  readonly followsChanges?: (input: { readonly host?: string | undefined }) => boolean;
 }) => {
   let fingerprints = 0;
   return Layer.mergeAll(
@@ -146,12 +148,12 @@ const fakeHost = (input: {
     NodeCrypto.layer,
     ServerSettings.layerTest(),
     Layer.mock(PullRequestService.PullRequestService)({
-      detail: () =>
+      detail: (read) =>
         Queue.offer(input.detailReads, undefined).pipe(
           Effect.as({
             ...watchedPullRequestDetail({
               projectId: input.projectId,
-              number: input.number,
+              number: read.number,
               at: "2026-10-02T12:00:00.000Z",
             }),
             headSha: "aaaaaaaaaa",
@@ -168,6 +170,7 @@ const fakeHost = (input: {
       watchFingerprint: () => Effect.sync(() => ({ status: String(++fingerprints), remarks: "" })),
       invalidate: () => Effect.void,
       changes: input.changes,
+      followsChanges: (ref) => Effect.succeed(input.followsChanges?.(ref) ?? true),
     }),
   );
 };
@@ -315,6 +318,7 @@ describe("pull request watch host events", () => {
             watchFingerprint: () =>
               Effect.sync(() => ({ status: String(++fingerprints), remarks: "" })),
             invalidate: () => Effect.void,
+            followsChanges: () => Effect.succeed(true),
             changes: () =>
               Stream.fromEffectDrain(Deferred.succeed(following, undefined)).pipe(
                 Stream.concat(
@@ -366,6 +370,52 @@ describe("pull request watch host events", () => {
         });
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
+  it.effect("gives the 64 feed slots only to pull requests whose host has an event feed", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, projectId } = yield* watchPullRequest("pr-watch-feed-cap", 1);
+      const watch = (host: string, number: number) =>
+        orchestrator.dispatch({
+          type: "thread.pull-request.watch",
+          commandId: CommandId.make(`pr-watch-feed-cap-${host}-${number}`),
+          threadId,
+          host,
+          repository: "goat-si/goat",
+          number,
+          watching: true,
+          link: { url: `https://${host}/goat-si/goat/pull/${number}`, source: "agent" },
+        });
+      for (let number = 2; number <= 65; number += 1) yield* watch("github.com", number);
+      // Its key sorts before every github.com one.
+      yield* watch("bitbucket.org", 1);
+      const opened: Array<string> = [];
+      const full = yield* Deferred.make<void>();
+      const detailReads = yield* Queue.unbounded<void>();
+      const reactor = yield* PullRequestWatchReactor.make.pipe(
+        Effect.provide(
+          fakeHost({
+            projectId,
+            number: 1,
+            detailReads,
+            followsChanges: (ref) => ref.host === "github.com",
+            changes: (ref) => {
+              opened.push(ref.host ?? "");
+              if (opened.length === PullRequestEventFeeds.MAX_EVENT_FEEDS) {
+                Deferred.doneUnsafe(full, Effect.void);
+              }
+              return Stream.never;
+            },
+          }),
+        ),
+      );
+      yield* reactor.start();
+      yield* Deferred.await(full);
+      assert.deepEqual(
+        opened.filter((host) => host !== "github.com"),
+        [],
+        "a host without an event feed took a feed slot",
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
 });
 
 describe("pull request watch host event feeds", () => {
@@ -374,9 +424,9 @@ describe("pull request watch host event feeds", () => {
       { length: 70 },
       (_, index) => [`github.com goat-si/goat#${String(index).padStart(3, "0")}`, index] as const,
     );
-    const forward = PullRequestWatchReactor.feedsToFollow(candidates);
-    const backward = PullRequestWatchReactor.feedsToFollow(candidates.toReversed());
-    assert.equal(PullRequestWatchReactor.MAX_EVENT_FEEDS, 64);
+    const forward = PullRequestEventFeeds.feedsToFollow(candidates);
+    const backward = PullRequestEventFeeds.feedsToFollow(candidates.toReversed());
+    assert.equal(PullRequestEventFeeds.MAX_EVENT_FEEDS, 64);
     assert.deepEqual(
       [...forward.keys()],
       candidates.slice(0, 64).map(([key]) => key),

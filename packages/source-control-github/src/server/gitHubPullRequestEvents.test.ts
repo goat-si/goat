@@ -442,3 +442,117 @@ it.effect("a replaced credential lifts the pauses the previous one earned", () =
     assert.equal(missing.posts.length, 2, "the pull request stays paused for the new credential");
   }),
 );
+
+it.effect("ten feeds starting together against a refusing account send one POST", () =>
+  Effect.gen(function* () {
+    const posted = yield* Deferred.make<void>();
+    const { rest, posts } = fakeRest(() =>
+      Deferred.succeed(posted, undefined).pipe(
+        Effect.andThen(Effect.sleep("1 second")),
+        Effect.andThen(
+          Effect.fail(
+            new GitHubApiResponseError({
+              host: "github.com",
+              operation: "subscribePullRequestEvents",
+              status: 403,
+            }),
+          ),
+        ),
+      ),
+    );
+    const events = yield* eventsOf(rest, noStream);
+    // Detached: on a failure the feeds still sleeping must not hang this test's teardown.
+    const feeds = yield* Effect.forEach(
+      Array.from({ length: 10 }, (_, index) => index),
+      (index) => Stream.runCount(events({ ...target, number: 100 + index })),
+      { concurrency: "unbounded" },
+    ).pipe(Effect.forkDetach);
+    yield* Deferred.await(posted);
+    yield* TestClock.adjust("1 second");
+    assert.equal(posts.length, 1, "each feed sent its own refused POST");
+    assert.deepEqual(
+      yield* Fiber.join(feeds),
+      Array.from({ length: 10 }, () => 0),
+    );
+  }),
+);
+
+it.effect("ends a connection whose event grows past 10 MiB without a line end", () =>
+  Effect.gen(function* () {
+    const { rest } = fakeRest(subscription);
+    const cancelled = yield* Deferred.make<void>();
+    const chunk = new TextEncoder().encode("a".repeat(1024 * 1024));
+    let connections = 0;
+    const httpClient = HttpClient.make((request) =>
+      Effect.sync(() => {
+        connections += 1;
+        if (connections > 1) {
+          return HttpClientResponse.fromWeb(request, new Response(null, { status: 403 }));
+        }
+        return HttpClientResponse.fromWeb(
+          request,
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                for (let index = 0; index < 12; index += 1) controller.enqueue(chunk);
+              },
+              cancel() {
+                Deferred.doneUnsafe(cancelled, Effect.void);
+              },
+            }),
+          ),
+        );
+      }),
+    );
+    const events = yield* eventsOf(rest, httpClient);
+    // Detached: a stream that never ends must fail this test, not hang its teardown.
+    yield* events(target).pipe(Stream.runDrain, Effect.forkDetach);
+    // The body is read without the test clock, so the size limit alone can end it.
+    yield* Deferred.await(cancelled);
+    assert.equal(connections, 1);
+  }),
+);
+
+it.effect.each([400, 410, 422])(
+  "a stream answering %s stops like a refusal instead of reconnecting",
+  (status) =>
+    Effect.gen(function* () {
+      const { rest, posts, deletes } = fakeRest(subscription);
+      let connections = 0;
+      const httpClient = HttpClient.make((request) =>
+        Effect.sync(() => {
+          connections += 1;
+          return HttpClientResponse.fromWeb(request, new Response(null, { status }));
+        }),
+      );
+      const events = yield* eventsOf(rest, httpClient);
+      const fiber = yield* events(target).pipe(Stream.runCount, Effect.forkChild);
+      yield* TestClock.adjust("10 minutes");
+      assert.equal(yield* Fiber.join(fiber), 0);
+      assert.equal(connections, 1, "the stream reconnected");
+      assert.deepEqual(deletes, ["event-subscriptions/1"]);
+      assert.equal(yield* Stream.runCount(events(target)), 0);
+      assert.equal(posts.length, 1, "the pull request subscribed again at once");
+    }),
+);
+
+it.effect("a stream answering 429 reconnects", () =>
+  Effect.gen(function* () {
+    const { rest } = fakeRest(subscription);
+    let connections = 0;
+    const httpClient = HttpClient.make((request) =>
+      Effect.sync(() => {
+        connections += 1;
+        return HttpClientResponse.fromWeb(
+          request,
+          new Response(null, { status: connections === 1 ? 429 : 403 }),
+        );
+      }),
+    );
+    const events = yield* eventsOf(rest, httpClient);
+    const fiber = yield* events(target).pipe(Stream.runCount, Effect.forkChild);
+    yield* TestClock.adjust("10 minutes");
+    assert.equal(yield* Fiber.join(fiber), 0);
+    assert.equal(connections, 2);
+  }),
+);
