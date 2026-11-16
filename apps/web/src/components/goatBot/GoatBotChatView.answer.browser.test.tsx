@@ -287,3 +287,28 @@ it("words the gate held become editable again when the card's choices come back 
   expect(screen.container.textContent).not.toContain("Not sent");
   expect(onSendToTask).not.toHaveBeenCalled();
 });
+
+it("gate-held words become editable when the question id arrives during the pick, and Enter routes with it (#3442)", async () => {
+  setup();
+  const onSendToTask = vi.fn(() => true);
+  const { answerQuestionId: _question, ...noQuestionId } = question;
+  const sending: BotRow = {
+    ...noQuestionId,
+    options: [],
+    answer: "Keep",
+    answerIndex: 0,
+    answerSending: true,
+  };
+  await using screen = await render(chat({ rows: [noQuestionId], onSendToTask }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Something else" }), TYPED);
+  await screen.rerender(chat({ rows: [sending], onSendToTask }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Something else" }), "{Enter}");
+  await expect.element(screen.getByText("Not sent: “" + TYPED + "”")).toBeVisible();
+  // The question id arrives while the pick is still on its way.
+  await screen.rerender(chat({ rows: [{ ...sending, answerQuestionId: "q-1" }], onSendToTask }));
+  const field = screen.getByRole("textbox", { name: "Something else" });
+  await expect.element(field).toHaveValue(TYPED);
+  expect(screen.container.textContent).not.toContain("Not sent");
+  await userEvent.type(field, "{Enter}");
+  expect(onSendToTask).toHaveBeenCalledWith("task-1", TYPED, [], "q-1");
+});
