@@ -305,6 +305,18 @@ it.effect("refuses unbinding into fresh sessions in one call, which would keep t
   }).pipe(Effect.provide(served));
 });
 
+it.effect("goat_schedule_update applies freshSession", () => {
+  const { stored, served } = updateFixture();
+  stored.task = intervalTask;
+  return Effect.gen(function* () {
+    const fresh = yield* callTool("goat_schedule_update", {
+      scheduledTaskId: intervalTask.id,
+      freshSession: true,
+    });
+    expect(fresh.structuredContent).toMatchObject({ freshSession: true });
+  }).pipe(Effect.provide(served));
+});
+
 const rotation = {
   scheduledTaskId: webhookTask.id,
   title: "Rotated hook",
