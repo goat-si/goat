@@ -1,7 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Sink from "effect/Sink";
@@ -63,16 +65,14 @@ const extractWith = (maxExtractedBytes?: number, packageBytes: Uint8Array = arch
       ...(maxExtractedBytes === undefined ? {} : { maxExtractedBytes }),
     }).pipe(Effect.exit);
     const files = yield* fs.readDirectory(runtime, { recursive: true });
-    return yield* result.pipe(
-      Effect.as(files),
-      Effect.mapError((error) => ({ error, files })),
-    );
-  }).pipe(Effect.scoped);
+    return { error: Exit.isFailure(result) ? Cause.squash(result.cause) : undefined, files };
+  }).pipe(Effect.scoped, Effect.orDie);
 
 it.layer(NodeServices.layer)("Codex package extraction", (it) => {
   it.effect("unpacks every member of a package within its size ceiling", () =>
     Effect.gen(function* () {
-      const files = yield* extractWith();
+      const { error, files } = yield* extractWith();
+      expect(error).toBeUndefined();
       expect([...files].sort()).toEqual(
         expect.arrayContaining(["bin/codex", "bin/codex-code-mode-host", "codex-path/rg"]),
       );
@@ -81,8 +81,8 @@ it.layer(NodeServices.layer)("Codex package extraction", (it) => {
 
   it.effect("stops unpacking once the package inflates past its ceiling", () =>
     Effect.gen(function* () {
-      const error = yield* extractWith(1).pipe(Effect.flip);
-      expect(error.error).toMatchObject({
+      const { error } = yield* extractWith(1);
+      expect(error).toMatchObject({
         detail: "The Codex package exceeded its unpacked size limit. Nothing was installed.",
       });
     }),
@@ -92,9 +92,7 @@ it.layer(NodeServices.layer)("Codex package extraction", (it) => {
     "refuses a member tar would read as an option or a pattern (%s) before unpacking anything",
     (name) =>
       Effect.gen(function* () {
-        const { error, files } = yield* extractWith(undefined, tarOf(["bin/codex", name])).pipe(
-          Effect.flip,
-        );
+        const { error, files } = yield* extractWith(undefined, tarOf(["bin/codex", name]));
         expect(error).toMatchObject({ detail: "The Codex archive contains unsafe entries." });
         expect(files).toEqual([]);
       }),
