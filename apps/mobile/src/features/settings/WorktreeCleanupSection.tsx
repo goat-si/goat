@@ -29,9 +29,14 @@ function NumberRow({
   readonly maximum: number;
   readonly disabled: boolean;
   readonly emptyLabel?: string;
-  readonly onSave: (value: number | null) => void;
+  readonly onSave: (value: number | null) => Promise<boolean>;
 }) {
   const [draft, setDraft] = useState(value === null ? "" : String(value));
+  const reset = () => setDraft(value === null ? "" : String(value));
+  const save = (next: number | null) =>
+    void onSave(next).then((saved) => {
+      if (!saved) reset();
+    });
   return (
     <View className="gap-2 p-4">
       <Text>{label}</Text>
@@ -44,9 +49,9 @@ function NumberRow({
         onChangeText={setDraft}
         onEndEditing={() => {
           const number = Number(draft);
-          if (draft.trim() === "") onSave(null);
-          else if (Number.isInteger(number) && number >= 1 && number <= maximum) onSave(number);
-          else setDraft(value === null ? "" : String(value));
+          if (draft.trim() === "") save(null);
+          else if (Number.isInteger(number) && number >= 1 && number <= maximum) save(number);
+          else reset();
         }}
       />
     </View>
@@ -76,12 +81,14 @@ export function WorktreeCleanupSection({
   const run = async (action: () => Promise<AtomCommandResult<unknown, unknown>>) => {
     setError(null);
     const result = await action();
-    if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
+    if (result._tag !== "Failure") return true;
+    if (isAtomCommandInterrupted(result)) return false;
     const failure = squashAtomCommandFailure(result);
     setError(failure instanceof Error ? failure.message : "The change was not saved. Try again.");
+    return false;
   };
   const write = (patch: Partial<StorageCleanupSettings>) =>
-    void run(() => update({ environmentId, input: { patch: { storageCleanup: patch } } }));
+    run(() => update({ environmentId, input: { patch: { storageCleanup: patch } } }));
   return (
     <SettingsSection title="Worktree cleanup">
       <NumberRow
@@ -102,14 +109,14 @@ export function WorktreeCleanupSection({
         label="Clean up when archived"
         value={settings.worktreeOnArchive}
         disabled={!allowed}
-        onValueChange={(value) => write({ worktreeOnArchive: value })}
+        onValueChange={(value) => void write({ worktreeOnArchive: value })}
       />
       <SettingsSwitchRow
         label="Clean up worktrees with uncommitted changes"
         subtitle="A snapshot is saved first."
         value={settings.worktreeSnapshotChanges}
         disabled={!allowed}
-        onValueChange={(value) => write({ worktreeSnapshotChanges: value })}
+        onValueChange={(value) => void write({ worktreeSnapshotChanges: value })}
       />
       <NumberRow
         label="Keep snapshots for days"
@@ -124,7 +131,7 @@ export function WorktreeCleanupSection({
         subtitle="Cleanup waits until you have seen what it would remove."
         value={settings.worktreeCleanupPreview}
         disabled={!allowed}
-        onValueChange={(value) => write({ worktreeCleanupPreview: value })}
+        onValueChange={(value) => void write({ worktreeCleanupPreview: value })}
       />
       {preview ? (
         <>
@@ -147,7 +154,7 @@ export function WorktreeCleanupSection({
           <SettingsActionRow
             label="Turn off"
             disabled={!allowed}
-            onPress={() => write(WORKTREE_CLEANUP_OFF)}
+            onPress={() => void write(WORKTREE_CLEANUP_OFF)}
           />
         </>
       ) : null}
