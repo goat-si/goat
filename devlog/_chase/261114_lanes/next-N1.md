@@ -95,6 +95,8 @@ Report /Users/jun/handoff-in/chase/next-N1-fix-review-232e473f.md; merged into `
 
 ## CI fix after the merge (#3519 at ffeb104573)
 
+CI fix 495a3a72b1 merged into the integration branch at 61827bdf57.
+
 goat-test-changed (run 43835378650, job 133192087032, lidge-goat-04) failed at apps/web/src/components/settings/AppearanceSettingsPanel.browser.test.tsx:116, "selects and restores the Liquid Glass style through client settings": `expected 'liquid-glass' to be 'default'`. One commit, `495a3a72b1`, on `ade3024ae7`.
 
 > Coordinator authorisation, 2026-11-16, rule 3, lane N1, CI fix. goat-test-changed failed on #3519 at ffeb104573 (run 43835378650, job 133192087032, lidge-goat-04): apps/web/src/components/settings/AppearanceSettingsPanel.browser.test.tsx:116 "selects and restores the Liquid Glass style through client settings": expected 'liquid-glass' to be 'default'. Cause: ruling C1 B starts a client settings save once the cross-tab lock is granted, a task after the click, and this existing test reads the saved value synchronously (it passed on a677ec2600 and 24819b5b90 by timing). Authorised: in an existing test, an assertion on a PERSISTED client settings write (the bridge's saved value, a setClientSettings mock, or the stored value) that follows a user action may be wrapped in vi.waitFor, with the expectation itself unchanged. That covers AppearanceSettingsPanel.browser.test.tsx:116 and every other test the audit below finds. Nothing else in an existing test may change.
