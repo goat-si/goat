@@ -853,6 +853,7 @@ export const OrchestratorMcpThreadWaitInput = Schema.Struct({
   runId: Schema.optional(RunId),
   timeoutMs: Schema.optional(Schema.Finite),
   ignoreRequestIds: Schema.optional(Schema.Array(RuntimeRequestId).check(Schema.isMaxLength(50))),
+  untilDelegatedWorkSettled: Schema.optional(Schema.Boolean),
 });
 export type OrchestratorMcpThreadWaitInput = typeof OrchestratorMcpThreadWaitInput.Type;
 
@@ -867,6 +868,10 @@ export const OrchestratorMcpThreadWaitResult = Schema.Struct({
   completedAt: Schema.optional(IsoDateTime),
   /** The waited run's structured result, once that run has ended. */
   result: Schema.optional(ThreadResult),
+  /** Present when the server honoured untilDelegatedWorkSettled: whether that work settled. */
+  delegatedWorkSettled: Schema.optional(Schema.Boolean),
+  /** Once delegated work settled: the run whose reply is the thread's answer, whoever sent it. */
+  resultRun: Schema.optional(Schema.Struct({ runId: RunId, status: OrchestratorMcpThreadStatus })),
   next: Schema.optional(OrchestratorMcpRunningTaskNext),
 });
 export type OrchestratorMcpThreadWaitResult = typeof OrchestratorMcpThreadWaitResult.Type;

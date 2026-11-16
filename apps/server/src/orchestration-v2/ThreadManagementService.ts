@@ -41,6 +41,7 @@ import {
   ThreadId,
   type TurnItemId,
 } from "@goat/contracts";
+import { delegatedTaskProgress } from "@goat/provider-core/server/subagentProjection";
 import { threadTranscriptHeader } from "@goat/shared/threadTranscript";
 import { AgentScope } from "@goat/shared/AgentScope";
 import * as Clock from "effect/Clock";
@@ -1467,6 +1468,27 @@ const make = Effect.gen(function* () {
       if (selectedRun === undefined)
         return { threadId: input.threadId, run: null, timedOut: false };
       const ignoredRequestIds = new Set(input.ignoreRequestIds ?? []);
+      const untilSettled = input.untilDelegatedWorkSettled === true;
+      // The run with the thread's answer once its delegated and background work settled.
+      const delegatedWorkResult = Effect.gen(function* () {
+        const records = yield* getProjectThreadRecords(
+          input,
+          ["runs", "messages", "subagents", "providerThreads"],
+          { messageRoles: ["user"] },
+        );
+        const progress = delegatedTaskProgress(records);
+        // A thread rolled back past all its work, with nothing left running, has no answer to wait for.
+        if (
+          progress.resultRun === undefined &&
+          records.runs.every((run) => isTerminalRunStatus(run.status))
+        )
+          return latestRun(records);
+        if (progress.state !== "result_available") return undefined;
+        const pending = yield* orchestrator
+          .delegatedTaskResultPending(input.threadId)
+          .pipe(Effect.mapError(loadError));
+        return pending ? undefined : progress.resultRun;
+      });
       const state = (runs: ReadonlyArray<OrchestrationV2Run>) =>
         Effect.gen(function* () {
           const selected = runs.find((candidate) => candidate.id === selectedRun.id);
@@ -1502,11 +1524,18 @@ const make = Effect.gen(function* () {
               ).filter((requestId) => !ignoredRequestIds.has(requestId));
             }
           }
+          const ended = isTerminalRunStatus(run.status) && !pending;
+          const resultRun =
+            untilSettled && ended && pendingRequestIds.length === 0
+              ? yield* delegatedWorkResult
+              : undefined;
           return {
             run,
             pending,
             pendingRequestIds,
-            ready: (isTerminalRunStatus(run.status) && !pending) || pendingRequestIds.length > 0,
+            resultRun,
+            ready:
+              (ended && (!untilSettled || resultRun !== undefined)) || pendingRequestIds.length > 0,
           };
         });
       const result = (
@@ -1519,6 +1548,7 @@ const make = Effect.gen(function* () {
         ...(current.pendingRequestIds.length === 0
           ? {}
           : { pendingRequestIds: current.pendingRequestIds }),
+        ...(current.resultRun === undefined ? {} : { resultRun: current.resultRun }),
       });
       const initial = yield* state(target.runs);
       if (initial.ready) return result(initial, false);
@@ -1530,7 +1560,15 @@ const make = Effect.gen(function* () {
       // A declined continuation has no event, so its effect settling also wakes the wait.
       const updates = Stream.mergeAll(
         (
-          ["run.updated", "thread.deleted", "runtime-request.updated", "turn-item.updated"] as const
+          [
+            "run.updated",
+            "thread.deleted",
+            "runtime-request.updated",
+            "turn-item.updated",
+            // What delegated work reads besides runs: tasks and their deliveries, and a provider
+            // thread's background tasks.
+            ...(untilSettled ? (["subagent.updated", "provider-thread.updated"] as const) : []),
+          ] as const
         ).map((eventType) =>
           orchestrator.streamStoredEventsFrom({
             threadId: input.threadId,
@@ -1543,6 +1581,7 @@ const make = Effect.gen(function* () {
         Stream.mapError(loadError),
         Stream.filter(
           (stored) =>
+            untilSettled ||
             stored.event.type !== "run.updated" ||
             stored.event.payload.id === selectedRun.id ||
             stored.event.payload.restartContinuationOfRunId !== undefined,

@@ -3847,6 +3847,7 @@ const make = Effect.gen(function* () {
           ...(input.ignoreRequestIds === undefined
             ? {}
             : { ignoreRequestIds: input.ignoreRequestIds }),
+          ...(input.untilDelegatedWorkSettled === true ? { untilDelegatedWorkSettled: true } : {}),
           timeoutMs: Math.min(
             MAX_WAIT_TIMEOUT_MS,
             Math.max(1, input.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS),
@@ -3885,6 +3886,12 @@ const make = Effect.gen(function* () {
         ...(result.run?.completedAt == null
           ? {}
           : { completedAt: DateTime.formatIso(result.run.completedAt) }),
+        ...(input.untilDelegatedWorkSettled === true
+          ? { delegatedWorkSettled: result.resultRun !== undefined }
+          : {}),
+        ...(result.resultRun === undefined
+          ? {}
+          : { resultRun: { runId: result.resultRun.id, status: runOutcome(result.resultRun) } }),
         ...(wakesCaller ? { next: ORCHESTRATOR_MCP_RUNNING_TASK_NEXT } : {}),
       } satisfies OrchestratorMcpThreadWaitResult;
     }),

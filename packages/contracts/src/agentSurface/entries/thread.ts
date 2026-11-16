@@ -305,6 +305,8 @@ export const threadEntries = {
         "How long to wait. Default 10 minutes, at most 1 hour. A timeout leaves the run going.",
       ignoreRequestIds:
         "Up to 50 question ids already forwarded to the user, which no longer end the wait.",
+      untilDelegatedWorkSettled:
+        "Also wait for the tasks and background work the run started and the runs they wake. resultRun names the run with the final reply; delegatedWorkSettled is absent from a host that ignores this.",
     },
     examples: [
       {

@@ -701,6 +701,36 @@ it.effect.each([true, false])("decodes remote wait with question IDs present=%s"
 );
 
 it.effect(
+  "a remote wait for delegated work passes the option only to a host that declares it",
+  () =>
+    Effect.gen(function* () {
+      // What a host from before untilDelegatedWorkSettled answers: no delegatedWorkSettled.
+      const { result, calls } = yield* runService(
+        {
+          interactionMode: "default",
+          hostCall: () =>
+            Effect.succeed({
+              threadId: "remote-1",
+              runId: "run-1",
+              status: "completed",
+              timedOut: false,
+            }),
+        },
+        (service) =>
+          service.waitForThread(scope, {
+            host: "box",
+            threadId: ThreadId.make("remote-1"),
+            untilDelegatedWorkSettled: true,
+          }),
+      );
+      expect(calls[0]?.arguments).not.toHaveProperty("untilDelegatedWorkSettled");
+      expect(calls[0]?.optionalArguments).toEqual({ untilDelegatedWorkSettled: true });
+      // The caller tells an unhonoured option by the missing field.
+      expect(result._tag === "Success" && result.success.delegatedWorkSettled).toBeUndefined();
+    }),
+);
+
+it.effect(
   "local read enriches the result once inside the host service and retains cloud metadata",
   () =>
     Effect.gen(function* () {

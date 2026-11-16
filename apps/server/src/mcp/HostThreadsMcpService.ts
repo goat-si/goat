@@ -729,7 +729,7 @@ const make = Effect.gen(function* () {
       if (input.host === undefined) return local.waitForThread(scope, input);
       const host = input.host;
       const timeoutMs = Math.min(MAX_WAIT_MS, Math.max(1, input.timeoutMs ?? DEFAULT_WAIT_MS));
-      const { ignoreRequestIds, ...args } = withoutHost(input);
+      const { ignoreRequestIds, untilDelegatedWorkSettled, ...args } = withoutHost(input);
       return Effect.gen(function* () {
         const watch = yield* launchWatches
           .find(
@@ -750,6 +750,10 @@ const make = Effect.gen(function* () {
               timeoutMs,
               ...(ignoreRequestIds === undefined ? {} : { ignoreRequestIds }),
             },
+            // Sent only to a host that declares it; an older host's answer then lacks delegatedWorkSettled.
+            ...(untilDelegatedWorkSettled === undefined
+              ? {}
+              : { optionalArguments: { untilDelegatedWorkSettled } }),
             writes: false,
             // A remote that times out answers timedOut:true; only silence past that is unavailability.
             timeoutMs: timeoutMs + WAIT_ANSWER_MARGIN_MS,
