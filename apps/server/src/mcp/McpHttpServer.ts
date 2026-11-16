@@ -123,6 +123,7 @@ import { imageToolFailure, imageToolSuccess, previewSnapshotFailure } from "./im
 import { decodeAsAdvertised } from "./decodeAsAdvertised.ts";
 import { advertisedJsonSchema, advertisedRegistration } from "./advertisedJsonSchema.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import { captureRegistrationContext, withRegistrationContext } from "./registrationContext.ts";
 import { layerMcpAuthMiddleware, makeMcpAuthMiddleware } from "./McpAuthMiddleware.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import * as ToolAdmission from "./ToolAdmission.ts";
@@ -476,6 +477,7 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
     const server = yield* McpServer.McpServer;
     const effects = yield* McpToolAccess.ToolEffects;
     const admit = yield* ToolAdmission.make();
+    const registrationContext = yield* captureRegistrationContext;
     const placementDeclared = yield* PlacementAdmissionEnabled;
     return yield* register.pipe(
       Effect.provideService(
@@ -505,7 +507,9 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
               ),
             };
             // Every call reaches the handler through the admission gate, direct or through goat_call.
-            const handle = keepingRefusalCode(registration.handle);
+            const handle = keepingRefusalCode(
+              withRegistrationContext(registrationContext, registration.handle),
+            );
             const gated = (payload: unknown) =>
               admit(registration.tool.name, effect, payload, handle);
             const inputSchema = hidePlacementArgument(
