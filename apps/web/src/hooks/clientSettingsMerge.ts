@@ -2,6 +2,7 @@ import { DEFAULT_CLIENT_SETTINGS, type ClientSettings } from "@goat/contracts/se
 import * as Equal from "effect/Equal";
 import * as Struct from "effect/Struct";
 
+import { foldLegacyFirstRunPrompt } from "~/components/desktop/firstRunPrompts.logic";
 import { runWithStorageLock } from "~/lib/storageLock";
 import { ensureLocalApi } from "~/localApi";
 
@@ -27,7 +28,8 @@ export function persistOverOtherTabs(input: {
     const stored = baseline ? await ensureLocalApi().persistence.getClientSettings() : null;
     let merged = settings;
     if (stored && baseline) {
-      const saved: ClientSettings = { ...DEFAULT_CLIENT_SETTINGS, ...stored };
+      // Folded as hydration folds it, so an answer under a legacy key is not copied back raw.
+      const saved = foldLegacyFirstRunPrompt({ ...DEFAULT_CLIENT_SETTINGS, ...stored });
       const untouchedKeys = Struct.keys(settings).filter(
         (key) => !editedKeys.has(key) && Equal.equals(settings[key], baseline[key]),
       );

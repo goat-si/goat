@@ -320,6 +320,21 @@ describe("client settings saved by another tab", () => {
     }
   });
 
+  // regression: the merge copied the raw stored firstRunPrompts, dropping an answer under the legacy key
+  it("keeps a first-run answer stored under the legacy key when another setting is saved", async () => {
+    persistenceMocks.getClientSettings.mockResolvedValue({
+      ...DEFAULT_CLIENT_SETTINGS,
+      computerUsePrompt: "enabled",
+    });
+    await ensureClientSettingsHydrated();
+
+    await persistClientSettingsPatch({ wordWrap: false });
+
+    const written = persistenceMocks.setClientSettings.mock.lastCall?.[0];
+    expect(written?.firstRunPrompts.computerUse).toBe("answered");
+    expect(written?.wordWrap).toBe(false);
+  });
+
   /** Two module instances over one settings store stand in for two tabs that never saw each other's writes. */
   async function openTwoTabs() {
     let stored: ClientSettings | null = null;
