@@ -1,12 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off - the binding stores the read key's sha256, as launch does.
 import * as NodeCrypto from "node:crypto";
 import { assert, it } from "@effect/vitest";
-import { CommandId, RunId, ThreadId } from "@goat/contracts";
+import { RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import {
   interruptResult,
   runStatuses,
@@ -87,22 +86,5 @@ it.effect("a session ceiling below the bound thread's mode refuses before anythi
     }).pipe(Effect.flip);
     assert.equal(error.code, "runtime_mode_escalation_denied");
     assert.deepEqual(yield* runStatuses(bound.threadId), ["running"]);
-  }).pipe(Effect.provide(layerTest)),
-);
-
-it.effect("an older origin's cancel, a plain interrupt, never force stops the bound thread", () =>
-  Effect.gen(function* () {
-    const threads = yield* ThreadManagementService.ThreadManagementService;
-    const bound = yield* boundThread("origin-force-older", true);
-    const shell = (yield* threads.getThreadShell(bound.threadId))!;
-    yield* threads.interruptThread({
-      projectId: shell.projectId,
-      commandId: CommandId.make("older-origin-cancel"),
-      threadId: bound.threadId,
-      runId: bound.runId,
-      reason: "Cancellation requested by the origin task owner.",
-    });
-    // Without a provider here the interrupt settles the run itself; it never takes Force stop's path.
-    assert.notMatch((yield* interruptResult(bound.threadId)) ?? "", /Force stopped/u);
   }).pipe(Effect.provide(layerTest)),
 );

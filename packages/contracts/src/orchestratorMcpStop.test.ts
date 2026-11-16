@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
-import { OrchestratorMcpThreadStatusResult } from "./orchestratorMcp.ts";
+import {
+  OrchestratorMcpCapabilitiesResult,
+  OrchestratorMcpThreadStatusResult,
+} from "./orchestratorMcp.ts";
 
 const at = "2026-10-13T01:00:00.000Z";
 const newerHostStatus = {
@@ -28,5 +31,38 @@ describe("unanswered Stop on the wire", () => {
     const older = decodeOlderStatus(newerHostStatus);
     expect(older).not.toHaveProperty("stop");
     expect(older.phase).toBe("running");
+  });
+
+  it("lets an origin that predates taskForceStop read a newer host's capabilities", () => {
+    const { taskForceStop: _force, ...olderFeatures } =
+      OrchestratorMcpCapabilitiesResult.fields.features.fields;
+    const decodeOlder = Schema.decodeUnknownSync(
+      Schema.Struct({
+        ...OrchestratorMcpCapabilitiesResult.fields,
+        features: Schema.Struct(olderFeatures),
+      }),
+    );
+    const features = {
+      appOwnedSubagents: true,
+      asyncPolling: true,
+      cancellation: true,
+      batchThreadCreation: true,
+      threadManagement: true,
+      incrementalThreadRead: true,
+      scheduledTasks: true,
+      maxBatchThreads: 8,
+      taskForceStop: true,
+    };
+    const older = decodeOlder({
+      parentThreadId: null,
+      inheritedProviderInstanceId: null,
+      inheritedModel: null,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      providers: [],
+      features,
+    });
+    expect(older.features).not.toHaveProperty("taskForceStop");
+    expect(older.features.cancellation).toBe(true);
   });
 });
