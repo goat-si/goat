@@ -44,18 +44,22 @@ export type AndroidAnchoredMenuProps = {
 
 /**
  * An open counts from its request until it settles, once: a choice, Back, an outside tap, an anchor
- * that cannot be measured, or the menu unmounting, whichever comes first.
+ * that cannot be measured, or the menu unmounting, whichever comes first. Each request has a token,
+ * so only the latest one's measurement can open or settle the menu.
  */
 function useOwedOpen(onClose: (() => void) | undefined) {
-  const owed = useRef(false);
+  const owed = useRef<number | null>(null);
+  const latest = useRef(0);
   return {
     request: () => {
-      owed.current = true;
+      latest.current += 1;
+      owed.current = latest.current;
+      return latest.current;
     },
-    isOwed: () => owed.current,
+    isCurrent: (token: number) => owed.current === token,
     settle: () => {
-      if (!owed.current) return;
-      owed.current = false;
+      if (owed.current === null) return;
+      owed.current = null;
       onClose?.();
     },
   };
@@ -88,14 +92,15 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
   useEffect(() => () => closeOnCleanup(), []);
 
   const open = () => {
-    owed.request();
+    const token = owed.request();
     if (anchorNode === null) {
       owed.settle();
       return;
     }
+    // A mounted host view always calls back, with zeros on failure; only an unmounted one does not.
     anchorNode.measureInWindow((x, y, width, height) => {
-      // Closed or unmounted meanwhile, or nothing to anchor to: no menu.
-      if (!owed.isOwed()) return;
+      // Closed, unmounted or superseded meanwhile, or nothing to anchor to: no menu.
+      if (!owed.isCurrent(token)) return;
       if (width <= 0 || height <= 0) {
         owed.settle();
         return;
