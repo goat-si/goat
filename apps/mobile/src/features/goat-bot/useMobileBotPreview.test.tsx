@@ -236,6 +236,19 @@ function mainTile() {
     /** The computer's connection is under way again after a failure; nothing is read yet. */
     reconnecting: () =>
       act(async () => registry.set(presentationsAtom, linked({ phase: "connecting" }))),
+    /** Connecting again, and nothing has said yet what the server supports. */
+    unconfigured: () =>
+      act(async () =>
+        registry.set(
+          presentationsAtom,
+          new Map([["env", { connection: { phase: "connecting" }, serverConfig: null }]]),
+        ),
+      ),
+    /** Connected, and the server's config says it lists bots. */
+    configured: () =>
+      act(async () =>
+        registry.set(presentationsAtom, linked({ phase: "connected" }, { goatBotProfiles: true })),
+      ),
     /** Only the main tile is on screen: no bot list, no member rows. */
     showTileAlone: () =>
       act(async () => {
@@ -447,4 +460,21 @@ it("a bot list that answers does not clear a connection refusal; connecting agai
   } finally {
     connection.failure = null;
   }
+});
+
+it("removed and added again while its config is not loaded yet, the main tile shows no line until a fresh bot list answers", async () => {
+  state.items = [message("b1", "assistant_message", "The build is waiting on you.")];
+  await using tile = mainTile();
+  await tile.show();
+  expect(tile.line).toBe("The build is waiting on you.");
+  await tile.showTileAlone();
+  await tile.setComputers([]);
+  await tile.setComputers(["env"]);
+  await tile.unconfigured();
+  expect(tile.line).toBeNull();
+  // Its config arrives: it lists bots, and its bot list has not answered since the re-add.
+  await tile.configured();
+  expect(tile.line).toBeNull();
+  await tile.show();
+  expect(tile.line).toBe("The build is waiting on you.");
 });

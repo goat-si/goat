@@ -1,4 +1,5 @@
 import { act, useLayoutEffect } from "react";
+import { useAtomValue } from "@effect/atom-react";
 import { createRoot } from "react-dom/client";
 import { RegistryContext } from "@effect/atom-react";
 import * as Cause from "effect/Cause";
@@ -33,6 +34,7 @@ vi.mock("./openAsksRead", () => ({ openAsks: () => queries.asks.atom }));
 import { environmentCatalog } from "../../connection/catalog";
 import { environmentPresentations } from "../../state/presentation";
 import { useEnvironmentQuery } from "../../state/query";
+import { startOver } from "./keptPerComputerStore";
 import {
   followKeptPerComputerCatalog,
   resetKeptPerComputerForTests,
@@ -437,3 +439,84 @@ it.each(["bots", "asks"] as const)(
     expect(read.shown).toBeNull();
   },
 );
+
+it.each(["bots", "asks"] as const)(
+  "%s: a second restart between an answer's render and its effect keeps the read starting over",
+  async (kind) => {
+    using env = computer();
+    await env.link("connected");
+    const read = env[kind];
+    const environmentId = EnvironmentId.make("env");
+    let shown: unknown = null;
+    let restarted = false;
+    function Reader() {
+      shown = useKeptPerComputer(kind, environmentId, useEnvironmentQuery(read.atom), false);
+      return null;
+    }
+    // Renders in the same commit as the reader; its layout effect runs before the reader's passive
+    // effect, so a restart here lands after the reader saw the answer and before it acts on it.
+    function RestartOnAnswer() {
+      const result = useAtomValue(read.atom);
+      useLayoutEffect(() => {
+        if (restarted || result._tag !== "Success" || result.waiting) return;
+        restarted = true;
+        startOver(env.registry, environmentId, kind);
+      }, [result]);
+      return null;
+    }
+    // For asks, the roster's bot list, which must answer after the re-add before they show. It
+    // shares the root, so every effect of a commit runs in one pass, as in the app.
+    function RosterList() {
+      useKeptPerComputer("bots", environmentId, useEnvironmentQuery(env.bots.atom), false);
+      return null;
+    }
+    const root = createRoot(document.createElement("div"));
+    await act(async () =>
+      root.render(
+        <RegistryContext value={env.registry}>
+          {kind === "asks" ? <RosterList /> : null}
+          <Reader />
+          <RestartOnAnswer />
+        </RegistryContext>,
+      ),
+    );
+    // Restart 1: the computer is removed and added again.
+    await act(async () => {
+      env.registry.set(catalogAtom, listed([]));
+      env.registry.set(catalogAtom, listed(["env"]));
+    });
+    if (kind === "asks") await env.bots.answer(env.registry, someBots());
+    const first = AsyncResult.success(kind === "bots" ? { bots: [] } : { asks: [], total: 0 });
+    await read.answer(env.registry, first);
+    expect(restarted).toBe(true);
+    // Restart 2 is still waiting on its answer: restart 1's, now a waiting copy, shows nothing.
+    expect(shown).toBeNull();
+    const second = AsyncResult.success(kind === "bots" ? { bots: [] } : { asks: [], total: 0 });
+    await read.answer(env.registry, second);
+    expect(shown).toBe(second.value);
+    await act(async () => root.unmount());
+  },
+);
+
+it("a bot list refused while the computer is starting over still restarts asks that answered since", async () => {
+  using env = computer();
+  await env.link("connected");
+  await using roster = reader("bots", env.registry, env.bots.atom);
+  await using needsYou = reader("asks", env.registry, env.asks.atom);
+  await roster.mount();
+  await needsYou.mount();
+  await act(async () => {
+    env.registry.set(catalogAtom, listed([]));
+    env.registry.set(catalogAtom, listed(["env"]));
+  });
+  // The asks answer after the re-add, then the bot list is refused before it ever answered.
+  const earlier = AsyncResult.success({ asks: [], total: 0 });
+  await env.asks.answer(env.registry, earlier);
+  await env.bots.answer(env.registry, refusal());
+  // Access comes back: the list answers. The asks from before its refusal do not show.
+  await env.bots.answer(env.registry, someBots());
+  expect(needsYou.shown).toBeNull();
+  const fresh = AsyncResult.success({ asks: [], total: 0 });
+  await env.asks.answer(env.registry, fresh);
+  expect(needsYou.shown).toBe(fresh.value);
+});
