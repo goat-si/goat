@@ -76,7 +76,7 @@ Deferrals are tracked in #3176.
 - The `8d236998d0` queue-wake follow-up from #3210 is unchanged and still tracked in #3176.
 - Upstream has this too: when a turn starts after Stop landed, #34912's forked interrupt is only logged if it fails (apps/server/src/orchestration-v2/RunExecutionService.ts:1440). A provider that never confirms keeps that turn running under an interrupted run, with no Force stop offered.
 - `c3e5bfc027`: the failure was not reproduced with a real provider; goat#3348 stays open for that. GOAT's ordinary portable fork path (apps/server/src/orchestration-v2/Orchestrator.ts:6799) still reads only the source's own runs, without the visibility filter; upstream uses readForkHistoryItems there.
-- `af9b4e41de` waited for `52c1491c8a`, which is now ported; only its C4 question about `detachedThreadId` remains (#3176).
+- `af9b4e41de` is ported in the af9b4e41de delta below and merged at `9acccf123d`; its `detachedThreadId` compatibility question is answered there.
 
 ## Surfaces
 
@@ -283,7 +283,7 @@ Model: anthropic/claude-opus-5-5 via Codex in GOAT on pen-mac-studio, coordinate
 
 ## af9b4e41de delta
 
-Lane branch: chase/t3-261114-orchestrator-handoff, based on origin/chase/t3-261114-all `50b8ca19dd`. Lane head: `ce488830ec5391354d61e4b4f8ada3d9092397c5` (not merged yet).
+Lane branch: chase/t3-261114-orchestrator-handoff, based on origin/chase/t3-261114-all `50b8ca19dd`. Reviewed head: `ce488830ec5391354d61e4b4f8ada3d9092397c5` (fresh C4 review: APPROVE WITH NITS, no P0 to P2), merged into chase/t3-261114-all at `9acccf123d` (#3397). Follow-up head after the review nits: `cbff6775a9` (see Review and merge).
 
 Commits:
 
@@ -304,6 +304,7 @@ GOAT adaptations:
 - `metadataUpdateContinuation` lives in goat/OrchestratorRunState.ts beside `mayStartSubagentFollowup`. The native-subagent refusal moved verbatim from the message.dispatch case into goat/TimelineRecords.ts as `refuseMessageTarget`, together with GOAT's channel-only check, so a continuation passes the same two refusals a message does.
 - `continuation` is server-issued. The public dispatch intake refuses it, as it refuses a fork workspace (apps/server/src/orchestration-v2/ThreadMessageIntake.ts:156), so a client cannot queue an agent-attributed turn through a metadata update. The hub proxy already refuses thread.metadata.update (packages/contracts/src/hubProxy.ts:70).
 - Upstream's ProviderSwitch handoff test is GOAT's ProviderSwitchBackground "interrupts the handoff tool call that releases its own session", which runs the real Claude capabilities and now expects the run to complete.
+- A failed workspace read on the detach path falls back to the old failure path: `Effect.orElseSucceed(() => false)` (apps/server/src/orchestration-v2/RunExecutionService.ts:1600) over the read's error mapping (:977-987). Upstream fails the handler instead; GOAT's run still ends failed, as before the port.
 - The handoff integration test runs on the real Codex, Claude and Pi capability sets in place of upstream's pooled and exclusive pair; @goat/provider-pi/server re-exports `PiProviderCapabilitiesV2` for it.
 
 Left out: upstream's four-way release parameterization in ProviderSessionManager.test.ts, because GOAT never ported that test. A new test covers the field with two of its cases (detach and stream failure).
@@ -323,8 +324,8 @@ Budgets, on the merged head against the tip `590cee0efb` (no entry changed, and 
 ### Integration review part B
 
 1. Upstream's ProviderSessionManager hunks change `failSubscribers` and the release call that feeds it, and both are still in ProviderSessionManager.ts after the L01 and L02 splits (:752, :1170). The release input already carried `detachedThreadId` (:1128), and the detach sets it (:2970). ProviderAdapterEventStreamError lives in provider-core, so ProviderSessionManagerTypes.ts and ProviderSessionManagerErrors.ts gain nothing. The new test sits in ProviderSessionManager.test.ts on the split harness's `layerTest` (test/ProviderSessionManagerHarness.testkit.ts) with ExclusiveCapabilities.
-2. Decision: L02's Force stop teardown keeps marking the thread as detached. Its `sessions.detach` (apps/server/src/orchestration-v2/ForceStopTeardown.ts:77) is GOAT closing the session because this thread left it, which is what the field says. On an exclusive session whose release was refused as busy, the stream error therefore names the thread. It cannot turn a Force stop into a completed handoff, for two reasons. The handoff settle also needs the run's workspace to have moved (RunExecutionService.ts:1594). And Force stop dispatches `run.interrupt` before the teardown (ThreadManagementService.ts:1734), so even after a real handoff the completed write refuses against the stored Stop (`unlessInterruptRequested`, RunExecutionService.ts:1015) and the run settles interrupted. Without a workspace move the failure path runs as before. Leaving the field off for Force stop would make it mean "detached, except by Force stop", for no behaviour gained. ForceStopTeardown.test.ts passes on the merged head.
-3. The continuation is a `queued_turn` user message, hidden while its run is queued by L03's rule (packages/shared/src/orchestrationV2Timeline.ts:59, :109). SelectionRestart.integration.test.ts:365 asserts, on Codex, Claude and Pi, that the continuation's prompt is hidden while queued and shown when its run fails or completes, through `createOrchestrationV2TurnItemVisibility`.
+2. Decision: L02's Force stop teardown keeps marking the thread as detached. Its `sessions.detach` (apps/server/src/orchestration-v2/ForceStopTeardown.ts:77) is GOAT closing the session because this thread left it, which is what the field says. On an exclusive session whose release was refused as busy, the stream error therefore names the thread. It cannot turn a Force stop into a completed handoff, for two reasons. The handoff settle also needs the run's workspace to have moved (RunExecutionService.ts:1594). And Force stop settles the run before its teardown, on either of its two branches (ThreadManagementService.ts:1730-1747). With no running provider turn it dispatches `run.interrupt`, and the later completed write is refused against the stored Stop (`unlessInterruptRequested`, RunExecutionService.ts:1015). During a turn it dispatches `thread.background-work.settle`, which settles the run interrupted in the same commit (Orchestrator.ts:10648-10662, run update at :10227-10240), and the later completed write is refused by its `expectedStatus: "running"` check (EventSink.ts:414-423). Either way the run stays interrupted, even after a real handoff. Without a workspace move the failure path runs as before. Leaving the field off for Force stop would make it mean "detached, except by Force stop", for no behaviour gained. ForceStopTeardown.test.ts passes on the merged head.
+3. While the continuation waits, it has no timeline item and shows only in the queue control. `startNextQueuedRun` creates its `queued_turn` user message when the run starts (Orchestrator.ts:1748), and from then on L03's rule decides its visibility (packages/shared/src/orchestrationV2Timeline.ts:59, :109). SelectionRestart.integration.test.ts:365 asserts, on Codex, Claude and Pi, that this item follows the rule through `createOrchestrationV2TurnItemVisibility`: hidden with its run queued, shown with it failed or completed.
 
 ### Fail-first
 
@@ -367,8 +368,18 @@ No known-failure triage applies, since no vitest summary was produced. The known
 ### Known limits
 
 - No live provider run: the Claude and Pi cases use their capability sets on the replay harness.
-- A replayed goat_worktree_handoff call (same derived ids) reports delivery "queued" whatever the first call did, since a replayed command returns no new events.
+- After a server restart, a continuation that had not started is held (`queueHeld`, apps/server/src/orchestration-v2/RecoveryUnstartedQueue.ts:94-117) and waits for the user to resume the queue. Nothing is lost, but it takes a click.
+- A re-sent goat_worktree_handoff call cannot queue a second continuation: each call draws new ids (apps/server/src/mcp/WorktreeMcpService.ts:141-153), and after a success the retry is refused as `already_in_worktree` (:288-291).
 
-NOT RUN: the full vitest suite to completion on either head (stopped; CI's full matrix covers it on #3397); a real-client pass and a real Claude or Pi turn (no client code changed; a real turn costs money); an independent C4 review lane; CI.
+NOT RUN: the full vitest suite to completion on either head (stopped; CI's full matrix covers it on #3397); a real-client pass and a real Claude or Pi turn (no client code changed; a real turn costs money); CI.
+
+### Review and merge
+
+The fresh C4 review of `ce488830ec` returned APPROVE WITH NITS with no P0 to P2 and three P3s. The coordinator merged `ce488830ec` into chase/t3-261114-all at `9acccf123d` (#3397). The lane branch fast-forwarded to `9acccf123d`, and one follow-up closes the nits:
+
+- `cbff6775a9` docs(contracts): goat_worktree_handoff says a continuation that cannot be queued fails the handoff (L04D-P3-1). The description now reads "Setup can fail after the move succeeds; check its status." and the guide "If the continuation cannot be queued, the handoff fails and removes the new worktree." (packages/contracts/src/agentSurface/entries/worktree.ts:98, :100). `WorktreeMcpContinuationStatus` keeps its "failed" variant, which older servers return. Checks: `node scripts/agent-surface/audit.ts --check` exit 0; `node scripts/agent-surface/context-budget.ts --check` exit 0 with ACP unchanged at 6,143 of 6,144 B, because the tool description is not in the injected instructions, so both sentences fit; contracts agentSurface tests 7 files, 48 tests pass; format and lint clean; the audit generator's output is unchanged, so docs/internals/agent-surface-audit.md is not regenerated; `node scripts/goat-rename.ts --check` 0. No test file moved.
+- L04D-P3-2 and P3-3 are corrected in this section: both Force stop branches (part B item 2), where a waiting continuation shows (item 3), the failed workspace read under GOAT adaptations, the restart and re-sent call under Known limits, and the line about this row near the top of the file.
+
+NOT RUN for the follow-up: the full vitest suite and CI (wording only; CI runs on the #3397 push).
 
 Model: anthropic/claude-opus-5-5 via Codex in GOAT on pen-macbookair
