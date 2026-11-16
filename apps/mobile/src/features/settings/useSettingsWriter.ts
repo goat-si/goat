@@ -4,7 +4,7 @@ import { isAtomCommandInterrupted } from "@goat/client-runtime/state/runtime";
 import * as Dialog from "../../components/ui/Dialog";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { commandFailureText } from "./commandFailureText";
+import { commandFailureText } from "../../lib/commandFailureText";
 import type { ScopedMobileSettingsTarget } from "./settings-scoped-server";
 
 export function useSettingsWriter() {

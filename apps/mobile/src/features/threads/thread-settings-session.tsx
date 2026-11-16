@@ -38,7 +38,7 @@ import {
   compatibleRuntimeModeForChoices,
   runtimeModeChoicesForSupportedModes,
 } from "./thread-settings-options";
-import { commandFailureText } from "./commandFailureText";
+import { commandFailureText } from "../../lib/commandFailureText";
 import { canSelectModel, modelFavoriteKey } from "./thread-settings-sheet-state";
 
 const EMPTY_MODEL_FAVORITES: ReadonlyArray<{
@@ -104,8 +104,6 @@ export type ThreadSettingsSessionValue = {
   /** The provider whose catalog for this folder the picker keeps fresh. */
   readonly workspaceScan: { readonly instanceId: ProviderInstanceId; readonly cwd: string } | null;
 };
-
-const NOT_SAVED = "The change was not saved. Try again.";
 
 const ThreadSettingsSessionContext = createContext<ThreadSettingsSessionValue | null>(null);
 
@@ -213,7 +211,7 @@ export function ThreadSettingsSessionProvider(
       },
     });
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result))
-      Dialog.alert("Favorites not saved", commandFailureText(result, NOT_SAVED));
+      Dialog.alert("Favorites not saved", commandFailureText(result));
     if (
       AsyncResult.isSuccess(result) &&
       registry.get(environmentServerConfigsAtom).get(environmentId)?.settings.favorites ===
@@ -264,7 +262,7 @@ export function ThreadSettingsSessionProvider(
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result))
         Dialog.alert(
           option.isHidden ? "Could not show the model" : "Could not hide the model",
-          commandFailureText(result, NOT_SAVED),
+          commandFailureText(result),
         );
     });
   };

@@ -6,7 +6,7 @@ import { AccessibilityInfo, Platform } from "react-native";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import type { useSelectedThreadDetailState } from "../../state/use-thread-detail";
-import { commandFailureText } from "./commandFailureText";
+import { commandFailureText } from "../../lib/commandFailureText";
 import type { ThreadFeedHistoryControls } from "./ThreadFeed";
 
 type ThreadHistory = ReturnType<typeof useSelectedThreadDetailState>["history"];
