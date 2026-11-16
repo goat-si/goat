@@ -113,8 +113,10 @@ export function GoatBotTimeline({
   /** How to open, by id, a routine an event line names; undefined when it no longer exists. */
   readonly onOpenRoutine?: ((routineId: string) => (() => void) | undefined) | undefined;
   readonly onDiscard?: ((clientKey: string) => void) | undefined;
-  /** Sends a question's choice as the user's answer; absent while the bot can't take messages. */
-  readonly onPick?: ((answer: string, taskId?: string, questionId?: string) => void) | undefined;
+  /** Sends a question's answer and says whether it went in; absent while the bot can't take messages. */
+  readonly onPick?:
+    | ((answer: string, taskId?: string, questionId?: string) => boolean | void)
+    | undefined;
 }) {
   const lastCopy = useRef<{ clear: () => void } | null>(null);
   const selectCopy = useStableCallback((owner: { clear: () => void }) => {

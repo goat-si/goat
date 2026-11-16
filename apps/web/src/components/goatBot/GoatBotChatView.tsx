@@ -57,6 +57,7 @@ import { GoatBotModelPicker } from "./GoatBotModelPicker";
 import { GoatBotNameRow } from "./GoatBotNameRow";
 import { GoatBotRemovedNotice } from "./GoatBotRemovedNotice";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
+import { GoatBotTypedAnswersScope } from "./GoatBotTypedAnswers";
 import { GoatBotActivityStatus } from "./GoatBotActivityStatus";
 import { GoatBotReplyStatus } from "./GoatBotReplyStatus";
 import { GoatBotStepsReader } from "./GoatBotStepsProvider";
@@ -72,6 +73,7 @@ import {
   type GoatBotAvailability,
   type GoatBotRemoval,
 } from "@goat/client-runtime/goatBot";
+const NO_ITEMS: ReadonlyArray<OrchestrationV2ProjectedTurnItem> = [];
 const EXAMPLES = [
   "Fix the flaky test in my project",
   "Review the latest changes",
@@ -550,76 +552,82 @@ function GoatBotChatViewContent({
             {/* An open file covers the conversation, so its activity lines stop reading. */}
             <GoatBotStepsReader rows={rows} paused={shownFile !== null || hidden}>
               <GoatBotOpenFileContext value={fileOpening}>
-                {rows.length > 0 ? (
-                  // History stays readable while the bot is unavailable; only sending stops.
-                  <GoatBotTimeline
-                    key={timelineIdentity}
-                    rows={rows}
-                    baselineIds={source.baselineIds}
-                    sourceIds={source.sourceIds}
-                    onExposure={onExposure}
-                    committedSends={source.committedSends}
-                    submissions={local.identity === timelineIdentity ? local.submissions : []}
-                    unreadSince={unreadSince}
-                    onReply={
-                      canSend
-                        ? (text) => {
-                            setReplyState({ botIdentity, text });
-                            composerRef.current?.focus();
-                          }
-                        : undefined
-                    }
-                    environmentId={environmentId}
-                    onOpenRoutine={routineLanding.openRoutine}
-                    taskThreads={supportsTaskThreads}
-                    retryEnvironmentId={supportsTaskRetry ? environmentId : null}
-                    replyingSince={removed ? null : replyingSince}
-                    onRetry={onRetryInput}
-                    onDiscard={onDiscardInput}
-                    onPick={
-                      canSend
-                        ? (answer, taskId, questionId) => {
-                            const result =
-                              taskId !== undefined && onSendToTask !== undefined
-                                ? onSendToTask(
-                                    ChannelTaskId.make(taskId),
-                                    answer,
-                                    [],
-                                    questionId === undefined
-                                      ? undefined
-                                      : ChannelQuestionId.make(questionId),
-                                  )
-                                : onSend(answer);
-                            recordSubmission(result);
-                          }
-                        : undefined
-                    }
-                  />
-                ) : removal !== null ? (
-                  <GoatBotRemovedNotice
-                    removal={removal}
-                    availability={availability}
-                    onRetryAvailability={onRetryAvailability}
-                    canOpenCurrentBot={canOpenCurrentBot}
-                    onUnarchive={onUnarchive}
-                    onRestore={member ? onRestore : undefined}
-                    memberName={member?.name ?? null}
-                    onCheckAgain={onCheckAgain}
-                  />
-                ) : (
-                  <GoatBotNotice
-                    availability={availability}
-                    homeMove={homeMove}
-                    onRetryAvailability={onRetryAvailability}
-                    legacyAgentRoute={legacyAgentRoute}
-                    onSelectExample={
-                      canSend
-                        ? (text) =>
-                            setSeed((previous) => ({ text, nonce: (previous?.nonce ?? 0) + 1 }))
-                        : undefined
-                    }
-                  />
-                )}
+                <GoatBotTypedAnswersScope
+                  destination={destination}
+                  visibleTurnItems={visibleTurnItems ?? NO_ITEMS}
+                  mainChat
+                >
+                  {rows.length > 0 ? (
+                    // History stays readable while the bot is unavailable; only sending stops.
+                    <GoatBotTimeline
+                      key={timelineIdentity}
+                      rows={rows}
+                      baselineIds={source.baselineIds}
+                      sourceIds={source.sourceIds}
+                      onExposure={onExposure}
+                      committedSends={source.committedSends}
+                      submissions={local.identity === timelineIdentity ? local.submissions : []}
+                      unreadSince={unreadSince}
+                      onReply={
+                        canSend
+                          ? (text) => {
+                              setReplyState({ botIdentity, text });
+                              composerRef.current?.focus();
+                            }
+                          : undefined
+                      }
+                      environmentId={environmentId}
+                      onOpenRoutine={routineLanding.openRoutine}
+                      taskThreads={supportsTaskThreads}
+                      retryEnvironmentId={supportsTaskRetry ? environmentId : null}
+                      replyingSince={removed ? null : replyingSince}
+                      onRetry={onRetryInput}
+                      onDiscard={onDiscardInput}
+                      onPick={
+                        canSend
+                          ? (answer, taskId, questionId) => {
+                              const result =
+                                taskId !== undefined && onSendToTask !== undefined
+                                  ? onSendToTask(
+                                      ChannelTaskId.make(taskId),
+                                      answer,
+                                      [],
+                                      questionId === undefined
+                                        ? undefined
+                                        : ChannelQuestionId.make(questionId),
+                                    )
+                                  : onSend(answer);
+                              return recordSubmission(result);
+                            }
+                          : undefined
+                      }
+                    />
+                  ) : removal !== null ? (
+                    <GoatBotRemovedNotice
+                      removal={removal}
+                      availability={availability}
+                      onRetryAvailability={onRetryAvailability}
+                      canOpenCurrentBot={canOpenCurrentBot}
+                      onUnarchive={onUnarchive}
+                      onRestore={member ? onRestore : undefined}
+                      memberName={member?.name ?? null}
+                      onCheckAgain={onCheckAgain}
+                    />
+                  ) : (
+                    <GoatBotNotice
+                      availability={availability}
+                      homeMove={homeMove}
+                      onRetryAvailability={onRetryAvailability}
+                      legacyAgentRoute={legacyAgentRoute}
+                      onSelectExample={
+                        canSend
+                          ? (text) =>
+                              setSeed((previous) => ({ text, nonce: (previous?.nonce ?? 0) + 1 }))
+                          : undefined
+                      }
+                    />
+                  )}
+                </GoatBotTypedAnswersScope>
               </GoatBotOpenFileContext>
             </GoatBotStepsReader>
           </div>
