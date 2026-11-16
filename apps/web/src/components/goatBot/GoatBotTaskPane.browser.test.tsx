@@ -603,7 +603,7 @@ const showingRows = (rows: ReadonlyArray<GoatBotRow>) => {
 };
 
 it("answers its task's question with the question, picked or typed as something else (#2977)", async () => {
-  state.send.mockClear();
+  setup();
   const rows: ReadonlyArray<GoatBotRow> = [
     {
       kind: "bot",
