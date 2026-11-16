@@ -176,6 +176,7 @@ import * as SshRuntimeAutoUpdate from "./cloud/sshRuntimeAutoUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import { layerCommandReadiness } from "./commandReadiness.ts";
 import * as PendingAttachmentSweep from "./assets/PendingAttachmentSweep.ts";
+import * as NonBlockingSpawner from "./process/NonBlockingSpawner.ts";
 import * as ServerConfig from "./config.ts";
 import * as CuaDriver from "./cua/CuaDriver.ts";
 import * as LinuxFrameSource from "./cua/linuxFrames/LinuxFrameSource.ts";
@@ -395,8 +396,12 @@ export const layerHttpServer = Layer.unwrap(
       },
     );
   }),
+).pipe(
+  // NodeHttpServer.layer also outputs NodeServices, whose spawner would shadow the wrapped one.
+  (layer) => NonBlockingSpawner.layer.pipe(Layer.provideMerge(layer)),
 );
 const layerPlatformServices = DocumentText.layer.pipe(
+  Layer.provideMerge(NonBlockingSpawner.layer),
   Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 export const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
@@ -1311,4 +1316,9 @@ export const runServer: Effect.Effect<
   | ChildProcessSpawner.ChildProcessSpawner
   | SecureRandom.SecureRandom
   | ServerConfig.ServerConfig
-> = PersistenceRecoveryOwner.run(Layer.launch(layerMakeServer));
+> = PersistenceRecoveryOwner.run(
+  Layer.launch(
+    // For the layers above whose spawner requirement is met by the caller's runtime.
+    layerMakeServer.pipe(Layer.provide(NonBlockingSpawner.layer)),
+  ),
+);
