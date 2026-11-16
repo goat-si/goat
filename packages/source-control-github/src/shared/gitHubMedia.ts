@@ -64,3 +64,24 @@ export function gitHubMediaUrl(url: URL): SourceControlMediaUrl | null {
     ? rawFile(`https://${RAW_HOST}/${repositoryFile[1]}/${repositoryFile[2]}/${repositoryFile[3]}`)
     : null;
 }
+
+export function gitHubRawFileUrl(input: {
+  readonly repositoryUrl: string;
+  readonly sha: string;
+  readonly path: string;
+}): string | null {
+  if (!COMMIT_SHA_PATTERN.test(input.sha)) return null;
+  const segments = input.path.split("/");
+  // URL parsing resolves dot segments, which could address another repository's file.
+  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+    return null;
+  }
+  const path = segments.map(encodeURIComponent).join("/");
+  let url: URL;
+  try {
+    url = new URL(`${input.repositoryUrl}/raw/${input.sha}/${path}`);
+  } catch {
+    return null;
+  }
+  return gitHubMediaUrl(url) === null ? null : url.toString();
+}

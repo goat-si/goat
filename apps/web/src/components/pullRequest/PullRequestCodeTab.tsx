@@ -52,6 +52,11 @@ import {
 import { isTestChangedFile } from "@goat/shared/changedFileKind";
 import { diffModel, NO_SLICES, type DiffSlice } from "./pullRequestDiffModel";
 import {
+  PullRequestImageAnnotation,
+  pullRequestImagePreviewUrl,
+  type PullRequestImagePreview,
+} from "./PullRequestImageAnnotation";
+import {
   buildFileDiffRenderKey,
   fnv1a32,
   getDiffLineStat,
@@ -126,6 +131,7 @@ interface ReviewAnnotationGroup {
   readonly threads: ReadonlyArray<PullRequestReviewThread>;
   readonly pending: ReadonlyArray<PendingReviewComment>;
   readonly draft: boolean;
+  readonly image?: PullRequestImagePreview;
 }
 
 type ReviewAnnotation = DiffLineAnnotation<ReviewAnnotationGroup>;
@@ -439,6 +445,7 @@ function PullRequestCodeTab({
     return placed;
   })();
 
+  const imagePreviewUrl = pullRequestImagePreviewUrl(detail, commit);
   const annotatedFiles = files.map((fileDiff) => {
     const fileKey = buildFileDiffRenderKey(fileDiff);
     const path = resolveFileDiffPath(fileDiff);
@@ -479,6 +486,14 @@ function PullRequestCodeTab({
       lineNumber: group.line,
       metadata: { threads: group.threads, pending: group.pending, draft: group.draft },
     }));
+    const imageUrl = imagePreviewUrl(fileDiff, path);
+    if (imageUrl !== null) {
+      annotations.push({
+        side: "additions",
+        lineNumber: 0,
+        metadata: { threads: [], pending: [], draft: false, image: { url: imageUrl, path } },
+      });
+    }
     return {
       fileKey,
       path,
@@ -489,7 +504,7 @@ function PullRequestCodeTab({
         annotations
           .map(
             ({ side, lineNumber, metadata }) =>
-              `${side}:${lineNumber}:${metadata.draft ? "d" : ""}:${metadata.pending
+              `${side}:${lineNumber}:${metadata.image?.url ?? ""}:${metadata.draft ? "d" : ""}:${metadata.pending
                 .map((comment) => `${comment.id}:${comment.body}`)
                 .join(",")}:${metadata.threads
                 .map(
@@ -851,6 +866,13 @@ function PullRequestCodeTab({
 
   const renderAnnotation = (...[annotation]: CodeViewAnnotationArgs<ReviewAnnotationGroup>) => (
     <div className="py-1 font-sans text-foreground">
+      {annotation.metadata.image ? (
+        <PullRequestImageAnnotation
+          environmentId={environmentId}
+          detail={detail}
+          image={annotation.metadata.image}
+        />
+      ) : null}
       {annotation.metadata.threads.map(renderThreadCard)}
       {annotation.metadata.pending.map((comment) => (
         <PendingReviewCommentCard
