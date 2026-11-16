@@ -142,3 +142,40 @@ it("guard: a failure on one thread does not show on another (#3556)", async () =
   await view.draw({ environmentId: studio.environmentId, id: ThreadId.make("thread-2") });
   expect(view.controls.error).toBeNull();
 });
+
+it("a pending load that fails after the person switched threads shows nothing and announces nothing (#3556)", async () => {
+  await using view = await mountControls();
+  mocks.platform.OS = "ios";
+  const pending = Promise.withResolvers<Result>();
+  mocks.load.mockReturnValueOnce(pending.promise);
+  await view.press();
+  await view.draw({ environmentId: studio.environmentId, id: ThreadId.make("thread-2") });
+  await act(async () => pending.resolve(offline()));
+  expect(view.controls.error).toBeNull();
+  expect(mocks.announce).not.toHaveBeenCalled();
+});
+
+it("a pending load that fails after the thread screen closed announces nothing (#3556)", async () => {
+  const view = await mountControls();
+  mocks.platform.OS = "ios";
+  const pending = Promise.withResolvers<Result>();
+  mocks.load.mockReturnValueOnce(pending.promise);
+  await view.press();
+  await view[Symbol.asyncDispose]();
+  await act(async () => pending.resolve(offline()));
+  expect(mocks.announce).not.toHaveBeenCalled();
+});
+
+it("a failure for the thread the person came back to still shows, after a press on another thread (#3556)", async () => {
+  await using view = await mountControls();
+  const first = Promise.withResolvers<Result>();
+  mocks.load
+    .mockReturnValueOnce(first.promise)
+    .mockReturnValueOnce(Promise.withResolvers<Result>().promise);
+  await view.press();
+  await view.draw({ environmentId: studio.environmentId, id: ThreadId.make("thread-2") });
+  await view.press();
+  await view.draw(studio);
+  await act(async () => first.resolve(offline()));
+  expect(view.controls.error).toBe("Studio is not connected.");
+});

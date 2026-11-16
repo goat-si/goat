@@ -201,6 +201,22 @@ describe("model picker failures (#3556)", () => {
     );
   });
 
+  it("an earlier favorite save that fails after a later toggle alerts nothing (#3556)", async () => {
+    await using mounted = await mountSession({}, { settingsLoaded: true });
+    const earlier = Promise.withResolvers<AsyncResult.AsyncResult<unknown, unknown>>();
+    mocks.save.mockReturnValueOnce(earlier.promise).mockResolvedValueOnce(AsyncResult.success({}));
+    let first: Promise<void> | undefined;
+    await act(async () => {
+      first = Promise.resolve(mounted.session().toggleFavorite(opus));
+    });
+    await act(async () => mounted.session().toggleFavorite(opus));
+    await act(async () => {
+      earlier.resolve(offline());
+      await first;
+    });
+    expect(mocks.alert).not.toHaveBeenCalled();
+  });
+
   it("a crash while saving a favorite shows the plain fallback (#3556)", async () => {
     await using mounted = await mountSession({}, { settingsLoaded: true });
     mocks.save.mockResolvedValueOnce(
