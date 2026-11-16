@@ -214,7 +214,8 @@ export const make = Effect.gen(function* () {
             Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
             Effect.timeout(SILENCE_LIMIT),
           );
-        if (response.status === 401 || response.status === 403 || response.status === 404) {
+        // A refusal stops the feed; a rate limit or a server error is reconnected with backoff.
+        if (response.status >= 400 && response.status < 500 && response.status !== 429) {
           return Stream.succeed<Ending>("stop");
         }
         if (response.status !== 200) return Stream.succeed<Ending>("reconnect");

@@ -512,3 +512,47 @@ it.effect("ends a connection whose event grows past 10 MiB without a line end", 
     assert.equal(connections, 1);
   }),
 );
+
+it.effect.each([400, 410, 422])(
+  "a stream answering %s stops like a refusal instead of reconnecting",
+  (status) =>
+    Effect.gen(function* () {
+      const { rest, posts, deletes } = fakeRest(subscription);
+      let connections = 0;
+      const httpClient = HttpClient.make((request) =>
+        Effect.sync(() => {
+          connections += 1;
+          return HttpClientResponse.fromWeb(request, new Response(null, { status }));
+        }),
+      );
+      const events = yield* eventsOf(rest, httpClient);
+      const fiber = yield* events(target).pipe(Stream.runCount, Effect.forkChild);
+      yield* TestClock.adjust("10 minutes");
+      assert.equal(yield* Fiber.join(fiber), 0);
+      assert.equal(connections, 1, "the stream reconnected");
+      assert.deepEqual(deletes, ["event-subscriptions/1"]);
+      assert.equal(yield* Stream.runCount(events(target)), 0);
+      assert.equal(posts.length, 1, "the pull request subscribed again at once");
+    }),
+);
+
+it.effect("a stream answering 429 reconnects", () =>
+  Effect.gen(function* () {
+    const { rest } = fakeRest(subscription);
+    let connections = 0;
+    const httpClient = HttpClient.make((request) =>
+      Effect.sync(() => {
+        connections += 1;
+        return HttpClientResponse.fromWeb(
+          request,
+          new Response(null, { status: connections === 1 ? 429 : 403 }),
+        );
+      }),
+    );
+    const events = yield* eventsOf(rest, httpClient);
+    const fiber = yield* events(target).pipe(Stream.runCount, Effect.forkChild);
+    yield* TestClock.adjust("10 minutes");
+    assert.equal(yield* Fiber.join(fiber), 0);
+    assert.equal(connections, 2);
+  }),
+);
