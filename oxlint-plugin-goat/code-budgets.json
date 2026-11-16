@@ -438,13 +438,13 @@
   "apps/server/src/sshRemote/SshHostSetup.test.ts": { "lines": 1881 },
   "apps/server/src/sshRemote/SshHostSetup.ts": { "lines": 1579, "nonNull": 12 },
   "apps/server/src/sshRemote/SshRemoteDispatch.test.ts": { "lines": 4496 },
-  "apps/server/src/sshRemote/SshRemoteDispatch.ts": { "lines": 2054, "nonNull": 1 },
+  "apps/server/src/sshRemote/SshRemoteDispatch.ts": { "lines": 2053, "nonNull": 1 },
   "apps/server/src/sshRemote/SshWorkspaceSync.test.ts": { "lines": 1784 },
   "apps/server/src/sshRemote/SshWorkspaceSync.ts": { "nonNull": 1 },
   "apps/server/src/storageCleanup.test.ts": { "lines": 2141 },
   "apps/server/src/storageCleanup.ts": { "lines": 1296, "nonNull": 11 },
-  "apps/server/src/terminal/Manager.test.ts": { "lines": 2223 },
-  "apps/server/src/terminal/Manager.ts": { "lines": 3225 },
+  "apps/server/src/terminal/Manager.test.ts": { "lines": 2019 },
+  "apps/server/src/terminal/Manager.ts": { "lines": 3217 },
   "apps/server/src/terminal/OutputProtocol.ts": { "nonNull": 5 },
   "apps/server/src/textGeneration/ClaudeTextGeneration.test.ts": { "lines": 1311 },
   "apps/server/src/threadResults/ObservedCheckService.ts": { "nonNull": 1 },
@@ -550,11 +550,11 @@
   "apps/web/src/components/settings/CodexHomeRouteSection.tsx": { "nonNull": 1 },
   "apps/web/src/components/settings/CodexSetupSection.tsx": { "lines": 1118, "nonNull": 4 },
   "apps/web/src/components/settings/ConnectionEnvironmentsSection.browser.test.tsx": {
-    "lines": 1101
+    "lines": 1031
   },
   "apps/web/src/components/settings/ConnectionEnvironmentsSection.tsx": {
-    "lines": 1914,
-    "nonNull": 3
+    "lines": 1889,
+    "nonNull": 2
   },
   "apps/web/src/components/settings/ConnectionsSettings.tsx": { "lines": 1425 },
   "apps/web/src/components/settings/DeviceHostsSettings.tsx": { "nonNull": 1 },
@@ -859,7 +859,7 @@
   "packages/ssh/src/tunnel.fixture.ts": { "nonNull": 1 },
   "packages/ssh/src/tunnel.pending-manager.test.ts": { "lines": 1947 },
   "packages/ssh/src/tunnel.runtime-status.test.ts": { "lines": 1066 },
-  "packages/ssh/src/tunnel.ts": { "lines": 4877, "nonNull": 4 },
+  "packages/ssh/src/tunnel.ts": { "lines": 4870, "nonNull": 4 },
   "scripts/agent-surface/audit.ts": { "lines": 1014 },
   "scripts/agent-surface/eval/core.ts": { "nonNull": 5 },
   "scripts/agent-surface/eval/run.ts": { "nonNull": 4 },
