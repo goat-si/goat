@@ -382,3 +382,30 @@ Mobile:
 - Not merged: origin/chase/t3-261114-next, frozen until N3 (per the ruling).
 - NOT RUN: web, desktop and mobile captures (owed to #3519's integrated pass); PostgreSQL relay tests; the Effect 4.1 adaptation (after N3 merges).
 
+
+## Part 2 accepted (2026-11-17): third-round review APPROVE WITH NITS at 645abbd7b7, follow-ups
+
+Coordinator ruling (verbatim):
+
+> Fresh narrow review of N7 part 2's third fix round at 645abbd7b7: APPROVE WITH NITS, nothing at P0 to P2; two P3. Report /Users/jun/handoff-in/chase/next-N7b-fix3-review-645abbd7.md. The reviewer's words: "The whole of lane N7 part 2 may merge at this head once it has merged the post-N3 integration head." The lane is ACCEPTED and waits for lane N3 under the freeze. While it waits, two small follow-up commits on chase/t3-261114-n7b-scheduler (test first, focused tests only, no force push); I read that delta myself, no further review round unless it grows beyond these two items:
+> 1. N7bF3-P3-1 (code, test first; web). A new task that gets a one-thread Destination on a current environment and is then switched with "Runs on" to an older server's environment still reads "The first run starts a thread... Later runs continue that conversation", while the save sends no mode and the older server starts a new thread on every run (ScheduledTasksSettings.tsx:1222-1234 keeps the draft's threadMode; ScheduledTaskDestination.tsx:36-47, :72-74 reads it on every server). Fix as the reviewer prefers, in ScheduledTaskDestination.tsx: when onThreadModeChange is absent (a server without the capability) the text follows the mode that server uses, threadId === null ? "new_thread" : "continue", so no line is added to ScheduledTasksSettings.tsx, which is exactly at its 1747 entry. Test first, in ScheduledTasksSettings.browser.test.tsx (its harness has two environments): New task, choose a one-thread mode, switch "Runs on" to the environment without the capability, expect "Each run starts a new thread". Add this piece to the record's gate list (the list said the draft's mode is written only by taskToDraft, EMPTY_DRAFT and the button; "Runs on" carries a mode over on web).
+> 2. N7bF3-P3-2 (tests; web and mobile). Since settleNotice clears the notice on the way back, nothing guards "picking a policy clears the notice" any more (with that clear removed every test still passes). One case per surface: leave the thread (the notice shows), pick "Failed runs only" WITHOUT coming back, expect the notice gone.
+> Then READY with the head. After lane N3 is merged (I tell you the head): merge origin/chase/t3-261114-next once; ScheduledTasksSettings.tsx (1747) and the mobile SettingsScheduledTasksRouteScreen.tsx (1181) are exactly at their entries, so if the merge or the Effect 4.1 adaptation adds a line to either, a verbatim move-out commit comes first; every budget entry at its real length, none raised; with lane N9b part 2 the Orchestrator.ts hunk at the top of dispatchMessage keeps both sides; goat-rename --check, format, lint, typecheck (web, mobile, server, contracts), the focused tests, check:changed; READY. I read the merge and merge the lane.
+
+| item | GOAT commit | result |
+| --- | --- | --- |
+| N7bF3-P3-1 | `475724af79d4545f12bc8375626ef4c93eacc399` | web: without the mode handler (a server without the capability) Destination shows the mode that server uses, one thread exactly when the task has one; ScheduledTasksSettings.tsx unchanged (1747 of 1747) |
+| N7bF3-P3-2 | `673fd197ad252478ab40fb1b13c0db0bc7952065` | web and mobile tests: picking "Failed runs only" while away from the thread clears the reset notice |
+
+- Fail-first: N7bF3-P3-1's case in ScheduledTasksSettings.browser.test.tsx failed at 645abbd7b7. In that harness Laptop advertises thread modes and Secondary does not; the case is New task, "One thread, continuing the conversation", "Runs on" Secondary, then "Each run starts a new thread".
+- N7bF3-P3-2's two cases pass with the policy-pick clear and fail with it removed (ScheduledTaskNotificationPolicyField.tsx:49, ScheduledTaskNotificationPolicySection.tsx:39; checked, source restored).
+- Addition to the older-server gate list (third fix round, item 3):
+  - On web the draft's mode is also carried over by "Runs on" (ScheduledTasksSettings.tsx:1222-1234 keeps threadMode when the environment changes), so on an older server the draft's mode can disagree with its thread.
+  - The pieces that read the mode are safe on an older server:
+    - Destination's text no longer reads the draft's mode there: ScheduledTaskDestination.tsx derives it from the thread when onThreadModeChange is absent.
+    - The save sends no mode without the capability (:1171).
+    - The policy filter and the "Run in new threads" button also require a thread, so they behave as dev's.
+- Checks on 673fd197ad (focused, per the ruling): `node scripts/goat-rename.ts --check` 0; format and lint pass (commit hooks); web and mobile typecheck 0; both web ScheduledTasksSettings browser test files 23 passed; the three mobile test files 40 passed.
+- NOT RUN on 673fd197ad: `check:changed` (the ruling asks for focused tests on these two items; it runs after the post-N3 merge); captures (owed to #3519's integrated pass); PostgreSQL relay tests; the Effect 4.1 adaptation (after N3).
+- Next, after lane N3 merges: merge origin/chase/t3-261114-next once, with a verbatim move-out first if either at-entry file (ScheduledTasksSettings.tsx 1747, mobile route screen 1181) would grow; then the checks and READY.
+
