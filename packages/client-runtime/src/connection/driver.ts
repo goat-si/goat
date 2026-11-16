@@ -5,7 +5,6 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import * as Redacted from "effect/Redacted";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
@@ -33,6 +32,7 @@ import * as RpcSession from "../rpc/session.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import { issueRemoteWebSocketTicket } from "../authorization/remote.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
+import { classifySocketFailure } from "./sessionEndedCheck.ts";
 import { withSshConnectionTiming } from "./sshTiming.ts";
 
 export type ConnectionDriverProgress =
@@ -68,31 +68,6 @@ const ROUTE_CHECK_TIMEOUT_MS = 2_500;
 // wait the full probe timeout for a LAN the device has already left. A route
 // that misses it connects over relay, then upgrades with a second reconnect.
 const ROUTE_CHECK_HEAD_START_MS = 500;
-const HTTP_SCHEME_FOR_SOCKET: Partial<Record<string, string>> = {
-  "ws:": "http:",
-  "wss:": "https:",
-};
-
-/** Whether the socket and the HTTP base URL reach one server: same host and port, paired schemes. */
-function sameServer(prepared: PreparedConnection): boolean {
-  try {
-    const socket = new URL(prepared.socketUrl);
-    const http = new URL(prepared.httpBaseUrl);
-    return HTTP_SCHEME_FOR_SOCKET[socket.protocol] === http.protocol && socket.host === http.host;
-  } catch {
-    return false;
-  }
-}
-
-/** A browser signed in to its own server by cookie sees a refused upgrade only as a failed socket. */
-function mayBeRefusedCookie(prepared: PreparedConnection, failure: ConnectionTransientError) {
-  return (
-    failure.reason === "transport" &&
-    prepared.target._tag === "PrimaryConnectionTarget" &&
-    prepared.httpAuthorization === null &&
-    sameServer(prepared)
-  );
-}
 
 export class ConnectionDriver extends Context.Service<
   ConnectionDriver,
@@ -262,39 +237,6 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  // Asks once, within the route check budget: the session is gone, and the server that said so
-  // is this environment, so another GOAT answering on the same port cannot strand the tab.
-  const classifySocketFailure = (
-    prepared: PreparedConnection,
-    failure: ConnectionTransientError,
-  ) => {
-    const sessionEnded = primaryAuth.sessionEnded;
-    if (sessionEnded === undefined || !mayBeRefusedCookie(prepared, failure))
-      return Effect.fail(failure);
-    return sessionEnded(prepared.httpBaseUrl).pipe(
-      Effect.flatMap((ended) =>
-        ended
-          ? checkHost(prepared).pipe(Effect.map((check) => check === "answered"))
-          : Effect.succeed(false),
-      ),
-      Effect.timeoutOption(ROUTE_CHECK_TIMEOUT_MS),
-      Effect.withSpan("ConnectionDriver.checkSession"),
-      Effect.flatMap((ended) =>
-        Effect.fail<ConnectionTransientError | ConnectionBlockedError>(
-          Option.getOrElse(ended, () => false)
-            ? new ConnectionBlockedError({
-                reason: "authentication",
-                hop: "server",
-                via: "direct",
-                sessionEnded: true,
-                detail: `This browser is no longer signed in to ${prepared.label}.`,
-              })
-            : failure,
-        ),
-      ),
-    );
-  };
-
   const connect = Effect.fn("ConnectionDriver.connect")(function* (
     entry: ConnectionCatalogEntry,
     reportProgress: (progress: ConnectionDriverProgress) => Effect.Effect<void>,
@@ -332,7 +274,12 @@ export const make = Effect.gen(function* () {
             return session;
           }).pipe(
             Effect.catchTags({
-              ConnectionTransientError: (failure) => classifySocketFailure(prepared, failure),
+              ConnectionTransientError: (failure) =>
+                classifySocketFailure(prepared, failure, {
+                  sessionEnded: primaryAuth.sessionEnded,
+                  checkHost,
+                  timeoutMs: ROUTE_CHECK_TIMEOUT_MS,
+                }),
             }),
             (effect) =>
               route.target._tag === "SshConnectionTarget"
