@@ -527,23 +527,22 @@ export function createVcsActionManager<R, E>(
         );
       }),
     });
-    const environmentId = requestedTarget.environmentId;
     const command: AtomCommand<RunVcsStackedActionInput, GitRunStackedActionResult, unknown> = {
       label: environmentCommand.label,
       run: (registry, input) =>
-        environmentId === null
+        target === null
           ? Promise.resolve(
               AsyncResult.failure(
                 Cause.fail(
                   new VcsActionUnavailableError({
                     operation: "run_change_request",
-                    environmentId,
+                    environmentId: requestedTarget.environmentId,
                     cwd: requestedTarget.cwd,
                   }),
                 ),
               ),
             )
-          : environmentCommand.run(registry, { environmentId, input }),
+          : environmentCommand.run(registry, { environmentId: target.environmentId, input }),
     };
     runStackedActionCommands.set(commandKey, command);
     return command;
