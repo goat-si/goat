@@ -162,3 +162,66 @@ it("a finish time that cannot be read says Unknown time, and an unreadable start
     "finished Nov 14, 9:04 AM",
   );
 });
+
+const at = "2026-11-14T09:00:00.000Z";
+const englishShort = /^[A-Z][a-z]{2} \d{1,2}, \d{2}:\d{2}$/;
+
+it("an invalid locale falls back to the device locale and keeps a valid zone, without throwing", () => {
+  const time = routineRunTime(at, {
+    locale: "not a locale!",
+    timeZone: "Asia/Tokyo",
+    hour12: false,
+  });
+  // 09:00 UTC reads 18:00 in Tokyo, whatever the device's language.
+  expect(time).toContain("18:00");
+  expect(
+    routineRunTime(at, { locale: "not a locale!", timeZone: "Asia/Tokyo", hour12: false }),
+  ).toBe(time);
+});
+
+it("an invalid zone falls back to the device zone and keeps a valid locale, without throwing", () => {
+  const time = routineRunTime(at, { locale: "en-US", timeZone: "Not/A_Zone", hour12: false });
+  expect(time).toMatch(englishShort);
+  expect(routineRunTime(at, { locale: "en-US", timeZone: "Not/A_Zone", hour12: false })).toBe(time);
+});
+
+it("a null or Symbol locale reads in the device locale, without throwing", () => {
+  for (const locale of [null, Symbol("locale")]) {
+    const time = routineRunTime(at, { locale: locale as never, timeZone: "UTC", hour12: false });
+    expect(time).toContain("09:00");
+    expect(routineRunFinished(at, at, { locale: locale as never, timeZone: "UTC" })).toMatch(
+      /^finished /,
+    );
+  }
+});
+
+it("a time that is not a string gives 'Unknown time', and a start that is not one is not the finish's day", () => {
+  const options = { locale: "en-US", hour12: false, timeZone: "UTC" } as const;
+  expect(routineRunTime(Symbol("time") as never, options)).toBe("Unknown time");
+  // A number would parse as a year; it is not a stored time.
+  expect(routineRunTime(2026 as never, options)).toBe("Unknown time");
+  expect(routineRunFinished(Symbol("start") as never, at, options)).toBe("finished Nov 14, 09:00");
+  expect(routineRunFinished(at, Symbol("finish") as never, options)).toBe("finished Unknown time");
+});
+
+it("a run with no finish time has no finish line, whether it is null or left out", () => {
+  expect(
+    routineRunFinished(at, undefined as never, { locale: "en-US", timeZone: "UTC" }),
+  ).toBeNull();
+});
+
+it("a device zone change while the app is open reads the next time in the new zone", () => {
+  const before = process.env.TZ;
+  try {
+    process.env.TZ = "Asia/Tokyo";
+    const tokyo = new Date(at).getTimezoneOffset();
+    expect(routineRunTime(at, { locale: "en-US", hour12: false })).toBe("Nov 14, 18:00");
+    process.env.TZ = "America/New_York";
+    // The guard: Node read the new zone, so a stale formatter is what the next line would catch.
+    expect(new Date(at).getTimezoneOffset()).not.toBe(tokyo);
+    expect(routineRunTime(at, { locale: "en-US", hour12: false })).toBe("Nov 14, 04:00");
+  } finally {
+    if (before === undefined) delete process.env.TZ;
+    else process.env.TZ = before;
+  }
+});
