@@ -63,6 +63,7 @@ import {
   saveD10Item,
   traceSqlStatements,
   addRolledBackRecoveryCandidate,
+  queryPlanFor,
 } from "./ProjectionStore.testkit.ts";
 
 declare module "node:sqlite" {
@@ -232,6 +233,37 @@ const threadWorktreePathsIncludeArchivedOnRequest = Effect.gen(function* () {
     { threadId: ThreadId.make("thread:archived"), worktreePath: "/worktrees/archived" },
   ]);
 });
+
+it.effect("the filters every command reads with seek the rows they keep", () =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const threadId = yield* addRolledBackRecoveryCandidate("command-filter-seeks");
+    const command = traceSqlStatements();
+    yield* store
+      .getThreadRecords(threadId, ["nodes", "subagents", "turnItems", "contextTransfers"], {
+        turnItemTypes: ["user_message", "error"],
+        omitSettledLeafNodes: true,
+        omitSettledSubagents: true,
+        contextTransferStatuses: ["pending"],
+      })
+      .pipe(Effect.withTracer(command.tracer));
+    for (const [table, seeks] of [
+      ["turn_items", ["USING INDEX orchestration_v2_projection_turn_items_conversation_idx"]],
+      ["nodes", ["nodes_settled_leaf_idx (thread_id=? AND <expr>=?)"]],
+      ["subagents", ["USING COVERING INDEX orchestration_v2_projection_subagents_settled_idx"]],
+      [
+        "context_transfers",
+        [
+          "source_thread_status_idx (source_thread_id=? AND status=?)",
+          "target_thread_idx (target_thread_id=? AND status=?)",
+        ],
+      ],
+    ] as const) {
+      const plan = yield* queryPlanFor(command.statements, table);
+      for (const seek of seeks) assert.include(plan, seek);
+    }
+  }).pipe(Effect.provide(layerTest)),
+);
 
 // The SQL store keeps only live work beside a window's rows; the replay store's window keeps every record.
 const commandReadsSkipSettledLeafNodes = Effect.fnUntraced(function* (
@@ -1934,6 +1966,19 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         DELETE FROM orchestration_v2_projection_turn_items
         WHERE turn_item_id LIKE 'turn-item:bounded-sql-history:ordinal-%'
       `;
+      // With every user item loaded, the items give the order and the lookup does not run.
+      const withItems = traceSqlStatements();
+      const ordered = yield* projectionStore
+        .getThreadRecords(threadId, ["messages", "turnItems"], {
+          messageRoles: ["user"],
+          turnItemTypes: ["user_message"],
+        })
+        .pipe(Effect.withTracer(withItems.tracer));
+      assert.deepEqual(
+        ordered.messages.map((message) => message.id),
+        yield* readMessageIds({ messageRoles: ["user"] }),
+      );
+      assert.isFalse(withItems.statements.some((statement) => statement.includes("MIN(ordinal)")));
 
       yield* sql`
         UPDATE orchestration_v2_projection_turn_items
