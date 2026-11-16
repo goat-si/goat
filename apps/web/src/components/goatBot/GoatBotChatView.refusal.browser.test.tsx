@@ -3,7 +3,7 @@ import { EnvironmentId, type BotProfile } from "@goat/contracts";
 import { type ReactNode, useSyncExternalStore } from "react";
 import { expect, it, vi } from "vite-plus/test";
 
-import { act, render, type Screen } from "../../../test/render";
+import { act, render } from "../../../test/render";
 
 import "~/index.css";
 
@@ -148,8 +148,6 @@ function Harness() {
   );
 }
 
-const header = (screen: Screen) => screen.container.querySelector("header p")?.textContent ?? null;
-
 const refusals: ReadonlyArray<[string, Scenario, boolean]> = [
   [
     "this tab's own server said its session is gone",
@@ -193,7 +191,9 @@ it.each(refusals)(
     // The banner and the notice title both carry the sentence in an empty chat.
     expect(screen.getByText(SENTENCE, { exact: true }).elements()).toHaveLength(2);
     await expect.element(screen.getByText(PAIR_AGAIN, { exact: true })).toBeVisible();
-    expect(header(screen)).toBe("Didn't accept this device");
+    await expect
+      .element(screen.getByText("Didn't accept this device", { exact: true }))
+      .toBeVisible();
     if (claimed)
       await expect
         .element(screen.getByRole("button", { name: "Move Goatie to MacBook" }))
@@ -214,6 +214,7 @@ it.each(refusals)(
     await expect
       .element(screen.getByRole("status").filter({ hasText: "Connecting to Goatie…" }))
       .toBeVisible();
+    await expect.element(screen.getByText("Connecting…", { exact: true })).toBeVisible();
     expect(screen.getByText(SENTENCE, { exact: true }).elements()).toHaveLength(0);
   },
 );
@@ -247,7 +248,7 @@ it.each(notRefused)(
     await expect
       .element(screen.getByRole("status").filter({ hasText: line }))
       .toHaveTextContent(line);
-    expect(header(screen)).toBe("Offline");
+    await expect.element(screen.getByText("Offline", { exact: true })).toBeVisible();
     expect(screen.container.textContent ?? "").not.toContain("did not accept");
   },
 );
