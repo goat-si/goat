@@ -327,7 +327,12 @@ export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
                   denied:
                     state.phase === "blocked" &&
                     (state.lastFailure?.reason === "authentication" ||
-                      state.lastFailure?.reason === "permission"),
+                      state.lastFailure?.reason === "permission") &&
+                    // A browser's ended cookie session says nothing about the hub's nodes.
+                    !(
+                      state.lastFailure._tag === "ConnectionBlockedError" &&
+                      state.lastFailure.sessionEnded === true
+                    ),
                 };
               }),
             ),

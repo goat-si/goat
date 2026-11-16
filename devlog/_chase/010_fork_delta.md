@@ -209,6 +209,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/server/src/persistence/Migrations*`, `ProjectionStore.ts`, `apps/server/src/http.ts`, `packages/contracts/src/environment*`
 - 정책: 아래 마이그레이션 규칙.
 
+### `session-ended-check` 쿠키 탭의 끝난 세션 판별
+
+- 커밋: #3592
+- 경로: `packages/client-runtime/src/connection/{driver,sessionEndedCheck,diagnosis,presentation,model}.ts`, `packages/client-runtime/src/platform/capabilities.ts`, `packages/client-runtime/src/state/presentation.ts`, `apps/web/src/components/settings/ConnectionDiagnosisDetails.tsx`
+- 정책: GOAT 전용. `driver.ts`에는 `PrimaryEnvironmentAuth`를 읽는 줄, import, 연결 시도의 `catchTags` 훅만 둔다. 판별 로직은 `sessionEndedCheck.ts`에 있다. upstream driver 변경을 받은 뒤 그 훅을 다시 얹는다. 나머지 upstream 파일에는 한두 줄씩만 더했다. `ConnectionBlockedError.sessionEnded`, presentation failure의 `sessionEnded`와 `state/presentation.ts` `sameConnection`의 비교, capability의 선택 멤버 `sessionEnded`, `diagnosis.ts`의 단계 하나, 배너 헤드라인의 단계 줄이다. upstream이 이 모델이나 비교를 바꾸면 이 필드를 다시 붙인다.
+
 ### `settings-page` 설정은 모달이 아니라 전체 페이지
 
 - 경로: `apps/web/src/routes/_chat.settings.tsx`, `apps/web/src/routes/_chat.tsx`, `apps/web/src/components/settings/{SettingsPageShell,SettingsSidebarNav}.tsx`, `apps/web/src/components/AppSidebarLayout.tsx`, `apps/web/src/components/sidebar/{mainAppLocation.ts,SidebarChrome.tsx}`

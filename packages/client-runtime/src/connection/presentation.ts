@@ -36,6 +36,8 @@ export interface EnvironmentConnectionPresentation {
     readonly reason: ConnectionFailure["reason"];
     readonly detail: string;
     readonly traceId?: string;
+    /** This browser's own server said its cookie session is gone. */
+    readonly sessionEnded?: true;
   };
   /** The step an attempt in progress has reached. */
   readonly stage?: ConnectionAttemptStage | null;
@@ -78,6 +80,10 @@ function projectConnectionState(
             reason: state.lastFailure.reason,
             detail: state.lastFailure.detail,
             ...(state.lastFailure.traceId ? { traceId: state.lastFailure.traceId } : {}),
+            ...(state.lastFailure._tag === "ConnectionBlockedError" &&
+            state.lastFailure.sessionEnded === true
+              ? { sessionEnded: true as const }
+              : {}),
           },
         };
   switch (state.phase) {
