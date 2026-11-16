@@ -734,6 +734,7 @@ it("on Android, a menu choice acts on nothing once its computer may not be read 
     await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
     await pressIn(container, "Long press Research");
     readable.refused.add("env-menu-refused");
+    await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
     await pressIn(container, "Hide");
     expect(state.manage.hide).not.toHaveBeenCalled();
   } finally {
