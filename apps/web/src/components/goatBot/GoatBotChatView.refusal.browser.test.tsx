@@ -191,9 +191,7 @@ it.each(refusals)(
     // The banner and the notice title both carry the sentence in an empty chat.
     expect(screen.getByText(SENTENCE, { exact: true }).elements()).toHaveLength(2);
     await expect.element(screen.getByText(PAIR_AGAIN, { exact: true })).toBeVisible();
-    await expect
-      .element(screen.getByText("Didn't accept this device", { exact: true }))
-      .toBeVisible();
+    await expect.element(screen.getByText("Not accepted", { exact: true })).toBeVisible();
     if (claimed)
       await expect
         .element(screen.getByRole("button", { name: "Move Goatie to MacBook" }))
