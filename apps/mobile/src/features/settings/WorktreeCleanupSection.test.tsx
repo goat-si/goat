@@ -255,6 +255,7 @@ it("a saved value from the field's own save doesn't replace typing in progress, 
   expect(section.field.value).toBe("45");
   await section.submit();
   expect(mocks.update).toHaveBeenLastCalledWith(sent(45));
+  expect(section.field.value).toBe("45");
 });
 
 it("a saved value from another device doesn't replace typing in progress, and the typing is saved on leaving (#3556)", async () => {
@@ -265,6 +266,7 @@ it("a saved value from another device doesn't replace typing in progress, and th
   expect(section.field.value).toBe("45");
   await section.submit();
   expect(mocks.update).toHaveBeenCalledExactlyOnceWith(sent(45));
+  expect(section.field.value).toBe("45");
 });
 
 it("going back to the saved number while another is still being saved sends it (#3556)", async () => {
