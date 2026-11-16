@@ -5,6 +5,7 @@ import {
   type OrchestrationV2ThreadProjection,
   ProjectId,
   RunId,
+  RuntimeRequestId,
   ThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
@@ -212,5 +213,69 @@ it.effect("waitForThread for delegated work times out while a delegated task sti
     // The run ended, but the work it is waiting on did not, so this is a timeout with no answer.
     expect(result).toMatchObject({ timedOut: true, run: { id: runId, status: "completed" } });
     expect(result).not.toHaveProperty("resultRun");
+  }),
+);
+
+it.effect("waitForThread for delegated work releases on a question a later run asks", () =>
+  Effect.gen(function* () {
+    const projectId = ProjectId.make("project:thread-management:wait-later-question");
+    const threadId = ThreadId.make("thread:thread-management:wait-later-question");
+    const runId = RunId.make("run:thread-management:wait-later-question");
+    const wakeRunId = RunId.make("run:thread-management:wait-later-question:wake");
+    const question = RuntimeRequestId.make("request:later-question");
+    const run = (id: RunId, ordinal: number, status: OrchestrationV2Run["status"]) =>
+      ({
+        id,
+        ordinal,
+        status,
+        startedAt: DateTime.makeUnsafe(ordinal * 1_000),
+        completedAt: status === "running" ? null : DateTime.makeUnsafe(ordinal * 1_000 + 500),
+      }) as unknown as OrchestrationV2Run;
+    // The run ended; the run its background work woke now waits on the user.
+    const service = yield* serviceOver({
+      getThreadEventSequence: () => Effect.succeed(0),
+      restartContinuationPending: () => Effect.succeed(false),
+      delegatedTaskResultPending: () => Effect.succeed(false),
+      streamStoredEventsFrom: () => Stream.never,
+      getThreadRecords: () =>
+        Effect.succeed({
+          thread: { id: threadId, projectId, deletedAt: null },
+          runs: [run(runId, 1, "completed"), run(wakeRunId, 2, "running")],
+          messages: [],
+          subagents: [],
+          providerThreads: [],
+          turnItems: [{ type: "user_input_request", runId: wakeRunId, requestId: question }],
+          runtimeRequests: [{ id: question, kind: "user_input", status: "pending" }],
+        } as unknown as OrchestrationV2ThreadProjection),
+    });
+    const wait = (options: {
+      readonly untilDelegatedWorkSettled?: boolean;
+      readonly releaseOnPendingQuestion?: boolean;
+      readonly ignoreRequestIds?: ReadonlyArray<RuntimeRequestId>;
+    }) =>
+      Effect.gen(function* () {
+        const fiber = yield* service
+          .waitForThread({ projectId, threadId, runId, timeoutMs: 60_000, ...options })
+          .pipe(Effect.forkChild);
+        yield* TestClock.adjust(Duration.millis(60_000));
+        return yield* Fiber.join(fiber);
+      });
+
+    expect(yield* wait({ untilDelegatedWorkSettled: true })).toMatchObject({
+      timedOut: false,
+      pendingRequestIds: [question],
+    });
+    // Internal settling and a forwarded question still wait for the work.
+    const held = { timedOut: true };
+    expect(
+      yield* wait({ untilDelegatedWorkSettled: true, releaseOnPendingQuestion: false }),
+    ).toMatchObject(held);
+    expect(
+      yield* wait({ untilDelegatedWorkSettled: true, ignoreRequestIds: [question] }),
+    ).toMatchObject(held);
+    // Without the field the ended run answers at once, as before.
+    const plain = yield* wait({});
+    expect(plain).toMatchObject({ timedOut: false, run: { id: runId } });
+    expect(plain).not.toHaveProperty("pendingRequestIds");
   }),
 );

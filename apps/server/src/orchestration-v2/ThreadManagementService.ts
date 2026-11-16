@@ -1,6 +1,7 @@
 import * as Semaphore from "effect/Semaphore";
 import { deliveryForDispatch, readRestartReceipt } from "./restartedDelivery.ts";
 import * as ThreadSettlementAfterRun from "./ThreadSettlementAfterRun.ts";
+import { laterRunQuestions } from "./threadWaitLaterQuestions.ts";
 import type {
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
@@ -1560,6 +1561,26 @@ const make = Effect.gen(function* () {
             }
           }
           const ended = isTerminalRunStatus(run.status) && !pending;
+          // A run the ended run's work woke may ask a question; it releases this wait too.
+          if (
+            untilSettled &&
+            ended &&
+            pendingRequestIds.length === 0 &&
+            input.releaseOnPendingQuestion !== false
+          )
+            pendingRequestIds = yield* laterRunQuestions({
+              runs,
+              run,
+              ignored: ignoredRequestIds,
+              pendingRequests: getProjectThreadRecords(input, ["runtimeRequests"], {
+                runtimeRequestStatuses: ["pending"],
+              }),
+              questionItems: (runIds) =>
+                getProjectThreadRecords(input, ["turnItems"], {
+                  turnItemTypes: ["user_input_request"],
+                  turnItemRunIds: runIds,
+                }),
+            });
           const resultRun =
             untilSettled && ended && pendingRequestIds.length === 0
               ? yield* delegatedWorkResult
