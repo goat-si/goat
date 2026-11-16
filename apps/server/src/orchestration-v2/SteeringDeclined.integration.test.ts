@@ -17,12 +17,56 @@ const composerSelection = {
   options: [...runSelection.options, { id: "fastMode", value: false }],
 };
 
+type EarlierInterrupt =
+  | { readonly kind: "run"; readonly holdQueue: boolean; readonly reason?: string }
+  | { readonly kind: "thread"; readonly reason: string };
+const agentInterrupt: EarlierInterrupt = {
+  kind: "run",
+  holdQueue: false,
+  reason: "Stopped by an agent",
+};
+const personStop: EarlierInterrupt = { kind: "run", holdQueue: true };
+// The follow-up is held only when an interrupt request on the steered run held the queue.
+const INTERRUPTS_BEFORE_DECLINE = {
+  "agent thread.stop before decline": {
+    interrupts: [{ kind: "thread", reason: "Stopped by an agent: done" }],
+    holds: true,
+  },
+  "agent interrupt before decline": { interrupts: [agentInterrupt], holds: false },
+  "goal worker interrupt before decline": {
+    interrupts: [
+      { kind: "run", holdQueue: false, reason: "The fleet goal no longer needs this worker." },
+    ],
+    holds: false,
+  },
+  // Byte for byte the item an older build wrote for a Stop: no holdsQueue, the default message.
+  "interrupt item without holdsQueue before decline": {
+    interrupts: [{ kind: "run", holdQueue: false }],
+    holds: false,
+  },
+  "unheld then held interrupt before decline": {
+    interrupts: [agentInterrupt, personStop],
+    holds: true,
+  },
+  "held then unheld interrupt before decline": {
+    interrupts: [personStop, agentInterrupt],
+    holds: true,
+  },
+} satisfies Record<
+  string,
+  { readonly interrupts: ReadonlyArray<EarlierInterrupt>; readonly holds: boolean }
+>;
+type InterruptTiming = keyof typeof INTERRUPTS_BEFORE_DECLINE;
+const isInterruptTiming = (timing: string): timing is InterruptTiming =>
+  Object.hasOwn(INTERRUPTS_BEFORE_DECLINE, timing);
+
 it.effect.each([
   "complete",
   "stop-before-decline",
   "stop-before-decline, discarded",
   "stop-after-decline",
   "queued-model",
+  ...(Object.keys(INTERRUPTS_BEFORE_DECLINE) as Array<InterruptTiming>),
 ] as const)("persists a declined steer without blocking the worker: %s", (timing) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -64,6 +108,31 @@ it.effect.each([
           })
           .pipe(Effect.asVoid, Effect.orDie);
         if (timing.startsWith("stop-before-decline")) beforeDecline = stop;
+        if (isInterruptTiming(timing)) {
+          const interrupts = Effect.forEach(
+            INTERRUPTS_BEFORE_DECLINE[timing].interrupts,
+            (interrupt: EarlierInterrupt, index) =>
+              orchestrator.dispatch(
+                interrupt.kind === "thread"
+                  ? {
+                      type: "thread.stop",
+                      commandId: CommandId.make(`earlier-interrupt-${index}`),
+                      threadId,
+                      reason: interrupt.reason,
+                      stopDelegatedTasks: false,
+                    }
+                  : {
+                      type: "run.interrupt",
+                      commandId: CommandId.make(`earlier-interrupt-${index}`),
+                      threadId,
+                      runId: first.runId,
+                      ...(interrupt.holdQueue ? { holdQueue: true } : {}),
+                      ...(interrupt.reason === undefined ? {} : { reason: interrupt.reason }),
+                    },
+              ),
+          ).pipe(Effect.asVoid, Effect.orDie);
+          beforeDecline = interrupts;
+        }
         const steerSelection = { ...runSelection, model: "steer-model" };
         if (timing === "queued-model") {
           yield* orchestrator.dispatch({
@@ -120,6 +189,20 @@ it.effect.each([
           effects.map((effect) => [effect.request.type, effect.status]),
           [["provider-turn.steer", "succeeded"]],
         );
+        if (isInterruptTiming(timing)) {
+          const { holds } = INTERRUPTS_BEFORE_DECLINE[timing];
+          assert.equal(queued?.queueHeld === true, holds);
+          if (holds) assert.equal(queued?.status, "queued");
+          // After an interrupt that did not hold the queue the follow-up starts once, unheld.
+          yield* worker.drain();
+          yield* orchestrator.resumeQueuedRuns;
+          yield* worker.drain();
+          assert.deepEqual(
+            started.map((turn) => turn.runId),
+            holds ? [first.runId] : [first.runId, queued?.id],
+          );
+          return;
+        }
         assert.equal(started.length, 1);
         assert.equal(queued?.status, "queued");
         assert.equal(queued?.userMessageId, messageId);

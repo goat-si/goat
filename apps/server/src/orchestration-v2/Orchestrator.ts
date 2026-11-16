@@ -5153,7 +5153,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
         return;
       }
-      steerFollowUpAfterStop = yield* stopReachedRun(command, command.threadId, source.id);
+      steerFollowUpAfterStop = yield* stopReachedRun(command, command.threadId, source.id, true);
     }
     const admissionSelection = command.modelSelection ?? projection.thread.modelSelection;
     const admissionAdapter = yield* providerAdapters
@@ -9848,11 +9848,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
   });
 
-  /** Late tool calls and restart continuations must not outlive Stop. */
+  /** Late tool calls and restart continuations must not outlive Stop; heldQueue: a Stop that held. */
   const stopReachedRun = (
     command: OrchestrationV2ServerCommand,
     threadId: ThreadId,
     runId: RunId,
+    heldQueue = false,
   ) =>
     projectionStore
       .getThreadRecords(threadId, ["turnItems"], {
@@ -9860,7 +9861,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         turnItemRunIds: [runId],
       })
       .pipe(
-        Effect.map(({ turnItems }) => turnItems.length > 0),
+        Effect.map(({ turnItems }) =>
+          turnItems.some((item) => !heldQueue || ("holdsQueue" in item && item.holdsQueue)),
+        ),
         mapDispatchError(command),
       );
 
@@ -10535,6 +10538,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           });
 
     const emitEvent = emit(events, command);
+    const holdsQueue =
+      command.holdQueue === true ||
+      (yield* stopReachedRun(command, command.threadId, run.id, true));
     const interruptRequestItem: OrchestrationV2TurnItem = {
       id: idAllocator.derive.runSignalTurnItem({
         runId: run.id,
@@ -10555,6 +10561,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       updatedAt: now,
       type: "run_interrupt_request",
       message: command.reason ?? RunExecutionService.USER_STOP_REASON,
+      ...(holdsQueue ? { holdsQueue } : {}),
     };
 
     const otherProviderInterrupts: Array<PendingOrchestrationEffectV2> = [];
