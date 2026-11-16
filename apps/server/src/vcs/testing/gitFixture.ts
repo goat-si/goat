@@ -3,6 +3,9 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import { afterAll } from "vite-plus/test";
+// @effect-diagnostics nodeBuiltinImport:off -- afterAll cleanup runs outside Effect.
+import * as NodeFS from "node:fs";
 import * as ServerConfig from "../../config.ts";
 import * as GitVcsDriver from "../GitVcsDriver.ts";
 
@@ -47,7 +50,7 @@ export const git = Effect.fn("GitVcsDriver.test.git")(function* (
   return result.stdout.trim();
 });
 
-export const initRepoWithCommit = Effect.fn("test.initRepoWithCommit")(function* (cwd: string) {
+const commitInitialRepo = Effect.fn("test.commitInitialRepo")(function* (cwd: string) {
   const driver = yield* GitVcsDriver.GitVcsDriver;
   yield* driver.initRepo({ cwd });
   yield* git(cwd, ["config", "user.email", "test@test.com"]);
@@ -55,6 +58,30 @@ export const initRepoWithCommit = Effect.fn("test.initRepoWithCommit")(function*
   yield* writeTextFile(cwd, "README.md", "# test\n");
   yield* git(cwd, ["add", "."]);
   yield* git(cwd, ["commit", "-m", "initial commit"]);
-  const initialBranch = yield* git(cwd, ["branch", "--show-current"]);
-  return { initialBranch };
+});
+
+// Most tests start from the same one-commit repository; they copy it instead of spawning git.
+let repoTemplate: string | undefined;
+afterAll(() => {
+  if (repoTemplate) NodeFS.rmSync(repoTemplate, { recursive: true, force: true });
+});
+
+export const initRepoWithCommit = Effect.fn("test.initRepoWithCommit")(function* (cwd: string) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  // Git commits whatever already sits in cwd, so only an empty one can take the shared copy.
+  const empty =
+    !(yield* fileSystem.exists(cwd)) || (yield* fileSystem.readDirectory(cwd)).length === 0;
+  if (empty) {
+    if (!repoTemplate) {
+      const template = yield* fileSystem.makeTempDirectory({ prefix: "git-vcs-driver-template-" });
+      yield* commitInitialRepo(template);
+      repoTemplate = template;
+    }
+    yield* fileSystem.copy(repoTemplate, cwd);
+  } else {
+    yield* commitInitialRepo(cwd);
+  }
+  const head = yield* fileSystem.readFileString(path.join(cwd, ".git", "HEAD"));
+  return { initialBranch: head.trim().replace(/^ref: refs\/heads\//, "") };
 });

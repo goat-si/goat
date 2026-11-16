@@ -1,3 +1,4 @@
+import { DEFAULT_MAX_TERMINAL_BUFFER_BYTES } from "@goat/contracts";
 import { BoundedTerminalHistory } from "./BoundedTerminalHistory.ts";
 
 // Pop beyond Ghostty's eight-entry Kitty stacks on both screens before clearing
@@ -193,7 +194,104 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
 const HISTORY_SEQUENCE_START = /\u001b/;
 const NEXT_HISTORY_SEQUENCE_START = new RegExp(HISTORY_SEQUENCE_START.source, "g");
 
+// UTF-16 code units of an unfinished string sequence held per terminal: the clients' replay window,
+// which counts UTF-8 bytes (the same for ASCII image and sixel payloads). A longer one is left out
+// of history whole; the live terminal already drew it and no client could replay it.
+export const MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH = DEFAULT_MAX_TERMINAL_BUFFER_BYTES;
+
+// An unfinished CSI or plain escape is never longer than a few hundred units in practice, and
+// the sanitizer rescans a held CSI on every chunk, so these are held far less.
+export const MAX_PENDING_HISTORY_ESCAPE_SEQUENCE_LENGTH = 4 * 1024;
+
+// Held while the rest of a sequence past the cap is swallowed: this marker, the sequence's kind,
+// and at most one code unit split across chunks. A held unfinished sequence always starts with ESC.
+const SWALLOWING = "swallowing:";
+
+function swallowedKind(sequence: string): string {
+  const introducer = sequence.charAt(1);
+  if (introducer === "]" || introducer === "[") return introducer;
+  return introducer === "P" || introducer === "^" || introducer === "_" ? "P" : "E";
+}
+
+// An ESC may begin ST, and a high surrogate may begin a code point that acts as a C1 control.
+function carriedUnit(input: string): string {
+  const last = input.charCodeAt(input.length - 1);
+  return last === 0x1b || (last >= 0xd800 && last <= 0xdbff) ? input.slice(-1) : "";
+}
+
+/** Where a swallowed sequence ends, as the sanitizer ends that kind, and what a C1 end leaves. */
+function endOfSwallowedSequence(
+  kind: string,
+  input: string,
+): { end: number; safe: string; next: string } | null {
+  if (kind === "]" || kind === "P") {
+    const stringEnd = findStringEnd(input, 0, kind === "]");
+    if (stringEnd === null) return null;
+    const effect = stringEnd.c1?.effect;
+    return { end: stringEnd.end, safe: effect?.safe ?? "", next: effect?.next ?? "" };
+  }
+  if (kind === "[") {
+    for (let cursor = 0; cursor < input.length; cursor += 1) {
+      const codePoint = input.charCodeAt(cursor);
+      if (isControlSequenceCancel(codePoint) || isCsiFinalByte(codePoint)) {
+        return { end: cursor + 1, safe: "", next: "" };
+      }
+      // An ESC abandons the CSI and starts the next sequence.
+      if (codePoint === 0x1b) return { end: cursor, safe: "", next: "" };
+      if (codePoint >= 0x80) {
+        const fullCodePoint = input.codePointAt(cursor) ?? codePoint;
+        const end = cursor + (fullCodePoint > 0xffff ? 2 : 1);
+        const c1 = c1Effect(fullCodePoint);
+        if (c1) return { end, safe: c1.safe, next: c1.next };
+        cursor = end - 1;
+      }
+    }
+    return null;
+  }
+  let cursor = 0;
+  while (cursor < input.length && isEscapeIntermediateByte(input.charCodeAt(cursor))) cursor += 1;
+  if (cursor >= input.length) return null;
+  return {
+    end: isEscapeFinalByte(input.charCodeAt(cursor)) ? cursor + 1 : cursor,
+    safe: "",
+    next: "",
+  };
+}
+
 export function sanitizeTerminalHistoryChunk(
+  pendingControlSequence: string,
+  data: string,
+): { visibleText: string; pendingControlSequence: string } {
+  let pending = pendingControlSequence;
+  let rest = data;
+  let swallowedEffect = "";
+  if (pending.startsWith(SWALLOWING)) {
+    const kind = pending.charAt(SWALLOWING.length);
+    const input = pending.slice(SWALLOWING.length + 1) + data;
+    const sequenceEnd = endOfSwallowedSequence(kind, input);
+    // A terminal inside a sequence shows nothing until it ends, so neither does history.
+    if (sequenceEnd === null) {
+      return { visibleText: "", pendingControlSequence: SWALLOWING + kind + carriedUnit(input) };
+    }
+    swallowedEffect = sequenceEnd.safe;
+    pending = sequenceEnd.next;
+    rest = input.slice(sequenceEnd.end);
+  }
+  const result = sanitizeChunk(pending, rest);
+  const visibleText = swallowedEffect + result.visibleText;
+  const held = result.pendingControlSequence;
+  const kind = swallowedKind(held);
+  const limit =
+    kind === "]" || kind === "P"
+      ? MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH
+      : MAX_PENDING_HISTORY_ESCAPE_SEQUENCE_LENGTH;
+  if (held.length <= limit) {
+    return { visibleText, pendingControlSequence: held };
+  }
+  return { visibleText, pendingControlSequence: SWALLOWING + kind + carriedUnit(held) };
+}
+
+function sanitizeChunk(
   pendingControlSequence: string,
   data: string,
 ): { visibleText: string; pendingControlSequence: string } {

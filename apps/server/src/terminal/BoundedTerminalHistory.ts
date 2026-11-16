@@ -1,3 +1,9 @@
+import {
+  TERMINAL_SEQUENCE_GROUND,
+  terminalSequenceEnd,
+  terminalSequenceStateAfter,
+} from "@goat/contracts";
+
 export const DEFAULT_HISTORY_BYTE_LIMIT = 8 * 1024 * 1024;
 const MAX_HISTORY_CHUNK_LENGTH = 16 * 1024;
 
@@ -5,6 +11,20 @@ interface TerminalHistoryChunk {
   data: string;
   byteLength: number;
   lineBreaks: number;
+}
+
+export interface TerminalHistoryPersistenceCursor {
+  readonly generation: number;
+  readonly offset: number;
+  readonly fileBytes: number;
+}
+
+function countLineBreaks(data: string): number {
+  let lineBreaks = 0;
+  for (let index = data.indexOf("\n"); index !== -1; index = data.indexOf("\n", index + 1)) {
+    lineBreaks += 1;
+  }
+  return lineBreaks;
 }
 
 export class BoundedTerminalHistory {
@@ -19,7 +39,10 @@ export class BoundedTerminalHistory {
   private lineBreaks = 0;
   // Reading the old string's tail on each append can force chunk concatenation.
   private lastCodeUnit: number | undefined;
+  // The terminal parser's state at the first retained code unit, which is where a replay starts.
+  private sequenceState = TERMINAL_SEQUENCE_GROUND;
   private cachedValue: string | null = "";
+  private generation = 0;
 
   constructor(maxLines: number, initial: string, maxBytes = DEFAULT_HISTORY_BYTE_LIMIT) {
     this.maxLines = maxLines;
@@ -56,6 +79,8 @@ export class BoundedTerminalHistory {
       firstCode <= 0xdfff
     ) {
       // Joining a split surrogate changes its UTF-8 size from 3 to 4 bytes.
+      // The previous flush may have encoded the lone surrogate as a replacement character.
+      this.generation += 1;
       previous.data += text[0];
       previous.byteLength += 1;
       this.byteLength += 1;
@@ -85,10 +110,7 @@ export class BoundedTerminalHistory {
 
   private appendChunk(data: string): void {
     const byteLength = Buffer.byteLength(data);
-    let lineBreaks = 0;
-    for (let index = data.indexOf("\n"); index !== -1; index = data.indexOf("\n", index + 1)) {
-      lineBreaks += 1;
-    }
+    const lineBreaks = countLineBreaks(data);
     const previous = this.chunks.at(-1);
     if (previous && previous.data.length + data.length <= MAX_HISTORY_CHUNK_LENGTH) {
       previous.data += data;
@@ -106,6 +128,7 @@ export class BoundedTerminalHistory {
   private discardChunk(): void {
     const first = this.chunks[this.start];
     if (!first) throw new Error("Terminal history chunk invariant");
+    this.sequenceState = terminalSequenceStateAfter(this.sequenceState, first.data);
     this.retainedPosition += first.data.length;
     this.byteLength -= first.byteLength;
     this.lineBreaks -= first.lineBreaks;
@@ -119,6 +142,7 @@ export class BoundedTerminalHistory {
       this.discardChunk();
       return;
     }
+    this.sequenceState = terminalSequenceStateAfter(this.sequenceState, first.data, 0, offset);
     this.retainedPosition += offset;
     first.data = first.data.slice(offset);
     first.byteLength -= byteLength;
@@ -170,6 +194,13 @@ export class BoundedTerminalHistory {
       }
       this.trimChunk(offset, bytes, lineBreaks);
     }
+    // A cut inside a control sequence would replay the rest of it as text.
+    while (this.sequenceState !== TERMINAL_SEQUENCE_GROUND && this.start < this.chunks.length) {
+      const first = this.chunks[this.start];
+      if (!first) throw new Error("Terminal history chunk invariant");
+      const dropped = first.data.slice(0, terminalSequenceEnd(this.sequenceState, first.data));
+      this.trimChunk(dropped.length, Buffer.byteLength(dropped), countLineBreaks(dropped));
+    }
     if (
       this.start === this.chunks.length ||
       (this.start > 2_048 && this.start * 2 >= this.chunks.length)
@@ -181,6 +212,7 @@ export class BoundedTerminalHistory {
   }
 
   clear(): void {
+    this.generation += 1;
     this.chunks = [];
     this.start = 0;
     this.endPosition = 0;
@@ -188,7 +220,41 @@ export class BoundedTerminalHistory {
     this.byteLength = 0;
     this.lineBreaks = 0;
     this.lastCodeUnit = undefined;
+    this.sequenceState = TERMINAL_SEQUENCE_GROUND;
     this.cachedValue = "";
+  }
+
+  persistenceUpdate(previous?: TerminalHistoryPersistenceCursor) {
+    const offset = this.endPosition;
+    let data: string | undefined;
+    if (previous?.generation === this.generation) {
+      let remaining = offset - previous.offset;
+      const tail: string[] = [];
+      for (let index = this.chunks.length - 1; remaining > 0 && index >= this.start; index -= 1) {
+        const chunk = this.chunks[index];
+        if (!chunk) throw new Error("Terminal history chunk invariant");
+        const suffix = chunk.data.slice(Math.max(0, chunk.data.length - remaining));
+        tail.push(suffix);
+        remaining -= suffix.length;
+      }
+      if (remaining === 0) data = tail.toReversed().join("");
+    }
+    // Keep the on-disk log bounded while amortizing compaction across new output.
+    // Readers already cap the plain-text tail by bytes and lines.
+    const append =
+      data !== undefined &&
+      previous !== undefined &&
+      previous.fileBytes + Buffer.byteLength(data) <= this.maxBytes * 2;
+    const output = append && data !== undefined ? data : this.value();
+    return {
+      data: output,
+      append,
+      cursor: {
+        generation: this.generation,
+        offset,
+        fileBytes: (append ? previous.fileBytes : 0) + Buffer.byteLength(output),
+      },
+    };
   }
 
   get position(): number {
