@@ -637,11 +637,12 @@ async function refusableRoster(environmentId: string) {
   const stop = followKeptPerComputerCatalog(registry);
   const container = document.createElement("div");
   const root = createRoot(container);
+  let visible = true;
   const draw = () =>
     act(async () =>
       root.render(
         <RegistryContext value={registry}>
-          <MobileBotRoster selectedKey={null} onOpenBot={() => {}} />
+          <MobileBotRoster selectedKey={null} onOpenBot={() => {}} visible={visible} />
         </RegistryContext>,
       ),
     );
@@ -676,6 +677,11 @@ async function refusableRoster(environmentId: string) {
     leave: () => {
       left = true;
       return act(async () => root.unmount());
+    },
+    /** Home covers the roster: it stays mounted, hidden, while a native alert stays up. */
+    cover: () => {
+      visible = false;
+      return draw();
     },
     /** Home's selection moves the roster to another computer, which this phone may read. */
     moveTo: (other: string) => {
@@ -740,6 +746,33 @@ it("a menu left open does nothing once the roster has left the screen", async ()
   await view.choose("Hide");
   expect(state.manage.hide).not.toHaveBeenCalled();
 });
+
+it.each([
+  ["Hide", "hide", (view: Awaited<ReturnType<typeof refusableRoster>>) => view.longPress()],
+  [
+    "Delete",
+    "remove",
+    async (view: Awaited<ReturnType<typeof refusableRoster>>) => {
+      await view.longPress();
+      await view.choose("Delete");
+    },
+  ],
+  [
+    "Restore",
+    "restore",
+    (view: Awaited<ReturnType<typeof refusableRoster>>) =>
+      act(async () => view.members().onRestoreDeleted({ ...member, state: "deleted" })),
+  ],
+] as const)(
+  "a %s choice does nothing once its roster is hidden but still mounted",
+  async (choice, action, open) => {
+    await using view = await refusableRoster("env-cover");
+    await open(view);
+    await view.cover();
+    await view.choose(choice);
+    expect(state.manage[action]).not.toHaveBeenCalled();
+  },
+);
 
 it("a menu choice pressed after a refusal reaches the store, before the roster renders it, does nothing", async () => {
   await using view = await refusableRoster("env");
