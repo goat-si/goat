@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -179,7 +180,13 @@ it.effect.each(["after the commit", "while the dispatch waits for the parent's l
           return;
         }
         assert.isTrue(yield* Deferred.isDone(cutAfterCommit));
-        yield* Deferred.await(started);
+        const startedInTime = yield* Deferred.await(started).pipe(
+          Effect.as(true),
+          Effect.timeoutOrElse({ duration: "1 minute", orElse: () => Effect.succeed(false) }),
+          Effect.forkChild,
+        );
+        yield* TestClock.adjust("1 minute");
+        assert.isTrue(yield* Fiber.join(startedInTime), "the cut run's preparation never started");
         yield* Deferred.succeed(openWorktree, undefined);
         const child = yield* preparationSettled(tasks[0]!.childThreadId!);
         assert.notInclude(

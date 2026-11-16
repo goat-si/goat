@@ -1402,6 +1402,7 @@ const make = Effect.gen(function* () {
     releasePreparation,
     schedulePreparation,
     failPreparedRun,
+    settled: eventSink.settled,
   });
 
   return ThreadLaunchService.of({

@@ -61,8 +61,13 @@ export const makeRunPreparation = <ES>(deps: {
     runId: RunId | null,
     cause: unknown,
   ) => Effect.Effect<void>;
+  /** The event sink's `settled`: every commit already on the batch worker has settled. */
+  readonly settled: Effect.Effect<void>;
 }) => {
   const { threads, reservePreparation, releasePreparation } = deps;
+
+  /** Whether a cut dispatch's command committed. */
+  const committed = (commandId: CommandId) => commandAccepted(threads, commandId);
 
   const scheduleRunPreparation = Effect.fn("ThreadLaunchService.scheduleRunPreparation")(function* (
     input: ThreadLaunchPreparationInput,
@@ -156,11 +161,11 @@ export const makeRunPreparation = <ES>(deps: {
             threadId: input.threadId,
             runId: input.runId,
           }),
-          commandAccepted(threads, input.commandId),
+          committed(input.commandId),
           prepareRun(input),
         ).pipe(Effect.tap(() => prepareRun(input))),
       ),
   );
 
-  return { prepareRun, prepareMessageRun, retryPreparation };
+  return { committed, prepareRun, prepareMessageRun, retryPreparation };
 };

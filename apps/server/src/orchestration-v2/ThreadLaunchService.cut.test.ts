@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ThreadLaunch from "./ThreadLaunchService.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
@@ -135,7 +136,13 @@ it.effect.each([
         return;
       }
       assert.isTrue(yield* Deferred.isDone(cutAfterCommit));
-      yield* Deferred.await(started);
+      const startedInTime = yield* Deferred.await(started).pipe(
+        Effect.as(true),
+        Effect.timeoutOrElse({ duration: "1 minute", orElse: () => Effect.succeed(false) }),
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust("1 minute");
+      assert.isTrue(yield* Fiber.join(startedInTime), "the cut run's preparation never started");
       yield* Deferred.succeed(openWorktree, undefined);
       const runs = yield* released(
         input.threadId,

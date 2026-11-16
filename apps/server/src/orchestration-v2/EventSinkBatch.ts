@@ -36,6 +36,8 @@ export interface Shape {
   readonly withProviderBatch: <A, E, R>(
     effect: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E | EventSinkV2Error, R>;
+  /** Completes once every commit already queued on, or running on, the batch worker has settled. */
+  readonly settled: Effect.Effect<void>;
 }
 export const make = Effect.fn("EventSinkBatch.make")(function* (
   mapError: (cause: SqlError.SqlError) => EventSinkV2Error,
@@ -138,6 +140,8 @@ export const make = Effect.fn("EventSinkBatch.make")(function* (
       withProviderBatch(effect).pipe(
         Effect.mapError((cause) => (SqlError.isSqlError(cause) ? mapError(cause) : cause)),
       ),
+    // The worker runs one batch at a time, so a barrier queued now runs after those before it.
+    settled: coordinator.barrier(Effect.void).pipe(Effect.exit, Effect.asVoid),
   };
   return { commitThenPublish, service };
 });
