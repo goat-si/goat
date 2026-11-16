@@ -1,6 +1,6 @@
 import type { MenuAction, MenuComponentProps } from "@react-native-menu/menu";
 import type { ReactNode } from "react";
-import { use, useRef, useState } from "react";
+import { use, useEffect, useEffectEvent, useRef, useState } from "react";
 import type { StyleProp, ViewInstance, ViewStyle } from "react-native";
 import { Pressable, ScrollView, View } from "react-native";
 import { useKeyboardState } from "react-native-keyboard-controller";
@@ -35,6 +35,8 @@ export type AndroidAnchoredMenuProps = {
   readonly actions: readonly MenuAction[];
   readonly title?: string;
   readonly onPressAction?: MenuComponentProps["onPressAction"];
+  /** The menu closed: a choice (before `onPressAction`), an outside tap, Back, or its owner unmounting it. */
+  readonly onClose?: () => void;
   readonly className?: string;
   readonly style?: StyleProp<ViewStyle>;
   readonly children: ReactNode | ((open: () => void) => ReactNode);
@@ -59,7 +61,13 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
     setPath([]);
     setOverlay(null);
     setRootHeight(null);
+    props.onClose?.();
   };
+  const closedByUnmount = useEffectEvent(() => {
+    if (anchor !== null) props.onClose?.();
+  });
+  // A menu whose trigger leaves the screen while it is open still tells its owner it closed.
+  useEffect(() => () => closedByUnmount(), []);
 
   const open = () => {
     anchorNode?.measureInWindow((x, y, width, height) => {

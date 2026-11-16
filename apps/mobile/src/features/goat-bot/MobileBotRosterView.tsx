@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { Fragment, useRef, useState, type ReactNode } from "react";
 import type { BotRosterEntry } from "@goat/client-runtime/goatBot";
 import {
   FACE_MOTION_RANK,
@@ -114,6 +114,11 @@ export function MobileBotRosterView(props: {
     readonly onNewBot: () => void;
     /** Edit, hide, show, delete or restore; the panel asks what to do. */
     readonly onLongPressBot: (bot: BotRosterEntry) => void;
+    /** Where the panel opens a row's actions as a menu around the row (Android), it draws the row. */
+    readonly menuRow?: (
+      bot: BotRosterEntry,
+      row: (onLongPress: () => void) => ReactNode,
+    ) => ReactNode;
     /** Whether this person may restore a deleted bot; its row then offers Restore. */
     readonly canRestore: boolean;
     readonly onRestoreDeleted: (bot: BotProfile) => void;
@@ -148,6 +153,14 @@ export function MobileBotRosterView(props: {
     mainFace.since,
     onScreen && mainEmoji === null,
   );
+  // A row with its long press, through the panel's menu when it draws one.
+  const withMenu = (
+    bot: BotRosterEntry,
+    row: (onLongPress: (() => void) | undefined) => ReactNode,
+  ) =>
+    props.members?.menuRow
+      ? props.members.menuRow(bot, row)
+      : row(props.members ? () => props.members?.onLongPressBot(bot) : undefined);
   return (
     <ScrollView
       ref={scrollRef}
@@ -172,73 +185,82 @@ export function MobileBotRosterView(props: {
       {props.bots.map((bot) => {
         const key = bot.kind === "main" ? "main" : `bot:${bot.profile.botId}`;
         const selected = props.selectedKey === key;
-        const longPress = props.members ? () => props.members?.onLongPressBot(bot) : undefined;
         if (bot.kind === "main") {
           // The main bot leads the list as one tile, like a contact the person returns to most.
+          // Keyed by its computer too, so a switch closes a menu opened on the other one.
           return (
-            <Pressable
-              key="main"
-              ref={rowRef}
-              onLayout={measure}
-              accessibilityRole="button"
-              onPress={() => props.onOpenBot(bot)}
-              onLongPress={longPress}
-              accessibilityState={{ selected }}
-              accessibilityLabel={[
-                mainFaceLabel,
-                bot.profile?.name ?? "GOAT Bot",
-                props.unread ? "unread" : null,
-                ...(mainSignals?.spoken ?? []),
-                props.preview || null,
-              ]
-                .filter((part) => part !== null)
-                .join(", ")}
-              className={
-                selected
-                  ? "mx-4 my-2 items-center gap-2 rounded-2xl bg-thread-selected px-4 py-4"
-                  : "mx-4 my-2 items-center gap-2 rounded-2xl px-4 py-4"
-              }
-            >
-              <GoatBotFaceAvatar
-                state={mainFace.state}
-                size={88}
-                motion={mainMotion}
-                emoji={mainEmoji}
-                surface={selected ? "selected" : "screen"}
-              />
-              <View className="max-w-full flex-row items-center gap-2">
-                <Text numberOfLines={1} className="shrink text-base font-semibold text-foreground">
-                  {bot.profile?.name ?? "GOAT Bot"}
-                </Text>
-                <MobileBotRowSignalMarks signals={mainSignals} />
-              </View>
-              {props.preview ? (
-                <View className="max-w-full flex-row items-center gap-1">
-                  {props.unread ? (
-                    <View
-                      accessibilityElementsHidden
-                      className="h-2 w-2 rounded-full bg-adaptive-blue-500-400"
-                    />
+            <Fragment key={`main:${props.mainEnvironmentId ?? ""}`}>
+              {withMenu(bot, (longPress) => (
+                <Pressable
+                  ref={rowRef}
+                  onLayout={measure}
+                  accessibilityRole="button"
+                  onPress={() => props.onOpenBot(bot)}
+                  onLongPress={longPress}
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={[
+                    mainFaceLabel,
+                    bot.profile?.name ?? "GOAT Bot",
+                    props.unread ? "unread" : null,
+                    ...(mainSignals?.spoken ?? []),
+                    props.preview || null,
+                  ]
+                    .filter((part) => part !== null)
+                    .join(", ")}
+                  className={
+                    selected
+                      ? "mx-4 my-2 items-center gap-2 rounded-2xl bg-thread-selected px-4 py-4"
+                      : "mx-4 my-2 items-center gap-2 rounded-2xl px-4 py-4"
+                  }
+                >
+                  <GoatBotFaceAvatar
+                    state={mainFace.state}
+                    size={88}
+                    motion={mainMotion}
+                    emoji={mainEmoji}
+                    surface={selected ? "selected" : "screen"}
+                  />
+                  <View className="max-w-full flex-row items-center gap-2">
+                    <Text
+                      numberOfLines={1}
+                      className="shrink text-base font-semibold text-foreground"
+                    >
+                      {bot.profile?.name ?? "GOAT Bot"}
+                    </Text>
+                    <MobileBotRowSignalMarks signals={mainSignals} />
+                  </View>
+                  {props.preview ? (
+                    <View className="max-w-full flex-row items-center gap-1">
+                      {props.unread ? (
+                        <View
+                          accessibilityElementsHidden
+                          className="h-2 w-2 rounded-full bg-adaptive-blue-500-400"
+                        />
+                      ) : null}
+                      <Text numberOfLines={1} className="shrink text-sm text-foreground-muted">
+                        {props.preview}
+                      </Text>
+                    </View>
                   ) : null}
-                  <Text numberOfLines={1} className="shrink text-sm text-foreground-muted">
-                    {props.preview}
-                  </Text>
-                </View>
-              ) : null}
-              {props.slackEnabled ? (
-                <Text className="text-xs text-foreground-muted">Also in Slack</Text>
-              ) : null}
-            </Pressable>
+                  {props.slackEnabled ? (
+                    <Text className="text-xs text-foreground-muted">Also in Slack</Text>
+                  ) : null}
+                </Pressable>
+              ))}
+            </Fragment>
           );
         }
         return (
-          <MemberRow
-            key={key}
-            bot={bot.profile}
-            selected={selected}
-            onPress={() => props.onOpenBot(bot)}
-            onLongPress={longPress}
-          />
+          <Fragment key={`${bot.profile.environmentId}:${key}`}>
+            {withMenu(bot, (longPress) => (
+              <MemberRow
+                bot={bot.profile}
+                selected={selected}
+                onPress={() => props.onOpenBot(bot)}
+                onLongPress={longPress}
+              />
+            ))}
+          </Fragment>
         );
       })}
       {props.newBotRow}
@@ -256,13 +278,16 @@ export function MobileBotRosterView(props: {
           </Pressable>
           {hiddenOpen
             ? props.members.hidden.map((profile) => (
-                <MemberRow
-                  key={profile.botId}
-                  bot={profile}
-                  hidden
-                  onPress={() => props.onOpenBot({ kind: "member", profile })}
-                  onLongPress={() => props.members?.onLongPressBot({ kind: "member", profile })}
-                />
+                <Fragment key={`${profile.environmentId}:${profile.botId}`}>
+                  {withMenu({ kind: "member", profile }, (longPress) => (
+                    <MemberRow
+                      bot={profile}
+                      hidden
+                      onPress={() => props.onOpenBot({ kind: "member", profile })}
+                      onLongPress={longPress}
+                    />
+                  ))}
+                </Fragment>
               ))
             : null}
         </View>
