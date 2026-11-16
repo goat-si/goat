@@ -101,15 +101,19 @@ vi.mock("../../state/environments", async () => {
     }),
   };
 });
-// The one bot-list read every reader of a computer shares, and this phone's permission to edit bots.
+// The roster's bot-list read, deleted members included, which every reader of a computer must share;
+// any other input is a read nobody answers. And this phone's permission to edit bots.
 vi.mock("../../state/channels", async () => {
   const { Atom, AsyncResult } = await import("effect/reactivity");
   const read = Atom.make<AsyncResult.AsyncResult<unknown, unknown>>(AsyncResult.initial());
+  const unanswered = Atom.make<AsyncResult.AsyncResult<unknown, unknown>>(AsyncResult.initial());
+  const mayEdit = Atom.make(true);
   const allowed = { permissionAtom: () => Atom.make(true) };
   return {
     channelEnvironment: {
-      listBots: () => read,
-      updateBot: allowed,
+      listBots: (args: { input: { includeDeleted?: boolean } }) =>
+        args.input.includeDeleted === true ? read : unanswered,
+      updateBot: { permissionAtom: () => mayEdit },
       createBot: allowed,
       setBotHidden: allowed,
     },
@@ -162,8 +166,11 @@ const presentationsAtom = environmentPresentations.presentationsAtom as unknown 
 >;
 const botListAtom = channelEnvironment.listBots({
   environmentId: "env" as never,
-  input: {},
+  input: { includeDeleted: true },
 }) as unknown as Atom.Writable<AsyncResult.AsyncResult<unknown, unknown>>;
+const mayEditAtom = channelEnvironment.updateBot.permissionAtom(
+  "env" as never,
+) as unknown as Atom.Writable<boolean>;
 const capabilities = { goatBotProfiles: true, goatBotProfileEdit: true, goatBotMembers: true };
 const home = (phase: string) =>
   new Map([["env", { connection: { phase }, serverConfig: { environment: { capabilities } } }]]);
@@ -189,6 +196,7 @@ async function settings() {
   const stop = followKeptPerComputerCatalog(registry);
   registry.set(presentationsAtom, home("connected"));
   registry.set(botListAtom, AsyncResult.initial());
+  registry.set(mayEditAtom, true);
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -229,6 +237,9 @@ async function settings() {
       }),
     drop: () => act(async () => registry.set(presentationsAtom, home("offline"))),
     reconnect: () => act(async () => registry.set(presentationsAtom, home("connected"))),
+    /** The read idled out while the computer was away: the next one starts with no answer. */
+    forgetRead: () => act(async () => registry.set(botListAtom, AsyncResult.initial())),
+    deny: () => act(async () => registry.set(mayEditAtom, false)),
     [Symbol.asyncDispose]: async () => {
       await act(async () => root.unmount());
       container.remove();
@@ -280,4 +291,25 @@ it("once the computer refuses the bot list, the row shows no name and does not o
   await screen.answer(AsyncResult.success(botList));
   expect(screen.row).toBe("🐐 Scout, Edit");
   expect(screen.sheetOpen).toBe(false);
+});
+
+it("without permission the row says so, and offline it says Offline first", async () => {
+  await using screen = await settings();
+  await screen.answer(AsyncResult.success(botList));
+  await screen.deny();
+  expect(screen.row).toBe("🐐 Scout, Permission required");
+  await screen.drop();
+  expect(screen.row).toBe("🐐 Scout, Offline");
+});
+
+it("a list read again from nothing after a long drop reads Loading, not Not started yet", async () => {
+  await using screen = await settings();
+  expect(screen.row).toBe("GOAT Bot, Loading…");
+  await screen.answer(AsyncResult.success(botList));
+  await screen.drop();
+  await screen.forgetRead();
+  await screen.reconnect();
+  expect(screen.row).toBe("GOAT Bot, Loading…");
+  await screen.answer(AsyncResult.success(botList));
+  expect(screen.row).toBe("🐐 Scout, Edit");
 });
