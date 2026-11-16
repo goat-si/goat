@@ -154,7 +154,9 @@ function GoatBotProfileSection({
             : !connected
               ? "Offline"
               : main === undefined
-                ? "Not started yet"
+                ? listed == null
+                  ? "Loading…"
+                  : "Not started yet"
                 : mayEdit
                   ? "Edit"
                   : "Permission required"
