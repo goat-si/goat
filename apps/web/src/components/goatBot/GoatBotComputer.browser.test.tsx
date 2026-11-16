@@ -123,6 +123,26 @@ it("lists running work under the machine it runs on, GOAT Bot's own first", asyn
   expect(state.refresh).toHaveBeenCalledTimes(1);
 });
 
+it("the main bot's card keeps the loading skeleton while the computer connects with no config, and reads nothing (#3450)", async () => {
+  setup(null);
+  state.config = "unknown";
+  state.phase = "connecting";
+  await using screen = await render(<GoatBotComputer environmentId={environmentId} />);
+  await expect.element(screen.getByText("Loading machines…")).toBeInTheDocument();
+  expect(
+    screen.getByText("Machines can't be listed from this server right now.").query(),
+  ).toBeNull();
+  expect(state.requested).not.toHaveBeenCalled();
+  expect(state.refresh).not.toHaveBeenCalled();
+  state.phase = "connected";
+  await screen.rerender(<GoatBotComputer environmentId={environmentId} />);
+  await expect
+    .element(screen.getByText("Machines can't be listed from this server right now."))
+    .toBeVisible();
+  expect(state.requested).not.toHaveBeenCalled();
+  expect(state.refresh).not.toHaveBeenCalled();
+});
+
 // Regression: Machines said Working while the bot's face said the task waited on the person.
 it("says a running task waits for your approval when its worker asks for one", async () => {
   setup({
