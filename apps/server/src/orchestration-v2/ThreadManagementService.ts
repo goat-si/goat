@@ -728,11 +728,15 @@ const make = Effect.gen(function* () {
       readonly threadId: ThreadId;
       readonly commandId: CommandId;
       readonly dispatchMode: OrchestrationV2DispatchModeType;
+      readonly instanceId: ProviderInstanceId | undefined;
     }) {
       // A live steer starts no turn, so it needs no workspace.
       if (Option.isNone(worktreeSendCheck) || input.dispatchMode === "steer_active") return;
       const { thread } = yield* orchestrator.getThreadRecords(input.threadId, []);
-      yield* assertWorktreeRestorable(input.commandId, thread);
+      yield* assertWorktreeRestorable(input.commandId, {
+        ...thread,
+        instanceId: input.instanceId ?? thread.modelSelection.instanceId,
+      });
     },
   );
   const assertWorktreeRestorable = Effect.fn("ThreadManagementService.assertWorktreeRestorable")(
@@ -929,6 +933,7 @@ const make = Effect.gen(function* () {
               threadId: command.threadId,
               commandId: command.commandId,
               dispatchMode: command.dispatchMode.type,
+              instanceId: command.modelSelection?.instanceId,
             })
           : Effect.void,
       ),

@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { ProjectId, ThreadId } from "@goat/contracts";
+import { ProjectId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
 import { worktreeSendRefusal, type SendCheckReads } from "./WorktreeSendCheck.ts";
@@ -9,15 +9,17 @@ const thread = {
   projectId: ProjectId.make("project:send-check"),
   worktreePath: "/goat/worktrees/repo/feature",
   branch: "feature" as string | null,
+  instanceId: ProviderInstanceId.make("codex"),
 };
 
 /** The check's whole world: these three reads, recorded, and nothing that could run Git. */
-const reads = (state: { exists: boolean; managed: boolean; project: boolean }) => {
+const reads = (state: { exists: boolean; managed: boolean; project: boolean; cloud?: boolean }) => {
   const calls: Array<string> = [];
   const value: SendCheckReads = {
     exists: (path) => Effect.sync(() => (calls.push(`exists ${path}`), state.exists)),
     isManaged: (path) => Effect.sync(() => (calls.push(`managed ${path}`), state.managed)),
     projectExists: (id) => Effect.sync(() => (calls.push(`project ${id}`), state.project)),
+    runsInCloud: (id) => Effect.sync(() => (calls.push(`cloud ${id}`), state.cloud === true)),
   };
   return { value, calls };
 };
@@ -64,5 +66,12 @@ it.effect.each([
       yield* worktreeSendRefusal(value, { ...thread, branch: row.branch }),
       `The worktree of thread ${thread.id} at ${thread.worktreePath} is missing, and GOAT can't recreate it: ${row.says}`,
     );
+  }),
+);
+
+it.effect("a cloud thread's missing worktree is not refused: turn start never prepares it", () =>
+  Effect.gen(function* () {
+    const { value } = reads({ exists: false, managed: false, project: false, cloud: true });
+    assert.isUndefined(yield* worktreeSendRefusal(value, { ...thread, branch: null }));
   }),
 );
