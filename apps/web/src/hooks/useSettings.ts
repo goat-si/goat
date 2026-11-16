@@ -43,7 +43,11 @@ import {
   supportsSharedSettingsSync,
 } from "@goat/client-runtime/state/shared-settings";
 import { ensureLocalApi } from "~/localApi";
-import { readBrowserClientSettings } from "~/clientPersistenceStorage";
+import { runWithStorageLock } from "~/lib/storageLock";
+import {
+  readBrowserClientSettings,
+  subscribeBrowserClientSettingsWrites,
+} from "~/clientPersistenceStorage";
 import { resolveSidebarViewIsProjects } from "~/components/Sidebar.logic";
 import { foldLegacyFirstRunPrompt } from "~/components/desktop/firstRunPrompts.logic";
 import {
@@ -142,6 +146,10 @@ let clientSettingsHydrationPromise: Promise<void> | null = null;
 let clientSettingsHydrationGeneration = 0;
 let clientSettingsPersistenceQueue: Promise<void> = Promise.resolve();
 let deferredClientSettingsPatchCount = 0;
+let unsubscribeOtherTabClientSettings: (() => void) | null = null;
+/** This tab's settings as of its last write or read; keys still equal to it were not edited here. */
+let clientSettingsMergeBaseline: ClientSettings | null = null;
+const CLIENT_SETTINGS_LOCK_KEY = "goat:client-settings:v1";
 
 function emitClientSettingsChange() {
   for (const listener of clientSettingsListeners) {
@@ -224,6 +232,10 @@ async function hydrateClientSettings(): Promise<void> {
       }
       writeSynchronousSidebarView(getClientSettingsSnapshot().projectsSidebarEnabled);
       lastPersistedClientSettings = getClientSettingsSnapshot();
+      clientSettingsMergeBaseline = getClientSettingsSnapshot();
+      unsubscribeOtherTabClientSettings ??= subscribeBrowserClientSettingsWrites(
+        refreshClientSettingsFromOtherTab,
+      );
       setClientSettingsHydrationStatus("ready");
     } catch (error) {
       if (hydrationGeneration === clientSettingsHydrationGeneration) {
@@ -245,6 +257,53 @@ async function hydrateClientSettings(): Promise<void> {
   clientSettingsHydrationPromise = hydrationPromise;
 
   return clientSettingsHydrationPromise;
+}
+
+function refreshClientSettingsFromOtherTab(): void {
+  void enqueueClientSettingsPersistence(async () => {
+    const persistedSettings = await ensureLocalApi().persistence.getClientSettings();
+    if (persistedSettings) {
+      replaceClientSettingsSnapshot(
+        foldLegacyFirstRunPrompt({ ...DEFAULT_CLIENT_SETTINGS, ...persistedSettings }),
+      );
+      clientSettingsMergeBaseline = getClientSettingsSnapshot();
+    }
+  }).catch((error) => {
+    console.error(`${CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE} refresh failed`, {
+      operation: "refresh",
+      ...safeErrorLogAttributes(error),
+    });
+  });
+}
+
+/**
+ * Under a lock shared by every tab, writes the keys this tab edited over what the store holds now,
+ * so a key another tab saved since this tab last read or wrote survives.
+ */
+function persistOverOtherTabs(
+  settings: ClientSettings,
+  editedKeys: ReadonlySet<string>,
+  persist: (settings: ClientSettings) => Promise<void>,
+): Promise<void> {
+  // Only the default store can be read back; a caller's own persist writes elsewhere.
+  if (persist !== defaultClientSettingsPersistence) return persist(settings);
+  return runWithStorageLock(CLIENT_SETTINGS_LOCK_KEY, async () => {
+    const baseline = clientSettingsMergeBaseline;
+    const stored = baseline ? await ensureLocalApi().persistence.getClientSettings() : null;
+    let merged = settings;
+    if (stored && baseline) {
+      const saved: ClientSettings = { ...DEFAULT_CLIENT_SETTINGS, ...stored };
+      const untouchedKeys = Struct.keys(settings).filter(
+        (key) => !editedKeys.has(key) && Equal.equals(settings[key], baseline[key]),
+      );
+      merged = {
+        ...settings,
+        ...Object.fromEntries(untouchedKeys.map((key) => [key, saved[key]])),
+      };
+    }
+    await persist(merged);
+    clientSettingsMergeBaseline = settings;
+  });
 }
 
 let lastPersistedClientSettings: ClientSettings | null = null;
@@ -307,7 +366,16 @@ export function persistClientSettingsPatch(
           deferredClientSettingsPatchCount -= 1;
         }
       }
-      await persist(getClientSettingsSnapshot());
+      // Reapplies an optimistic patch that a refresh from another tab replaced.
+      const current = getClientSettingsSnapshot();
+      if (
+        !Object.entries(patch).every(([key, value]) =>
+          Object.is(current[key as keyof ClientSettings], value),
+        )
+      ) {
+        replaceClientSettingsSnapshot({ ...current, ...patch });
+      }
+      await persistOverOtherTabs(getClientSettingsSnapshot(), new Set(Object.keys(patch)), persist);
     } catch (error) {
       if (previous) {
         const current = getClientSettingsSnapshot();
@@ -342,7 +410,10 @@ export async function persistClientSettingsUpdate(
     for (;;) {
       const current = getClientSettingsSnapshot();
       const next = update(current);
-      await persist(next);
+      const editedKeys = new Set(
+        Struct.keys(next).filter((key) => !Equal.equals(next[key], current[key])),
+      );
+      await persistOverOtherTabs(next, editedKeys, persist);
       if (getClientSettingsSnapshot() === current) {
         replaceClientSettingsSnapshot(next);
         return next;
@@ -896,6 +967,9 @@ export function __resetClientSettingsPersistenceForTests(): void {
   clientSettingsPersistenceQueue = Promise.resolve();
   deferredClientSettingsPatchCount = 0;
   lastPersistedClientSettings = null;
+  clientSettingsMergeBaseline = null;
+  unsubscribeOtherTabClientSettings?.();
+  unsubscribeOtherTabClientSettings = null;
   clientSettingsListeners.clear();
   clientSettingsHydrationListeners.clear();
   sidebarViewMirrorCache = undefined;

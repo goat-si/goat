@@ -133,8 +133,7 @@ export type DraftThreadEnvMode = typeof DraftThreadEnvModeSchema.Type;
 export const DraftId = Schema.String.pipe(Schema.brand("DraftId"));
 export type DraftId = typeof DraftId.Type;
 
-const { storage: composerPersistStorage, flush: flushComposerPersistStorage } =
-  createComposerPersistStorage(partializeComposerDraftStoreState);
+const composerPersist = createComposerPersistStorage(partializeComposerDraftStoreState);
 
 export const PersistedComposerImageAttachment = Schema.Struct({
   id: Schema.String,
@@ -2309,7 +2308,7 @@ function verifyPersistedAttachments(
 ): void {
   let persistedIdSet = new Set<string>();
   try {
-    flushComposerPersistStorage();
+    composerPersist.flush();
     persistedIdSet = new Set(readPersistedAttachmentIdsFromStorage(threadKey));
   } catch {
     persistedIdSet = new Set();
@@ -4204,7 +4203,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
     {
       name: COMPOSER_DRAFT_STORAGE_KEY,
       version: COMPOSER_DRAFT_STORAGE_VERSION,
-      storage: composerPersistStorage,
+      storage: composerPersist.storage,
       migrate: migratePersistedComposerDraftStoreState,
       partialize: (state): ComposerPersistState => ({ capturedState: state }),
       merge: (persistedState, currentState) => {
@@ -4236,6 +4235,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
   ),
 );
 
+composerPersist.markLoaded(composerDraftStore.getState());
 export const useComposerDraftStore = composerDraftStore;
 
 export function subscribeComposerDraftModelReconciliation(input: {
@@ -4397,7 +4397,7 @@ export function clearComposerDraftsEnvironment(environmentId: EnvironmentId): vo
       ),
     };
   });
-  flushComposerPersistStorage();
+  composerPersist.flush();
 }
 
 export function useComposerThreadDraft(threadRef: ComposerThreadTarget): ComposerThreadDraftState {
