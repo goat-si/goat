@@ -149,7 +149,7 @@ Coordinator rulings: /Users/jun/handoff-in/chase/next-N11-coordinator-rulings.md
 
 ## N11b: terminal cap (goat#3539)
 
-Branch `chase/t3-261114-n11b-terminal-cap`, from the integration branch `chase/t3-261114-next` at `e7b14604c2` (coordinator decision: a server buffer without a limit is forbidden by docs/internals/server-resilience.md, "Every buffer the server holds has a bound"). Round-2 head `24e0d39ad7a454af7c4cdbf147e726c5a5c79529` (fresh narrow review: APPROVE WITH NITS, P3 only); 24e0d39ad7 merged into the integration branch at `e0392ed8a9`. Follow-up head `fb8564131457dcc0b16727e3120fe9b331562fd0`, pushed, not merged yet; see N11b follow-up. Host pen-macbookair. goat#3538 stays an issue only.
+Branch `chase/t3-261114-n11b-terminal-cap`, from the integration branch `chase/t3-261114-next` at `e7b14604c2` (coordinator decision: a server buffer without a limit is forbidden by docs/internals/server-resilience.md, "Every buffer the server holds has a bound"). Round-2 head `24e0d39ad7a454af7c4cdbf147e726c5a5c79529` (fresh narrow review: APPROVE WITH NITS, P3 only); 24e0d39ad7 merged into the integration branch at `e0392ed8a9`. Follow-up head `fb8564131457dcc0b16727e3120fe9b331562fd0`; N11b follow-up fb85641314 merged into the integration branch at `a1d67a4933`; see N11b follow-up. Host pen-macbookair. goat#3538 stays an issue only.
 
 | commit       | change                                                                                                                |
 | ------------ | --------------------------------------------------------------------------------------------------------------------- |
@@ -196,7 +196,7 @@ Tests first, deterministic: an over-cap OSC, DCS and CSI each followed by its te
 
 ### N11b follow-up (review of 24e0d39ad7)
 
-Coordinator rulings: /Users/jun/handoff-in/chase/next-N11-coordinator-rulings.md (section "N11b review verdict and follow-up"); report: next-N11b-review-24e0d39a.md (APPROVE WITH NITS, P3 only). 24e0d39ad7 merged into the integration branch at `e0392ed8a9`. The in-band `swallowing:` marker stays: the reviewer found every return path safe. One commit per item on top of 24e0d39ad7. Follow-up head `fb8564131457dcc0b16727e3120fe9b331562fd0`, pushed, not merged yet.
+Coordinator rulings: /Users/jun/handoff-in/chase/next-N11-coordinator-rulings.md (section "N11b review verdict and follow-up"); report: next-N11b-review-24e0d39a.md (APPROVE WITH NITS, P3 only). 24e0d39ad7 merged into the integration branch at `e0392ed8a9`. The in-band `swallowing:` marker stays: the reviewer found every return path safe. One commit per item on top of 24e0d39ad7. Follow-up head `fb8564131457dcc0b16727e3120fe9b331562fd0`. N11b follow-up fb85641314 merged into the integration branch at `a1d67a4933`.
 
 | item      | commit       | change                                                                                                                  |
 | --------- | ------------ | ----------------------------------------------------------------------------------------------------------------------- |
