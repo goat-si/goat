@@ -407,3 +407,14 @@ it.each([
     );
   },
 );
+
+it("says the reason a failure gives as plain text when removing an allowed app (#3556)", async () => {
+  mocks.targets[0]!.serverConfig.settings.cuaAllowedApps = ["Safari"];
+  mocks.updateSettings.mockResolvedValueOnce(AsyncResult.failure(Cause.fail("Local is busy.")));
+  act(() => render(<SettingsEnvironmentAgentBehaviorRouteScreen />));
+  await act(async () => button("Remove Safari").click());
+  expect(mocks.alert).toHaveBeenCalledExactlyOnceWith(
+    "Could not remove the app",
+    "Local: Local is busy.",
+  );
+});

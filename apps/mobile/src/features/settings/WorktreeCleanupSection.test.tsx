@@ -185,6 +185,24 @@ it("puts a number back to the saved value when saving it fails (#3556)", async (
   expect(section.field.value).toBe("15");
 });
 
+it("leaving a number field without typing sends nothing and alerts nothing (#3556)", async () => {
+  await using section = await mountSection();
+  mocks.update.mockResolvedValue(offline());
+  await act(async () => section.field.focus());
+  await section.submit();
+  expect(mocks.update).not.toHaveBeenCalled();
+  expect(mocks.alert).not.toHaveBeenCalled();
+});
+
+it("retyping the saved number sends nothing (#3556)", async () => {
+  await using section = await mountSection();
+  mocks.update.mockResolvedValue(offline());
+  await section.type("15");
+  await section.submit();
+  expect(mocks.update).not.toHaveBeenCalled();
+  expect(section.field.value).toBe("15");
+});
+
 it("a number save that fails after the person typed again leaves the new typing (#3556)", async () => {
   await using section = await mountSection();
   const save = Promise.withResolvers<AsyncResult.AsyncResult<unknown, unknown>>();
