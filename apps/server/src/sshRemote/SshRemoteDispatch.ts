@@ -30,7 +30,7 @@ import {
 import * as NetService from "@goat/shared/Net";
 import { isWindowsShellOs, toWindowsHostPath } from "@goat/shared/path";
 import * as SshAuth from "@goat/ssh/auth";
-import { discoverSshHosts } from "@goat/ssh/config";
+import { discoverSshHostAliases } from "./sshHostAliases.ts";
 import { SshPasswordPromptError } from "@goat/ssh/errors";
 import * as SshTunnel from "@goat/ssh/tunnel";
 import * as Clock from "effect/Clock";
@@ -545,7 +545,7 @@ const make = Effect.gen(function* () {
           ),
         );
 
-  const knownHosts = withRuntime(discoverSshHosts({})).pipe(
+  const knownHosts = withRuntime(discoverSshHostAliases()).pipe(
     Effect.mapError((error) => failure("ssh_failed", describe(error))),
   );
 
