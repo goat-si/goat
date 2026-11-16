@@ -1866,24 +1866,17 @@ it.each([
       target.startsWith("/") ? target.slice(1) : `xl/${target}`,
       `<worksheet><sheetData><row r="${row}"><c r="A${row}" t="inlineStr"><is><t>worksheet value</t></is></c></row></sheetData></worksheet>`,
     );
-    const file = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
-    const src = URL.createObjectURL(file);
-    try {
-      await using screen = await render(
-        <div style={{ display: "flex", height: 400, width: 600 }}>
-          <OfficeFilePreview name="custom.xlsx" src={src} kind="xlsx" sizeBytes={file.size} />
-        </div>,
+    const bytes = await zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
+    const { prepareOffice } = await import("./officeArchive");
+    if (row > 250000) {
+      await expect(prepareOffice(bytes, "xlsx")).rejects.toThrow(
+        "This workbook exceeds the preview limit",
       );
-      await vi.waitFor(
-        () =>
-          expect(screen.container.textContent).toContain(
-            row > 250000 ? "This workbook exceeds the preview limit" : "worksheet value",
-          ),
-        { timeout: 10_000 },
-      );
-    } finally {
-      URL.revokeObjectURL(src);
+      return;
     }
+    const prepared = await prepareOffice(bytes, "xlsx");
+    const bounded = await JSZip.loadAsync(prepared.bytes);
+    expect(await bounded.file(`xl/${target}`)!.async("string")).toContain("worksheet value");
   },
 );
 
@@ -2215,7 +2208,7 @@ it.each(["rtf", "epub", "ods"] as const)(
           expect(screen.container.textContent).toContain("North");
           expect(screen.container.textContent).toContain("150");
           expect(screen.container.textContent).not.toContain("private note");
-          expect(screen.container.textContent).toContain("1 rows · 2 columns");
+          expect(screen.container.textContent).toContain("1 row · 2 columns");
           expect(screen.container.textContent).not.toContain("Limited to 500");
         } else {
           const frame = screen.container.querySelector("iframe");

@@ -8,6 +8,8 @@ import type {
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { sanitizeNewRefName } from "@goat/shared/git";
+import type { ThreadStructureRuntime } from "@goat/client-runtime/state/shell";
+import { deriveCanInterruptRunningThread } from "../session-logic";
 export {
   dedupeRemoteBranchesWithLocalMatches,
   deriveLocalBranchNameFromRemoteRef,
@@ -262,6 +264,17 @@ export function shouldReuseSelectedWorktree(
 ): boolean {
   return (
     selection.reuseExistingWorktree && !(selection.staysInActiveCheckout && canWriteSourceControl)
+  );
+}
+
+export function isWorktreeChangeBlocked(input: {
+  runtime: ThreadStructureRuntime | null;
+  currentWorktreePath: string | null;
+  nextWorktreePath: string | null;
+}): boolean {
+  return (
+    input.nextWorktreePath !== input.currentWorktreePath &&
+    deriveCanInterruptRunningThread(true, input.runtime)
   );
 }
 
