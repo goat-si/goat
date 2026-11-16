@@ -6,6 +6,7 @@ import { Text } from "react-native";
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
+import { environmentPresentations } from "../../state/presentation";
 import { useEnvironmentQuery } from "../../state/query";
 import { MobileBotProfileSheet } from "../goat-bot/MobileBotProfileSheet";
 import {
@@ -195,8 +196,10 @@ function GoatBotProfileSection({
 }
 
 /**
- * Messages, Workers and Model on the home computer. Offline they keep the config last loaded from
- * it and stay closed to changes; refused or removed, they show none of it.
+ * Messages, Workers and Model on the home computer, shown only while this phone may read it, the
+ * same check as Profile, connected or not. Offline they keep the config last loaded from it and
+ * stay closed to changes; refused or removed, they show none of it, and while a fresh bot list is
+ * asked after that they read as loading.
  */
 function GoatBotModelSection({
   environmentId,
@@ -209,19 +212,35 @@ function GoatBotModelSection({
   readonly connected: boolean;
   readonly canWrite: boolean;
 }) {
+  const registry = useContext(RegistryContext);
   const model = useMobileGoatBotModel(environmentId, canWrite);
   const readable = useComputerReadable(environmentId);
+  const startingOver = useComputerStartingOver(environmentId);
+  const { presentationById } = useEnvironments();
+  const capabilities = presentationById.get(environmentId)?.serverConfig?.environment.capabilities;
+  // The roster's read; started over, it decides whether the fresh list failed or is still asked.
+  const list = useEnvironmentQuery(
+    startingOver && connected && capabilities?.goatBotProfiles === true
+      ? channelEnvironment.listBots({
+          environmentId,
+          input: capabilities.goatBotMembers === true ? { includeDeleted: true } : {},
+        })
+      : null,
+  );
   const [pickerOpen, setPickerOpen] = useState(false);
-  if (pickerOpen && !connected) setPickerOpen(false);
-  // Connected, the config is still loading.
-  if (connected && !model) return null;
-  if (!model || !(connected || readable)) {
+  if (pickerOpen && !(connected && readable)) setPickerOpen(false);
+  if (!readable || !model) {
+    // Connected, the config is still loading.
+    if (readable && connected) return null;
+    const pending = readable || (startingOver && !(list.error !== null && !list.isPending));
     return (
       <>
         <Text className="text-foreground-muted">
-          {readable
-            ? `Shown when ${computer} connects.`
-            : `Couldn't load these settings from ${computer}.`}
+          {!pending
+            ? `Couldn't load these settings from ${computer}.`
+            : connected
+              ? "Loading…"
+              : `Shown when ${computer} connects.`}
         </Text>
         {["Messages", "Workers", "Model"].map((title) => (
           <SettingsSection key={title} title={title}>
@@ -231,8 +250,14 @@ function GoatBotModelSection({
       </>
     );
   }
-  const { state: modelState, settings, saving, error, save } = model;
+  const { state: modelState, settings, saving, error } = model;
   const allowed = model.allowed && connected;
+  // Read when pressed: a refusal or a drop not yet rendered saves nothing.
+  const save = (patch: Parameters<typeof model.save>[0]) => {
+    const live = registry.get(environmentPresentations.presentationsAtom).get(environmentId);
+    if (live?.connection.phase === "connected" && isComputerReadable(registry, environmentId))
+      void model.save(patch);
+  };
 
   return (
     <>
