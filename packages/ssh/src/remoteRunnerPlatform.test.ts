@@ -27,7 +27,7 @@ const runRunner = (host: { readonly system: string; readonly machine: string }) 
     );
     NodeFS.writeFileSync(
       NodePath.join(bin, "curl"),
-      "#!/bin/sh\necho 'download attempt' >&2\nexit 22\n",
+      "#!/bin/sh\necho 'download attempt' >&2\necho 'curl: (6) Could not resolve host: example.invalid' >&2\nexit 6\n",
       { mode: 0o755 },
     );
     const runner = NodePath.join(root, "run-goat.sh");
@@ -53,6 +53,13 @@ describe("remote runner platform gate", () => {
       assert.notEqual(result.status, 0);
       if (downloads) {
         assert.include(result.stderr, "download attempt");
+        // A bare curl error does not tell the user that GOAT itself could not be downloaded.
+        assert.include(result.stderr, ARCHIVE.archiveVersion);
+        assert.include(result.stderr, ARCHIVE.releaseBaseUrl);
+        assert.include(
+          result.stderr,
+          "https://raw.githubusercontent.com/goat-si/goat-releases/main/install.sh",
+        );
       } else {
         assert.notInclude(result.stderr, "download attempt");
         assert.include(result.stderr, "has no GOAT release archive.");
