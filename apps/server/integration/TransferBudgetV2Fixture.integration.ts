@@ -763,7 +763,7 @@ export function staleTodoListThreadBatches(
           ordinalWithinScope: index + 1,
           appRunOrdinal: index + 1,
           ref: CheckpointRef.make(
-            `refs/t3/orchestration-v2/checkpoints/stale-todo-lists/ordinal/${index + 1}`,
+            `refs/goat/orchestration-v2/checkpoints/stale-todo-lists/ordinal/${index + 1}`,
           ),
           status: "ready",
           files: Array.from({ length: 12 }, (_, file) => ({
