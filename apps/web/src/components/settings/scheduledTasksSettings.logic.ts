@@ -366,3 +366,12 @@ export const withThreadMode = (draft: DraftState, threadMode: ScheduledTaskThrea
   threadMode === "new_thread" && draft.notificationPolicy === "important_updates"
     ? { ...draft, threadMode, notificationPolicy: "all_runs", notificationPolicyReset: true }
     : { ...draft, threadMode };
+
+// Still bound to its GOAT Bot conversation; moved to new threads it is an ordinary task again.
+export const isBotRoutineDraft = (
+  liveTask: ScheduledTask | null | undefined,
+  draft: Pick<DraftState, "threadId">,
+) =>
+  liveTask?.goatBotRoutine === true &&
+  draft.threadId !== "" &&
+  draft.threadId === liveTask.threadId;

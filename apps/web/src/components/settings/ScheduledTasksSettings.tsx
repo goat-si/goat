@@ -100,6 +100,7 @@ import {
   scheduledTaskDefaultModel,
   taskToDraft,
   type DraftState,
+  isBotRoutineDraft,
   withThreadMode,
   workspaceStrategyFromDraft,
   type ScheduleMode,
@@ -1042,11 +1043,7 @@ function ScheduledTaskEditorForm({
   const liveTask = tasksQuery.data
     ? (tasksQuery.data.tasks.find((entry) => entry.id === draft.editingId) ?? null)
     : task;
-  // Still bound to its GOAT Bot conversation; moved to new threads it is an ordinary task again.
-  const botRoutine =
-    liveTask?.goatBotRoutine === true &&
-    draft.threadId !== "" &&
-    draft.threadId === liveTask.threadId;
+  const botRoutine = isBotRoutineDraft(liveTask, draft);
   const selectedProjectId = draft.projectId || projects[0]?.id || "";
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
   const instanceEntries = sortProviderInstanceEntries(
