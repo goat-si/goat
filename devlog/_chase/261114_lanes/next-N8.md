@@ -1,6 +1,6 @@
 # N8 Remote tasks and CLI wait (lane record)
 
-Lane branch: `chase/t3-261114-n8-remote-tasks`, accepted at `fa4899666f8e1c4c1b407ebbc9fa12d3cc05c299`, follow-up round head `0ff08e8a041e45679a2afe074c7b4d34b198d234` (based on dev `26847e90dc`, merged with the integration branch at `44d7d60d20`; dev has nothing newer). Host pen-macmini (juniui-Macmini.local, macOS 27.0, 10 cores, Node 26.12.1). Rows from #3176: L132 (O9 A), L135 (O11 C), L215 (C18 A). C4: O9 (new stored dispatch records) and C18 (contract field).
+Lane branch: `chase/t3-261114-n8-remote-tasks`, accepted at `fa4899666f8e1c4c1b407ebbc9fa12d3cc05c299`, follow-up round head `0ff08e8a041e45679a2afe074c7b4d34b198d234`, merged head `81fc05ff227536115b49f2fd2c0b342891f312b9` (based on dev `26847e90dc`, merged with the integration branch at `44d7d60d20`; dev has nothing newer). Host pen-macmini (juniui-Macmini.local, macOS 27.0, 10 cores, Node 26.12.1). Rows from #3176: L132 (O9 A), L135 (O11 C), L215 (C18 A). C4: O9 (new stored dispatch records) and C18 (contract field).
 
 ## Rows and commits
 
@@ -116,5 +116,16 @@ Owed to #3519's integrated pass: a web and a mobile view of a parent with a fini
 Residual the reviewer named: a send that reached the host before the server stopped, and before the INSERT, leaves no record and no wake; upstream has the same gap.
 
 Focused tests for this round (pen-macmini, no check:changed while lane N9b gates there): RemoteDispatchCoordinator.followUp.test.ts 7; LaunchWatchService.followerDefects/follow/LaunchWatchService.test.ts 104; ThreadManagementService.delegatedWork/ThreadManagementService/ThreadManagementSettlement 77; DelegatedCompletion*, DelegatedSelfQueue, FinishedDelegateRelease 63; server typecheck clean.
+
+## Merge of the integration head `8540be97ac` (freeze lifted, 2026-11-16)
+
+Head `81fc05ff227536115b49f2fd2c0b342891f312b9` (on origin). Two commits after `0ff08e8a04`:
+
+- `5b9eaef13e` refactor: the N8-P3-4 hook in ThreadManagementService.ts becomes one call; threadWaitLaterQuestions.ts builds the same two narrow reads from getProjectThreadRecords. Without it the merge put ThreadManagementService.ts at 2203, past its 2201 entry (N6 grew it too). After: 2195. Tests: delegatedWork + ThreadManagementService 64 passed.
+- `81fc05ff22` merge of origin/chase/t3-261114-next `8540be97ac` (44d7d60d20 plus the N6 follow-up e74a5be389). One conflict, oxlint-plugin-goat/code-budgets.json, OrchestratorMcpService.ts: set to 3882, its countLines in the merged tree. Orchestrator.ts stays at 13555 (its countLines). LaunchWatchService.ts 2023, orchestratorMcp.ts 1092, ThreadManagementService.ts 2195 of 2201; nothing raised. No Effect 4.1 adaptation (N3 does it later).
+
+Checks on the merged tree: goat-rename --check 0; format check and lint of the changed files clean; server typecheck exit 0; agent surface audit --check 0; focused tests 99 files, 1273 tests passed (this lane's files plus N6's ThreadManagementService.worktreeSend, WorktreeSendCheck, QuestionEscalationService.staleWake, DecisionInbox* and the OrchestratorMcpService task-wait tests).
+
+check:changed NOT RUN: lane N9b's gate was running on pen-macmini's heavy slot.
 
 NOT RUN: CI (ci:full); a live two-machine run of O9 and O11 (server-only rows: the runtime evidence is the test transcripts above); the desktop app; mobile; an independent C4 review lane.
