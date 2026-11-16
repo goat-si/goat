@@ -2,7 +2,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { RegistryContext } from "@effect/atom-react";
 import { type AsyncResult, AtomRegistry } from "effect/reactivity";
-import { expect, it, vi } from "vite-plus/test";
+import { beforeEach, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   alert: vi.fn(),
@@ -58,6 +58,9 @@ const state = vi.hoisted(() => ({
   // The platform, and the rows the view stand-in draws (each with a long press).
   os: "ios",
   rows: [] as Array<{ kind: string; profile: { name: string } }>,
+  // Android menu measurements a test holds, each answered with whether the row could be measured.
+  holdMenus: false,
+  heldMenus: [] as Array<(measured: boolean) => void>,
 }));
 vi.mock("@react-navigation/native", () => ({
   useNavigation: () => ({ getState: () => state.navState, getParent: () => undefined }),
@@ -659,19 +662,37 @@ vi.mock("../../components/ui/AndroidAnchoredMenu", async () => {
     onClose?: () => void;
     children: (open: () => void) => React.ReactNode;
   };
+  // The real menu's contract: a requested open settles once, on a choice, an outside tap, a row
+  // that cannot be measured, or the menu leaving, whichever comes first.
   return {
     AndroidAnchoredMenu: (props: Props) => {
       const [open, setOpen] = useState(false);
-      const report = useRef({ open, onClose: props.onClose });
-      report.current = { open, onClose: props.onClose };
-      useEffect(() => () => void (report.current.open && report.current.onClose?.()), []);
+      const owed = useRef(false);
+      const onClose = useRef(props.onClose);
+      onClose.current = props.onClose;
+      const settle = () => {
+        if (!owed.current) return;
+        owed.current = false;
+        onClose.current?.();
+      };
+      useEffect(() => () => settle(), []);
+      const measured = (ok: boolean) => {
+        if (!owed.current) return;
+        if (ok) setOpen(true);
+        else settle();
+      };
+      const request = () => {
+        owed.current = true;
+        if (state.holdMenus) state.heldMenus.push(measured);
+        else measured(true);
+      };
       const close = () => {
         setOpen(false);
-        props.onClose?.();
+        settle();
       };
       return (
         <>
-          {props.children(() => setOpen(true))}
+          {props.children(request)}
           {open ? (
             <div role="menu" aria-label={props.title}>
               {props.actions.map((action) => (
@@ -692,6 +713,12 @@ vi.mock("../../components/ui/AndroidAnchoredMenu", async () => {
       );
     },
   };
+});
+beforeEach(() => {
+  state.os = "ios";
+  state.rows = [];
+  state.holdMenus = false;
+  state.heldMenus = [];
 });
 
 const menuItems = (container: HTMLElement) =>
@@ -803,3 +830,60 @@ it("on Android, an open menu holds back a New bot answer, and a menu whose row l
     state.rows = [];
   }
 });
+
+it("on Android, a menu still being measured holds back a New bot answer like an open one (#3575)", async () => {
+  state.os = "android";
+  state.holdMenus = true;
+  const row = {
+    kind: "member",
+    profile: { ...member, role: "member", defaultModelSelection: null },
+  };
+  state.rows = [row];
+  const view = await newBotRoster();
+  try {
+    await view.tap();
+    await pressIn(view.container, "Long press Research");
+    await view.answer(stored("research", "New bot"));
+    expect(view.opened).not.toHaveBeenCalled();
+  } finally {
+    await view.unmount();
+  }
+});
+
+it.each([
+  [
+    "its row leaves before it is measured",
+    async (view: Awaited<ReturnType<typeof newBotRoster>>) => {
+      state.rows = [];
+      await view.draw();
+      await act(async () => state.heldMenus.splice(0).forEach((measured) => measured(true)));
+    },
+  ],
+  [
+    "its row cannot be measured",
+    (_view: Awaited<ReturnType<typeof newBotRoster>>) =>
+      act(async () => state.heldMenus.splice(0).forEach((measured) => measured(false))),
+  ],
+])(
+  "on Android, a New bot answer opens once a requested menu settles because %s (#3575)",
+  async (_, settle) => {
+    state.os = "android";
+    state.holdMenus = true;
+    const row = {
+      kind: "member",
+      profile: { ...member, role: "member", defaultModelSelection: null },
+    };
+    state.rows = [row];
+    const view = await newBotRoster();
+    try {
+      await view.tap();
+      await pressIn(view.container, "Long press Research");
+      await settle(view);
+      expect(menuItems(view.container)).toEqual([]);
+      await view.answer(stored("research", "New bot"));
+      expect(view.opened).toHaveBeenCalled();
+    } finally {
+      await view.unmount();
+    }
+  },
+);
