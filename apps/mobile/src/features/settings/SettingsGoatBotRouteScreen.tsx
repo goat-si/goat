@@ -1,6 +1,6 @@
-import { useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId } from "@goat/contracts";
-import { useState } from "react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
+import type { BotProfile, EnvironmentId } from "@goat/contracts";
+import { useContext, useState } from "react";
 import { Text } from "react-native";
 
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
@@ -8,6 +8,12 @@ import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { MobileBotProfileSheet } from "../goat-bot/MobileBotProfileSheet";
+import {
+  isComputerReadable,
+  useComputerReadable,
+  useComputerStartingOver,
+  useKeptPerComputer,
+} from "../goat-bot/useKeptPerComputer";
 import { useMobileBotManage } from "../goat-bot/useMobileBotManage";
 import { useMobileGoatBotHomeSettings } from "../goat-bot/useMobileGoatBotHomeSettings";
 import { useMobileGoatBotModel } from "../goat-bot/useMobileGoatBotModel";
@@ -45,10 +51,11 @@ export function SettingsGoatBotRouteScreen() {
           </Text>
         ) : (
           <>
-            {resolution.state === "claimed" && resolution.homeConnected ? (
+            {resolution.state === "claimed" && resolution.homeKnown ? (
               <GoatBotProfileSection
                 key={"profile:" + resolution.claim.environmentId}
                 environmentId={resolution.claim.environmentId}
+                connected={resolution.homeConnected}
               />
             ) : null}
             <Text className="text-foreground-muted">
@@ -103,47 +110,82 @@ export function SettingsGoatBotRouteScreen() {
   );
 }
 
-/** The main bot's name, avatar and purpose on its home computer. */
-function GoatBotProfileSection({ environmentId }: { readonly environmentId: EnvironmentId }) {
+/**
+ * The main bot's name, avatar and purpose on its home computer. Offline it shows what the roster
+ * last read there and stays closed; refused or removed, it shows nothing from that computer.
+ */
+function GoatBotProfileSection({
+  environmentId,
+  connected,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly connected: boolean;
+}) {
+  const registry = useContext(RegistryContext);
   const { presentationById } = useEnvironments();
-  const supported =
-    presentationById.get(environmentId)?.serverConfig?.environment.capabilities
-      .goatBotProfileEdit === true;
+  const capabilities = presentationById.get(environmentId)?.serverConfig?.environment.capabilities;
+  const supported = capabilities?.goatBotProfileEdit === true;
+  // The roster's exact read, so both share one request and one kept answer.
   const profiles = useEnvironmentQuery(
-    supported ? channelEnvironment.listBots({ environmentId, input: {} }) : null,
+    supported && connected
+      ? channelEnvironment.listBots({
+          environmentId,
+          input: capabilities?.goatBotMembers === true ? { includeDeleted: true } : {},
+        })
+      : null,
   );
-  const canEdit = useAtomValue(channelEnvironment.updateBot.permissionAtom(environmentId));
-  const manage = useMobileBotManage(environmentId);
-  const [editing, setEditing] = useState(false);
+  const listed = useKeptPerComputer("bots", environmentId, profiles, !connected);
+  const readable = useComputerReadable(environmentId);
+  const startingOver = useComputerStartingOver(environmentId);
+  const mayEdit = useAtomValue(channelEnvironment.updateBot.permissionAtom(environmentId));
+  const main = listed?.bots.find((bot) => bot.role === "main");
+  const manage = useMobileBotManage(environmentId, main?.name);
+  // The sheet holds the bot's profile, so a list read again on reconnect keeps it open; it closes
+  // for good once this computer may not be read.
+  const [editing, setEditing] = useState<BotProfile | null>(null);
+  if (editing !== null && !readable) setEditing(null);
   if (!supported) return null;
-  const main = profiles.data?.bots.find((bot) => bot.role === "main");
+  // Starting over, a refusal being asked again is still loading; one that stands is not.
+  const loadFailed = startingOver
+    ? profiles.error !== null && !profiles.isPending
+    : !readable || profiles.error !== null;
   return (
     <SettingsSection title="Profile">
       <SettingsRow
         icon="person.crop.circle"
         label={main === undefined ? "GOAT Bot" : [main.avatar, main.name].filter(Boolean).join(" ")}
         value={
-          profiles.error
+          loadFailed
             ? "Couldn't load"
-            : main === undefined
-              ? "Not started yet"
-              : canEdit
-                ? "Edit"
-                : "Permission required"
+            : !connected
+              ? "Offline"
+              : main === undefined
+                ? listed == null
+                  ? "Loading…"
+                  : "Not started yet"
+                : mayEdit
+                  ? "Edit"
+                  : "Permission required"
         }
-        disabled={main === undefined || !canEdit}
-        onPress={() => setEditing(true)}
+        disabled={main === undefined || !manage.canEdit}
+        onPress={() => setEditing(main ?? null)}
       />
       {main?.purpose ? (
         <Text className="px-4 py-2 text-foreground-muted">{main.purpose}</Text>
       ) : null}
-      {editing && main !== undefined ? (
+      {editing !== null ? (
         <MobileBotProfileSheet
           mode="edit"
-          initial={main}
-          canSubmit={canEdit}
-          onClose={() => setEditing(false)}
-          onSubmit={(changes) => manage.update(main, changes)}
+          initial={editing}
+          canSubmit={manage.canEdit}
+          unavailableReason={manage.connected ? undefined : manage.offlineReason}
+          onClose={() => setEditing(null)}
+          // Save reads the store when pressed: a refusal not yet rendered sends nothing.
+          onSubmit={(changes) =>
+            isComputerReadable(registry, environmentId)
+              ? manage.update(editing, changes)
+              : Promise.resolve(null)
+          }
         />
       ) : null}
     </SettingsSection>
