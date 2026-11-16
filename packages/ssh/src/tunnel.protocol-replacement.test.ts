@@ -1,9 +1,11 @@
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import { ARCHIVE } from "./tunnel.fixture.ts";
 import { protocolExecutable, makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
@@ -65,7 +67,10 @@ exec /bin/mv "$@"
             (yield* f.fs.readFileString(`${f.test}/events`)).split('"type":"self-stop"').length - 1,
             1,
           );
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each(["script", "base dir", "duplicate", "malformed", "prefix", "suffix"] as const)(
@@ -129,7 +134,10 @@ console.log(command);
           assert.deepEqual(yield* f.snapshot, before);
           yield* Effect.sync(() => process.kill(f.pid, 0));
           assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each(["before publication", "before drain", "candidate validation"] as const)(
@@ -207,7 +215,10 @@ console.log(command);
               (name) => name.includes(".next.") || name.includes(".retained."),
             ),
           );
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each((["stale metadata", "descriptor 404"] as const).map((failure) => ({ failure })))(
@@ -252,7 +263,10 @@ console.log(command);
           assert.notInclude(events, '"type":"stop"');
           assert.notInclude(events, '"type":"auth"');
           assert.equal(events.split('"type":"start"').length - 1, 1); // Only the seeded process.
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each((["launch", "pairing", "mcp"] as const).map((entry) => ({ entry })))(
@@ -299,7 +313,10 @@ console.log(command);
           assert.notInclude(events, '"type":"auth"');
           assert.equal(events.split('"type":"start"').length - 1, 1);
           yield* Effect.sync(() => process.kill(f.pid, 0));
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each(
@@ -336,7 +353,7 @@ console.log(command);
         const events = yield* f.fs.readFileString(`${f.test}/events`);
         for (const type of ["auth", "serve", "start", "stop"])
           assert.notInclude(events, `"type":"${type}"`);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
   },
 );

@@ -1,4 +1,4 @@
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import type { HourlyOperation } from "./AccountLimits.ts";
 import type { RelayRateLimitOperation } from "@goat/contracts/relayErrors";
 import {
@@ -57,7 +57,7 @@ export const makeWorkerRateLimits = Effect.fn("RelayRateLimits.makeWorker")(func
   readonly mobile: (key: string) => Effect.Effect<{ readonly success: boolean }, MobileError>;
   readonly publish: (key: string) => Effect.Effect<{ readonly success: boolean }, PublishError>;
 }) {
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* Digest.Digest;
   const close = bindings.close;
   return RelayRateLimits.of({
     ...(close
@@ -65,7 +65,7 @@ export const makeWorkerRateLimits = Effect.fn("RelayRateLimits.makeWorker")(func
           close: Effect.fn("RelayRateLimits.close")(
             function* (userId: string, subjectDigest: string) {
               const legacy = yield* crypto.digest(
-                "SHA-256",
+                Digest.sha256,
                 new TextEncoder().encode(
                   [bindings.stage, userId].map((part) => `${part.length}:${part}`).join(""),
                 ),
@@ -86,7 +86,7 @@ export const makeWorkerRateLimits = Effect.fn("RelayRateLimits.makeWorker")(func
     charge: Effect.fn("RelayRateLimits.charge")(function* (input) {
       const key = yield* crypto
         .digest(
-          "SHA-256",
+          Digest.sha256,
           new TextEncoder().encode(
             (input.operation === "activity_publish"
               ? [bindings.stage, input.environmentId ?? "", input.environmentPublicKey ?? ""]

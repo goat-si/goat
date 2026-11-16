@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - The integration fixture binds the same platform socket or named pipe as the CLI.
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import type { DesktopAppActivationRequest } from "@goat/contracts";
@@ -44,6 +45,7 @@ const runCli = (args: ReadonlyArray<string>, env: Record<string, string> = {}) =
     Effect.provide(
       Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         NetService.layer,
         ConfigProvider.layer(ConfigProvider.fromEnv({ env })),
       ),

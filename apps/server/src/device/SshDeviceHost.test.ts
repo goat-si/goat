@@ -1,8 +1,8 @@
 import { expect, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Net from "@goat/shared/Net";
 import * as Deferred from "effect/Deferred";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -35,7 +35,7 @@ it.effect("preserves installed status after probes and cleans failed agent activ
       Effect.gen(function* () {
         if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
         const forwarding = command.args.includes("-L");
-        (forwarding ? tunnelArgs : commandArgs).push([...command.args]);
+        (forwarding ? tunnelArgs : commandArgs).push(command.args.map(String));
         if (forwarding) tunnelStdins.push(command.options.stdin);
         let output = "";
         let exitCode = 0;
@@ -186,7 +186,7 @@ it.effect("preserves installed status after probes and cleans failed agent activ
     }
     yield* host.stop;
     expect(forwards).toBe(0);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("releases the forward of a bootstrap interrupted before its hub answered", () =>
@@ -392,7 +392,7 @@ it.effect("lists Android devices without probing the host again once it reports 
     expect(yield* androidNames).toEqual(["Pixel_8"]);
     expect(modes.splice(0)).toEqual([""]);
     yield* host.stop;
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -465,7 +465,10 @@ it.effect(
       yield* TestClock.adjust("30 seconds");
       expect(forwardSpawns).toBe(2);
       yield* host.stop;
-    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, TestClock.layer()))),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, TestClock.layer())),
+    ),
 );
 
 it.effect.each([
@@ -581,7 +584,7 @@ it.effect.each([
       );
       // A transport failure has no remote shell to ask.
       if (exitCode === 255) expect(shellChecks).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 // Starts a fake SSH device host, stops it with the given remote stop result, and returns the logs.
@@ -677,5 +680,5 @@ it.effect("logs a device host's failed runner cleanup and a stop that never reac
       "agent-device did not stop; its daemon and runners may still be running",
       expect.objectContaining({ hostId: "studio" }),
     ]);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

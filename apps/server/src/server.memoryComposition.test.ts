@@ -18,6 +18,7 @@ import {
   layerMemorySourceReadBinding,
   layerMemorySnapshot,
 } from "./server.ts";
+import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 
 // The application's own memory toolkits, over a Sync that only answers hub settings updates.
 const servedMemoryToolkits = (sync: Layer.Layer<Sync.MemorySyncService>) =>
@@ -39,7 +40,7 @@ const servedMemoryToolkits = (sync: Layer.Layer<Sync.MemorySyncService>) =>
     ),
     Layer.provide(Layer.mock(Settings.ServerSettingsService)({})),
     Layer.provide(sync),
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
     Layer.provide(NodeServices.layer),
   );

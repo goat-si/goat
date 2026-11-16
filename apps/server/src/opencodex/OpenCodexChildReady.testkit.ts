@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   type ChildReadyPrepareInput,
@@ -275,7 +276,7 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
               .pipe(Effect.orDie);
           }
           return yield* ok();
-        }).pipe(Effect.provide(NodeServices.layer)),
+        }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     }),
     Layer.mock(Profiles.PermissionProfiles)({}),
     Layer.mock(UpdateHost.OpenCodexUpdateHost)({}),
@@ -313,7 +314,7 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
     ),
     Layer.provideMerge(settingsLayer),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-child-ready-" })),
-    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
   const ready = yield* Layer.build(service);
   const run = <A, E>(

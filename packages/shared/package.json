@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./nodeServicesWithCrypto": {
+      "types": "./src/nodeServicesWithCrypto.ts",
+      "import": "./src/nodeServicesWithCrypto.ts"
+    },
     "./sshRuntimeProtocolComparison": {
       "types": "./src/sshRuntimeProtocolComparison.ts",
       "import": "./src/sshRuntimeProtocolComparison.ts"

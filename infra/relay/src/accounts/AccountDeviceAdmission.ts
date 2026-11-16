@@ -1,4 +1,4 @@
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Hex from "effect/encoding/Hex";
 import {
   RelayAccountResourceLimitExceededError,
@@ -36,7 +36,7 @@ export class AccountDeviceAdmission extends Context.Service<
   }
 >()("goat-relay/accounts/AccountDeviceAdmission") {}
 const make = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* Digest.Digest;
   const db = yield* RelayDb;
   const sql = db.$client;
   const access = yield* AccountAccess;
@@ -74,7 +74,7 @@ const make = Effect.gen(function* () {
                 traceId: "relay",
               });
             for (const token of (yield* Effect.forEach([...new Set(input.tokens ?? [])], (token) =>
-              crypto.digest("SHA-256", new TextEncoder().encode(token)).pipe(
+              crypto.digest(Digest.sha256, new TextEncoder().encode(token)).pipe(
                 Effect.map(Hex.encode),
                 Effect.mapError(
                   () =>

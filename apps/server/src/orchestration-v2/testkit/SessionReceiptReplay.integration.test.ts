@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -14,6 +15,7 @@ import {
 } from "@goat/provider-testing/replayTranscript";
 import { checkpointWorkspace } from "@goat/provider-testing/replayWorkspace";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
 import { CodexOrchestratorReplayHarness } from "../Adapters/CodexAdapterV2.testkit.ts";
 import { ClaudeOrchestratorReplayHarness } from "../Adapters/ClaudeAdapterV2.testkit.ts";
@@ -197,7 +199,7 @@ function receiptReplay<T extends ProviderReplayTranscript, E>(
     const file = driver === "codex" ? "codex" : "claude";
     const raw = yield* readProviderReplayTranscript(
       new URL(`./fixtures/simple/${file}_transcript.ndjson`, import.meta.url),
-    ).pipe(Effect.provide(NodeServices.layer));
+    ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
     const modelSelection = driver === "codex" ? CODEX_MODEL_SELECTION : CLAUDE_MODEL_SELECTION;
     const workspace = yield* checkpointWorkspace("receipt-" + driver);
     const transcript = yield* harness.decodeTranscript(

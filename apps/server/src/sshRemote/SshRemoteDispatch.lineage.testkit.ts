@@ -2,6 +2,7 @@
  * A fake remote GOAT for SSH launch tests: it answers tools/list with the goat_thread_launch
  * arguments a test declares and records every launch it receives.
  */
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, vi } from "@effect/vitest";
 import { EnvironmentId, NodeId, RunId, ThreadId } from "@goat/contracts";
@@ -466,7 +467,7 @@ export const launchAgainst = (remote: {
             Layer.provide(ServerSettings.layerTest()),
             Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-dispatch-test-" })),
             Layer.provide(FetchHttpClient.layer),
-            Layer.provide(NodeServices.layer),
+            Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ),
       );

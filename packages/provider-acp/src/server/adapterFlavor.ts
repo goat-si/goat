@@ -12,7 +12,7 @@ import type {
   ThreadId,
 } from "@goat/contracts";
 import type { SelfInvocation } from "@goat/shared/nodeRuntime";
-import type * as Crypto from "effect/Crypto";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import type * as Duration from "effect/Duration";
 import type * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
@@ -181,7 +181,7 @@ export interface AcpAdapterV2Flavor {
   ) => Effect.Effect<
     AcpSessionRuntime.AcpSessionRuntime["Service"],
     EffectAcpErrors.AcpError,
-    ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
+    ChildProcessSpawner.ChildProcessSpawner | SecureRandom.SecureRandom | Scope.Scope
   >;
   readonly customModels?: ReadonlyArray<string>;
   /** The agent may run another model than session/new reports, so the model is always written. */

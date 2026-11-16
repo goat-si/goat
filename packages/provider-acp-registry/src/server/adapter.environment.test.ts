@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ProviderSessionId, ThreadId } from "@goat/contracts";
@@ -9,6 +10,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveSelfInvocation } from "@goat/shared/nodeRuntime";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -32,6 +34,9 @@ import {
   archiveUrl,
 } from "./AcpRegistrySupport.testkit.ts";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
+
+const plainEnvValue = (value: string | Redacted.Redacted<string> | undefined) =>
+  Redacted.isRedacted(value) ? Redacted.value(value) : value;
 
 const decodeSettings = Schema.decodeEffect(AcpRegistrySettings);
 
@@ -85,13 +90,16 @@ it.live.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       Effect.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           IdAllocator.layer,
           McpProviderSessions.layer,
           Layer.succeed(
             HttpClient.HttpClient,
             HttpClient.make(() => Effect.die("unexpected request")),
           ),
-          TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
+          TestProviderHost.layer().pipe(
+            Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          ),
         ),
       ),
       Effect.scoped,
@@ -107,7 +115,7 @@ it.live("keeps the resolved executable across MCP replacement and resolves a new
     const capturingSpawner = ChildProcessSpawner.make((command) => {
       if (command._tag === "StandardCommand") {
         spawnedEnvironments.push(
-          command.options.env?.GOAT_ISSUE_3079_LATE_HOST ??
+          plainEnvValue(command.options.env?.GOAT_ISSUE_3079_LATE_HOST) ??
             (command.options.extendEnv ? process.env.GOAT_ISSUE_3079_LATE_HOST : undefined),
         );
       }
@@ -213,13 +221,16 @@ it.live("keeps the resolved executable across MCP replacement and resolves a new
     Effect.provide(
       Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         IdAllocator.layer,
         McpProviderSessions.layer,
         Layer.succeed(
           HttpClient.HttpClient,
           HttpClient.make(() => Effect.die("unexpected request")),
         ),
-        TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
+        TestProviderHost.layer().pipe(
+          Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        ),
       ),
     ),
     Effect.scoped,
@@ -354,6 +365,7 @@ it.live("a session's reported configuration names the environment it runs with",
     Effect.provide(
       Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         IdAllocator.layer,
         McpProviderSessions.layer,
         AcpRegistryRuntimeCoordinator.layer,
@@ -361,7 +373,9 @@ it.live("a session's reported configuration names the environment it runs with",
           HttpClient.HttpClient,
           HttpClient.make(() => Effect.die("unexpected request")),
         ),
-        TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
+        TestProviderHost.layer().pipe(
+          Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        ),
       ),
     ),
     Effect.scoped,

@@ -159,6 +159,7 @@ describe("managed endpoint provisioning errors", () => {
             },
             body: payload,
           }),
+          Context.empty(),
         ),
       );
       expect(response.status).toBe(503);
@@ -271,6 +272,7 @@ describe("device listing compatibility", () => {
             new Request(`https://relay.example.test/${version}/client/devices`, {
               headers: { authorization: "Bearer test-token" },
             }),
+            Context.empty(),
           ),
         );
         expect(response.status).toBe(200);
@@ -368,6 +370,7 @@ describe("Cloudflare rate-limit retry hint", () => {
                 managedTunnelsEnabled: true,
               }),
             }),
+            Context.empty(),
           ),
         ),
       ),

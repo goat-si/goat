@@ -2,6 +2,7 @@ import { EnvironmentId } from "@goat/contracts";
 import * as Invocation from "../mcp/McpInvocationContext.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it, vi } from "@effect/vitest";
 import {
@@ -120,7 +121,7 @@ const withDispatch = <A, E>(
               ServerConfig.layerTest("/fixture", { prefix: "goat-dispatch-cloud-test-" }),
             ),
             Layer.provide(FetchHttpClient.layer),
-            Layer.provide(NodeServices.layer),
+            Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ),
       );

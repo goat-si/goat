@@ -48,6 +48,7 @@ import * as ServerConfig from "../config.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as Path from "effect/Path";
 import * as MemoryToolkitFixture from "../mcp/toolkits/memory/handlers.testkit.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { AgentScope } from "@goat/shared/AgentScope";
@@ -2420,6 +2421,7 @@ it.effect(
           Layer.mergeAll(
             layerTestDatabase,
             NodeServices.layer,
+            NodeCrypto.layer,
             settingsLayer,
             Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
             Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
@@ -4029,7 +4031,7 @@ it.effect.each(["missing", "file"] as const)(
           [],
         );
       }).pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 60_000 })));
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -4079,7 +4081,7 @@ it.effect(
           before.providerSessions,
         );
       }).pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 60_000 })));
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -4686,7 +4688,7 @@ it.effect.each([
           ),
         ),
       );
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
 );
 
 it.effect.each([
@@ -4784,7 +4786,7 @@ it.effect.each([
           }),
         ),
       );
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
 );
 
 it.effect.each(["failure", "interrupt"] as const)(
@@ -5200,7 +5202,7 @@ it.effect.each(turnStartMemoryCases)(
                   Layer.succeed(ServerEnvironment.ServerEnvironment, fakeEnvironment),
                   settingsLayer,
                   ServerConfig.layerTest(process.cwd(), { prefix: "memory-channel-" }).pipe(
-                    Layer.provide(NodeServices.layer),
+                    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
                   ),
                   Path.layer,
                   FileSystem.layerNoop({}),
@@ -5338,7 +5340,7 @@ it.effect.each(turnStartMemoryCases)(
               }),
               Path.layer,
               ServerConfig.layerTest(process.cwd(), { prefix: "memory-start-" }).pipe(
-                Layer.provide(NodeServices.layer),
+                Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
               ),
               Layer.mock(RuntimePolicy.RuntimePolicyV2)({ resolve: () => Effect.succeed(policy) }),
               Layer.mock(MemorySnapshot.MemorySnapshot)({

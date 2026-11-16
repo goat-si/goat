@@ -73,7 +73,7 @@ const served = (
 ) =>
   McpHttpServer.toolkitRegistration(ProjectToolkit, ProjectHandlers.layer).pipe(
     Layer.provideMerge(Profiles.layer),
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provideMerge(state.revoke === undefined ? Layer.empty : revokingAdmission(state)),
     Layer.provideMerge(
       Layer.mergeAll(

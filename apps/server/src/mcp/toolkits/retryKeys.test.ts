@@ -230,13 +230,13 @@ const fixture = (options: { readonly sharedDatabase?: boolean } = {}) => {
     McpHttpServer.toolkitRegistration(AttachmentToolkit, AttachmentHandlers.layer),
     McpHttpServer.toolkitRegistration(SshToolkit, SshHandlers.layer),
   ).pipe(
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provide(dependencies),
     Layer.provide(DocumentText.layer),
     Layer.provideMerge(PendingAttachmentSweep.layer),
     Layer.provideMerge(options.sharedDatabase === true ? Layer.empty : Sqlite.layerMemory),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-retry-keys-" })),
-    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
   return { performed, served, capabilities, parked, invocation };
 };

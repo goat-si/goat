@@ -246,6 +246,7 @@ it.effect("leaves a newer service unchanged during onboarding without prompting"
     const terminal = Terminal.make({
       columns: Effect.succeed(80),
       rows: Effect.succeed(24),
+      size: Effect.die("These tests never read the terminal size."),
       readInput: Effect.die("Onboarding must not prompt to replace a newer service."),
       readLine: Effect.die("Onboarding must not prompt to replace a newer service."),
       display: () => Effect.die("Onboarding must not prompt to replace a newer service."),
@@ -300,6 +301,7 @@ it.effect.each([
     const terminal = Terminal.make({
       columns: Effect.succeed(80),
       rows: Effect.succeed(24),
+      size: Effect.die("These tests never read the terminal size."),
       readInput: Effect.die("Onboarding must not prompt without a terminal."),
       readLine: Effect.die("Onboarding must not prompt without a terminal."),
       display: () => Effect.die("Onboarding must not prompt without a terminal."),

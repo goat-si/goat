@@ -5,7 +5,7 @@ import * as Context from "effect/Context";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as HostProcess from "@goat/shared/HostProcess";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Base64Url from "effect/encoding/Base64Url";
 import * as P from "effect/Predicate";
@@ -56,8 +56,8 @@ export class OpenCode2Server extends Context.Service<
  * otherwise, so GOAT supplies its own and keeps it in memory.
  */
 const generatePassword = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
-  const bytes = yield* crypto.randomBytes(32).pipe(Effect.orDie);
+  const random = yield* SecureRandom.SecureRandom;
+  const bytes = yield* random.randomBytes(32);
   return Redacted.make(Base64Url.encode(bytes), { label: "OPENCODE_PASSWORD" });
 });
 
@@ -151,7 +151,7 @@ export const make = Effect.fn("OpenCode2Server.make")(function* (input: {
     return { ...api, url, version, external } satisfies OpenCode2Connection;
   });
   const runtime = yield* OpenCodeRuntime.OpenCodeRuntime;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
@@ -233,7 +233,7 @@ export const make = Effect.fn("OpenCode2Server.make")(function* (input: {
         return yield* use(connection);
       }).pipe(
         Effect.scoped,
-        Effect.provideService(Crypto.Crypto, crypto),
+        Effect.provideService(SecureRandom.SecureRandom, random),
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideService(Path.Path, path),
         Effect.provideService(HostProcess.Platform, platform),

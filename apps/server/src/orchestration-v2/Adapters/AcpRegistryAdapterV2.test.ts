@@ -5,7 +5,7 @@ import {
   claudeMarker,
   claudeChild,
 } from "./AcpClaudeReplay.testkit.ts";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import {
   type ModelSelection,

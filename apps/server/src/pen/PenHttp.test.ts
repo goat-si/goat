@@ -3,6 +3,7 @@ import type * as NodeHttp from "node:http";
 import * as NodeNet from "node:net";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId } from "@goat/contracts";
@@ -42,7 +43,11 @@ const layerServices = (enabled: Layer.Layer<PenEnablement.PenEnablement>) =>
       }),
     ),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-pen-http-" })),
-    Layer.provideMerge(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
+    Layer.provideMerge(
+      DocumentText.layer.pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
   );
 
 const harness = Effect.gen(function* () {
@@ -112,162 +117,180 @@ const issue = (port: number, nodeId: string, body: object) =>
   ).pipe(Effect.map((answer) => (JSON.parse(answer.body) as { readonly token: string }).token));
 const bearer = (token: string) => ({ authorization: "Bearer " + token });
 
-it.layer(NodeServices.layer)("the Pen listener's HTTP surface (mesh link design §5)", (it) => {
-  it.effect("each member session kind reaches its own routes and no other", () =>
-    Effect.gen(function* () {
-      const { port, seen } = yield* harness;
-      const proxy = yield* issue(port, member("a"), {
-        kind: "proxy",
-        scopes: ["orchestration:read"],
-      });
-      const agent = yield* issue(port, member("a"), {
-        kind: "agent",
-        access: "approval-required",
-        memory: "none",
-        providersManage: false,
-        settingsWrite: false,
-      });
-      expect((yield* call(port, member("a"), "GET", "/api/projects", bearer(proxy))).status).toBe(
-        200,
-      );
-      expect((yield* call(port, member("a"), "GET", "/api/projects", bearer(agent))).status).toBe(
-        404,
-      );
-      expect((yield* call(port, member("a"), "GET", "/api/projects")).status).toBe(401);
-      expect((yield* call(port, member("b"), "GET", "/api/projects", bearer(proxy))).status).toBe(
-        401,
-      );
-      expect((yield* call(port, member("a"), "POST", "/mcp", bearer(agent))).status).toBe(200);
-      expect((yield* call(port, member("a"), "POST", "/mcp", bearer(proxy))).status).toBe(404);
-      expect(
-        (yield* call(port, member("a"), "POST", "/api/pen/session", bearer(agent))).status,
-      ).toBe(404);
-      expect(
-        (yield* call(port, member("a"), "GET", "/api/auth/session", bearer(proxy))).status,
-      ).toBe(404);
-      const upgrade = (token: string) => ({
-        ...bearer(token),
-        connection: "Upgrade",
-        upgrade: "websocket",
-        "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
-        "sec-websocket-version": "13",
-      });
-      expect((yield* call(port, member("a"), "GET", "/ws", upgrade(agent))).status).toBe(404);
-      expect((yield* call(port, member("a"), "GET", "/ws", upgrade(proxy))).status).toBe(200);
-      expect(seen).toEqual(["projects", "mcp", "ws"]);
-    }).pipe(Effect.scoped, Effect.provide(layerServices(layerEnablement(true)))),
-  );
-
-  it.effect("a dispatch upload needs the member agent's bearer and a valid capability", () =>
-    Effect.gen(function* () {
-      const { port } = yield* harness;
-      const agent = yield* issue(port, member("a"), {
-        kind: "agent",
-        access: "auto",
-        memory: "none",
-        providersManage: false,
-        settingsWrite: false,
-      });
-      const proxy = yield* issue(port, member("a"), {
-        kind: "proxy",
-        scopes: ["orchestration:read"],
-      });
-      const upload = () =>
-        issueAttachmentUploadUrl({
-          type: "file",
-          name: "a.txt",
-          mimeType: "text/plain",
-          sizeBytes: 6,
-        });
-      const text = "abcdef";
-      expect(
-        (yield* call(port, member("a"), "POST", (yield* upload()).relativeUrl, bearer(agent), text))
-          .status,
-      ).toBe(204);
-      expect(
-        (yield* call(port, member("a"), "POST", (yield* upload()).relativeUrl, {}, text)).status,
-      ).toBe(401);
-      expect(
-        (yield* call(port, member("a"), "POST", (yield* upload()).relativeUrl, bearer(proxy), text))
-          .status,
-      ).toBe(404);
-      expect(
-        (yield* call(
-          port,
-          member("a"),
-          "POST",
-          "/api/attachments/upload/bad.token",
-          bearer(agent),
-          text,
-        )).status,
-      ).toBe(404);
-    }).pipe(Effect.scoped, Effect.provide(layerServices(layerEnablement(true)))),
-  );
-
-  it.effect("refuses an oversized session request before reading it", () =>
-    Effect.gen(function* () {
-      const { port } = yield* harness;
-      const big = JSON.stringify({
-        kind: "proxy",
-        scopes: ["orchestration:read"],
-        pad: "x".repeat(5000),
-      });
-      expect((yield* call(port, member("a"), "POST", "/api/pen/session", {}, big)).status).toBe(
-        413,
-      );
-      const answer = yield* call(port, member("a"), "POST", "/api/pen/session", {}, "{}");
-      expect(answer.status).toBe(400);
-      expect(JSON.parse(answer.body)).toMatchObject({ code: "refused" });
-    }).pipe(Effect.scoped, Effect.provide(layerServices(layerEnablement(true)))),
-  );
-
-  it.effect(
-    "main-listener requests pass the gate unchanged; an injected socket with no context gets 404",
-    () =>
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "the Pen listener's HTTP surface (mesh link design §5)",
+  (it) => {
+    it.effect("each member session kind reaches its own routes and no other", () =>
       Effect.gen(function* () {
-        const { mainPort, seen, main } = yield* harness;
-        const direct = yield* dial(mainPort);
-        direct.socket.write(http("GET", "/api/projects"));
-        expect((yield* response(direct)).status).toBe(200);
-        const stray = NodeNet.createServer((socket) => main().emit("connection", socket));
-        yield* Effect.acquireRelease(
-          Effect.callback<void>((resume) => {
-            stray.listen(0, "127.0.0.1", () => resume(Effect.void));
-          }),
-          () => Effect.sync(() => stray.close()),
+        const { port, seen } = yield* harness;
+        const proxy = yield* issue(port, member("a"), {
+          kind: "proxy",
+          scopes: ["orchestration:read"],
+        });
+        const agent = yield* issue(port, member("a"), {
+          kind: "agent",
+          access: "approval-required",
+          memory: "none",
+          providersManage: false,
+          settingsWrite: false,
+        });
+        expect((yield* call(port, member("a"), "GET", "/api/projects", bearer(proxy))).status).toBe(
+          200,
         );
-        const address = stray.address();
-        const injected = yield* dial(
-          typeof address === "object" && address !== null ? address.port : 0,
+        expect((yield* call(port, member("a"), "GET", "/api/projects", bearer(agent))).status).toBe(
+          404,
         );
-        injected.socket.write(http("GET", "/api/projects"));
-        expect((yield* response(injected)).status).toBe(404);
-        expect(seen).toEqual(["projects"]);
-      }).pipe(Effect.scoped, Effect.provide(layerServices(layerEnablement(true)))),
-  );
-});
-
-it.layer(NodeServices.layer)("with the build's gate closed", (it) => {
-  it.effect("a Pen connection reaches nothing, upgrades included, and no session is issued", () =>
-    Effect.gen(function* () {
-      const { port, seen } = yield* harness;
-      expect(PenEnablement.PEN_TARGET_ENABLED).toBe(false);
-      expect((yield* call(port, member("a"), "POST", "/api/pen/session", {}, "{}")).status).toBe(
-        404,
-      );
-      expect((yield* call(port, member("a"), "GET", "/api/projects", bearer("x"))).status).toBe(
-        404,
-      );
-      expect(
-        (yield* call(port, member("a"), "GET", "/ws", {
-          authorization: "Bearer x",
+        expect((yield* call(port, member("a"), "GET", "/api/projects")).status).toBe(401);
+        expect((yield* call(port, member("b"), "GET", "/api/projects", bearer(proxy))).status).toBe(
+          401,
+        );
+        expect((yield* call(port, member("a"), "POST", "/mcp", bearer(agent))).status).toBe(200);
+        expect((yield* call(port, member("a"), "POST", "/mcp", bearer(proxy))).status).toBe(404);
+        expect(
+          (yield* call(port, member("a"), "POST", "/api/pen/session", bearer(agent))).status,
+        ).toBe(404);
+        expect(
+          (yield* call(port, member("a"), "GET", "/api/auth/session", bearer(proxy))).status,
+        ).toBe(404);
+        const upgrade = (token: string) => ({
+          ...bearer(token),
           connection: "Upgrade",
           upgrade: "websocket",
           "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
           "sec-websocket-version": "13",
-        })).status,
-      ).toBe(404);
-      expect(seen).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(layerServices(PenEnablement.layer))),
-  );
-});
+        });
+        expect((yield* call(port, member("a"), "GET", "/ws", upgrade(agent))).status).toBe(404);
+        expect((yield* call(port, member("a"), "GET", "/ws", upgrade(proxy))).status).toBe(200);
+        expect(seen).toEqual(["projects", "mcp", "ws"]);
+      }).pipe(Effect.scoped, Effect.provide(layerServices(layerEnablement(true)))),
+    );
+
+    it.effect("a dispatch upload needs the member agent's bearer and a valid capability", () =>
+      Effect.gen(function* () {
+        const { port } = yield* harness;
+        const agent = yield* issue(port, member("a"), {
+          kind: "agent",
+          access: "auto",
+          memory: "none",
+          providersManage: false,
+          settingsWrite: false,
+        });
+        const proxy = yield* issue(port, member("a"), {
+          kind: "proxy",
+          scopes: ["orchestration:read"],
+        });
+        const upload = () =>
+          issueAttachmentUploadUrl({
+            type: "file",
+            name: "a.txt",
+            mimeType: "text/plain",
+            sizeBytes: 6,
+          });
+        const text = "abcdef";
+        expect(
+          (yield* call(
+            port,
+            member("a"),
+            "POST",
+            (yield* upload()).relativeUrl,
+            bearer(agent),
+            text,
+          )).status,
+        ).toBe(204);
+        expect(
+          (yield* call(port, member("a"), "POST", (yield* upload()).relativeUrl, {}, text)).status,
+        ).toBe(401);
+        expect(
+          (yield* call(
+            port,
+            member("a"),
+            "POST",
+            (yield* upload()).relativeUrl,
+            bearer(proxy),
+            text,
+          )).status,
+        ).toBe(404);
+        expect(
+          (yield* call(
+            port,
+            member("a"),
+            "POST",
+            "/api/attachments/upload/bad.token",
+            bearer(agent),
+            text,
+          )).status,
+        ).toBe(404);
+      }).pipe(Effect.scoped, Effect.provide(layerServices(layerEnablement(true)))),
+    );
+
+    it.effect("refuses an oversized session request before reading it", () =>
+      Effect.gen(function* () {
+        const { port } = yield* harness;
+        const big = JSON.stringify({
+          kind: "proxy",
+          scopes: ["orchestration:read"],
+          pad: "x".repeat(5000),
+        });
+        expect((yield* call(port, member("a"), "POST", "/api/pen/session", {}, big)).status).toBe(
+          413,
+        );
+        const answer = yield* call(port, member("a"), "POST", "/api/pen/session", {}, "{}");
+        expect(answer.status).toBe(400);
+        expect(JSON.parse(answer.body)).toMatchObject({ code: "refused" });
+      }).pipe(Effect.scoped, Effect.provide(layerServices(layerEnablement(true)))),
+    );
+
+    it.effect(
+      "main-listener requests pass the gate unchanged; an injected socket with no context gets 404",
+      () =>
+        Effect.gen(function* () {
+          const { mainPort, seen, main } = yield* harness;
+          const direct = yield* dial(mainPort);
+          direct.socket.write(http("GET", "/api/projects"));
+          expect((yield* response(direct)).status).toBe(200);
+          const stray = NodeNet.createServer((socket) => main().emit("connection", socket));
+          yield* Effect.acquireRelease(
+            Effect.callback<void>((resume) => {
+              stray.listen(0, "127.0.0.1", () => resume(Effect.void));
+            }),
+            () => Effect.sync(() => stray.close()),
+          );
+          const address = stray.address();
+          const injected = yield* dial(
+            typeof address === "object" && address !== null ? address.port : 0,
+          );
+          injected.socket.write(http("GET", "/api/projects"));
+          expect((yield* response(injected)).status).toBe(404);
+          expect(seen).toEqual(["projects"]);
+        }).pipe(Effect.scoped, Effect.provide(layerServices(layerEnablement(true)))),
+    );
+  },
+);
+
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "with the build's gate closed",
+  (it) => {
+    it.effect("a Pen connection reaches nothing, upgrades included, and no session is issued", () =>
+      Effect.gen(function* () {
+        const { port, seen } = yield* harness;
+        expect(PenEnablement.PEN_TARGET_ENABLED).toBe(false);
+        expect((yield* call(port, member("a"), "POST", "/api/pen/session", {}, "{}")).status).toBe(
+          404,
+        );
+        expect((yield* call(port, member("a"), "GET", "/api/projects", bearer("x"))).status).toBe(
+          404,
+        );
+        expect(
+          (yield* call(port, member("a"), "GET", "/ws", {
+            authorization: "Bearer x",
+            connection: "Upgrade",
+            upgrade: "websocket",
+            "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+            "sec-websocket-version": "13",
+          })).status,
+        ).toBe(404);
+        expect(seen).toEqual([]);
+      }).pipe(Effect.scoped, Effect.provide(layerServices(PenEnablement.layer))),
+    );
+  },
+);

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -278,6 +279,10 @@ it.layer(layerTest)("OrchestrationV2LayerLive rewind", (it) => {
         rollbackThread.mock.calls[1]![0].providerThreadTurns.map((turn) => turn.id),
         [ProviderTurnId.make("non-git-resent-turn")],
       );
-    }).pipe(Effect.provide(Layer.merge(Layer.fresh(layerTest), NodeServices.layer))),
+    }).pipe(
+      Effect.provide(
+        Layer.merge(Layer.fresh(layerTest), Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
   );
 });

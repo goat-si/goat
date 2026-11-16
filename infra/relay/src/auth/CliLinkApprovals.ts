@@ -10,7 +10,8 @@ import { RelayInternalError } from "@goat/contracts/relay";
 import { normalizeRelayIssuer } from "@goat/shared/relayJwt";
 import { stableStringify } from "@goat/shared/relaySigning";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -65,7 +66,8 @@ export class CliLinkApprovals extends Context.Service<
 const make = Effect.gen(function* () {
   const config = yield* RelayConfiguration.RelayConfiguration;
   const mintSigner = CloudMintSigner.make(config);
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
+  const crypto = yield* Digest.Digest;
   const replay = yield* DpopProofs.DpopProofReplay;
   const accounts = yield* ConnectAccounts.ConnectAccounts;
   const unavailable = () =>
@@ -91,7 +93,7 @@ const make = Effect.gen(function* () {
         iss: issuer,
         aud: issuer,
         sub: assurance.userId,
-        jti: yield* crypto.randomUUIDv4().pipe(Effect.mapError(unavailable)),
+        jti: yield* random.uuidV4().pipe(Effect.mapError(unavailable)),
         iat: now,
         exp: expires,
         scope: "environment:link",
@@ -118,7 +120,7 @@ const make = Effect.gen(function* () {
       return yield* strengthRequired("session_not_active");
     const challenge = Base64Url.encode(
       yield* crypto
-        .digest("SHA-256", new TextEncoder().encode(input.verifier))
+        .digest(Digest.sha256, new TextEncoder().encode(input.verifier))
         .pipe(Effect.mapError(unavailable)),
     );
     if (

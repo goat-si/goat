@@ -1,7 +1,8 @@
 import { RelayHostRevocationReceipt } from "@goat/contracts/relay";
 import { normalizeRelayIssuer } from "@goat/shared/relayJwt";
 import { normalizeSecureRelayUrl } from "@goat/shared/relayUrl";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Base64Url from "effect/encoding/Base64Url";
@@ -36,7 +37,8 @@ export interface CleanupTarget {
 export const request = Effect.fn("CloudLinkRevocationClient.request")(
   function* (target: CleanupTarget) {
     const client = yield* HttpClient.HttpClient;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
+    const digest = yield* Digest.Digest;
     const secrets = yield* ServerSecretStore;
     const relay = normalizeSecureRelayUrl(target.relayUrl);
     if (!relay) return yield* new CloudLinkRevocationError({ phase: "transport" });
@@ -44,8 +46,8 @@ export const request = Effect.fn("CloudLinkRevocationClient.request")(
     const path = `/v1/environments/${encodeURIComponent(target.environmentId)}/cloud-revocation${target.revocationId ? "/ack" : ""}`;
     const key = yield* EnvironmentSigningKey.load(secrets);
     const now = Math.floor((yield* DateTime.now).epochMilliseconds / 1000);
-    const credentialDigest = yield* crypto
-      .digest("SHA-256", new TextEncoder().encode(target.credential))
+    const credentialDigest = yield* digest
+      .digest(Digest.sha256, new TextEncoder().encode(target.credential))
       .pipe(Effect.map(Base64Url.encode));
     const proof = yield* key.sign({
       typ: "goat-host-revocation+jwt",
@@ -57,7 +59,7 @@ export const request = Effect.fn("CloudLinkRevocationClient.request")(
         path,
         credentialDigest,
         ...(target.revocationId ? { revocationId: target.revocationId } : {}),
-        jti: yield* crypto.randomUUIDv4(),
+        jti: yield* random.uuidV4(),
         iat: now,
         exp: now + 60,
       },

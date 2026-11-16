@@ -1,8 +1,8 @@
 import * as Alchemy from "alchemy";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -30,8 +30,8 @@ const rateLayer = RestartableRate.make(
     const inner = yield* Rate.make;
     return Effect.gen(function* () {
       const methods = yield* inner;
-      const crypto = yield* Crypto.Crypto;
-      const instance = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      const random = yield* SecureRandom.SecureRandom;
+      const instance = yield* random.uuidV4();
       return {
         consume: Effect.fn("PolicyFixture.consume")(function* (operation: HourlyOperation) {
           const clock = yield* Clock.Clock;
@@ -88,8 +88,8 @@ const inboxLayer = RestartableInbox.make(
     const inner = yield* Inbox.makeWithAuthorization(authorizationLayer);
     return Effect.gen(function* () {
       const methods = yield* inner;
-      const crypto = yield* Crypto.Crypto;
-      const instance = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      const random = yield* SecureRandom.SecureRandom;
+      const instance = yield* random.uuidV4();
       return {
         hold: methods.hold,
         setMode: (mode: string) =>

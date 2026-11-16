@@ -1,6 +1,6 @@
 import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
@@ -58,7 +58,7 @@ export function splitBranchSections(
 export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   // The outer read span owns validation; tracing every stat would multiply hot-path spans.
   const stamp = Effect.fnUntraced(function* (file: string) {
     return yield* fs.stat(file).pipe(
@@ -126,7 +126,7 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
       (fileStamp.mtime !== null && readAt - fileStamp.mtime > CONFIG_MTIME_GRANULARITY_MS);
     const fallback =
       bytes !== null && sections === null
-        ? `${fileStamp.value}:content:${Hex.encode(yield* crypto.digest("SHA-256", bytes))}`
+        ? `${fileStamp.value}:content:${Hex.encode(yield* digest.digest(Digest.sha256, bytes))}`
         : !reusable && bytes === null
           ? `${fileStamp.value}:racy:${++racyRead}`
           : fileStamp.value;

@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Loopback listeners represent the remote server and SSH forward.
 import * as NodeHttp from "node:http";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentId, ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import * as NetService from "@goat/shared/Net";
@@ -243,6 +244,7 @@ describe("existing Git Bash managed environment", () => {
           FetchHttpClient.layer,
           SshAuth.SshPasswordPrompt.disabledLayer,
           NodeServices.layer,
+          NodeCrypto.layer,
         ),
       ),
       Effect.scoped,

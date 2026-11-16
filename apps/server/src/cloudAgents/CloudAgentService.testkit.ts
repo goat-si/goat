@@ -4,6 +4,7 @@
  * @module CloudAgentService.testkit
  */
 import * as ServerSettings from "../serverSettings.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentAuthorizationError,
@@ -415,7 +416,7 @@ export const layerFor = (world: World, profile?: string) => {
     Layer.provide(launches),
     Layer.provide(deps),
     Layer.provideMerge(store),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
 };
 

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { projectId, modelSelection } from "./threadLaunchInput.ts";
 import * as WorktreeSetupTracker from "../../project/WorktreeSetupTracker.ts";
@@ -305,7 +306,7 @@ export function makeHarness(options: HarnessOptions = {}) {
   const layerTitleRegeneration = ThreadTitleRegeneration.layer.pipe(
     Layer.provide(
       Layer.mergeAll(layerThreadManagement, layerProjectedProjects, layerExternalServices).pipe(
-        Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       ),
     ),
   );

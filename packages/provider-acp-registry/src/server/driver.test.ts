@@ -115,13 +115,14 @@ it.effect(
           IdAllocator.layer,
           McpProviderSessions.layer,
           TestProviderHost.layer({ runBackgroundWork: false }).pipe(
-            Layer.provide(NodeServices.layer),
+            Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
           Layer.succeed(
             ProviderEventLoggers.ProviderEventLoggers,
             ProviderEventLoggers.NoOpProviderEventLoggers,
           ),
           NodeServices.layer,
+          NodeCrypto.layer,
         ),
       ),
     ),

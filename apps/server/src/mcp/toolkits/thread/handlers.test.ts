@@ -92,7 +92,7 @@ const layerThreadTools = McpHttpServer.layerThreadToolkit.pipe(
       find: () => Effect.succeed(null),
     }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
   ),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   Layer.provide(NodeCrypto.layer),
   Layer.provide(
     Layer.mock(ThreadSearch.ThreadSearch)({

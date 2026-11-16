@@ -1,4 +1,4 @@
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -23,12 +23,12 @@ import {
 export function makeAntigravityValidator(deps: {
   readonly fs: FileSystem.FileSystem;
   readonly path: Path.Path;
-  readonly crypto: Crypto.Crypto;
+  readonly random: SecureRandom.SecureRandom["Service"];
   readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly platform: NodeJS.Platform;
   readonly environment: NodeJS.ProcessEnv;
 }) {
-  const { fs, path, crypto, spawner, platform, environment } = deps;
+  const { fs, path, random, spawner, platform, environment } = deps;
   return Effect.fn("AntigravityInstallation.validate")(
     function* (executable: AntigravityExecutable, expectedVersion: string) {
       const validationScope = yield* Effect.scope;
@@ -101,7 +101,7 @@ export function makeAntigravityValidator(deps: {
     Effect.provideService(FileSystem.FileSystem, fs),
     Effect.provideService(Path.Path, path),
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-    Effect.provideService(Crypto.Crypto, crypto),
+    Effect.provideService(SecureRandom.SecureRandom, random),
     Effect.mapError((cause) => {
       if (isInstallationError(cause)) return cause;
       const stderr = isAcpProcessExitedError(cause) ? (cause.stderr ?? "") : "";

@@ -15,6 +15,7 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -188,4 +189,7 @@ export const layerReportingProcessRunner = (
         },
       });
     }),
-  ).pipe(Layer.provide(ProcessRunner.layer), Layer.provide(NodeServices.layer));
+  ).pipe(
+    Layer.provide(ProcessRunner.layer),
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+  );

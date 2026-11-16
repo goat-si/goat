@@ -597,7 +597,7 @@ it.effect("MCP writes need a full-access caller; reads and dry runs answer witho
     ).pipe(
       Layer.provide(Layer.mock(AcpSessionService.AcpSessionService)({})),
       Layer.provide(layerPermissionProfilesOff),
-      Layer.provideMerge(McpServer.McpServer.layer),
+      Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
       Layer.provide(liveThreadsLayer),
       Layer.provide(Layer.mock(HomeRequests.CodexHomeRequests)({})),
       Layer.provide(Layer.mock(Routing.ProviderDiagnosisRouting)({})),

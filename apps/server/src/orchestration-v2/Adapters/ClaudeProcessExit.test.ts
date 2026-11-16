@@ -3,7 +3,7 @@ import { ClaudeSettings, ProviderSessionId, RunAttemptId, ThreadId } from "@goat
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { assert, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -41,7 +41,7 @@ it.effect("names the signal that killed the Claude process on the failed turn", 
       attachmentsDir,
       fileSystem,
       path: yield* Path.Path,
-      crypto: yield* Crypto.Crypto,
+      random: yield* SecureRandom.SecureRandom,
       idAllocator: yield* IdAllocator.IdAllocatorV2,
       queryRunner: {
         allocateSessionId: Effect.succeed(WAKE_NATIVE_SESSION),

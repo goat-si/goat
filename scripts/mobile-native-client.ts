@@ -1,12 +1,12 @@
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { isCommandAvailable, resolveSpawnCommand } from "@goat/shared/shell";
 import * as Clock from "effect/Clock";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -85,9 +85,9 @@ export const ensureClient = Effect.fn("ensureClient")(function* <E, R, E2, R2>(o
 });
 
 const digest = Effect.fn("nativeClient.digest")(function* (value: string | Uint8Array) {
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* Digest.Digest;
   const bytes = yield* crypto.digest(
-    "SHA-256",
+    Digest.sha256,
     typeof value === "string" ? new TextEncoder().encode(value) : value,
   );
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -100,7 +100,7 @@ export const hashBundle = Effect.fn("hashBundle")(function* (root: string) {
   const entries: string[] = [];
   const visit = Effect.fn("mobile-native-client.visit")(function* (
     relative: string,
-  ): Effect.fn.Return<void, FileSystemError, FileSystem.FileSystem | Crypto.Crypto> {
+  ): Effect.fn.Return<void, FileSystemError, FileSystem.FileSystem | Digest.Digest> {
     const names = (yield* fs.readDirectory(path.join(root, relative))).sort((a, b) =>
       a.localeCompare(b, "en"),
     );

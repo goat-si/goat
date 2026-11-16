@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { AuthSessionId, EnvironmentId, ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -129,6 +130,7 @@ const makeHost = () => {
   let localPort = 41_773;
   const layer = Layer.mergeAll(
     NodeServices.layer,
+    NodeCrypto.layer,
     Layer.succeed(FileSystem.FileSystem, noAskpassFileSystem),
     Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
     Layer.succeed(HttpClient.HttpClient, httpClient),

@@ -25,7 +25,7 @@ it.effect("answers 2026-07-28 discovery and keeps 2025-06-18 as the initialize f
         capabilities: new Set(["orchestration"]),
         issuedAt: 1,
       };
-      const layerServer = McpHttpServer.layerMcpTransport.pipe(
+      const layerServer = McpHttpServer.layerMcpTransport(Layer.empty).pipe(
         Layer.provide(
           Layer.mock(McpSessionRegistry.McpSessionRegistry)({
             explainRefusal: () => Effect.succeed({ reason: "unknown" as const }),

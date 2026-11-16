@@ -18,7 +18,7 @@ import * as ProviderPathRefresh from "./provider/ProviderPathRefresh.ts";
 import * as ProviderSettings from "./provider/ProviderSettings.ts";
 import * as SshDeviceAdd from "./sshRemote/SshDeviceAdd.ts";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
-import type * as Crypto from "effect/Crypto";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import type * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -67,6 +67,7 @@ import * as SiteNotes from "./preview/SiteNotes.ts";
 
 import { heartbeat, HeartbeatWebSocket } from "./wsHeartbeat.ts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentHttpApi, type RepositoryIdentity } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
@@ -417,7 +418,9 @@ export const layerHttpServer = Layer.unwrap(
     );
   }),
 );
-const layerPlatformServices = DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer));
+const layerPlatformServices = DocumentText.layer.pipe(
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+);
 export const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
 const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer));
 const layerSourceControlProviderRegistry = SourceControlProviderRegistry.layer.pipe(
@@ -1043,20 +1046,26 @@ const layerMakeRoutes = Layer.mergeAll(
     PenServer.layer,
   ),
   Layer.mergeAll(
-    McpHttpServer.layer.pipe(Layer.provide(Layer.mergeAll(layerFleetHealth, layerFleetPressure))),
-    ComputerUseLeaseRoute.layer,
-    layerMemoryToolkits,
-    McpHttpServer.layerProviderToolkit.pipe(
-      Layer.provide(PermissionProfiles.layer),
-      Layer.provide(AcpSessionService.layer),
-    ),
-    HandoffExpiry.layer,
-    // Fleet goals act through the same launch, watch and dispatch services as these tools.
-    McpHttpServer.layerFleetToolkit.pipe(
-      Layer.provide(
-        GoalLayers.layer.pipe(Layer.provide(HubDown.layer), Layer.provideMerge(layerFleetHealth)),
+    McpHttpServer.layerWith(
+      Layer.mergeAll(
+        layerMemoryToolkits,
+        McpHttpServer.layerProviderToolkit.pipe(
+          Layer.provide(PermissionProfiles.layer),
+          Layer.provide(AcpSessionService.layer),
+        ),
+        // Fleet goals act through the same launch, watch and dispatch services as these tools.
+        McpHttpServer.layerFleetToolkit.pipe(
+          Layer.provide(
+            GoalLayers.layer.pipe(
+              Layer.provide(HubDown.layer),
+              Layer.provideMerge(layerFleetHealth),
+            ),
+          ),
+        ),
       ),
-    ),
+    ).pipe(Layer.provide(Layer.mergeAll(layerFleetHealth, layerFleetPressure))),
+    ComputerUseLeaseRoute.layer,
+    HandoffExpiry.layer,
   ).pipe(
     Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
     Layer.provide(McpOAuth.layerMcpClientAuthenticator),
@@ -1322,6 +1331,6 @@ export const runServer: Effect.Effect<
   | FileSystem.FileSystem
   | Path.Path
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   | ServerConfig.ServerConfig
 > = PersistenceRecoveryOwner.run(Layer.launch(layerMakeServer));

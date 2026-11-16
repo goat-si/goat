@@ -6,7 +6,7 @@ import {
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -85,7 +85,7 @@ const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
   const projects = yield* ProjectService.ProjectService;
   const pullRequests = yield* PullRequestService.PullRequestService;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
 
   const requireThread = Effect.fn("PullRequestWatchService.requireThread")(function* (
     threadId: ThreadId,
@@ -147,7 +147,7 @@ const make = Effect.gen(function* () {
           }),
         );
     }
-    const uuid = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+    const uuid = yield* random.uuidV4().pipe(Effect.orDie);
     yield* engine
       .dispatch({
         type: "thread.pull-request.watch",

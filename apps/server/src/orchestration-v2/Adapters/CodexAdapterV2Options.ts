@@ -9,7 +9,7 @@ import type {
 import type * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import type * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import type { ManagedServerProvider } from "@goat/provider-core/server/snapshot";
-import type * as Crypto from "effect/Crypto";
+import type * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Scope from "effect/Scope";
@@ -51,7 +51,7 @@ export interface CodexAdapterV2Options {
   ) => Effect.Effect<ServerProviderCompatibilityAdvisory | undefined>;
   /** The models GOAT offers for this instance; sessions use it to spot models added after their process started. */
   readonly offeredModels?: Effect.Effect<ReadonlyArray<ServerProviderModel>>;
-  readonly crypto: Crypto.Crypto;
+  readonly digest: Digest.Digest["Service"];
   readonly fileSystem: FileSystem.FileSystem;
   readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly serverConfig: ServerConfig["Service"];

@@ -1,6 +1,6 @@
 import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import { settlementCase } from "./ManagerSettlement.testkit.ts";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
 import { assert, it } from "@effect/vitest";
 import {
   DEFAULT_TERMINAL_ID,

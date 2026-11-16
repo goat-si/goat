@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
@@ -385,7 +386,7 @@ const layerThreadTitleRegenerationProvided = ThreadTitleRegenerationService.laye
       layerThreadManagementProvided,
       ProjectStore.layer,
       TextGeneration.layer.pipe(Layer.provide(ProviderInstallationGate.layer)),
-    ).pipe(Layer.provideMerge(NodeServices.layer)),
+    ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   ),
 );
 const layerEffectExecutorProvided = EffectWorker.layerExecutor.pipe(

@@ -81,7 +81,7 @@ const makeHarness = Effect.fn(function* (options: {
         ServerSettings.layerTest(),
         NodeCrypto.layer,
         GoatProjectFileLoader.layer,
-      ).pipe(Layer.provideMerge(NodeServices.layer)),
+      ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     ),
   );
   const start = runner
@@ -104,7 +104,7 @@ const makeHarness = Effect.fn(function* (options: {
         ],
       },
     })
-    .pipe(Effect.provide(NodeServices.layer));
+    .pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
   const emit = (terminalEvent: TerminalEvent) =>
     Effect.forEach([...listeners], (listener) => listener(terminalEvent), { discard: true });
   return { start, listeners, writes, opens, outputLines, emit };

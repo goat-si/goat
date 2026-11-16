@@ -32,6 +32,7 @@ import {
 } from "./agentSurface.testkit.ts";
 import type * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as Invocation from "./McpInvocationContext.ts";
+import * as McpHttpServer from "./McpHttpServer.ts";
 
 const decodeConnection = Schema.decodeUnknownSync(ChildReadyConnectionResult);
 
@@ -169,7 +170,7 @@ const fixture = Effect.gen(function* () {
   ).pipe(Layer.provide(boundary));
   const served = catalog.pipe(
     Layer.provideMerge(Layer.mergeAll(boundary, child)),
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provideMerge(
       Logger.layer([Logger.make(({ message }) => logs.push(String(message)))], {
         mergeWithExisting: false,

@@ -1,8 +1,10 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -68,7 +70,7 @@ const extractWith = (maxExtractedBytes?: number, packageBytes: Uint8Array = arch
     return { error: Exit.isFailure(result) ? Cause.squash(result.cause) : undefined, files };
   }).pipe(Effect.scoped, Effect.orDie);
 
-it.layer(NodeServices.layer)("Codex package extraction", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("Codex package extraction", (it) => {
   it.effect("unpacks every member of a package within its size ceiling", () =>
     Effect.gen(function* () {
       const { error, files } = yield* extractWith();
@@ -134,5 +136,5 @@ it.effect("a tar that stalls while unpacking ends the install with nothing activ
       message: "Unpacking Codex took too long. Nothing was installed.",
     });
     expect(yield* h.fs.exists(`${h.baseDir}/tools/codex/active.json`)).toBe(false);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

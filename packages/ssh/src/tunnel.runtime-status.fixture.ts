@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert } from "@effect/vitest";
 import { ORCHESTRATION_PROTOCOL_VERSION, SshHostProviders, SshHostResult } from "@goat/contracts";
@@ -117,7 +118,7 @@ export const fixture = (
           : "";
       if (script.includes("GOAT_TOOL_FIX_PROBE")) return makeSuccessfulProcess(toolFixProbe);
       if (command.args.includes("goat-runtime-cleanup")) return makeSuccessfulProcess("");
-      if (script.includes("ready=false") && !isRemoteLaunch(command.args)) {
+      if (script.includes("ready=false") && !isRemoteLaunch(command.args.map(String))) {
         calls.probes++;
         probeScripts.push(script);
         const gate = probeGate;
@@ -214,6 +215,7 @@ export const fixture = (
     },
     layer: Layer.mergeAll(
       NodeServices.layer,
+      NodeCrypto.layer,
       Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Layer.succeed(NetService.NetService, testNetService),
       Layer.succeed(HttpClient.HttpClient, httpClient),

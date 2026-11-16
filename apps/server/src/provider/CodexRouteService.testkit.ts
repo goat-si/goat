@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   AuthSessionId,
@@ -57,7 +58,7 @@ export const layer = Routes.layer.pipe(
     }),
   ),
   Layer.provideMerge(Routes.layerState),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 /** Await the actual persisted revision, acknowledge it, then observe the caller's result. */
 export const commitAndApply = <A, E, R>(mutation: Effect.Effect<A, E, R>) =>

@@ -1,7 +1,9 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import { HostStatusEntry, PreviewAutomationStatus } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -147,7 +149,7 @@ describe("server browser readiness", () => {
   });
 });
 
-it.layer(NodeServices.layer)("server browser installs", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server browser installs", (it) => {
   it.effect("a failed install stays visible until the next open retries it and succeeds", () =>
     Effect.gen(function* () {
       const { browser, requests } = yield* makeHarness({

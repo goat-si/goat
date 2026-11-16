@@ -243,7 +243,7 @@ it.effect.each(["direct", "call", "eval"] as const)(
             }),
           ),
           Layer.provide(Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({})),
-          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
           Layer.provide(UserDocs.layer),
           Layer.provide(NodeServices.layer),
           Layer.provideMerge(testLayer),
@@ -446,7 +446,7 @@ it.effect(
                 }),
             }),
           ),
-          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
           Layer.provide(ServerSettings.layerTest()),
           Layer.provideMerge(
             Layer.mergeAll(

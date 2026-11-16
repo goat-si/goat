@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - CLI integration reads the temp state directory.
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, expect, it, vi } from "@effect/vitest";
 import * as NetService from "@goat/shared/Net";
@@ -86,6 +87,7 @@ const runCliUnstubbed = (args: ReadonlyArray<string>, env: Record<string, string
     Effect.provide(
       Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         NetService.layer,
         TestConsole.layer,
         ConfigProvider.layer(ConfigProvider.fromEnv({ env })),
@@ -246,7 +248,7 @@ it.effect("stored login never sends its token to a dead server's former port", (
     ]).pipe(Effect.flip);
     expect(error).toMatchObject({ reason: "server_not_running" });
     expect(fetch).not.toHaveBeenCalled();
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 describe("goat login", () => {
@@ -304,6 +306,6 @@ describe("goat login", () => {
       expect(yield* signOut(() => Effect.succeed(true), paths)).toBe("signed_out");
       expect(NodeFS.existsSync(file)).toBe(false);
       expect(yield* signOut(() => Effect.succeed(true), paths)).toBe("not_signed_in");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 });

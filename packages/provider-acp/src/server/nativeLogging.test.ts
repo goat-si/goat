@@ -1,8 +1,10 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProviderDriverKind, ThreadId } from "@goat/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import * as AcpErrors from "effect-acp/errors";
@@ -10,7 +12,7 @@ import * as AcpErrors from "effect-acp/errors";
 import type * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import { makeAcpNativeLoggerFactory } from "./nativeLogging.ts";
 
-const nodeServicesIt = it.layer(NodeServices.layer);
+const nodeServicesIt = it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer));
 const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
 nodeServicesIt("ACP native logging", (it) => {

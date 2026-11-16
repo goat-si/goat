@@ -1,4 +1,4 @@
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
@@ -15,9 +15,9 @@ export const goatMcpServerName = Effect.fn("goatMcpServerName")(function* (threa
   // Keep the readable-id ceiling the t3-code- prefix had (56), so a shorter
   // prefix never makes more ids readable and widens own-thread wildcards.
   if (sanitized === threadId && sanitized.length <= 56) return name;
-  const crypto = yield* Crypto.Crypto;
-  const digest = yield* crypto
-    .digest("SHA-256", new TextEncoder().encode(threadId))
+  const digester = yield* Digest.Digest;
+  const digest = yield* digester
+    .digest(Digest.sha256, new TextEncoder().encode(threadId))
     .pipe(Effect.orDie);
   return `goat-${Hex.encode(digest).slice(0, 16)}`;
 });
@@ -28,9 +28,9 @@ export const goatMcpServerName = Effect.fn("goatMcpServerName")(function* (threa
  * tool namespace with this longer prefix.
  */
 export const cuaMcpServerName = Effect.fn("cuaMcpServerName")(function* (threadId: string) {
-  const crypto = yield* Crypto.Crypto;
-  const digest = yield* crypto
-    .digest("SHA-256", new TextEncoder().encode(threadId))
+  const digester = yield* Digest.Digest;
+  const digest = yield* digester
+    .digest(Digest.sha256, new TextEncoder().encode(threadId))
     .pipe(Effect.orDie);
   return `${McpProviderSession.CUA_MCP_SERVER_NAME}-${Hex.encode(digest).slice(0, 16)}`;
 });

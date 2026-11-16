@@ -10,7 +10,7 @@ import {
   type ThreadId,
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
@@ -199,6 +199,6 @@ export const newCommandId = Effect.fn("mcp.newCommandId")(function* () {
   const held = yield* Effect.serviceOption(LifecycleAdmissionReceipt);
   const receiptId = Option.isNone(held) ? undefined : yield* held.value.held;
   if (receiptId !== undefined) return CommandId.make(`mcp:${receiptId}`);
-  const crypto = yield* Crypto.Crypto;
-  return CommandId.make(`mcp:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`);
+  const random = yield* SecureRandom.SecureRandom;
+  return CommandId.make(`mcp:${yield* random.uuidV4().pipe(Effect.orDie)}`);
 });

@@ -5,6 +5,7 @@ import {
   claudeMarker,
   claudeChild,
 } from "./AcpClaudeReplay.testkit.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Fiber from "effect/Fiber";
@@ -18,7 +19,9 @@ import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 
-const layerHost = TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer));
+const layerHost = TestProviderHost.layer().pipe(
+  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+);
 
 const layerRegistry = Layer.succeed(
   HttpClient.HttpClient,
@@ -58,6 +61,7 @@ const layerRegistry = Layer.succeed(
 
 const layerTest = Layer.mergeAll(
   NodeServices.layer,
+  NodeCrypto.layer,
   IdAllocator.layer,
   McpProviderSessions.layer,
   layerHost,

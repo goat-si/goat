@@ -139,7 +139,7 @@ it.effect(
     const layer = Layer.mergeAll(
       McpHttpServer.catalogRegistrations.agentSurface.pipe(Layer.provide(dependencies)),
       screen,
-    ).pipe(Layer.provideMerge(McpServer.McpServer.layer));
+    ).pipe(Layer.provideMerge(McpHttpServer.layerInProcessMcpServer));
     return Effect.gen(function* () {
       const server = yield* McpServer.McpServer;
       const response = yield* server

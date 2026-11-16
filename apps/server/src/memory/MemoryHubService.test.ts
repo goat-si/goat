@@ -32,7 +32,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 import * as Option from "effect/Option";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
 import * as Persistence from "../persistence/Sqlite.ts";
 import * as Settings from "../serverSettings.ts";
 import * as FileSystem from "effect/FileSystem";

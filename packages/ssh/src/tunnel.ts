@@ -33,7 +33,8 @@ import { compareRuntimeBuilds } from "@goat/shared/semver";
 import * as Option from "effect/Option";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -227,7 +228,8 @@ export interface SshTunnelEntry {
 
 export type SshEnvironmentEffectContext =
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | Digest.Digest
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | Path.Path
   | HttpClient.HttpClient
@@ -1375,7 +1377,11 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
     }) => Effect.Effect<
       void,
       never,
-      ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
+      | ChildProcessSpawner.ChildProcessSpawner
+      | Digest.Digest
+      | SecureRandom.SecureRandom
+      | FileSystem.FileSystem
+      | Path.Path
     >,
     /** The app server refused a credential recently, so this launch goes to the managed server. */
     skipAppServer = false,
@@ -1390,7 +1396,11 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
       }
     | { readonly status: "pending"; readonly pending: SshRuntimePendingReplacement },
     SshCommandError | SshInvalidTargetError | SshLaunchError,
-    ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
+    | ChildProcessSpawner.ChildProcessSpawner
+    | Digest.Digest
+    | SecureRandom.SecureRandom
+    | FileSystem.FileSystem
+    | Path.Path
   > {
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
@@ -1673,7 +1683,11 @@ const stopRemoteServer = Effect.fn("ssh/tunnel.stopRemoteServer")(function* (
 ): Effect.fn.Return<
   void,
   SshCommandError | SshInvalidTargetError | SshLaunchError,
-  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner
+  | Digest.Digest
+  | SecureRandom.SecureRandom
+  | FileSystem.FileSystem
+  | Path.Path
 > {
   const stateKey = REMOTE_RUNTIME_STATE_KEY;
   yield* Effect.logInfo("ssh.remoteServer.stop.start", {
@@ -1717,7 +1731,11 @@ const readRemoteServerLogTail = Effect.fn("ssh/tunnel.readRemoteServerLogTail")(
 ): Effect.fn.Return<
   string,
   SshCommandError | SshInvalidTargetError | SshLaunchError,
-  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner
+  | Digest.Digest
+  | SecureRandom.SecureRandom
+  | FileSystem.FileSystem
+  | Path.Path
 > {
   const result = yield* runSshCommand(target, {
     remoteCommandArgs: ["sh", "-s"],
@@ -1792,7 +1810,8 @@ const startSshTunnelAttempt = Effect.fn("ssh/tunnel.startSshTunnel")(function* (
   SshTunnelEntry,
   SshCommandError | SshInvalidTargetError | SshReadinessError,
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | Digest.Digest
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | Path.Path
   | HttpClient.HttpClient
@@ -2988,7 +3007,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       if (remoteLaunch.pending === undefined && !needsArchiveRetry)
         pendingReplacements.delete(input.key);
       const spawnerService = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const cryptoService = yield* Crypto.Crypto;
+      const randomService = yield* SecureRandom.SecureRandom;
+      const digestService = yield* Digest.Digest;
       const fileSystemService = yield* FileSystem.FileSystem;
       const pathService = yield* Path.Path;
       yield* Scope.addFinalizer(
@@ -3036,7 +3056,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           ).pipe(
             Effect.provideService(SshConnectionSharing, sharing),
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawnerService),
-            Effect.provideService(Crypto.Crypto, cryptoService),
+            Effect.provideService(SecureRandom.SecureRandom, randomService),
+            Effect.provideService(Digest.Digest, digestService),
             Effect.provideService(FileSystem.FileSystem, fileSystemService),
             Effect.provideService(Path.Path, pathService),
           );
@@ -4769,7 +4790,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
 });
 
 /**
- * @effect-expect-leaking ChildProcessSpawner | Crypto | FileSystem | HttpClient | NetService | Path | SshPasswordPrompt
+ * @effect-expect-leaking ChildProcessSpawner | Digest | FileSystem | HttpClient | NetService | Path | SecureRandom | SshPasswordPrompt
  */
 export class SshEnvironmentManager extends Context.Service<
   SshEnvironmentManager,

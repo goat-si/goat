@@ -1,5 +1,6 @@
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
@@ -37,6 +38,7 @@ const layerAdapterTest = Layer.mergeAll(
   IdAllocator.layer,
   McpProviderSessions.layer,
   NodeServices.layer,
+  NodeCrypto.layer,
 );
 
 describe("CodexAdapterV2 post-settle continuation", () => {

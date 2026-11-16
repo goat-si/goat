@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { GOAT_CONNECT_CLI_COMING_SOON_MESSAGE } from "@goat/shared/goatConnect";
@@ -44,7 +45,12 @@ it.effect.each(tails.map((tail) => ({ tail, name: tail.join(" ") })))(
       ).pipe(Effect.provideService(Console.Console, { ...console, log }), Effect.exit);
       expect(Exit.isSuccess(exit)).toBe(true);
       expect(log.mock.calls).toEqual([[GOAT_CONNECT_CLI_COMING_SOON_MESSAGE]]);
-    }).pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, NetService.layer))),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.merge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer), NetService.layer),
+      ),
+    ),
 );
 
 it.effect("preserves root help, version and invalid-command parsing", () =>
@@ -60,5 +66,10 @@ it.effect("preserves root help, version and invalid-command parsing", () =>
       Exit.isFailure(yield* runCliWithArgs(["nonexistent-command"]).pipe(capture, Effect.exit)),
     ).toBe(true);
     expect(log.mock.calls.flat()).not.toContain(GOAT_CONNECT_CLI_COMING_SOON_MESSAGE);
-  }).pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, NetService.layer))),
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      Layer.merge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer), NetService.layer),
+    ),
+  ),
 );

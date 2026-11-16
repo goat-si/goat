@@ -5,6 +5,7 @@ import {
   ThreadId,
   type OrchestrationV2ThreadProjection,
 } from "@goat/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -54,6 +55,7 @@ it.effect("thread read exposes run cause", () =>
     };
     const dependencies = Layer.mergeAll(
       NodeServices.layer,
+      NodeCrypto.layer,
       ServerSettings.layerTest(),
       Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
       Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({}),

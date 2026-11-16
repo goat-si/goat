@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect } from "@effect/vitest";
 import {
@@ -50,18 +51,26 @@ export const fixtureWith = Effect.fnUntraced(function* (initial: SshHostStatus =
     readonly reason: string;
     readonly args: unknown;
   }> = [];
-  const fs = yield* FileSystem.FileSystem.pipe(Effect.provide(NodeServices.layer));
+  const fs = yield* FileSystem.FileSystem.pipe(
+    Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+  );
   const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-ssh-audit-" });
   const config = yield* ServerConfig.ServerConfig.pipe(
     Effect.provide(
-      ServerConfig.layerTest(process.cwd(), baseDir).pipe(Layer.provide(NodeServices.layer)),
+      ServerConfig.layerTest(process.cwd(), baseDir).pipe(
+        Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
     ),
   );
   const audit = yield* MaintenanceAudit.MaintenanceAudit.pipe(
     Effect.provide(
       MaintenanceAudit.layer.pipe(
         Layer.provide(
-          Layer.mergeAll(NodeServices.layer, Layer.succeed(ServerConfig.ServerConfig, config)),
+          Layer.mergeAll(
+            NodeServices.layer,
+            NodeCrypto.layer,
+            Layer.succeed(ServerConfig.ServerConfig, config),
+          ),
         ),
       ),
     ),

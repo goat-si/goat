@@ -1,9 +1,9 @@
 import { watchedEvents } from "../testUtils/watchedEvents.testkit.ts";
 import { assert, describe, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Hex from "effect/encoding/Hex";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -164,9 +164,9 @@ const makeScenario = (fileSystem?: FileSystem.FileSystem) =>
       yield* run(
         Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient;
-          const crypto = yield* Crypto.Crypto;
+          const digester = yield* Digest.Digest;
           const digest = Hex.encode(
-            yield* crypto.digest("SHA-256", new TextEncoder().encode(hubCredential)),
+            yield* digester.digest(Digest.sha256, new TextEncoder().encode(hubCredential)),
           );
           yield* sql`INSERT INTO memory_hub_members(space,environment,credential_digest,credential_version,status,joined_at) VALUES (${space},${hubEnv},${digest},1,'active',0)`;
           const compactor = yield* Compactor.MemoryCompactor;

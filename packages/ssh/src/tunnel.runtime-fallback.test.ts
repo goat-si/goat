@@ -1,10 +1,11 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterEach, assert, describe, it, vi } from "@effect/vitest";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NetService from "@goat/shared/Net";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Hex from "effect/encoding/Hex";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -97,9 +98,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             "unrecorded-incompatible",
           ].includes(kind)
         ) {
-          const crypto = yield* Crypto.Crypto;
+          const digester = yield* Digest.Digest;
           const digest = Hex.encode(
-            yield* crypto.digest("SHA-256", yield* f.fs.readFile(`${dir}/goat`)),
+            yield* digester.digest(Digest.sha256, yield* f.fs.readFile(`${dir}/goat`)),
           );
           yield* f.fs.writeFileString(
             `${dir}/.install-record`,
@@ -164,10 +165,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const record = yield* f.fs.readFileString(
             `${f.home}/.goat/runtime/goat/versions/${ARCHIVE.archiveVersion}/.install-record`,
           );
-          const crypto = yield* Crypto.Crypto;
+          const digester = yield* Digest.Digest;
           const digest = Hex.encode(
-            yield* crypto.digest(
-              "SHA-256",
+            yield* digester.digest(
+              Digest.sha256,
               yield* f.fs.readFile(
                 `${f.home}/.goat/runtime/goat/versions/${ARCHIVE.archiveVersion}/goat`,
               ),
@@ -188,7 +189,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           ]);
           assert.isUndefined(selected.upgradeFailure);
         }
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("bounds discovery to eight records and selects by build order rather than mtime", () =>
@@ -200,7 +201,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           ssh: SSH_RUNTIME_PROTOCOL_VERSION,
           orchestration: ORCHESTRATION_PROTOCOL_VERSION,
         });
-        const crypto = yield* Crypto.Crypto;
         const calls = `${f.test}/candidate-calls`;
         yield* f.fs.makeDirectory(calls);
         // The newest build has the oldest record; all ten are newer than retained/client.
@@ -222,8 +222,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           yield* f.fs.writeFileString(`${dir}/goat`, executable);
           yield* f.fs.chmod(`${dir}/goat`, 0o700);
           yield* f.fs.writeFileString(`${dir}/.install-complete`, version + "\n");
+          const digester = yield* Digest.Digest;
           const digest = Hex.encode(
-            yield* crypto.digest("SHA-256", yield* f.fs.readFile(`${dir}/goat`)),
+            yield* digester.digest(Digest.sha256, yield* f.fs.readFile(`${dir}/goat`)),
           );
           yield* f.fs.writeFileString(
             `${dir}/.install-record`,
@@ -244,7 +245,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.lengthOf(invoked, 8);
         const newestInvoked = Math.max(...invoked.map((version) => Number(version.split(".")[2])));
         assert.equal(selected.version, `1.3.${newestInvoked}`);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each([true, false])(
@@ -321,6 +322,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             Effect.provide(
               Layer.mergeAll(
                 NodeServices.layer,
+                NodeCrypto.layer,
                 Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, transport),
                 Layer.succeed(HttpClient.HttpClient, testHttpClient),
                 Layer.succeed(NetService.NetService, testNetService),
@@ -340,7 +342,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           for (const type of ["drain", "drain-request", "self-stop", "stop", "supervise"])
             assert.notInclude(events, `"type":"${type}"`);
           assert.equal(f.counters().uploads, 0);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("filters recorded markers before capping unrecorded discovery", () =>
@@ -370,7 +375,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, f.transport));
         assert.equal(selected.version, "1.2.2");
         assert.equal(selected.source, "installed");
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     // A plain 1.2.4 sorts above the requested 1.2.3-preview, so only the commit times show
@@ -399,7 +404,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             true,
           ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, f.transport));
           assert.equal(selected.version, expected);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("fails an upload instead of starting a compatible retained runtime", () =>
@@ -416,7 +424,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const transport = ChildProcessSpawner.make((command) => {
           if (
             command._tag === "StandardCommand" &&
-            command.args.some((arg) => arg.includes("GOAT_SSH_UPLOADED_ARCHIVE"))
+            command.args.map(String).some((arg) => arg.includes("GOAT_SSH_UPLOADED_ARCHIVE"))
           ) {
             uploads++;
             return Effect.succeed({
@@ -440,7 +448,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         }
         assert.deepEqual(yield* f.snapshot, before);
         assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"start"');
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each([true, false])("disables replacement for fallback; live=%s", (live) =>
@@ -470,7 +478,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           selected.upgradeFailure?.fix.instruction ?? "",
           "Using compatible GOAT 1.2.2.",
         );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live(
@@ -505,6 +513,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           });
           const layer = Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, transport),
             Layer.succeed(HttpClient.HttpClient, testHttpClient),
             Layer.succeed(NetService.NetService, testNetService),
@@ -542,7 +551,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             assert.equal(status?.refreshDeferred?.requestedVersion, "0.1.0");
           }).pipe(Effect.provide(layer), Effect.scoped);
           assert.deepEqual(yield* f.snapshot, before);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each([
@@ -589,6 +601,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         });
         const layer = Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, transport),
           Layer.succeed(HttpClient.HttpClient, testHttpClient),
           Layer.succeed(NetService.NetService, testNetService),
@@ -678,7 +691,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.notInclude(events, `"type":"${type}"`);
         assert.equal(events.includes('"type":"start"'), live || fallback);
         assert.equal(events.includes('"type":"auth"'), fallback);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
   },
 );

@@ -1,6 +1,7 @@
 // Adopts legacy T3 env names before anything reads the environment.
 import "@goat/contracts/adoptLegacyEnv";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
@@ -226,6 +227,8 @@ const recordCursorReplayCommand = Command.make(
 );
 
 Command.run(recordCursorReplayCommand, { version: "0.0.0" }).pipe(
-  Effect.provide(CursorSdk.layer.pipe(Layer.provideMerge(NodeServices.layer))),
+  Effect.provide(
+    CursorSdk.layer.pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  ),
   NodeRuntime.runMain,
 );

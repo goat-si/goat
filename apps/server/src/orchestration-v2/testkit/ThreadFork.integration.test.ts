@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -11,6 +12,7 @@ import {
 } from "@goat/contracts";
 import { isolatedGitEnv } from "@goat/shared/testing/gitEnv";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
@@ -281,7 +283,7 @@ describe("orchestration V2 thread fork", () => {
         const sourceUsage = sourceProjection.providerTurns[0]?.tokenUsage;
         assert.isDefined(sourceUsage);
         assert.deepEqual(transfers[0]?.sourceTokenUsage, sourceUsage);
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("forks a Codex native thread at the selected native turn boundary", () =>
@@ -463,7 +465,7 @@ describe("orchestration V2 thread fork", () => {
         "fork boundary beta",
         "fork target visible projection must not inherit source turns after the fork point",
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("keeps a Claude native fork stable when the source thread rolls back", () =>
@@ -664,7 +666,7 @@ describe("orchestration V2 thread fork", () => {
         "source rollback must not cause the fork target to inherit turns past its fork point",
       );
       assert.equal(targetProjection.contextTransfers[0]?.resolution?.strategy, "native_fork");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("rolls back a Claude native fork to an earlier fork-local turn", () =>
@@ -878,6 +880,6 @@ describe("orchestration V2 thread fork", () => {
         "fork local second",
         "resumeSessionAt must reopen the Claude fork before the rolled-back second fork turn",
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 });

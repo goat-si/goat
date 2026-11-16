@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { GrokSettings } from "@goat/provider-grok/settings";
 import * as Effect from "effect/Effect";
@@ -50,7 +51,9 @@ function layerGrokProviderAdapterRegistryReplay(
     readonly onReplayTurnComplete?: (nativeTurnId: string) => Effect.Effect<void>;
   } = {},
 ) {
-  const layerHost = TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer));
+  const layerHost = TestProviderHost.layer().pipe(
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+  );
 
   return ProviderAdapterRegistry.layerFromAdaptersEffect(
     Effect.gen(function* () {
@@ -122,7 +125,9 @@ function layerGrokProviderAdapterRegistryReplay(
       return [adapter];
     }),
   ).pipe(
-    Layer.provide(Layer.mergeAll(layerHost, NodeServices.layer, IdAllocator.layer)),
+    Layer.provide(
+      Layer.mergeAll(layerHost, NodeServices.layer, NodeCrypto.layer, IdAllocator.layer),
+    ),
     // Held inbound lines must not outlive the scenario and wedge teardown.
     Layer.merge(
       Layer.effectDiscard(

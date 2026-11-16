@@ -8,7 +8,7 @@ import {
 import * as Logger from "effect/Logger";
 import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
 import { MemoryTaskGrantCeiling } from "@goat/contracts";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
 import { expect, it, vi } from "vite-plus/test";
 import { it as effectIt } from "@effect/vitest";
 import {

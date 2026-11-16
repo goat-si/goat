@@ -1,7 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off - the upload test writes a scratch file.
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
+import * as PlatformNodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ChatAttachmentId, PROVIDER_SEND_TURN_MAX_IMAGE_BYTES } from "@goat/contracts";
 import * as FileSystem from "effect/FileSystem";
@@ -133,7 +135,11 @@ it.effect(
       const changed = yield* attachmentBody(fileSystem, path, attachment, frozen).pipe(Effect.flip);
       assert.strictEqual(changed.reason, "invalid_request");
       assert.isFalse(changed.launchMayHaveStarted);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer, PlatformNodeCrypto.layer),
+      ),
+    ),
 );
 
 it.effect(
@@ -165,5 +171,9 @@ it.effect(
         }),
       );
       assert.isNull(yield* readAttachmentExactly(fileSystem, path + ".gone", attachment));
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer, PlatformNodeCrypto.layer),
+      ),
+    ),
 );

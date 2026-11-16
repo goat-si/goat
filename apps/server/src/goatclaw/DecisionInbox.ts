@@ -23,7 +23,7 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -177,7 +177,7 @@ const make = Effect.gen(function* () {
   const settings = yield* Settings.ServerSettingsService;
   const pending = yield* PendingQuestions.PendingQuestionsMcpService;
   const threads = yield* ThreadManagement.ThreadManagementService;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const deliveryPermit = yield* Semaphore.make(1);
   const routing = yield* makeDecisionRouting;
   const version = yield* SubscriptionRef.make(0);
@@ -545,7 +545,7 @@ const make = Effect.gen(function* () {
       );
       yield* expire();
       const time = yield* now;
-      const id = idPrefix + (yield* crypto.randomUUIDv4().pipe(Effect.orDie));
+      const id = idPrefix + (yield* random.uuidV4().pipe(Effect.orDie));
       const raised = yield* sql
         .withTransaction(
           Effect.gen(function* () {
@@ -682,7 +682,7 @@ const make = Effect.gen(function* () {
           : DateTime.formatIso(DateTime.makeUnsafe(input.expiresAt));
       if (expiresAt !== null && expiresAt <= time)
         return yield* invalid("expiresAt must be in the future.");
-      const id = `decision:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`;
+      const id = `decision:${yield* random.uuidV4().pipe(Effect.orDie)}`;
       const sourceThreadId = scopeOf(caller).thread?.threadId ?? null;
       const routed = yield* sql
         .withTransaction(
@@ -752,7 +752,7 @@ const make = Effect.gen(function* () {
         if (input.optionId !== undefined)
           return yield* invalid("Answer projected questions with answers or decision.");
         const commandId = CommandId.make(
-          `decision-response:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`,
+          `decision-response:${yield* random.uuidV4().pipe(Effect.orDie)}`,
         );
         yield* sql
           .withTransaction(

@@ -22,7 +22,12 @@ import * as AgentWorkspaceAudit from "./AgentWorkspaceTerminalAudit.ts";
 import * as AgentTerminal from "./AgentTerminalMcpService.ts";
 import { TerminalToolkit } from "./toolkits/terminal/tools.ts";
 import * as TerminalHandlers from "./toolkits/terminal/handlers.ts";
-import { listedRegistration, registeredToolName, ToolDispatch } from "./ToolDispatch.ts";
+import {
+  dispatchError,
+  listedRegistration,
+  registeredToolName,
+  ToolDispatch,
+} from "./ToolDispatch.ts";
 import {
   argumentKeys,
   encodeReferenceRefusal,
@@ -42,7 +47,7 @@ import {
 import { llmsTxtCaller, llmsTxtResponse } from "./llmsTxtResponse.ts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -232,7 +237,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const saveServices = yield* Effect.context<
-    ServerConfig.ServerConfig | FileSystem.FileSystem | Path.Path | Crypto.Crypto
+    ServerConfig.ServerConfig | FileSystem.FileSystem | Path.Path | SecureRandom.SecureRandom
   >();
   const built = yield* decodeAsAdvertised(PreviewSnapshotToolkit);
   const tool = PreviewSnapshotTool;
@@ -728,30 +733,44 @@ const withListedNames = <A, E, R>(
     }),
   );
 
+/** Hands each call the services its registration was built with; the request's own still win. */
+const provideRegistrationServices = <Services>() =>
+  McpServer.middleware<{ provides: Services }>()(
+    Effect.map(
+      Effect.context<Services>(),
+      (services) => (effect) =>
+        Effect.updateContext(effect, (request: Context.Context<never>) =>
+          Context.merge(services, request),
+        ),
+    ),
+  );
+
 /**
- * `McpServer.toolkit` asks for every service its tools declare when it
- * registers them, but the auth middleware provides `McpInvocationContext` to
- * each request instead. Registration must not get one: the services it
- * captures would replace the request's.
+ * Tools declare their handler services as request-level dependencies. Those
+ * built with the server are provided here; `McpInvocationContext` and `McpServerClient`
+ * are left to the transport, which resolves them per request.
  */
 export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, RX>(
   toolkit: Toolkit.Toolkit<Tools>,
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
-) => {
-  const registration = Layer.effectDiscard(
+) =>
+  Layer.effectDiscard(
     withListedNames(
       withToolAnalytics(applyToolContracts(McpServer.registerToolkit(decodeAsAdvertised(toolkit)))),
       toolkit.tools,
     ),
-  ).pipe(Layer.provide(McpServer.McpServer.layer));
-  // @effect-diagnostics-next-line unsafeEffectTypeAssertion:off - the auth middleware provides it per request.
-  const registered = registration as Layer.Layer<
-    never,
-    never,
-    Exclude<Layer.Services<typeof registration>, McpInvocationContext.McpInvocationContext>
-  >;
-  return registered.pipe(Layer.provide(McpToolAccess.HandlersLayer.layer(handlers)));
-};
+  ).pipe(
+    Layer.provide(
+      provideRegistrationServices<
+        Exclude<
+          Tool.Requirements<Tools[keyof Tools]>,
+          McpInvocationContext.McpInvocationContext | McpSchema.McpServerClient
+        >
+      >().layer,
+    ),
+    Layer.provide(McpServer.McpServer.layer),
+    Layer.provide(McpToolAccess.HandlersLayer.layer(handlers)),
+  );
 
 /**
  * goat_call and goat_eval run tools through the server they are registered on,
@@ -763,7 +782,10 @@ const layerToolDispatch = Layer.effect(
     const server = yield* McpServer.McpServer;
     return ToolDispatch.of({
       // Callers may name a tool as it shipped; the server registers it under its listed name.
-      call: (name, args) => server.callTool({ name: registeredToolName(name), arguments: args }),
+      call: (name, args) =>
+        server
+          .callTool({ name: registeredToolName(name), arguments: args })
+          .pipe(Effect.mapError(dispatchError)),
       served: (name) =>
         server.tools.find(({ tool }) => tool.name === registeredToolName(name))?.tool,
     });
@@ -1001,15 +1023,54 @@ const layerListingChanges = Layer.effectDiscard(
   }),
 );
 
-export const layerMcpTransport = McpServer.layerHttp({
-  name: "GOAT",
-  version: packageJson.version,
-  path: "/mcp",
-  protocols: [McpProtocol.v2025_06_18, McpProtocol.v2026_07_28],
-  allowSessionTermination: true,
-}).pipe(Layer.provide(layerMcpAuthMiddleware));
+/**
+ * `McpServer` for in-process calls, which provide `McpInvocationContext` and
+ * `McpServerClient` around `callTool` as the transport does for each /mcp request.
+ */
+export const layerInProcessMcpServer = McpServer.middleware<{
+  provides: McpInvocationContext.McpInvocationContext | McpSchema.McpServerClient;
+}>()(
+  (effect) =>
+    Effect.flatMap(
+      Effect.all([
+        Effect.serviceOption(McpInvocationContext.McpInvocationContext),
+        Effect.serviceOption(McpSchema.McpServerClient),
+      ]),
+      ([scope, client]) =>
+        Option.isNone(scope) || Option.isNone(client)
+          ? Effect.die(
+              "Provide McpInvocationContext and McpServerClient around in-process MCP calls.",
+            )
+          : effect.pipe(
+              Effect.provideService(McpInvocationContext.McpInvocationContext, scope.value),
+              Effect.provideService(McpSchema.McpServerClient, client.value),
+            ),
+    ),
+  { global: true },
+).pipe(Layer.provideMerge(McpServer.McpServer.layer));
 
-export const layer = Layer.mergeAll(
+export const layerMcpTransport = <RA, RE, RR>(registrations: Layer.Layer<RA, RE, RR>) => {
+  const transport = McpServer.layerHttp({
+    name: "GOAT",
+    version: packageJson.version,
+    path: "/mcp",
+    protocols: [McpProtocol.v2025_06_18, McpProtocol.v2026_07_28],
+    allowSessionTermination: true,
+    registrations,
+  }).pipe(Layer.provide(layerMcpAuthMiddleware));
+  // Effect gives stateful-protocol calls their McpServerClient; 2026-07-28 calls get none, as under 4.0.
+  // @effect-diagnostics-next-line unsafeEffectTypeAssertion:off - 4.0 typed the transport as providing it.
+  return transport as Layer.Layer<
+    Layer.Success<typeof transport>,
+    Layer.Error<typeof transport>,
+    Exclude<
+      Layer.Services<typeof transport>,
+      HttpRouter.Request<"Requires", McpSchema.McpServerClient>
+    >
+  >;
+};
+
+const layerRegistrations = Layer.mergeAll(
   catalogRegistrations.agentSurface,
   catalogRegistrations.decision,
   catalogRegistrations.workspace.pipe(
@@ -1056,9 +1117,16 @@ export const layer = Layer.mergeAll(
   Layer.provide(ThreadResultService.layer),
   // Every registration's goatclaw and session receipt gates, and the handlers that check profiles.
   provideAdmission,
-  // tools/list leaves out what a thread's profile refuses, so the transport reads profiles too.
-  Layer.provideMerge(layerMcpTransport.pipe(Layer.provide(Profiles.layer))),
 );
+
+/** The /mcp server with every built-in registration and the server's own `extra` ones. */
+export const layerWith = <RA, RE, RR>(extra: Layer.Layer<RA, RE, RR>) =>
+  layerMcpTransport(Layer.mergeAll(layerRegistrations, extra)).pipe(
+    // tools/list leaves out what a thread's profile refuses, so the transport reads profiles too.
+    Layer.provide(Profiles.layer),
+  );
+
+export const layer = layerWith(Layer.empty);
 
 // L5 composes these after the domain and committed policy producers are ready.
 export const layerMemoryToolkit = catalogRegistrations.memory;

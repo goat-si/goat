@@ -1,4 +1,5 @@
 import { processProbeSource } from "../testUtils/processProbe.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -22,7 +23,7 @@ export const DEFAULT_TEST_MODEL_SELECTION = createModelSelection(
 
 export const layerCodexTextGenerationTest = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "goat-codex-text-generation-test-",
-}).pipe(Layer.provideMerge(NodeServices.layer));
+}).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 export interface FakeCodexInput {
   lifecycle?: { port: number; command: "exec" | "mcp list" };

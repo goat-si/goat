@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it, vi } from "@effect/vitest";
 import {
@@ -108,7 +109,7 @@ const serve = Effect.fn("test.voice.serve")(function* (
     Layer.provideMerge(
       HttpPlatform.layer.pipe(
         Layer.provideMerge(Etag.layerWeak),
-        Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       ),
     ),
   );
@@ -152,7 +153,7 @@ const serve = Effect.fn("test.voice.serve")(function* (
   };
 });
 
-it.layer(NodeServices.layer)("mounted voice API", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("mounted voice API", (it) => {
   it.effect.each(["transcribe", "prewarm"])("requires operate scope before reading %s", (path) =>
     Effect.gen(function* () {
       const h = yield* serve({ operate: false });
@@ -479,212 +480,217 @@ it.layer(NodeServices.layer)("mounted voice API", (it) => {
   );
 });
 
-it.layer(NodeServices.layer)("forced ChatGPT credential renewal", (it) => {
-  it.effect("renews before local expiry and coalesces retries for the rejected token", () =>
-    Effect.gen(function* () {
-      const instanceId = ProviderInstanceId.make("voice-refresh-test");
-      const bytes = new Map<string, Uint8Array>();
-      const secrets = ServerSecretStore.ServerSecretStore.of({
-        get: (key) => Effect.sync(() => Option.fromUndefinedOr(bytes.get(key))),
-        set: (key, value) =>
-          Effect.sync(() => {
-            bytes.set(key, value);
-          }),
-        remove: (key) =>
-          Effect.sync(() => {
-            bytes.delete(key);
-          }),
-        create: () => Effect.die("unused"),
-        getOrCreateRandom: () => Effect.die("unused"),
-      });
-      let refreshes = 0;
-      const fetchFn: typeof fetch = async (url, init) => {
-        if (String(url).endsWith("discovery"))
-          return Response.json({
-            issuer: "https://auth.test",
-            authorization_endpoint: "https://auth.test/authorize",
-            token_endpoint: "https://auth.test/token",
-            jwks_uri: "https://auth.test/jwks",
-          });
-        const form = new URLSearchParams(String(init?.body));
-        expect(form.get("grant_type")).toBe("refresh_token");
-        expect(form.get("client_id")).toBe("oaiapp_voice");
-        refreshes++;
-        return Response.json({
-          access_token: "new-access",
-          refresh_token: "new-refresh",
-          token_type: "Bearer",
-          expires_in: 3600,
-          scope: "chatgpt.tokens.use.direct",
-        });
-      };
-      yield* Effect.gen(function* () {
-        const store = yield* ProviderCredentialStore.make("codex-chatgpt", instanceId);
-        const credentials = {
-          clientId: "oaiapp_voice",
-          accessToken: "still-locally-valid",
-          refreshToken: "refresh-token",
-          expiresAt: (yield* Clock.currentTimeMillis) + 3_600_000,
-          earliestRefreshAt: null,
-          scopes: ["chatgpt.tokens.use.direct"],
-          subject: "voice-account",
-          email: null,
-        };
-        yield* store.set(new TextEncoder().encode(JSON.stringify(credentials)));
-        const auth = yield* makeCodexChatGptAuth({
-          instanceId,
-          discoveryUrl: "https://auth.test/discovery",
-        });
-        const initial = yield* auth.access;
-        expect(initial.accessToken).toBe("still-locally-valid");
-        expect(refreshes).toBe(0);
-        const renewed = yield* auth.refreshAccess(initial);
-        expect(renewed.accessToken).toBe("new-access");
-        expect((yield* auth.refreshAccess(initial)).accessToken).toBe("new-access");
-        expect(refreshes).toBe(1);
-        // A changed profile must never refresh or supply another account's token.
-        const changed = { ...renewed, subject: "different-account" };
-        yield* store.set(new TextEncoder().encode(JSON.stringify(changed)));
-        expect((yield* auth.refreshAccess(renewed).pipe(Effect.flip)).operation).toBe("access");
-        expect(refreshes).toBe(1);
-      }).pipe(
-        Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
-        Effect.provideService(ServerEnvironment.ServerEnvironmentIdentity, {
-          getEnvironmentId: Effect.succeed(EnvironmentId.make("voice-environment")),
-        }),
-        Effect.provide(
-          FetchHttpClient.layer.pipe(Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchFn))),
-        ),
-      );
-    }),
-  );
-
-  it.effect(
-    "enforces threadId readability, workspace cwd containment, and non-Codex fallback in layerSessions",
-    () =>
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "forced ChatGPT credential renewal",
+  (it) => {
+    it.effect("renews before local expiry and coalesces retries for the rejected token", () =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const workspace = yield* fs.makeTempDirectoryScoped();
-        const subdir = `${workspace}/sub`;
-        const outside = yield* fs.makeTempDirectoryScoped();
-        yield* fs.makeDirectory(subdir, { recursive: true });
-        const threadId = ThreadId.make("thread-valid");
-        const deletedId = ThreadId.make("thread-deleted");
-        const projectId = ProjectId.make("project-1");
-        const codexId = ProviderInstanceId.make("codex");
-        const claudeId = ProviderInstanceId.make("claude");
-        const secretsMap = new Map<string, Uint8Array>();
+        const instanceId = ProviderInstanceId.make("voice-refresh-test");
+        const bytes = new Map<string, Uint8Array>();
         const secrets = ServerSecretStore.ServerSecretStore.of({
-          get: (key) => Effect.sync(() => Option.fromUndefinedOr(secretsMap.get(key))),
+          get: (key) => Effect.sync(() => Option.fromUndefinedOr(bytes.get(key))),
           set: (key, value) =>
             Effect.sync(() => {
-              secretsMap.set(key, value);
+              bytes.set(key, value);
             }),
           remove: (key) =>
             Effect.sync(() => {
-              secretsMap.delete(key);
+              bytes.delete(key);
             }),
           create: () => Effect.die("unused"),
           getOrCreateRandom: () => Effect.die("unused"),
         });
-        const sessionLayer = VoiceTranscription.layerSessions.pipe(
-          Layer.provide(
-            Layer.succeed(ServerSettingsService, {
-              getSettings: Effect.succeed({
-                defaultModelSelection: {
-                  provider: "claude",
-                  instanceId: claudeId,
-                  model: "claude-4",
-                },
-                providerInstances: {
-                  [claudeId]: { driver: "claude", enabled: true, config: {} },
-                  [codexId]: {
-                    driver: "codex",
-                    enabled: true,
-                    config: {
+        let refreshes = 0;
+        const fetchFn: typeof fetch = async (url, init) => {
+          if (String(url).endsWith("discovery"))
+            return Response.json({
+              issuer: "https://auth.test",
+              authorization_endpoint: "https://auth.test/authorize",
+              token_endpoint: "https://auth.test/token",
+              jwks_uri: "https://auth.test/jwks",
+            });
+          const form = new URLSearchParams(String(init?.body));
+          expect(form.get("grant_type")).toBe("refresh_token");
+          expect(form.get("client_id")).toBe("oaiapp_voice");
+          refreshes++;
+          return Response.json({
+            access_token: "new-access",
+            refresh_token: "new-refresh",
+            token_type: "Bearer",
+            expires_in: 3600,
+            scope: "chatgpt.tokens.use.direct",
+          });
+        };
+        yield* Effect.gen(function* () {
+          const store = yield* ProviderCredentialStore.make("codex-chatgpt", instanceId);
+          const credentials = {
+            clientId: "oaiapp_voice",
+            accessToken: "still-locally-valid",
+            refreshToken: "refresh-token",
+            expiresAt: (yield* Clock.currentTimeMillis) + 3_600_000,
+            earliestRefreshAt: null,
+            scopes: ["chatgpt.tokens.use.direct"],
+            subject: "voice-account",
+            email: null,
+          };
+          yield* store.set(new TextEncoder().encode(JSON.stringify(credentials)));
+          const auth = yield* makeCodexChatGptAuth({
+            instanceId,
+            discoveryUrl: "https://auth.test/discovery",
+          });
+          const initial = yield* auth.access;
+          expect(initial.accessToken).toBe("still-locally-valid");
+          expect(refreshes).toBe(0);
+          const renewed = yield* auth.refreshAccess(initial);
+          expect(renewed.accessToken).toBe("new-access");
+          expect((yield* auth.refreshAccess(initial)).accessToken).toBe("new-access");
+          expect(refreshes).toBe(1);
+          // A changed profile must never refresh or supply another account's token.
+          const changed = { ...renewed, subject: "different-account" };
+          yield* store.set(new TextEncoder().encode(JSON.stringify(changed)));
+          expect((yield* auth.refreshAccess(renewed).pipe(Effect.flip)).operation).toBe("access");
+          expect(refreshes).toBe(1);
+        }).pipe(
+          Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
+          Effect.provideService(ServerEnvironment.ServerEnvironmentIdentity, {
+            getEnvironmentId: Effect.succeed(EnvironmentId.make("voice-environment")),
+          }),
+          Effect.provide(
+            FetchHttpClient.layer.pipe(
+              Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchFn)),
+            ),
+          ),
+        );
+      }),
+    );
+
+    it.effect(
+      "enforces threadId readability, workspace cwd containment, and non-Codex fallback in layerSessions",
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const workspace = yield* fs.makeTempDirectoryScoped();
+          const subdir = `${workspace}/sub`;
+          const outside = yield* fs.makeTempDirectoryScoped();
+          yield* fs.makeDirectory(subdir, { recursive: true });
+          const threadId = ThreadId.make("thread-valid");
+          const deletedId = ThreadId.make("thread-deleted");
+          const projectId = ProjectId.make("project-1");
+          const codexId = ProviderInstanceId.make("codex");
+          const claudeId = ProviderInstanceId.make("claude");
+          const secretsMap = new Map<string, Uint8Array>();
+          const secrets = ServerSecretStore.ServerSecretStore.of({
+            get: (key) => Effect.sync(() => Option.fromUndefinedOr(secretsMap.get(key))),
+            set: (key, value) =>
+              Effect.sync(() => {
+                secretsMap.set(key, value);
+              }),
+            remove: (key) =>
+              Effect.sync(() => {
+                secretsMap.delete(key);
+              }),
+            create: () => Effect.die("unused"),
+            getOrCreateRandom: () => Effect.die("unused"),
+          });
+          const sessionLayer = VoiceTranscription.layerSessions.pipe(
+            Layer.provide(
+              Layer.succeed(ServerSettingsService, {
+                getSettings: Effect.succeed({
+                  defaultModelSelection: {
+                    provider: "claude",
+                    instanceId: claudeId,
+                    model: "claude-4",
+                  },
+                  providerInstances: {
+                    [claudeId]: { driver: "claude", enabled: true, config: {} },
+                    [codexId]: {
+                      driver: "codex",
                       enabled: true,
-                      setupMode: "managed",
-                      modelRoute: "opencodex",
-                      opencodexBaseUrl: "http://127.0.0.1:10100/v1",
+                      config: {
+                        enabled: true,
+                        setupMode: "managed",
+                        modelRoute: "opencodex",
+                        opencodexBaseUrl: "http://127.0.0.1:10100/v1",
+                      },
                     },
                   },
-                },
-              } as unknown as Effect.Success<ServerSettingsService["Service"]["getSettings"]>),
-            } as unknown as ServerSettingsService["Service"]),
-          ),
-          Layer.provide(
-            Layer.succeed(ProjectionStoreV2, {
-              getThread: (id: ThreadId) =>
-                id === threadId
-                  ? Effect.succeed({
-                      id: threadId,
-                      projectId,
-                      worktreePath: null,
-                      deletedAt: null,
-                      modelSelection: {
-                        provider: "claude",
-                        instanceId: claudeId,
-                        model: "claude-4",
-                      },
-                    } as never)
-                  : id === deletedId
+                } as unknown as Effect.Success<ServerSettingsService["Service"]["getSettings"]>),
+              } as unknown as ServerSettingsService["Service"]),
+            ),
+            Layer.provide(
+              Layer.succeed(ProjectionStoreV2, {
+                getThread: (id: ThreadId) =>
+                  id === threadId
                     ? Effect.succeed({
-                        id: deletedId,
+                        id: threadId,
                         projectId,
                         worktreePath: null,
-                        deletedAt: "2026-10-27T00:00:00Z",
+                        deletedAt: null,
                         modelSelection: {
                           provider: "claude",
                           instanceId: claudeId,
                           model: "claude-4",
                         },
                       } as never)
-                    : Effect.fail(new ProjectionStoreThreadNotFoundError({ threadId: id })),
-            } as unknown as ProjectionStoreV2["Service"]),
-          ),
-          Layer.provide(
-            Layer.succeed(ProjectStoreV2, {
-              get: (id: ProjectId) =>
-                Effect.succeed(
-                  id === projectId
-                    ? Option.some({ projectId, workspaceRoot: workspace } as never)
-                    : Option.none(),
-                ),
-              listShells: () =>
-                Effect.succeed([{ id: projectId, workspaceRoot: workspace } as never]),
-            } as unknown as ProjectStoreV2["Service"]),
-          ),
-          Layer.provide(Layer.succeed(ServerSecretStore.ServerSecretStore, secrets)),
-          Layer.provide(
-            Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
-              getEnvironmentId: Effect.succeed(EnvironmentId.make("voice-environment")),
-            }),
-          ),
-          Layer.provide(FetchHttpClient.layer),
-        );
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const sessions = yield* VoiceTranscription.VoiceSessions;
-            const unknownThread = yield* sessions
-              .resolve({ threadId: ThreadId.make("thread-missing") })
-              .pipe(Effect.flip);
-            expect(unknownThread._tag).toBe("EnvironmentHttpForbiddenError");
-            const deletedThread = yield* sessions
-              .resolve({ threadId: deletedId })
-              .pipe(Effect.flip);
-            expect(deletedThread._tag).toBe("EnvironmentHttpForbiddenError");
-            const outsideCwd = yield* sessions
-              .resolve({ threadId, cwd: outside as never })
-              .pipe(Effect.flip);
-            expect(outsideCwd._tag).toBe("EnvironmentHttpForbiddenError");
-            const resolved = yield* sessions.resolve({
-              threadId,
-              providerInstanceId: claudeId,
-              cwd: subdir as never,
-            });
-            expect(resolved.settings.modelRoute).toBe("opencodex");
-          }).pipe(Effect.provide(sessionLayer)),
-        );
-      }),
-  );
-});
+                    : id === deletedId
+                      ? Effect.succeed({
+                          id: deletedId,
+                          projectId,
+                          worktreePath: null,
+                          deletedAt: "2026-10-27T00:00:00Z",
+                          modelSelection: {
+                            provider: "claude",
+                            instanceId: claudeId,
+                            model: "claude-4",
+                          },
+                        } as never)
+                      : Effect.fail(new ProjectionStoreThreadNotFoundError({ threadId: id })),
+              } as unknown as ProjectionStoreV2["Service"]),
+            ),
+            Layer.provide(
+              Layer.succeed(ProjectStoreV2, {
+                get: (id: ProjectId) =>
+                  Effect.succeed(
+                    id === projectId
+                      ? Option.some({ projectId, workspaceRoot: workspace } as never)
+                      : Option.none(),
+                  ),
+                listShells: () =>
+                  Effect.succeed([{ id: projectId, workspaceRoot: workspace } as never]),
+              } as unknown as ProjectStoreV2["Service"]),
+            ),
+            Layer.provide(Layer.succeed(ServerSecretStore.ServerSecretStore, secrets)),
+            Layer.provide(
+              Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
+                getEnvironmentId: Effect.succeed(EnvironmentId.make("voice-environment")),
+              }),
+            ),
+            Layer.provide(FetchHttpClient.layer),
+          );
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const sessions = yield* VoiceTranscription.VoiceSessions;
+              const unknownThread = yield* sessions
+                .resolve({ threadId: ThreadId.make("thread-missing") })
+                .pipe(Effect.flip);
+              expect(unknownThread._tag).toBe("EnvironmentHttpForbiddenError");
+              const deletedThread = yield* sessions
+                .resolve({ threadId: deletedId })
+                .pipe(Effect.flip);
+              expect(deletedThread._tag).toBe("EnvironmentHttpForbiddenError");
+              const outsideCwd = yield* sessions
+                .resolve({ threadId, cwd: outside as never })
+                .pipe(Effect.flip);
+              expect(outsideCwd._tag).toBe("EnvironmentHttpForbiddenError");
+              const resolved = yield* sessions.resolve({
+                threadId,
+                providerInstanceId: claudeId,
+                cwd: subdir as never,
+              });
+              expect(resolved.settings.modelRoute).toBe("opencodex");
+            }).pipe(Effect.provide(sessionLayer)),
+          );
+        }),
+    );
+  },
+);

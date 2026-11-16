@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import type { AgentOptions, SDKModel } from "@cursor/sdk";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -41,10 +42,12 @@ import { loadCursorSdk } from "./sdk.ts";
 const { Cursor } = loadCursorSdk();
 
 const layerTest = TestProviderHost.layer({ runBackgroundWork: false }).pipe(
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   Layer.provideMerge(IdAllocator.layer),
   Layer.provideMerge(McpProviderSessions.layer),
-  Layer.provideMerge(CursorSdk.layer.pipe(Layer.provide(NodeServices.layer))),
+  Layer.provideMerge(
+    CursorSdk.layer.pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  ),
   Layer.provideMerge(
     Layer.mock(CursorAgentSdk.CursorAgentSdkRunner)({
       open: () => Effect.die("Maintenance resolution must not open a Cursor session"),

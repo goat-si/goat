@@ -1,4 +1,4 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { cliArchiveFileName } from "@goat/shared/cliRelease";
@@ -953,7 +953,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           );
           const launches = () =>
             f.remoteCommands.filter(
-              (command) => command._tag === "StandardCommand" && isRemoteLaunch(command.args),
+              (command) =>
+                command._tag === "StandardCommand" && isRemoteLaunch(command.args.map(String)),
             ).length;
           const beforeReuse = launches();
           const reused = yield* manager.ensureEnvironment(uploadTarget, {

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -352,7 +353,7 @@ it.live("login sentinels stay out of agent results, thread events and browser di
               Layer.provideMerge(
                 ServerConfig.layerTest(process.cwd(), { prefix: "goat-login-sentinel-" }),
               ),
-              Layer.provideMerge(NodeServices.layer),
+              Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
             ),
           ),
         );
@@ -374,7 +375,7 @@ it.live("login sentinels stay out of agent results, thread events and browser di
             PreviewStandardToolkit,
             PreviewHandlers.layerStandard,
           ).pipe(
-            Layer.provideMerge(McpServer.McpServer.layer),
+            Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
             Layer.provide(
               Layer.mergeAll(
                 layerPermissionProfilesOff,
@@ -468,7 +469,7 @@ it.live("login sentinels stay out of agent results, thread events and browser di
                   entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
                 },
                 assetResolver: () => resolveScreenRuntimeAsset("dev"),
-              }).pipe(Layer.provide(NodeServices.layer)),
+              }).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
             ),
           );
           expect(screen.status, JSON.stringify(screen.error)).toBe("completed");
@@ -606,6 +607,6 @@ it.live("login sentinels stay out of agent results, thread events and browser di
           ).pipe(Layer.provideMerge(database)),
         ),
       );
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   ).pipe(Effect.provide(logger));
 });

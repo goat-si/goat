@@ -31,6 +31,7 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
@@ -1482,8 +1483,8 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       ];
       yield* sql.withTransaction(
         Effect.gen(function* () {
-          for (let offset = 0; offset < items.length; offset += 50) {
-            const rows = items.slice(offset, offset + 50).map((item) => ({
+          for (const chunk of Arr.chunksOf(items, 50)) {
+            const rows = Arr.map(chunk, (item) => ({
               turn_item_id: item.id,
               thread_id: item.threadId,
               run_id: item.runId,

@@ -200,7 +200,7 @@ function signingFixture(
     if (!ChildProcess.isStandardCommand(command)) {
       return Effect.die("Unexpected piped command");
     }
-    commands.push({ command: command.command, args: command.args });
+    commands.push({ command: command.command, args: command.args.map(String) });
     return Effect.succeed(
       command.args[1] === "submit"
         ? mockProcess(

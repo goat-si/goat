@@ -1,12 +1,12 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import { expect, it } from "@effect/vitest";
 import * as NodeFS from "node:fs";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -46,8 +46,8 @@ const driver = (value: string) => ProviderDriverKind.make(value);
 // Shell stubs use POSIX paths; Windows temp paths cannot split on colon.
 const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 const makeTempDir = (name: string) =>
-  Crypto.Crypto.pipe(
-    Effect.flatMap((crypto) => crypto.randomUUIDv4()),
+  SecureRandom.SecureRandom.pipe(
+    Effect.flatMap((crypto) => crypto.uuidV4()),
     Effect.flatMap((id) =>
       Effect.acquireRelease(
         Effect.succeed(NodePath.join(NodeFS.realpathSync(NodeOS.tmpdir()), `${name}-${id}`)),
@@ -587,7 +587,11 @@ it.layer(
   it.effect.each([
     { name: "a user-scope link", resolved: userWinGetLink, real: userWinGetPackage },
     { name: "a user-scope package", resolved: userWinGetPackage, real: userWinGetPackage },
-    { name: "a machine-scope package", resolved: machineWinGetPackage, real: machineWinGetPackage },
+    {
+      name: "a machine-scope package",
+      resolved: machineWinGetPackage,
+      real: machineWinGetPackage,
+    },
     { name: "a machine-scope link alone", resolved: machineWinGetLink, real: machineWinGetLink },
     {
       name: "a mixed-case link",

@@ -17,7 +17,7 @@ import * as ChannelChildWork from "../channels/ChannelChildWork.ts";
 import { captureRpcMemoryGrantCeiling } from "../auth/RpcAuthorization.ts";
 import { effectiveMemoryGrant } from "../memory/MemoryAccess.ts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -173,7 +173,7 @@ const make = Effect.gen(function* () {
   const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const fileSystem = yield* FileSystem.FileSystem;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const config = yield* ServerConfig.ServerConfig;
   const settings = yield* ServerSettings.ServerSettingsService;
   const watches = yield* LaunchWatchService.LaunchWatchService;
@@ -813,7 +813,7 @@ const make = Effect.gen(function* () {
         Effect.provideService(ManagedProjectFolders.ManagedProjectFolders, folders),
         Effect.provideService(GitVcsDriver.GitVcsDriver, git),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
-        Effect.provideService(Crypto.Crypto, crypto),
+        Effect.provideService(SecureRandom.SecureRandom, random),
         Effect.provideService(ServerConfig.ServerConfig, config),
         Effect.provideService(ServerSettings.ServerSettingsService, settings),
         Effect.provideService(LaunchWatchService.LaunchWatchService, watches),

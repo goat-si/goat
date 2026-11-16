@@ -7,6 +7,7 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { connectionOf } from "../auth/connectionContext.ts";
 import { parseBearerToken } from "../auth/EnvironmentAuth.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
+import { requestUrl } from "../requestUrl.ts";
 import * as Settings from "../serverSettings.ts";
 import { credentialRefusalMessage, GENERIC_REFUSAL, refusedToolCallId } from "./mcpAuthResponse.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -16,7 +17,7 @@ import { withServedToolNames } from "./ToolDispatch.ts";
 import { listingSetting, withCallerListing } from "./toolListing.ts";
 
 const mcpResourceMetadataUrl = (request: HttpServerRequest.HttpServerRequest) =>
-  HttpServerRequest.toURL(request).pipe(
+  requestUrl(request).pipe(
     Option.map((url) => `${url.origin}/.well-known/oauth-protected-resource/mcp`),
   );
 

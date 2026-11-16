@@ -1,9 +1,11 @@
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import { ARCHIVE } from "./tunnel.fixture.ts";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
@@ -99,7 +101,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         for (const type of ["stop", "drain", "self-stop", "supervise"])
           assert.notInclude(events, `"type":"${type}"`);
         assert.notInclude(events, '"type":"auth"');
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each([false, true])(
@@ -134,7 +136,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           for (const type of ["drain", "self-stop", "supervise", "stop", "activity"])
             assert.notInclude(events, `"type":"${type}"`);
           assert.isAbove(Number(yield* f.fs.readFileString(`${f.test}/compat-requests`)), 0);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("legacy acquisition failure preserves all running-server files", () =>
@@ -155,7 +160,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         yield* Effect.sync(() => process.kill(f.pid, 0));
         for (const type of ["stop", "drain", "self-stop", "supervise"])
           assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), `"type":"${type}"`);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each(["idle", "busy", "unknown", "garbage", "idle,busy"] as const)(
@@ -208,7 +213,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             for (const type of ["stop", "drain", "self-stop", "supervise"])
               assert.notInclude(events, `"type":"${type}"`);
           }
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
   },
 );

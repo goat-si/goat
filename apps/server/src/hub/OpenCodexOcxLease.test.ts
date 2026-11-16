@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId } from "@goat/contracts";
@@ -128,7 +129,7 @@ const scriptedOcx = Effect.fn("OpenCodexOcxLeaseTest.scriptedOcx")(function* (fl
   return { sync, script, syncStarted, syncRelease, updateStarted, updateRelease, updateEnded };
 });
 
-it.layer(NodeServices.layer)("OpenCodex shared lease", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("OpenCodex shared lease", (it) => {
   it.effect("a concurrent Home sync reports updating while apply holds the lease", () =>
     Effect.gen(function* () {
       const fleet = makeFleet({ homeOwnership: "adopted" });

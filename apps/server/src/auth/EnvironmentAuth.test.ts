@@ -1,4 +1,5 @@
 import { makeDpopKey } from "./dpop.testkit.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { authScopeResponse, AuthStandardClientScopes } from "@goat/contracts";
@@ -97,7 +98,7 @@ const requestMetadata = {
   ipAddress: "192.168.1.23",
 };
 
-it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("EnvironmentAuth.layer", (it) => {
   it.effect("refuses CLI session issuance with the reserved desktop subject", () =>
     Effect.gen(function* () {
       const auth = onMainListenerAuth(yield* EnvironmentAuth.EnvironmentAuth);

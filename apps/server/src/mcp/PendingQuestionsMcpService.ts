@@ -15,7 +15,7 @@ import {
   type UserInputRespondedBy,
   type ThreadId,
 } from "@goat/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -101,14 +101,14 @@ const decodeRead = Schema.decodeUnknownEffect(OrchestratorMcpPendingRequestReadR
 const decodeRespond = Schema.decodeUnknownEffect(OrchestratorMcpPendingRequestRespondResult);
 
 const make = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
   const hosts = yield* HostThreadsMcpService.HostThreadsMcpService;
   const inScope = <A, E, R>(scope: McpInvocationScope, effect: Effect.Effect<A, E, R>) =>
     effect.pipe(
       Effect.provideService(McpInvocationContext, scope),
-      Effect.provideService(Crypto.Crypto, crypto),
+      Effect.provideService(SecureRandom.SecureRandom, random),
       Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
     );
   const requireRemoteThread = (input: {
