@@ -7,8 +7,14 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
+import * as EffectOutbox from "./EffectOutbox.ts";
+import * as EventSink from "./EventSink.ts";
+import * as EventStore from "./EventStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ProviderRuntimeRecovery from "./ProviderRuntimeRecoveryService.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import {
@@ -108,7 +114,7 @@ it.effect.each([
 );
 
 it.effect(
-  "Force stop after a server restart ends the child, and the decision survives the next",
+  "the force decision reads only durable state, so a new server instance decides it the same",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -134,6 +140,55 @@ it.effect(
         });
       }),
     ),
+);
+
+it.effect("after a restart cancelled the run, the parent's force stops nothing", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const database = Layer.succeedContext(yield* Layer.build(SqlitePersistence.layerMemory));
+      const task = yield* parentWithTask("force-recovered", "unanswered").pipe(
+        Effect.provide(layerForAdapter(adapter, { database })),
+      );
+      // Startup recovery cancels every run the previous server left running.
+      yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService.use(
+        (recovery) => recovery.recover,
+      ).pipe(
+        Effect.provide(
+          ProviderRuntimeRecovery.layer.pipe(
+            Layer.provideMerge(
+              EventSink.layer.pipe(
+                Layer.provideMerge(
+                  Layer.mergeAll(
+                    EventStore.layer,
+                    ProjectionStore.layer,
+                    EffectOutbox.layer,
+                    IdAllocator.layer,
+                  ),
+                ),
+              ),
+            ),
+            Layer.provide(Layer.mergeAll(database, ServerSettings.layerTest())),
+          ),
+        ),
+      );
+      const calls: Array<string> = [];
+      const sessions = Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+        isLive: () => Effect.succeed(true),
+        otherWorkingThreads: () => Effect.succeed([]),
+        detach: () => Effect.sync(() => calls.push("detach")),
+        releaseUnlessBusy: () => Effect.sync(() => calls.push("release")).pipe(Effect.as(true)),
+      });
+      const after = yield* Effect.all({
+        refusal: refusal(task),
+        runs: runStatuses(task.childThreadId),
+        reason: interruptResult(task.childThreadId),
+      }).pipe(Effect.provide(layerForAdapter(adapter, { database, sessions })));
+      assert.deepEqual(
+        { ...after, calls },
+        { refusal: "not_unresponsive", runs: ["cancelled"], reason: undefined, calls: [] },
+      );
+    }),
+  ),
 );
 
 it.effect("the parent's Force stop of a cloud child refuses and leaves its run alone", () =>
