@@ -12,9 +12,11 @@ import {
 } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -90,7 +92,116 @@ const seedProject = (input: {
     }),
   );
 
+const watchPullRequest = Effect.fn("test.watchPullRequest")(function* (
+  name: string,
+  number: number,
+) {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const threadId = ThreadId.make(`${name}-thread`);
+  const projectId = ProjectId.make(`${name}-project`);
+  yield* seedProject({
+    projectId,
+    title: name,
+    workspaceRoot: `/workspace/${name}`,
+    defaultModelSelection: null,
+    createdAt: "2026-10-01T00:00:00.000Z",
+  });
+  yield* orchestrator.dispatch({
+    type: "thread.create",
+    createdBy: "user",
+    creationSource: "web",
+    commandId: CommandId.make(`${name}-create`),
+    threadId,
+    projectId,
+    title: name,
+    modelSelection,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+  });
+  yield* orchestrator.dispatch({
+    type: "thread.pull-request.watch",
+    commandId: CommandId.make(`${name}-watch`),
+    threadId,
+    host: "github.com",
+    repository: "goat-si/goat",
+    number,
+    watching: true,
+    link: { url: `https://github.com/goat-si/goat/pull/${number}`, source: "agent" },
+  });
+  return { orchestrator, threadId, projectId };
+});
+
+/** A host whose every read finds a new fingerprint, so each pass reads the detail. */
+const fakeHost = (input: {
+  readonly projectId: ProjectId;
+  readonly number: number;
+  readonly detailReads: Queue.Queue<void>;
+  readonly changes: () => Stream.Stream<void>;
+}) => {
+  let fingerprints = 0;
+  return Layer.mergeAll(
+    NodeServices.layer,
+    NodeCrypto.layer,
+    ServerSettings.layerTest(),
+    Layer.mock(PullRequestService.PullRequestService)({
+      detail: () =>
+        Queue.offer(input.detailReads, undefined).pipe(
+          Effect.as({
+            ...watchedPullRequestDetail({
+              projectId: input.projectId,
+              number: input.number,
+              at: "2026-10-02T12:00:00.000Z",
+            }),
+            headSha: "aaaaaaaaaa",
+          }),
+        ),
+      activity: () =>
+        Effect.succeed({
+          comments: [],
+          commentCount: 0,
+          commentsTruncated: false,
+          reviewThreads: [],
+          commits: [],
+        }),
+      watchFingerprint: () => Effect.sync(() => ({ status: String(++fingerprints), remarks: "" })),
+      invalidate: () => Effect.void,
+      changes: input.changes,
+    }),
+  );
+};
+
 describe("pull request watch host events", () => {
+  it.effect("opens a host feed for a watched pull request once the first sweep has read it", () =>
+    Effect.gen(function* () {
+      const { projectId } = yield* watchPullRequest("pr-watch-host-feed-opened", 16);
+      const following = yield* Deferred.make<void>();
+      const detailReads = yield* Queue.unbounded<void>();
+      const reactor = yield* PullRequestWatchReactor.make.pipe(
+        Effect.provide(
+          fakeHost({
+            projectId,
+            number: 16,
+            detailReads,
+            changes: () =>
+              Stream.fromEffectDrain(Deferred.succeed(following, undefined)).pipe(
+                Stream.concat(Stream.never),
+              ),
+          }),
+        ),
+      );
+      yield* reactor.start();
+      yield* Queue.take(detailReads);
+      // The next sweep reads again only after the first one has opened its feeds.
+      const opened = yield* Effect.raceFirst(
+        Deferred.await(following).pipe(Effect.as(true)),
+        Queue.take(detailReads).pipe(Effect.as(false)),
+      ).pipe(Effect.forkChild);
+      yield* TestClock.adjust("2 minutes");
+      assert.isTrue(yield* Fiber.join(opened), "the reactor never opened a host feed");
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
   it.effect(
     "reads a watched pull request when the host reports a change, and wakes once per change",
     () =>
