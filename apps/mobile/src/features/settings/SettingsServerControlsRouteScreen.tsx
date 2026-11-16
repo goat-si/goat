@@ -1,10 +1,8 @@
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
-import {
-  isAtomCommandInterrupted,
-  squashAtomCommandFailure,
-} from "@goat/client-runtime/state/runtime";
+import { isAtomCommandInterrupted } from "@goat/client-runtime/state/runtime";
 import * as Dialog from "../../components/ui/Dialog";
 import { SettingsRow } from "./components/SettingsRow";
+import { commandFailureText } from "./commandFailureText";
 import { AllowedApps } from "./computerUse/AllowedApps";
 import {
   AuthSettingsWriteScope,
@@ -748,10 +746,9 @@ function ServerSettingsDetail(props: {
                                 displayTargets.find(
                                   (target) => target.environment.environmentId === environmentId,
                                 )?.environment.label ?? environmentId;
-                              const error = squashAtomCommandFailure(result);
                               Dialog.alert(
                                 "Could not remove the app",
-                                `${label}: ${error instanceof Error ? error.message : String(error)}`,
+                                `${label}: ${commandFailureText(result)}`,
                               );
                             })
                             .finally(() => {

@@ -3,18 +3,19 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   type AtomCommandResult,
   isAtomCommandInterrupted,
-  squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import type { EnvironmentId, StorageCleanupSettings } from "@goat/contracts";
 import { useEffect, useState } from "react";
 import { TextInput, View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
+import * as Dialog from "../../components/ui/Dialog";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsActionRow } from "./components/SettingsActionRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
+import { commandFailureText } from "./commandFailureText";
 
 function NumberRow({
   label,
@@ -31,12 +32,20 @@ function NumberRow({
   readonly emptyLabel?: string;
   readonly onSave: (value: number | null) => Promise<boolean>;
 }) {
-  const [draft, setDraft] = useState(value === null ? "" : String(value));
-  const reset = () => setDraft(value === null ? "" : String(value));
-  const save = (next: number | null) =>
+  // Null shows the saved value; a newer saved value replaces whatever was typed.
+  const [draft, setDraft] = useState<string | null>(null);
+  const [savedValue, setSavedValue] = useState(value);
+  if (savedValue !== value) {
+    setSavedValue(value);
+    setDraft(null);
+  }
+  const shown = draft ?? (value === null ? "" : String(value));
+  const save = (next: number | null) => {
+    const submitted = shown;
     void onSave(next).then((saved) => {
-      if (!saved) reset();
+      if (!saved) setDraft((current) => (current === submitted ? null : current));
     });
+  };
   return (
     <View className="gap-2 p-4">
       <Text>{label}</Text>
@@ -44,14 +53,14 @@ function NumberRow({
         accessibilityLabel={label}
         keyboardType="number-pad"
         editable={!disabled}
-        value={draft}
+        value={shown}
         placeholder={emptyLabel}
         onChangeText={setDraft}
         onEndEditing={() => {
-          const number = Number(draft);
-          if (draft.trim() === "") save(null);
+          const number = Number(shown);
+          if (shown.trim() === "") save(null);
           else if (Number.isInteger(number) && number >= 1 && number <= maximum) save(number);
-          else reset();
+          else setDraft(null);
         }}
       />
     </View>
@@ -69,7 +78,6 @@ export function WorktreeCleanupSection({
   const report = useAtomValue(serverEnvironment.storageCleanupReport({ environmentId, input: {} }));
   const update = useAtomCommand(serverEnvironment.updateSettings);
   const respond = useAtomCommand(serverEnvironment.respondWorktreeCleanupPreview);
-  const [error, setError] = useState<string | null>(null);
   const preview = report._tag === "Success" ? report.value?.worktreePreview : undefined;
   const previewId = preview?.id;
   const seenAt = preview?.seenAt;
@@ -78,17 +86,19 @@ export function WorktreeCleanupSection({
     if (previewId !== undefined && seenAt === null)
       void respond({ environmentId, input: { previewId, response: "seen" } });
   }, [environmentId, previewId, seenAt, respond]);
-  const run = async (action: () => Promise<AtomCommandResult<unknown, unknown>>) => {
-    setError(null);
+  const run = async (
+    title: string,
+    action: () => Promise<AtomCommandResult<unknown, unknown>>,
+  ): Promise<boolean> => {
     const result = await action();
     if (result._tag !== "Failure") return true;
-    if (isAtomCommandInterrupted(result)) return false;
-    const failure = squashAtomCommandFailure(result);
-    setError(failure instanceof Error ? failure.message : "The change was not saved. Try again.");
+    if (!isAtomCommandInterrupted(result)) Dialog.alert(title, commandFailureText(result));
     return false;
   };
   const write = (patch: Partial<StorageCleanupSettings>) =>
-    run(() => update({ environmentId, input: { patch: { storageCleanup: patch } } }));
+    run("Could not save settings", () =>
+      update({ environmentId, input: { patch: { storageCleanup: patch } } }),
+    );
   return (
     <SettingsSection title="Worktree cleanup">
       <NumberRow
@@ -146,7 +156,7 @@ export function WorktreeCleanupSection({
             label="Clean up now"
             disabled={!allowed}
             onPress={() =>
-              void run(() =>
+              void run("Could not clean up worktrees", () =>
                 respond({ environmentId, input: { previewId: preview.id, response: "confirm" } }),
               )
             }
@@ -157,11 +167,6 @@ export function WorktreeCleanupSection({
             onPress={() => void write(WORKTREE_CLEANUP_OFF)}
           />
         </>
-      ) : null}
-      {error ? (
-        <Text selectable className="px-4 pb-4 text-sm text-danger-foreground">
-          {error}
-        </Text>
       ) : null}
     </SettingsSection>
   );

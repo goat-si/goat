@@ -1,12 +1,10 @@
 import type { EnvironmentId, ServerSettingsPatch } from "@goat/contracts";
-import {
-  isAtomCommandInterrupted,
-  squashAtomCommandFailure,
-} from "@goat/client-runtime/state/runtime";
+import { isAtomCommandInterrupted } from "@goat/client-runtime/state/runtime";
 
 import * as Dialog from "../../components/ui/Dialog";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { commandFailureText } from "./commandFailureText";
 import type { ScopedMobileSettingsTarget } from "./settings-scoped-server";
 
 export function useSettingsWriter() {
@@ -32,8 +30,7 @@ export function useSettingsWriter() {
         const label =
           targets.find((target) => target.environment.environmentId === entry.environmentId)
             ?.environment.label ?? entry.environmentId;
-        const error = squashAtomCommandFailure(result);
-        return `${label}: ${error instanceof Error ? error.message : String(error)}`;
+        return `${label}: ${commandFailureText(result)}`;
       }),
     );
     const failures = outcomes.filter((outcome) => outcome !== null);
