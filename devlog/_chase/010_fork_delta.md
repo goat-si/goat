@@ -157,6 +157,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `package.json`, `apps/server/package.json`, `packages/shared/src/nodeSqliteClient.ts`, `apps/server/vite.config.ts`, `scripts/dev-runtime-archive.ts`, `.github/workflows/{release-desktop,goat-nightly}.yml`
 - 정책: 루트 `engines.node`(정확한 `26.12.1`)가 개발·CI·SEA Node의 정본이다. upstream도 정확한 값을 쓰므로 버전 충돌은 GOAT가 정한 값을 둔다. 서버 `engines.node`와 `NODE_SQLITE_RUNTIME_RANGE`는 `^24.16.0 || >=26.1.0`으로 upstream `^22.16 || ^23.11 || >=24.10`과 다르다 (#1015, 데스크톱이 Electron 44의 Node 24.22.1에서 서버를 돌린다). upstream이 `nodeSqliteClient.ts`를 바꾸면 받고 이 범위 검사만 다시 얹는다. upstream의 네이티브 SEA 빌드 guard는 받지 않는다 (`dev-runtime-archive`가 다른 SEA Node를 고른다). 고정 이전 커밋을 빌드하는 실행 파일 단계의 workflow revision fallback은 유지한다 ([10.011](./_fin/10/10.011_t3_chase_node_pin.md)).
 
+### `office-archive-split` Office 미리보기의 upstream 코드 옮김
+
+- 커밋: 사이클 261114 다음 PR의 lane N13a (PR 번호는 draft PR이 열리면 적는다)
+- 경로: `apps/web/src/components/files/officeArchiveWorkbook.ts`, `apps/web/src/components/files/officeArchiveXml.ts`, `apps/web/src/components/files/AttachmentFilePreview.spreadsheet.browser.test.tsx`
+- 정책: upstream 코드를 그대로 옮긴 GOAT 파일이다. `officeArchive.ts`가 1211줄 예산에 닿아 `boundedWorksheet`·`boundWorkbook`(upstream c8e8b58ee6 이후 `engineStyles` 포함)은 `officeArchiveWorkbook.ts`로, 두 파일이 같이 쓰는 `xmlParser`·`officeXmlDecoder`·`officeXml`은 `officeArchiveXml.ts`로 옮겼다. 스프레드시트 미리보기 테스트 다섯 묶음은 `AttachmentFilePreview.spreadsheet.browser.test.tsx`에 있다. upstream이 `officeArchive.ts`의 스프레드시트 부분이나 XML 도우미를 바꾸면 그 hunk를 이 파일들에 옮겨 적용한다. Word 부분은 `officeArchive.ts`에 남아 그대로 머지된다. upstream `fcc25c8bb2`는 Office 테스트 전부를 `AttachmentFilePreview.office.browser.test.tsx`로 나눴지만 GOAT는 받지 않았다(#3176). 그 파일에 들어가는 스프레드시트 테스트 hunk는 GOAT의 spreadsheet 파일로, 나머지 Office 테스트 hunk는 `AttachmentFilePreview.browser.test.tsx`로 옮긴다.
+
 ### `orchestrator-goat-modules` Orchestrator의 GOAT 명령 모듈
 
 - 커밋: #808 #809 #811 #813 #814 #815 #870 #874 #892

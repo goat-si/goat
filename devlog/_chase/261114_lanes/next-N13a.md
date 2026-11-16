@@ -76,3 +76,68 @@ Captures in /tmp/n13a-captures on pen-macmini, kept outside the worktree until t
 - The two move-outs carry upstream code into GOAT modules (officeArchiveWorkbook.ts, officeArchiveXml.ts, AttachmentFilePreview.spreadsheet.browser.test.tsx). The next chase maps upstream's hunks of officeArchive.ts and AttachmentFilePreview(.office).browser.test.tsx onto them. Not recorded in 010_fork_delta.md, which is on dev.
 
 NOT RUN: CI (ci:full), the desktop app, mobile (no Office preview there), Windows and Linux hosts, a build of the desktop artifact.
+
+## Review of `6216af3736` (APPROVE WITH NITS)
+
+A fresh C4 review found no P0 or P1, and three P2s, none a code defect. The coordinator ruled on each; the head stays `6216af373677f0f6f7b85560335fd4c7e64d37f4`.
+
+### O18 (`bc3eb6d2b2`): where the 34.8 MB lands (N13A-P2-2)
+
+The 34,818,280 bytes of CJK faces ship in every copy of the web client, not only the web build (reviewer's figures, from `gh release view` on v0.1.10-nightly.20261115.371 and the staging code; compression ratio inferred, the OTF faces barely compress):
+
+- CLI archives stage the whole client (scripts/build-cli-archive.ts:592, :634): each grows by about 33-35 MB, from 120-169 MB today.
+- Desktop installers bundle three SSH runtime archives plus the app's own copy, and the WSL runtime on Windows (scripts/build-desktop-artifact.ts:3080, .github/workflows/goat-nightly.yml:599, :832-834): each installer (700-840 MB today) grows by about 140-175 MB.
+- Every SSH runtime install uploads about 35 MB more.
+- The 256 MiB SSH runtime cap (scripts/build-desktop-artifact.ts:3360) still holds: linux-x64 goes from about 161 MiB to about 194 MiB.
+
+The decision is the owner's; the coordinator asked him. Until he answers, `bc3eb6d2b2` stays as ported. If he prefers to hold the fonts, the lane takes `5b1181c6a1` out in a follow-up commit when the coordinator says so.
+
+### WORD_LIMITS before and after (`787c59c802`, P3-1)
+
+Checked against officeArchive.ts on `02511156b0` and on the head (officeArchive.ts:10).
+
+| limit                                 | before                                   | after                     |
+| ------------------------------------- | ---------------------------------------- | ------------------------- |
+| body bytes kept                       | 3 MiB                                    | 4 MiB                     |
+| body elements                         | 5,000                                    | 50,000                    |
+| body tags                             | 100,000                                  | 1,000,000                 |
+| tags per element                      | 2,000 (and a 128 KiB window per element) | 100,000                   |
+| paragraph text                        | none                                     | 128 KiB                   |
+| styles                                | 1,024                                    | 8,192                     |
+| style bytes / units                   | 1 MiB / 20,000                           | 16 MiB / 400,000          |
+| style visits / property visits        | 8,192 / 100,000                          | 131,072 / 2,000,000       |
+| numbering references / bytes / markup | 2,000 / 128 KiB / 2,000                  | 20,000 / 32 MiB / 400,000 |
+| auxiliary part bytes / markup         | 1 MiB / 50,000                           | 8 MiB / 1,000,000         |
+| expanded bytes / markup               | 3 MiB / 100,000                          | 64 MiB / 4,000,000        |
+
+Upstream's comment puts a 40K-character paragraph at about 2 s and growing with the square, so a paragraph at the 128 KiB limit takes about 20 s in the document worker; each worker call either finishes or ends with a message after 30 s, off the main thread. The preparation bounds are unchanged: 50 MB input (officeArchive.ts:681), 2,048 entries (:689), streamed expansion caps (:729) and the 30 s preparation timer (OpenXmlOfficeViewer.tsx:67).
+
+### More known limits
+
+- Slow links (N13A-P2-1, goat#3513): over a slow link a first CJK preview can end in "This document took too long to preview". The faces (Japanese 4.5 MB, Korean 4.6 MB, Traditional Chinese 5.7 MB, Simplified sans 8.3 MB; up to 20 MB for a document with two Chinese families) must arrive inside the 30-second per-call limit of office/worker-rpc.ts:123 together with the engine's start, and a terminated worker cannot resume the download. Before this lane those documents showed empty boxes. Upstream's own behaviour; thresholds inferred, not measured. Follow-up: https://github.com/goat-si/goat/issues/3513.
+- SVG pictures (P3-2, goat#3514): an SVG picture from a Word file (or a WMF/EMF picture the engine turns into SVG) decodes on the main thread through office/vector-pictures.ts:17-41 with no time or input-size bound; output is capped at 2,560 px and nothing external loads. Follow-up: https://github.com/goat-si/goat/issues/3514.
+- Font serving (P3-3): the desktop protocol (apps/desktop/src/electron/ElectronProtocol.ts:272) and the server's asar fallback (apps/server/src/http.ts:846) read a whole font file per request; existing behaviour, the files are now larger (up to 11.6 MB).
+- Fork map (P3-4): devlog/_chase/010_fork_delta.md gains an `office-archive-split` block for officeArchiveWorkbook.ts, officeArchiveXml.ts and AttachmentFilePreview.spreadsheet.browser.test.tsx.
+
+### Captures for the PR (P3-5)
+
+In /tmp/n13a-captures on pen-macmini until the coordinator sends the PR number. Before images are the harness renders on `02511156b0`; after images are the real-client renders on the lane head. `harness-after-slide-worker-import-error.png` is not an after image.
+
+| preview               | before           | after                  |
+| --------------------- | ---------------- | ---------------------- |
+| Word (Japanese)       | before-word.png  | after-client-word.png  |
+| Excel                 | before-sheet.png | after-client-sheet.png |
+| PowerPoint (Japanese) | before-slide.png | after-client-slide.png |
+
+### PowerPoint in the built web app (N13A-P2-3)
+
+Run on the lane head `6216af3736`, pen-macmini, after lane N16's gate had finished (load 2.2). `vp run dev --share --built` (the runner accepts `--built` only with `--share`, scripts/dev-runner.ts:643) built apps/web with `vp build --watch` ("built in 34382ms") and the backend served apps/web/dist from this worktree's own .goat; GOAT's browser panel opened the tailnet URL, paired, and opened decks from a project at /tmp/n13a-fixtures in the Files panel.
+
+- review-en.pptx (python-pptx default Office theme, Calibri Light and Calibri, two slides, a filled shape): both slides render.
+- launch-ja.pptx (Yu Gothic and Meiryo runs with Japanese text): the slide renders with Japanese glyphs.
+- Network, from opening the decks on: no failed request. Each returned 200: `presentation.worker-0SNkwrL-.js`, `chunk-3TTZUGDD-Bz8jjJxr.js` (pptx 0.5.1's top-level `import()`, which the Vitest harness could not load in a worker), `pptx_wasm_bg-CJHE01bI.wasm`, `Carlito-Regular-BkJcQkis.ttf` and, for the Japanese deck, `NotoSansJP-Regular-Drz8BAUN.otf`.
+- Console and page errors after opening the decks: none. Before pairing, the first load got 502s from the tailnet proxy while the backend was still starting ("Unable to preload CSS"; a reload fixed it) and the WebSocket refused the unpaired page; neither involves the previews.
+- Captures: `built-web-slide-en.png`, `built-web-slide-ja.png`, and `built-web-sheet-resize.mp4` (11.7 s: a column edge drag in sales-ja.xlsx, then a row edge drag).
+- The dev server was stopped through its own session; the tailnet mapping it left for port 7149 was removed with `tailscale serve --https=7149 off`; apps/web/dist was removed.
+
+Desktop NOT RUN: the built renderer loads only in a production run (`isDevelopment` is false when `VITE_DEV_SERVER_URL` is empty), and there `GOAT_DEV_INSECURE_SECRET_STORAGE` does not apply (apps/desktop/src/app/DesktopDevSecretStorage.ts:27-32), so the unsigned app would open the macOS keychain's shared safe-storage item and macOS would prompt for the login password; `vp run dev:desktop` loads the Vite dev renderer instead of the built one, and apps/desktop has no package build script (its `dist-electron/main.cjs` comes from the vite `build` task or the artifact build). The coordinator carries the desktop PowerPoint check before stable promotion.
