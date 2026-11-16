@@ -177,7 +177,7 @@ function mainTile() {
       EnvironmentId.make("env"),
       {
         data: props.cause === null && !props.offline ? botList : null,
-        successResult: null,
+        successResult: props.cause === null && !props.offline ? AsyncResult.success(botList) : null,
         cause: props.cause,
         error: null,
         isPending: false,
@@ -249,14 +249,26 @@ it("the main tile keeps its line while its computer is offline", async () => {
   expect(tile.line).toBe("The build is waiting on you.");
 });
 
+// A bot list's answer carries the time it settled; the clock stands still until a test moves it.
+const T0 = Date.parse("2026-11-16T10:00:00.000Z");
+function frozenClock() {
+  vi.useFakeTimers({ toFake: ["Date"], now: T0 });
+  return {
+    later: () => vi.setSystemTime(T0 + 1_000),
+    [Symbol.dispose]: () => vi.useRealTimers(),
+  };
+}
+
 it("the main tile shows no line once this phone is refused that computer's bot list, offline included, until a read succeeds", async () => {
   state.items = [message("b1", "assistant_message", "The build is waiting on you.")];
+  using clock = frozenClock();
   await using tile = mainTile();
   await tile.show();
   await tile.show({ cause: refused });
   expect(tile.line).toBeNull();
   await tile.show({ offline: true });
   expect(tile.line).toBeNull();
+  clock.later();
   await tile.show();
   expect(tile.line).toBe("The build is waiting on you.");
 });

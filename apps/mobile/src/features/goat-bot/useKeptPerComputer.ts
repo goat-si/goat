@@ -16,6 +16,8 @@ import {
   keptAtom,
   listRefusedAtom,
   refuseComputer,
+  removalAtom,
+  type Removal,
   type KeptKind,
 } from "./keptPerComputerStore";
 
@@ -28,17 +30,26 @@ const readableAtom = Atom.family((key: string) => {
   return Atom.make(
     (get) =>
       get(environmentCatalog.catalogValueAtom).entries.has(environmentId) &&
-      !get(connectionRefusedAtom(key)) &&
-      !get(listRefusedAtom(key)) &&
+      get(connectionRefusedAtom(key)) === null &&
+      get(listRefusedAtom(key)) === null &&
       !currentListDenied(get, environmentId),
   );
 });
 const NOT_READABLE = Atom.make(false);
-// How many times each computer has left the catalog, per registry. A write prepared before a
-// removal is dropped, even when the same computer has been added again since.
-const removals = new WeakMap<AtomRegistry.AtomRegistry, Map<EnvironmentId, number>>();
-const removalsOf = (registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentId) =>
-  removals.get(registry)?.get(environmentId) ?? 0;
+const NO_REMOVAL = Atom.make<Removal | null>(null);
+// When each answer's data last settled. A waiting read or a refusal still carries an earlier
+// answer's data; it counts from when that answer settled, never from now.
+const settledAt = new WeakMap<object, number>();
+
+/** When the data this read shows last settled, or null when no settled answer carried it. */
+function lastSettled<A>(live: EnvironmentQueryView<A>): number | null {
+  const data = live.data;
+  if (typeof data !== "object" || data === null) return null;
+  const success = live.successResult;
+  if (success !== null && success.value === data && typeof success.timestamp === "number")
+    settledAt.set(data, Math.max(success.timestamp, settledAt.get(data) ?? success.timestamp));
+  return settledAt.get(data) ?? null;
+}
 
 /** The bot list the roster reads, shared: refused while the computer is connected and lists bots. */
 function currentListDenied(get: Atom.AtomContext, environmentId: EnvironmentId): boolean {
@@ -61,8 +72,6 @@ function currentListDenied(get: Atom.AtomContext, environmentId: EnvironmentId):
  * way to stop following.
  */
 export function followKeptPerComputerCatalog(registry: AtomRegistry.AtomRegistry): () => void {
-  const counts = new Map<EnvironmentId, number>();
-  removals.set(registry, counts);
   let known = new Set<EnvironmentId>();
   const stopCatalog = registry.subscribe(
     environmentCatalog.catalogValueAtom,
@@ -70,10 +79,12 @@ export function followKeptPerComputerCatalog(registry: AtomRegistry.AtomRegistry
       const now = new Set(catalog.entries.keys());
       for (const environmentId of known)
         if (!now.has(environmentId)) {
-          counts.set(environmentId, (counts.get(environmentId) ?? 0) + 1);
+          const removal = removalAtom(environmentId);
+          const count = (registry.get(removal)?.count ?? 0) + 1;
+          registry.set(removal, { count, at: Date.now() });
           forgetKept(registry, environmentId);
-          registry.set(connectionRefusedAtom(computerKey(environmentId)), false);
-          registry.set(listRefusedAtom(computerKey(environmentId)), false);
+          registry.set(connectionRefusedAtom(computerKey(environmentId)), null);
+          registry.set(listRefusedAtom(computerKey(environmentId)), null);
         }
       known = now;
     },
@@ -86,13 +97,15 @@ export function followKeptPerComputerCatalog(registry: AtomRegistry.AtomRegistry
       for (const [environmentId, { connection }] of presentations) {
         const refused = connectionRefusedAtom(computerKey(environmentId));
         if (connection.phase === "connected") {
-          if (!connected.has(environmentId) && registry.get(refused)) registry.set(refused, false);
+          if (!connected.has(environmentId) && registry.get(refused) !== null)
+            registry.set(refused, null);
           connected.add(environmentId);
           continue;
         }
         connected.delete(environmentId);
         const reason = "failure" in connection ? connection.failure?.reason : null;
-        if ((reason === "authentication" || reason === "permission") && !registry.get(refused))
+        const refusal = reason === "authentication" || reason === "permission";
+        if (refusal && registry.get(refused) === null)
           refuseComputer(registry, environmentId, refused);
       }
     },
@@ -121,9 +134,15 @@ export function useKeptPerComputer<A>(
   const atom = environmentId === null ? NO_KEPT : keptAtom(kind, environmentId);
   const stored = useAtomValue(atom) as A | null;
   const store = useAtomSet(atom as Atom.Writable<unknown>);
-  const settled = live.isSuccess ? live.data : null;
+  // An answer counts once it settled after the computer last left the catalog and, for clearing a
+  // refused bot list, after that refusal.
+  const settledTime = lastSettled(live);
+  const removal = useAtomValue(environmentId === null ? NO_REMOVAL : removalAtom(environmentId));
+  const data =
+    removal === null || (settledTime !== null && settledTime > removal.at) ? live.data : null;
+  const settled = live.isSuccess ? data : null;
   const denied = accessDenied(live.cause);
-  const removalsAtRender = environmentId === null ? 0 : removalsOf(registry, environmentId);
+  const removalsAtRender = removal?.count ?? 0;
   // oxlint-disable-next-line goat/react-effect-budget -- Remember each computer's last answer so it still reads after that computer drops.
   useEffect(() => {
     if (environmentId === null) return;
@@ -133,8 +152,14 @@ export function useKeptPerComputer<A>(
       refuseComputer(registry, environmentId, listRefused);
       return;
     }
-    if (kind === "bots" && settled !== null && registry.get(listRefused))
-      registry.set(listRefused, false);
+    const listRefusedAt = registry.get(listRefused);
+    if (
+      kind === "bots" &&
+      listRefusedAt !== null &&
+      settledTime !== null &&
+      settledTime > listRefusedAt
+    )
+      registry.set(listRefused, null);
     if (denied || !readable) {
       if (stored !== null) store(null);
       return;
@@ -143,13 +168,24 @@ export function useKeptPerComputer<A>(
     // phone: its answer from before is not kept then.
     const unchanged =
       registry.get(environmentCatalog.catalogValueAtom).entries.has(environmentId) &&
-      removalsOf(registry, environmentId) === removalsAtRender &&
-      !registry.get(connectionRefusedAtom(computerKey(environmentId))) &&
-      !registry.get(listRefused);
+      (registry.get(removalAtom(environmentId))?.count ?? 0) === removalsAtRender &&
+      registry.get(connectionRefusedAtom(computerKey(environmentId))) === null &&
+      registry.get(listRefused) === null;
     if (unchanged && settled !== null && settled !== stored) store(settled);
-  }, [registry, environmentId, kind, settled, stored, denied, readable, store, removalsAtRender]);
+  }, [
+    registry,
+    environmentId,
+    kind,
+    settled,
+    settledTime,
+    stored,
+    denied,
+    readable,
+    store,
+    removalsAtRender,
+  ]);
   if (denied || !readable) return null;
-  if (!offline || live.data !== null) return live.data;
+  if (!offline || data !== null) return data;
   return stored;
 }
 

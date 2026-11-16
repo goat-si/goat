@@ -12,7 +12,10 @@ export const KEPT_KINDS = ["bots", "asks"] as const;
 export type KeptKind = (typeof KEPT_KINDS)[number];
 let generation = 0;
 const keptFamily = Atom.family((_key: string) => Atom.make<unknown>(null).pipe(Atom.keepAlive));
-const flagFamily = Atom.family((_key: string) => Atom.make(false).pipe(Atom.keepAlive));
+// A refusal is the time it was recorded, so only an answer that settled later clears it.
+const flagFamily = Atom.family((_key: string) =>
+  Atom.make<number | null>(null).pipe(Atom.keepAlive),
+);
 
 export const keptAtom = (kind: KeptKind, environmentId: EnvironmentId) =>
   keptFamily(`${generation}:${kind}:${environmentId}`);
@@ -21,8 +24,17 @@ export const computerKey = (environmentId: EnvironmentId) => `${generation}:${en
 // Refused by the computer's connection (credential or scope), or its account signed out; only
 // reaching "connected" again clears it.
 export const connectionRefusedAtom = (key: string) => flagFamily(`connection:${key}`);
-// The computer's bot list was refused; only a bot list that answers clears it.
+// The computer's bot list was refused; only a bot list that settles after the refusal clears it.
 export const listRefusedAtom = (key: string) => flagFamily(`list:${key}`);
+
+// How many times the computer has left the catalog, and when it last did. A write prepared before a
+// removal is dropped, and an answer settled before it is not shown.
+export type Removal = { readonly count: number; readonly at: number };
+const removalFamily = Atom.family((_key: string) =>
+  Atom.make<Removal | null>(null).pipe(Atom.keepAlive),
+);
+export const removalAtom = (environmentId: EnvironmentId) =>
+  removalFamily(computerKey(environmentId));
 
 export function resetKeptPerComputerForTests() {
   generation += 1;
@@ -36,9 +48,9 @@ export function forgetKept(registry: AtomRegistry.AtomRegistry, environmentId: E
 export function refuseComputer(
   registry: AtomRegistry.AtomRegistry,
   environmentId: EnvironmentId,
-  flag: Atom.Writable<boolean>,
+  flag: Atom.Writable<number | null>,
 ) {
-  registry.set(flag, true);
+  registry.set(flag, Date.now());
   forgetKept(registry, environmentId);
   forgetNewBotEnvironment(environmentId);
 }

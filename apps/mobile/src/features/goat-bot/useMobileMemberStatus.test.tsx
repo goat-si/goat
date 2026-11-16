@@ -1,7 +1,7 @@
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { RegistryContext } from "@effect/atom-react";
-import { type Atom, AtomRegistry } from "effect/reactivity";
+import { AsyncResult, type Atom, AtomRegistry } from "effect/reactivity";
 import { BotProfile, EnvironmentId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
@@ -238,7 +238,10 @@ function rosterRow(bot = scout) {
       {
         // As in the app, a bot list reads nothing while its computer is offline or refuses it.
         data: props.cause === null && member.connected ? listOf(member.listed) : null,
-        successResult: null,
+        successResult:
+          props.cause === null && member.connected
+            ? AsyncResult.success(listOf(member.listed))
+            : null,
         cause: props.cause,
         error: null,
         isPending: false,
@@ -335,12 +338,24 @@ it("a member's status read refused for access shows nothing of the earlier answe
   expect(row.value?.unreadable).toBe(true);
 });
 
+// A bot list's answer carries the time it settled; the clock stands still until a test moves it.
+const T0 = Date.parse("2026-11-16T10:00:00.000Z");
+function frozenClock() {
+  vi.useFakeTimers({ toFake: ["Date"], now: T0 });
+  return {
+    later: () => vi.setSystemTime(T0 + 1_000),
+    [Symbol.dispose]: () => vi.useRealTimers(),
+  };
+}
+
 it("a member is unreadable once its bot list is refused, and once its computer refuses this phone", async () => {
   setup();
+  using clock = frozenClock();
   member.answer = { waitingCount: 1, latest: reply };
   await using row = rosterRow();
   await row.show(refused);
   expect(row.value?.unreadable).toBe(true);
+  clock.later();
   await row.show();
   expect(row.value?.unreadable).toBe(false);
   member.connected = false;

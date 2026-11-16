@@ -48,6 +48,8 @@ export function MobileBotRoster(props: {
   const mainName = goatBotName(roster.groups.main);
   const manage = useMobileBotManage(roster.environmentId, mainName);
   const [editing, setEditing] = useState<BotProfile | null>(null);
+  // The sheet holds the bot's profile: it closes for good once its computer may not be read.
+  if (editing !== null && !rosterReadable) setEditing(null);
   // A row's action menu is a native alert: open from the long press until a choice or dismissal.
   const [menuOpen, setMenuOpen] = useState(false);
   const menu = (
@@ -63,7 +65,8 @@ export function MobileBotRoster(props: {
         ...button,
         onPress: () => {
           setMenuOpen(false);
-          button.onPress?.();
+          // An alert cannot be withdrawn; a choice pressed after a refusal does nothing.
+          if (mount.current.readable) button.onPress?.();
         },
       })),
       { cancelable: true, onDismiss: () => setMenuOpen(false) },
@@ -76,15 +79,21 @@ export function MobileBotRoster(props: {
     manage.create({ name, avatar: null, purpose: "" }, null, clientRequestId);
   const { onOpenBot } = props;
   const navigation = useNavigation();
-  // This roster mount as it is now: mounted, on screen, presenting a sheet or menu of its own, and
-  // its environment. A create's answer reads it then; the open belongs to the mount that was tapped.
+  // This roster mount as it is now: mounted, on screen, presenting a sheet or menu of its own, its
+  // environment and whether it may be read. A create's answer and a menu choice read it then.
   const visible = props.visible !== false;
   const presenting = editing !== null || menuOpen;
-  const mount = useRef({ mounted: true, visible, presenting, environmentId });
+  const mount = useRef({
+    mounted: true,
+    visible,
+    presenting,
+    environmentId,
+    readable: rosterReadable,
+  });
   // oxlint-disable-next-line goat/react-effect-budget -- A create answers later; it must read this mount's committed state.
   useLayoutEffect(() => {
-    mount.current = { mounted: true, visible, presenting, environmentId };
-  }, [visible, presenting, environmentId]);
+    mount.current = { mounted: true, visible, presenting, environmentId, readable: rosterReadable };
+  }, [visible, presenting, environmentId, rosterReadable]);
   // oxlint-disable-next-line goat/react-effect-budget -- An unmounted roster (the Bots / Threads switch) opens nothing when its create answers.
   useEffect(() => {
     const owner = mount;
