@@ -1,6 +1,6 @@
 # N1: web saves and composer (lane record)
 
-Lane branch: `chase/t3-261114-n1-web-saves`, from origin/dev `02511156b0`, merged with origin/dev at `3182a54238` (merge `d6257bb019`). Merged into the integration branch `chase/t3-261114-next` at `a677ec2600` (lane head `232e473f33`, draft PR [#3519](https://github.com/goat-si/goat/pull/3519)); not in dev until #3519 merges. Follow-up head `ade3024ae755837fc611c122bba5b2b878f1351e` (N1F-P3-A), pushed, not merged yet. Host pen-mac-studio. Class: L21 is C4 (the merge decides which saved user data survives; ruling N1-P3-4), with P2-1 as its older-data case; L19, L20 and L22 keep #3176's labels. Stored shape and wire are unchanged.
+Lane branch: `chase/t3-261114-n1-web-saves`, from origin/dev `02511156b0`, merged with origin/dev at `3182a54238` (merge `d6257bb019`). Merged into the integration branch `chase/t3-261114-next` at `a677ec2600` (lane head `232e473f33`, draft PR [#3519](https://github.com/goat-si/goat/pull/3519)); not in dev until #3519 merges. Follow-up ade3024ae7 merged into the integration branch at 24819b5b90 (follow-up head `ade3024ae755837fc611c122bba5b2b878f1351e`, N1F-P3-A). Host pen-mac-studio. Class: L21 is C4 (the merge decides which saved user data survives; ruling N1-P3-4), with P2-1 as its older-data case; L19, L20 and L22 keep #3176's labels. Stored shape and wire are unchanged.
 
 ## Rows
 
