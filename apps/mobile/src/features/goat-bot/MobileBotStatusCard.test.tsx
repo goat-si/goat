@@ -215,7 +215,8 @@ it.each(["authentication", "permission"] as const)(
     state.changeHome.mockClear();
     try {
       follow.registry.set(presentationsAtom, homeLink(blocked(reason)));
-      await render({ rows: "unavailable" }, follow.registry);
+      // The sheet shows another machine; the card still names the home that refused.
+      await render({ environmentId: LAPTOP, rows: "unavailable" }, follow.registry);
       expect(container.textContent).toContain("Not working");
       expect(container.textContent).toContain("GOAT on Mac Studio did not accept this device");
       expect(container.textContent).not.toContain("Home machine is offline");
