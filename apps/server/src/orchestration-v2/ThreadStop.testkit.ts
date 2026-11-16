@@ -49,13 +49,31 @@ export const layerForAdapter = (
   options: {
     readonly database?: Layer.Layer<SqlClient.SqlClient>;
     readonly sessions?: Layer.Layer<ProviderSessionManager.ProviderSessionManagerV2>;
+    /** Wraps the orchestrator ThreadManagementService sees, to pause it between two reads. */
+    readonly orchestrator?: (
+      service: Orchestrator.OrchestratorV2["Service"],
+    ) => Orchestrator.OrchestratorV2["Service"];
   } = {},
 ) => {
   const layerDatabase = options.database ?? SqlitePersistence.layerMemory;
-  const management =
+  const withSessions =
     options.sessions === undefined
       ? ThreadManagementService.layer
       : ThreadManagementService.layer.pipe(Layer.provide(options.sessions));
+  const decorate = options.orchestrator;
+  const management =
+    decorate === undefined
+      ? withSessions
+      : withSessions.pipe(
+          Layer.provide(
+            Layer.effect(
+              Orchestrator.OrchestratorV2,
+              Effect.gen(function* () {
+                return decorate(yield* Orchestrator.OrchestratorV2);
+              }),
+            ),
+          ),
+        );
   return management.pipe(
     Layer.provideMerge(
       Layer.mergeAll(

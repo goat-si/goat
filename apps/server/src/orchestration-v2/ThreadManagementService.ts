@@ -1660,7 +1660,11 @@ const make = Effect.gen(function* () {
   });
 
   const forceStop = Effect.fn("ThreadManagementService.forceStopThread")(
-    function* (input: OrchestrationV2ForceStopThreadInput, reason: string) {
+    function* (
+      input: OrchestrationV2ForceStopThreadInput,
+      reason: string,
+      recheck?: (target: OrchestrationV2Run | undefined) => Effect.Effect<void, Error>,
+    ) {
       // Under the thread lock no new run can be created between the check and the kill. The
       // settlement below dispatches, which takes that lock itself, so it runs after release.
       const { records, target, killed } = yield* threadDispatch.withLock(
@@ -1694,6 +1698,7 @@ const make = Effect.gen(function* () {
               reason: "cloud",
             });
           }
+          if (recheck !== undefined) yield* recheck(target);
           // Shared scopes are never tracked per thread, so this only kills the thread's own agent.
           const killed = yield* agentScope.kill(input.threadId);
           return { records, target, killed };

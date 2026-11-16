@@ -3,6 +3,7 @@ import {
   OrchestrationV2ForceStopThreadError,
   type OrchestrationV2ForceStopThreadInput,
   type OrchestrationV2ForceStopThreadResult,
+  type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
   type RunId,
   type ThreadId,
@@ -11,7 +12,7 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 
 import type * as Orchestrator from "./Orchestrator.ts";
-import { latestActiveRun } from "./ThreadManagementService.ts";
+import { isActiveRun, latestActiveRun } from "./ThreadManagementService.ts";
 
 /** Why a Force stop an agent or another machine asked for was refused; nothing was stopped. */
 export class DelegatedForceStopRefused extends Data.TaggedError("DelegatedForceStopRefused")<{
@@ -35,6 +36,8 @@ interface ForceStopDeps {
   readonly forceStop: (
     input: OrchestrationV2ForceStopThreadInput,
     reason: string,
+    /** Runs under the thread lock before anything stops; its failure refuses the force. */
+    recheck?: (target: OrchestrationV2Run | undefined) => Effect.Effect<void, Error>,
   ) => Effect.Effect<OrchestrationV2ForceStopThreadResult, OrchestrationV2ForceStopThreadError>;
 }
 
@@ -59,19 +62,33 @@ export const forceStopUnresponsiveRun = Effect.fn(
       threadId: input.threadId,
       reason: "superseded",
     });
-  const items =
-    run === undefined
-      ? []
-      : (yield* deps.getThreadRecords(input.threadId, ["turnItems"], {
-          turnItemRunIds: [run.id],
-          turnItemTypes: ["run_interrupt_request", "run_interrupt_result"],
-        })).turnItems;
-  if (run === undefined || !stopIsUnresponsive(run.id, items))
-    return yield* new DelegatedForceStopRefused({
-      reason: "not_unresponsive",
-      message: `not_unresponsive: ${input.subject} has no run whose Stop went unanswered. Cancel it normally first; force only once its stop.state is "unresponsive".`,
-    });
-  const result = yield* deps.forceStop({ threadId: input.threadId, runId: run.id }, input.reason);
+  const refused = new DelegatedForceStopRefused({
+    reason: "not_unresponsive",
+    message: `not_unresponsive: ${input.subject} has no run whose Stop went unanswered. Cancel it normally first; force only once its stop.state is "unresponsive".`,
+  });
+  const unresponsive = (target: OrchestrationV2Run | undefined) =>
+    target === undefined || !isActiveRun(target)
+      ? Effect.fail(refused)
+      : deps
+          .getThreadRecords(input.threadId, ["turnItems"], {
+            turnItemRunIds: [target.id],
+            turnItemTypes: ["run_interrupt_request", "run_interrupt_result"],
+          })
+          .pipe(
+            Effect.flatMap(({ turnItems }) =>
+              stopIsUnresponsive(target.id, turnItems) ? Effect.void : Effect.fail(refused),
+            ),
+          );
+  if (run === undefined) return yield* refused;
+  yield* unresponsive(run);
+  // The provider may confirm the Stop before the lock is taken; then nothing is touched.
+  const result = yield* deps
+    .forceStop({ threadId: input.threadId, runId: run.id }, input.reason, unresponsive)
+    .pipe(
+      Effect.mapError((error) =>
+        error.cause instanceof DelegatedForceStopRefused ? error.cause : error,
+      ),
+    );
   return { ...result, runId: run.id };
 });
 
