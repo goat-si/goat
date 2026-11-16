@@ -1,4 +1,7 @@
-import { resolvePullRequestWorktreeLocalBranchName } from "./pullRequestBranchName.ts";
+import {
+  isPullRequestWorktreeLocalBranchName,
+  resolvePullRequestWorktreeLocalBranchName,
+} from "./pullRequestBranchName.ts";
 import { publishedRemoteName, appendUnique } from "./gitPublishedBranch.ts";
 import { resolveLastKnownPr } from "./lastKnownPr.ts";
 import { shippedByMergedPr } from "./shippedByMergedPr.ts";
@@ -1620,7 +1623,12 @@ export const make = Effect.gen(function* () {
         };
       }
     }
-    if (headContext.headBranch === details.branch || headContext.isCrossRepository) {
+    // A fork's default branch can be a PR head. When that fork is origin it is also where new
+    // branches start, so only a branch made for a pull request takes it as its head.
+    const tracksForkHead =
+      headContext.isCrossRepository &&
+      (headContext.remoteName !== "origin" || isPullRequestWorktreeLocalBranchName(details.branch));
+    if (headContext.headBranch === details.branch || tracksForkHead) {
       return { headContext, lookup: true };
     }
     const upstreamHeadIsBase =
