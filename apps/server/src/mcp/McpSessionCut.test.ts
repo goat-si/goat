@@ -186,7 +186,7 @@ const call = (
   );
 const textOf = (result: McpSchema.CallToolResult) =>
   result.content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
-const CUT = "revoked or expired while the call ran";
+const CUT = "while the call ran, so GOAT stopped it";
 const create = (title: string) => ({ title, workspaceRoot: "/tmp/goat-session-cut/" + title });
 
 it.effect.each(["Settings revoke", "Revoke others"] as const)(
@@ -307,7 +307,7 @@ it.effect("an eval cut during one step never runs its next step", () =>
 );
 
 it.effect(
-  "a call whose session was revoked, or expired, before it started is cut without running",
+  "a call whose session was revoked before it started is cut without running; one whose session expired runs, as before",
   () =>
     Effect.gen(function* () {
       const probe = yield* makeProbe;
@@ -316,16 +316,17 @@ it.effect(
       yield* revoked.revoke;
       yield* TestClock.adjust(Duration.hours(1));
       yield* Effect.gen(function* () {
-        for (const client of [revoked, expired]) {
-          const result = yield* call(client.scope, "goat_project_create", create("free"));
-          expect(textOf(result)).toContain(CUT);
-        }
-        expect(yield* Ref.get(probe.landed)).toEqual([]);
+        const cut = yield* call(revoked.scope, "goat_project_create", create("free-revoked"));
+        expect(textOf(cut)).toContain(CUT);
+        // The request was admitted before the expiry; a new request after it gets 401 at /mcp.
+        const ran = yield* call(expired.scope, "goat_project_create", create("free-expired"));
+        expect(textOf(ran)).not.toContain(CUT);
+        expect(yield* Ref.get(probe.landed)).toEqual(["free-expired"]);
       }).pipe(Effect.provide(served(probe)));
     }).pipe(Effect.provide(layerAuth)),
 );
 
-it.effect("a running call is cut when its session expires, as a socket is", () =>
+it.effect("a running call outlives its session's expiry and lands, as before this change", () =>
   Effect.gen(function* () {
     const probe = yield* makeProbe;
     const client = yield* signIn;
@@ -337,8 +338,8 @@ it.effect("a running call is cut when its session expires, as a socket is", () =
       yield* TestClock.adjust(Duration.hours(1));
       yield* Deferred.succeed(probe.gate, undefined);
       const result = yield* Fiber.join(running);
-      expect(yield* Ref.get(probe.landed)).toEqual([]);
-      expect(textOf(result)).toContain(CUT);
+      expect(yield* Ref.get(probe.landed)).toEqual(["gated"]);
+      expect(textOf(result)).not.toContain(CUT);
     }).pipe(Effect.provide(served(probe)));
   }).pipe(Effect.provide(layerAuth)),
 );

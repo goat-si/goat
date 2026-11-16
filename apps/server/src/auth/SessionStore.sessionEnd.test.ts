@@ -135,24 +135,31 @@ it.effect("a call that starts after its session was removed is cut at once witho
   }).pipe(Effect.provide(layerStore)),
 );
 
-it.effect("expiry cuts a running call at the deadline, and a later call at once", () =>
+it.effect("expiry never cuts a call: one running past its session's expiry runs to its end", () =>
+  Effect.gen(function* () {
+    const store = yield* SessionStore.SessionStore;
+    const issued = yield* store.issue({ ...mcpClient, ttl: Duration.hours(1) });
+    const end = yield* store.sessionEnd(issued.sessionId);
+    const gate = yield* Deferred.make<void>();
+    const running = yield* end
+      .run(Deferred.await(gate).pipe(Effect.as("finished")))
+      .pipe(Effect.forkScoped({ startImmediately: true }));
+    yield* TestClock.adjust(Duration.hours(2));
+    yield* Deferred.succeed(gate, undefined);
+    expect(yield* Fiber.join(running)).toEqual(Option.some("finished"));
+  }).pipe(Effect.scoped, Effect.provide(layerStore)),
+);
+
+it.effect("a revoke still cuts a call whose session is already past its expiry", () =>
   Effect.gen(function* () {
     const store = yield* SessionStore.SessionStore;
     const issued = yield* store.issue({ ...mcpClient, ttl: Duration.hours(1) });
     const call = yield* runningCall(store, issued.sessionId);
-    yield* TestClock.adjust(Duration.minutes(59));
+    yield* TestClock.adjust(Duration.hours(2));
     expect(yield* call.stopped).toBe(false);
-    yield* TestClock.adjust(Duration.minutes(1));
+    yield* store.revoke(issued.sessionId);
+    yield* call.hasStopped;
     expect(yield* Fiber.join(call.outcome)).toEqual(Option.none());
-    expect(yield* call.stopped).toBe(true);
-    let ran = false;
-    const later = yield* (yield* store.sessionEnd(issued.sessionId)).run(
-      Effect.sync(() => {
-        ran = true;
-      }),
-    );
-    expect(later).toEqual(Option.none());
-    expect(ran).toBe(false);
   }).pipe(Effect.scoped, Effect.provide(layerStore)),
 );
 
