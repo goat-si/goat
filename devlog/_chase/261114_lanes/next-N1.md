@@ -93,6 +93,30 @@ Report /Users/jun/handoff-in/chase/next-N1-fix-review-232e473f.md; merged into `
 - N1F-P3-B: recorded under NOT RUN.
 - Checks on `ade3024ae7` (pen-mac-studio, no other gate running): `node scripts/goat-rename.ts --check` 0; `set -o pipefail; vp run check:changed` exit 0, with format, lint, knip 1/2 and 2/2, agent surface audit, agent context budget and typecheck (8 packages) passing, and 182 test files, 5637 tests passing. Focused: stashFailedSend and promptStashStore 16/16, ChatView and ComposerStashMenu browser 9/9. No existing dev test expectation changed; no dev merge in this follow-up.
 
+## CI fix after the merge (#3519 at ffeb104573)
+
+goat-test-changed (run 43835378650, job 133192087032, lidge-goat-04) failed at apps/web/src/components/settings/AppearanceSettingsPanel.browser.test.tsx:116, "selects and restores the Liquid Glass style through client settings": `expected 'liquid-glass' to be 'default'`. One commit, `495a3a72b1`, on `ade3024ae7`.
+
+> Coordinator authorisation, 2026-11-16, rule 3, lane N1, CI fix. goat-test-changed failed on #3519 at ffeb104573 (run 43835378650, job 133192087032, lidge-goat-04): apps/web/src/components/settings/AppearanceSettingsPanel.browser.test.tsx:116 "selects and restores the Liquid Glass style through client settings": expected 'liquid-glass' to be 'default'. Cause: ruling C1 B starts a client settings save once the cross-tab lock is granted, a task after the click, and this existing test reads the saved value synchronously (it passed on a677ec2600 and 24819b5b90 by timing). Authorised: in an existing test, an assertion on a PERSISTED client settings write (the bridge's saved value, a setClientSettings mock, or the stored value) that follows a user action may be wrapped in vi.waitFor, with the expectation itself unchanged. That covers AppearanceSettingsPanel.browser.test.tsx:116 and every other test the audit below finds. Nothing else in an existing test may change.
+
+Converted to `vi.waitFor`, expectation unchanged:
+
+- apps/web/src/components/settings/AppearanceSettingsPanel.browser.test.tsx:116, the bridge's saved `appearancePreset` after choosing Default (the CI failure).
+- apps/web/src/components/settings/DesktopWindowMaterialSetting.browser.test.tsx:83, the bridge's saved `desktopSystemMaterialEnabled` after the rejected toggle.
+- apps/web/src/hooks/useSettings.test.ts:220, the `setClientSettings` call count after a patch and a single `await Promise.resolve()`.
+
+Audited, no change (each persisted read follows an awaited save, or the mock stands in for the persistence layer):
+
+- apps/web/src/components/settings/DesktopWindowMaterialSetting.browser.test.tsx:60 (already `vi.waitFor`); :106, :166, :181 build a bridge write from `saved()`, they do not assert it.
+- apps/web/src/desktop/DesktopWindowMaterialSync.browser.test.tsx:160 follows `await act(() => persistClientSettingsPatch(…))`; :129 builds a write; :214 is already `vi.waitFor`.
+- apps/web/src/hooks/useSettings.test.ts:93, :98, :120, :140, :263, :291, :296-297, :314, :333, :362, :374, :383 follow an awaited save or a `Deferred` that marks the write start, or assert a write has not happened yet.
+- apps/web/src/hooks/settingsPersistence.hook.browser.test.tsx:73 already waits (second authorisation).
+- apps/web/src/components/ReopenClosedViewShortcut.browser.test.tsx:360-371, SnapShotSettings, ProjectSettingsPanel, GoatBotSuggested, AttachmentFilePreview.media and DiffPanel mock `updateClientSettings` or `persistClientSettings*` themselves, so no lock is involved; ElectronBrowserHost only resets `setClientSettings`.
+- LiquidGlassBackdrop, MarkdownCodeBlock and I18nProvider pass their own `persist`, which skips the merge (`readsBack: false`).
+- apps/desktop tests (DesktopClientSettings, DesktopApp, DesktopSnapShot, preview, wsl) run in the Electron main process, outside the web lock.
+
+Checks on `495a3a72b1` (pen-mac-studio, focused only; N3 holds the heavy slot): each touched file in five separate runs, every run passing: AppearanceSettingsPanel.browser 4/4, DesktopWindowMaterialSetting.browser 16/16, useSettings 34/34, no unhandled errors. Format and lint on the three files, `vp run typecheck` (web) clean, `node scripts/goat-rename.ts --check` 0.
+
 ## Known limits
 
 - Cross-tab localStorage in Chromium propagates between renderer processes asynchronously; the lock serializes read-merge-write between tabs but cannot make a write another process has not delivered yet visible. Upstream has the same window.
@@ -101,6 +125,7 @@ Report /Users/jun/handoff-in/chase/next-N1-fix-review-232e473f.md; merged into `
 - The mobile half of O2 has unit tests only; its device capture is owed to the N15a device pass.
 - `/side` typed in mobile's PendingUserInputCard field, or in the Decisions inbox on web and mobile (DecisionUserInputForm.tsx, useDecisionInbox.ts), is still sent as the answer: O4 was ruled for the composer.
 - Answers typed in the Decisions inbox live in component state, so Stop still discards them on web and mobile (O2 covers the composer's answer drafts).
+- A client settings write now lands a task after the action that made it (the save starts once the cross-tab lock is granted); the in-memory value updates at once, so tests that read the persisted value wait for it.
 - A tab still running the old bundle writes whole drafts, settings and stash values. Drafts that tab erases are not restored by a new-bundle tab, which rewrites only drafts it edits, until the old tab reloads.
 - The Decisions-inbox and mobile-card rows above go to next-pr-plan.md (lane coordinator). In my opinion N15b (mobile parity) owns them: three of the four surfaces are mobile (PendingUserInputCard, the mobile inbox for /side and for Stop), and the web inbox change is the same small rule.
 
