@@ -1,9 +1,10 @@
-import { act, type ReactNode } from "react";
+import { act, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ProjectId,
   ProviderInstanceId,
   ScheduledTaskId,
+  ThreadId,
   type ScheduledTask,
 } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
@@ -32,15 +33,36 @@ vi.mock("./components/SettingsSection", () => ({
   ),
 }));
 vi.mock("./ScheduledTaskFormFields", () => ({
-  SelectRow: ({ label, value }: { label: string; value: string }) => (
-    <button type="button" aria-label={`${label}, ${value}`} />
+  SelectRow: ({
+    label,
+    value,
+    actions = [],
+    onSelect,
+  }: {
+    label: string;
+    value: string;
+    actions?: ReadonlyArray<{ id: string; title: string }>;
+    onSelect?: (id: string) => void;
+  }) => (
+    <>
+      <button type="button" aria-label={`${label}, ${value}`} />
+      {actions.map((action) => (
+        <button
+          key={action.id}
+          type="button"
+          aria-label={`${label}: ${action.title}`}
+          onClick={() => onSelect?.(action.id)}
+        />
+      ))}
+    </>
   ),
   FormField: ({ label }: { label: string }) => <input aria-label={label} />,
 }));
 vi.mock("../../lib/modelOptions", () => ({ buildModelOptions: () => [] }));
 
 import { ScheduledTaskContextSections } from "./ScheduledTaskContextSections";
-import { editDraft } from "./scheduledTaskDraft";
+import { ScheduledTaskNotificationPolicySection } from "./ScheduledTaskNotificationPolicySection";
+import { editDraft, type ScheduledTaskDraft } from "./scheduledTaskDraft";
 
 const task = (goatBotRoutine: boolean): ScheduledTask => ({
   id: ScheduledTaskId.make("goat-bot-check-in:bot"),
@@ -107,4 +129,59 @@ it("an ordinary task keeps its project, model and workspace choices", async () =
   expect(labels.some((label) => label?.startsWith("Project"))).toBe(true);
   expect(labels.some((label) => label?.startsWith("Model,"))).toBe(true);
   expect(labels.some((label) => label?.startsWith("Run in"))).toBe(true);
+});
+
+const RESET_NOTICE =
+  "Notifications changed to All runs because Important updates requires an existing thread.";
+const threadModesConfig = { environment: { capabilities: { scheduledTaskThreadModes: true } } };
+
+/** The route screen's wiring of both sections around one draft. */
+function Editor({ initial }: { initial: ScheduledTaskDraft }) {
+  const [draft, setDraft] = useState(initial);
+  return (
+    <>
+      <ScheduledTaskContextSections
+        draft={draft}
+        setDraft={setDraft}
+        config={threadModesConfig as never}
+        projects={[]}
+        saving={false}
+        locked={false}
+        onPickModel={vi.fn()}
+        onPickBranch={vi.fn()}
+      />
+      <ScheduledTaskNotificationPolicySection draft={draft} disabled={false} onChange={setDraft} />
+    </>
+  );
+}
+
+async function renderEditor(overrides: Partial<ScheduledTask>) {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(<Editor initial={editDraft({ ...task(false), ...overrides })} />);
+  });
+  const press = async (label: string) => {
+    const button = container.querySelector(`[aria-label="${label}"]`);
+    expect(button, label).not.toBeNull();
+    await act(async () => (button as HTMLButtonElement).click());
+  };
+  const labels = () =>
+    [...container.querySelectorAll("[aria-label]")].map((node) => node.getAttribute("aria-label"));
+  return { container, press, labels, [Symbol.dispose]: () => act(() => root.unmount()) };
+}
+
+it("choosing Important updates again clears the reset notice", async () => {
+  using editor = await renderEditor({
+    threadId: ThreadId.make("bound"),
+    threadMode: "continue",
+    notificationPolicy: "important_updates",
+  });
+  await editor.press("Runs go to: New thread each run");
+  expect(editor.container.textContent).toContain(RESET_NOTICE);
+  await editor.press("Runs go to: One thread, same conversation");
+  await editor.press("Notifications: Important updates");
+  expect(editor.container.textContent).not.toContain(RESET_NOTICE);
+  expect(editor.labels()).toContain("Notifications, Important updates");
 });

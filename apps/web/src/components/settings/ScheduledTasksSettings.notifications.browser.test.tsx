@@ -427,3 +427,27 @@ it("with thread modes, a GOAT Bot routine returned to one thread shows its Bot v
   await expect.element(dialog.getByText("GOAT Bot's model", { exact: true })).toBeVisible();
   await expect.element(dialog.getByRole("combobox", { name: "Project" })).not.toBeInTheDocument();
 });
+
+it("with thread modes, choosing Important updates again clears the reset notice", async () => {
+  const task = setup("important_updates", true, { threadMode: "continue" }, true);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  const notice = page.getByText(
+    "Notifications changed to All runs because Important updates requires an existing thread.",
+  );
+  const destination = page.getByRole("combobox", { name: "Destination" });
+  await userEvent.click(destination);
+  await userEvent.click(page.getByRole("option", { name: "New thread each run" }));
+  await expect.element(notice).toBeVisible();
+  await userEvent.click(destination);
+  await userEvent.click(
+    page.getByRole("option", { name: "One thread, continuing the conversation" }),
+  );
+  await userEvent.click(page.getByRole("combobox", { name: "Notifications" }));
+  await userEvent.click(page.getByRole("option", { name: "Important updates" }));
+  await expect.element(notice).not.toBeInTheDocument();
+  await expect
+    .element(page.getByRole("combobox", { name: "Notifications" }))
+    .toHaveTextContent("Important updates");
+});

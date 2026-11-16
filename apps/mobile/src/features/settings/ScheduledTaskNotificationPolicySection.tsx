@@ -14,7 +14,8 @@ export function ScheduledTaskNotificationPolicySection({
 }: {
   draft: ScheduledTaskDraft;
   disabled: boolean;
-  onChange: (notificationPolicy: string) => void;
+  /** A chosen policy replaces the reset notice. */
+  onChange: (draft: ScheduledTaskDraft) => void;
 }) {
   const label = choices.find((c) => c.id === draft.notificationPolicy)?.title;
   return (
@@ -30,7 +31,9 @@ export function ScheduledTaskNotificationPolicySection({
                 .filter((c) => c.id !== "important_updates" || offersImportantUpdates(draft))
                 .map((c) => ({ ...c, state: c.id === draft.notificationPolicy ? "on" : undefined }))
         }
-        onSelect={onChange}
+        onSelect={(id) =>
+          onChange({ ...draft, notificationPolicy: id, notificationPolicyReset: false })
+        }
       />
       {draft.notificationPolicyReset ? (
         <Text className="px-4 pb-3 text-sm text-foreground-muted">

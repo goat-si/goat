@@ -899,7 +899,7 @@ function TaskForm({
           <ScheduledTaskNotificationPolicySection
             draft={draft}
             disabled={saving}
-            onChange={(notificationPolicy) => setDraft({ ...draft, notificationPolicy })}
+            onChange={setDraft}
           />
           <View className="min-h-14 flex-row items-center gap-3 border-t border-border-subtle px-4 py-3">
             <Text className="min-w-0 flex-1 text-lg text-foreground">Enabled</Text>

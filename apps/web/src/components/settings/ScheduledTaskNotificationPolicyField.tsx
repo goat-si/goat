@@ -46,7 +46,7 @@ export function ScheduledTaskNotificationPolicyField({
       <Select
         value={draft.notificationPolicy}
         onValueChange={(value) => {
-          if (value) onChange({ notificationPolicy: value });
+          if (value) onChange({ notificationPolicy: value, notificationPolicyReset: false });
         }}
       >
         <SelectTrigger id="scheduled-task-notifications" size="sm">
