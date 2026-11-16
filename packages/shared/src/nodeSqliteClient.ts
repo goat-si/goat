@@ -40,6 +40,7 @@ import {
   CHECKPOINT_FRAMES,
   openCheckpointWorker,
   prepareCheckpointWriter,
+  readSafeSqliteInteger,
 } from "./sqliteCheckpointWorker.ts";
 
 import { makeWriter } from "./nodeSqliteWriter.ts";
@@ -487,11 +488,6 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (options: SqliteClie
         : ("idle" as const);
   return { acquire, state } satisfies ReaderSlot;
 });
-
-const readSafeSqliteInteger = (value: unknown) => {
-  const number = typeof value === "bigint" ? Number(value) : value;
-  return typeof number === "number" && Number.isSafeInteger(number) ? number : undefined;
-};
 
 const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
   filename: string,
