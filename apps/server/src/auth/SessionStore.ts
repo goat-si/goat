@@ -1051,8 +1051,15 @@ export const make = Effect.gen(function* () {
             ),
     );
     yield* settleEnded([...revoked, ...unclassified.filter((id) => !unrevoked.has(id))]);
+    // Counted as the list shows rows: unexpired, or expired but still connected.
+    const connected = yield* Ref.get(connectedSessionsRef);
+    const shown = kept.filter(
+      (row) =>
+        row.expiresAt.epochMilliseconds > revokedAt.epochMilliseconds ||
+        connected.has(row.sessionId),
+    );
     const count = (kind: (typeof kept)[number]["kind"]) =>
-      kept.filter((row) => row.kind === kind).length;
+      shown.filter((row) => row.kind === kind).length;
     return { revokedCount: revoked.length, kept: { desktop: count("desktop"), pen: count("pen") } };
   });
 

@@ -114,10 +114,11 @@ export type RevokeOtherAuthSessionsInput = typeof RevokeOtherAuthSessionsInput.T
 
 export interface RevokedOtherAuthSessions {
   readonly revoked: ReadonlyArray<AuthSessionId>;
-  /** Other unrevoked rows the revoke left alone. */
+  /** Other unrevoked rows the revoke left alone, expired ones included. */
   readonly kept: ReadonlyArray<{
     readonly sessionId: AuthSessionId;
     readonly kind: AuthRevokeOthersKeep;
+    readonly expiresAt: DateTime.Utc;
   }>;
 }
 
@@ -498,10 +499,17 @@ export const make = Effect.gen(function* () {
 
   const keptOtherSessionRows = SqlSchema.findAll({
     Request: RevokeOtherAuthSessionsInput,
-    Result: Schema.Struct({ sessionId: AuthSessionId, kind: AuthRevokeOthersKeep }),
+    Result: Schema.Struct({
+      sessionId: AuthSessionId,
+      kind: AuthRevokeOthersKeep,
+      expiresAt: Schema.DateTimeUtcFromString,
+    }),
     execute: ({ currentSessionId, keep }) =>
       sql`
-        SELECT session_id AS "sessionId", CASE WHEN ${penBound} THEN 'pen' ELSE 'desktop' END AS "kind"
+        SELECT
+          session_id AS "sessionId",
+          CASE WHEN ${penBound} THEN 'pen' ELSE 'desktop' END AS "kind",
+          expires_at AS "expiresAt"
         FROM auth_sessions
         WHERE session_id <> ${currentSessionId}
           AND revoked_at IS NULL
