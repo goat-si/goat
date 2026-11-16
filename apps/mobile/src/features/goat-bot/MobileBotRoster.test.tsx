@@ -690,6 +690,9 @@ async function refusableRoster(environmentId: string) {
     },
     answerList: (result: AsyncResult.AsyncResult<unknown, unknown>) =>
       act(async () => registry.set(botListAtom, result)),
+    /** The bot list answers in the store; React has not rendered it yet. */
+    answerListNow: (result: AsyncResult.AsyncResult<unknown, unknown>) =>
+      registry.set(botListAtom, result),
     longPress: () => act(async () => members().onLongPressBot({ kind: "member", profile: member })),
     choose: (text: string) => act(async () => choose(text)),
     [Symbol.asyncDispose]: async () => {
@@ -815,4 +818,19 @@ it("a menu opened on one computer does nothing once Home has moved the roster to
   await view.choose("Delete");
   // No confirmation follows: the Delete pressed on the other computer opened nothing.
   expect(state.alert.mock.calls.length).toBe(menus);
+});
+
+it("Save in an open Edit sheet sends nothing once a bot-list refusal reaches the store, before it renders", async () => {
+  await using view = await refusableRoster("env");
+  await view.link({ phase: "connected" });
+  await view.answerList(AsyncResult.success({ bots: [] }));
+  await view.longPress();
+  await view.choose("Edit");
+  const sheet = state.sheet;
+  expect(sheet).not.toBeNull();
+  view.answerListNow(refusedList);
+  await act(async () => {
+    await sheet?.onSubmit({ name: "Research 2" });
+  });
+  expect(state.manage.update).not.toHaveBeenCalled();
 });
