@@ -52,7 +52,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { McpSchema, McpServer } from "effect/ai";
-import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { layerMemorySecretStore } from "./OrchestratorMcpToolkit.integration.testkit.ts";
 import { CodexOrchestratorReplayHarness } from "../orchestration-v2/Adapters/CodexAdapterV2.testkit.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
@@ -430,24 +430,6 @@ const client = McpSchema.McpServerClient.of({
     clientInfo: { name: "orchestrator-mcp-test", version: "1.0.0" },
   },
   getClient: Effect.die("unused"),
-});
-
-const layerMemorySecretStore = Layer.sync(ServerSecretStore.ServerSecretStore, () => {
-  const stored = new Map<string, Uint8Array>();
-  return ServerSecretStore.ServerSecretStore.of({
-    get: (name) => Effect.succeed(Option.fromNullishOr(stored.get(name))),
-    set: (name, value) => Effect.sync(() => void stored.set(name, value)),
-    create: (name, value) => Effect.sync(() => void stored.set(name, value)),
-    getOrCreateRandom: (name, bytes) =>
-      Effect.sync(() => {
-        const existing = stored.get(name);
-        if (existing) return existing;
-        const value = new Uint8Array(bytes).fill(7);
-        stored.set(name, value);
-        return value;
-      }),
-    remove: (name) => Effect.sync(() => void stored.delete(name)),
-  });
 });
 
 const layerUnusedScheduledTaskStub = Layer.succeed(
