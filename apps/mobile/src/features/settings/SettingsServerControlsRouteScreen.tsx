@@ -2,7 +2,7 @@ import { useNavigation, type StaticScreenProps } from "@react-navigation/native"
 import { isAtomCommandInterrupted } from "@goat/client-runtime/state/runtime";
 import * as Dialog from "../../components/ui/Dialog";
 import { SettingsRow } from "./components/SettingsRow";
-import { commandFailureText } from "./commandFailureText";
+import { commandFailureText } from "../../lib/commandFailureText";
 import { AllowedApps } from "./computerUse/AllowedApps";
 import {
   AuthSettingsWriteScope,

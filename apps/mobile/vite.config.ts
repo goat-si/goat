@@ -14,6 +14,8 @@ const reactTests = [
   "src/features/threads/CustomAnswerInput.test.tsx",
   "src/features/threads/MessageImageGalleryScope.test.tsx",
   "src/features/threads/ThreadMarkdownVideo.test.tsx",
+  "src/features/threads/useThreadHistoryControls.test.tsx",
+  "src/features/threads/useThreadMessageJumpLoading.test.tsx",
   "src/features/devices/device-stream.browser.test.ts",
   "src/features/notes/live-editor/note-editor-images.dom.test.ts",
   "src/features/notes/useNoteFiles.test.tsx",
@@ -181,6 +183,7 @@ const devCompiledSources = [
   "/features/goat-bot/GoatBotScreen.tsx",
   "/features/goat-bot/MobileBotWork.tsx",
   "/features/goat-bot/MobileBotRowMenu.tsx",
+  "/features/threads/useThreadHistoryControls.ts",
 ];
 const require = NodeModule.createRequire(import.meta.url);
 const babel: {

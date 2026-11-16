@@ -15,7 +15,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsActionRow } from "./components/SettingsActionRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
-import { commandFailureText } from "./commandFailureText";
+import { commandFailureText } from "../../lib/commandFailureText";
 
 function NumberRow({
   label,

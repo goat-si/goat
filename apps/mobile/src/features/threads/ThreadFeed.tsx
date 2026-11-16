@@ -309,7 +309,8 @@ export interface ThreadFeedHistoryControls {
   readonly error: string | null;
   readonly onLoadEarlier: () => void;
   /** Loads earlier history down to the entry, in one request. */
-  readonly onLoadThrough: (entryId: string) => void;
+  /** Resolves whether that load brought history in; a failure ends a message jump. */
+  readonly onLoadThrough: (entryId: string) => Promise<boolean>;
 }
 
 export interface ThreadFeedHandle {
@@ -3357,7 +3358,7 @@ function ThreadFeedLoadEarlierControl(props: ThreadFeedHistoryControls) {
     return null;
   }
   return (
-    <View className="mb-3 items-center gap-1.5 px-2">
+    <View className="mb-3 items-center px-2">
       {props.hasMoreHistory ? (
         <View className="self-center">
           <Button
@@ -3371,11 +3372,17 @@ function ThreadFeedLoadEarlierControl(props: ThreadFeedHistoryControls) {
           />
         </View>
       ) : null}
-      {props.error !== null ? (
-        <Text className="text-center text-xs" style={{ color: mutedColor }}>
-          {props.error}
-        </Text>
-      ) : null}
+      {/* Mounted with the control so TalkBack announces an error line when it appears. */}
+      <View collapsable={false} accessibilityLiveRegion="polite">
+        {props.error !== null ? (
+          <Text
+            className={props.hasMoreHistory ? "mt-1.5 text-center text-xs" : "text-center text-xs"}
+            style={{ color: mutedColor }}
+          >
+            {props.error}
+          </Text>
+        ) : null}
+      </View>
     </View>
   );
 }
