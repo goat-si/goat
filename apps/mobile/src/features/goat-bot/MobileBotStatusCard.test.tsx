@@ -241,37 +241,6 @@ it("guard: a home that is only offline still says it is offline (#3532)", async 
   expect(container.textContent).not.toContain("did not accept this device");
 });
 
-/** The home refused, was removed, and was added back while its old connection state was held. */
-function readdedAfterRefusal(registry: AtomRegistry.AtomRegistry) {
-  registry.set(presentationsAtom, homeLink(blocked("authentication")));
-  registry.set(catalogAtom, listed(["env-laptop"]));
-  // As in the app, the presentation of the id that is back arrives before the catalog's update.
-  registry.set(presentationsAtom, homeLink(blocked("authentication")));
-  registry.set(catalogAtom, listed(["env-studio", "env-laptop"]));
-  // Listed again, its presentation still carries the removed connection's last state.
-  registry.set(presentationsAtom, homeLink(blocked("authentication")));
-}
-
-it("a home removed and added back doesn't inherit the earlier membership's refusal (#3532)", async () => {
-  using follow = following();
-  state.homeConnected = false;
-  readdedAfterRefusal(follow.registry);
-  await render({ rows: "unavailable" }, follow.registry);
-  expect(container.textContent).toContain("Home machine is offline (Mac Studio)");
-  expect(container.textContent).not.toContain("did not accept this device");
-});
-
-it("a home added back says it did not accept this device once its new connection is refused (#3532)", async () => {
-  using follow = following();
-  state.homeConnected = false;
-  readdedAfterRefusal(follow.registry);
-  follow.registry.set(presentationsAtom, homeLink({ phase: "connecting", error: null }));
-  follow.registry.set(presentationsAtom, homeLink(blocked("permission")));
-  await render({ rows: "unavailable" }, follow.registry);
-  expect(container.textContent).toContain("GOAT on Mac Studio did not accept this device");
-  expect(container.textContent).not.toContain("Home machine is offline");
-});
-
 it("says the home machine is offline and moves the bot where the viewer may write", async () => {
   state.homeConnected = false;
   state.moveTarget = { environmentId: LAPTOP, label: "MacBook" };

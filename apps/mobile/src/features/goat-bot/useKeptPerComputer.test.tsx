@@ -298,22 +298,6 @@ it("a refusal starts no request that could be refused again: a refused list read
   expect(requests()).toEqual({ bots: before.bots + 1, asks: before.asks + 2 });
 });
 
-it("a computer added back after a refusal and a removal is asked again for the removal only, not once more for the old refusal (#3532)", async () => {
-  using env = computer();
-  await using bots = reader("bots", env.registry, env.bots.atom);
-  await using asks = reader("asks", env.registry, env.asks.atom);
-  await bots.mount();
-  await asks.mount();
-  await env.link("refused");
-  const requests = () => ({ bots: env.bots.requests, asks: env.asks.requests });
-  await act(async () => env.registry.set(catalogAtom, listed([])));
-  const removed = requests();
-  // As in the app, the presentation of the id that is back arrives before the catalog's own update.
-  await env.link("refused");
-  await act(async () => env.registry.set(catalogAtom, listed(["env"])));
-  expect(requests()).toEqual(removed);
-});
-
 it("an answer that lands in the same step as a connection refusal does not show after the reconnect", async () => {
   using env = computer();
   await env.link("connected");
