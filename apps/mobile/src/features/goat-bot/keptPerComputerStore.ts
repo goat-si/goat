@@ -1,6 +1,7 @@
 import { forgetNewBotEnvironment } from "@goat/client-runtime/goatBot";
 import { removedWithRelay } from "@goat/client-runtime/connection";
 import type { EnvironmentId } from "@goat/contracts";
+import * as Equal from "effect/Equal";
 import { Atom, type AtomRegistry } from "effect/reactivity";
 
 import { environmentCatalog } from "../../connection/catalog";
@@ -34,7 +35,7 @@ export const refusedComputersAtom = Atom.make((get) => {
   for (const environmentId of get(environmentCatalog.catalogValueAtom).entries.keys())
     if (get(connectionRefusedAtom(environmentId))) refused.add(environmentId);
   return refused;
-});
+}).pipe(Atom.withEquality(Equal.equals));
 // The follower's way to interrupt a computer's reads, so nothing in flight lands afterwards.
 const refreshers = new WeakMap<
   AtomRegistry.AtomRegistry,
