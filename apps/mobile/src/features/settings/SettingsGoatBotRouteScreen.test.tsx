@@ -31,13 +31,13 @@ vi.mock("react-native", () => ({
     onPress?: () => void;
     disabled?: boolean;
     accessibilityLabel?: string;
-    accessibilityHint?: string;
+    accessibilityValue?: { text?: string };
   }) => (
     <button
       onClick={props.onPress}
       disabled={props.disabled}
       aria-label={props.accessibilityLabel}
-      aria-description={props.accessibilityHint}
+      aria-valuetext={props.accessibilityValue?.text}
     >
       {props.children}
     </button>
@@ -184,8 +184,10 @@ const mayEditAtom = channelEnvironment.updateBot.permissionAtom(
   "env" as never,
 ) as unknown as Atom.Writable<boolean>;
 const capabilities = { goatBotProfiles: true, goatBotProfileEdit: true, goatBotMembers: true };
-const home = (phase: string) =>
-  new Map([["env", { connection: { phase }, serverConfig: { environment: { capabilities } } }]]);
+const home = (phase: string, failure?: { kind: string; reason: string }) =>
+  new Map([
+    ["env", { connection: { phase, failure }, serverConfig: { environment: { capabilities } } }],
+  ]);
 const main = {
   botId: "main",
   role: "main",
@@ -235,9 +237,9 @@ async function settings() {
     get saveEnabled() {
       return save() !== null && !save()!.disabled;
     },
-    /** What a screen reader says after Save, or null. */
-    get saveHint() {
-      return save()?.getAttribute("aria-description") ?? null;
+    /** What a screen reader says with Save, after its name, or null. */
+    get saveValue() {
+      return save()?.getAttribute("aria-valuetext") ?? null;
     },
     /** Each place the text shows on screen, and whether a screen reader skips it. */
     shown: (text: string) =>
@@ -258,6 +260,14 @@ async function settings() {
       }),
     drop: () => act(async () => registry.set(presentationsAtom, home("offline"))),
     reconnect: () => act(async () => registry.set(presentationsAtom, home("connected"))),
+    /** The next connection attempt is refused: this phone's credential no longer works there. */
+    refuseConnection: () =>
+      act(async () =>
+        registry.set(
+          presentationsAtom,
+          home("error", { kind: "blocked", reason: "authentication" }),
+        ),
+      ),
     /** The read idled out while the computer was away: the next one starts with no answer. */
     forgetRead: () => act(async () => registry.set(botListAtom, AsyncResult.initial())),
     deny: () => act(async () => registry.set(mayEditAtom, false)),
@@ -285,18 +295,18 @@ it("an Edit sheet open when the computer drops stays open with its typed change 
   await screen.openRow();
   await screen.typePurpose("Keeps an eye on the release");
   expect(screen.saveEnabled).toBe(true);
-  expect(screen.saveHint).toBe(null);
+  expect(screen.saveValue).toBe(null);
   await screen.drop();
   expect(screen.sheetOpen).toBe(true);
   expect(screen.purpose).toBe("Keeps an eye on the release");
   expect(screen.saveEnabled).toBe(false);
-  // Shown beside Save and said as Save's hint; the visible line is skipped so it is said once.
-  expect(screen.saveHint).toBe("Scout's computer isn't connected.");
+  // Shown beside Save and said with it, hints on or off; the visible line is skipped so it is said once.
+  expect(screen.saveValue).toBe("Scout's computer isn't connected.");
   expect(screen.shown("Scout's computer isn't connected.")).toEqual([{ hiddenFromReader: true }]);
   await screen.reconnect();
   expect(screen.purpose).toBe("Keeps an eye on the release");
   expect(screen.saveEnabled).toBe(true);
-  expect(screen.saveHint).toBe(null);
+  expect(screen.saveValue).toBe(null);
   expect(screen.shown("Scout's computer isn't connected.")).toEqual([]);
 });
 
@@ -361,4 +371,11 @@ it("a list read again from nothing after a long drop reads Loading, not Not star
   expect(screen.row).toBe("GOAT Bot, Loading…");
   await screen.answer(AsyncResult.success(botList));
   expect(screen.row).toBe("🐐 Scout, Edit");
+});
+
+it("once the connection is refused the row reads Couldn't load, not Offline or Loading", async () => {
+  await using screen = await settings();
+  await screen.answer(AsyncResult.success(botList));
+  await screen.refuseConnection();
+  expect(screen.row).toBe("GOAT Bot, Couldn't load");
 });
