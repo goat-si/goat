@@ -100,7 +100,12 @@ export function useGoatBotTypedAnswer(row: QuestionRow) {
     row.answerTaskId === undefined
       ? { taskId: answer?.taskId, questionId: answer?.questionId }
       : { taskId: row.answerTaskId, questionId: row.answerQuestionId };
-  const ended = isRecorded(answer, scope.recorded);
+  // Judged on the current target: a held answer's question id can arrive after its last keystroke.
+  const ended =
+    answer !== undefined &&
+    target.taskId !== undefined &&
+    target.questionId !== undefined &&
+    scope.recorded.has(recordKey(target.taskId, target.questionId));
   // A closed card's Enter would send a task message the main chat hides, so the words are held.
   const gated =
     scope.mainChat &&

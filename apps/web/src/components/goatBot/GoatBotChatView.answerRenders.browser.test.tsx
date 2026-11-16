@@ -167,8 +167,9 @@ it("a keystroke in one question card redraws neither the timeline nor the chat v
     timeline: after.timeline - before.timeline,
     chat: after.chat - before.chat,
     typed: after.typed - before.typed,
-    other: after.other - before.other,
-  }).toEqual({ timeline: 0, chat: 0, typed: 1, other: 1 });
+  }).toEqual({ timeline: 0, chat: 0, typed: 1 });
+  // The other card's one redraw is the known cost listed under Limits; fewer is fine.
+  expect(after.other - before.other).toBeLessThanOrEqual(1);
 });
 
 it("under StrictMode, an answer its task records while the field is empty settles without render warnings (#3442)", async () => {
