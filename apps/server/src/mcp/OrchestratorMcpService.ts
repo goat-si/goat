@@ -138,6 +138,7 @@ import { runStop, STOP_TURN_ITEM_TYPES, statusFromShell, threadRun } from "./thr
 import * as View from "./threadListView.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 import type { OrchestratorMcpServiceShape } from "./OrchestratorMcpServiceShape.ts";
+import { endsTaskWait, isTerminalTaskStatus } from "./taskWaitState.ts";
 
 // Resolved per call: RemoteDispatchCoordinator → LaunchWatchService → PressureNudger →
 // HostStatusMcpService → HostThreadsMcpService → this module is an import cycle, so the
@@ -173,11 +174,6 @@ interface ResolvedTarget {
   readonly modelSelection: ModelSelection;
   readonly supportedRuntimeModes: ReadonlyArray<RuntimeMode> | undefined;
 }
-
-type TerminalTaskStatus = Extract<
-  OrchestratorMcpDelegateTaskResult["status"],
-  "completed" | "failed" | "cancelled" | "interrupted"
->;
 
 export type { OrchestratorMcpServiceShape } from "./OrchestratorMcpServiceShape.ts";
 
@@ -422,30 +418,6 @@ function hasPendingChildRuns(
       !ThreadManagementService.isTerminalRunStatus(run.status) &&
       !(run.status === "queued" && run.queueHeld === true) &&
       (delegatedRun === undefined || run.ordinal > delegatedRun.ordinal),
-  );
-}
-
-function isTerminalTaskStatus(
-  status: OrchestratorMcpDelegateTaskResult["status"] | OrchestrationV2Subagent["status"],
-): status is TerminalTaskStatus {
-  return (
-    status === "completed" ||
-    status === "failed" ||
-    status === "cancelled" ||
-    status === "interrupted"
-  );
-}
-
-// pendingRequestIds lists questions on the task's own runs; hasPendingQuestion covers any live one.
-const hasTaskQuestion = (
-  result: Pick<OrchestratorMcpDelegateTaskResult, "hasPendingQuestion" | "pendingRequestIds">,
-) => result.hasPendingQuestion || (result.pendingRequestIds?.length ?? 0) > 0;
-
-function endsTaskWait(result: OrchestratorMcpDelegateTaskResult): boolean {
-  return (
-    hasTaskQuestion(result) ||
-    result.pendingApproval !== null ||
-    isTerminalTaskStatus(result.status)
   );
 }
 

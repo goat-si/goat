@@ -203,7 +203,7 @@
   "apps/server/src/mcp/McpHttpServer.ts": { "lines": 1217 },
   "apps/server/src/mcp/McpSessionRegistry.ts": { "nonNull": 1 },
   "apps/server/src/mcp/OrchestratorMcpService.test.ts": { "lines": 4977 },
-  "apps/server/src/mcp/OrchestratorMcpService.ts": { "lines": 3957, "nonNull": 5 },
+  "apps/server/src/mcp/OrchestratorMcpService.ts": { "lines": 3930, "nonNull": 5 },
   "apps/server/src/mcp/OrchestratorMcpToolkit.integration.test.ts": { "lines": 1092 },
   "apps/server/src/mcp/PendingQuestionsMcpService.test.ts": { "lines": 1231 },
   "apps/server/src/mcp/PreviewAutomationBroker.test.ts": { "lines": 1117 },
