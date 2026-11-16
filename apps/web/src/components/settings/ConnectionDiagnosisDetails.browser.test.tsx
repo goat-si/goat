@@ -112,8 +112,8 @@ it("a browser whose own server ended its session reads the way back under the he
   await using screen = await render(<ConnectionDiagnosisHeadline environment={environment} />, {
     router: false,
   });
-  await expect.element(screen.getByText("GOAT on Studio did not accept this device")).toBeVisible();
   await expect.element(screen.getByText(STEP, { exact: true })).toBeVisible();
+  expect(screen.container.textContent).toBe(`GOAT on Studio did not accept this device${STEP}`);
 });
 
 it("a bearer refusal shows the headline alone (#3473, guard)", async () => {
