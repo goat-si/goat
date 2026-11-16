@@ -1,7 +1,7 @@
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { RegistryContext } from "@effect/atom-react";
-import { Atom, AtomRegistry } from "effect/reactivity";
+import { type Atom, AtomRegistry } from "effect/reactivity";
 import { BotProfile, EnvironmentId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
@@ -18,11 +18,9 @@ const member = vi.hoisted(() => ({
   answer: null as null | object,
   cause: null as unknown,
   failure: null as null | { kind: string; reason: string },
-  // The status read was sent after a reconnect and has not answered yet.
-  pending: false,
   // The bots the roster's list answers with; a deleted one is listed with its state.
   listed: [{ botId: "scout" }] as ReadonlyArray<{ botId: string; state?: string }>,
-  // Open asks, kept per computer like the statuses, and whether their reader is on screen.
+  // Open asks, kept per computer for offline, and whether their reader is on screen.
   asks: { asks: [{ text: "Which machine?" }], total: 1 } as object,
   asksShown: false,
 }));
@@ -50,18 +48,25 @@ vi.mock("../../state/environments", () => ({
     ]),
   }),
 }));
-vi.mock("../../state/channels", () => ({ channelEnvironment: { botStatus: () => "status" } }));
+vi.mock("../../state/channels", () => ({
+  channelEnvironment: { botStatus: () => "status", listBots: () => null },
+}));
+// The presentations the follower watches; each show sets the computer's connection.
+vi.mock("../../state/presentation", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return { environmentPresentations: { presentationsAtom: Atom.make(new Map()) } };
+});
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (query: string | null) => {
     // Like a real read, an answer keeps its identity; a refused one keeps the earlier answer beside it.
     member.answer ??= { waitingCount: 0, ...(member.latest ? { latest: member.latest } : {}) };
-    const data = query === null || member.pending ? null : member.answer;
+    const data = query === null ? null : member.answer;
     return {
       data,
       successResult: data !== null && member.cause === null ? { value: data } : null,
       cause: query === null ? null : member.cause,
       error: member.error,
-      isPending: query !== null && member.pending,
+      isPending: false,
       isSuccess: data !== null && member.cause === null,
       refresh: member.refresh,
     };
@@ -78,6 +83,7 @@ vi.mock("../../connection/catalog", async () => {
 });
 vi.mock("../../state/entities", () => ({ useThreadShell: () => member.shell }));
 
+import { environmentPresentations } from "../../state/presentation";
 import { useMobileMemberStatus } from "./useMobileMemberStatus";
 import {
   followKeptPerComputerCatalog,
@@ -109,7 +115,6 @@ function setup() {
   member.answer = null;
   member.cause = null;
   member.failure = null;
-  member.pending = false;
   member.listed = [{ botId: "scout" }];
   member.asksShown = false;
   resetKeptPerComputerForTests();
@@ -195,21 +200,22 @@ const listed = (ids: string[]) => ({
 /** Renders Scout's row status in one registry that follows the app's computers, as the app does. */
 function rosterRow(bot = scout) {
   const registry = AtomRegistry.make();
-  // The app's connections, as the app hands them to the follower it installs.
-  const connections = Atom.make<ReadonlyMap<string, object>>(new Map());
+  const connections = environmentPresentations.presentationsAtom as unknown as Atom.Writable<
+    ReadonlyMap<string, object>
+  >;
   const stop = followKeptPerComputerCatalog(registry, connections as never);
   registry.set(catalog.atom!, listed(["env"]));
   let value: ReturnType<typeof useMobileMemberStatus> | undefined;
   let asks: unknown = null;
   // Needs you's own kept read of the computer's open asks.
   function Asks() {
-    const live = member.connected && !member.pending ? member.asks : null;
+    const live = member.connected ? member.asks : null;
     asks = useKeptPerComputer("asks", EnvironmentId.make("env"), {
       data: live,
       successResult: null,
       cause: null,
       error: null,
-      isPending: member.connected && member.pending,
+      isPending: false,
       isSuccess: live !== null,
       refresh: () => {},
     });
@@ -292,19 +298,17 @@ const reply = {
   author: "bot" as const,
 };
 
-it("keeps a member's last line and waiting count while its computer is offline, without its running work", async () => {
+it("offline, a member's row shows no line or waiting count from before", async () => {
   setup();
   member.answer = { waitingCount: 2, latest: reply, tasks: { active: true } };
   await using row = rosterRow();
   await row.show();
+  expect(row.value?.latest).toEqual(reply);
   member.connected = false;
   await row.show();
-  expect(row.value?.latest).toEqual(reply);
-  expect(row.value?.waitingCount).toBe(2);
-  expect(row.value?.kept).toBe(true);
-  // An old count is not a fresh one, and the work it saw going may have stopped since.
-  expect(row.value?.waitingState).toBe("pending");
-  expect(row.value?.status?.tasks).toBeUndefined();
+  expect(row.value?.latest).toBeUndefined();
+  expect(row.value?.waitingCount).toBe(0);
+  expect(row.value?.status).toBeNull();
 });
 
 it("a member's status read refused for access shows nothing of the earlier answer it still holds", async () => {
@@ -313,156 +317,41 @@ it("a member's status read refused for access shows nothing of the earlier answe
   await using row = rosterRow();
   await row.show();
   expect(row.value?.latest).toEqual(reply);
+  expect(row.value?.unreadable).toBe(false);
   member.cause = refused;
   await row.show();
   expect(row.value?.latest).toBeUndefined();
   expect(row.value?.waitingCount).toBe(0);
-  member.connected = false;
-  await row.show();
-  expect(row.value?.latest).toBeUndefined();
+  expect(row.value?.unreadable).toBe(true);
 });
 
-it("a refused bot list leaves no member status kept, offline or after", async () => {
+it("a member is unreadable once its bot list is refused, and once its computer refuses this phone", async () => {
   setup();
   member.answer = { waitingCount: 1, latest: reply };
   await using row = rosterRow();
-  await row.show();
   await row.show(refused);
-  member.connected = false;
-  await row.show(refused);
-  expect(row.value?.latest).toBeUndefined();
-  expect(row.value?.waitingCount).toBe(0);
-});
-
-it("a member's kept status goes with its computer, and adding the computer again starts empty", async () => {
-  setup();
-  member.answer = { waitingCount: 1, latest: reply };
-  await using row = rosterRow();
+  expect(row.value?.unreadable).toBe(true);
   await row.show();
-  member.connected = false;
-  await row.setComputers([]);
-  await row.show();
-  expect(row.value?.latest).toBeUndefined();
-  await row.setComputers(["env"]);
-  await row.show();
-  expect(row.value?.latest).toBeUndefined();
-});
-
-it("keeps nothing for a deleted member, even one whose status was kept before it was deleted", async () => {
-  setup();
-  member.answer = { waitingCount: 1, latest: reply };
-  await using row = rosterRow();
-  await row.show();
-  member.connected = false;
-  await row.show(null, { ...scout, state: "deleted" } as typeof scout);
-  expect(row.value?.latest).toBeUndefined();
-});
-
-it("removing a computer forgets the status kept for a member whose row was not on screen", async () => {
-  setup();
-  member.answer = { waitingCount: 1, latest: reply };
-  await using row = rosterRow();
-  await row.show();
-  member.connected = false;
-  // Scout's row is off screen when the computer is removed and added back.
-  await row.show(null, null);
-  await row.setComputers([]);
-  await row.setComputers(["env"]);
-  await row.show();
-  expect(row.value?.latest).toBeUndefined();
-});
-
-it("a member's kept status is gone once its computer refuses this phone, and does not come back", async () => {
-  setup();
-  member.answer = { waitingCount: 1, latest: reply };
-  await using row = rosterRow();
-  await row.show();
+  expect(row.value?.unreadable).toBe(false);
   member.connected = false;
   member.failure = { kind: "blocked", reason: "authentication" };
   await row.show();
-  expect(row.value?.latest).toBeUndefined();
-  expect(row.value?.waitingCount).toBe(0);
-  // The refusal is forgotten (say the phone is paired again) while still offline: what was kept is gone.
-  member.failure = null;
-  await row.show();
-  expect(row.value?.latest).toBeUndefined();
+  expect(row.value?.unreadable).toBe(true);
 });
 
-it("keeps only the row's one line of a member's newest message, cut to a bound", async () => {
+it("a refused bot list forgets the open asks kept for its computer, on screen or not", async () => {
   setup();
-  const long = { ...reply, text: "## Disk check\n\n**Which** machine? " + "x".repeat(500) };
-  member.answer = { waitingCount: 1, latest: long };
-  await using row = rosterRow();
-  await row.show();
-  member.connected = false;
-  await row.show();
-  expect(row.value?.latest?.text.startsWith("Disk check Which machine? x")).toBe(true);
-  expect(row.value?.latest?.text.length).toBe(200);
-});
-
-const refusedRead = { _tag: "EnvironmentAuthorizationError", message: "Not allowed." };
-
-it("a refused bot list forgets every member status and open ask kept for its computer, on screen or not", async () => {
-  setup();
-  member.answer = { waitingCount: 1, latest: reply };
   member.asksShown = true;
   await using row = rosterRow();
   await row.show();
   expect(row.asks).not.toBeNull();
-  // Scout's row and Needs you leave the screen; then the bot list is refused, then answers again.
+  // Needs you leaves the screen; then the bot list is refused, then answers again.
   member.asksShown = false;
   await row.show(null, null);
-  await row.show(refusedRead, null);
+  await row.show(refused, null);
   await row.show(null, null);
   member.connected = false;
   member.asksShown = true;
   await row.show();
-  expect(row.value?.latest).toBeUndefined();
   expect(row.asks).toBeNull();
-});
-
-it("a member deleted and restored does not bring back the status kept before it was deleted", async () => {
-  setup();
-  member.answer = { waitingCount: 1, latest: reply };
-  await using row = rosterRow();
-  await row.show();
-  // Deleted: its row leaves the list, which still names it as deleted.
-  member.listed = [{ botId: "scout", state: "deleted" }];
-  await row.show(null, null);
-  // Restored, and the computer drops before a fresh status arrives.
-  member.listed = [{ botId: "scout" }];
-  await row.show(null, null);
-  member.connected = false;
-  await row.show();
-  expect(row.value?.latest).toBeUndefined();
-});
-
-it("after a reconnect, a row keeps its last status, still marked, until the first status read answers", async () => {
-  setup();
-  member.answer = { waitingCount: 1, latest: reply };
-  await using row = rosterRow();
-  await row.show();
-  member.connected = false;
-  await row.show();
-  // Back online, the read was sent and has not answered.
-  member.connected = true;
-  member.pending = true;
-  await row.show();
-  expect(row.value?.latest).toEqual(reply);
-  expect(row.value?.kept).toBe(true);
-  member.pending = false;
-  await row.show();
-  expect(row.value?.kept).toBe(false);
-});
-
-it("cuts a kept line by characters, never through an emoji", async () => {
-  setup();
-  member.answer = { waitingCount: 0, latest: { ...reply, text: "x".repeat(199) + "😀😀" } };
-  await using row = rosterRow();
-  await row.show();
-  member.connected = false;
-  await row.show();
-  const text = row.value?.latest?.text ?? "";
-  expect(Array.from(text)).toHaveLength(200);
-  expect(text.endsWith("😀")).toBe(true);
 });

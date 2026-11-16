@@ -21,8 +21,8 @@ const state = vi.hoisted(() => ({
   environmentId: "env",
   // A bot-list read refused for access; the query keeps its earlier answer beside it.
   cause: null as unknown,
-  // Back online, the first bot-list read was sent and has not answered.
-  pending: false,
+  // The computer's Slack connections, as its settings read answers.
+  slack: null as null | ReadonlyArray<{ enabled: boolean }>,
 }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({
@@ -51,16 +51,15 @@ vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (query: string | null) => {
     if (query) state.calls.push(query);
     // An offline computer answers nothing. Like a real read, an answer keeps its identity.
-    const profiles =
-      query === "profiles" && state.connected && !state.pending ? answerOf(state.bots) : null;
+    const profiles = query === "profiles" && state.connected ? answerOf(state.bots) : null;
     const refused = query === "profiles" ? state.cause : null;
     return {
-      data: query === "threads" ? { rows: [] } : profiles,
+      data: query === "threads" ? { rows: [] } : query === "slack" ? state.slack : profiles,
       successResult: profiles === null || refused !== null ? null : { value: profiles },
       cause: refused,
       error: null,
-      isPending: query === "profiles" && state.pending,
-      isSuccess: query !== null && refused === null && !(query === "profiles" && state.pending),
+      isPending: false,
+      isSuccess: query !== null && refused === null,
       refresh: vi.fn(),
     };
   },
@@ -74,6 +73,11 @@ vi.mock("../../state/channels", () => ({
   },
 }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
+// No computer is connected in these presentations, so no reader looks at the bot list beyond the roster.
+vi.mock("../../state/presentation", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return { environmentPresentations: { presentationsAtom: Atom.make(new Map()) } };
+});
 // The app's computers. Each test's registry holds its own catalog value; "env" is listed unless a test says not.
 const catalog = vi.hoisted(() => ({
   atom: null as null | import("effect/reactivity").Atom.Writable<unknown>,
@@ -105,7 +109,7 @@ afterEach(async () => {
   state.botRef = null;
   state.environmentId = "env";
   state.cause = null;
-  state.pending = false;
+  state.slack = null;
   resetKeptPerComputerForTests();
 });
 
@@ -342,14 +346,14 @@ it("an answer from before its computer was removed and added again is not kept",
   stopFollowing();
 });
 
-it("a refused bot list is known in the same render it arrives, with no bots listed", async () => {
+it("a refused bot list lists no bots in the same render it arrives", async () => {
   state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
   state.bots = echoBots;
   state.botRef = { environmentId: "env", threadId: "bot" };
-  const commits: Array<{ refused: boolean; members: string[] }> = [];
+  const commits: Array<{ members: string[] }> = [];
   function Committed() {
     const roster = useMobileBotRoster();
-    const seen = { refused: roster.refused, members: memberNamesOf(roster.bots) };
+    const seen = { members: memberNamesOf(roster.bots) };
     useLayoutEffect(() => {
       commits.push(seen);
     });
@@ -357,29 +361,23 @@ it("a refused bot list is known in the same render it arrives, with no bots list
   }
   root = createRoot(document.createElement("div"));
   await act(async () => root?.render(<Committed />));
-  expect(commits.at(-1)).toEqual({ refused: false, members: ["Echo"] });
+  expect(commits.at(-1)).toEqual({ members: ["Echo"] });
   const before = commits.length;
   state.cause = { _tag: "EnvironmentAuthorizationError", message: "Not allowed." };
   await act(async () => root?.render(<Committed />));
   // The first commit after the refused answer already says so.
-  expect(commits[before]).toEqual({ refused: true, members: [] });
+  expect(commits[before]).toEqual({ members: [] });
 });
 
-it("after a reconnect the bot list keeps its last answer until the first read answers", async () => {
-  state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
+it("says nothing of Slack once the bot list is refused", async () => {
+  state.capabilities = { goatBotProfiles: true, goatBotMembers: true, slackChannel: true };
+  state.slack = [{ enabled: true }];
   state.bots = echoBots;
   state.botRef = { environmentId: "env", threadId: "bot" };
   root = createRoot(document.createElement("div"));
   await act(async () => root?.render(<Probe />));
-  state.connected = false;
+  expect(value.slackEnabled).toBe(true);
+  state.cause = { _tag: "EnvironmentAuthorizationError", message: "Not allowed." };
   await act(async () => root?.render(<Probe />));
-  expect(memberNames()).toEqual(["Echo"]);
-  state.connected = true;
-  state.pending = true;
-  await act(async () => root?.render(<Probe />));
-  expect(memberNames()).toEqual(["Echo"]);
-  expect(value.stale).toBe(true);
-  state.pending = false;
-  await act(async () => root?.render(<Probe />));
-  expect(value.stale).toBe(false);
+  expect(value.slackEnabled).toBe(false);
 });

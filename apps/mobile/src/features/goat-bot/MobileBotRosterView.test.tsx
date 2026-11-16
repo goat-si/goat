@@ -116,8 +116,6 @@ const members = vi.hoisted(() => ({
       latest?: { text: string; at: string; author: "bot" | "person" };
       unread: boolean;
       waitingState?: "ready" | "pending" | "unavailable";
-      kept?: boolean;
-      offline?: boolean;
     }
   >,
 }));
@@ -670,63 +668,6 @@ it("while the computer is offline, New bot stays New bot, unavailable, and says 
   expect(container.textContent).toContain("Unavailable while Studio Mac is offline");
 });
 
-it("offline, rows that show what this phone read before say it may be out of date, on screen and in their names", async () => {
-  const scout = decodeProfile({
-    botId: "scout",
-    role: "member",
-    name: "Scout",
-    avatar: null,
-    purpose: "",
-    defaultModelSelection: null,
-    defaultProjectId: null,
-    environmentId: "env",
-    sessionThreadId: "thread-scout",
-    createdAt: at,
-    updatedAt: at,
-  });
-  // Scout's status is the one read before its computer dropped.
-  members.status = {
-    scout: {
-      waitingCount: 1,
-      latest: { text: "Which branch should I use?", at, author: "bot" },
-      unread: false,
-      waitingState: "pending",
-      kept: true,
-      offline: true,
-    },
-  };
-  try {
-    root = createRoot(container);
-    await act(async () =>
-      root?.render(
-        <MobileBotRosterView
-          bots={[
-            { kind: "main", profile: null },
-            { kind: "member", profile: scout },
-          ]}
-          preview="The build is waiting on you."
-          offline
-          slackEnabled={false}
-          onOpenBot={() => {}}
-        />,
-      ),
-    );
-    const label = (name: string) =>
-      [...container.querySelectorAll("button")]
-        .find((element) => element.getAttribute("aria-label")?.split(", ").includes(name))
-        ?.getAttribute("aria-label");
-    expect(container.textContent).toContain("Offline · this may be out of date");
-    expect(label("Scout")).toBe(
-      "1 waiting for you, Scout, Which branch should I use?, offline, may be out of date",
-    );
-    expect(label("GOAT Bot")).toBe(
-      "GOAT Bot, The build is waiting on you., offline, may be out of date",
-    );
-  } finally {
-    members.status = {};
-  }
-});
-
 it("once its computer may no longer be read here, the main tile rests and says nothing it read there", async () => {
   // The conversation still holds a waiting task from before access was refused.
   face.items = [
@@ -744,66 +685,13 @@ it("once its computer may no longer be read here, the main tile rests and says n
         <MobileBotRosterView
           bots={[{ kind: "main", profile: null }]}
           mainUnreadable
-          offline
           slackEnabled={false}
           onOpenBot={() => {}}
         />,
       ),
     );
     expect(container.querySelector('[aria-label="GOAT Bot"]')).not.toBeNull();
-    // Nothing it read there shows, so nothing is marked out of date either.
-    expect(container.textContent).not.toContain("may be out of date");
   } finally {
     face.items = [];
-  }
-});
-
-it("back online before the first read answers, rows still showing what was read before say it may be out of date", async () => {
-  const scout = decodeProfile({
-    botId: "scout",
-    role: "member",
-    name: "Scout",
-    avatar: null,
-    purpose: "",
-    defaultModelSelection: null,
-    defaultProjectId: null,
-    environmentId: "env",
-    sessionThreadId: "thread-scout",
-    createdAt: at,
-    updatedAt: at,
-  });
-  members.status = {
-    scout: {
-      waitingCount: 1,
-      latest: { text: "Which branch should I use?", at, author: "bot" },
-      unread: false,
-      waitingState: "pending",
-      kept: true,
-      offline: false,
-    },
-  };
-  try {
-    root = createRoot(container);
-    await act(async () =>
-      root?.render(
-        <MobileBotRosterView
-          bots={[
-            { kind: "main", profile: null },
-            { kind: "member", profile: scout },
-          ]}
-          stale
-          slackEnabled={false}
-          onOpenBot={() => {}}
-        />,
-      ),
-    );
-    expect(container.textContent).toContain("This may be out of date");
-    expect(container.textContent).not.toContain("Offline");
-    const label = [...container.querySelectorAll("button")]
-      .find((element) => element.getAttribute("aria-label")?.split(", ").includes("Scout"))
-      ?.getAttribute("aria-label");
-    expect(label).toBe("1 waiting for you, Scout, Which branch should I use?, may be out of date");
-  } finally {
-    members.status = {};
   }
 });

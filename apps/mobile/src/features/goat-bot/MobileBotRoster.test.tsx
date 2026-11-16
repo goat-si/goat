@@ -40,7 +40,6 @@ const state = vi.hoisted(() => ({
     supportsMembers: true,
     membersUnknown: false,
     connected: true,
-    refused: false,
   },
   requests: 0,
   newBotRow: null as unknown,
@@ -82,11 +81,11 @@ vi.mock("react-native", () => ({
 vi.mock("./useMobileBotPreview", () => ({
   useMobileBotPreview: () => ({ text: "The build is waiting on you.", unread: false }),
 }));
-// Which computers this phone may still read; the main bot's saved computer is "env" unless a test moves it.
-const readable = vi.hoisted(() => ({ ids: new Set(["env"]), botComputer: "env" }));
+// The computers this phone may no longer read; the main bot's saved computer is "env" unless a test moves it.
+const readable = vi.hoisted(() => ({ refused: new Set(["old"]), botComputer: "env" }));
 vi.mock("./useKeptPerComputer", () => ({
   useComputerReadable: (environmentId: string | null) =>
-    environmentId !== null && readable.ids.has(environmentId),
+    environmentId !== null && !readable.refused.has(environmentId),
 }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({
@@ -100,7 +99,6 @@ vi.mock("./useMobileBotRoster", () => ({
     supportsMembers: state.roster.supportsMembers,
     membersUnknown: state.roster.membersUnknown,
     connected: state.roster.connected,
-    refused: state.roster.refused,
     computerLabel: "Studio Mac",
     environmentId: state.roster.environmentId,
     slackEnabled: false,
@@ -536,20 +534,35 @@ it("rests the main tile by the computer its saved bot lives on, not the one the 
   }
 });
 
-it("in the render a bot-list refusal arrives, the main tile has no line and Needs you no computer", async () => {
+it("once the roster's computer may no longer be read, the main tile has no line and Needs you no computer", async () => {
   state.roster.environmentId = "env";
   readable.botComputer = "env";
   const root = createRoot(document.createElement("div"));
   await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
   expect(state.view).toEqual({ preview: "The build is waiting on you.", mainEnvironmentId: "env" });
-  // The roster's own read is refused; the store has not heard yet, so the computer still reads as open.
-  state.roster.refused = true;
+  readable.refused.add("env");
   try {
     await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
     expect(state.mainUnreadable).toBe(true);
     expect(state.view).toEqual({ preview: undefined, mainEnvironmentId: null });
   } finally {
-    state.roster.refused = false;
+    readable.refused.delete("env");
     await act(async () => root.unmount());
+  }
+});
+
+it("shows no created bot's row once its computer may no longer be read", async () => {
+  const view = await newBotRoster();
+  await view.tap();
+  await view.answer(stored("research", "New bot"));
+  expect(view.container.textContent).toContain("New bot");
+  const environmentId = state.roster.environmentId;
+  readable.refused.add(environmentId);
+  try {
+    await view.draw();
+    expect(view.container.textContent).toBe("");
+  } finally {
+    readable.refused.delete(environmentId);
+    await view.unmount();
   }
 });

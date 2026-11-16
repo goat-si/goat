@@ -182,6 +182,10 @@ vi.mock("@goat/client-runtime/state/runtime", async () => {
   return { createEnvironmentRpcQueryAtomFamily: () => () => read };
 });
 vi.mock("../../connection/runtime", () => ({ connectionAtomRuntime: {} }));
+vi.mock("../../state/presentation", async () => {
+  const { Atom: A } = await import("effect/reactivity");
+  return { environmentPresentations: { presentationsAtom: A.make(new Map()) } };
+});
 // The app's computers: the bot computer "env" stays in the catalog throughout.
 vi.mock("../../connection/catalog", async () => {
   const { Atom: A } = await import("effect/reactivity");
@@ -593,28 +597,6 @@ it("keeps the last asks through a failed refresh when the computer then goes off
   expect(container.textContent).toContain("Scout: Which machine?");
   expect(container.textContent).toContain("Offline · this may be out of date");
   link.phase = "connected";
-});
-
-it("back online before the first read answers, keeps the last asks marked out of date until it does", async () => {
-  setupLink("connected");
-  await showRoster(true);
-  serve(read([ask("scout", "task-s", "Which machine?", "2026-11-11T10:05:00.000Z")]));
-  await act(async () => {});
-  link.phase = "disconnected";
-  await showRoster(true);
-  // Back online: the read was sent and has not answered.
-  serve(AsyncResult.initial(true));
-  link.phase = "connected";
-  await showRoster(true);
-  expect(stripButton()?.getAttribute("aria-label")).toBe(
-    "1 waiting for you, may be out of date. Scout: Which machine?",
-  );
-  expect(container.textContent).toContain("This may be out of date");
-  expect(container.textContent).not.toContain("Offline · this may be out of date");
-  serve(read([]));
-  await showRoster(true);
-  expect(container.textContent).not.toContain("Which machine?");
-  expect(container.textContent).not.toContain("may be out of date");
 });
 
 it("says what waits is unavailable when the computer is offline before any read answered", async () => {

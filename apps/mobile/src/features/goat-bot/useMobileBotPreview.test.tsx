@@ -9,7 +9,9 @@ import {
 import * as DateTime from "effect/DateTime";
 import { act, type ReactNode } from "react";
 import { RegistryContext } from "@effect/atom-react";
-import { Atom, AtomRegistry } from "effect/reactivity";
+import * as Cause from "effect/Cause";
+import * as Option from "effect/Option";
+import { AsyncResult, type Atom, AtomRegistry } from "effect/reactivity";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -46,12 +48,34 @@ vi.mock("../../connection/catalog", async () => {
   catalog.atom = Atom.make<unknown>({ isReady: true, entries: new Map([["env", {}]]) });
   return { environmentCatalog: { catalogValueAtom: catalog.atom } };
 });
+// Each computer's presentation, as the app derives it: its connection and what its server supports.
+vi.mock("../../state/presentation", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return { environmentPresentations: { presentationsAtom: Atom.make(new Map()) } };
+});
+// The one bot-list read every reader of a computer shares; each test drives what it answers.
+vi.mock("../../state/channels", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const read = Atom.make<AsyncResult.AsyncResult<unknown, unknown>>(AsyncResult.initial());
+  return { channelEnvironment: { listBots: () => read } };
+});
 import { useMobileBotPreview } from "./useMobileBotPreview";
 import {
   followKeptPerComputerCatalog,
   resetKeptPerComputerForTests,
   useKeptPerComputer,
 } from "./useKeptPerComputer";
+import { useEnvironmentQuery } from "../../state/query";
+import { channelEnvironment } from "../../state/channels";
+import { environmentPresentations } from "../../state/presentation";
+
+const presentationsAtom = environmentPresentations.presentationsAtom as unknown as Atom.Writable<
+  ReadonlyMap<string, object>
+>;
+const botListAtom = channelEnvironment.listBots({
+  environmentId: EnvironmentId.make("env"),
+  input: {},
+}) as unknown as Atom.Writable<AsyncResult.AsyncResult<unknown, unknown>>;
 
 const threadId = ThreadId.make("thread-bot");
 function message(
@@ -133,14 +157,14 @@ const listed = (ids: string[]) => ({
   entries: new Map(ids.map((id) => [id, { enabled: true }])),
 });
 const botList = { bots: [] };
+const linked = (connection: object, capabilities: object = {}) =>
+  new Map([["env", { connection, serverConfig: { environment: { capabilities } } }]]);
 
 /** The main tile's line in one registry that follows the app's computers, beside the roster's bot-list read. */
 function mainTile() {
   resetKeptPerComputerForTests();
   const registry = AtomRegistry.make();
-  // The app's connections, as the app hands them to the follower it installs.
-  const connections = Atom.make<ReadonlyMap<string, object>>(new Map());
-  const stop = followKeptPerComputerCatalog(registry, connections as never);
+  const stop = followKeptPerComputerCatalog(registry, presentationsAtom as never);
   registry.set(catalog.atom!, listed(["env"]));
   let preview: ReturnType<typeof useMobileBotPreview> = null;
   function Probe() {
@@ -191,18 +215,14 @@ function mainTile() {
       act(async () => {
         connection.failure = failure;
         registry.set(
-          connections,
-          new Map([
-            [
-              "env",
-              {
-                connection: failure === null ? { phase: "connected" } : { phase: "error", failure },
-              },
-            ],
-          ]),
+          presentationsAtom,
+          linked(failure === null ? { phase: "connected" } : { phase: "error", failure }),
         );
         if (listOpen && failure !== null) render({ offline: true });
       }),
+    /** The computer's connection is under way again after a failure; nothing is read yet. */
+    reconnecting: () =>
+      act(async () => registry.set(presentationsAtom, linked({ phase: "connecting" }))),
     /** Only the main tile is on screen: no bot list, no member rows. */
     showTileAlone: () =>
       act(async () => {
@@ -261,7 +281,7 @@ it("a phone whose access was revoked shows no line, even from a fresh start with
   }
 });
 
-it("a refusal stays known after the next attempt fails some other way, until a read succeeds", async () => {
+it("a refusal stays known after the next attempt fails some other way, until the computer connects again", async () => {
   state.items = [message("b1", "assistant_message", "The build is waiting on you.")];
   try {
     await using tile = mainTile();
@@ -291,6 +311,81 @@ it("a refusal seen while no bot list is on screen still hides the line when the 
     await tile.fail({ kind: "retrying", reason: "host-unreachable" });
     await tile.showTileAlone();
     expect(tile.line).toBeNull();
+  } finally {
+    connection.failure = null;
+  }
+});
+
+it("a reader outside the roster shows no line in any render after a refused bot list arrives", async () => {
+  state.items = [message("b1", "assistant_message", "The build is waiting on you.")];
+  resetKeptPerComputerForTests();
+  const registry = AtomRegistry.make();
+  const stop = followKeptPerComputerCatalog(registry, presentationsAtom as never);
+  registry.set(catalog.atom!, listed(["env"]));
+  registry.set(presentationsAtom, linked({ phase: "connected" }, { goatBotProfiles: true }));
+  registry.set(botListAtom, AsyncResult.success(botList));
+  const environmentId = EnvironmentId.make("env");
+  const lines: Array<{ readonly afterRefusal: boolean; readonly line: string | null }> = [];
+  let afterRefusal = false;
+  // As the bot chat route reads them in one component: the shared bot list, then the line.
+  function Route() {
+    useKeptPerComputer("bots", environmentId, useEnvironmentQuery(botListAtom));
+    const line = useMobileBotPreview({ environmentId, threadId })?.text ?? null;
+    lines.push({ afterRefusal, line });
+    return null;
+  }
+  const root = createRoot(document.createElement("div"));
+  await act(async () =>
+    root.render(
+      <RegistryContext value={registry}>
+        <Route />
+      </RegistryContext>,
+    ),
+  );
+  expect(lines.at(-1)?.line).toBe("The build is waiting on you.");
+  await act(async () => {
+    afterRefusal = true;
+    registry.set(
+      botListAtom,
+      AsyncResult.failure(Cause.fail(refused), {
+        previousSuccess: Option.some(AsyncResult.success(botList)),
+      }),
+    );
+  });
+  const after = lines.filter((render) => render.afterRefusal).map((render) => render.line);
+  expect(after.length).toBeGreaterThan(0);
+  expect(after).toEqual(after.map(() => null));
+  await act(async () => root.unmount());
+  stop();
+});
+
+it("a connection refusal clears once the computer connects again, with no bot-list read at all", async () => {
+  state.items = [message("b1", "assistant_message", "The build is waiting on you.")];
+  try {
+    await using tile = mainTile();
+    await tile.showTileAlone();
+    await tile.fail({ kind: "blocked", reason: "authentication" });
+    expect(tile.line).toBeNull();
+    // A server without bot profiles is never asked for a bot list: connecting is the sign.
+    await tile.fail(null);
+    expect(tile.line).toBe("The build is waiting on you.");
+  } finally {
+    connection.failure = null;
+  }
+});
+
+it("a bot list that answers does not clear a connection refusal; connecting again does", async () => {
+  state.items = [message("b1", "assistant_message", "The build is waiting on you.")];
+  try {
+    await using tile = mainTile();
+    await tile.show();
+    await tile.fail({ kind: "blocked", reason: "authentication" });
+    expect(tile.line).toBeNull();
+    await tile.reconnecting();
+    await tile.show();
+    expect(tile.line).toBeNull();
+    await tile.fail(null);
+    expect(tile.line).toBe("The build is waiting on you.");
   } finally {
     connection.failure = null;
   }

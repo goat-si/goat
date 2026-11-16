@@ -45,6 +45,7 @@ const reactTests = [
   "src/features/cloud/CloudAuthProvider.disabled.test.tsx",
   "src/features/cloud/AccountDeletionSection.test.tsx",
   "src/features/cloud/CloudAuthProvider.test.ts",
+  "src/features/cloud/cloudAccountService.test.tsx",
   "src/features/connection/ConnectionsNewRouteScreen.test.tsx",
   "src/features/decisions/DecisionDurableCard.test.tsx",
   "src/features/decisions/useDecisionInbox.test.tsx",

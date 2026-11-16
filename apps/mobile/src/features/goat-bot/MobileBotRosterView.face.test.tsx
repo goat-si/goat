@@ -180,7 +180,7 @@ function setup(statuses: Record<string, object | undefined>) {
   fixture.shells = {};
   fixture.refused = {};
 }
-async function show(bots = [scout]) {
+async function show(bots = [scout], mainUnreadable = false) {
   document.body.appendChild(container);
   root ??= createRoot(container);
   await act(async () =>
@@ -191,6 +191,7 @@ async function show(bots = [scout]) {
           ...bots.map((profile) => ({ kind: "member" as const, profile })),
         ]}
         slackEnabled={false}
+        mainUnreadable={mainUnreadable}
         onOpenBot={() => {}}
       />,
     ),
@@ -202,6 +203,7 @@ const row = (name: string) =>
   );
 const faceOf = (name: string) => row(name)?.querySelector("[data-face]")?.getAttribute("data-face");
 const labelOf = (name: string) => row(name)?.getAttribute("aria-label");
+const mainTile = () => row("GOAT Bot");
 const wait = (ms: number) => act(async () => vi.advanceTimersByTime(ms));
 
 it("reads while the person's message is the newest, from a status with no tasks, then turns back after 90 s", async () => {
@@ -313,4 +315,34 @@ it("a member whose status read is refused does not wait or work from its retaine
   await show();
   expect(faceOf("Scout")).not.toBe("waiting");
   expect(labelOf("Scout")).not.toContain("aiting");
+});
+
+it("a member and the main tile rest at once when they may no longer be read, with no face hold", async () => {
+  setup({ scout: { waitingCount: 0 } });
+  fixture.shells = { "thread-scout": quiet("thread-scout"), bot: quiet("bot") };
+  await show();
+  expect(faceOf("Scout")).toBe("idle");
+  expect(mainTile()?.querySelector("[data-face]")?.getAttribute("data-face")).toBe("idle");
+  // Both start waiting on the person: the member by its status, the main bot by its question.
+  fixture.status = { scout: { waitingCount: 1 } };
+  fixture.shells = {
+    ...fixture.shells,
+    bot: {
+      ...quiet("bot"),
+      source: {
+        ...quiet("bot").source,
+        pendingRuntimeRequest: { kind: "user_input", blocking: true },
+      },
+    },
+  };
+  await show();
+  expect(faceOf("Scout")).toBe("waiting");
+  expect(mainTile()?.querySelector("[data-face]")?.getAttribute("data-face")).toBe("waiting");
+  // Refused: no timer runs, yet both are idle, drawn and spoken.
+  fixture.refused = { scout: true };
+  await show([scout], true);
+  expect(faceOf("Scout")).toBe("idle");
+  expect(labelOf("Scout")).toBe("Scout, Finds sources");
+  expect(mainTile()?.querySelector("[data-face]")?.getAttribute("data-face")).toBe("idle");
+  expect(mainTile()?.getAttribute("aria-label")).toBe("GOAT Bot");
 });
