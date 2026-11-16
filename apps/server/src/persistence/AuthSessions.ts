@@ -11,6 +11,7 @@ import * as SqlSchema from "effect/sql/SqlSchema";
 import {
   AuthClientMetadataDeviceType,
   AuthEnvironmentScopes,
+  AuthRevokeOthersKeep,
   AuthSessionId,
   ClientSurface,
   ServerAuthSessionMethod,
@@ -114,7 +115,10 @@ export type RevokeOtherAuthSessionsInput = typeof RevokeOtherAuthSessionsInput.T
 export interface RevokedOtherAuthSessions {
   readonly revoked: ReadonlyArray<AuthSessionId>;
   /** Other unrevoked rows the revoke left alone. */
-  readonly kept: ReadonlyArray<AuthSessionId>;
+  readonly kept: ReadonlyArray<{
+    readonly sessionId: AuthSessionId;
+    readonly kind: AuthRevokeOthersKeep;
+  }>;
 }
 
 export const SetAuthSessionLastConnectedAtInput = Schema.Struct({
@@ -485,16 +489,23 @@ export const make = Effect.gen(function* () {
       `,
   });
 
+  // Pen-bound exactly as toAuthSessionRecord decodes a binding: all four columns set.
+  const penBound = sql.literal(
+    "(pen_mesh_id IS NOT NULL AND pen_node_id IS NOT NULL AND pen_sign_pub IS NOT NULL AND pen_noise_pub IS NOT NULL)",
+  );
+  const keptByRevokeOthers = (keep: RevokeOtherAuthSessionsInput["keep"]) =>
+    sql`(${penBound} OR (subject = ${keep.subject} AND method = ${keep.method}))`;
+
   const keptOtherSessionRows = SqlSchema.findAll({
     Request: RevokeOtherAuthSessionsInput,
-    Result: Schema.Struct({ sessionId: AuthSessionId }),
+    Result: Schema.Struct({ sessionId: AuthSessionId, kind: AuthRevokeOthersKeep }),
     execute: ({ currentSessionId, keep }) =>
       sql`
-        SELECT session_id AS "sessionId"
+        SELECT session_id AS "sessionId", CASE WHEN ${penBound} THEN 'pen' ELSE 'desktop' END AS "kind"
         FROM auth_sessions
         WHERE session_id <> ${currentSessionId}
           AND revoked_at IS NULL
-          AND (pen_node_id IS NOT NULL OR (subject = ${keep.subject} AND method = ${keep.method}))
+          AND ${keptByRevokeOthers(keep)}
       `,
   });
 
@@ -507,8 +518,7 @@ export const make = Effect.gen(function* () {
         SET revoked_at = ${revokedAt}
         WHERE session_id <> ${currentSessionId}
           AND revoked_at IS NULL
-          AND pen_node_id IS NULL
-          AND NOT (subject = ${keep.subject} AND method = ${keep.method})
+          AND NOT ${keptByRevokeOthers(keep)}
         RETURNING session_id AS "sessionId"
       `,
   });
@@ -717,7 +727,7 @@ export const make = Effect.gen(function* () {
         ),
         Effect.map(([kept, revoked]) => ({
           revoked: revoked.map((row) => row.sessionId),
-          kept: kept.map((row) => row.sessionId),
+          kept,
         })),
       );
 

@@ -327,6 +327,10 @@ export type SessionPrincipalKind = typeof SessionPrincipalKind.Type;
 export const AuthRevokeOthersKeep = Schema.Literals(["desktop", "pen"]);
 export type AuthRevokeOthersKeep = typeof AuthRevokeOthersKeep.Type;
 
+/** How many other sessions of each kind one "Revoke others" kept. */
+export const AuthRevokeOthersKept = Schema.Struct({ desktop: Schema.Int, pen: Schema.Int });
+export type AuthRevokeOthersKept = typeof AuthRevokeOthersKept.Type;
+
 export const AuthClientSession = Schema.Struct({
   sessionId: AuthSessionId,
   subject: TrimmedNonEmptyString,

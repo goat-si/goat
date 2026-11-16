@@ -151,7 +151,7 @@ it.effect(
             );
             yield* store.verify(issued.token, MAIN_LISTENER);
             yield* Deferred.succeed(late, issued);
-          }).pipe(Effect.orDie),
+          }).pipe(Effect.orDie, Effect.provide(NodeServices.layer)),
         );
 
         yield* store.revokeAllExcept(current.sessionId);
