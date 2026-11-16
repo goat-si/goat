@@ -1,4 +1,8 @@
 import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
+import {
+  projectionQueryTracer,
+  readRestOfItem,
+} from "./OrchestratorMcpToolkit.threadRead.testkit.ts";
 import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
@@ -46,7 +50,6 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as Tracer from "effect/Tracer";
 import { McpSchema, McpServer } from "effect/ai";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { CodexOrchestratorReplayHarness } from "../orchestration-v2/Adapters/CodexAdapterV2.testkit.ts";
@@ -102,6 +105,7 @@ const delegatedResult = "Delegated API boundary inspected.";
 const cancellationPrompt = "Remain active until the parent cancels this delegated task.";
 const queuedFollowupPrompt = "Complete the queued follow-up and return the final result.";
 const queuedFollowupResult = "Queued delegated follow-up completed.";
+const longFollowupResult = "Long delegated follow-up line. ".repeat(1_500);
 
 const decodeDelegateTaskResult = Schema.decodeUnknownEffect(OrchestratorMcpDelegateTaskResult);
 
@@ -465,6 +469,7 @@ describe("orchestrator MCP toolkit", () => {
     { label: "distinct", result: queuedFollowupResult, latestSummary: queuedFollowupResult },
     { label: "identical", result: delegatedResult, latestSummary: null },
     { label: "emoji", result: "😀", latestSummary: "😀" },
+    { label: "long", result: longFollowupResult, latestSummary: longFollowupResult },
   ])("reports $label child results", ({ result, latestSummary }) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -847,30 +852,16 @@ describe("orchestrator MCP toolkit", () => {
           expect(finalStatus.latestTerminalResultContextTransferId).not.toBe(
             delegated.resultContextTransferId,
           );
-          const transferReads: Array<string> = [];
-          const messageReads: Array<string> = [];
-          const tracer = Tracer.make({
-            span(options) {
-              const span = new Tracer.NativeSpan(options);
-              const end = span.end.bind(span);
-              span.end = (endTime, exit) => {
-                end(endTime, exit);
-                const query = span.attributes.get("db.query.text");
-                if (typeof query !== "string") return;
-                if (
-                  /SELECT[\s\S]*FROM orchestration_v2_projection_context_transfers/i.test(query)
-                ) {
-                  transferReads.push(query);
-                }
-                if (
-                  /SELECT\s+payload_json\s+FROM orchestration_v2_projection_messages/i.test(query)
-                ) {
-                  messageReads.push(query);
-                }
-              };
-              return span;
-            },
-          });
+          const { tracer, transferReads, messageReads } = projectionQueryTracer();
+          const followupDelivery = orchestrator
+            .getThreadProjection(parentThreadId)
+            .pipe(
+              Effect.map(
+                (projection) =>
+                  projection.subagents.find((task) => task.id === runningFollowup.taskId)
+                    ?.completionDelivery?.state,
+              ),
+            );
           const parentlessRead = yield* invoke(
             "goat_thread_read",
             {
@@ -882,11 +873,7 @@ describe("orchestrator MCP toolkit", () => {
           ).pipe(Effect.withTracer(tracer));
           expect(parentlessRead.isError).not.toBe(true);
           expect(transferReads).toHaveLength(0);
-          const afterParentlessRead = yield* orchestrator.getThreadProjection(parentThreadId);
-          expect(
-            afterParentlessRead.subagents.find((task) => task.id === runningFollowup.taskId)
-              ?.completionDelivery?.state,
-          ).toBe("claimed");
+          expect(yield* followupDelivery).toBe("claimed");
 
           const read = yield* invoke("goat_thread_read", {
             threadId: delegated.childThreadId,
@@ -896,11 +883,19 @@ describe("orchestrator MCP toolkit", () => {
           expect(read.isError).not.toBe(true);
           expect(transferReads.length).toBeGreaterThan(0);
           expect(read.structuredContent).toEqual(parentlessRead.structuredContent);
-          const afterRead = yield* orchestrator.getThreadProjection(parentThreadId);
-          expect(
-            afterRead.subagents.find((task) => task.id === runningFollowup.taskId)
-              ?.completionDelivery?.state,
-          ).toBe("acknowledged");
+          // A cut-off result is acknowledged by the page that reaches its end.
+          if (result.length > 20_000) {
+            const text = yield* readRestOfItem({
+              page: read.structuredContent,
+              threadId: delegated.childThreadId,
+              read: (args) => invoke("goat_thread_read", args),
+              beforePage: followupDelivery.pipe(
+                Effect.map((state) => expect(state).toBe("claimed")),
+              ),
+            });
+            expect(text).toBe(result);
+          }
+          expect(yield* followupDelivery).toBe("acknowledged");
 
           const messageReadsBeforeCapabilities = messageReads.length;
           const capabilities = yield* invoke("goat_schedule_list", {}).pipe(
