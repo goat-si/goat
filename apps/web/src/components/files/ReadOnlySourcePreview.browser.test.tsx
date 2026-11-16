@@ -64,4 +64,34 @@ describe("ReadOnlySourcePreview", () => {
     document.getSelection()!.setBaseAndExtent(firstText, 4, pre, pre.childNodes.length);
     expect(copiedText(rows()[0]!)).toBeNull();
   });
+
+  it("copies the whole file after Select All in a browser without composed ranges", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(Selection.prototype, "getComposedRanges");
+    Object.defineProperty(Selection.prototype, "getComposedRanges", {
+      value: undefined,
+      configurable: true,
+    });
+    using _restore = {
+      [Symbol.dispose]: () => {
+        if (descriptor) Object.defineProperty(Selection.prototype, "getComposedRanges", descriptor);
+      },
+    };
+    await getSyntaxHighlighterPromise("text");
+    await using screen = await render(
+      <div className="flex h-[400px] flex-col">
+        <ReadOnlySourcePreview name="notes.txt" text={text} wordWrap={false} />
+      </div>,
+    );
+    const root = screen.container.querySelector("diffs-container")!.shadowRoot!;
+    const rows = () => root.querySelectorAll("[data-line]");
+    await vi.waitFor(() => expect(rows()[0]?.textContent).toBe("line 1"));
+
+    await userEvent.click(rows()[0]!);
+    await userEvent.keyboard("{ControlOrMeta>}a{/ControlOrMeta}");
+    expect(copiedText(rows()[0]!)).toBe(text);
+
+    // A click after Select All starts a selection of the user's own, which the browser copies.
+    await userEvent.click(rows()[1]!);
+    expect(copiedText(rows()[0]!)).toBeNull();
+  });
 });

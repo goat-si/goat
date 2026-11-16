@@ -1,5 +1,5 @@
 import { File, type FileOptions, Virtualizer } from "@pierre/diffs/react";
-import type { ClipboardEvent } from "react";
+import { useEffect, useRef, type ClipboardEvent } from "react";
 
 import { DiffWorkerPoolProvider } from "~/components/DiffWorkerPoolProvider";
 import { useClientSettings } from "~/hooks/useSettings";
@@ -9,14 +9,19 @@ import { PREFERRED_HIGHLIGHTER } from "~/lib/syntaxHighlighting";
 
 import { FILE_LINK_REVEAL_UNSAFE_CSS } from "./fileSurfaceChrome";
 
-/** Select All spans the file's shadow tree, where the virtualizer mounts only rows near the viewport. */
-function selectsEveryMountedRow(root: ShadowRoot) {
+/**
+ * Select All spans the file's shadow tree, where the virtualizer mounts only rows near the viewport.
+ * Null when this engine cannot read a selection inside a shadow tree.
+ */
+function selectsEveryMountedRow(root: ShadowRoot): boolean | null {
   const rows = root.querySelectorAll("[data-line]");
   const first = rows[0];
   const last = rows[rows.length - 1];
   if (!first || !last) return false;
+  const selection = document.getSelection();
+  if (typeof selection?.getComposedRanges !== "function") return null;
   try {
-    const selected = document.getSelection()?.getComposedRanges({ shadowRoots: [root] })[0];
+    const selected = selection.getComposedRanges({ shadowRoots: [root] })[0];
     if (!selected) return false;
     if (!root.contains(selected.startContainer) || !root.contains(selected.endContainer)) {
       return false;
@@ -29,8 +34,7 @@ function selectsEveryMountedRow(root: ShadowRoot) {
       range.comparePoint(first, 0) === 0 && range.comparePoint(last, last.childNodes.length) === 0
     );
   } catch {
-    // Engines without composed ranges keep their own copy.
-    return false;
+    return null;
   }
 }
 
@@ -45,15 +49,39 @@ export default function ReadOnlySourcePreview(props: {
   const resolvedTheme = useRenderedAppearance();
   const defaultWordWrap = useClientSettings((settings) => settings.wordWrap);
   const wordWrap = props.wordWrap ?? defaultWordWrap;
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const selectedAllRef = useRef(false);
+  // oxlint-disable-next-line goat/react-effect-budget -- Where a shadow-tree selection cannot be read, remember a Select All pressed after a press in this preview.
+  useEffect(() => {
+    if (typeof Selection.prototype.getComposedRanges === "function") return;
+    let pressedInside = false;
+    const notePress = (event: PointerEvent) => {
+      pressedInside = event.target instanceof Node && !!wrapperRef.current?.contains(event.target);
+      selectedAllRef.current = false;
+    };
+    // Modified keys such as the copy shortcut keep the selection; plain keys may change it.
+    const noteKey = (event: globalThis.KeyboardEvent) => {
+      const modified = event.metaKey || event.ctrlKey;
+      if (modified && !event.altKey && event.key.toLowerCase() === "a") {
+        selectedAllRef.current = pressedInside;
+      } else if (!modified) selectedAllRef.current = false;
+    };
+    document.addEventListener("pointerdown", notePress, true);
+    document.addEventListener("keydown", noteKey, true);
+    return () => {
+      document.removeEventListener("pointerdown", notePress, true);
+      document.removeEventListener("keydown", noteKey, true);
+    };
+  }, []);
   const copyWholeFile = (event: ClipboardEvent<HTMLDivElement>) => {
     const root = event.currentTarget.querySelector("diffs-container")?.shadowRoot;
-    if (!root || !selectsEveryMountedRow(root)) return;
+    if (!root || !(selectsEveryMountedRow(root) ?? selectedAllRef.current)) return;
     event.clipboardData.setData("text/plain", props.text);
     event.preventDefault();
   };
   return (
     <DiffWorkerPoolProvider>
-      <div className="contents" onCopy={copyWholeFile}>
+      <div ref={wrapperRef} className="contents" onCopy={copyWholeFile}>
         <Virtualizer
           key={`${props.name}:${resolvedTheme}:${props.text.length}`}
           className="file-preview-virtualizer min-h-0 flex-1 overflow-auto"
