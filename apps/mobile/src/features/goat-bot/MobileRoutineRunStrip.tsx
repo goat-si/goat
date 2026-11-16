@@ -35,8 +35,9 @@ export function MobileRoutineRunStrip(props: {
   const dots = botRoutineRuns(props.task, RUNS_SHOWN, (iso) =>
     routineRunTime(iso, props.timeOptions),
   );
+  // A run that leaves the seven closes its panel, and stays closed if it comes back.
+  if (openId !== null && !dots.some((dot) => dot.firingId === openId)) setOpenId(null);
   if (dots.length === 0) return null;
-  // A run pushed out of the seven closes its panel.
   const open = dots.find((dot) => dot.firingId === openId) ?? null;
   return (
     <View className="gap-1">
@@ -56,6 +57,7 @@ export function MobileRoutineRunStrip(props: {
       </View>
       {open ? (
         <MobileRoutineRunPanel
+          key={open.firingId}
           environmentId={props.environmentId}
           dot={open}
           newest={open === dots.at(-1)}
@@ -104,15 +106,49 @@ function MobileRoutineRunPanel(props: {
   );
   const word = dot.word.charAt(0).toUpperCase() + dot.word.slice(1);
   const finished = routineRunFinished(dot.requestedAt, dot.completedAt, props.timeOptions);
+  const body = runBody({ ...props, state, quiet, inputId, read });
+  const [expanded, setExpanded] = useState(false);
+  const [long, setLong] = useState(false);
   return (
     <View className="gap-1 pb-1">
       <Text className="text-foreground">
         {word} · {routineRunTime(dot.requestedAt, props.timeOptions)}
         {finished === null ? "" : `, ${finished}`}
       </Text>
-      <Text numberOfLines={6} className="text-foreground-muted">
-        {runBody({ ...props, state, quiet, inputId, read })}
-      </Text>
+      <View>
+        <Text numberOfLines={expanded ? undefined : 6} className="text-foreground-muted">
+          {body}
+        </Text>
+        {/* An unclamped copy, unseen and unread, measures whether the reply needs more lines. */}
+        {expanded ? null : (
+          <View
+            pointerEvents="none"
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            className="absolute left-0 right-0 top-0 opacity-0"
+          >
+            <Text
+              className="text-foreground-muted"
+              onTextLayout={(event) => setLong(event.nativeEvent.lines.length > 6)}
+            >
+              {body}
+            </Text>
+          </View>
+        )}
+      </View>
+      {long ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={expanded ? "Show less of the reply" : "Show the full reply"}
+          accessibilityState={{ expanded }}
+          onPress={() => setExpanded((value) => !value)}
+          className="min-h-[44px] justify-center self-start"
+        >
+          <Text className="font-goat-medium text-primary-text">
+            {expanded ? "Show less" : "Show more"}
+          </Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }

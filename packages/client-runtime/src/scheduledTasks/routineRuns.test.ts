@@ -162,3 +162,106 @@ it("a finish time that cannot be read says Unknown time, and an unreadable start
     "finished Nov 14, 9:04 AM",
   );
 });
+
+const at = "2026-11-14T09:00:00.000Z";
+const enUSShort = /^[A-Z][a-z]{2} \d{1,2}, \d{2}:\d{2}$/;
+// Kathmandu is UTC+5:45; on a device set to UTC, a dropped zone reads 09:00 instead of 14:45.
+const kathmandu = "Asia/Kathmandu";
+const onUtcDevice = (check: () => void) => {
+  const before = process.env.TZ;
+  try {
+    process.env.TZ = "UTC";
+    check();
+  } finally {
+    if (before === undefined) delete process.env.TZ;
+    else process.env.TZ = before;
+  }
+};
+// The 24-hour time in `timeZone` as the device's own locale writes it, in its own digits.
+const deviceClock = (timeZone: string) =>
+  new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone,
+  }).format(Date.parse(at));
+
+it("an invalid locale falls back to the device locale and keeps a valid zone, without throwing", () => {
+  onUtcDevice(() => {
+    const options = { locale: "not a locale!", timeZone: kathmandu, hour12: false } as const;
+    const time = routineRunTime(at, options);
+    expect(time.endsWith(deviceClock(kathmandu))).toBe(true);
+    expect(time.endsWith(deviceClock("UTC"))).toBe(false);
+    expect(routineRunTime(at, options)).toBe(time);
+  });
+});
+
+it("an invalid zone falls back to the device zone and keeps a valid locale, without throwing", () => {
+  const time = routineRunTime(at, { locale: "en-US", timeZone: "Not/A_Zone", hour12: false });
+  expect(time).toMatch(enUSShort);
+  expect(routineRunTime(at, { locale: "en-US", timeZone: "Not/A_Zone", hour12: false })).toBe(time);
+});
+
+it("a null or Symbol locale reads in the device locale, without throwing", () => {
+  onUtcDevice(() => {
+    for (const locale of [null, Symbol("locale")]) {
+      const time = routineRunTime(at, {
+        locale: locale as never,
+        timeZone: kathmandu,
+        hour12: false,
+      });
+      expect(time.endsWith(deviceClock(kathmandu))).toBe(true);
+      expect(time.endsWith(deviceClock("UTC"))).toBe(false);
+      expect(routineRunFinished(at, at, { locale: locale as never, timeZone: kathmandu })).toMatch(
+        /^finished /,
+      );
+    }
+  });
+});
+
+it("a time that is not a string gives 'Unknown time', and a start that is not one is not the finish's day", () => {
+  const options = { locale: "en-US", hour12: false, timeZone: "UTC" } as const;
+  expect(routineRunTime(Symbol("time") as never, options)).toBe("Unknown time");
+  // A number would parse as a year; it is not a stored time.
+  expect(routineRunTime(2026 as never, options)).toBe("Unknown time");
+  expect(routineRunFinished(Symbol("start") as never, at, options)).toBe("finished Nov 14, 09:00");
+  expect(routineRunFinished(at, Symbol("finish") as never, options)).toBe("finished Unknown time");
+});
+
+it("a run with no finish time has no finish line, whether it is null or left out", () => {
+  expect(
+    routineRunFinished(at, undefined as never, { locale: "en-US", timeZone: "UTC" }),
+  ).toBeNull();
+});
+
+it("a device zone change while the app is open reads the next time in the new zone", () => {
+  const before = process.env.TZ;
+  try {
+    process.env.TZ = "Asia/Tokyo";
+    // @effect-diagnostics-next-line globalDate:off -- the zone's offset at the fixed test instant.
+    const tokyo = new Date(at).getTimezoneOffset();
+    expect(routineRunTime(at, { locale: "en-US", hour12: false })).toBe("Nov 14, 18:00");
+    process.env.TZ = "America/New_York";
+    // The guard: Node read the new zone, so a stale formatter is what the next line would catch.
+    // @effect-diagnostics-next-line globalDate:off -- the zone's offset at the fixed test instant.
+    expect(new Date(at).getTimezoneOffset()).not.toBe(tokyo);
+    expect(routineRunTime(at, { locale: "en-US", hour12: false })).toBe("Nov 14, 04:00");
+  } finally {
+    if (before === undefined) delete process.env.TZ;
+    else process.env.TZ = before;
+  }
+});
+
+it("a zone that falls back to the device's follows a device zone change too", () => {
+  const before = process.env.TZ;
+  const options = { locale: "en-US", hour12: false, timeZone: "Not/A_Zone" } as const;
+  try {
+    process.env.TZ = "Asia/Tokyo";
+    expect(routineRunTime(at, options)).toBe("Nov 14, 18:00");
+    process.env.TZ = "America/New_York";
+    expect(routineRunTime(at, options)).toBe("Nov 14, 04:00");
+  } finally {
+    if (before === undefined) delete process.env.TZ;
+    else process.env.TZ = before;
+  }
+});

@@ -76,32 +76,65 @@ export function routineRunState(
   return "unsettled";
 }
 
-// Building an Intl formatter is costly on Hermes and a row formats every dot each minute.
+// Building an Intl formatter is costly on Hermes and a row formats every dot each minute. One
+// without a zone, or whose zone was rejected, keeps the device's zone of that moment, so the
+// device offset is part of every key.
 const formatters = new Map<string, Intl.DateTimeFormat>();
-function formatter(locale: string | undefined, options: Intl.DateTimeFormatOptions) {
-  const key = `${locale ?? ""}|${JSON.stringify(options)}`;
+function formatter(
+  locale: string | undefined,
+  options: Intl.DateTimeFormatOptions,
+  offset: number,
+) {
+  const key = `${String(locale ?? "")}|${JSON.stringify(options)}|${offset}`;
   let cached = formatters.get(key);
   if (cached === undefined) {
     if (formatters.size >= 32) formatters.clear();
-    cached = new Intl.DateTimeFormat(locale, options);
+    cached = buildFormatter(locale, options);
     formatters.set(key, cached);
   }
   return cached;
 }
 
+/** A bad locale or zone falls back a step at a time, keeping whichever of the two is valid. */
+function buildFormatter(locale: string | undefined, options: Intl.DateTimeFormatOptions) {
+  const { timeZone: _zone, ...withoutZone } = options;
+  const attempts = [
+    [locale, options],
+    [locale, withoutZone],
+    [undefined, options],
+  ] as const;
+  for (const [tag, attempt] of attempts) {
+    try {
+      return new Intl.DateTimeFormat(tag, attempt);
+    } catch {
+      // The next attempt drops what this one could not take.
+    }
+  }
+  return new Intl.DateTimeFormat(undefined, withoutZone);
+}
+
+// The device zone's offset now, read once per call; a formatter without a zone bakes it in.
+// @effect-diagnostics-next-line globalDate:off -- the device's zone of this moment, not a stored date.
+const localOffset = () => new Date().getTimezoneOffset();
+
+type TimeOptions = {
+  readonly locale?: string;
+  readonly hour12?: boolean;
+  readonly timeZone?: string;
+  readonly timeOnly?: boolean;
+};
+
 /**
  * A run's time as short month, day, hour and minute, joined by a comma on every engine (some put
  * "at" between them); web passes its timestamp locale and hour form. `timeOnly` drops the date.
  */
-export function routineRunTime(
-  iso: string,
-  options: {
-    readonly locale?: string;
-    readonly hour12?: boolean;
-    readonly timeZone?: string;
-    readonly timeOnly?: boolean;
-  } = {},
-): string {
+export function routineRunTime(iso: string, options: TimeOptions = {}): string {
+  return runTime(iso, options, localOffset());
+}
+
+function runTime(iso: string, options: TimeOptions, offset: number): string {
+  // A stored time that is not a string is not a time; Date.parse would throw on a Symbol.
+  if (typeof iso !== "string") return "Unknown time";
   const at = Date.parse(iso);
   // A stored time is any string; Intl throws on NaN, and server text never reaches a spoken name.
   if (Number.isNaN(at)) return "Unknown time";
@@ -112,12 +145,12 @@ export function routineRunTime(
     ...zone,
   } as const;
   // A 24-hour clock reads "09:00"; a 12-hour one reads "9:00 AM".
-  const cycle = formatter(options.locale, { ...clock, hour: "numeric" }).resolvedOptions()
+  const cycle = formatter(options.locale, { ...clock, hour: "numeric" }, offset).resolvedOptions()
     .hourCycle;
   const hour = cycle === "h23" || cycle === "h24" ? "2-digit" : "numeric";
-  const time = formatter(options.locale, { ...clock, hour }).format(at);
+  const time = formatter(options.locale, { ...clock, hour }, offset).format(at);
   if (options.timeOnly === true) return time;
-  const day = formatter(options.locale, { month: "short", day: "numeric", ...zone });
+  const day = formatter(options.locale, { month: "short", day: "numeric", ...zone }, offset);
   return `${day.format(at)}, ${time}`;
 }
 
@@ -130,16 +163,22 @@ export function routineRunFinished(
   completedAt: string | null,
   options: { readonly locale?: string; readonly hour12?: boolean; readonly timeZone?: string } = {},
 ): string | null {
-  if (completedAt === null) return null;
-  const finish = Date.parse(completedAt);
+  if (completedAt == null) return null;
+  const offset = localOffset();
+  const finish = typeof completedAt === "string" ? Date.parse(completedAt) : Number.NaN;
   if (Number.isNaN(finish)) return "finished Unknown time";
-  const start = Date.parse(requestedAt);
-  const day = formatter(options.locale, {
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-    ...(options.timeZone === undefined ? {} : { timeZone: options.timeZone }),
-  });
+  // A start that is not a string has no day, so the finish says its date.
+  const start = typeof requestedAt === "string" ? Date.parse(requestedAt) : Number.NaN;
+  const day = formatter(
+    options.locale,
+    {
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      ...(options.timeZone === undefined ? {} : { timeZone: options.timeZone }),
+    },
+    offset,
+  );
   const sameDay = !Number.isNaN(start) && day.format(start) === day.format(finish);
-  return `finished ${routineRunTime(completedAt, { ...options, timeOnly: sameDay })}`;
+  return `finished ${runTime(completedAt, { ...options, timeOnly: sameDay }, offset)}`;
 }

@@ -8,7 +8,31 @@ vi.mock("react-native", () => ({
   View: (props: Props & { accessibilityLabel?: string }) => (
     <div aria-label={props.accessibilityLabel}>{props.children}</div>
   ),
-  Text: (props: Props) => <span>{props.children}</span>,
+  // A text that asks for its layout hears its line count: about forty characters a line, and no
+  // more than it may show, as a clamped native text reports.
+  Text: (
+    props: Props & {
+      numberOfLines?: number;
+      onTextLayout?: (event: { nativeEvent: { lines: unknown[] } }) => void;
+    },
+  ) => (
+    <span
+      ref={() =>
+        props.onTextLayout?.({
+          nativeEvent: {
+            lines: Array.from({
+              length: Math.min(
+                Math.ceil(String(props.children).length / 40),
+                props.numberOfLines ?? Infinity,
+              ),
+            }),
+          },
+        })
+      }
+    >
+      {props.children}
+    </span>
+  ),
   Pressable: (
     props: Props & {
       onPress?: () => void;
@@ -326,5 +350,61 @@ it("a finish on the same day says only its time", async () => {
   });
   await view.press("Run on Nov 14, 12:00, completed");
   expect(view.text()).toContain("Completed · Nov 14, 12:00, finished 12:00");
+  await view.unmount();
+});
+
+it("a run pushed out of the seven, or by an empty list, stays closed when it comes back", async () => {
+  setup();
+  const seven = [9, 8, 7, 6, 5, 4, 3].map((hour) =>
+    run(hour, "completed", { conversation: conversation(`in-${hour}`) }),
+  );
+  const newer = [16, 15, 14, 13, 12, 11, 10].map((hour) =>
+    run(hour, "completed", { conversation: conversation(`in-${hour}`) }),
+  );
+  const view = await show({ recentRuns: seven });
+  await view.press("Run on Nov 14, 03:00, completed");
+  await view.rerender({ recentRuns: newer });
+  await view.rerender({ recentRuns: seven });
+  expect(view.dots().filter(([, expanded]) => expanded === "true")).toEqual([]);
+  await view.press("Run on Nov 14, 03:00, completed");
+  await view.rerender({ recentRuns: [] });
+  await view.rerender({ recentRuns: seven });
+  expect(view.dots().filter(([, expanded]) => expanded === "true")).toEqual([]);
+  await view.unmount();
+});
+
+it("a long reply offers its full text, and the next run opened starts collapsed", async () => {
+  setup();
+  const long = (words: string) => Array.from({ length: 40 }, () => words).join(" ");
+  answer("in-6", { reply: { text: long("The build passed on every machine.") } });
+  answer("in-5", { reply: { text: long("Disks are fine everywhere.") } });
+  const view = await show({
+    recentRuns: [
+      run(6, "completed", { conversation: conversation("in-6") }),
+      run(5, "completed", { conversation: conversation("in-5") }),
+    ],
+  });
+  const fullReply = () =>
+    view
+      .dots()
+      .find(([label]) => label?.endsWith("of the reply") || label === "Show the full reply");
+  await view.press("Run on Nov 14, 06:00, completed");
+  expect(fullReply()).toEqual(["Show the full reply", "false"]);
+  await view.press("Show the full reply");
+  expect(fullReply()).toEqual(["Show less of the reply", "true"]);
+  await view.press("Run on Nov 14, 05:00, completed");
+  expect(fullReply()).toEqual(["Show the full reply", "false"]);
+  await view.unmount();
+});
+
+it("a short reply offers no full text", async () => {
+  setup();
+  answer("in-6", { reply: { text: "All quiet." } });
+  const view = await show({
+    recentRuns: [run(6, "completed", { conversation: conversation("in-6") })],
+  });
+  await view.press("Run on Nov 14, 06:00, completed");
+  expect(view.text()).toContain("All quiet.");
+  expect(view.dots().map(([label]) => label)).not.toContain("Show the full reply");
   await view.unmount();
 });
