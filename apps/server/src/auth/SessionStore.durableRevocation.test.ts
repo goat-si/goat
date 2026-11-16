@@ -6,9 +6,10 @@ import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
-import { MAIN_LISTENER } from "./connectionContext.testkit.ts";
+import { MAIN_LISTENER, penConnection } from "./connectionContext.testkit.ts";
 import { makeCheckProbe, makeReadBarrier, makeServerAndCli } from "./DurableRevocations.testkit.ts";
 import { reauthorizeSession } from "./McpClientAuthority.ts";
+import { PEN_PROXY_SUBJECT } from "./sessionBinding.ts";
 import * as SessionStore from "./SessionStore.ts";
 
 const grantState = (
@@ -68,18 +69,45 @@ it.effect.each(["revoked", "deleted"] as const)(
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-it.effect.each(["revoke", "revokeAllExcept"] as const)(
-  "Settings %s ends a session the command line already revoked, without waiting for a check",
-  (operation) =>
+const penPeer = {
+  meshId: "mesh-1",
+  nodeId: "node-a",
+  signPub: "sign",
+  noisePub: "noise",
+  name: "a",
+};
+// Revoke others keeps unrevoked sessions of these shapes, never ones another process revoked.
+const cliRevokedShapes = {
+  plain: { issue: {}, connection: MAIN_LISTENER },
+  "desktop app": { issue: { subject: "desktop-bootstrap" }, connection: MAIN_LISTENER },
+  "Pen-bound": {
+    issue: {
+      subject: PEN_PROXY_SUBJECT,
+      principalKind: "proxied_person",
+      penBinding: { meshId: "mesh-1", nodeId: "node-a", signPub: "sign", noisePub: "noise" },
+    },
+    connection: penConnection(penPeer).context,
+  },
+} as const;
+
+it.effect.each([
+  ["revoke", "plain"],
+  ["revokeAllExcept", "plain"],
+  ["revokeAllExcept", "desktop app"],
+  ["revokeAllExcept", "Pen-bound"],
+] as const)(
+  "Settings %s ends a %s session the command line already revoked, without waiting for a check",
+  ([operation, shape]) =>
     Effect.gen(function* () {
       const barrier = yield* makeReadBarrier;
       const { running, fromCli } = yield* makeServerAndCli(barrier.wrap);
       yield* Effect.gen(function* () {
         const store = yield* SessionStore.SessionStore;
+        const { issue, connection } = cliRevokedShapes[shape];
         const issued = yield* fromCli((cli) =>
-          cli.issue({ method: "bearer-access-token", scopes: ["memory:read"] }),
+          cli.issue({ ...issue, method: "bearer-access-token", scopes: ["memory:read"] }),
         );
-        yield* store.verify(issued.token, MAIN_LISTENER);
+        yield* store.verify(issued.token, connection);
         const current = yield* store.issue({ subject: "settings-page" });
         yield* barrier.arm;
         const waiting = yield* store

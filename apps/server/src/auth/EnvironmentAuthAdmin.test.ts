@@ -10,7 +10,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
-import { MAIN_LISTENER } from "./connectionContext.testkit.ts";
+import { MAIN_LISTENER, onMainListenerAuth } from "./connectionContext.testkit.ts";
 
 const layerServerConfig = (
   overrides?: Partial<Pick<ServerConfig.ServerConfig["Service"], "desktopBootstrapToken">>,
@@ -93,5 +93,46 @@ it.layer(NodeServices.layer)("EnvironmentAuth administrative operations", (it) =
       expect(revoked).toBe(true);
       expect(listedAfterRevoke).toHaveLength(0);
     }).pipe(Effect.provide(layerEnvironmentAuth())),
+  );
+
+  it.effect(
+    "Revoke others keeps the desktop session minted by the bootstrap exchange and ends look-alikes (contract)",
+    () =>
+      Effect.gen(function* () {
+        const auth = onMainListenerAuth(yield* EnvironmentAuth.EnvironmentAuth);
+        const sessions = yield* SessionStore.SessionStore;
+        const desktopClient = { label: "GOAT Desktop", deviceType: "desktop" } as const;
+        const exchange = (credential: string, input?: { readonly proofKeyThumbprint: string }) =>
+          auth
+            .exchangeBootstrapCredentialForAccessToken(credential, undefined, desktopClient, input)
+            .pipe(
+              Effect.flatMap((result) => sessions.verify(result.access_token, MAIN_LISTENER)),
+              Effect.map((session) => session.sessionId),
+            );
+        const pair = (label: string) =>
+          auth
+            .issuePairingCredential({ label })
+            .pipe(Effect.flatMap((pairing) => exchange(pairing.credential)));
+        // The desktop main process's own exchange: the bootstrap credential, no proof key.
+        const desktop = yield* exchange("desktop-bootstrap-token");
+        const lookAlikes = [
+          yield* pair("GOAT Desktop"),
+          yield* exchange("desktop-bootstrap-token", { proofKeyThumbprint: "test-proof-key" }),
+          (yield* auth.issueSession({ subject: "desktop-local", label: "GOAT Desktop" })).sessionId,
+        ];
+        const current = yield* pair("Test browser");
+
+        const revokedCount = yield* auth.revokeOtherClientSessions(current);
+        const listed = yield* auth.listClientSessions(current);
+
+        expect(revokedCount).toBe(lookAlikes.length);
+        expect(
+          Object.fromEntries(
+            listed.map((session) => [session.sessionId, session.keptByRevokeOthers ?? "none"]),
+          ),
+        ).toEqual({ [current]: "none", [desktop]: "desktop" });
+      }).pipe(
+        Effect.provide(layerEnvironmentAuth({ desktopBootstrapToken: "desktop-bootstrap-token" })),
+      ),
   );
 });
