@@ -166,6 +166,8 @@ L95 is C4 (see its cases above). It adds ThreadManagementWorktreeUnrestorableErr
 
 ## Gate
 
+Full goat-ci on 44d7d60d20: SUCCESS, https://github.com/goat-si/goat/actions/runs/43881838566 (workflow_dispatch, all 28 jobs passed). This is the full-matrix proof for this lane, whose local gate below did not pass, and for the N6 + N7 part 1 tree. The follow-up e74a5be389 is held under the freeze and is not in that run.
+
 On pen-macbookair, the tree `fad0991978` (lane + integration `b2fb30748a` + origin/dev `97c0dd32c4`): `node scripts/goat-rename.ts --check` 0; `set -o pipefail; vp run check:changed` exit 1. Passed: format, graphql (2), lint, agent context budget, agent surface audit, knip 1/2, typecheck (39 packages). Failed:
 
 - knip 2/2: the two refusal texts in goat/ActiveTurnRefusals.ts were unused exports. Fixed in `5c92dee0bc`; `vp run knip:check:exports` exits 0 afterwards.
