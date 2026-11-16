@@ -511,6 +511,8 @@ it("guard: once the connection is refused, Messages, Workers and Model show none
   expect(screen.toggle("Answer with the bot session")).toBe(null);
   expect(screen.toggle("Automatically choose a worker computer")).toBe(null);
   expect(screen.modelRow).toBe(null);
+  expect(screen.titles).toEqual(["Profile", "Computers", "Messages", "Workers", "Model"]);
+  expect(screen.shown("Couldn't load")).toHaveLength(1);
 });
 
 it("offline with no config ever loaded, Messages, Workers and Model keep their titles and say they show when the computer connects (#3503)", async () => {

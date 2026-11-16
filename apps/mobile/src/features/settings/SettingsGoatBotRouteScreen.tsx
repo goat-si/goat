@@ -96,10 +96,12 @@ export function SettingsGoatBotRouteScreen() {
                   />
                 ))}
             </SettingsSection>
-            {resolution.state === "claimed" && resolution.homeConnected ? (
+            {resolution.state === "claimed" && resolution.homeKnown ? (
               <GoatBotModelSection
                 key={resolution.claim.environmentId}
                 environmentId={resolution.claim.environmentId}
+                computer={label(resolution.claim.environmentId)}
+                connected={resolution.homeConnected}
                 canWrite={writableIds.has(resolution.claim.environmentId)}
               />
             ) : null}
@@ -192,20 +194,49 @@ function GoatBotProfileSection({
   );
 }
 
+/**
+ * Messages, Workers and Model on the home computer. Offline they keep the config last loaded from
+ * it and stay closed to changes; refused or removed, they show none of it.
+ */
 function GoatBotModelSection({
   environmentId,
+  computer,
+  connected,
   canWrite,
 }: {
   readonly environmentId: EnvironmentId;
+  readonly computer: string;
+  readonly connected: boolean;
   readonly canWrite: boolean;
 }) {
   const model = useMobileGoatBotModel(environmentId, canWrite);
+  const readable = useComputerReadable(environmentId);
   const [pickerOpen, setPickerOpen] = useState(false);
-  if (!model) return null;
-  const { state: modelState, settings, saving, error, allowed, save } = model;
+  if (pickerOpen && !connected) setPickerOpen(false);
+  // Connected, the config is still loading.
+  if (connected && !model) return null;
+  if (!model || !(connected || readable)) {
+    return (
+      <>
+        {["Messages", "Workers", "Model"].map((title) => (
+          <SettingsSection key={title} title={title}>
+            {null}
+          </SettingsSection>
+        ))}
+        <Text className="text-foreground-muted">
+          {readable ? `Shown when ${computer} connects.` : "Couldn't load"}
+        </Text>
+      </>
+    );
+  }
+  const { state: modelState, settings, saving, error, save } = model;
+  const allowed = model.allowed && connected;
 
   return (
     <>
+      {connected ? null : (
+        <Text className="text-foreground-muted">{`Changes need ${computer} connected.`}</Text>
+      )}
       <SettingsSection title="Messages">
         <SettingsSwitchRow
           label="Answer with the bot session"
