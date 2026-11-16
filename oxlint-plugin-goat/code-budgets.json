@@ -550,7 +550,7 @@
   "apps/web/src/components/settings/CodexHomeRouteSection.tsx": { "nonNull": 1 },
   "apps/web/src/components/settings/CodexSetupSection.tsx": { "lines": 1118, "nonNull": 4 },
   "apps/web/src/components/settings/ConnectionEnvironmentsSection.browser.test.tsx": {
-    "lines": 1031
+    "lines": 1029
   },
   "apps/web/src/components/settings/ConnectionEnvironmentsSection.tsx": {
     "lines": 1889,

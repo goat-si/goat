@@ -587,20 +587,16 @@ it("shows resolved configured User and Port read-only and sends no overrides on 
   });
 });
 it("checks a known_hosts suggestion on its own port", async () => {
+  const ip = "100.64.0.1";
   state.preflightSshHost.mockResolvedValue({
     _tag: "Success",
     value: {
       ...readyReport,
-      destination: { alias: "100.64.0.1", hostname: "100.64.0.1", user: null, port: 2223 },
+      destination: { alias: ip, hostname: ip, user: null, port: 2223 },
     },
   });
-  state.sshHosts = [2222, 2223].map((port) => ({
-    alias: "100.64.0.1",
-    hostname: "100.64.0.1",
-    username: null,
-    port,
-    source: "known-hosts",
-  }));
+  const knownHost = { alias: ip, hostname: ip, username: null, source: "known-hosts" } as const;
+  state.sshHosts = [2222, 2223].map((port) => ({ ...knownHost, port }));
   await openSshDialog();
   const host = input("Search hosts or type devbox");
   await act(async () => {
@@ -619,12 +615,14 @@ it("checks a known_hosts suggestion on its own port", async () => {
       }),
     ),
   );
-  expect(state.preflightSshHost).toHaveBeenLastCalledWith({
-    environmentId: "primary",
-    input: { host: "100.64.0.1", port: 2223 },
+  await vi.waitFor(() => {
+    expect(state.preflightSshHost).toHaveBeenLastCalledWith({
+      environmentId: "primary",
+      input: { host: ip, port: 2223 },
+    });
+    expect(host.value).toBe(ip);
+    expect(input("22").value).toBe("2223");
   });
-  expect(host.value).toBe("100.64.0.1");
-  expect(input("22").value).toBe("2223");
 });
 
 it("keeps checking the managed alias a typed address with its own user and port resolved to", async () => {
