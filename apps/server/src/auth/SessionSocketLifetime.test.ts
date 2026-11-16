@@ -4,11 +4,10 @@ import { NodeWS } from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
 import * as SqlClient from "effect/sql/SqlClient";
-import * as TestClock from "effect/testing/TestClock";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import * as Auth from "./EnvironmentAuth.ts";
 import * as Access from "./HubConnectAccess.ts";
@@ -17,6 +16,7 @@ import * as Sessions from "./SessionStore.ts";
 import * as Lifetime from "./SessionSocketLifetime.ts";
 import * as SettingsSessionPermit from "./settingsSessionPermit.ts";
 import { MAIN_LISTENER } from "./connectionContext.testkit.ts";
+import { layerHubAccess, makeCheckProbe, makeServerAndCli } from "./DurableRevocations.testkit.ts";
 import * as Config from "../config.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
@@ -94,108 +94,97 @@ it.effect.each([false, true])(
     }).pipe(Effect.scoped, Effect.provide(layer)),
 );
 
-const layerOnDisk = Layer.unwrap(
-  Effect.map(Config.ServerConfig, (config) =>
-    Auth.layer.pipe(
-      Layer.provideMerge(Sqlite.layerFromPath(config.dbPath)),
-      Layer.provide(Secrets.layer),
-      Layer.provide(Environment.layerIdentity),
-    ),
-  ),
-).pipe(
-  Layer.provideMerge(Config.layerTest(process.cwd(), { prefix: "goat-cli-revoke-socket-" })),
-  Layer.provideMerge(NodeServices.layer),
-);
-
 it.effect(
-  "a session the command line revokes closes its open socket, then refuses settings writes and new tickets",
+  "a session the command line revokes closes its open socket at the next check, then refuses settings writes and credentials",
   () =>
     Effect.gen(function* () {
-      const auth = yield* Auth.EnvironmentAuth;
-      const sessions = yield* Sessions.SessionStore;
-      const config = yield* Config.ServerConfig;
-      // A second store on the same database is what `goat auth session revoke` runs.
-      const cli = Sessions.layer.pipe(
-        Layer.provide(Sqlite.layerFromPath(config.dbPath)),
-        Layer.provide(Secrets.layer),
-        Layer.provide(Environment.layerIdentity),
-        Layer.provide(Layer.succeed(Config.ServerConfig, config)),
-        Layer.provide(NodeServices.layer),
-      );
-      const token = yield* sessions.issue({ subject: "phone" });
-      const ticket = yield* auth.issueWebSocketTicket(token, { use: "rpc" });
-      const admitted = yield* Deferred.make<Auth.AuthenticatedSession>();
-      const routes = HttpRouter.add(
-        "GET",
-        "/ws",
-        Effect.gen(function* () {
-          const request = yield* HttpServerRequest.HttpServerRequest;
-          const session = yield* auth.authenticateWebSocketUpgrade(request, "rpc");
-          return yield* Lifetime.run(
-            session,
-            Effect.gen(function* () {
-              const socket = yield* request.upgrade;
-              const reader = yield* socket.reader;
-              const writer = yield* socket.writer;
-              yield* writer.write("tick");
-              yield* Deferred.succeed(admitted, session);
-              // A subscription keeps streaming to the client while the revocation lands.
-              yield* Effect.all(
-                [
-                  Stream.fromPull(Effect.succeed(reader.pull)).pipe(Stream.runDrain),
-                  Effect.forever(
-                    Effect.sleep(Duration.seconds(1)).pipe(Effect.andThen(writer.write("tick"))),
-                  ),
-                ],
-                { concurrency: "unbounded", discard: true },
-              );
-              return HttpServerResponse.empty();
-            }),
-          );
-        }),
-      );
-      const origin = yield* serve(routes);
-      const opened = Promise.withResolvers<void>();
-      const closed = Promise.withResolvers<void>();
-      const firstMessage = Promise.withResolvers<string>();
-      yield* Effect.acquireRelease(
-        Effect.sync(() => {
-          const client = new NodeWS.WebSocket(
-            `${origin.replace(/^http/u, "ws")}ws?wsTicket=${encodeURIComponent(Redacted.value(ticket.ticket))}`,
-          );
-          client.on("open", () => opened.resolve());
-          client.on("close", () => closed.resolve());
-          client.on("message", (data) => firstMessage.resolve(data.toString()));
-          client.on("error", () => {});
-          return client;
-        }),
-        (client) => Effect.sync(() => client.terminate()),
-      );
-      yield* Effect.promise(() => opened.promise);
-      const session = yield* Deferred.await(admitted);
-      expect(yield* Effect.promise(() => firstMessage.promise)).toBe("tick");
-      const authorizeSettings = yield* SettingsSessionPermit.make(session);
-      const patch = { hub: { enabled: true } };
-      yield* authorizeSettings(patch);
+      const probe = yield* makeCheckProbe;
+      const { running, fromCli } = yield* makeServerAndCli(probe.wrap);
+      yield* Effect.gen(function* () {
+        const sessions = yield* Sessions.SessionStore;
+        const token = yield* sessions.issue({ subject: "phone" });
+        const ticket = yield* sessions.issueWebSocketToken(token.sessionId, { audience: "rpc" });
+        const admitted = yield* Deferred.make<Sessions.VerifiedWebSocketTicket>();
+        const updates = yield* Queue.unbounded<string>();
+        const routes = HttpRouter.add(
+          "GET",
+          "/ws",
+          Effect.gen(function* () {
+            const request = yield* HttpServerRequest.HttpServerRequest;
+            const wsTicket = new URL(request.url, "http://localhost").searchParams.get("wsTicket");
+            const session = yield* sessions.verifyWebSocketToken(wsTicket ?? "", MAIN_LISTENER);
+            return yield* Lifetime.run(
+              session,
+              Effect.gen(function* () {
+                const socket = yield* request.upgrade;
+                const reader = yield* socket.reader;
+                const writer = yield* socket.writer;
+                yield* writer.write("tick");
+                yield* Deferred.succeed(admitted, session);
+                // A subscription keeps streaming to the client while the revocation lands.
+                yield* Effect.all(
+                  [
+                    Stream.fromPull(Effect.succeed(reader.pull)).pipe(Stream.runDrain),
+                    Stream.fromQueue(updates).pipe(
+                      Stream.runForEach((update) => writer.write(update)),
+                    ),
+                  ],
+                  { concurrency: "unbounded", discard: true },
+                );
+                return HttpServerResponse.empty();
+              }),
+            );
+          }).pipe(Effect.orDie),
+        );
+        const origin = yield* serve(routes);
+        const opened = Promise.withResolvers<void>();
+        const closed = Promise.withResolvers<void>();
+        const firstMessage = Promise.withResolvers<string>();
+        let isClosed = false;
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            const client = new NodeWS.WebSocket(
+              `${origin.replace(/^http/u, "ws")}ws?wsTicket=${encodeURIComponent(ticket.token)}`,
+            );
+            client.on("open", () => opened.resolve());
+            client.on("close", () => {
+              isClosed = true;
+              closed.resolve();
+            });
+            client.on("message", (data) => firstMessage.resolve(data.toString()));
+            client.on("error", () => {});
+            return client;
+          }),
+          (client) => Effect.sync(() => client.terminate()),
+        );
+        yield* Effect.promise(() => opened.promise);
+        const session = yield* Deferred.await(admitted);
+        expect(yield* Effect.promise(() => firstMessage.promise)).toBe("tick");
+        const authorizeSettings = yield* SettingsSessionPermit.make(session);
+        const patch = { hub: { enabled: true } };
+        yield* authorizeSettings(patch);
 
-      yield* Sessions.SessionStore.pipe(
-        Effect.flatMap((store) => store.revoke(token.sessionId)),
-        Effect.provide(cli, { local: true }),
-        Effect.scoped,
-      );
-      yield* TestClock.adjust(Duration.seconds(5));
-      yield* Effect.promise(() => closed.promise);
+        // A second store on the same database is what `goat auth session revoke` runs.
+        yield* Queue.offer(updates, "update before revoke");
+        yield* fromCli((cli) => cli.revoke(token.sessionId));
+        yield* Queue.offer(updates, "update after revoke");
+        if ((yield* probe.next) === "read") yield* Effect.promise(() => closed.promise);
+        expect(isClosed).toBe(true);
 
-      expect((yield* authorizeSettings(patch).pipe(Effect.flip))._tag).toBe("ServerSettingsError");
-      // The ticket route verifies the session first, and a ticket minted earlier fails at upgrade.
-      expect((yield* sessions.verify(token.token, MAIN_LISTENER).pipe(Effect.flip))._tag).toBe(
-        "SessionTokenRevokedError",
-      );
-      const late = yield* auth.issueWebSocketTicket(token, { use: "rpc" });
-      expect(
-        (yield* sessions
-          .verifyWebSocketToken(Redacted.value(late.ticket), MAIN_LISTENER)
-          .pipe(Effect.flip))._tag,
-      ).toBe("WebSocketSessionRevokedError");
-    }).pipe(Effect.scoped, Effect.provide(layerOnDisk)),
+        // This checks the permit a settings write passes before commit, not a routed RPC.
+        expect(
+          yield* authorizeSettings(patch).pipe(
+            Effect.match({ onFailure: (error) => error._tag, onSuccess: () => "authorized" }),
+          ),
+        ).toBe("ServerSettingsError");
+        // The ticket route verifies the session first, and a ticket minted earlier fails at upgrade.
+        expect((yield* sessions.verify(token.token, MAIN_LISTENER).pipe(Effect.flip))._tag).toBe(
+          "SessionTokenRevokedError",
+        );
+        const late = yield* sessions.issueWebSocketToken(token.sessionId, { audience: "rpc" });
+        expect(
+          (yield* sessions.verifyWebSocketToken(late.token, MAIN_LISTENER).pipe(Effect.flip))._tag,
+        ).toBe("WebSocketSessionRevokedError");
+      }).pipe(Effect.provide(Layer.merge(running, layerHubAccess)), Effect.scoped);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
