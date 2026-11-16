@@ -899,7 +899,7 @@ function ConnectedAgentsStep({
   );
 }
 
-function OnboardingCodexSetup({
+export function OnboardingCodexSetup({
   createdAccount,
   onAutoStartConsumed,
   environmentId,
