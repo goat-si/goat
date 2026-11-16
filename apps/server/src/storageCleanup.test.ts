@@ -1514,6 +1514,8 @@ describe("storage cleanup reports and local file policies", () => {
           const { service, worktree, setPolicy } = yield* cleanupFixture().pipe(
             Effect.provideService(FileSystem.FileSystem, {
               ...fs,
+              lstat: (target) =>
+                Effect.sync(() => statted.push(target)).pipe(Effect.andThen(fs.lstat(target))),
               stat: (target) => {
                 statted.push(target);
                 return fs
