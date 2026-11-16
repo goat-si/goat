@@ -60,7 +60,7 @@ import {
 } from "./threadStateSnapshots.ts";
 import * as StreamDiagnostics from "./threadStreamDiagnostics.ts";
 import { threadStreamFailureMessage } from "./threadTextAppends.ts";
-import { makeThreadRequestsResolvedAnnouncer, pendingRuntimeRequestIds } from "./threadRequests.ts";
+import { makeThreadRequestsResolvedAnnouncer } from "./threadRequests.ts";
 import { EMPTY_ENVIRONMENT_THREAD_STATE, type EnvironmentThreadState } from "./threadState.ts";
 
 function formatHistoryError(error: unknown): string {
@@ -191,7 +191,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     const owns = resumeCache === undefined || resumeCache.owner === owner;
     if (owns && current.status === "deleted") announceRequests([]);
     else if (owns && current.status === "live" && Option.isSome(current.data))
-      announceRequests(pendingRuntimeRequestIds(current.data.value));
+      announceRequests(current.data.value.runtimeRequests);
     committed = {
       state: current,
       sequence,

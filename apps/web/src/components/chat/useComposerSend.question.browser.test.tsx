@@ -144,6 +144,11 @@ it("sends a question answer through turn blockers and preserves it under answer 
       input: expect.objectContaining({ threadId, requestId, answers: { q: "My answer" } }),
     }),
   );
-  await act(() => makeThreadRequestsResolvedAnnouncer(environmentId, threadId)([]));
+  await act(() =>
+    makeThreadRequestsResolvedAnnouncer(
+      environmentId,
+      threadId,
+    )([{ id: requestId, status: "resolved" }]),
+  );
   expect(requests.activePendingDraftAnswers.q?.customAnswer).toBeUndefined();
 });
