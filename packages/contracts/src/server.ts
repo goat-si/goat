@@ -113,6 +113,9 @@ export const ServerProviderModel = Schema.Struct({
   isCustom: Schema.Boolean,
   isDefault: Schema.optional(Schema.Boolean),
   isLegacy: Schema.optional(Schema.Boolean),
+  // False when the provider can run this model in sessions but not for
+  // application text generation. Absent means supported.
+  supportsTextGeneration: Schema.optional(Schema.Boolean),
   capabilities: Schema.NullOr(ModelCapabilities),
 });
 export type ServerProviderModel = typeof ServerProviderModel.Type;
@@ -325,6 +328,10 @@ export const isProviderAvailable = (snapshot: ServerProvider): boolean =>
 /** Legacy producers omit this field and support text generation. */
 export const isProviderTextGenerationCapable = (snapshot: ServerProvider): boolean =>
   snapshot.supportsTextGeneration !== false;
+
+/** A model the provider runs in sessions only, such as a Pi extension model. Absent means supported. */
+export const isModelTextGenerationCapable = (snapshot: ServerProvider, model: string): boolean =>
+  snapshot.models.find((candidate) => candidate.slug === model)?.supportsTextGeneration !== false;
 
 export const OtlpEndpointSource = Schema.Literals(["environment", "bootstrap", "settings"]);
 export type OtlpEndpointSource = typeof OtlpEndpointSource.Type;

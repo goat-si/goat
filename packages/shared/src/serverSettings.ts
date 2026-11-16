@@ -13,6 +13,7 @@ import {
   resolveProjectProviderInstanceEnabled,
   resolveProviderInstanceEnabled,
   isProviderTextGenerationCapable,
+  isModelTextGenerationCapable,
   type ModelSelection,
   patchDisposableMachines,
   type ProjectId,
@@ -169,7 +170,8 @@ export function resolveSourceControlWriterModelSelection(
   const provider = providers.find((candidate) => candidate.instanceId === selection.instanceId);
   return provider?.enabled === true &&
     isProviderAvailable(provider) &&
-    isProviderTextGenerationCapable(provider)
+    isProviderTextGenerationCapable(provider) &&
+    isModelTextGenerationCapable(provider, selection.model)
     ? selection
     : settings.textGenerationModelSelection;
 }
@@ -232,7 +234,8 @@ export function resolveReviewGuideModelSelection(
       providers === undefined ||
       (provider?.enabled === true &&
         isProviderAvailable(provider) &&
-        isProviderTextGenerationCapable(provider))
+        isProviderTextGenerationCapable(provider) &&
+        isModelTextGenerationCapable(provider, selection.model))
     ) {
       return selection;
     }
