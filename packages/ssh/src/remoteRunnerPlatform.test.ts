@@ -61,6 +61,8 @@ describe("remote runner platform gate", () => {
           result.stderr,
           "https://raw.githubusercontent.com/goat-si/goat-releases/main/install.sh",
         );
+        // Without it the installer may choose ~/.t3, where the runner never looks.
+        assert.include(result.stderr, "GOAT_HOME=$HOME/.goat");
       } else {
         assert.notInclude(result.stderr, "download attempt");
         assert.include(result.stderr, "has no GOAT release archive.");
