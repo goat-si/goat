@@ -24,9 +24,14 @@ async function openTwoTabs(): Promise<{
   vi.stubGlobal("window", sharedWindow);
   vi.resetModules();
   const thisTab = await import("./composerDraftStore");
-  vi.resetModules();
-  const otherTab = await import("./composerDraftStore");
+  const otherTab = await openTab();
   return { storage, window: sharedWindow, thisTab, otherTab };
+}
+
+/** Another tab over the same stubbed localStorage, loading what is saved now. */
+async function openTab(): Promise<DraftStoreModule> {
+  vi.resetModules();
+  return import("./composerDraftStore");
 }
 
 /** Lets a debounced write fire and every write queued on the tabs' shared lock land. */
@@ -77,12 +82,17 @@ describe("composer draft persistence across tabs", () => {
     }));
 
   it("removes a draft this tab cleared without bringing back the other tab's copy", () =>
-    withTabs(async ({ storage, thisTab, otherTab }) => {
+    withTabs(async ({ storage, thisTab }) => {
       thisTab.useComposerDraftStore.getState().setPrompt(alphaRef, "alpha draft");
       await settleWrites();
-      otherTab.useComposerDraftStore.getState().setPrompt(betaRef, "beta draft");
-      await settleWrites();
+      // This tab loads alpha, so it holds a copy of the draft the first tab is about to clear.
+      const lateTab = await openTab();
+      expect(lateTab.useComposerDraftStore.getState().getComposerDraft(alphaRef)?.prompt).toBe(
+        "alpha draft",
+      );
       thisTab.useComposerDraftStore.getState().setPrompt(alphaRef, "");
+      await settleWrites();
+      lateTab.useComposerDraftStore.getState().setPrompt(betaRef, "beta draft");
       await settleWrites();
 
       expect(savedPrompts(storage)).toEqual({ alpha: undefined, beta: "beta draft" });
