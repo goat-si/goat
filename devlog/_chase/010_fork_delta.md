@@ -186,6 +186,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: upstream `apps/server/src/peer`, `packages/contracts/src/peerLink.ts`, `apps/server/src/persistence/Migrations/070_PeerLinks.ts`, `071_PeerLinkFence.ts`, `072_WaitingLinkRequestIndex.ts`
 - 정책: upstream의 peer link store, `environmentId` 라우팅, `delegated_task.remote.*` 이벤트 모델은 받지 않는다. GOAT fleet는 `LinkedHosts`, `HubNodes`, `SshRemoteDispatch`의 `host` 라우팅, `RemoteDelegatedTasks`가 정본이다. upstream 070-072(PeerLinks, PeerLinkFence, WaitingLinkRequestIndex)는 GOAT도 같은 이름과 id로 등록해 스키마만 둔다. 071·072는 upstream처럼 다시 실행해도 안전하다 (사이클 261114). 모델 검색, reconnect/history, @ picker, Copy thread 같은 독립 개선은 GOAT 코드에 adapt한다.
 
+### `pr-event-feeds` 감시 PR의 GitHub 이벤트 피드
+
+- 커밋: #3519 (사이클 261114 다음 PR, lane N16)
+- 경로: `packages/source-control-github/src/server/gitHubPullRequestEvents.ts`, `apps/server/src/orchestration-v2/PullRequestWatchReactor.ts`, `apps/server/src/orchestration-v2/goat/PullRequestEventFeeds.ts`, `apps/server/src/pullRequest/PullRequestService.ts`
+- 정책: upstream `4e1be34436`·`e0d6aadb88`을 GitHub 앱 로그인(`0c80751701`, 받지 않음) 대신 GOAT 호스트 자격 증명으로 받았다. upstream이 `gitHubPullRequestEvents.ts`나 `PullRequestWatchReactor.ts`를 바꾸면 그 변경을 받은 뒤 다음을 다시 얹는다. 일시 정지는 자격 증명 지문(토큰의 해시)으로 묶는다. 구독 응답 표: 401·403·그 밖의 4xx는 그 자격 증명 1시간, 404는 그 PR 1시간, 422는 10분, 429와 5xx는 기존 경로. 스트림이 429가 아닌 4xx로 답하면 피드를 멈추고 그 PR을 1시간 정지한다. 정지 확인과 구독 POST는 한 permit 세마포어 안에서 돈다. `events_url`이 `https://api.github.com` 밖이거나 본문이 풀리지 않으면 id로 DELETE하고 정지한다. SSE는 `Sse.makeParser`로 읽어 `retry:`를 무시하고 10 MiB 상한을 지킨다. DELETE는 5초, 스트림 헤더는 45초 기한이다. 피드 상한 64, 20초 settle(`Stream.debounce`), 상한 선택은 GOAT 모듈 `goat/PullRequestEventFeeds.ts`에 있고 reactor에는 import 한 줄과 `follow`가 남는다. 상한은 이벤트 피드가 있는 공급자의 PR만 센다(`PullRequestService.followsChanges`, upstream `changes` 옆의 GOAT 메서드). 이유와 시험은 lane 기록 `devlog/_chase/261114_lanes/next-N16.md`에 있다.
+
 ### `remote-reports` 원격 보고와 원격 위임
 
 - 커밋: #5 #10 #6
