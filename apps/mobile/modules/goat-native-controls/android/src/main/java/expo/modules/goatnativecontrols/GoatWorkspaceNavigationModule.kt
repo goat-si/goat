@@ -38,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -187,17 +188,20 @@ class GoatWorkspaceNavigationView(
                     onClick = { onTabSelected(mapOf("tab" to tab)) },
                     icon = { Icon(tabIconPainter(tab), contentDescription = null) },
                     label = {
-                      Text(
-                        tabTitle(tab),
-                        maxLines = 1,
-                        softWrap = false,
-                        overflow = TextOverflow.Ellipsis,
-                        autoSize = TextAutoSize.StepBased(
-                          minFontSize = (8 * textScale).sp,
-                          maxFontSize = (12 * textScale).sp,
-                          stepSize = 0.5.sp,
-                        ),
-                      )
+                      // Autosize kept its old size when only GOAT's text size changed.
+                      key(textScale) {
+                        Text(
+                          tabTitle(tab),
+                          maxLines = 1,
+                          softWrap = false,
+                          overflow = TextOverflow.Ellipsis,
+                          autoSize = TextAutoSize.StepBased(
+                            minFontSize = (8 * textScale).sp,
+                            maxFontSize = (12 * textScale).sp,
+                            stepSize = 0.5.sp,
+                          ),
+                        )
+                      }
                     },
                     colors = NavigationBarItemDefaults.colors(
                       selectedIconColor = Color(selectedColor),
@@ -361,26 +365,29 @@ class GoatWorkspaceNavigationView(
 
   @Composable
   private fun railLabel(text: String, fraction: Float, color: Color = Color.Unspecified) {
-    Text(
-      text,
-      Modifier
-        .padding(start = 12.dp)
-        // Sized against the open rail, not the animating row, so autosize settles once.
-        .wrapContentWidth(Alignment.Start, unbounded = true)
-        .widthIn(max = RAIL_LABEL_WIDTH)
-        .alpha(labelAlpha(fraction))
-        .clearAndSetSemantics {},
-      color = color,
-      style = MaterialTheme.typography.labelLarge,
-      maxLines = 1,
-      softWrap = false,
-      overflow = TextOverflow.Ellipsis,
-      autoSize = TextAutoSize.StepBased(
-        minFontSize = (10 * textScale).sp,
-        maxFontSize = (14 * textScale).sp,
-        stepSize = 0.5.sp,
-      ),
-    )
+    // Autosize kept its old size when only GOAT's text size changed.
+    key(textScale) {
+      Text(
+        text,
+        Modifier
+          .padding(start = 12.dp)
+          // Sized against the open rail, not the animating row, so autosize settles once.
+          .wrapContentWidth(Alignment.Start, unbounded = true)
+          .widthIn(max = RAIL_LABEL_WIDTH)
+          .alpha(labelAlpha(fraction))
+          .clearAndSetSemantics {},
+        color = color,
+        style = MaterialTheme.typography.labelLarge,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Ellipsis,
+        autoSize = TextAutoSize.StepBased(
+          minFontSize = (10 * textScale).sp,
+          maxFontSize = (14 * textScale).sp,
+          stepSize = 0.5.sp,
+        ),
+      )
+    }
   }
 
   private fun tabTitle(tab: String) = when (tab) {
