@@ -15,7 +15,6 @@ import { isUsageLimitsCommand } from "@goat/shared/usageLimits";
 import {
   AuthOrchestrationOperateScope,
   DEFAULT_MODEL,
-  type EnvironmentId,
   type PreviewAnnotationPayload,
 } from "@goat/contracts";
 import { deriveThreadTitleSeed } from "@goat/client-runtime/operations";
@@ -71,7 +70,6 @@ import { threadEnvironment } from "../../state/threads";
 import { runMobileComposerTransition } from "./draftHeroTransition";
 import { useClientSettingsHydrated, useEnvironmentSettings } from "../../hooks/useSettings";
 import { useSendWithRouting } from "./useSendWithRouting";
-import { environmentPresentations } from "../../state/presentation";
 import {
   approvalRedirectNotice,
   expiredTerminalContextToast,
@@ -108,7 +106,6 @@ import {
 } from "./chatViewSend";
 import { notifyDirectAnnotationAttached } from "./composerSendNotices";
 import type { UnifiedSettings } from "@goat/contracts";
-import type { ComposerThreadTarget } from "../../composerDraftStore";
 import type { DraftSshDestination } from "../../composerDraftStore";
 import { NO_PROVIDER_MODEL_SELECTION } from "../../providerInstances";
 import type { SavedSshWorktreeOption } from "../../lib/sshWorktree";
@@ -135,6 +132,7 @@ import { waitForThreadShell } from "../../state/entities";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { vcsEnvironment } from "../../state/vcs";
 import type { ComposerSendInput } from "./useComposerSend.input";
+import { draftHasNonPromptContent, readEnvironmentPresentation } from "./useComposerSend.helpers";
 import { keepFailedSendInStash } from "./stashFailedSend";
 
 const sshWorkspaceLaunchCommand = vcsEnvironment.sshWorkspaceLaunch;
@@ -142,15 +140,6 @@ const sshWorkspaceLaunchCommand = vcsEnvironment.sshWorkspaceLaunch;
 const ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE = 3;
 
 const selectPlanModeEnabled = (settings: UnifiedSettings) => settings.planModeEnabled;
-
-function readEnvironmentPresentation(environmentId: EnvironmentId) {
-  return appAtomRegistry.get(environmentPresentations.presentationsAtom).get(environmentId);
-}
-
-function draftHasNonPromptContent(target: ComposerThreadTarget) {
-  const draft = useComposerDraftStore.getState().getComposerDraft(target);
-  return draft ? composerDraftHasUserContent({ ...draft, prompt: "" }) : false;
-}
 
 /**
  * Everything the composer's send button can start: a turn on this thread or a new one,
