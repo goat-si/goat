@@ -1,3 +1,4 @@
+import { isCloudExecution } from "@goat/provider-core/server/cloudTask";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -5,6 +6,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import { makeIsManagedWorktreePath } from "../../worktreesDirectory.ts";
+import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
 import * as ProjectStore from "../ProjectStore.ts";
 import {
   WorktreeSendCheck,
@@ -21,6 +23,8 @@ export const layer = Layer.effect(
     const path = yield* Path.Path;
     const projects = yield* ProjectStore.ProjectStoreV2;
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
+    // As turn start reads it (ProviderTurnStartService); an unknown instance is checked as local.
+    const adapters = yield* Effect.serviceOption(ProviderAdapterRegistry.ProviderAdapterRegistryV2);
     const reads: SendCheckReads = {
       // An unreadable folder is left to turn start, as today.
       exists: (worktreePath) =>
@@ -31,6 +35,14 @@ export const layer = Layer.effect(
           Effect.map(Option.isSome),
           Effect.orElseSucceed(() => true),
         ),
+      runsInCloud: (instanceId) =>
+        Option.isNone(adapters)
+          ? Effect.succeed(false)
+          : adapters.value.get(instanceId).pipe(
+              Effect.flatMap((adapter) => adapter.getCapabilities()),
+              Effect.map(isCloudExecution),
+              Effect.orElseSucceed(() => false),
+            ),
     };
     return WorktreeSendCheck.of({
       refusal: Effect.fn("WorktreeSendCheck.check")(function* (thread: SendTarget) {

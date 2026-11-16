@@ -365,7 +365,8 @@ const make = Effect.gen(function* () {
       status:
         row.status === "pending"
           ? "open"
-          : row.status === "resolved" && row.decision !== "cancel"
+          : // A closed question was never answered; a Cancel on an approval is a person's answer.
+            row.status === "resolved" && (row.kind !== "user_input" || row.decision !== "cancel")
             ? "answered"
             : row.status === "expired"
               ? "expired"

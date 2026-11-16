@@ -141,6 +141,7 @@ export const runService = <A, E>(
         taskOrigin: () => Effect.succeed(options.taskOwner ?? threadId),
         isTaskThread: () => Effect.succeed(options.taskThread ?? false),
         resume: (host, id) => Effect.sync(() => options.onResume?.(host, id)),
+        followUp: (input) => Effect.succeed(input.sent),
       }),
     ),
     Layer.provide(

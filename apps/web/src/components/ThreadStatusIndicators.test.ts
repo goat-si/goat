@@ -128,7 +128,6 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: "feature/other",
         gitStatus: status({ refName: "feature/other", pr: null }),
         snapshot: undefined,
-        retainTerminalOnBranchMismatch: false,
         linkedPullRequest,
         linkedPullRequestStatus,
       }),
@@ -138,7 +137,6 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: "feature/other",
         gitStatus: status({ refName: "feature/other", pr: null }),
         snapshot: undefined,
-        retainTerminalOnBranchMismatch: false,
         linkedPullRequest,
         linkedPullRequestStatus,
       }),
@@ -148,7 +146,6 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: "feature/other",
         gitStatus: status({ refName: "feature/other", pr: null }),
         snapshot: undefined,
-        retainTerminalOnBranchMismatch: false,
         linkedPullRequest,
         linkedPullRequestStatus,
       }),
@@ -171,7 +168,6 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: null,
         gitStatus: null,
         snapshot,
-        retainTerminalOnBranchMismatch: false,
         linkedPullRequest,
         linkedPullRequestStatus: null,
       }),
@@ -181,7 +177,6 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: null,
         gitStatus: null,
         snapshot,
-        retainTerminalOnBranchMismatch: false,
         linkedPullRequest,
         linkedPullRequestStatus: null,
       }),
@@ -199,7 +194,6 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: featureBranch,
         gitStatus: null,
         snapshot,
-        retainTerminalOnBranchMismatch: true,
         linkedPullRequest,
         linkedPullRequestStatus: null,
       }),
@@ -217,7 +211,6 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: featureBranch,
         gitStatus: status({ refName: "main", pr: null }),
         snapshot,
-        retainTerminalOnBranchMismatch: true,
       }),
     ).toBeNull();
     expect(
@@ -225,56 +218,56 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: featureBranch,
         gitStatus: null,
         snapshot,
-        retainTerminalOnBranchMismatch: true,
       }),
     ).toBeNull();
   });
 
-  it("after caching a merged PR, resolves main status back to the cached feature PR", () => {
+  it("neither caches nor shows an unlinked merged PR once the checkout moves to main", () => {
     const matchingStatus = status({
       refName: featureBranch,
       pr: mergedPr,
       sourceControlProvider: provider,
     });
-    const cached = nextThreadChangeRequestSnapshot({
-      threadBranch: featureBranch,
-      gitStatus: matchingStatus,
-      snapshot: undefined,
-      retainTerminalOnBranchMismatch: true,
-    });
-    expect(cached).toEqual(snapshotFor(featureBranch, mergedPr, provider));
-
-    const mainStatus = status({
-      refName: "main",
-      isDefaultRef: true,
-      pr: {
-        number: 99,
-        title: "Unrelated main PR",
-        url: "https://github.com/goat-si/goat/pull/99",
-        baseRef: "main",
-        headRef: "main",
-        state: "open",
-      },
-      sourceControlProvider: provider,
-    });
-
+    expect(
+      nextThreadChangeRequestSnapshot({
+        threadBranch: featureBranch,
+        gitStatus: matchingStatus,
+        snapshot: undefined,
+      }),
+    ).toBeNull();
+    const terminalSnapshot = snapshotFor(featureBranch, mergedPr, provider);
+    const mainStatus = status({ refName: "main", isDefaultRef: true, pr: null });
     expect(
       resolveDisplayedThreadPr({
         threadBranch: featureBranch,
         gitStatus: mainStatus,
-        snapshot: cached as ThreadChangeRequestSnapshot,
-        retainTerminalOnBranchMismatch: true,
+        snapshot: terminalSnapshot,
       }),
-    ).toEqual(mergedPr);
+    ).toBeNull();
     expect(
       resolveDisplayedThreadPrProvider({
         threadBranch: featureBranch,
         gitStatus: mainStatus,
-        snapshot: cached as ThreadChangeRequestSnapshot,
-        retainTerminalOnBranchMismatch: true,
+        snapshot: terminalSnapshot,
       }),
-    ).toEqual(provider);
+    ).toBeUndefined();
   });
+
+  it.each(["open", "merged", "closed"] as const)(
+    "only shows an unlinked branch PR while open (state=%s)",
+    (state) => {
+      const branchPr = { ...mergedPr, state };
+      const input = {
+        threadBranch: featureBranch,
+        gitStatus: status({ pr: branchPr, sourceControlProvider: provider }),
+      };
+
+      expect(resolveDisplayedThreadPr(input)).toEqual(state === "open" ? branchPr : null);
+      expect(resolveDisplayedThreadPrProvider(input)).toEqual(
+        state === "open" ? provider : undefined,
+      );
+    },
+  );
 
   it("never attaches a PR reported by main to the feature thread", () => {
     const mainPr = {
@@ -290,7 +283,6 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: featureBranch,
         gitStatus: status({ refName: "main", pr: mainPr }),
         snapshot: undefined,
-        retainTerminalOnBranchMismatch: true,
       }),
     ).toBeNull();
     expect(
@@ -298,7 +290,6 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: featureBranch,
         gitStatus: status({ refName: "main", pr: mainPr }),
         snapshot: undefined,
-        retainTerminalOnBranchMismatch: true,
       }),
     ).toBeNull();
   });
@@ -315,12 +306,11 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: featureBranch,
         gitStatus: status({ refName: "main", pr: null }),
         snapshot: openSnapshot,
-        retainTerminalOnBranchMismatch: true,
       }),
     ).toBeNull();
   });
 
-  it("retains a cached closed PR across a branch mismatch", () => {
+  it("does not show a cached closed unlinked PR across a branch mismatch", () => {
     const closedPr = { ...mergedPr, state: "closed" as const, title: "Closed feature" };
     const closedSnapshot = snapshotFor(featureBranch, closedPr, provider);
 
@@ -329,9 +319,8 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: featureBranch,
         gitStatus: status({ refName: "main", pr: null }),
         snapshot: closedSnapshot,
-        retainTerminalOnBranchMismatch: true,
       }),
-    ).toEqual(closedPr);
+    ).toBeNull();
   });
 
   it("does not retain or display a terminal PR when a worktree switches branches", () => {
@@ -343,7 +332,6 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: featureBranch,
         gitStatus: mismatchedStatus,
         snapshot: terminalSnapshot,
-        retainTerminalOnBranchMismatch: false,
       }),
     ).toBeNull();
     expect(
@@ -351,7 +339,6 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: featureBranch,
         gitStatus: mismatchedStatus,
         snapshot: terminalSnapshot,
-        retainTerminalOnBranchMismatch: false,
       }),
     ).toBeUndefined();
     expect(
@@ -359,12 +346,11 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: featureBranch,
         gitStatus: mismatchedStatus,
         snapshot: terminalSnapshot,
-        retainTerminalOnBranchMismatch: false,
       }),
     ).toBeNull();
   });
 
-  it("retains a terminal snapshot when a local thread and status move to a branch with no PR", () => {
+  it("clears a terminal unlinked snapshot when a local thread moves to a branch with no PR", () => {
     const terminalSnapshot = snapshotFor(featureBranch, mergedPr, provider);
 
     expect(
@@ -372,17 +358,15 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: "main",
         gitStatus: status({ refName: "main", pr: null }),
         snapshot: terminalSnapshot,
-        retainTerminalOnBranchMismatch: true,
       }),
-    ).toBeUndefined();
+    ).toBeNull();
     expect(
       resolveDisplayedThreadPr({
         threadBranch: "main",
         gitStatus: status({ refName: "main", pr: null }),
         snapshot: terminalSnapshot,
-        retainTerminalOnBranchMismatch: true,
       }),
-    ).toEqual(mergedPr);
+    ).toBeNull();
   });
 
   it("clears an open snapshot when a local thread moves to a branch with no PR", () => {
@@ -393,7 +377,6 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: "main",
         gitStatus: status({ refName: "main", pr: null }),
         snapshot: openSnapshot,
-        retainTerminalOnBranchMismatch: true,
       }),
     ).toBeNull();
   });
@@ -406,7 +389,6 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: null,
         gitStatus: status({ refName: "main", pr: null }),
         snapshot: terminalSnapshot,
-        retainTerminalOnBranchMismatch: true,
       }),
     ).toBeNull();
     expect(
@@ -414,7 +396,6 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: null,
         gitStatus: status({ refName: "main", pr: null }),
         snapshot: terminalSnapshot,
-        retainTerminalOnBranchMismatch: true,
       }),
     ).toBeNull();
     expect(
@@ -422,12 +403,11 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: null,
         gitStatus: status({ refName: "main", pr: null }),
         snapshot: terminalSnapshot,
-        retainTerminalOnBranchMismatch: true,
       }),
     ).toBeUndefined();
   });
 
-  it("does not erase a terminal snapshot when VCS data is missing", () => {
+  it("keeps the snapshot but shows no terminal unlinked PR while VCS data is missing", () => {
     const terminalSnapshot = snapshotFor(featureBranch, mergedPr, provider);
 
     expect(
@@ -435,7 +415,6 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: featureBranch,
         gitStatus: null,
         snapshot: terminalSnapshot,
-        retainTerminalOnBranchMismatch: true,
       }),
     ).toBeUndefined();
     expect(
@@ -443,9 +422,8 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
         threadBranch: featureBranch,
         gitStatus: null,
         snapshot: terminalSnapshot,
-        retainTerminalOnBranchMismatch: true,
       }),
-    ).toEqual(mergedPr);
+    ).toBeNull();
   });
 
   it("shows the last matching PR snapshot while its live status lease is released", () => {
@@ -454,7 +432,6 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
       threadBranch: featureBranch,
       gitStatus: null,
       snapshot: snapshotFor(featureBranch, openPr, provider),
-      retainTerminalOnBranchMismatch: false,
     };
     expect(resolveDisplayedThreadPr(input)).toEqual(openPr);
     expect(resolveDisplayedThreadPrProvider(input)).toEqual(provider);

@@ -6,10 +6,11 @@ import {
   type PullRequestDiffResult,
 } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
+import { page, userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
 
-const { diffAtom, pagedDiffAtom } = await vi.hoisted(async () => {
+const { diffAtom, pagedDiffAtom, imageDiffAtom } = await vi.hoisted(async () => {
   const { AsyncResult, Atom } = await import("effect/reactivity");
   const filePatch = (path: string) =>
     [
@@ -42,8 +43,21 @@ const { diffAtom, pagedDiffAtom } = await vi.hoisted(async () => {
     },
     "page-2": { patch: filePatch("late.ts"), truncated: false, nextCursor: null },
   };
+  // GitHub sends no patch for a binary file, so its section is the header alone.
+  const imagePage: PullRequestDiffResult = {
+    patch: [
+      "diff --git a/docs/shot.png b/docs/shot.png",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/docs/shot.png",
+      "",
+    ].join("\n"),
+    truncated: false,
+    nextCursor: null,
+  };
   return {
     diffAtom: Atom.make(() => AsyncResult.success(firstPage)),
+    imageDiffAtom: Atom.make(() => AsyncResult.success(imagePage)),
     pagedDiffAtom: Atom.family((cursor: string) =>
       Atom.make(() => AsyncResult.success(pages[cursor]!)),
     ),
@@ -52,9 +66,22 @@ const { diffAtom, pagedDiffAtom } = await vi.hoisted(async () => {
 
 const mocks = vi.hoisted(() => ({
   paged: false,
+  image: false,
+  assetResources: [] as unknown[],
   diffCommits: [] as Array<string | undefined>,
 }));
 
+vi.mock(import("~/assets/assetUrls"), async (original) => ({
+  ...(await original()),
+  useAssetUrlState: ((_environmentId: unknown, resource: unknown) => {
+    if (resource !== null) mocks.assetResources.push(resource);
+    return {
+      _tag: "Success",
+      url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+    };
+  }) as never,
+  useAssetUrlRefresh: (() => async () => null) as never,
+}));
 vi.mock(import("~/state/use-atom-command"), async (original) => ({
   ...(await original()),
   useAtomCommand: (() => vi.fn()) as never,
@@ -67,6 +94,7 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
       ...actual.pullRequestEnvironment,
       diff: (({ input }: { input: { commit?: string; cursor?: string } }) => {
         mocks.diffCommits.push(input.commit);
+        if (mocks.image) return imageDiffAtom;
         return mocks.paged ? pagedDiffAtom(input.cursor ?? "first") : diffAtom;
       }) as never,
     },
@@ -128,8 +156,10 @@ const detail: PullRequestDetailView = {
   },
 };
 
-function setup(paged = false) {
+function setup(paged = false, image = false) {
   mocks.paged = paged;
+  mocks.image = image;
+  mocks.assetResources = [];
   mocks.diffCommits = [];
 }
 
@@ -245,4 +275,31 @@ it("scrolls to a loaded file requested before the viewer mounts", async () => {
   await using screen = await render(tab(0, { path: "early-39.ts", nonce: 1 }), { container });
 
   await expectFileHeaderShown(screen, container, "early-39.ts");
+});
+
+it("previews an image the host sent no patch for at the pull request's head", async () => {
+  setup(false, true);
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px] flex-col";
+  const headSha = "0123456789abcdef0123456789abcdef01234567";
+  await using _screen = await render(tab(0, null, null, { ...detail, headSha }), { container });
+
+  // A file the host sent no patch for starts collapsed; the image shows once a person expands it.
+  const image = page.getByAltText("docs/shot.png", { exact: true });
+  await expect.element(image).not.toBeVisible();
+  const header = await vi.waitFor(() => {
+    const found = container
+      .querySelector("diffs-container")
+      ?.shadowRoot?.querySelector<HTMLElement>("[data-diffs-header]");
+    expect(found).toBeTruthy();
+    return found!;
+  });
+  await userEvent.click(header);
+  await expect.element(image).toBeVisible();
+  expect(mocks.assetResources).toContainEqual({
+    _tag: "github-media",
+    cwd: "/workspace",
+    url: `https://github.com/owner/repo/raw/${headSha}/docs/shot.png`,
+    repository: "owner/repo",
+  });
 });

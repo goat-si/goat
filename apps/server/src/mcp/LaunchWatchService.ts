@@ -65,7 +65,6 @@ import {
   type LaunchWatch,
   LaunchWatchDocument,
   launchWatchId,
-  type LaunchWatchTerminalStatus,
   type LaunchWatchWake,
   type LaunchWatchRunDetails,
   type LaunchWatchWebhookTarget,
@@ -86,6 +85,7 @@ import {
   watchExpired as expired,
 } from "./launchWatch.ts";
 import { quietEnd } from "./launchWatchEnds.ts";
+import { lostTrackWake, restartOnDefect, type StepResult } from "./launchWatchFollower.ts";
 import { isPermanentDispatchFailure, wakeThread } from "./threadWake.ts";
 
 /**
@@ -244,33 +244,6 @@ export const LAUNCH_WATCH_FILE = "thread-launch-watches.json";
  * every ordinary watch; this way they keep reading LAUNCH_WATCH_FILE.
  */
 export const LAUNCHERLESS_WATCH_FILE = "thread-launch-watches-launcherless.json";
-
-/** What one follower step learned about the run it follows. */
-type StepResult =
-  | {
-      readonly _tag: "Terminal";
-      readonly status: LaunchWatchTerminalStatus;
-      /**
-       * The run that ended: the followed one, or the running turn a queued
-       * message was promoted into, which carries on its work.
-       */
-      readonly runId: RunId;
-      /** When it ended, where the step could read it. */
-      readonly end?: string | null;
-    }
-  | {
-      readonly _tag: "Running";
-      readonly questions: ReadonlyArray<{ readonly id: string; readonly kind: string | null }>;
-      /** The run that asks them: a continuation or joined run of the followed one, else it. */
-      readonly askedRunId?: RunId;
-      readonly escalatesUserInput?: boolean;
-      readonly retryIfNoNewQuestions?: boolean;
-    }
-  | { readonly _tag: "RunMissing" }
-  | { readonly _tag: "Gone"; readonly reason: string }
-  | { readonly _tag: "LauncherGone" }
-  | { readonly _tag: "CallerChanged" }
-  | { readonly _tag: "Unreachable"; readonly error: string };
 
 const decodeDocument = Schema.decodeUnknownEffect(Schema.fromJsonString(LaunchWatchDocument));
 const encodeDocument = Schema.encodeEffect(Schema.fromJsonString(LaunchWatchDocument));
@@ -1671,12 +1644,14 @@ export const make = Effect.gen(function* () {
         if (pause > 0) yield* Effect.sleep(pause);
       }
     }).pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.interrupt
-          : Effect.logError("launch watch follower stopped", { watchId, cause }).pipe(
-              Effect.andThen(locked(Effect.sync(() => releaseSlot(watchId, incarnation)))),
-            ),
+      restartOnDefect(watchId, () =>
+        locked(
+          Effect.suspend(() => {
+            releaseSlot(watchId, incarnation);
+            const watch = current(watchId, incarnation);
+            return watch === undefined ? Effect.void : deliver(watch, lostTrackWake(watch));
+          }),
+        ),
       ),
     );
 

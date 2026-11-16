@@ -71,18 +71,18 @@ it.layer(layerTest)("QuestionEscalationService", (it) => {
         assert.include(refused.message, "so it can no longer be answered.");
       }).pipe(Effect.provide(QuestionEscalationService.layer), Effect.scoped),
   );
-  it.effect(
-    "a completed task's pending question keeps its inbox item and wake, and answering it continues the child",
-    () =>
+  it.effect.each(["completed", "failed"] as const)(
+    "a %s task's pending question keeps its inbox item and wake, and answering it continues the child",
+    (ending) =>
       Effect.gen(function* () {
         const engine = yield* Orchestrator.OrchestratorV2;
         const projections = yield* ProjectionStore.ProjectionStoreV2;
         const sink = yield* EventSink.EventSinkV2;
         const service = yield* QuestionEscalationService.QuestionEscalationService;
-        const parentThreadId = ThreadId.make("thread:completed-task-parent");
+        const parentThreadId = ThreadId.make(`thread:${ending}-task-parent`);
         yield* engine.dispatch({
           type: "thread.create",
-          commandId: CommandId.make("create:completed-task-parent"),
+          commandId: CommandId.make(`create:${ending}-task-parent`),
           threadId: parentThreadId,
           projectId: ProjectId.make("project:question-escalation"),
           title: "Parent",
@@ -96,8 +96,8 @@ it.layer(layerTest)("QuestionEscalationService", (it) => {
         });
         yield* engine.dispatch({
           type: "message.dispatch",
-          commandId: CommandId.make("start:completed-task-parent"),
-          messageId: MessageId.make("message:completed-task-parent"),
+          commandId: CommandId.make(`start:${ending}-task-parent`),
+          messageId: MessageId.make(`message:${ending}-task-parent`),
           threadId: parentThreadId,
           text: "Delegate the proof",
           attachments: [],
@@ -108,7 +108,7 @@ it.layer(layerTest)("QuestionEscalationService", (it) => {
         const parentRun = (yield* projections.getThreadRecords(parentThreadId, ["runs"])).runs[0]!;
         yield* engine.dispatch({
           type: "delegated_task.request",
-          commandId: CommandId.make("delegate:completed-task"),
+          commandId: CommandId.make(`delegate:${ending}-task`),
           parentThreadId,
           parentRunId: parentRun.id,
           parentNodeId: parentRun.rootNodeId!,
@@ -125,12 +125,12 @@ it.layer(layerTest)("QuestionEscalationService", (it) => {
         const childThreadId = task.childThreadId!;
         const childRun = (yield* projections.getThreadRecords(childThreadId, ["runs"])).runs[0]!;
         const now = yield* DateTime.now;
-        const requestId = RuntimeRequestId.make("request:completed-task");
-        const nodeId = NodeId.make("node:completed-task-question");
+        const requestId = RuntimeRequestId.make(`request:${ending}-task`);
+        const nodeId = NodeId.make(`node:${ending}-task-question`);
         const stored = yield* sink.write({
           events: [
             {
-              id: EventId.make("completed-task:node"),
+              id: EventId.make(`${ending}-task:node`),
               type: "node.updated",
               threadId: childThreadId,
               runId: childRun.id,
@@ -155,7 +155,7 @@ it.layer(layerTest)("QuestionEscalationService", (it) => {
               },
             },
             {
-              id: EventId.make("completed-task:request"),
+              id: EventId.make(`${ending}-task:request`),
               type: "runtime-request.updated",
               threadId: childThreadId,
               runId: childRun.id,
@@ -174,14 +174,14 @@ it.layer(layerTest)("QuestionEscalationService", (it) => {
               },
             },
             {
-              id: EventId.make("completed-task:item"),
+              id: EventId.make(`${ending}-task:item`),
               type: "turn-item.updated",
               threadId: childThreadId,
               runId: childRun.id,
               nodeId,
               occurredAt: now,
               payload: {
-                id: TurnItemId.make("item:completed-task"),
+                id: TurnItemId.make(`item:${ending}-task`),
                 type: "user_input_request",
                 threadId: childThreadId,
                 runId: childRun.id,
@@ -212,16 +212,16 @@ it.layer(layerTest)("QuestionEscalationService", (it) => {
             .pipe(Effect.map(({ runs }) => runs.find((run) => run.userMessageId === wakeId)));
         assert.equal((yield* wakeRun())?.status, "queued");
 
-        // The child's turn ends COMPLETED with its question still open.
+        // The child's turn ends with its question still open.
         yield* sink.write({
           events: [
             {
-              id: EventId.make("completed-task:child-completed"),
+              id: EventId.make(`${ending}-task:child-completed`),
               type: "run.updated",
               threadId: childThreadId,
               runId: childRun.id,
               occurredAt: now,
-              payload: { ...childRun, status: "completed", startedAt: now, completedAt: now },
+              payload: { ...childRun, status: ending, startedAt: now, completedAt: now },
             },
           ],
         });
@@ -229,14 +229,14 @@ it.layer(layerTest)("QuestionEscalationService", (it) => {
         const settled = (yield* projections.getThreadRecords(parentThreadId, ["subagents"], {
           subagentIds: [task.id],
         })).subagents[0];
-        assert.equal(settled?.status, "completed");
+        assert.equal(settled?.status, ending);
         assert.equal(
           (yield* projections.getRuntimeRequest(childThreadId, requestId))?.status,
           "pending",
         );
 
         yield* projections.apply({
-          id: EventId.make("completed-task:parent-completed"),
+          id: EventId.make(`${ending}-task:parent-completed`),
           type: "run.updated",
           threadId: parentThreadId,
           runId: parentRun.id,
@@ -245,14 +245,14 @@ it.layer(layerTest)("QuestionEscalationService", (it) => {
         });
         yield* engine.dispatch({
           type: "queue.resume",
-          commandId: CommandId.make("resume:completed-task-parent"),
+          commandId: CommandId.make(`resume:${ending}-task-parent`),
           threadId: parentThreadId,
         });
         assert.equal((yield* wakeRun())?.status, "starting");
 
         yield* engine.dispatch({
           type: "runtime-request.respond",
-          commandId: CommandId.make("answer:completed-task"),
+          commandId: CommandId.make(`answer:${ending}-task`),
           threadId: childThreadId,
           requestId,
           answers: { color: "Blue" },

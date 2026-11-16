@@ -307,7 +307,9 @@ const layerThreadManagementProvided = ThreadManagementService.layerWithLegacyImp
       layerLegacyV1ThreadImporterProvided,
       layerCommandReceiptStoreProvided,
       layerProviderSessionManagerProvided,
-      WorktreeSendCheckLive.layer.pipe(Layer.provide(ProjectStore.layer)),
+      WorktreeSendCheckLive.layer.pipe(
+        Layer.provide(Layer.merge(ProjectStore.layer, layerProviderAdapterRegistryProvided)),
+      ),
     ),
   ),
 );

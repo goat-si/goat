@@ -10,7 +10,11 @@ import {
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import { safeErrorLogAttributes } from "@goat/client-runtime/errors";
-import type { ScopedThreadRef, RunId } from "@goat/contracts";
+import {
+  CHECKPOINT_DIFF_TRUNCATED_MARKER,
+  type ScopedThreadRef,
+  type RunId,
+} from "@goat/contracts";
 import {
   ArrowRightIcon,
   CheckIcon,
@@ -293,7 +297,10 @@ export default function DiffPanel({
 
   const turnPatch = selectedTurn ? activeCheckpointDiff : edit;
   const selectedPatch = turnPatch ? turnPatch.data?.diff : gitDiff;
-  const isSelectedPatchTruncated = isGitSelection && selectedGitSource?.truncated === true;
+  const isSelectedPatchTruncated =
+    (isGitSelection && selectedGitSource?.truncated === true) ||
+    (selectedTurn !== undefined &&
+      selectedPatch?.endsWith(CHECKPOINT_DIFF_TRUNCATED_MARKER) === true);
   const selectedPatchQuery = turnPatch ?? branchDiffPreview;
   const isLoadingSelectedPatch =
     selectedPatchQuery.isPending &&

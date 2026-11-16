@@ -240,6 +240,7 @@ export function registerPiExtensionStatusChecks({
           statusText: "Watching 3 files",
         });
         const command = failure === "failed compact" ? "compact" : "prompt";
+        if (failure === "rejected prompt") fake.deferNextLifecycle("prompt");
         yield* startTurn(
           runtime,
           providerThread,

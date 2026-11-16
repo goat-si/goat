@@ -29,6 +29,7 @@ const NO_KEPT = Atom.make<unknown>(null);
 const NOT_STALE = Atom.make<number | null>(null);
 const NOT_READABLE = Atom.make(false);
 const NOT_STARTING_OVER = Atom.make(false);
+const NOT_REFUSED = Atom.make(false);
 // The bot list the roster reads, shared by every reader of a computer.
 const botListOf = (environmentId: EnvironmentId, members: boolean) =>
   channelEnvironment.listBots({ environmentId, input: members ? { includeDeleted: true } : {} });
@@ -65,6 +66,15 @@ const startingOverAtom = Atom.family((key: string) => {
     const list = get(botListOf(environmentId, capabilities.goatBotMembers === true));
     return !(list._tag === "Failure" && !list.waiting && accessDenied(Cause.squash(list.cause)));
   });
+});
+// An unlisted computer is never refused, whatever its flag says.
+const refusedAtom = Atom.family((key: string) => {
+  const environmentId = key.slice(key.indexOf(":") + 1) as EnvironmentId;
+  return Atom.make(
+    (get) =>
+      get(environmentCatalog.catalogValueAtom).entries.has(environmentId) &&
+      get(connectionRefusedAtom(environmentId)),
+  );
 });
 
 // The reads of each kind; a refresh replaces whatever request of theirs is in flight.
@@ -218,5 +228,17 @@ export function isComputerReadable(
 export function useComputerStartingOver(environmentId: EnvironmentId | null): boolean {
   return useAtomValue(
     environmentId === null ? NOT_STARTING_OVER : startingOverAtom(computerKey(environmentId)),
+  );
+}
+
+/**
+ * Whether this phone counts the computer as refusing it: a connection to it was blocked for
+ * authentication or permission, or a sign-out left it reachable only through the relay. Holds until
+ * it next connects, and only while it is listed; after a removal and re-add, the removed
+ * connection's last state can set it again.
+ */
+export function useComputerRefused(environmentId: EnvironmentId | null): boolean {
+  return useAtomValue(
+    environmentId === null ? NOT_REFUSED : refusedAtom(computerKey(environmentId)),
   );
 }
