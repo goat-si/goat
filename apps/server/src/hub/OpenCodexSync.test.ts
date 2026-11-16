@@ -678,6 +678,7 @@ it.effect.each(["notifications/cancelled", "a dropped request"] as const)(
       yield* Fiber.join(after);
       yield* Fiber.interrupt(running);
       expect(fleet.calls).toEqual(["home sync --restart-codex"]);
+      expect(fleet.holds).toBe(0);
       const report = yield* sync.latest;
       expect(report && rows(report)).toEqual([
         [null, "synced", undefined],

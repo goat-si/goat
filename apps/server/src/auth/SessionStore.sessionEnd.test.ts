@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId } from "@goat/contracts";
+import { AuthSessionId, EnvironmentId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -15,6 +15,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { MAIN_LISTENER } from "./connectionContext.testkit.ts";
 import { makeCheckProbe, makeServerAndCli } from "./DurableRevocations.testkit.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
+import * as SessionEndLatches from "./SessionEndLatches.ts";
 import * as SessionStore from "./SessionStore.ts";
 
 const layerStore = SessionStore.layer.pipe(
@@ -121,9 +122,7 @@ it.effect("a call that starts after its session was removed is cut at once witho
     const store = yield* SessionStore.SessionStore;
     const issued = yield* store.issue(mcpClient);
     const end = yield* store.sessionEnd(issued.sessionId);
-    expect(yield* end.ended).toBe(false);
     yield* store.revoke(issued.sessionId);
-    expect(yield* end.ended).toBe(true);
     let ran = false;
     const outcome = yield* end.run(
       Effect.sync(() => {
@@ -175,4 +174,22 @@ it.effect("a call returns its own result or failure, and its caller can still st
     yield* Fiber.interrupt(call.outcome);
     expect(yield* call.stopped).toBe(true);
   }).pipe(Effect.scoped, Effect.provide(layerStore)),
+);
+
+it.effect(
+  "one removal of more than 10,000 sessions still cuts a call that starts on its first",
+  () =>
+    Effect.gen(function* () {
+      const latches = SessionEndLatches.make();
+      const ids = Array.from({ length: 10_001 }, (_, index) => AuthSessionId.make(`bulk-${index}`));
+      yield* latches.cut(ids);
+      let ran = false;
+      const outcome = yield* latches.sessionEnd(ids[0]!).run(
+        Effect.sync(() => {
+          ran = true;
+        }),
+      );
+      expect(outcome).toEqual(Option.none());
+      expect(ran).toBe(false);
+    }),
 );

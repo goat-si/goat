@@ -15,8 +15,6 @@ export interface SessionEnd {
    * caller interrupting the run interrupts the work too.
    */
   readonly run: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<Option.Option<A>, E, R>;
-  /** Whether the session's grant was removed (revoked or its row deleted). */
-  readonly ended: Effect.Effect<boolean>;
 }
 
 interface Guarded {
@@ -40,8 +38,6 @@ export const make = () => {
       for (const sessionId of sessionIds) {
         removed.delete(sessionId);
         removed.add(sessionId);
-        const oldest = removed.values().next();
-        if (removed.size > REMEMBERED_REMOVALS && !oldest.done) removed.delete(oldest.value);
         const calls = guarded.get(sessionId);
         if (calls === undefined) continue;
         guarded.delete(sessionId);
@@ -50,10 +46,15 @@ export const make = () => {
           call.fiber.interruptUnsafe();
         }
       }
+      // Evicted after the loop and never from this removal, so none of its ids is forgotten.
+      const current = new Set(sessionIds);
+      for (const oldest of removed) {
+        if (removed.size <= REMEMBERED_REMOVALS || current.has(oldest)) break;
+        removed.delete(oldest);
+      }
     });
 
   const sessionEnd = (sessionId: AuthSessionId): SessionEnd => ({
-    ended: isRemoved(sessionId),
     // Untraced: it wraps every MCP tool call, which already has its own span.
     run: Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
       return yield* Effect.uninterruptibleMask((restore) =>

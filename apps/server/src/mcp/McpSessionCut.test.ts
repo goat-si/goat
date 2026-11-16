@@ -523,7 +523,7 @@ it.effect(
         // A session that has already ended: a guarded tool answers the cut without its handler.
         const scope: McpInvocationContext.McpInvocationScope = {
           ...client.scope,
-          sessionEnd: { run: () => Effect.succeedNone, ended: Effect.succeed(true) },
+          sessionEnd: { run: () => Effect.succeedNone },
         };
         const unguarded = (names: ReadonlyArray<string>) =>
           Effect.filter(names, (name) =>
