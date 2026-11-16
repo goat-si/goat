@@ -1,4 +1,7 @@
-import { OrchestratorMcpScheduledTask } from "./orchestratorMcpScheduledTask.ts";
+import {
+  OrchestratorMcpFreshSession,
+  OrchestratorMcpScheduledTask,
+} from "./orchestratorMcpScheduledTask.ts";
 export { OrchestratorMcpScheduledTask } from "./orchestratorMcpScheduledTask.ts";
 import * as Lineage from "./orchestratorMcpThreadLineage.ts";
 import {
@@ -1114,6 +1117,7 @@ export const OrchestratorMcpScheduleTaskInput = Schema.Struct({
       description: "Post here, else new thread per run. Unset: true in own project, else false.",
     }),
   ),
+  freshSession: OrchestratorMcpFreshSession,
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
 });
 export type OrchestratorMcpScheduleTaskInput = typeof OrchestratorMcpScheduleTaskInput.Type;
@@ -1129,6 +1133,7 @@ export const OrchestratorMcpUpdateScheduledTaskInput = Schema.Struct({
   notificationPolicy: Schema.optional(ScheduledTaskNotificationPolicy),
   enabled: Schema.optional(Schema.Boolean),
   bindToCurrentThread: Schema.optional(Schema.Boolean),
+  freshSession: OrchestratorMcpFreshSession,
 });
 export type OrchestratorMcpUpdateScheduledTaskInput =
   typeof OrchestratorMcpUpdateScheduledTaskInput.Type;

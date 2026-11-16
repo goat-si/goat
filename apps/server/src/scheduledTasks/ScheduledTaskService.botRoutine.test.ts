@@ -63,6 +63,28 @@ it.effect("only a person's owner context can bind a routine to a GOAT Bot thread
   ),
 );
 
+it.effect(
+  "a GOAT Bot routine stays in its conversation whatever thread mode a client asks for",
+  () =>
+    withWebhookService(
+      ({ service, sql }) =>
+        Effect.gen(function* () {
+          yield* registerBot(sql);
+          const input = yield* routineInput();
+          const captured = { memoryGrantCeiling: "none" as const, owner };
+          assert.strictEqual((yield* service.upsert(input, captured)).task.threadMode, "continue");
+          const fresh = yield* service.upsert({ ...input, threadMode: "fresh_session" }, captured);
+          assert.deepStrictEqual(
+            [fresh.task.threadId, fresh.task.threadMode, fresh.task.goatBotRoutine],
+            [botThread, "continue", true],
+          );
+          const rows = yield* sql<{ thread_mode: string }>`SELECT thread_mode FROM scheduled_tasks`;
+          assert.deepStrictEqual(rows, [{ thread_mode: "continue" }]);
+        }),
+      {},
+    ),
+);
+
 it.effect("a GOAT Bot routine firing freezes its input with the admission and sends nothing", () =>
   withWebhookService(
     ({ service, sql }) =>

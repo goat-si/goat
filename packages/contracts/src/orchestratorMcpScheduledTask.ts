@@ -21,6 +21,7 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   enabled: Schema.Boolean,
   projectId: ProjectId,
   boundThreadId: Schema.NullOr(ThreadId),
+  freshSession: Schema.Boolean,
   schedule: ScheduledTaskSchedule,
   notificationPolicy: Schema.optional(Schema.String),
   nextRunAt: Schema.NullOr(IsoDateTime),
@@ -43,6 +44,11 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   ...OrchestratorMcpReconcileFields.scheduledTask,
 });
 export type OrchestratorMcpScheduledTask = typeof OrchestratorMcpScheduledTask.Type;
+
+export const OrchestratorMcpFreshSession = Schema.optional(Schema.Boolean).annotate({
+  description:
+    "Runs share one thread but each starts a fresh session without earlier runs' context. Unbound: the first run makes the thread.",
+});
 
 export const OrchestratorMcpDeleteScheduledTaskInput = Schema.Struct({
   scheduledTaskId: ScheduledTaskId,

@@ -44,6 +44,7 @@ export const decodeRow = Effect.fnUntraced(
       schedule,
       projectId: row.project_id,
       threadId: row.thread_id,
+      threadMode: row.thread_mode,
       workspaceStrategy,
       modelSelection,
       memoryGrantCeiling: row.memory_grant_ceiling ?? "none",

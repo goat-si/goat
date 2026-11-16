@@ -995,6 +995,8 @@ function ScheduledTaskEditorForm({
   const environment = useEnvironment(environmentId);
   const connected =
     environment?.connection.phase === "connected" && environment.serverConfig !== null;
+  const offersThreadModes =
+    environment?.serverConfig?.environment?.capabilities?.scheduledTaskThreadModes === true;
   const tasksQuery = useEnvironmentQuery(
     connected ? serverEnvironment.scheduledTasksLive({ environmentId, input: {} }) : null,
   );
@@ -1167,6 +1169,7 @@ function ScheduledTaskEditorForm({
         : {}),
       schedule,
       threadId: draft.threadId ? (draft.threadId as ThreadId) : null,
+      ...(offersThreadModes ? { threadMode: draft.threadMode } : {}),
       ...context,
       runtimeMode: draft.runtimeMode,
       interactionMode: draft.interactionMode,
@@ -1299,6 +1302,12 @@ function ScheduledTaskEditorForm({
           <ScheduledTaskDestination
             environmentId={environmentId}
             threadId={draft.threadId ? (draft.threadId as ThreadId) : null}
+            threadMode={draft.threadMode}
+            onThreadModeChange={
+              offersThreadModes
+                ? (threadMode) => setDraft((current) => ({ ...current, threadMode }))
+                : undefined
+            }
             botRoutine={botRoutine}
           />
 

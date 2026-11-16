@@ -1,7 +1,8 @@
-import type {
-  OrchestratorMcpScheduledTask,
-  ScheduledTask,
-  ScheduledTaskWebhookUrlUnavailableReason,
+import {
+  type OrchestratorMcpScheduledTask,
+  type ScheduledTask,
+  type ScheduledTaskWebhookUrlUnavailableReason,
+  scheduledTaskThreadMode,
 } from "@goat/contracts";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 
@@ -70,6 +71,7 @@ export function scheduledTaskSummary(
     enabled: task.enabled,
     projectId: task.projectId,
     boundThreadId: task.threadId,
+    freshSession: scheduledTaskThreadMode(task) === "fresh_session",
     schedule: task.schedule,
     notificationPolicy: task.notificationPolicy ?? "all_runs",
     nextRunAt: task.nextRunAt,

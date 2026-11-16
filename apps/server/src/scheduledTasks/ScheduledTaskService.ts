@@ -29,10 +29,12 @@ import {
   type ScheduledTaskRunNowInput,
   type ScheduledTaskRunNowResult,
   type ScheduledTaskSetEnabledInput,
+  type ScheduledTaskThreadMode,
   type ScheduledTaskUpsertInput,
   type ScheduledTaskWebhookDeliveryOutcome,
   type ScheduledTaskWebhookFilter,
   type ScheduledTaskWebhookUrlUnavailableReason,
+  scheduledTaskThreadMode,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -209,7 +211,7 @@ export class ScheduledTaskService extends Context.Service<
       readonly threadIds: ReadonlyArray<ThreadId>;
       readonly projectId: ProjectId;
     }) => Effect.Effect<void, ScheduledTaskError>;
-    /** The dispatched thread, or null if dispatch failed; leaves the task's binding unchanged. */
+    /** The dispatched thread, or null if dispatch failed; a first run binds a one-thread task. */
     readonly runNow: (
       input: ScheduledTaskRunNowInput,
     ) => Effect.Effect<
@@ -237,6 +239,19 @@ export class ScheduledTaskService extends Context.Service<
 >()("goat/scheduledTasks/ScheduledTaskService") {}
 
 const localNow = DateTime.withCurrentZoneLocal(DateTime.nowInCurrentZone);
+
+/**
+ * Clients that predate thread modes send none, and may send a thread loaded before the first run
+ * bound one. An edit keeps the stored mode; binding a thread to a new-thread task continues it.
+ */
+function resolveThreadMode(
+  input: Pick<ScheduledTaskUpsertInput, "threadId" | "threadMode">,
+  existing: Pick<ScheduledTask, "threadId" | "threadMode"> | null,
+): ScheduledTaskThreadMode {
+  if (input.threadMode !== undefined) return input.threadMode;
+  const stored = existing === null ? "new_thread" : scheduledTaskThreadMode(existing);
+  return stored === "new_thread" && input.threadId != null ? "continue" : stored;
+}
 
 export const layer = Layer.effect(
   ScheduledTaskService,
@@ -314,6 +329,7 @@ export const layer = Layer.effect(
         t.schedule_json,
         t.project_id,
         t.thread_id,
+        t.thread_mode,
         t.workspace_strategy_json,
         t.model_selection_json,
         t.memory_grant_ceiling,
@@ -355,6 +371,7 @@ export const layer = Layer.effect(
         t.schedule_json,
         t.project_id,
         t.thread_id,
+        t.thread_mode,
         t.workspace_strategy_json,
         t.model_selection_json,
         t.memory_grant_ceiling,
@@ -466,7 +483,7 @@ export const layer = Layer.effect(
           ${JSON.stringify(task.schedule)},
           ${task.projectId},
           ${task.threadId},
-          ${task.threadId === null ? "new_thread" : "continue"},
+          ${scheduledTaskThreadMode(task)},
           ${JSON.stringify(task.workspaceStrategy)},
           ${JSON.stringify(task.modelSelection)},
           ${task.memoryGrantCeiling ?? "none"},
@@ -494,7 +511,13 @@ export const layer = Layer.effect(
           notification_policy = excluded.notification_policy,
           schedule_json = excluded.schedule_json,
           project_id = excluded.project_id,
-          thread_id = excluded.thread_id,
+          -- A first run may bind the thread while this save is in flight; only a
+          -- switch to new threads unbinds.
+          thread_id = CASE
+            WHEN excluded.thread_mode = 'new_thread' THEN NULL
+            WHEN excluded.project_id != scheduled_tasks.project_id THEN excluded.thread_id
+            ELSE COALESCE(excluded.thread_id, scheduled_tasks.thread_id)
+          END,
           thread_mode = excluded.thread_mode,
           workspace_strategy_json = excluded.workspace_strategy_json,
           model_selection_json = excluded.model_selection_json,
@@ -542,6 +565,25 @@ export const layer = Layer.effect(
             taskError("Could not delete schedule task.", { taskId: id, cause }),
           ),
         );
+
+    // The run already started the thread, so a failed write only costs the binding.
+    // A thread deleted before the binding landed already ran its task cleanup, so apply that
+    // cleanup here; a later deletion finds the binding. An unconfirmed lookup keeps the binding.
+    const bindThread = Effect.fn("ScheduledTaskService.bindThread")(
+      function* (task: ScheduledTask, threadId: ThreadId) {
+        yield* sql`
+          UPDATE scheduled_tasks SET thread_id = ${threadId}
+          WHERE task_id = ${task.id} AND created_at = ${task.createdAt}
+            AND project_id = ${task.projectId}
+            AND thread_id IS NULL AND thread_mode != 'new_thread'
+        `;
+        const shell = yield* threadManagement.getThreadShell(threadId);
+        if (shell === null || shell.deletedAt != null) yield* deleteForThread(threadId);
+      },
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Could not bind a scheduled task to its first thread.", cause),
+      ),
+    );
 
     const runTask = Effect.fn("ScheduledTaskService.runTask")(function* (
       task: ScheduledTask,
@@ -666,6 +708,7 @@ export const layer = Layer.effect(
               firing,
             };
           }
+          const threadMode = scheduledTaskThreadMode(active);
           // A bound thread can move to another project (No project to a project) while
           // this fires. Follow it; one move needs at most two retries. Same ids replay safely.
           const sendBound = (
@@ -685,6 +728,7 @@ export const layer = Layer.effect(
                 text: prompt,
                 attachments: [],
                 mode: "queue",
+                ...(threadMode === "fresh_session" ? { freshContext: true } : {}),
                 createdBy: active.createdBy,
                 creationSource: active.creationSource,
               })
@@ -728,6 +772,11 @@ export const layer = Layer.effect(
                     creationSource: active.creationSource,
                   })
                   .pipe(
+                    Effect.tap((launched) =>
+                      threadMode === "new_thread"
+                        ? Effect.void
+                        : bindThread(active, launched.threadId),
+                    ),
                     Effect.map((launched) => ({
                       threadId: launched.threadId,
                       run:
@@ -986,6 +1035,14 @@ export const layer = Layer.effect(
       // keep their run history, and so real load failures propagate instead
       // of silently resetting an existing row.
       const existingTask = yield* findTask(id);
+      const resolvedMode = resolveThreadMode(input, existingTask);
+      const keptThreadId = input.threadId ?? existingTask?.threadId ?? null;
+      // A bound thread belongs to its project, so moving the task leaves it for a new one.
+      const movedOffThread =
+        existingTask !== null &&
+        existingTask.projectId !== input.projectId &&
+        keptThreadId === existingTask.threadId;
+      const threadId = resolvedMode === "new_thread" || movedOffThread ? null : keptThreadId;
       // Keep the existing next_run_at when the schedule itself is untouched:
       // editing a title or prompt must not postpone (or resurrect) a due
       // run — only schedule/enabled changes restart the clock.
@@ -1069,10 +1126,13 @@ export const layer = Layer.effect(
         isSameSchedule(existingTask.schedule, schedule);
       const notificationPolicy =
         input.notificationPolicy ?? existingTask?.notificationPolicy ?? "all_runs";
-      if (notificationPolicy === "important_updates" && (input.threadId ?? null) === null)
+      if (
+        notificationPolicy === "important_updates" &&
+        ((input.threadId ?? null) === null || threadId === null)
+      )
         return yield* taskError("Important updates requires an existing thread.", { taskId: id });
       const owner = yield* botRoutines.checkUpsert(
-        { taskId: id, threadId: input.threadId ?? null, schedule },
+        { taskId: id, threadId, schedule },
         captured?.owner,
       );
       const task: ScheduledTask = {
@@ -1083,7 +1143,9 @@ export const layer = Layer.effect(
         enabled: input.enabled,
         schedule,
         projectId: input.projectId,
-        threadId: input.threadId ?? null,
+        threadId,
+        // GOAT Bot answers its routines in their conversation, so a routine always continues it.
+        threadMode: owner === null ? resolvedMode : "continue",
         workspaceStrategy,
         modelSelection: input.modelSelection,
         memoryGrantCeiling: captured?.memoryGrantCeiling ?? "none",

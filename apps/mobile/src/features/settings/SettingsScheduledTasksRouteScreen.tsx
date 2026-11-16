@@ -604,6 +604,9 @@ function TaskForm({
         ? { notificationPolicy: draft.notificationPolicy }
         : {}),
       threadId: draft.task?.threadId ?? null,
+      ...(config?.environment?.capabilities?.scheduledTaskThreadModes === true
+        ? { threadMode: draft.threadMode }
+        : {}),
       workspaceStrategy: context.workspaceStrategy,
       runtimeMode: draft.runtimeMode,
       interactionMode: draft.task?.interactionMode ?? "default",
