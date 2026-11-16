@@ -408,3 +408,28 @@ it("a short reply offers no full text", async () => {
   expect(view.dots().map(([label]) => label)).not.toContain("Show the full reply");
   await view.unmount();
 });
+
+it("an expanded reply that turns into an error offers no Show less, and the reply comes back collapsed", async () => {
+  setup();
+  const long = Array.from({ length: 40 }, () => "The build passed on every machine.").join(" ");
+  answer("in-6", { reply: { text: long } });
+  const task = () => ({
+    recentRuns: [run(6, "completed", { conversation: conversation("in-6") })],
+  });
+  const view = await show(task());
+  const fullReply = () =>
+    view
+      .dots()
+      .find(([label]) => label?.endsWith("of the reply") || label === "Show the full reply");
+  await view.press("Run on Nov 14, 06:00, completed");
+  await view.press("Show the full reply");
+  expect(fullReply()).toEqual(["Show less of the reply", "true"]);
+  answer("in-6", null, new Error("offline"));
+  await view.rerender(task());
+  expect(view.text()).toContain("Couldn't load this run.");
+  expect(fullReply()).toBeUndefined();
+  answer("in-6", { reply: { text: long } });
+  await view.rerender(task());
+  expect(fullReply()).toEqual(["Show the full reply", "false"]);
+  await view.unmount();
+});
