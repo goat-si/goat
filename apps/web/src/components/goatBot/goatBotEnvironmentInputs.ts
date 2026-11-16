@@ -6,13 +6,14 @@ import type { EnvironmentId } from "@goat/contracts";
 
 import { resolveEnvironmentOptionLabel } from "~/components/BranchToolbar.logic";
 import type { EnvironmentPresentation } from "~/state/environments";
+import type { GoatBotRefusal } from "./useGoatBotComputerReadable";
 
 /** Every machine as GOAT Bot sees it, for the hook, the answer-time read and the Home atom. */
 export function goatBotEnvironmentInputs(
   environments: ReadonlyArray<EnvironmentPresentation>,
   primaryEnvironmentId: EnvironmentId | null,
   /** Only the hook passes refusals; picking a computer never depends on them. */
-  refused?: ReadonlySet<EnvironmentId>,
+  refused?: ReadonlyMap<EnvironmentId, GoatBotRefusal>,
 ): ReadonlyArray<GoatBotEnvironmentInput> {
   return environments.map((entry) => ({
     environmentId: entry.environmentId,
@@ -38,5 +39,6 @@ export function goatBotEnvironmentInputs(
       home: entry.serverConfig?.settings?.goatBotHome ?? null,
     },
     ...(refused?.has(entry.environmentId) ? { refused: true } : {}),
+    ...(refused?.get(entry.environmentId) === "session-ended" ? { sessionEnded: true } : {}),
   }));
 }

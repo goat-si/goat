@@ -38,16 +38,22 @@ export function readGoatBotComputerReadable(environmentId: EnvironmentId): boole
   return readableFrom(readEnvironment(environmentId), ownServer && primarySessionCheck.revoked());
 }
 
+/** How a listed computer refused this device; "session-ended" when this browser can reload back in. */
+export type GoatBotRefusal = "refused" | "session-ended";
+
 /** The listed computers that refused this device, by the same rule, for GOAT Bot's availability. */
 export function useGoatBotRefusals(
   environments: ReadonlyArray<EnvironmentPresentation>,
   primaryEnvironmentId: EnvironmentId | null,
-): ReadonlySet<EnvironmentId> {
+): ReadonlyMap<EnvironmentId, GoatBotRefusal> {
   const revoked = usePrimarySessionRevoked(primaryEnvironmentId !== null);
-  const refused = new Set<EnvironmentId>();
+  const refused = new Map<EnvironmentId, GoatBotRefusal>();
   for (const presentation of environments) {
-    const ownServer = presentation.environmentId === primaryEnvironmentId;
-    if (refusedFrom(presentation, ownServer && revoked)) refused.add(presentation.environmentId);
+    const held = presentation.environmentId === primaryEnvironmentId && revoked;
+    if (!refusedFrom(presentation, held)) continue;
+    // The follower holds only a cookie tab's ended session, through Retry's cleared failure.
+    const ended = held || presentation.connection.failure?.sessionEnded === true;
+    refused.set(presentation.environmentId, ended ? "session-ended" : "refused");
   }
   return refused;
 }

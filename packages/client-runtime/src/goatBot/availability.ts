@@ -4,6 +4,7 @@ import {
   type ExecutionEnvironmentCapabilities,
   type ThreadId,
 } from "@goat/contracts";
+import { SESSION_ENDED_STEP } from "../connection/diagnosis.ts";
 import { pickGoatBotHomeCandidate, resolveGoatBotHome, type GoatBotHomeTarget } from "./home.ts";
 
 /** One machine as GOAT Bot sees it. */
@@ -23,6 +24,8 @@ export interface GoatBotEnvironmentInput {
    * offline result reads it.
    */
   readonly refused?: boolean;
+  /** Refused because this browser's own server ended its cookie session; reloading leads back in. */
+  readonly sessionEnded?: boolean;
 }
 
 export interface GoatBotRef {
@@ -50,6 +53,7 @@ export type GoatBotAvailability =
       readonly environmentId: EnvironmentId;
       readonly refused: true;
       readonly label: string;
+      readonly sessionEnded?: true;
     }
   | {
       readonly kind: "home_offline";
@@ -57,6 +61,7 @@ export type GoatBotAvailability =
       readonly environmentId: EnvironmentId;
       readonly label: string;
       readonly refused?: true;
+      readonly sessionEnded?: true;
     }
   | { readonly kind: "connecting"; readonly environmentId: EnvironmentId }
   | { readonly kind: "legacy_active"; readonly environmentId: EnvironmentId }
@@ -68,6 +73,15 @@ export function goatBotRefusedBy(availability: GoatBotAvailability): string | nu
   return (availability.kind === "offline" || availability.kind === "home_offline") &&
     availability.refused === true
     ? availability.label
+    : null;
+}
+
+/** The way back from a refusal, when this browser can take it itself; otherwise null. */
+export function goatBotRefusalStep(availability: GoatBotAvailability): string | null {
+  return goatBotRefusedBy(availability) !== null &&
+    "sessionEnded" in availability &&
+    availability.sessionEnded === true
+    ? SESSION_ENDED_STEP
     : null;
 }
 
@@ -84,6 +98,7 @@ function offlineOn(entry: GoatBotEnvironmentInput): GoatBotAvailability {
         environmentId: entry.environmentId,
         refused: true,
         label: environmentLabel(entry),
+        ...(entry.sessionEnded === true ? { sessionEnded: true as const } : {}),
       }
     : { kind: "offline", environmentId: entry.environmentId };
 }
@@ -190,6 +205,9 @@ export function resolveGoatBotAvailabilityBeforeEnsure(input: {
             ? environmentId
             : environmentId.slice(0, 8),
         ...(home?.refused === true ? { refused: true as const } : {}),
+        ...(home?.refused === true && home.sessionEnded === true
+          ? { sessionEnded: true as const }
+          : {}),
       };
     }
     if (resolution.state !== "claimed") {
