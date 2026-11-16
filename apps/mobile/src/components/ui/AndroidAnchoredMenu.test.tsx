@@ -122,6 +122,9 @@ async function mountMenu(options: { inTab?: boolean } = {}) {
       act(async () => {
         for (const done of h.held.splice(0)) done(10, 20, width, height);
       }),
+    /** Answers one held measurement, in the order they were asked, leaving the others held. */
+    answer: (index: number, width: number, height: number) =>
+      act(async () => h.held[index]?.(10, 20, width, height)),
     press: (label: string) => act(async () => click(container, label)),
     container,
     [Symbol.asyncDispose]: async () => {
@@ -197,4 +200,19 @@ it("tells its owner once when its tab hides it, and shows no stale menu when the
   await menu.measure(300, 48);
   await menu.press("Outside the menu");
   expect(menu.closed).toHaveBeenCalledTimes(2);
+});
+
+it("lets only the latest request open or settle the menu when an earlier measurement answers late (#3575)", async () => {
+  await using menu = await mountMenu();
+  await menu.request();
+  await menu.request();
+  await menu.answer(1, 300, 48);
+  expect(menu.items()).toEqual(["Hide"]);
+  // The first request's measurement answers late, with nothing to anchor to.
+  await menu.answer(0, 0, 0);
+  expect(menu.items()).toEqual(["Hide"]);
+  expect(menu.closed).not.toHaveBeenCalled();
+  await menu.press("Outside the menu");
+  expect(menu.items()).toEqual([]);
+  expect(menu.closed).toHaveBeenCalledTimes(1);
 });
