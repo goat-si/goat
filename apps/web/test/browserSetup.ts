@@ -1,4 +1,4 @@
-import { beforeEach } from "vite-plus/test";
+import { beforeEach, vi } from "vite-plus/test";
 import { commands } from "vite-plus/test/browser";
 import { installMockFactoryFailureReport } from "./reportMockFactoryFailure";
 
@@ -10,6 +10,11 @@ declare module "vite-plus/test/browser" {
 }
 
 installMockFactoryFailureReport();
+
+// Faces, the main row and Needs you read this gate; a test that is about it unmocks it.
+vi.mock("../src/components/goatBot/useGoatBotComputerReadable", () => ({
+  useGoatBotComputerReadable: () => true,
+}));
 
 // Test files in one browser session share the origin's storage, and persisted stores such as the
 // composer drafts hydrate from it when the test file imports them. Setup files run before that
