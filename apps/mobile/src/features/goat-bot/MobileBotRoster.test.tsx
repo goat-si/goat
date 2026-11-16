@@ -1,6 +1,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import type { AsyncResult } from "effect/reactivity";
+import { RegistryContext } from "@effect/atom-react";
+import { type AsyncResult, AtomRegistry } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
@@ -230,6 +231,7 @@ vi.mock("./MobileBotProfileSheet", () => ({
     );
   },
 }));
+import { connectionRefusedAtom } from "./keptPerComputerStore";
 import { MobileBotRoster } from "./MobileBotRosterPanel";
 const member = { botId: "research", name: "Research", hidden: false };
 type Choice = { text: string; onPress?: () => void };
@@ -739,6 +741,33 @@ it("on Android, a menu choice acts on nothing once its computer may not be read 
     expect(state.manage.hide).not.toHaveBeenCalled();
   } finally {
     readable.refused.delete("env-menu-refused");
+    state.os = "ios";
+    state.rows = [];
+    state.roster.environmentId = "env";
+    await act(async () => root.unmount());
+  }
+});
+
+it("on Android, a long press opens no menu once its computer may not be read (#3575)", async () => {
+  state.os = "android";
+  state.rows = [{ kind: "member", profile: member }];
+  state.roster.environmentId = "env-press-refused";
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    const registry = AtomRegistry.make();
+    await act(async () =>
+      root.render(
+        <RegistryContext value={registry}>
+          <MobileBotRoster selectedKey={null} onOpenBot={() => {}} />
+        </RegistryContext>,
+      ),
+    );
+    // The connection refuses in the store after the last draw: the press itself must read it.
+    registry.set(connectionRefusedAtom("env-press-refused" as never), true);
+    await pressIn(container, "Long press Research");
+    expect(menuItems(container)).toEqual([]);
+  } finally {
     state.os = "ios";
     state.rows = [];
     state.roster.environmentId = "env";
