@@ -26,6 +26,8 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
+import { dispatchFailure } from "../mcp/threadAccess.ts";
+import { userFacingDispatchErrorMessage } from "./UserFacingErrors.ts";
 
 const instanceId = ProviderInstanceId.make("codex");
 const otherInstanceId = ProviderInstanceId.make("codex-other");
@@ -194,6 +196,13 @@ const assertRefusedUnchanged = (
     assert.ok(Result.isFailure(outcome));
     assert.instanceOf(outcome.failure, Orchestrator.OrchestratorDispatchError);
     assert.include(String(outcome.failure.cause), reason);
+    // Every client, older ones included, shows this text; an agent's tool result carries it.
+    const text = String(outcome.failure.cause);
+    assert.equal(userFacingDispatchErrorMessage(outcome.failure), text);
+    assert.deepInclude(dispatchFailure(outcome.failure), {
+      code: "orchestration_error",
+      message: text,
+    });
     assert.deepEqual(yield* projections.getThreadProjection(threadId), before);
     assert.deepEqual(yield* outbox.listByCommandId(commandId), []);
     assert.equal(yield* orchestrator.getThreadEventSequence(threadId), sequence);
@@ -274,5 +283,39 @@ it.effect("a worktree handoff that queues the agent's continuation proceeds duri
       continuation: { messageId: MessageId.make("message:handoff"), text: "Continue there" },
     });
     assert.equal((yield* projections.getThread(threadId)).worktreePath, "/handoff-worktree");
+    const { runs } = yield* projections.getThreadRecords(threadId, ["runs"]);
+    assert.equal(
+      runs.find((run) => run.userMessageId === MessageId.make("message:handoff"))?.status,
+      "queued",
+    );
+  }).pipe(Effect.provide(layerFor(false))),
+);
+
+it.effect.each([
+  {
+    case: "the mobile Git sheet's worktree change",
+    update: { branch: "feature", worktreePath: "/mobile" },
+  },
+  { case: "a rename, as the MCP thread metadata tool sends", update: { title: "Renamed" } },
+])("during a running turn: $case", ({ update }) =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const { threadId } = yield* seedThread(true);
+    const commandId = CommandId.make("metadata-during-turn");
+    const dispatch = orchestrator.dispatch({
+      type: "thread.metadata.update",
+      commandId,
+      threadId,
+      ...update,
+    });
+    if ("worktreePath" in update) {
+      yield* assertRefusedUnchanged(threadId, commandId, dispatch, "has a turn running");
+      return;
+    }
+    yield* dispatch;
+    const thread = yield* projections.getThread(threadId);
+    assert.equal(thread.title, "Renamed");
+    assert.equal(thread.worktreePath, "/repo");
   }).pipe(Effect.provide(layerFor(false))),
 );

@@ -156,6 +156,14 @@ export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(
       cause: "A handoff continuation is queued by goat_worktree_handoff, not sent by clients.",
     });
   }
+  if (incoming.type === "thread.metadata.update" && incoming.expectedWorktreePath !== undefined) {
+    // Only the server's own rebinds may move a thread's worktree while its turn runs.
+    return yield* new Orchestrator.OrchestratorDispatchError({
+      commandId: incoming.commandId,
+      commandType: incoming.type,
+      cause: "A worktree rebind is checked by the server, not sent by clients.",
+    });
+  }
   const command =
     incoming.type === "message.dispatch" ? yield* withGuestAttachments(incoming) : incoming;
   const threads = yield* ThreadManagement.ThreadManagementService;
