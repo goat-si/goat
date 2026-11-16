@@ -33,11 +33,19 @@ settings. GOAT uses only that configured password for an external server; it
 does not forward a local <code>OPENCODE_SERVER_PASSWORD</code>. If connection or version checks
 fail, check the URL, credentials, and OpenCode version, then refresh provider status.</p>
 <p>When <strong>Server URL</strong> points to a locally running server (such as <code>127.0.0.1</code>),
-the update button upgrades its installed CLI without terminating the running server.
-The server can still report the previous version until you restart it. GOAT
-shows that restart requirement instead of treating the CLI update as a failure.
-Restart the server when active sessions can safely be interrupted.</p>
-<p>After a lost connection, send another prompt to reconnect to the same OpenCode
+the update button upgrades its installed CLI. If that server is this machine’s
+OpenCode background service, GOAT then restarts it on the new version. The URL
+must use the service’s own protocol, host, and port. For a service listening on
+<code>0.0.0.0</code> use <code>127.0.0.1</code>, and for <code>[::]</code> use <code>[::1]</code>.</p>
+<p>Restarting interrupts running turns, and the service then runs with GOAT’s
+environment. Set any variables it needs with <code>opencode service set env &lt;name&gt; &lt;value&gt;</code>.</p>
+<p>GOAT does not restart any other server, including the background service
+reached through <code>localhost</code>. That server can still report the previous version
+until you restart it. For a loopback URL, GOAT shows that restart requirement
+instead of treating the CLI update as a failure.</p>
+<p>GOAT waits for a local server it started to recover after a lost connection.
+You can stop the turn while it reconnects. If the server exits or an external
+connection cannot be restored, send another prompt to resume the same OpenCode
 session.</p>
 <h2 id="change-an-instances-settings">Change an instance’s settings</h2>
 <p>Changing any of an OpenCode instance’s settings, or turning it off, restarts the
@@ -76,6 +84,9 @@ cached while the local helper is running. Let it sit for 30 seconds without mode
 refreshes or text-generation work, then refresh again to reload the files. Repeated
 refreshes keep the helper alive. An external server may need its own reload or
 restart before GOAT can see configuration changes.</p>
+<p>Models defined in a project’s own <code>opencode.json</code> appear only in that project’s
+model picker, after GOAT reads the project’s catalog the first time the picker
+opens there.</p>
 <p>Existing threads keep their selected model and options even when it disappears
 from the catalog. If OpenCode rejects that model, select an available one and retry.</p>
 </article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#opencode-2">OpenCode 2</a></li><li><a href="#compaction">Compaction</a></li><li><a href="#local-or-external-server">Local or external server</a></li><li><a href="#change-an-instances-settings">Change an instance’s settings</a></li><li><a href="#use-opencodex-home">Use OpenCodex Home</a></li><li><a href="#approvals">Approvals</a></li><li><a href="#refresh-models-commands-and-skills">Refresh models, commands, and skills</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>

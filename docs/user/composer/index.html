@@ -325,6 +325,9 @@ turn and starts the goal, unless you queue it. <code>/goal clear</code> and <cod
 stop the turn only when it is working on the goal. Other goal commands wait for
 the turn to end.</li>
 </ul>
+<p>With Antigravity, send <code>/goal</code> followed by the objective; that is the only form it accepts.
+Bare <code>/goal</code>, <code>/goal clear</code>, <code>/goal pause</code> and <code>/goal resume</code> are refused, and its 1.4.5
+runtime has no goals. See <a href="/goat/docs/user/providers-antigravity/#run-a-native-goal">Antigravity</a>.</p>
 <h2 id="context-in-your-message">Context in your message</h2>
 <p>Type <code>@</code> and a model or provider name to name a model for the agent, for example when delegating.
 This adds a model reference to the message; it does not change the thread’s model.</p>

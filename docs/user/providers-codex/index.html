@@ -22,6 +22,20 @@ covers installation and custom configuration.</p>
 <p>Running <code>codex login</code> does not change a managed ChatGPT connection. In
 <strong>Settings → Providers</strong>, add a Codex instance, choose <strong>Configure manually</strong>,
 and complete the wizard. Then select that instance from the thread’s model picker.</p>
+<h2 id="allow-more-time-for-provider-checks">Allow more time for provider checks</h2>
+<p>If an authenticated Codex installation reports “Timed out while checking Codex
+app-server provider status,” set <code>GOAT_CODEX_PROBE_TIMEOUT_MS=60000</code> in the
+GOAT server’s environment and restart it. See <a href="/goat/docs/user/install/#provider-check-timeouts">Provider check timeouts</a>
+for configuration and other providers.</p>
+<h2 id="generate-images">Generate images</h2>
+<p>Codex can generate images in a GOAT thread when your Codex version, model, and
+account support native image generation. If Codex reports that its image tool is
+unavailable, open <strong>Settings → Providers</strong>, edit your Codex instance, and add
+<code>-c features.image_generation=true</code> to <strong>Launch arguments</strong>, keeping any other
+arguments. This enables the feature for that instance without changing shared Codex
+configuration; it does not add support to an unsupported model or account.</p>
+<p>Start a new thread with that instance after saving the change and ask Codex to
+generate an image.</p>
 <h2 id="change-an-instances-settings">Change an instance’s settings</h2>
 <p>Changing a Codex instance’s binary path, launch arguments, environment,
 CODEX_HOME or shadow home path, route or Home authentication, or turning the
@@ -147,6 +161,13 @@ supports async questions.</p>
 in the thread on web, desktop, or mobile. Some tools offer access for one request,
 the current session, or permanently. See <a href="/goat/docs/user/permission-modes/">Permission modes</a>
 for command and file approvals.</p>
+<h2 id="use-daybreak">Use Daybreak</h2>
+<p>Models with cyber access programs show a Cyber Access option in the model
+options. It starts on Standard, or on Daybreak when <code>config.toml</code> in your Codex
+home sets <code>daybreak = true</code> or the model only runs under Daybreak. Your choice carries
+over to new threads. Custom models do not offer it. If Codex rejects a turn
+because your login lacks the program, switch Cyber Access back to Standard or
+sign in to Codex with an account that has it.</p>
 <h2 id="codex-says-i-hit-a-usage-limit">Codex says I hit a usage limit</h2>
 <p>When Codex stops on a usage limit, the thread names the window that ran out and
 when it resets, when Codex reports them. Send the message again after the reset. On a workspace plan the
@@ -200,4 +221,4 @@ turns keep the details the app-server started with.
 After GOAT itself restarts, an app-server kept running across the restart serves the
 first turn sent to it, because it may still hold that earlier work. The next turn
 restarts it once it is idle.</p>
-</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#connect-with-chatgpt">Connect with ChatGPT</a></li><li><a href="#use-an-existing-codex-login">Use an existing Codex login</a></li><li><a href="#change-an-instances-settings">Change an instance’s settings</a></li><li><a href="#use-opencodex-home">Use OpenCodex Home</a></li><li><a href="#use-multiple-accounts">Use multiple accounts</a></li><li><a href="#switch-accounts-in-an-existing-thread">Switch accounts in an existing thread</a></li><li><a href="#answer-questions-while-codex-works">Answer questions while Codex works</a></li><li><a href="#approve-app-access">Approve app access</a></li><li><a href="#codex-says-i-hit-a-usage-limit">Codex says I hit a usage limit</a></li><li><a href="#send-feedback-to-openai">Send feedback to OpenAI</a></li><li><a href="#keep-a-turn-running-across-a-restart">Keep a turn running across a restart</a></li><li><a href="#give-each-thread-its-own-codex-app-server">Give each thread its own Codex app-server</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>
+</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#connect-with-chatgpt">Connect with ChatGPT</a></li><li><a href="#use-an-existing-codex-login">Use an existing Codex login</a></li><li><a href="#allow-more-time-for-provider-checks">Allow more time for provider checks</a></li><li><a href="#generate-images">Generate images</a></li><li><a href="#change-an-instances-settings">Change an instance’s settings</a></li><li><a href="#use-opencodex-home">Use OpenCodex Home</a></li><li><a href="#use-multiple-accounts">Use multiple accounts</a></li><li><a href="#switch-accounts-in-an-existing-thread">Switch accounts in an existing thread</a></li><li><a href="#answer-questions-while-codex-works">Answer questions while Codex works</a></li><li><a href="#approve-app-access">Approve app access</a></li><li><a href="#use-daybreak">Use Daybreak</a></li><li><a href="#codex-says-i-hit-a-usage-limit">Codex says I hit a usage limit</a></li><li><a href="#send-feedback-to-openai">Send feedback to OpenAI</a></li><li><a href="#keep-a-turn-running-across-a-restart">Keep a turn running across a restart</a></li><li><a href="#give-each-thread-its-own-codex-app-server">Give each thread its own Codex app-server</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>

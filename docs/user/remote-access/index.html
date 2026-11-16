@@ -150,7 +150,9 @@ ranges, run <code>netsh int ipv4 show excludedportrange protocol=tcp</code>.</p>
 <p>The desktop app, and <code>goat serve --tailscale-serve</code>, re-apply that HTTPS port
 each time they start and keep trying until Tailscale is running, so the address
 stays the same across restarts. A mapping left by <code>goat pair --tailscale</code> on
-another port stays until you remove it with <code>tailscale serve --https=&lt;port&gt; off</code>.</p>
+another port stays until you remove it with <code>tailscale serve --https=&lt;port&gt; off</code>.
+If that HTTPS port already serves another running server or app, GOAT leaves it
+alone; a mapping to a server that has stopped is taken over within a minute.</p>
 <p>To start a command-line server with Tailscale HTTPS:</p>
 <pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> serve</span><span style="color:#79B8FF"> --tailscale-serve</span></span></code></pre>
 <p>For an already-running server:</p>

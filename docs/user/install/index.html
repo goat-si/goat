@@ -335,11 +335,24 @@ on the environment’s machine. An unlisted version is unverified.</p>
 <p>When a provider CLI is behind its latest release, its provider card shows the
 available version. <strong>Update now</strong> runs the installer that owns the CLI
 (Homebrew, or a global npm, pnpm, Yarn, Bun, Volta, or Vite+ install), or the
-CLI’s own update command when GOAT cannot tell. Update a CLI installed with
+CLI’s own update command when GOAT cannot tell. Claude, Codex, and OpenCode
+installs GOAT cannot identify stay manual: update them through the installer you
+used. Update a CLI installed with
 mise through mise, and one installed with Nix through Nix. Cursor and
 Antigravity update with GOAT. Homebrew and Chocolatey installs compare against
 the version their package manager offers, which can trail the npm release;
 update Claude installed with Chocolatey through Chocolatey.</p>
+<p>The managed Codex runtime for Codex connected through ChatGPT first installs
+the release GOAT tested. When GOAT finds a newer compatible release, its setup
+in <strong>Settings → Providers</strong> offers an update.</p>
+<p>The managed Antigravity runtime works the same way. While provider update checks
+are on (<strong>Settings → Maintenance</strong>), opening Antigravity setup checks Google’s CLI
+release channel at most once an hour, and setup then shows the new version with
+<strong>Update Antigravity</strong>. Installing or reinstalling checks the channel too. Nothing
+installs until you choose it, GOAT offers only releases its compatibility list marks
+supported, and it installs one only after its download matches the SHA-512 digest
+Google publishes for it. When the channel is unreachable or offers nothing supported,
+setup offers the release GOAT tested, or keeps your installed release if it is newer.</p>
 <p>Add another provider instance for a separate account or configuration. Each
 instance can have its own environment variables, such as API keys or a custom
 base URL. Mark secret values as sensitive; after saving, GOAT does not display
@@ -348,6 +361,74 @@ their original values.</p>
 <a href="/goat/docs/user/providers-claude/">Claude</a>, <a href="/goat/docs/user/providers-opencode/">OpenCode</a>,
 <a href="/goat/docs/user/providers-antigravity/">Antigravity</a>, <a href="/goat/docs/user/providers-pi/">Pi</a>,
 <a href="/goat/docs/user/providers-muse/">Muse Code</a>, and <a href="/goat/docs/user/providers-fx/">fx</a>.</p>
+<h3 id="provider-check-timeouts">Provider check timeouts</h3>
+<p>If a provider works in its CLI but GOAT reports a timeout while checking it,
+allow more time in the GOAT server’s environment. For example, give Codex and
+Claude readiness checks 60 seconds:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#E1E4E8">GOAT_CODEX_PROBE_TIMEOUT_MS</span><span style="color:#F97583">=</span><span style="color:#9ECBFF">60000</span><span style="color:#E1E4E8"> GOAT_CLAUDE_PROBE_TIMEOUT_MS</span><span style="color:#F97583">=</span><span style="color:#9ECBFF">60000</span><span style="color:#B392F0"> goat</span><span style="color:#9ECBFF"> serve</span></span></code></pre>
+<p>For a remote environment, set these on the machine running the GOAT server. For
+the background service, put them in <code>service.env</code> (see
+<a href="/goat/docs/user/background-service/#configure-the-service-environment">Configure the service environment</a>)
+and restart the service. A provider instance can also set its own values in its
+<strong>Environment variables</strong> in <strong>Settings → Providers</strong>.</p>
+<p>Each variable extends that provider’s readiness-probe deadlines; a phase whose
+default is already longer keeps its default. Providers with several phases can
+take longer than one deadline in total. Values must be whole milliseconds no
+greater than 2147483647; unset or invalid values keep the defaults.</p>
+<table>
+<thead>
+<tr>
+<th>Provider</th>
+<th>Environment variable</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Codex</td>
+<td><code>GOAT_CODEX_PROBE_TIMEOUT_MS</code></td>
+</tr>
+<tr>
+<td>Claude</td>
+<td><code>GOAT_CLAUDE_PROBE_TIMEOUT_MS</code></td>
+</tr>
+<tr>
+<td>Cursor</td>
+<td><code>GOAT_CURSOR_PROBE_TIMEOUT_MS</code></td>
+</tr>
+<tr>
+<td>Antigravity</td>
+<td><code>GOAT_ANTIGRAVITY_PROBE_TIMEOUT_MS</code></td>
+</tr>
+<tr>
+<td>Grok</td>
+<td><code>GOAT_GROK_PROBE_TIMEOUT_MS</code></td>
+</tr>
+<tr>
+<td>fx</td>
+<td><code>GOAT_FX_PROBE_TIMEOUT_MS</code></td>
+</tr>
+<tr>
+<td>Pi</td>
+<td><code>GOAT_PI_PROBE_TIMEOUT_MS</code></td>
+</tr>
+<tr>
+<td>Muse Code</td>
+<td><code>GOAT_MUSE_PROBE_TIMEOUT_MS</code></td>
+</tr>
+<tr>
+<td>OpenCode</td>
+<td><code>GOAT_OPENCODE_PROBE_TIMEOUT_MS</code></td>
+</tr>
+<tr>
+<td>ACP Registry agents</td>
+<td><code>GOAT_ACP_REGISTRY_PROBE_TIMEOUT_MS</code></td>
+</tr>
+</tbody>
+</table>
+<p>Longer deadlines also take longer to report a stalled check. These overrides
+cover readiness and discovery, including OpenCode server startup. Usage and
+config enrichment retain their own shorter limits. Turn execution, package
+installation, update checks, and shutdown limits keep their existing behavior.</p>
 <h2 id="next-steps">Next steps</h2>
 <ul>
 <li><a href="/goat/docs/user/thread-sidebar/">Working with threads</a>: start tasks and organize parallel work.</li>

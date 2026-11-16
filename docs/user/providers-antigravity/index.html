@@ -58,19 +58,26 @@ ambient <code>GEMINI_API_KEY</code> and Google credential variables do not overr
 Changing the method stops the instance’s sessions. Sign out before replacing an
 account.</p>
 <h2 id="runtime-installation">Runtime installation</h2>
-<p>Managed installation supports Apple Silicon macOS, Linux x64 or ARM64, and Windows
-x64 or ARM64. Intel Macs can connect to a supported remote environment. Allow
-several GB of free disk space, especially on Linux.
+<p>Managed installation supports Apple Silicon and Intel macOS, Linux x64 or ARM64,
+and Windows x64 or ARM64. When Google’s release channel is unreachable, every one
+of these installs the 1.4.5 runtime GOAT tested, except musl Linux: that runtime is
+built for glibc, so musl Linux installs only Google’s native CLI, and while the
+channel is down setup reports that no release is available. Allow several GB of free disk space,
+especially on Linux.
 On Linux ARM64, Google’s runtime needs a kernel with 4 KiB memory pages, so it
 does not run on kernels with larger pages, such as Asahi Linux or Raspberry Pi 5.</p>
 <h3 id="use-a-manual-installation">Use a manual installation</h3>
-<p>Download the archive for your environment from the <a href="https://github.com/agentclientprotocol/registry/blob/main/antigravity-acp/agent.json">official ACP Registry</a>.
-Extract the ACP executable and its <code>localharness_external</code> helper into the same
-directory, at the same version. Make both executable on macOS or Linux; Windows
-uses <code>.exe</code> files.</p>
-<p>Set <strong>Binary path</strong> to the ACP executable on the environment and update it yourself.
+<p>Install <a href="https://antigravity.google/docs/getting-started">Antigravity CLI</a> on the environment.
+Set <strong>Binary path</strong> to its <code>agy</code> executable and update it yourself.
 Leave the field blank to use the managed runtime, or a compatible executable on
 <code>PATH</code> if no managed runtime is installed.</p>
+<h3 id="update-the-managed-runtime">Update the managed runtime</h3>
+<p>When provider update checks find a newer Antigravity release, choose <strong>Update
+Antigravity</strong> in provider settings. Updating from the 1.4.5 runtime moves to Google’s
+native CLI, and you may need to sign in again. Threads already running finish on
+their original runtime; new sessions use the update. If the new release fails its
+check, the previous runtime stays in use. See
+<a href="/goat/docs/user/install/">Install GOAT</a> for when GOAT looks for updates.</p>
 <h2 id="models-and-threads">Models and threads</h2>
 <p>The model list comes from your Antigravity account. Compatible runtimes can include
 Claude and GPT models when your plan has them. Pick a thinking level in the composer’s effort menu; it
@@ -139,6 +146,14 @@ Sign out, then sign in again to replace an account.</p>
 <p>Before removing a managed runtime, disable its instances and cancel any active
 installation. Clear any explicit binary path pointing into that runtime. Removal
 is refused while the runtime is in use.</p>
+<h2 id="run-a-native-goal">Run a native goal</h2>
+<p>When your Antigravity runtime offers <code>/goal</code>, send <code>/goal</code> followed by a verifiable
+objective. Antigravity keeps working until it completes the goal or you cancel it.
+If you still use the older 1.4.5 runtime, update Antigravity in provider settings,
+then refresh provider status.</p>
+<p>Use Stop to interrupt a running goal, then ask Antigravity to stop pursuing it
+before starting more work. Ordinary follow-ups wait until the running turn ends.
+GOAT does not support Antigravity goal status, pause, resume, or clear commands.</p>
 <h2 id="check-access-and-troubleshoot">Check access and troubleshoot</h2>
 <p>Open <strong>Usage &gt; Limits</strong> to see the remaining Gemini and shared Claude/GPT allowances
 for Google sign-ins. Each group has separate five-hour and weekly limits and reset
@@ -151,4 +166,4 @@ sign in again, use provider settings on web or desktop, or <strong>Provider acco
 <p>If Google reports <code>SUBSCRIPTION_REQUIRED</code>, an account restriction, or a usage limit,
 follow the provider’s message and any retry time. See <a href="https://antigravity.google/docs/plans">Google’s account plans</a>
 for eligibility.</p>
-</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#set-up-antigravity">Set up Antigravity</a></li><li><a href="#runtime-installation">Runtime installation</a></li><li><a href="#models-and-threads">Models and threads</a></li><li><a href="#accounts-and-removal">Accounts and removal</a></li><li><a href="#check-access-and-troubleshoot">Check access and troubleshoot</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>
+</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#set-up-antigravity">Set up Antigravity</a></li><li><a href="#runtime-installation">Runtime installation</a></li><li><a href="#models-and-threads">Models and threads</a></li><li><a href="#accounts-and-removal">Accounts and removal</a></li><li><a href="#run-a-native-goal">Run a native goal</a></li><li><a href="#check-access-and-troubleshoot">Check access and troubleshoot</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>
