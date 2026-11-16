@@ -1,4 +1,5 @@
 import { retainedUserItemFailures } from "./goat/RetainedQueuedInput.ts";
+import { preparationFailureTitle } from "./goat/PreparationFailure.ts";
 import { commandThreadId } from "./commandThreadId.ts";
 import { guardArchiveDelegates } from "./goat/ArchiveDelegatedGuard.ts";
 import { isHistoryArchiveOnlyUpdate, withoutHistoryArchive } from "./goat/HistoryArchive.ts";
@@ -9679,7 +9680,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       payload: {
         ...state.preparationItem,
         status: "failed",
-        title: "Workspace preparation failed",
+        title: preparationFailureTitle(command.failure),
         output:
           command.failure.log === undefined
             ? command.failure.message
@@ -9710,7 +9711,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         parentItemId: null,
         ordinal: yield* nextTurnItemOrdinal(projection),
         status: "failed",
-        title: "Workspace preparation failed",
+        title: preparationFailureTitle(command.failure),
         startedAt: now,
         completedAt: now,
         updatedAt: now,

@@ -1,0 +1,244 @@
+import { assert, it } from "@effect/vitest";
+import { CommandId, ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE } from "@goat/contracts";
+import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
+
+import * as ThreadLaunch from "../ThreadLaunchService.ts";
+import * as ThreadManagement from "../ThreadManagementService.ts";
+import { makeHarness } from "../testkit/ThreadLaunchHarness.ts";
+import { launchInput } from "../testkit/threadLaunchInput.ts";
+import { makeClaimProbe, makeLaunchHold } from "./PreparationClaims.testkit.ts";
+import { NOT_STARTED_MESSAGE } from "./PreparationOrphans.ts";
+import { makeOrphanProbe, orphanRun, released, runStatus } from "./PreparationOrphans.testkit.ts";
+
+type Harness = ReturnType<typeof makeHarness>;
+type Probe = Effect.Success<typeof makeOrphanProbe>;
+
+const withCheck = (harness: Harness, probe: Probe) =>
+  Layer.mergeAll(harness.layer, probe.layer.pipe(Layer.provide(harness.layer)));
+
+/** Passes at 1, 2 and 3 minutes find the run; the first read it, so the fourth fails it. */
+const passesBeforeGrace = <E, R>(probe: Probe, still: Effect.Effect<void, E, R>) =>
+  Effect.gen(function* () {
+    for (let pass = 1; pass <= 3; pass++) {
+      assert.equal(yield* probe.pass, "read");
+      yield* still;
+    }
+  });
+
+it.effect(
+  "a run left preparing with nothing preparing it is failed between the grace period and one interval later, says preparation did not finish, and Retry prepares it",
+  () =>
+    Effect.gen(function* () {
+      const probe = yield* makeOrphanProbe;
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const { threadId, runId } = yield* orphanRun("orphan");
+        const preparing = runStatus(threadId, runId).pipe(
+          Effect.map((status) => assert.equal(status, "preparing")),
+        );
+        // The third pass is the grace period after the run's commit.
+        yield* passesBeforeGrace(probe, preparing);
+        assert.equal(yield* probe.pass, "read");
+        assert.equal(yield* probe.failed, runId);
+
+        const projection = yield* threads.getThreadProjection(threadId);
+        assert.equal(projection.runs[0]?.status, "failed");
+        const failedItems = projection.turnItems.filter(
+          (item) => item.runId === runId && item.status === "failed",
+        );
+        assert.deepEqual(
+          failedItems.map((item) => item.title),
+          ["Workspace preparation did not finish", "Workspace preparation did not finish"],
+        );
+        const error = failedItems.find((item) => item.type === "error");
+        assert.ok(error?.type === "error");
+        assert.equal(error.failure.code, ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE);
+        assert.equal(error.failure.message, NOT_STARTED_MESSAGE);
+
+        yield* launches.retryPreparation({
+          commandId: CommandId.make("command:orphan:retry"),
+          threadId,
+          runId,
+        });
+        yield* released(threadId, "command:orphan:retry");
+        assert.notInclude(["preparing", "failed"], yield* runStatus(threadId, runId));
+      }).pipe(Effect.provide(withCheck(harness, probe)));
+    }),
+);
+
+it.effect("a run whose preparation is under way is not failed, however long it takes", () =>
+  Effect.gen(function* () {
+    const probe = yield* makeOrphanProbe;
+    const entered = yield* Deferred.make<void>();
+    const allow = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      createWorktree: (request) =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(allow)),
+          Effect.as({
+            worktree: { path: "/repo-worktrees/slow", refName: request.newRefName, headSha: "abc" },
+          } as never),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "command:slow",
+          thread: "thread:slow",
+          message: "Prepare slowly",
+          workspace: { type: "worktree", baseRef: "main" },
+        }),
+      );
+      const runId = launched.projection.runs[0]!.id;
+      yield* Deferred.await(entered);
+      // Ten grace periods.
+      for (let pass = 1; pass <= 30; pass++) assert.equal(yield* probe.pass, "read");
+      assert.equal(yield* runStatus(launched.threadId, runId), "preparing");
+      assert.equal(yield* probe.failCount, 0);
+
+      yield* Deferred.succeed(allow, undefined);
+      yield* released(launched.threadId, "command:slow");
+    }).pipe(Effect.provide(withCheck(harness, probe)));
+  }),
+);
+
+it.effect.each(["fail", "die"] as const)(
+  "a pass whose read ends with %s fails nothing, and the next pass still fails the orphan",
+  (failure) =>
+    Effect.gen(function* () {
+      const probe = yield* makeOrphanProbe;
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const { threadId, runId } = yield* orphanRun(`orphan-${failure}`);
+        yield* Ref.set(probe.mode, failure);
+        for (let pass = 1; pass <= 4; pass++) assert.equal(yield* probe.pass, failure);
+        assert.equal(yield* runStatus(threadId, runId), "preparing");
+
+        yield* Ref.set(probe.mode, "read");
+        yield* passesBeforeGrace(probe, Effect.void);
+        assert.equal(yield* probe.pass, "read");
+        assert.equal(yield* probe.failed, runId);
+        assert.equal(yield* runStatus(threadId, runId), "failed");
+      }).pipe(Effect.provide(withCheck(harness, probe)));
+    }),
+);
+
+it.effect("a run retried and stuck again is failed again", () =>
+  Effect.gen(function* () {
+    const probe = yield* makeOrphanProbe;
+    const harness = makeHarness();
+    yield* Effect.gen(function* () {
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const { threadId, runId } = yield* orphanRun("stuck-again");
+      yield* passesBeforeGrace(probe, Effect.void);
+      assert.equal(yield* probe.pass, "read");
+      assert.equal(yield* probe.failed, runId);
+
+      // A Retry cut before its preparation started.
+      yield* threads.dispatch({
+        type: "prepared-run.retry",
+        commandId: CommandId.make("command:stuck-again:retry"),
+        threadId,
+        runId,
+      });
+      const preparing = runStatus(threadId, runId).pipe(
+        Effect.map((status) => assert.equal(status, "preparing")),
+      );
+      yield* preparing;
+      yield* passesBeforeGrace(probe, preparing);
+      assert.equal(yield* probe.pass, "read");
+      assert.equal(yield* probe.failed, runId);
+      assert.equal(yield* runStatus(threadId, runId), "failed");
+    }).pipe(Effect.provide(withCheck(harness, probe)));
+  }),
+);
+
+it.effect(
+  "a launch interrupted after it reserved its preparation and before it forked leaves no claim, so the check fails the run and Retry prepares it",
+  () =>
+    Effect.gen(function* () {
+      const probe = yield* makeOrphanProbe;
+      const hold = yield* makeLaunchHold;
+      const harness = makeHarness({ launchThreads: hold.wrap });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const { input, threadId, runId } = yield* orphanRun("interrupted-launch");
+        yield* hold.arm;
+        const launch = yield* launches
+          .launch(input)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* hold.held;
+        yield* Fiber.interrupt(launch);
+
+        yield* passesBeforeGrace(probe, Effect.void);
+        assert.equal(yield* probe.pass, "read");
+        assert.equal(yield* probe.failed, runId);
+        yield* launches.retryPreparation({
+          commandId: CommandId.make("command:interrupted-launch:retry"),
+          threadId,
+          runId,
+        });
+        yield* released(threadId, "command:interrupted-launch:retry");
+      }).pipe(Effect.provide(withCheck(harness, probe)));
+    }),
+);
+
+it.effect(
+  "a launch that forks its preparation after its service stopped leaves no claim, so the check fails the run and Retry prepares it",
+  () =>
+    Effect.gen(function* () {
+      const probe = yield* makeOrphanProbe;
+      const hold = yield* makeLaunchHold;
+      const claims = yield* makeClaimProbe;
+      const harness = makeHarness({ claims: claims.layer });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const { input, threadId, runId } = yield* orphanRun("stopped-service");
+        const serviceScope = yield* Scope.make();
+        const stopping = yield* Layer.buildWithScope(
+          Layer.fresh(ThreadLaunch.layer).pipe(
+            Layer.provide(
+              Layer.merge(
+                harness.launchDependencies,
+                Layer.succeed(ThreadManagement.ThreadManagementService, hold.wrap(threads)),
+              ),
+            ),
+          ),
+          serviceScope,
+        );
+        yield* hold.arm;
+        const launch = yield* Context.get(stopping, ThreadLaunch.ThreadLaunchService)
+          .launch(input)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* hold.held;
+        yield* Scope.close(serviceScope, Exit.void);
+        yield* hold.resume;
+        yield* Fiber.join(launch);
+
+        yield* passesBeforeGrace(probe, Effect.void);
+        assert.equal(yield* probe.pass, "read");
+        const outcome = yield* Effect.raceFirst(
+          probe.failed.pipe(Effect.as("failed")),
+          claims.refused.pipe(Effect.as("claim still held")),
+        );
+        assert.equal(outcome, "failed");
+        yield* launches.retryPreparation({
+          commandId: CommandId.make("command:stopped-service:retry"),
+          threadId,
+          runId,
+        });
+        yield* released(threadId, "command:stopped-service:retry");
+      }).pipe(Effect.provide(withCheck(harness, probe)));
+    }),
+);

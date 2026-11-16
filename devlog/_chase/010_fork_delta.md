@@ -180,6 +180,11 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: upstream `apps/server/src/peer`, `packages/contracts/src/peerLink.ts`, `apps/server/src/persistence/Migrations/070_PeerLinks.ts`, `071_PeerLinkFence.ts`, `072_WaitingLinkRequestIndex.ts`
 - 정책: upstream의 peer link store, `environmentId` 라우팅, `delegated_task.remote.*` 이벤트 모델은 받지 않는다. GOAT fleet는 `LinkedHosts`, `HubNodes`, `SshRemoteDispatch`의 `host` 라우팅, `RemoteDelegatedTasks`가 정본이다. upstream 070-072(PeerLinks, PeerLinkFence, WaitingLinkRequestIndex)는 GOAT도 같은 이름과 id로 등록해 스키마만 둔다. 071·072는 upstream처럼 다시 실행해도 안전하다 (사이클 261114). 모델 검색, reconnect/history, @ picker, Copy thread 같은 독립 개선은 GOAT 코드에 adapt한다.
 
+### `preparation-orphans` 아무것도 준비하지 않는 "preparing" run
+
+- 경로: `apps/server/src/orchestration-v2/goat/{PreparationClaims,PreparationOrphans,PreparationFailure}.ts`, `apps/server/src/orchestration-v2/{ThreadLaunchService,Orchestrator,runtimeLayer}.ts`
+- 정책: GOAT 전용. 준비 fiber는 첫 단계로 run claim을 잡고, 그 claim 안에서 모든 작업 공간 전략의 run을 다시 읽는다. 검사는 같은 claim을 잡고 3분 넘게 "preparing"에 남은 run을 `prepared-run.fail`로 실패시켜 Retry가 되게 한다 (#3595). upstream이 `schedulePreparation`을 바꾸면 받고 claim(`claims.whileClaimed`)과 재조회만 다시 얹는다. `Orchestrator.ts`의 hook은 import 하나와 `dispatchPreparedRunFail`의 두 `title`(`preparationFailureTitle`)뿐이다. 검사 layer는 `runtimeLayer.ts`의 `layerProduction`에 있고 launch 서비스와 같은 `PreparationClaims.layer` 값을 받아야 claim을 함께 쓴다.
+
 ### `remote-reports` 원격 보고와 원격 위임
 
 - 커밋: #5 #10 #6

@@ -69,6 +69,8 @@ import * as ThreadLifecycleService from "./ThreadLifecycleService.ts";
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as ThreadForkService from "./ThreadForkService.ts";
 import * as ThreadForkWorkspace from "./goat/ThreadForkWorkspace.ts";
+import * as PreparationClaims from "./goat/PreparationClaims.ts";
+import * as PreparationOrphans from "./goat/PreparationOrphans.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -325,6 +327,7 @@ const layerThreadLaunchProvided = ThreadLaunchService.layer.pipe(
       layerCommandReceiptStoreProvided,
       layerEventSink,
       IdAllocator.layer,
+      PreparationClaims.layer,
     ),
   ),
 );
@@ -461,6 +464,10 @@ export const layerProduction = Layer.mergeAll(
   ),
   layerManagedProjectFoldersProvided,
   layerThreadLaunchProvided,
+  // The same claims layer value as the launch service's, so both hold one set of claims.
+  PreparationOrphans.layer.pipe(
+    Layer.provide(Layer.merge(layerThreadManagementProvided, PreparationClaims.layer)),
+  ),
   layerThreadForkWorkspaceProvided,
   layerThreadLifecycleProvided,
   layerScheduledTaskProvided,

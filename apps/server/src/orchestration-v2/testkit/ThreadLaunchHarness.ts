@@ -31,8 +31,10 @@ import { ClaudeProviderCapabilitiesV2 } from "../Adapters/ClaudeAdapterV2.ts";
 import { CodexProviderCapabilitiesV2 } from "../Adapters/CodexAdapterV2.ts";
 import * as CommandReceiptStore from "../CommandReceiptStore.ts";
 import * as EffectOutbox from "../EffectOutbox.ts";
+import * as EventSink from "../EventSink.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
+import * as PreparationClaims from "../goat/PreparationClaims.ts";
 import * as ThreadLaunch from "../ThreadLaunchService.ts";
 import * as ThreadManagement from "../ThreadManagementService.ts";
 import * as ThreadTitleRegeneration from "../ThreadTitleRegenerationService.ts";
@@ -115,6 +117,12 @@ interface HarnessOptions {
   ) => ThreadManagement.ThreadManagementService["Service"]["streamStoredEventsFrom"];
   /** The provider CLI gate the launch service is built with; none unless given. */
   readonly providerCliGate?: Layer.Layer<ProviderCliGate.ProviderCliGate>;
+  /** The run claims the launch service and the harness's callers share; the real ones unless given. */
+  readonly claims?: Layer.Layer<PreparationClaims.PreparationClaims>;
+  /** Replaces the thread service the launch service alone reads. */
+  readonly launchThreads?: (
+    real: ThreadManagement.ThreadManagementService["Service"],
+  ) => ThreadManagement.ThreadManagementService["Service"];
 }
 
 export function makeHarness(options: HarnessOptions = {}) {
@@ -238,18 +246,23 @@ export function makeHarness(options: HarnessOptions = {}) {
         }),
   );
   const prepared = options.prepared;
+  const layerClaims = options.claims ?? PreparationClaims.layer;
   const layerLaunch = ThreadLaunch.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
         layerOrchestrator,
         layerRegistry,
         layerExternalServices,
-        prepared === undefined && options.launchEvents === undefined
+        layerClaims,
+        prepared === undefined &&
+          options.launchEvents === undefined &&
+          options.launchThreads === undefined
           ? layerThreadManagement
           : Layer.effect(
               ThreadManagement.ThreadManagementService,
               Effect.gen(function* () {
-                const service = yield* ThreadManagement.ThreadManagementService;
+                const real = yield* ThreadManagement.ThreadManagementService;
+                const service = options.launchThreads?.(real) ?? real;
                 return ThreadManagement.ThreadManagementService.of({
                   ...service,
                   streamStoredEventsFrom:
@@ -318,6 +331,15 @@ export function makeHarness(options: HarnessOptions = {}) {
       layerOutbox,
       layerDatabase,
       layerExternalServices,
+      layerClaims,
+    ),
+    /** What a launch service built apart from the harness reads besides the harness's services. */
+    launchDependencies: Layer.effect(
+      EventSink.EventSinkV2,
+      Effect.service(EventSink.EventSinkV2),
+    ).pipe(
+      Layer.provide(layerOrchestrator),
+      Layer.merge(Layer.merge(layerReceipts, IdAllocator.layer)),
     ),
     createWorktree,
     removeWorktree,

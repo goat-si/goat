@@ -3,6 +3,14 @@ import * as Schema from "effect/Schema";
 
 const isGitCommandError = Schema.is(GitCommandError);
 
+/** The code of a run the orphan check failed because nothing was preparing it. */
+export const PREPARATION_NOT_STARTED_CODE = "preparation_not_started";
+
+export const preparationFailureTitle = (failure: { readonly code: string | null }) =>
+  failure.code === PREPARATION_NOT_STARTED_CODE
+    ? "Workspace preparation did not finish"
+    : "Workspace preparation failed";
+
 /**
  * Most preparation failures are a request this machine cannot satisfy, such as a missing
  * base ref. A stalled or timed-out Git command is a slow or stuck host instead, which a
