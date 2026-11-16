@@ -1,7 +1,17 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, EventId, MessageId } from "@goat/contracts";
+import {
+  CommandId,
+  EventId,
+  MessageId,
+  NodeId,
+  ProjectId,
+  RuntimeRequestId,
+  ThreadId,
+  TurnItemId,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as QuestionEscalationService from "./QuestionEscalationService.ts";
@@ -9,6 +19,7 @@ import {
   answer,
   holdLauncher,
   ids,
+  instanceId,
   layerTest,
   records,
   seed,
@@ -58,6 +69,199 @@ it.layer(layerTest)("QuestionEscalationService", (it) => {
 
         const refused = yield* answer(suffix, { type: "user" }, false).pipe(Effect.flip);
         assert.include(refused.message, "so it can no longer be answered.");
+      }).pipe(Effect.provide(QuestionEscalationService.layer), Effect.scoped),
+  );
+  it.effect(
+    "a completed task's pending question keeps its inbox item and wake, and answering it continues the child",
+    () =>
+      Effect.gen(function* () {
+        const engine = yield* Orchestrator.OrchestratorV2;
+        const projections = yield* ProjectionStore.ProjectionStoreV2;
+        const sink = yield* EventSink.EventSinkV2;
+        const service = yield* QuestionEscalationService.QuestionEscalationService;
+        const parentThreadId = ThreadId.make("thread:completed-task-parent");
+        yield* engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("create:completed-task-parent"),
+          threadId: parentThreadId,
+          projectId: ProjectId.make("project:question-escalation"),
+          title: "Parent",
+          modelSelection: { instanceId, model: "gpt-5" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* engine.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("start:completed-task-parent"),
+          messageId: MessageId.make("message:completed-task-parent"),
+          threadId: parentThreadId,
+          text: "Delegate the proof",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const parentRun = (yield* projections.getThreadRecords(parentThreadId, ["runs"])).runs[0]!;
+        yield* engine.dispatch({
+          type: "delegated_task.request",
+          commandId: CommandId.make("delegate:completed-task"),
+          parentThreadId,
+          parentRunId: parentRun.id,
+          parentNodeId: parentRun.rootNodeId!,
+          task: "Capture the proof",
+          completionWake: "settled_only",
+          modelSelection: { instanceId, model: "gpt-5" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdBy: "agent",
+          creationSource: "mcp",
+        });
+        const task = (yield* projections.getThreadRecords(parentThreadId, ["subagents"]))
+          .subagents[0]!;
+        const childThreadId = task.childThreadId!;
+        const childRun = (yield* projections.getThreadRecords(childThreadId, ["runs"])).runs[0]!;
+        const now = yield* DateTime.now;
+        const requestId = RuntimeRequestId.make("request:completed-task");
+        const nodeId = NodeId.make("node:completed-task-question");
+        const stored = yield* sink.write({
+          events: [
+            {
+              id: EventId.make("completed-task:node"),
+              type: "node.updated",
+              threadId: childThreadId,
+              runId: childRun.id,
+              nodeId,
+              occurredAt: now,
+              payload: {
+                id: nodeId,
+                threadId: childThreadId,
+                runId: childRun.id,
+                parentNodeId: childRun.rootNodeId,
+                rootNodeId: childRun.rootNodeId ?? nodeId,
+                kind: "user_input_request",
+                status: "waiting",
+                countsForRun: false,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                runtimeRequestId: requestId,
+                checkpointScopeId: null,
+                startedAt: now,
+                completedAt: null,
+              },
+            },
+            {
+              id: EventId.make("completed-task:request"),
+              type: "runtime-request.updated",
+              threadId: childThreadId,
+              runId: childRun.id,
+              nodeId,
+              occurredAt: now,
+              payload: {
+                id: requestId,
+                nodeId,
+                providerTurnId: null,
+                nativeRequestRef: null,
+                kind: "user_input",
+                status: "pending",
+                responseCapability: { type: "message" },
+                createdAt: now,
+                resolvedAt: null,
+              },
+            },
+            {
+              id: EventId.make("completed-task:item"),
+              type: "turn-item.updated",
+              threadId: childThreadId,
+              runId: childRun.id,
+              nodeId,
+              occurredAt: now,
+              payload: {
+                id: TurnItemId.make("item:completed-task"),
+                type: "user_input_request",
+                threadId: childThreadId,
+                runId: childRun.id,
+                nodeId,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 0,
+                status: "waiting",
+                title: null,
+                startedAt: now,
+                completedAt: null,
+                updatedAt: now,
+                requestId,
+                questions: [
+                  { id: "color", header: "Color", question: "Which color?", options: [] },
+                ],
+              },
+            },
+          ],
+        });
+        yield* Effect.forEach(stored, service.handleStoredEvent, { discard: true });
+        const wakeId = MessageId.make(`question-escalation:${childThreadId}:${requestId}`);
+        const wakeRun = () =>
+          projections
+            .getThreadRecords(parentThreadId, ["runs"])
+            .pipe(Effect.map(({ runs }) => runs.find((run) => run.userMessageId === wakeId)));
+        assert.equal((yield* wakeRun())?.status, "queued");
+
+        // The child's turn ends COMPLETED with its question still open.
+        yield* sink.write({
+          events: [
+            {
+              id: EventId.make("completed-task:child-completed"),
+              type: "run.updated",
+              threadId: childThreadId,
+              runId: childRun.id,
+              occurredAt: now,
+              payload: { ...childRun, status: "completed", startedAt: now, completedAt: now },
+            },
+          ],
+        });
+        yield* engine.recoverDelegatedTasks;
+        const settled = (yield* projections.getThreadRecords(parentThreadId, ["subagents"], {
+          subagentIds: [task.id],
+        })).subagents[0];
+        assert.equal(settled?.status, "completed");
+        assert.equal(
+          (yield* projections.getRuntimeRequest(childThreadId, requestId))?.status,
+          "pending",
+        );
+
+        yield* projections.apply({
+          id: EventId.make("completed-task:parent-completed"),
+          type: "run.updated",
+          threadId: parentThreadId,
+          runId: parentRun.id,
+          occurredAt: now,
+          payload: { ...parentRun, status: "completed", completedAt: now },
+        });
+        yield* engine.dispatch({
+          type: "queue.resume",
+          commandId: CommandId.make("resume:completed-task-parent"),
+          threadId: parentThreadId,
+        });
+        assert.equal((yield* wakeRun())?.status, "starting");
+
+        yield* engine.dispatch({
+          type: "runtime-request.respond",
+          commandId: CommandId.make("answer:completed-task"),
+          threadId: childThreadId,
+          requestId,
+          answers: { color: "Blue" },
+        });
+        const continued = (yield* projections.getThreadRecords(childThreadId, ["runs"])).runs.find(
+          (run) => run.userMessageId === MessageId.make(`async-answer:${requestId}`),
+        );
+        assert.isDefined(continued);
+        assert.notEqual(continued?.status, "cancelled");
       }).pipe(Effect.provide(QuestionEscalationService.layer), Effect.scoped),
   );
 });
