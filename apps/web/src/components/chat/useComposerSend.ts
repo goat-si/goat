@@ -1612,7 +1612,7 @@ export function useComposerSend(input: ComposerSendInput) {
         )
       ) {
         const interrupted = isAtomCommandInterrupted(failure);
-        keepFailedSendInStash({ snapshot: sendSnapshot, environmentId, interrupted });
+        void keepFailedSendInStash({ snapshot: sendSnapshot, environmentId, interrupted });
       } else {
         const retryComposerImages = restoreComposerDraft(composerDraftTarget, sendSnapshot);
         if (currentRouteThreadKeyRef.current === routeThreadKey) {

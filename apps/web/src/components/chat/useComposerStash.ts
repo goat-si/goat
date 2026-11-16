@@ -58,7 +58,7 @@ import {
   useState,
 } from "react";
 import { BackgroundThreadContext } from "./backgroundThread";
-import { encodeImagesForStash } from "./stashFailedSend";
+import { encodeImagesForStash, reportStashedImages } from "./stashFailedSend";
 import { useStableCallback } from "../../hooks/useStableCallback";
 
 /**
@@ -599,24 +599,13 @@ export function useComposerStash(input: {
       const encoded = await encodeImagesForStash(images);
       const kept = encoded.attachments;
       const { attached, durable: imagesDurable } = finalizeStashEntryImages(entryId, encoded);
-      if (attached) {
-        if (!imagesDurable && durable && images.length > 0) {
-          toastManager.add({
-            type: "warning",
-            title: "Stashed images were not saved",
-            description:
-              "The prompt was stashed, but browser storage rejected its images. They will be missing if you reload.",
-            data: { hideCopyButton: true },
-          });
-        }
-      } else if (kept.length > 0) {
-        toastManager.add({
-          type: "warning",
-          title: "Stashed images did not attach",
-          description: `That prompt was restored or deleted before ${kept.length} image${kept.length === 1 ? "" : "s"} finished saving. Re-attach ${kept.length === 1 ? "it" : "them"} if you still need ${kept.length === 1 ? "it" : "them"}.`,
-          data: { hideCopyButton: true },
-        });
-      }
+      reportStashedImages({
+        attached,
+        imagesDurable,
+        entryDurable: durable,
+        imageCount: images.length,
+        keptCount: kept.length,
+      });
     };
     await stashAndEncode().finally(() => stashInFlightRef.current.delete(snapshotKey));
   };

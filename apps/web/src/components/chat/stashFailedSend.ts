@@ -53,6 +53,35 @@ export async function encodeImagesForStash(images: ReadonlyArray<ComposerImageAt
   };
 }
 
+/** Warns when a stashed prompt's encoded images did not land, as the composer stash does. */
+export function reportStashedImages(input: {
+  readonly attached: boolean;
+  readonly imagesDurable: boolean;
+  readonly entryDurable: boolean;
+  readonly imageCount: number;
+  readonly keptCount: number;
+}): void {
+  const { keptCount: kept } = input;
+  if (input.attached) {
+    if (!input.imagesDurable && input.entryDurable && input.imageCount > 0) {
+      toastManager.add({
+        type: "warning",
+        title: "Stashed images were not saved",
+        description:
+          "The prompt was stashed, but browser storage rejected its images. They will be missing if you reload.",
+        data: { hideCopyButton: true },
+      });
+    }
+  } else if (kept > 0) {
+    toastManager.add({
+      type: "warning",
+      title: "Stashed images did not attach",
+      description: `That prompt was restored or deleted before ${kept} image${kept === 1 ? "" : "s"} finished saving. Re-attach ${kept === 1 ? "it" : "them"} if you still need ${kept === 1 ? "it" : "them"}.`,
+      data: { hideCopyButton: true },
+    });
+  }
+}
+
 /** Writes a failed send to the stash; images follow once encoded, as for a stashed prompt. */
 function stashSendSnapshot(snapshot: ComposerSendSnapshot, environmentId: EnvironmentId) {
   const files: PersistedComposerFileAttachment[] = [];
@@ -98,7 +127,7 @@ function stashSendSnapshot(snapshot: ComposerSendSnapshot, environmentId: Enviro
     pendingImageCount: snapshot.images.length,
     ...(records.length > 0 ? { records } : {}),
   });
-  if (!result.written) return result;
+  if (!result.written) return { ...result, imagesSettled: Promise.resolve() };
   for (const file of result.evicted?.files ?? []) {
     releasePersistedAttachmentUpload({
       id: file.id,
@@ -109,31 +138,43 @@ function stashSendSnapshot(snapshot: ComposerSendSnapshot, environmentId: Enviro
   for (const attachment of [...snapshot.images, ...snapshot.previewAnnotations]) {
     releaseAttachmentUpload(attachment.id);
   }
-  if (snapshot.images.length > 0) {
-    void encodeImagesForStash(snapshot.images)
-      .catch(() => ({
-        attachments: [],
-        droppedImageNames: [],
-        unreadableImageNames: snapshot.images.map((image) => image.name),
-      }))
-      .then((images) => {
-        usePromptStashStore.getState().finalizeEntryImages(entryId, images);
-      });
-  }
-  return result;
+  const imagesSettled =
+    snapshot.images.length === 0
+      ? Promise.resolve()
+      : encodeImagesForStash(snapshot.images)
+          .catch(() => ({
+            attachments: [],
+            droppedImageNames: [],
+            unreadableImageNames: snapshot.images.map((image) => image.name),
+          }))
+          .then((images) => {
+            const finalized = usePromptStashStore.getState().finalizeEntryImages(entryId, images);
+            reportStashedImages({
+              attached: finalized.attached,
+              imagesDurable: finalized.durable,
+              entryDurable: result.durable,
+              imageCount: snapshot.images.length,
+              keptCount: images.attachments.length,
+            });
+          });
+  return { ...result, imagesSettled };
 }
 
 /**
  * A send that fails after a new draft was typed leaves the composer to that draft, so the failed
- * send (text, files, context and images) goes to the prompt stash and the toast says so.
+ * send (text, files, context and images) goes to the prompt stash and the toast says so. Resolves
+ * once the stashed images have been finalized.
  */
 export function keepFailedSendInStash(input: {
   readonly snapshot: ComposerSendSnapshot;
   readonly environmentId: EnvironmentId;
   readonly interrupted: boolean;
-}): void {
+}): Promise<void> {
   const title = input.interrupted ? "Message may not have been sent" : "Message not sent";
-  const { written, durable, evicted } = stashSendSnapshot(input.snapshot, input.environmentId);
+  const { written, durable, evicted, imagesSettled } = stashSendSnapshot(
+    input.snapshot,
+    input.environmentId,
+  );
   if (written) {
     const notes = [
       "Your new draft was kept, and the failed message is in the prompt stash.",
@@ -148,10 +189,22 @@ export function keepFailedSendInStash(input: {
         data: { hideCopyButton: true },
       }),
     );
-    return;
+    return imagesSettled;
   }
   const failedText = input.snapshot.messageText;
-  if (failedText.length === 0) return;
+  if (failedText.length === 0) {
+    const lost = [...input.snapshot.images, ...input.snapshot.files].map((entry) => entry.name);
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title,
+        description: `Your new draft was kept, but browser storage rejected the stash, so ${lost.join(", ")} could not be kept. Attach ${lost.length === 1 ? "it" : "them"} again to send.`,
+        timeout: 0,
+        data: { hideCopyButton: true },
+      }),
+    );
+    return imagesSettled;
+  }
   toastManager.add(
     stackedThreadToast({
       type: "error",
@@ -169,4 +222,5 @@ export function keepFailedSendInStash(input: {
       },
     }),
   );
+  return imagesSettled;
 }
