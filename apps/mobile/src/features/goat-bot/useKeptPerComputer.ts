@@ -26,7 +26,7 @@ import { openAsks } from "./openAsksRead";
 export { resetKeptPerComputerForTests } from "./keptPerComputerStore";
 
 const NO_KEPT = Atom.make<unknown>(null);
-const NOT_STALE = Atom.make(false);
+const NOT_STALE = Atom.make<number | null>(null);
 const NOT_READABLE = Atom.make(false);
 // Derived in the same pass as the roster's own read, so no reader shows a line after a refusal.
 const readableAtom = Atom.family((key: string) => {
@@ -35,10 +35,13 @@ const readableAtom = Atom.family((key: string) => {
     if (!get(environmentCatalog.catalogValueAtom).entries.has(environmentId)) return false;
     if (get(connectionRefusedAtom(environmentId))) return false;
     const presentation = get(environmentPresentations.presentationsAtom).get(environmentId);
+    const restarting = get(staleAtom("bots", environmentId)) !== null;
+    // Its config not loaded (a re-add, a cold start), whether it lists bots is unknown.
     const capabilities = presentation?.serverConfig?.environment.capabilities;
-    // Only a computer that lists bots can answer the read that ends a list refusal.
-    if (capabilities?.goatBotProfiles !== true) return true;
-    if (get(staleAtom("bots", environmentId))) return false;
+    if (capabilities === undefined) return !restarting;
+    // A server known to list no bots has no bot-list read to wait for.
+    if (capabilities.goatBotProfiles !== true) return true;
+    if (restarting) return false;
     if (presentation?.connection.phase !== "connected") return true;
     // The bot list the roster reads, shared: refused in the render it arrives.
     const list = get(
@@ -128,8 +131,9 @@ export function useKeptPerComputer<A>(
   const atom = environmentId === null ? NO_KEPT : keptAtom(kind, environmentId);
   const stored = useAtomValue(atom) as A | null;
   const store = useAtomSet(atom as Atom.Writable<unknown>);
-  const stale = useAtomValue(environmentId === null ? NOT_STALE : staleAtom(kind, environmentId));
-  // Starting over, only a settled answer seen while the flag was already set ends it.
+  const restart = useAtomValue(environmentId === null ? NOT_STALE : staleAtom(kind, environmentId));
+  const stale = restart !== null;
+  // Starting over, only a settled answer seen during this restart ends it.
   const answered = stale && live.successResult !== null;
   const settled = live.isSuccess ? live.data : null;
   const denied = accessDenied(live.cause);
@@ -138,11 +142,13 @@ export function useKeptPerComputer<A>(
     if (environmentId === null) return;
     // The bot list speaks for the whole computer: refused, nothing of it shows until a list settles.
     if (kind === "bots" && denied) {
-      if (!stale) refuseList(registry, environmentId);
+      refuseList(registry, environmentId);
       return;
     }
     if (answered) {
-      registry.set(staleAtom(kind, environmentId), false);
+      // A newer restart since this render is not ended by this answer.
+      const flag = staleAtom(kind, environmentId);
+      if (registry.get(flag) === restart) registry.set(flag, null);
       return;
     }
     if (stale || denied || !readable) {
@@ -152,10 +158,22 @@ export function useKeptPerComputer<A>(
     // The computer may have left the catalog or refused this phone since this render.
     const unchanged =
       registry.get(environmentCatalog.catalogValueAtom).entries.has(environmentId) &&
-      !registry.get(staleAtom(kind, environmentId)) &&
+      registry.get(staleAtom(kind, environmentId)) === null &&
       !registry.get(connectionRefusedAtom(environmentId));
     if (unchanged && settled !== null && settled !== stored) store(settled);
-  }, [registry, environmentId, kind, settled, stored, stale, answered, denied, readable, store]);
+  }, [
+    registry,
+    environmentId,
+    kind,
+    settled,
+    stored,
+    stale,
+    restart,
+    answered,
+    denied,
+    readable,
+    store,
+  ]);
   if (stale || denied || !readable) return null;
   if (!offline || live.data !== null) return live.data;
   return stored;

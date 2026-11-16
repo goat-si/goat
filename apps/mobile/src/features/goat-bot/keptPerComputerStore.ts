@@ -13,13 +13,18 @@ export type KeptKind = (typeof KEPT_KINDS)[number];
 let generation = 0;
 const keptFamily = Atom.family((_key: string) => Atom.make<unknown>(null).pipe(Atom.keepAlive));
 const flagFamily = Atom.family((_key: string) => Atom.make(false).pipe(Atom.keepAlive));
+const restartFamily = Atom.family((_key: string) =>
+  Atom.make<number | null>(null).pipe(Atom.keepAlive),
+);
+let restarts = 0;
 /** Keys one computer in this generation. */
 export const computerKey = (environmentId: EnvironmentId) => `${generation}:${environmentId}`;
 export const keptAtom = (kind: KeptKind, environmentId: EnvironmentId) =>
   keptFamily(`${kind}:${computerKey(environmentId)}`);
-// Set on a refusal or removal: the read shows and keeps nothing until an answer settles while set.
+// The restart a refusal or removal began, null when fresh: the read shows and keeps nothing until
+// an answer settles during that same restart.
 export const staleAtom = (kind: KeptKind, environmentId: EnvironmentId) =>
-  flagFamily(`stale:${kind}:${computerKey(environmentId)}`);
+  restartFamily(`${kind}:${computerKey(environmentId)}`);
 // Refused by the computer's connection, or its account signed out; reaching "connected" clears it.
 export const connectionRefusedAtom = (environmentId: EnvironmentId) =>
   flagFamily(`connection:${computerKey(environmentId)}`);
@@ -46,7 +51,7 @@ export function startOver(
 ) {
   if (refresh) refreshers.get(registry)?.(environmentId, kind);
   registry.set(keptAtom(kind, environmentId), null);
-  registry.set(staleAtom(kind, environmentId), true);
+  registry.set(staleAtom(kind, environmentId), ++restarts);
 }
 
 /** The connection refused this phone, or the account that reached the computer signed out. */
@@ -61,11 +66,14 @@ export function refuseConnection(
 
 /**
  * The bot list was refused. That refusal is its query's latest answer, with nothing in flight, so
- * the list starts over without a new request; the asks are read again unless already starting over.
+ * the list starts over without a new request; the asks are read again. A kind already starting
+ * over is left as it is, so a refusal seen again starts nothing.
  */
 export function refuseList(registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentId) {
-  startOver(registry, environmentId, "bots", false);
-  if (!registry.get(staleAtom("asks", environmentId))) startOver(registry, environmentId, "asks");
+  if (registry.get(staleAtom("bots", environmentId)) === null)
+    startOver(registry, environmentId, "bots", false);
+  if (registry.get(staleAtom("asks", environmentId)) === null)
+    startOver(registry, environmentId, "asks");
   forgetNewBotEnvironment(environmentId);
 }
 
