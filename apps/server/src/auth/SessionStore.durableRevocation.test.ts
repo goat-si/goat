@@ -226,3 +226,50 @@ it.effect("a failed durable check ends no session and the next one recovers", ()
     }).pipe(Effect.provide(running), Effect.scoped);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.effect("a check that dies with a defect does not stop later checks", () =>
+  Effect.gen(function* () {
+    const barrier = yield* makeReadBarrier;
+    const dying = yield* Ref.make(true);
+    const checks = yield* Queue.unbounded<"died" | "read">();
+    const { running, fromCli } = yield* makeServerAndCli((repository) =>
+      barrier.wrap({
+        ...repository,
+        listUnrevoked: (input) =>
+          Effect.flatMap(Ref.get(dying), (die) =>
+            die
+              ? Queue.offer(checks, "died").pipe(
+                  Effect.andThen(Effect.die(new Error("unexpected repository defect"))),
+                )
+              : repository.listUnrevoked(input).pipe(Effect.tap(() => Queue.offer(checks, "read"))),
+          ),
+      }),
+    );
+    yield* Effect.gen(function* () {
+      const store = yield* SessionStore.SessionStore;
+      const ended = yield* fromCli((cli) =>
+        cli.issue({ method: "bearer-access-token", scopes: ["memory:write"] }),
+      );
+      yield* store.verify(ended.token, MAIN_LISTENER);
+      yield* barrier.arm;
+      const waiting = yield* store
+        .awaitInvalidation(ended.sessionId)
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* barrier.read;
+
+      yield* TestClock.adjust(Duration.seconds(5));
+      expect(yield* Queue.take(checks)).toBe("died");
+      expect(yield* store.readActiveScopes(ended.sessionId)).toEqual(["memory:write"]);
+
+      // Revoked after the defect: only a check that still runs can apply it.
+      yield* fromCli((cli) => cli.revoke(ended.sessionId));
+      yield* Ref.set(dying, false);
+      yield* TestClock.adjust(Duration.seconds(5));
+      expect(yield* Queue.take(checks)).toBe("read");
+      yield* Fiber.join(waiting);
+      expect((yield* store.readActiveScopes(ended.sessionId).pipe(Effect.flip))._tag).toBe(
+        "UnknownSessionTokenError",
+      );
+    }).pipe(Effect.provide(running), Effect.scoped);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
