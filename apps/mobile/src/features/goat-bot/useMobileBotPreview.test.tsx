@@ -364,6 +364,48 @@ it("a reader outside the roster shows no line in any render after a refused bot 
   stop();
 });
 
+it("a bot list refused while no roster shows that computer stays known once it goes offline", async () => {
+  state.items = [message("b1", "assistant_message", "The build is waiting on you.")];
+  resetKeptPerComputerForTests();
+  const registry = AtomRegistry.make();
+  const stop = followKeptPerComputerCatalog(registry);
+  registry.set(catalog.atom!, listed(["env"]));
+  registry.set(presentationsAtom, linked({ phase: "connected" }, { goatBotProfiles: true }));
+  registry.set(botListAtom, AsyncResult.success(botList));
+  let line: string | null = null;
+  // The main bot's chat or tile alone: the roster shows another computer, so no roster list here.
+  function Tile() {
+    line =
+      useMobileBotPreview({ environmentId: EnvironmentId.make("env"), threadId })?.text ?? null;
+    return null;
+  }
+  const root = createRoot(document.createElement("div"));
+  const show = () =>
+    act(async () =>
+      root.render(
+        <RegistryContext value={registry}>
+          <Tile />
+        </RegistryContext>,
+      ),
+    );
+  await show();
+  expect(line).toBe("The build is waiting on you.");
+  await act(async () => {
+    registry.set(
+      botListAtom,
+      AsyncResult.failure(Cause.fail(refused), {
+        previousSuccess: Option.some(AsyncResult.success(botList)),
+      }),
+    );
+  });
+  expect(line).toBeNull();
+  await act(async () => registry.set(presentationsAtom, linked({ phase: "connecting" })));
+  await show();
+  expect(line).toBeNull();
+  await act(async () => root.unmount());
+  stop();
+});
+
 it("a connection refusal clears once the computer connects again, with no bot-list read at all", async () => {
   state.items = [message("b1", "assistant_message", "The build is waiting on you.")];
   try {
