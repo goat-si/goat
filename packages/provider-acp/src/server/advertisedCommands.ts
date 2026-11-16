@@ -2,7 +2,7 @@
 export type BySession = ReadonlyMap<string, ReadonlySet<string>>;
 
 // A parent and its child sessions announce separately, and a resumed session need not announce again.
-export const MAX_SESSIONS = 8;
+const MAX_SESSIONS = 8;
 
 export const empty: BySession = new Map();
 
