@@ -8,9 +8,11 @@ import { expect, it, vi } from "vite-plus/test";
 const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   respond: vi.fn(),
+  alert: vi.fn(),
   updateCommand: {},
   respondCommand: {},
 }));
+vi.mock("../../components/ui/Dialog", () => ({ alert: mocks.alert }));
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: unknown) =>
     atom === "permission"
@@ -93,43 +95,12 @@ it("turns off the three automatic cleanup rules", async () => {
   await act(() => root.unmount());
 });
 
-it.each([
-  ["Turn off", "update"],
-  ["Clean up now", "respond"],
-] as const)(
-  "shows why %s could not reach the computer and clears it when pressed again (#3556)",
-  async (label, command) => {
-    mocks.update.mockReset();
-    mocks.respond.mockReset();
-    mocks[command]
-      .mockResolvedValueOnce(AsyncResult.failure(Cause.fail(new Error("Studio is not connected."))))
-      .mockResolvedValueOnce(AsyncResult.success(undefined));
-    const container = document.createElement("div");
-    const root = createRoot(container);
-    await act(() =>
-      root.render(
-        <WorktreeCleanupSection
-          environmentId={EnvironmentId.make("local")}
-          settings={DEFAULT_SERVER_SETTINGS.storageCleanup}
-        />,
-      ),
-    );
-    const button = () =>
-      [...container.querySelectorAll("button")].find((entry) => entry.textContent === label);
-    await act(async () => button()?.click());
-    expect(container.textContent).toContain("Studio is not connected.");
-    await act(async () => button()?.click());
-    expect(mocks[command]).toHaveBeenCalledTimes(2);
-    expect(container.textContent).not.toContain("Studio is not connected.");
-    await act(() => root.unmount());
-  },
-);
+const offline = () => AsyncResult.failure(Cause.fail(new Error("Studio is not connected.")));
 
-it("puts a number back to the saved value when saving it fails (#3556)", async () => {
+async function mountSection() {
   mocks.update.mockReset();
-  mocks.update.mockResolvedValueOnce(
-    AsyncResult.failure(Cause.fail(new Error("Studio is not connected."))),
-  );
+  mocks.respond.mockReset();
+  mocks.alert.mockReset();
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -146,15 +117,96 @@ it("puts a number back to the saved value when saving it fails (#3556)", async (
   );
   if (!field) throw new Error("Missing field");
   const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-  await act(async () => {
-    field.focus();
-    setValue?.call(field, "40");
-    field.dispatchEvent(new Event("input", { bubbles: true }));
+  return {
+    field,
+    press: (label: string) =>
+      act(async () =>
+        [...container.querySelectorAll("button")]
+          .find((entry) => entry.textContent === label)
+          ?.click(),
+      ),
+    type: (text: string) =>
+      act(async () => {
+        field.focus();
+        setValue?.call(field, text);
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+      }),
+    submit: () => act(async () => field.blur()),
+    [Symbol.asyncDispose]: async () => {
+      await act(() => root.unmount());
+      container.remove();
+    },
+  };
+}
+
+it.each([
+  ["Turn off", "update", "Could not save settings"],
+  ["Clean up now", "respond", "Could not clean up worktrees"],
+] as const)(
+  "says why %s failed in an alert and sends it again when pressed again (#3556)",
+  async (label, command, title) => {
+    await using section = await mountSection();
+    mocks[command]
+      .mockResolvedValueOnce(offline())
+      .mockResolvedValueOnce(AsyncResult.success(undefined));
+    await section.press(label);
+    expect(mocks.alert).toHaveBeenCalledExactlyOnceWith(title, "Studio is not connected.");
+    await section.press(label);
+    expect(mocks[command]).toHaveBeenCalledTimes(2);
+    expect(mocks.alert).toHaveBeenCalledOnce();
+  },
+);
+
+it("a failure on one control is still reported when another control is pressed (#3556)", async () => {
+  await using section = await mountSection();
+  mocks.respond.mockResolvedValueOnce(offline());
+  mocks.update.mockResolvedValueOnce(AsyncResult.success(undefined));
+  await section.press("Clean up now");
+  await section.press("Turn off");
+  expect(mocks.alert).toHaveBeenCalledExactlyOnceWith(
+    "Could not clean up worktrees",
+    "Studio is not connected.",
+  );
+});
+
+it("puts a number back to the saved value when saving it fails (#3556)", async () => {
+  await using section = await mountSection();
+  mocks.update.mockResolvedValueOnce(offline());
+  await section.type("40");
+  await section.submit();
+  expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "local",
+    input: { patch: { storageCleanup: { worktreeKeepRecent: 40 } } },
   });
-  await act(async () => field.blur());
-  expect(mocks.update).toHaveBeenCalledOnce();
-  expect(container.textContent).toContain("Studio is not connected.");
-  expect(field.value).toBe("15");
-  await act(() => root.unmount());
-  container.remove();
+  expect(mocks.alert).toHaveBeenCalledExactlyOnceWith(
+    "Could not save settings",
+    "Studio is not connected.",
+  );
+  expect(section.field.value).toBe("15");
+});
+
+it("a number save that fails after the person typed again leaves the new typing (#3556)", async () => {
+  await using section = await mountSection();
+  const save = Promise.withResolvers<AsyncResult.AsyncResult<unknown, unknown>>();
+  mocks.update.mockReturnValueOnce(save.promise);
+  await section.type("40");
+  await section.submit();
+  await section.type("45");
+  await act(async () => save.resolve(offline()));
+  expect(section.field.value).toBe("45");
+});
+
+it("an older number save that fails does not reset a newer one (#3556)", async () => {
+  await using section = await mountSection();
+  const older = Promise.withResolvers<AsyncResult.AsyncResult<unknown, unknown>>();
+  const newer = Promise.withResolvers<AsyncResult.AsyncResult<unknown, unknown>>();
+  mocks.update.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+  await section.type("40");
+  await section.submit();
+  await section.type("50");
+  await section.submit();
+  await act(async () => older.resolve(offline()));
+  expect(section.field.value).toBe("50");
+  await act(async () => newer.resolve(AsyncResult.success(undefined)));
+  expect(section.field.value).toBe("50");
 });

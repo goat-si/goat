@@ -389,3 +389,20 @@ it("says why an allowed app could not be removed, and removes it when pressed ag
   });
   expect(mocks.alert).toHaveBeenCalledOnce();
 });
+
+it.each([
+  ["a failure that isn't an Error", { reason: "internal" }],
+  ["an Error with no message", new Error("")],
+])(
+  "says the change was not saved when removing an allowed app fails with %s (#3556)",
+  async (_case, failure) => {
+    mocks.targets[0]!.serverConfig.settings.cuaAllowedApps = ["Safari"];
+    mocks.updateSettings.mockResolvedValueOnce(AsyncResult.failure(Cause.fail(failure)));
+    act(() => render(<SettingsEnvironmentAgentBehaviorRouteScreen />));
+    await act(async () => button("Remove Safari").click());
+    expect(mocks.alert).toHaveBeenCalledExactlyOnceWith(
+      "Could not remove the app",
+      "Local: The change was not saved. Try again.",
+    );
+  },
+);
