@@ -122,3 +122,5 @@ Checks on the merged tree (pen-macbookpro2, no other check:changed or full vites
 NOT RUN at this head: `vp run check:changed` and the full vitest suite (part 2 runs on this Mac); real client (no visible change); PostgreSQL relay tests.
 
 Merge: part 1 370a3b3c0d merged into the integration branch at 44d7d60d20 (#3519).
+
+Full goat-ci on the integration head 44d7d60d20 (the N6 + N7 part 1 tree): SUCCESS, the coordinator's manual workflow_dispatch run https://github.com/goat-si/goat/actions/runs/43881838566 (head 44d7d60d20923485898e915f5cb504750ce1da3a; goat-ci-result success; of 28 jobs, 25 succeeded and 3 were skipped by their event conditions: the ignored-event branch, the screenshot gate and the republish refresh).
