@@ -146,6 +146,21 @@ export function fallbackTextGenerationModelSelection(
   };
 }
 
+/**
+ * The model text generation runs on an instance when its saved model cannot be used, as the
+ * Settings picker resolves it: the driver's text generation default, else the status's default
+ * or first model that can generate text (Pi and OmO list "default" first).
+ */
+export function textGenerationDefaultModel(snapshot: ServerProvider): string {
+  const capable = snapshot.models.filter((model) => model.supportsTextGeneration !== false);
+  return (
+    DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[snapshot.driver] ??
+    (capable.find((model) => model.isDefault === true) ?? capable[0])?.slug ??
+    DEFAULT_MODEL_BY_PROVIDER[snapshot.driver] ??
+    DEFAULT_TEXT_GENERATION_MODEL
+  );
+}
+
 export function resolveSourceControlWriterModelSelection(
   settings: ServerSettings,
   providers: ReadonlyArray<ServerProvider> | undefined,

@@ -1,18 +1,17 @@
 import * as Effect from "effect/Effect";
 import {
-  DEFAULT_MODEL_BY_PROVIDER,
-  DEFAULT_TEXT_GENERATION_MODEL,
-  DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   isModelTextGenerationCapable,
   isProviderAvailable,
   isProviderTextGenerationCapable,
   type ModelSelection,
-  type ProviderDriverKind,
   type ServerProvider,
   type ServerSettings,
 } from "@goat/contracts";
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
-import { fallbackTextGenerationModelSelection } from "@goat/shared/serverSettings";
+import {
+  fallbackTextGenerationModelSelection,
+  textGenerationDefaultModel,
+} from "@goat/shared/serverSettings";
 
 import type * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 
@@ -24,11 +23,6 @@ const checkedSnapshot = Effect.fn("TextGeneration.checkedSnapshot")(function* (
   }
   return yield* instance.snapshot.getSnapshot;
 });
-
-const providerDefaultModel = (driver: ProviderDriverKind) =>
-  DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[driver] ??
-  DEFAULT_MODEL_BY_PROVIDER[driver] ??
-  DEFAULT_TEXT_GENERATION_MODEL;
 
 /**
  * Moves off a model or provider the status marks unable to generate text (a Pi extension
@@ -48,7 +42,7 @@ export const resolveTextGenerationCapableSelection = Effect.fn(
   if (snapshot === undefined) return selection;
   const ownDefault = {
     instanceId: selection.instanceId,
-    model: providerDefaultModel(snapshot.driver),
+    model: textGenerationDefaultModel(snapshot),
   };
   if (isProviderTextGenerationCapable(snapshot)) {
     return isModelTextGenerationCapable(snapshot, selection.model) ? selection : ownDefault;
@@ -59,6 +53,7 @@ export const resolveTextGenerationCapableSelection = Effect.fn(
     const otherSnapshot = yield* checkedSnapshot(other);
     if (otherSnapshot !== undefined) others.set(other.instanceId, otherSnapshot);
   }
+  // The web picker takes the fallback instance's default model, never the thread's custom default.
   const fallback = fallbackTextGenerationModelSelection(
     settings.providerInstances,
     (instanceId) => {
@@ -69,7 +64,9 @@ export const resolveTextGenerationCapableSelection = Effect.fn(
         isProviderTextGenerationCapable(candidate)
       );
     },
-    { defaultModelSelection: settings.defaultModelSelection },
   );
-  return fallback ?? ownDefault;
+  const fallbackSnapshot = fallback === null ? undefined : others.get(fallback.instanceId);
+  return fallback === null || fallbackSnapshot === undefined
+    ? ownDefault
+    : { instanceId: fallback.instanceId, model: textGenerationDefaultModel(fallbackSnapshot) };
 });

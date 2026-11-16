@@ -323,6 +323,7 @@ const textProvider = (
 
 const PI = ProviderInstanceId.make("pi");
 const CODEX = ProviderInstanceId.make("codex");
+const OMO = ProviderInstanceId.make("omo");
 
 const capableSelectionHarness = (
   snapshots: ReadonlyArray<M.ServerProvider>,
@@ -406,6 +407,34 @@ describe("TextGeneration model Settings no longer offers", () => {
         createModelSelection(PI, "demo/demo-model"),
       );
       expect(ran).toEqual([{ instanceId: PI, model: "default" }]);
+    }),
+  );
+
+  // OmO has no text generation default in the model tables; Settings shows its first listed model.
+  it.effect.each([
+    ["a flagged OmO model", OMO, false, false],
+    ["OmO flagged as a whole with no other provider", OMO, true, false],
+    ["Pi flagged as a whole with OmO the first capable fallback", PI, true, true],
+  ] as const)("runs OmO's own default for %s", ([, saved, wholeListing, withOmoFallback]) =>
+    Effect.gen(function* () {
+      const flagged = [
+        { slug: "default" },
+        { slug: "demo/demo-model", supportsTextGeneration: false as const },
+      ];
+      const { ran, generation } = capableSelectionHarness([
+        textProvider(
+          saved,
+          saved === OMO ? "omo" : "pi",
+          flagged,
+          wholeListing ? false : undefined,
+        ),
+        ...(withOmoFallback ? [textProvider(OMO, "omo", [{ slug: "default" }])] : []),
+      ]);
+      yield* generateBranch(
+        yield* generation.pipe(Effect.provide(ServerSettings.layerTest())),
+        createModelSelection(saved, "demo/demo-model"),
+      );
+      expect(ran).toEqual([{ instanceId: OMO, model: "default" }]);
     }),
   );
 
