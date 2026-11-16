@@ -29,6 +29,10 @@ const NO_RECORDS: ReadonlySet<string> = new Set();
 const recordKey = (taskId: string, questionId: string) => taskId + "\u0000" + questionId;
 const hasWords = (answer: TypedAnswer | undefined) =>
   answer !== undefined && answer.text.trim() !== "";
+const isRecorded = (answer: TypedAnswer | undefined, recorded: ReadonlySet<string>) =>
+  answer?.taskId !== undefined &&
+  answer.questionId !== undefined &&
+  recorded.has(recordKey(answer.taskId, answer.questionId));
 
 /** Every question a task's newest chip records an answer to. */
 function recordedQuestions(items: ReadonlyArray<OrchestrationV2ProjectedTurnItem>) {
@@ -57,10 +61,17 @@ export function GoatBotTypedAnswersScope({
   readonly children: ReactNode;
 }) {
   const [state, setState] = useState({ destination, answers: NO_ANSWERS });
-  if (destination !== null && destination !== state.destination)
-    setState({ destination, answers: state.destination === null ? state.answers : NO_ANSWERS });
   const tracking = state.answers.size > 0;
   const recorded = tracking ? recordedQuestions(visibleTurnItems) : NO_RECORDS;
+  if (destination !== null && destination !== state.destination) {
+    setState({ destination, answers: state.destination === null ? state.answers : NO_ANSWERS });
+  } else if (tracking) {
+    // An answer its task recorded while the field held no words has ended; nothing is left to show.
+    const answers = new Map(state.answers);
+    for (const [rowId, answer] of state.answers)
+      if (!hasWords(answer) && isRecorded(answer, recorded)) answers.delete(rowId);
+    if (answers.size !== state.answers.size) setState({ destination: state.destination, answers });
+  }
   const holding = [...state.answers.values()].some(hasWords);
   const update = (rowId: string, next: TypedAnswer | null) =>
     setState((previous) => {
@@ -87,10 +98,7 @@ export function useGoatBotTypedAnswer(row: QuestionRow) {
     row.answerTaskId === undefined
       ? { taskId: answer?.taskId, questionId: answer?.questionId }
       : { taskId: row.answerTaskId, questionId: row.answerQuestionId };
-  const ended =
-    answer?.taskId !== undefined &&
-    answer.questionId !== undefined &&
-    scope.recorded.has(recordKey(answer.taskId, answer.questionId));
+  const ended = isRecorded(answer, scope.recorded);
   return {
     text: answer?.text ?? "",
     kept: answer !== undefined,
@@ -99,10 +107,10 @@ export function useGoatBotTypedAnswer(row: QuestionRow) {
     /** The words stay visible, unsent, until the person discards them. */
     unsent: hasWords(answer) && (ended || answer?.held === true),
     target,
-    /** Enter would send a task message the main chat hides, so the words are held instead. */
+    /** A closed card's Enter would send a task message the main chat hides, so the words are held. */
     gated:
       scope.mainChat &&
-      row.answerTaskId === undefined &&
+      row.options.length === 0 &&
       target.taskId !== undefined &&
       target.questionId === undefined,
     set: (text: string) => scope.update(row.id, { text, ...target }),
@@ -111,7 +119,7 @@ export function useGoatBotTypedAnswer(row: QuestionRow) {
     },
     remove: () => scope.update(row.id, null),
     dropIfEmpty: () => {
-      if (answer !== undefined && answer.text === "") scope.update(row.id, null);
+      if (answer !== undefined && !hasWords(answer)) scope.update(row.id, null);
     },
   };
 }
