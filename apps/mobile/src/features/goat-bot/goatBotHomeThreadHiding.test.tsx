@@ -54,6 +54,12 @@ const fx = vi.hoisted(() => ({
   /** Every read the stand-in server was asked for, as tag and target. */
   reads: [] as string[],
 }));
+// Keeping answers for offline is not under test here: the live answer, from a readable computer.
+vi.mock("./useKeptPerComputer", () => ({
+  useKeptPerComputer: (_kind: string, _environmentId: unknown, live: { data: unknown }) =>
+    live.data,
+  useComputerReadable: () => true,
+}));
 vi.mock("../../state/atom-registry", async () => {
   const { AtomRegistry } = await import("effect/reactivity");
   fx.registry = AtomRegistry.make();

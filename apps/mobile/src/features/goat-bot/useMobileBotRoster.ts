@@ -6,7 +6,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { pickMobileGoatBotHomeEnvironment } from "./goatBotHomeMode";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { syncMobileGoatBotMembers } from "./mobileGoatBotMembers";
-import { useKeptPerComputer } from "./useKeptPerComputer";
+import { useComputerReadable, useKeptPerComputer } from "./useKeptPerComputer";
 
 /**
  * The bot list: bots only. The work each bot started is listed in that bot's home sheet. While the
@@ -34,6 +34,7 @@ export function useMobileBotRoster() {
       : null,
   );
   const bots = useKeptPerComputer("bots", environmentId, profiles, !connected)?.bots;
+  const readable = useComputerReadable(environmentId);
   // oxlint-disable-next-line goat/react-effect-budget -- Keep the environment's send queue to the members the roster lists as active.
   useEffect(() => {
     if (environmentId !== null && supportsMembers && bots !== undefined)
@@ -53,7 +54,7 @@ export function useMobileBotRoster() {
     connected,
     computerLabel: selected?.label ?? null,
     environmentId,
-    slackEnabled: slack.data?.some((connection) => connection.enabled) === true,
+    slackEnabled: readable && slack.data?.some((connection) => connection.enabled) === true,
     error: profiles.error,
     /** Every bot the list holds, hidden and deleted included; null before it has answered. */
     listedBots: bots ?? null,
@@ -105,7 +106,8 @@ export function useMobileGoatBotMember(botId: string | undefined) {
       botId !== undefined &&
       member === null &&
       (!supported ||
-        (!profiles.isPending && profiles.isSuccess) ||
+        // Only the list itself says so: one being read again after a refusal or removal shows none.
+        (!profiles.isPending && profiles.isSuccess && listed !== null) ||
         (!connected && listed !== null)),
   };
 }

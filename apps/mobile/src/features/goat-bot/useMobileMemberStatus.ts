@@ -1,5 +1,5 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import type { GoatBotRowStatus } from "@goat/client-runtime/goatBot";
+import { accessDenied, type GoatBotRowStatus } from "@goat/client-runtime/goatBot";
 import type { BotProfile, ChannelGetBotStatusResult } from "@goat/contracts";
 import { useEffect } from "react";
 
@@ -7,12 +7,13 @@ import { channelEnvironment } from "../../state/channels";
 import { useThreadShell } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
+import { useComputerReadable } from "./useKeptPerComputer";
 
 /**
  * How many of a member's tasks wait on a person, its conversation's newest message, and whether
  * that message is the bot's and arrived after the last visit. One cached read per member, read
  * again only when that member's conversation changes or is visited. \`status\` is what its row face
- * reads, null until the server has answered.
+ * reads, null until the server has answered or once that read is refused.
  */
 export function useMobileMemberStatus(bot: BotProfile): {
   readonly waitingCount: number;
@@ -24,6 +25,8 @@ export function useMobileMemberStatus(bot: BotProfile): {
   readonly latest: ChannelGetBotStatusResult["latest"];
   readonly unread: boolean;
   readonly status: GoatBotRowStatus | null;
+  /** This phone may not read the member now: its status read or its computer refused it. */
+  readonly unreadable: boolean;
 } {
   const { presentationById } = useEnvironments();
   const presentation = presentationById.get(bot.environmentId);
@@ -47,14 +50,17 @@ export function useMobileMemberStatus(bot: BotProfile): {
   useEffect(() => {
     if (supported && revision !== null) refresh();
   }, [supported, revision, refresh]);
-  const latest = status.data?.latest;
+  // A refused read still holds its earlier answer beside the refusal; it is not shown.
+  const refused = accessDenied(status.cause);
+  const readable = useComputerReadable(bot.environmentId);
+  const data = refused ? null : (status.data ?? null);
+  const latest = data?.latest;
   // A server that records no visits (lastVisitedAt absent) cannot say what was read.
   const tracksVisits = shell !== null && shell.lastVisitedAt !== undefined;
   const unread =
     tracksVisits &&
     latest?.author === "bot" &&
     (lastVisitedAt === null || Date.parse(latest.at) > Date.parse(lastVisitedAt));
-  const data = status.data ?? null;
   const capabilities = presentation?.serverConfig?.environment.capabilities;
   // A count that ignores visits never clears when the person reads the member's chat.
   const visitAware =
@@ -80,5 +86,6 @@ export function useMobileMemberStatus(bot: BotProfile): {
             latest: data.latest,
             ...(data.tasks === undefined ? {} : { tasks: data.tasks }),
           },
+    unreadable: refused || !readable,
   };
 }

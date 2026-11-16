@@ -1,4 +1,6 @@
+import { RegistryContext } from "@effect/atom-react";
 import {
+  useContext,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -20,7 +22,7 @@ import {
   type CreateNewBot,
   type OpenIfStillHere,
 } from "@goat/client-runtime/goatBot";
-import type { BotProfile, ChannelTaskId } from "@goat/contracts";
+import type { BotProfile, ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import { useNavigation, type NavigationProp, type ParamListBase } from "@react-navigation/native";
 import { Alert, type AlertButton, AppState, Pressable, Text, View } from "react-native";
 import { uuidv4 } from "../../lib/uuid";
@@ -31,6 +33,7 @@ import { useMobileBotRoster } from "./useMobileBotRoster";
 import { useMobileBotPreview } from "./useMobileBotPreview";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileBotManage } from "./useMobileBotManage";
+import { isComputerReadable, useComputerReadable } from "./useKeptPerComputer";
 
 export function MobileBotRoster(props: {
   header?: ReactNode;
@@ -40,18 +43,31 @@ export function MobileBotRoster(props: {
   visible?: boolean;
 }) {
   const roster = useMobileBotRoster();
-  const preview = useMobileBotPreview(useMobileGoatBotHomeMode().botRef);
+  const botRef = useMobileGoatBotHomeMode().botRef;
+  const preview = useMobileBotPreview(botRef);
+  const mainReadable = useComputerReadable(botRef?.environmentId ?? null);
+  const rosterReadable = useComputerReadable(roster.environmentId);
   const mainName = goatBotName(roster.groups.main);
   const manage = useMobileBotManage(roster.environmentId, mainName);
-  const [editing, setEditing] = useState<BotProfile | null>(null);
+  // A sheet or menu belongs to the roster computer it was opened on.
+  const [editing, setEditing] = useState<{
+    readonly profile: BotProfile;
+    readonly environmentId: EnvironmentId | null;
+  } | null>(null);
+  // The sheet holds the bot's profile: it closes for good once the roster leaves its computer or
+  // that computer may not be read.
+  if (editing !== null && (editing.environmentId !== roster.environmentId || !rosterReadable))
+    setEditing(null);
   // A row's action menu is a native alert: open from the long press until a choice or dismissal.
   const [menuOpen, setMenuOpen] = useState(false);
+  const registry = useContext(RegistryContext);
   const menu = (
     title: string,
     message: string | undefined,
     buttons: ReadonlyArray<AlertButton>,
   ) => {
     setMenuOpen(true);
+    const openedOn = environmentId;
     Alert.alert(
       title,
       message,
@@ -59,7 +75,12 @@ export function MobileBotRoster(props: {
         ...button,
         onPress: () => {
           setMenuOpen(false);
-          button.onPress?.();
+          // An alert cannot be withdrawn: a choice acts only while this roster is mounted and
+          // visible, on its computer, and may read it, as the store says now.
+          const now = mount.current;
+          const live = openedOn !== null && isComputerReadable(registry, openedOn);
+          const shown = now.mounted && now.visible;
+          if (shown && now.environmentId === openedOn && now.readable && live) button.onPress?.();
         },
       })),
       { cancelable: true, onDismiss: () => setMenuOpen(false) },
@@ -72,15 +93,21 @@ export function MobileBotRoster(props: {
     manage.create({ name, avatar: null, purpose: "" }, null, clientRequestId);
   const { onOpenBot } = props;
   const navigation = useNavigation();
-  // This roster mount as it is now: mounted, on screen, presenting a sheet or menu of its own, and
-  // its environment. A create's answer reads it then; the open belongs to the mount that was tapped.
+  // This roster mount as it is now: mounted, on screen, presenting a sheet or menu of its own, its
+  // environment and whether it may be read. A create's answer and a menu choice read it then.
   const visible = props.visible !== false;
   const presenting = editing !== null || menuOpen;
-  const mount = useRef({ mounted: true, visible, presenting, environmentId });
+  const mount = useRef({
+    mounted: true,
+    visible,
+    presenting,
+    environmentId,
+    readable: rosterReadable,
+  });
   // oxlint-disable-next-line goat/react-effect-budget -- A create answers later; it must read this mount's committed state.
   useLayoutEffect(() => {
-    mount.current = { mounted: true, visible, presenting, environmentId };
-  }, [visible, presenting, environmentId]);
+    mount.current = { mounted: true, visible, presenting, environmentId, readable: rosterReadable };
+  }, [visible, presenting, environmentId, rosterReadable]);
   // oxlint-disable-next-line goat/react-effect-budget -- An unmounted roster (the Bots / Threads switch) opens nothing when its create answers.
   useEffect(() => {
     const owner = mount;
@@ -127,7 +154,7 @@ export function MobileBotRoster(props: {
   const askAbout = (entry: BotRosterEntry) => {
     const bot = entry.profile;
     if (bot === null) return;
-    const edit = { text: "Edit", onPress: () => setEditing(bot) };
+    const edit = { text: "Edit", onPress: () => setEditing({ profile: bot, environmentId }) };
     const cancel = { text: "Cancel", style: "cancel" as const };
     if (entry.kind === "main") {
       if (manage.canEdit) menu(bot.name, undefined, [edit, cancel]);
@@ -206,14 +233,15 @@ export function MobileBotRoster(props: {
         }
         slackEnabled={roster.slackEnabled}
         preview={preview?.text}
+        mainUnreadable={!mainReadable}
         unread={preview?.unread}
-        mainEnvironmentId={environmentId}
+        mainEnvironmentId={rosterReadable ? environmentId : null}
         onOpenBot={props.onOpenBot}
         onOpenTask={props.onOpenTask}
         onUnknownBot={roster.refreshBots ?? undefined}
         visible={props.visible}
         newBotRow={
-          environmentId !== null && (operation !== null || created.length > 0) ? (
+          environmentId !== null && rosterReadable && (operation !== null || created.length > 0) ? (
             <MobileNewBotStatus
               operation={operation}
               created={created}
@@ -225,12 +253,20 @@ export function MobileBotRoster(props: {
           ) : null
         }
       />
-      {editing !== null && environmentId !== null ? (
+      {editing !== null && editing.environmentId !== null ? (
         <MobileBotEditSheet
-          key={editing.botId}
-          bot={editing}
-          environmentId={environmentId}
-          manage={manage}
+          key={editing.profile.botId}
+          bot={editing.profile}
+          environmentId={editing.environmentId}
+          manage={{
+            ...manage,
+            // Save reads the store when pressed: a refusal not yet rendered sends nothing, and
+            // the sheet closes on that render.
+            update: (...args: Parameters<typeof manage.update>) =>
+              editing.environmentId !== null && isComputerReadable(registry, editing.environmentId)
+                ? manage.update(...args)
+                : Promise.resolve(null),
+          }}
           mainName={mainName}
           onClose={() => setEditing(null)}
         />

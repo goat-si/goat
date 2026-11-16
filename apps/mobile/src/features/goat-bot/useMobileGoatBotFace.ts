@@ -40,6 +40,8 @@ export function useMobileGoatBotFace(
    * conversation's detail. The status says what waits, whether the bot is reading, and its work.
    */
   row?: { readonly status: GoatBotRowStatus | null },
+  /** A bot this phone may no longer read: idle at once, without the face hold. */
+  rest?: boolean,
 ): {
   readonly state: GoatBotFaceState;
   readonly since: number | null;
@@ -81,6 +83,7 @@ export function useMobileGoatBotFace(
   if (track.key !== key || due) {
     setTrack((previous) => advanceGoatBotFace(previous, input, Date.now()));
   }
+  if (rest === true) return { state: "idle", since: null };
   const state = track.hold.shown;
   const runStartedAt = (shell?.source ?? null)?.activityRunStartedAt;
   // Which work started last decides which of several working faces moves.

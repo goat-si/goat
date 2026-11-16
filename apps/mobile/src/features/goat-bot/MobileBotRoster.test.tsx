@@ -1,5 +1,8 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
+import { RegistryContext } from "@effect/atom-react";
+import * as Cause from "effect/Cause";
+import { AsyncResult, type Atom, AtomRegistry } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
@@ -51,6 +54,8 @@ const state = vi.hoisted(() => ({
   },
   appState: "active",
   rosterError: null as string | null,
+  mainUnreadable: false,
+  view: { preview: undefined as string | undefined, mainEnvironmentId: null as string | null },
 }));
 vi.mock("@react-navigation/native", () => ({
   useNavigation: () => ({ getState: () => state.navState, getParent: () => undefined }),
@@ -76,9 +81,60 @@ vi.mock("react-native", () => ({
     },
   },
 }));
-vi.mock("./useMobileBotPreview", () => ({ useMobileBotPreview: () => null }));
+// The computers this phone may no longer read; the main bot's saved computer is "env" unless a test moves it.
+const readable = vi.hoisted(() => ({ refused: new Set(["old"]), botComputer: "env" }));
+// As the real preview, nothing from a computer this phone may no longer read.
+vi.mock("./useMobileBotPreview", () => ({
+  useMobileBotPreview: (botRef: { environmentId: string } | null) =>
+    botRef === null || readable.refused.has(botRef.environmentId)
+      ? null
+      : { text: "The build is waiting on you.", unread: false },
+}));
+// Readability is the real one, over the stand-ins below, narrowed by the computers a test refuses.
+vi.mock("./useKeptPerComputer", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./useKeptPerComputer")>();
+  return {
+    ...actual,
+    useComputerReadable: (environmentId: string | null) =>
+      actual.useComputerReadable(environmentId as never) &&
+      environmentId !== null &&
+      !readable.refused.has(environmentId),
+  };
+});
+// Every computer a test names is in the app's catalog.
+vi.mock("../../connection/catalog", async () => {
+  const { Atom } = await import("effect/reactivity");
+  class Everyone extends Map<string, object> {
+    override has() {
+      return true;
+    }
+  }
+  return {
+    environmentCatalog: {
+      catalogValueAtom: Atom.make({ isReady: true, entries: new Everyone() }),
+    },
+  };
+});
+vi.mock("../../state/presentation", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return { environmentPresentations: { presentationsAtom: Atom.make(new Map()) } };
+});
+// The bot list every reader of a computer shares.
+vi.mock("../../state/channels", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const read = Atom.make<AsyncResult.AsyncResult<unknown, unknown>>(AsyncResult.initial());
+  return { channelEnvironment: { listBots: () => read } };
+});
+// Needs you's open asks read, refreshed when a computer refuses or leaves; idle here.
+vi.mock("./openAsksRead", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const idle = Atom.make(AsyncResult.initial());
+  return { openAsks: () => idle };
+});
 vi.mock("./useMobileGoatBotHomeMode", () => ({
-  useMobileGoatBotHomeMode: () => ({ botRef: null }),
+  useMobileGoatBotHomeMode: () => ({
+    botRef: { environmentId: readable.botComputer, threadId: "bot" },
+  }),
 }));
 vi.mock("./useMobileBotRoster", () => ({
   useMobileBotRoster: () => ({
@@ -102,8 +158,13 @@ vi.mock("./MobileBotRosterView", () => ({
     members?: Record<string, unknown>;
     header?: React.ReactNode;
     newBotRow?: React.ReactNode;
+    mainUnreadable?: boolean;
+    preview?: string;
+    mainEnvironmentId?: string | null;
   }) => {
     state.members = props.members ?? null;
+    state.mainUnreadable = props.mainUnreadable === true;
+    state.view = { preview: props.preview, mainEnvironmentId: props.mainEnvironmentId ?? null };
     return (
       <>
         {props.header}
@@ -134,10 +195,26 @@ vi.mock("./MobileBotProfileSheet", () => ({
     children?: React.ReactNode;
   }) => {
     state.sheet = props;
-    return <>{props.children}</>;
+    return (
+      <>
+        <p>{(props as { initial?: { name?: string } }).initial?.name}</p>
+        {props.children}
+      </>
+    );
   },
 }));
 import { MobileBotRoster } from "./MobileBotRosterPanel";
+import { channelEnvironment } from "../../state/channels";
+import { environmentPresentations } from "../../state/presentation";
+import { followKeptPerComputerCatalog } from "./useKeptPerComputer";
+
+const presentationsAtom = environmentPresentations.presentationsAtom as unknown as Atom.Writable<
+  ReadonlyMap<string, object>
+>;
+const botListAtom = channelEnvironment.listBots({
+  environmentId: "env" as never,
+  input: {},
+}) as unknown as Atom.Writable<AsyncResult.AsyncResult<unknown, unknown>>;
 const member = { botId: "research", name: "Research", hidden: false };
 type Choice = { text: string; onPress?: () => void };
 const choices = () => state.alert.mock.calls.at(-1)?.[2] as Array<Choice>;
@@ -499,4 +576,261 @@ it("opens nothing for a retried create that returns a bot already deleted", asyn
   expect(view.opened).not.toHaveBeenCalled();
   expect(view.container.textContent).toBe("");
   await view.unmount();
+});
+
+it("rests the main tile by the computer its saved bot lives on, not the one the roster lists", async () => {
+  // The saved bot is on a computer this phone may no longer read; the roster still lists "env".
+  readable.botComputer = "old";
+  try {
+    const root = createRoot(document.createElement("div"));
+    await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
+    expect(state.mainUnreadable).toBe(true);
+    readable.botComputer = "env";
+    await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
+    expect(state.mainUnreadable).toBe(false);
+    await act(async () => root.unmount());
+  } finally {
+    readable.botComputer = "env";
+  }
+});
+
+it("once the roster's computer may no longer be read, the main tile has no line and Needs you no computer", async () => {
+  state.roster.environmentId = "env";
+  readable.botComputer = "env";
+  const root = createRoot(document.createElement("div"));
+  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
+  expect(state.view).toEqual({ preview: "The build is waiting on you.", mainEnvironmentId: "env" });
+  readable.refused.add("env");
+  try {
+    await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
+    expect(state.mainUnreadable).toBe(true);
+    expect(state.view).toEqual({ preview: undefined, mainEnvironmentId: null });
+  } finally {
+    readable.refused.delete("env");
+    await act(async () => root.unmount());
+  }
+});
+
+it("shows no created bot's row once its computer may no longer be read", async () => {
+  const view = await newBotRoster();
+  await view.tap();
+  await view.answer(stored("research", "New bot"));
+  expect(view.container.textContent).toContain("New bot");
+  const environmentId = state.roster.environmentId;
+  readable.refused.add(environmentId);
+  try {
+    await view.draw();
+    expect(view.container.textContent).toBe("");
+  } finally {
+    readable.refused.delete(environmentId);
+    await view.unmount();
+  }
+});
+
+/** The roster on its own computer, in a registry that follows refusals as the app's does. */
+async function refusableRoster(environmentId: string) {
+  state.alert.mockClear();
+  state.manage.hide.mockClear();
+  state.manage.restore.mockClear();
+  state.roster.environmentId = environmentId;
+  const registry = AtomRegistry.make();
+  const stop = followKeptPerComputerCatalog(registry);
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  let visible = true;
+  const draw = () =>
+    act(async () =>
+      root.render(
+        <RegistryContext value={registry}>
+          <MobileBotRoster selectedKey={null} onOpenBot={() => {}} visible={visible} />
+        </RegistryContext>,
+      ),
+    );
+  await draw();
+  const members = () =>
+    state.members as {
+      onLongPressBot: (entry: object) => void;
+      onRestoreDeleted: (bot: object) => void;
+    };
+  const setLink = (connection: object) =>
+    registry.set(
+      presentationsAtom,
+      new Map([
+        [
+          environmentId,
+          {
+            connection,
+            serverConfig: { environment: { capabilities: { goatBotProfiles: true } } },
+          },
+        ],
+      ]),
+    );
+  const link = (connection: object) => act(async () => setLink(connection));
+  let left = false;
+  return {
+    container,
+    members,
+    link,
+    /** The connection changes in the store; React has not rendered it yet. */
+    linkNow: setLink,
+    /** The person navigates away: the roster unmounts while a native alert stays up. */
+    leave: () => {
+      left = true;
+      return act(async () => root.unmount());
+    },
+    /** Home covers the roster: it stays mounted, hidden, while a native alert stays up. */
+    cover: () => {
+      visible = false;
+      return draw();
+    },
+    /** Home's selection moves the roster to another computer, which this phone may read. */
+    moveTo: (other: string) => {
+      state.roster.environmentId = other;
+      return draw();
+    },
+    answerList: (result: AsyncResult.AsyncResult<unknown, unknown>) =>
+      act(async () => registry.set(botListAtom, result)),
+    /** The bot list answers in the store; React has not rendered it yet. */
+    answerListNow: (result: AsyncResult.AsyncResult<unknown, unknown>) =>
+      registry.set(botListAtom, result),
+    longPress: () => act(async () => members().onLongPressBot({ kind: "member", profile: member })),
+    choose: (text: string) => act(async () => choose(text)),
+    [Symbol.asyncDispose]: async () => {
+      if (!left) await act(async () => root.unmount());
+      stop();
+    },
+  };
+}
+const refusedList = AsyncResult.failure(
+  Cause.fail({ _tag: "EnvironmentAuthorizationError", message: "Not allowed." }),
+);
+
+it("closes an open Edit sheet, and the bot's name in it, once the bot list or the connection refuses", async () => {
+  await using view = await refusableRoster("env");
+  await view.link({ phase: "connected" });
+  await view.answerList(AsyncResult.success({ bots: [] }));
+  await view.longPress();
+  await view.choose("Edit");
+  expect(view.container.textContent).toContain("Research");
+  await view.answerList(refusedList);
+  expect(view.container.textContent).not.toContain("Research");
+  // Readable again, Edit opens again; then the connection refuses this phone.
+  await view.answerList(AsyncResult.success({ bots: [] }));
+  await view.longPress();
+  await view.choose("Edit");
+  expect(view.container.textContent).toContain("Research");
+  await view.link({ phase: "error", failure: { kind: "blocked", reason: "authentication" } });
+  expect(view.container.textContent).not.toContain("Research");
+  // Closed, not hidden: connecting again does not bring the sheet back.
+  await view.link({ phase: "connected" });
+  expect(view.container.textContent).not.toContain("Research");
+});
+
+it("an action menu opened before a refusal does nothing when a choice is pressed after it", async () => {
+  await using view = await refusableRoster("env-menu");
+  await view.longPress();
+  await view.link({ phase: "error", failure: { kind: "blocked", reason: "permission" } });
+  await view.choose("Hide");
+  expect(state.manage.hide).not.toHaveBeenCalled();
+  await view.longPress();
+  await view.choose("Edit");
+  expect(view.container.textContent).not.toContain("Research");
+  await view.longPress();
+  const menus = state.alert.mock.calls.length;
+  await view.choose("Delete");
+  // No confirmation follows: the Delete pressed after the refusal opened nothing.
+  expect(state.alert.mock.calls.length).toBe(menus);
+});
+
+it("a menu left open does nothing once the roster has left the screen", async () => {
+  await using view = await refusableRoster("env-a");
+  await view.longPress();
+  await view.leave();
+  await view.choose("Hide");
+  expect(state.manage.hide).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["Hide", "hide", (view: Awaited<ReturnType<typeof refusableRoster>>) => view.longPress()],
+  [
+    "Delete",
+    "remove",
+    async (view: Awaited<ReturnType<typeof refusableRoster>>) => {
+      await view.longPress();
+      await view.choose("Delete");
+    },
+  ],
+  [
+    "Restore",
+    "restore",
+    (view: Awaited<ReturnType<typeof refusableRoster>>) =>
+      act(async () => view.members().onRestoreDeleted({ ...member, state: "deleted" })),
+  ],
+] as const)(
+  "a %s choice does nothing once its roster is hidden but still mounted",
+  async (choice, action, open) => {
+    await using view = await refusableRoster("env-cover");
+    await open(view);
+    await view.cover();
+    await view.choose(choice);
+    expect(state.manage[action]).not.toHaveBeenCalled();
+  },
+);
+
+it("a menu choice pressed after a refusal reaches the store, before the roster renders it, does nothing", async () => {
+  await using view = await refusableRoster("env");
+  await view.link({ phase: "connected" });
+  await view.answerList(AsyncResult.success({ bots: [] }));
+  await view.longPress();
+  view.linkNow({ phase: "error", failure: { kind: "blocked", reason: "authentication" } });
+  await view.choose("Hide");
+  expect(state.manage.hide).not.toHaveBeenCalled();
+});
+
+it("a Restore confirmation opened before a refusal restores nothing when pressed after it", async () => {
+  await using view = await refusableRoster("env-restore");
+  await act(async () => view.members().onRestoreDeleted({ ...member, state: "deleted" }));
+  await view.link({ phase: "error", failure: { kind: "blocked", reason: "authentication" } });
+  await view.choose("Restore");
+  expect(state.manage.restore).not.toHaveBeenCalled();
+});
+
+it("an Edit sheet opened on one computer closes once Home moves the roster to another and the first refuses", async () => {
+  await using view = await refusableRoster("env-a");
+  await view.longPress();
+  await view.choose("Edit");
+  expect(view.container.textContent).toContain("Research");
+  await view.moveTo("env-b");
+  await view.link({ phase: "error", failure: { kind: "blocked", reason: "authentication" } });
+  expect(view.container.textContent).not.toContain("Research");
+});
+
+it("a menu opened on one computer does nothing once Home has moved the roster to another", async () => {
+  await using view = await refusableRoster("env-a");
+  await view.longPress();
+  await view.moveTo("env-b");
+  await view.choose("Hide");
+  expect(state.manage.hide).not.toHaveBeenCalled();
+  await view.moveTo("env-a");
+  await view.longPress();
+  await view.moveTo("env-b");
+  const menus = state.alert.mock.calls.length;
+  await view.choose("Delete");
+  // No confirmation follows: the Delete pressed on the other computer opened nothing.
+  expect(state.alert.mock.calls.length).toBe(menus);
+});
+
+it("Save in an open Edit sheet sends nothing once a bot-list refusal reaches the store, before it renders", async () => {
+  await using view = await refusableRoster("env");
+  await view.link({ phase: "connected" });
+  await view.answerList(AsyncResult.success({ bots: [] }));
+  await view.longPress();
+  await view.choose("Edit");
+  const sheet = state.sheet;
+  expect(sheet).not.toBeNull();
+  view.answerListNow(refusedList);
+  await act(async () => {
+    await sheet?.onSubmit({ name: "Research 2" });
+  });
+  expect(state.manage.update).not.toHaveBeenCalled();
 });
