@@ -321,21 +321,27 @@ export const make = Effect.gen(function* () {
   const emitUpsert = (clientSession: AuthClientSession) =>
     PubSub.publish(changesPubSub, { type: "clientUpserted", clientSession }).pipe(Effect.asVoid);
 
-  const emitRemoved = (sessionId: AuthSessionId) =>
+  /** Removes the grants in one update, fenced against running verifies, then announces each. */
+  const removeGrants = (sessionIds: ReadonlyArray<AuthSessionId>) =>
     Ref.update(activeScopes, (current) => {
       const records = new Map(current.records);
-      records.delete(sessionId);
+      const removed = new Map(current.removed);
       const removals = current.removals + 1;
-      return {
-        ...current,
-        records,
-        removals,
-        removed: neededFences(new Map(current.removed).set(sessionId, removals), current.verifying),
-      };
+      for (const sessionId of sessionIds) {
+        records.delete(sessionId);
+        removed.set(sessionId, removals);
+      }
+      return { ...current, records, removals, removed: neededFences(removed, current.verifying) };
     }).pipe(
-      Effect.andThen(PubSub.publish(changesPubSub, { type: "clientRemoved", sessionId })),
+      Effect.andThen(
+        PubSub.publishAll(
+          changesPubSub,
+          sessionIds.map((sessionId) => ({ type: "clientRemoved", sessionId }) as const),
+        ),
+      ),
       Effect.asVoid,
     );
+  const emitRemoved = (sessionId: AuthSessionId) => removeGrants([sessionId]);
 
   const cloudFence = yield* CloudSessionFence.make(activeScopeRows, emitRemoved);
 
@@ -345,11 +351,7 @@ export const make = Effect.gen(function* () {
       const next = new Map(current);
       for (const sessionId of sessionIds) next.delete(sessionId);
       return next;
-    }).pipe(
-      Effect.andThen(
-        Effect.forEach(sessionIds, emitRemoved, { concurrency: "unbounded", discard: true }),
-      ),
-    );
+    }).pipe(Effect.andThen(removeGrants(sessionIds)));
   const liveSessionIds = Effect.map(
     Effect.all([Ref.get(activeScopes), Ref.get(connectedSessionsRef)]),
     ([scopes, connected]) => [...new Set([...scopes.records.keys(), ...connected.keys()])],

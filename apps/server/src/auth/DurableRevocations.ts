@@ -3,6 +3,7 @@ import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 
 import type * as AuthSessions from "../persistence/AuthSessions.ts";
@@ -10,10 +11,8 @@ import type * as AuthSessions from "../persistence/AuthSessions.ts";
 const CHECK_INTERVAL = Duration.seconds(5);
 
 /**
- * Ends live sessions another process revoked or whose rows are gone: `goat auth session revoke`,
- * `goat logout` and `goat login` write SQLite from their own process. Only ids a successful read
- * left out count as ended, so a failed read ends nothing. The first check waits one interval, so a
- * short CLI command that builds this store never runs one.
+ * Ends live sessions that another process (the CLI) revoked or deleted. Only ids a successful read
+ * left out count as ended. The first check waits one interval, so a short CLI command runs none.
  */
 // Untraced: a span here would parent every pass for the server's life; each pass has its own.
 export const start = Effect.fnUntraced(function* (input: {
@@ -51,7 +50,13 @@ export const start = Effect.fnUntraced(function* (input: {
               ? Effect.void
               : Effect.logWarning(
                   "Could not check for sessions revoked elsewhere; retrying every 5 seconds",
-                  { cause: Cause.pretty(cause) },
+                  // A bounded category only: a defect's text could carry anything.
+                  {
+                    reason: Option.getOrElse(
+                      Option.map(Cause.findErrorOption(cause), (error) => error._tag),
+                      () => "defect",
+                    ),
+                  },
                 ),
           ),
         ),
