@@ -1126,8 +1126,6 @@ export const layerWith = <RA, RE, RR>(extra: Layer.Layer<RA, RE, RR>) =>
     Layer.provide(Profiles.layer),
   );
 
-export const layer = layerWith(Layer.empty);
-
 // L5 composes these after the domain and committed policy producers are ready.
 export const layerMemoryToolkit = catalogRegistrations.memory;
 export const layerMemoryAdministrationToolkit = catalogRegistrations.memoryAdministration;
