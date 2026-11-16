@@ -1,5 +1,5 @@
 import { htmlRenderFromToolItem } from "@goat/shared/toolOutput";
-import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import {
   ChatFileAttachment,

@@ -1,5 +1,5 @@
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
-import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { isCommandAvailable, resolveSpawnCommand } from "@goat/shared/shell";
 import * as Clock from "effect/Clock";

@@ -1,4 +1,4 @@
-import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { cliArchiveFileName } from "@goat/shared/cliRelease";

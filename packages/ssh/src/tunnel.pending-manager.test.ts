@@ -1,4 +1,4 @@
-import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as NetService from "@goat/shared/Net";
 import { ORCHESTRATION_PROTOCOL_VERSION, IsoDateTime, SshHostResult } from "@goat/contracts";

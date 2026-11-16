@@ -3,7 +3,7 @@ import { scheduledTaskFixture } from "../scheduledTasks/ScheduledTaskFixture.tes
 import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import { derive } from "@goat/provider-core/server/IdAllocator";
 import * as SqlClient from "effect/sql/SqlClient";
-import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import {
   BUILTIN_PERMISSION_PROFILES,

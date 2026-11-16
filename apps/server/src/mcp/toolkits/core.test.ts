@@ -6,7 +6,7 @@ import * as Profiles from "../../goatclaw/PermissionProfiles.ts";
 import * as PermissionSettings from "../../serverSettings.ts";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { expect, it } from "@effect/vitest";
 import {
   CHANNEL_MCP_TOOL_NAMES,

@@ -1,6 +1,6 @@
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Schema from "effect/Schema";
-import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- expected paths mirror the host's native join.
 import * as NodePath from "node:path";
 import { expect, it, vi } from "@effect/vitest";

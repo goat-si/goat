@@ -1,5 +1,5 @@
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
-import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import {
   DesktopSshEnvironmentBootstrapSchema,

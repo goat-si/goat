@@ -1,4 +1,4 @@
-import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { assert, it } from "@effect/vitest";
 import {
   ChannelDeliveryId,

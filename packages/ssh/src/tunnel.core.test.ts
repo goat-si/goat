@@ -2,7 +2,7 @@ import * as NodeNet from "node:net";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it, beforeEach, afterEach, vi } from "@effect/vitest";
-import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import * as NetService from "@goat/shared/Net";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Deferred from "effect/Deferred";

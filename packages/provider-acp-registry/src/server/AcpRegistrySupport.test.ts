@@ -1,4 +1,4 @@
-import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { describe, expect, it } from "@effect/vitest";
 import { DEFAULT_SERVER_SETTINGS, ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";

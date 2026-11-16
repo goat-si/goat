@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import { expect, it } from "@effect/vitest";
 import * as NodeFS from "node:fs";
-import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@goat/contracts";

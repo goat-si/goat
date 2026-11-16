@@ -1,6 +1,6 @@
 import * as MemoryToolkitFixture from "../mcp/toolkits/memory/handlers.testkit.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
-import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import {
   AuthStandardClientScopes,
   type AuthCreatePairingCredentialInput,

@@ -1,7 +1,7 @@
 import { watchedEvents } from "../testUtils/watchedEvents.testkit.ts";
 import { assert, describe, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
-import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
 import * as Hex from "effect/encoding/Hex";

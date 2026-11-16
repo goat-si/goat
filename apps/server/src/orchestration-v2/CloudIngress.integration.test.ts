@@ -46,7 +46,7 @@ import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as SqlClient from "effect/sql/SqlClient";
-import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { McpServer, McpSchema } from "effect/ai";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import {

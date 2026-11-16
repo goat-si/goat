@@ -4,7 +4,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
-import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";

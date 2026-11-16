@@ -35,7 +35,7 @@ import * as McpAccess from "../mcp/McpToolAccess.testkit.ts";
 import * as McpFixture from "../mcp/toolkits/memory/handlers.testkit.ts";
 import { assert, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
-import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";

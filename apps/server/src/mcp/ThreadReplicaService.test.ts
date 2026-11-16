@@ -2,7 +2,7 @@
 import * as PressureNudger from "../fleet/pressure/PressureNudger.ts";
 import * as NodeCrypto from "node:crypto";
 import { assert, describe, it } from "@effect/vitest";
-import * as NodeServices from "@goat/shared/nodeServicesWithCrypto";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import {
   OrchestrationV2CheckpointJson,
   CheckpointScopeId,

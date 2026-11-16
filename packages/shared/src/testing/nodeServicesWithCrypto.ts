@@ -4,4 +4,5 @@ import * as Layer from "effect/Layer";
 
 // Effect 4.1 moved SecureRandom and Digest out of NodeServices. Files at their code budget take
 // the pair from here so the extra provider does not grow them; see docs/operations/code-quality.md.
+// Tests and dev scripts only: @goat/shared has @effect/platform-node as a dev dependency.
 export const layer = Layer.mergeAll(NodeServices.layer, NodeCrypto.layer);
