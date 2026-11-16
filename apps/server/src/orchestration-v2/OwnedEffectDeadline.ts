@@ -1,3 +1,4 @@
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -68,7 +69,18 @@ export const runClaim = Effect.fn("OwnedEffectDeadline.runClaim")(function* <A, 
             return "cancelled" as const;
           }),
         ),
-      ).pipe(Effect.ensuring(input.fences.retireJoined(token)));
+      ).pipe(
+        Effect.onExit((exit) =>
+          input.fences.retireJoined(
+            token,
+            Exit.isSuccess(exit)
+              ? exit.value
+              : Cause.hasInterruptsOnly(exit.cause)
+                ? "interrupted"
+                : "failed",
+          ),
+        ),
+      );
     }),
   );
 });

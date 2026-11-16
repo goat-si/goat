@@ -4,6 +4,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 import * as EffectOutbox from "./EffectOutbox.ts";
@@ -94,6 +95,14 @@ it.effect(
       const hungStarted = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const ran = { same: yield* Deferred.make<void>(), other: yield* Deferred.make<void>() };
+      const logs: Array<ReadonlyArray<unknown>> = [];
+      const logger = Logger.make(({ message }) => {
+        if (
+          Array.isArray(message) &&
+          String(message[0]).startsWith("orchestration-v2.effect-execution-")
+        )
+          logs.push(message);
+      });
       const layer = workerLayer(outbox, (effect) =>
         effect.id === hung.id
           ? Deferred.succeed(hungStarted, undefined).pipe(Effect.andThen(Deferred.await(release)))
@@ -121,6 +130,24 @@ it.effect(
         yield* outbox.awaitSettled(hung.id);
         assert.equal(Option.getOrThrow(yield* outbox.get(hung.id)).status, "succeeded");
         assert.isTrue(Option.isSome(yield* within(Deferred.await(ran.same))));
-      }).pipe(Effect.provide(layer), Effect.scoped);
+        assert.deepEqual(
+          logs.map(([name]) => name),
+          [
+            "orchestration-v2.effect-execution-detached",
+            "orchestration-v2.effect-execution-detached-settled",
+          ],
+        );
+        assert.deepInclude(logs[0]?.[1], { effectId: hung.id, threadId: hung.threadId });
+        assert.deepInclude(logs[1]?.[1], {
+          effectId: hung.id,
+          threadId: hung.threadId,
+          outcome: "executed",
+        });
+        assert.isAtLeast(Number((logs[1]?.[1] as { elapsedMs?: unknown })?.elapsedMs), 30_000);
+      }).pipe(
+        Effect.provide(layer),
+        Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+        Effect.scoped,
+      );
     }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
 );

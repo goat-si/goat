@@ -75,6 +75,7 @@ export const runDaemonWithOptions = (options: OrchestrationEffectDaemonOptions =
                   yield* Effect.logWarning("orchestration-v2.effect-execution-detached", {
                     effectId: slot.current.claim.id,
                     effectType: slot.current.claim.request.type,
+                    threadId: slot.current.claim.threadId,
                   });
                   outcome = "worked";
                 }

@@ -1,4 +1,5 @@
 import * as Context from "effect/Context";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -32,7 +33,10 @@ export class EffectExecutionFences extends Context.Service<
     ) => Effect.Effect<Option.Option<OrchestrationEffectV2>>;
     readonly warnSlowCleanup: (claim: OrchestrationEffectV2) => Effect.Effect<void>;
     readonly detach: (claim: OrchestrationEffectV2, cap: number) => Effect.Effect<boolean>;
-    readonly retireJoined: (claim: OrchestrationEffectV2) => Effect.Effect<void>;
+    readonly retireJoined: (
+      claim: OrchestrationEffectV2,
+      outcome: "executed" | "cancelled" | "failed" | "interrupted",
+    ) => Effect.Effect<void>;
     readonly retireAdmission: (claim: OrchestrationEffectV2) => Effect.Effect<void>;
   }
 >()("goat/orchestration-v2/EffectExecutionFences") {}
@@ -54,7 +58,7 @@ export const layer = Layer.sync(EffectExecutionFences, () => {
   // A detached entry still fences its thread but no longer fills its lane.
   const active = new Map<
     string,
-    { effect: OrchestrationEffectV2; executing: boolean; detached: boolean }
+    { effect: OrchestrationEffectV2; executing: boolean; detached: boolean; beganAt: number }
   >();
   let claims = 0;
   let revision = 0;
@@ -126,14 +130,15 @@ export const layer = Layer.sync(EffectExecutionFences, () => {
     admissions: Effect.sync(() => Array.from(active.values(), ({ effect }) => effect)),
     admitClaim: Effect.fn("EffectExecutionFences.admitClaim")((effect) =>
       Effect.sync(() => {
-        active.set(effect.id, { effect, executing: false, detached: false });
+        active.set(effect.id, { effect, executing: false, detached: false, beganAt: 0 });
         notifyChanged();
       }),
     ),
     begin: Effect.fn("EffectExecutionFences.begin")((claim) =>
-      Effect.sync(() => {
+      Effect.map(Clock.currentTimeMillis, (now) => {
         const entry = active.get(claim.id);
         if (entry?.effect !== claim) return Option.none();
+        entry.beganAt = now;
         entry.executing = true;
         return Option.some(claim);
       }),
@@ -165,12 +170,21 @@ export const layer = Layer.sync(EffectExecutionFences, () => {
         return true;
       }),
     ),
-    retireJoined: Effect.fn("EffectExecutionFences.retireJoined")((claim) =>
-      Effect.sync(() => {
-        if (active.get(claim.id)?.effect === claim) {
-          active.delete(claim.id);
-          notifyChanged();
-        }
+    retireJoined: Effect.fn("EffectExecutionFences.retireJoined")((claim, outcome) =>
+      Effect.flatMap(Clock.currentTimeMillis, (now) => {
+        const entry = active.get(claim.id);
+        if (entry?.effect !== claim) return Effect.void;
+        active.delete(claim.id);
+        notifyChanged();
+        return entry.detached
+          ? Effect.logInfo("orchestration-v2.effect-execution-detached-settled", {
+              effectId: claim.id,
+              effectType: claim.request.type,
+              threadId: claim.threadId,
+              outcome,
+              elapsedMs: now - entry.beganAt,
+            })
+          : Effect.void;
       }),
     ),
     retireAdmission: Effect.fn("EffectExecutionFences.retireAdmission")((claim) =>
