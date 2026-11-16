@@ -405,6 +405,34 @@ it("the profile row reads Loading… while its first read is pending (#3504, beh
   await expect.element(row.getByRole("button", { name: "Edit" })).toBeDisabled();
 });
 
+it("a refetch over an answer with no main bot keeps saying the profile appears once GOAT Bot has started, not Loading… (#3504, behavior)", async () => {
+  setup();
+  home(CONNECTED, kept([]));
+  await using screen = await render(<GoatBotSettingsPanel />);
+  await expect
+    .element(profile(screen).getByText("The profile appears once GOAT Bot has started."))
+    .toBeVisible();
+
+  await change(() => home(CONNECTED, { ...kept([]), isPending: true }));
+
+  const row = profile(screen);
+  await expect
+    .element(row.getByText("The profile appears once GOAT Bot has started."))
+    .toBeVisible();
+  expect(row.getByText("Loading…").query()).toBeNull();
+});
+
+it("a home still on its first connect reads Loading…, never Offline, with Edit off (#3504, behavior)", async () => {
+  setup();
+  home({ phase: "connecting" }, { data: null, error: null, isPending: false });
+  await using screen = await render(<GoatBotSettingsPanel />);
+
+  const row = profile(screen);
+  await expect.element(row.getByText("Loading…")).toBeVisible();
+  expect(row.getByText("Offline", { exact: true }).query()).toBeNull();
+  await expect.element(row.getByRole("button", { name: "Edit" })).toBeDisabled();
+});
+
 it("a home on an older server without profile edits shows no Profile section (#3504, contract)", async () => {
   setup();
   home(CONNECTED);
