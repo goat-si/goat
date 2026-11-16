@@ -211,3 +211,20 @@ describe("pull request watch host events", () => {
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 });
+
+describe("pull request watch host event feeds", () => {
+  it("follows at most 64 pull requests, the same ones whatever order the sweep found them in", () => {
+    const candidates = Array.from(
+      { length: 70 },
+      (_, index) => [`github.com goat-si/goat#${String(index).padStart(3, "0")}`, index] as const,
+    );
+    const forward = PullRequestWatchReactor.feedsToFollow(candidates);
+    const backward = PullRequestWatchReactor.feedsToFollow(candidates.toReversed());
+    assert.equal(PullRequestWatchReactor.MAX_EVENT_FEEDS, 64);
+    assert.deepEqual(
+      [...forward.keys()],
+      candidates.slice(0, 64).map(([key]) => key),
+    );
+    assert.deepEqual([...backward.keys()], [...forward.keys()]);
+  });
+});

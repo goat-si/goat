@@ -74,6 +74,10 @@ export const make = Effect.gen(function* () {
   const pause = (key: string, duration: Duration.Duration) =>
     Clock.currentTimeMillis.pipe(
       Effect.map((now) => {
+        // Expired pauses go as new ones arrive, so the map holds only live refusals.
+        for (const [pausedKey, until] of pausedUntil) {
+          if (until <= now) pausedUntil.delete(pausedKey);
+        }
         pausedUntil.set(key, now + Duration.toMillis(duration));
       }),
     );

@@ -53,6 +53,16 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 /** Checks take minutes; faster sweeps waste the account's shared host quota. */
 const SWEEP_MINUTES = 2;
 const READ_FAILURE_LIMIT = 8;
+/** Each feed holds a host connection and subscription; watches past the cap rely on the sweep. */
+export const MAX_EVENT_FEEDS = 64;
+
+/** The first feeds by key, so the same pull requests keep theirs from sweep to sweep. */
+export const feedsToFollow = <A>(candidates: Iterable<readonly [string, A]>) =>
+  new Map(
+    [...new Map(candidates)]
+      .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .slice(0, MAX_EVENT_FEEDS),
+  );
 /** A failed read waits twice as long as the one before it, up to this, before the next try. */
 const READ_RETRY_MAX_MS = 30 * 60_000;
 /** Without fingerprints, reread quiet PRs on snapshot changes or this interval to catch edits. */
@@ -773,7 +783,7 @@ export const make = Effect.gen(function* () {
 
   // One feed per pull request: the host keeps one subscription per pull request and account.
   const follow = Effect.fnUntraced(function* (feeds: FiberMap.FiberMap<string>) {
-    const wanted = new Map(
+    const wanted = feedsToFollow(
       currentGroups.flatMap((group) =>
         group.targets.slice(0, 1).map(({ link }) => [threadPullRequestKeyOf(link), group] as const),
       ),
