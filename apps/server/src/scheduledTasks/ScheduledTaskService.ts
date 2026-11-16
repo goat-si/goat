@@ -1,5 +1,6 @@
 import { hasQueuedOccurrence } from "./queuedOccurrence.ts";
 import type { ScheduledTaskRow } from "./ScheduledTaskRow.ts";
+import { decodeRow, decodeTaskId, listDueTasks } from "./scheduledTaskRowDecode.ts";
 import { dispatchFailureDetails, taskError } from "./scheduledTaskError.ts";
 import { prepareScheduledTaskNotificationPrompt } from "./scheduledTaskNotificationPrompt.ts";
 import { withRecentRuns } from "./scheduledTaskRecentRuns.ts";
@@ -11,7 +12,6 @@ import {
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type ProjectId,
   ScheduledTask,
-  ScheduledTaskRun,
   ScheduledTaskError,
   ScheduledTaskId,
   ScheduledTaskWebhookDeliveryId,
@@ -48,7 +48,6 @@ import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
-import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -76,17 +75,16 @@ import {
 import { describeFailedWebhookFilter, findFailedWebhookFilter } from "./webhookFilter.ts";
 import { redactHeaders, redactQuery, renderWebhookPrompt } from "./webhookTemplate.ts";
 import { constantTimeEquals, verifyWebhookSignature } from "./webhookVerification.ts";
-import { webhookEndpoint } from "./webhookEndpoint.ts";
 import {
   BOT_ROUTINE_NEEDS_OWNER,
   makeScheduledBotRoutines,
-  routineOwnerOf,
   ROUTINE_MESSAGE_PREFIX,
   type RoutineOwner,
 } from "./scheduledBotRoutines.ts";
 import { WebhookAutomationHeldError, rejectWebhookWhileHeld } from "./webhookAutomationHold.ts";
 
 export { WEBHOOK_ROUTE_PREFIX } from "./webhookEndpoint.ts";
+export { listDueTasks };
 
 const isScheduledTaskError = Schema.is(ScheduledTaskError);
 const PROMPT_TOO_LONG = "The filled-in prompt is too long.";
@@ -155,17 +153,6 @@ export type { WebhookDeliveryOutcome, WebhookTriggerRequest, WebhookTriggerResul
 const webhookFilters = (filters: ReadonlyArray<ScheduledTaskWebhookFilter> | undefined) =>
   filters?.length ? { filters } : {};
 
-const decodeTask = Schema.decodeUnknownEffect(ScheduledTask);
-const decodeTaskId = Schema.decodeUnknownOption(ScheduledTaskId);
-const decodeScheduleJson = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(ScheduledTask.fields.schedule),
-);
-const decodeWorkspaceStrategyJson = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(ScheduledTask.fields.workspaceStrategy),
-);
-const decodeModelSelectionJson = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(ScheduledTask.fields.modelSelection),
-);
 const HeadersJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
 const MissingFieldsJson = Schema.fromJsonString(Schema.Array(Schema.String));
 const decodeHeadersJson = Schema.decodeUnknownOption(HeadersJson);
@@ -249,95 +236,7 @@ export class ScheduledTaskService extends Context.Service<
   }
 >()("goat/scheduledTasks/ScheduledTaskService") {}
 
-const decodeLastRunJson = Schema.decodeUnknownEffect(Schema.fromJsonString(ScheduledTaskRun));
 const localNow = DateTime.withCurrentZoneLocal(DateTime.nowInCurrentZone);
-
-// Runs per task row; list and lookup operations already own the span.
-
-const decodeRow = Effect.fnUntraced(
-  function* (row: ScheduledTaskRow, origin: WebhookOrigin | null = null) {
-    const schedule = yield* decodeScheduleJson(row.schedule_json);
-    const webhook = schedule.type === "webhook" ? webhookEndpoint(row, origin) : undefined;
-    const workspaceStrategy = yield* decodeWorkspaceStrategyJson(row.workspace_strategy_json);
-    const modelSelection = yield* decodeModelSelectionJson(row.model_selection_json);
-    return yield* decodeTask({
-      id: row.task_id,
-      title: row.title,
-      prompt: row.prompt,
-      enabled: row.enabled === 1,
-      notificationPolicy: row.notification_policy,
-      schedule,
-      projectId: row.project_id,
-      threadId: row.thread_id,
-      workspaceStrategy,
-      modelSelection,
-      memoryGrantCeiling: row.memory_grant_ceiling ?? "none",
-      runtimeMode: row.runtime_mode,
-      interactionMode: row.interaction_mode,
-      createdBy: row.created_by,
-      creationSource: row.creation_source,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      nextRunAt: row.next_run_at,
-      lastRunAt: row.last_run_at,
-      lastRunStatus: row.last_run_status,
-      ...(row.last_run_json == null
-        ? {}
-        : { lastRun: yield* decodeLastRunJson(row.last_run_json) }),
-      lastRunError: row.last_run_error,
-      runCount: row.run_count,
-      ...(webhook === undefined ? {} : { webhook }),
-      ...(Option.isSome(routineOwnerOf(row.owner_json)) ? { goatBotRoutine: true } : {}),
-    });
-  },
-  (effect, row, _origin?) =>
-    effect.pipe(
-      Effect.mapError((cause) => {
-        const taskId = decodeTaskId(row.task_id);
-        return taskError("Could not decode schedule task row.", {
-          ...(Option.isSome(taskId) ? { taskId: taskId.value } : {}),
-          cause,
-        });
-      }),
-    ),
-);
-
-export const listDueTasks = Effect.fn("ScheduledTaskService.listDueTasks")(function* (
-  now: DateTime.DateTime,
-) {
-  const sql = yield* SqlClient.SqlClient;
-  const rows = yield* sql<ScheduledTaskRow>`
-    SELECT t.*,r.snapshot_json AS last_run_json FROM scheduled_tasks t
-    LEFT JOIN scheduled_task_runs r ON r.firing_id=t.last_firing_id AND r.task_id=t.task_id AND r.task_created_at=t.created_at
-    WHERE t.enabled = 1 AND t.next_run_at IS NOT NULL AND t.next_run_at <= ${iso(now)}
-      AND NOT EXISTS (SELECT 1 FROM scheduled_task_runs busy WHERE busy.task_id=t.task_id AND busy.task_created_at=t.created_at
-        AND (busy.dispatch_bookkept_at IS NULL OR busy.dispatch_status='dispatching'))
-    ORDER BY t.next_run_at ASC, t.task_id ASC
-  `.pipe(NodeSqliteClient.readOnly);
-  const tasks: ScheduledTask[] = [];
-  for (const row of rows) {
-    const decoded = yield* Effect.result(decodeRow(row));
-    if (Result.isSuccess(decoded)) {
-      const task = decoded.success;
-      // next_run_at is a freeform string at the schema level; a stored value
-      // that cannot parse as a DateTime would defect the poll below, so the
-      // row is skipped here like any other corrupt row.
-      if (task.nextRunAt === null || Option.isSome(DateTime.make(task.nextRunAt))) {
-        tasks.push(task);
-      } else {
-        yield* Effect.logWarning("Skipping schedule task row with invalid next_run_at", {
-          taskId: row.task_id,
-        });
-      }
-    } else {
-      yield* Effect.logWarning("Skipping undecodable schedule task row", {
-        taskId: row.task_id,
-        cause: decoded.failure,
-      });
-    }
-  }
-  return tasks;
-});
 
 export const layer = Layer.effect(
   ScheduledTaskService,
