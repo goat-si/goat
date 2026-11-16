@@ -23,6 +23,7 @@ import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
+import { createOrchestrationV2TurnItemVisibility } from "@goat/shared/orchestrationV2Timeline";
 import { checkpointWorkspace } from "@goat/provider-testing/replayWorkspace";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { PiProviderCapabilitiesV2 } from "@goat/provider-pi/server";
@@ -219,6 +220,7 @@ it.live.each(["Codex", "Claude", "Pi"] as const)(
         const cwd = yield* checkpointWorkspace(`workspace-handoff-${mode}`);
         const handoffCwd = yield* checkpointWorkspace(`workspace-handoff-${mode}-target`);
         const threadId = ThreadId.make(`thread:workspace-handoff:${mode}`);
+        const continuationMessageId = MessageId.make("message:workspace-handoff:continuation");
         const state = yield* Ref.make<RestartAdapterState>({
           activeTurn: null,
           opened: [],
@@ -319,7 +321,7 @@ it.live.each(["Codex", "Claude", "Pi"] as const)(
             branch: "repro-handoff",
             worktreePath: handoffCwd,
             continuation: {
-              messageId: MessageId.make("message:workspace-handoff:continuation"),
+              messageId: continuationMessageId,
               text: "continue in the worktree",
             },
           });
@@ -359,6 +361,24 @@ it.live.each(["Codex", "Claude", "Pi"] as const)(
         assert.deepEqual(
           (yield* Ref.get(state)).started.map((turn) => turn.cwd),
           [cwd, handoffCwd],
+        );
+        // L03 hides a queued_turn prompt only while its run is queued or cancelled, so the
+        // continuation's prompt shows once its run starts, and also when that run fails.
+        const continuationItem = projection.turnItems.find(
+          (item) => item.type === "user_message" && item.messageId === continuationMessageId,
+        );
+        assert.isTrue(continuationItem?.type === "user_message");
+        assert.deepEqual(
+          (["queued", "failed", "completed"] as const).map((status) =>
+            createOrchestrationV2TurnItemVisibility({
+              runs: projection.runs.map((run) =>
+                run.id === continuationItem?.runId ? { ...run, status } : run,
+              ),
+              attempts: projection.attempts,
+              items: projection.turnItems,
+            })(continuationItem!),
+          ),
+          [false, true, true],
         );
         // Compatibility: a client that predates the field sees the events a metadata update and
         // a queued message already produced; the command field never reaches an event.
