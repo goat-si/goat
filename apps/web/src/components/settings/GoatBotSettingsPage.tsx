@@ -45,7 +45,7 @@ function GoatBotProfileSection() {
         <SettingsRow
           {...searchableSetting("goat-bot-profile")}
           title="GOAT Bot"
-          status={`GOAT on ${environment.label} did not accept this device.`}
+          status={`GOAT on ${environment.label ?? "this computer"} did not accept this device.`}
         />
       )}
     </SettingsSection>
@@ -82,7 +82,7 @@ function GoatBotProfileRow({
               ? undefined
               : profiles.error
                 ? "Could not load the bot's profile."
-                : starting || profiles.isPending
+                : profiles.data === null && (starting || profiles.isPending)
                   ? "Loading…"
                   : "The profile appears once GOAT Bot has started."
         }
