@@ -433,7 +433,7 @@ it.each(REFUSALS)(
     expect(page.getByRole("dialog").query()).toBeNull();
     const row = profile(screen);
     await expect
-      .element(row.getByText("GOAT on Mac Studio did not accept this device"))
+      .element(row.getByText("GOAT on Mac Studio did not accept this device", { exact: true }))
       .toBeVisible();
     await expect.element(row.getByText("GOAT Bot", { exact: true })).toBeVisible();
     expect(row.getByText("Goatie").query()).toBeNull();
@@ -458,7 +458,9 @@ it("after a refusal, access coming back shows Loading… and nothing read before
 
   await change(() => home(BLOCKED, { ...kept(), error: "Not accepted." }));
   await expect
-    .element(profile(screen).getByText("GOAT on Mac Studio did not accept this device"))
+    .element(
+      profile(screen).getByText("GOAT on Mac Studio did not accept this device", { exact: true }),
+    )
     .toBeVisible();
   // Access is back; the query still holds its pre-refusal answer while the fresh read is pending.
   await change(() => home(CONNECTED, { ...kept(), isPending: true }));
@@ -550,6 +552,7 @@ it("a denied bot-list read while connected hides the kept profile, closes the di
     .element(
       profile(screen).getByText(
         "GOAT on Mac Studio did not let this device read the bot's profile",
+        { exact: true },
       ),
     )
     .toBeVisible();
@@ -679,7 +682,7 @@ it.each(REFUSALS)(
 
     const card = status(screen);
     await expect
-      .element(card.getByText("GOAT on Mac Studio did not accept this device"))
+      .element(card.getByText("GOAT on Mac Studio did not accept this device", { exact: true }))
       .toBeVisible();
     await expect.element(card.getByRole("button", { name: "Make MacBook the home" })).toBeVisible();
     expect(card.getByText(/Home machine is offline/).query()).toBeNull();
@@ -727,6 +730,9 @@ it("a refused home then removed from the app never says it did not accept this d
     state.environments = [environment(LAPTOP, "MacBook", false)];
   });
 
+  await expect
+    .element(status(screen).getByText("Home machine is offline (env-stud)"))
+    .toBeVisible();
   expect(
     status(screen)
       .getByText(/did not accept/)
