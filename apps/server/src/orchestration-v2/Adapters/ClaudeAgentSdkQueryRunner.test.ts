@@ -407,6 +407,40 @@ it.effect("stops retrying MCP registration after two timeouts and reports the ca
   ),
 );
 
+it.effect("a failed open keeps its typed error when the query's disposal also fails", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const registrations = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+      const querySpy = vi.spyOn(ClaudeSdk, "query").mockImplementation(() => {
+        const started = registrations[querySpy.mock.calls.length - 1];
+        return {
+          setMcpServers: () => {
+            started?.resolve();
+            return new Promise<ClaudeSdk.McpSetServersResult>(() => {});
+          },
+          [Symbol.asyncDispose]: () => Promise.reject(new Error("dispose failed")),
+        } as unknown as ClaudeSdk.Query;
+      });
+      yield* Effect.addFinalizer(() => Effect.sync(() => querySpy.mockRestore()));
+      const runner = yield* ClaudeAgentSdkQueryRunner;
+      const opening = yield* runner
+        .open(resumedMcpQueryInput)
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Effect.promise(() => registrations[0]!.promise);
+      yield* TestClock.adjust("90 seconds");
+      // Without its typed error the open gives up after the first attempt.
+      const retried = yield* Effect.raceFirst(
+        Effect.promise(() => registrations[1]!.promise).pipe(Effect.as(true)),
+        Fiber.await(opening).pipe(Effect.as(false)),
+      );
+      if (retried) yield* TestClock.adjust("90 seconds");
+      const result = yield* Fiber.join(opening);
+      // ProviderTurnStartService restores unsent context handoffs only on this typed refusal.
+      assert.equal(result._tag, "Failure");
+    }).pipe(Effect.provide(realQueryRunner)),
+  ),
+);
+
 it.effect("cancels a stalled registration without retrying or retaining its prompt queue", () =>
   Effect.scoped(
     Effect.gen(function* () {

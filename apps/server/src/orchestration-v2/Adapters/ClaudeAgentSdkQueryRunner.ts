@@ -688,7 +688,10 @@ export const layerQueryRunner: Layer.Layer<
                         Effect.tryPromise({
                           try: () => queryRuntime[Symbol.asyncDispose](),
                           catch: (cause) => queryRunnerError(cause, "close"),
-                        }).pipe(Effect.orDie),
+                        }).pipe(
+                          // A disposal defect would hide the open's typed error under Effect 4.1.
+                          Effect.ignore({ log: true }),
+                        ),
                       ),
                       Effect.orDie,
                     ),
