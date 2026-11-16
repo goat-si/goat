@@ -106,7 +106,8 @@ export function useMobileGoatBotMember(botId: string | undefined) {
       botId !== undefined &&
       member === null &&
       (!supported ||
-        (!profiles.isPending && profiles.isSuccess) ||
+        // Only the list itself says so: one being read again after a refusal or removal shows none.
+        (!profiles.isPending && profiles.isSuccess && listed !== null) ||
         (!connected && listed !== null)),
   };
 }

@@ -54,6 +54,7 @@ function following() {
   const registry = AtomRegistry.make();
   const stop = followKeptPerComputerCatalog(registry);
   registry.set(catalogAtom, listed(["env"]));
+  Object.assign(queries, { bots: query(), botsActive: query(), asks: query() });
   return { registry, [Symbol.dispose]: stop };
 }
 
@@ -207,8 +208,9 @@ function query() {
 function computer() {
   vi.useFakeTimers({ toFake: ["Date"], now: T0 });
   const follow = following();
-  const reads = { bots: query(), botsActive: query(), asks: query() };
-  Object.assign(queries, reads);
+  const reads = { bots: queries.bots, botsActive: queries.botsActive, asks: queries.asks } as {
+    [Kind in "bots" | "botsActive" | "asks"]: ReturnType<typeof query>;
+  };
   const link = (phase: "connected" | "refused") =>
     act(async () =>
       follow.registry.set(
@@ -399,8 +401,12 @@ it.each(["bots", "asks"] as const)(
   async (kind) => {
     using env = computer();
     await env.link("connected");
+    // The roster's bot list, which says whether this computer may be read at all.
+    await using roster = reader("bots", env.registry, env.bots.atom);
     await using read = reader(kind, env.registry, env[kind].atom);
+    await roster.mount();
     await read.mount();
+    await env.bots.answer(env.registry, someBots());
     const before = AsyncResult.success(kind === "bots" ? { bots: [] } : { asks: [], total: 0 });
     await env[kind].answer(env.registry, before);
     expect(read.shown).toBe(before.value);
@@ -409,8 +415,8 @@ it.each(["bots", "asks"] as const)(
       env.registry.set(catalogAtom, listed(["env"]));
     });
     expect(read.shown).toBeNull();
-    const after = AsyncResult.success(before.value);
-    await env[kind].answer(env.registry, after);
+    if (kind === "asks") await env.bots.answer(env.registry, someBots());
+    await env[kind].answer(env.registry, AsyncResult.success(before.value));
     expect(read.shown).toBe(before.value);
   },
 );

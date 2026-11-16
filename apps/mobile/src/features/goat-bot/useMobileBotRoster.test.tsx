@@ -23,6 +23,8 @@ const state = vi.hoisted(() => ({
   cause: null as unknown,
   // The computer's Slack connections, as its settings read answers.
   slack: null as null | ReadonlyArray<{ enabled: boolean }>,
+  // The bot list was read again (a removal refreshes it): its answer shows marked waiting.
+  refreshed: false,
 }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({
@@ -57,24 +59,29 @@ vi.mock("../../state/query", () => ({
     const refused = query === "profiles" ? state.cause : null;
     return {
       data: query === "threads" ? { rows: [] } : query === "slack" ? state.slack : profiles,
-      successResult: profiles === null || refused !== null ? null : { value: profiles },
+      successResult:
+        profiles === null || refused !== null || state.refreshed ? null : { value: profiles },
       cause: refused,
       error: null,
-      isPending: false,
+      isPending: query === "profiles" && state.refreshed,
       isSuccess: query !== null && refused === null,
       refresh: vi.fn(),
     };
   },
 }));
-const profilesRead = vi.hoisted(() => ({ atom: {} }));
-vi.mock("../../state/channels", () => ({
-  channelEnvironment: {
-    listBots: () => profilesRead.atom,
-    listBotThreads: () => "threads",
-    slackSettings: () => "slack",
-    updateTaskView: {},
-  },
-}));
+const profilesRead = vi.hoisted(() => ({ atom: {} as object }));
+vi.mock("../../state/channels", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  profilesRead.atom = Atom.make(AsyncResult.initial());
+  return {
+    channelEnvironment: {
+      listBots: () => profilesRead.atom,
+      listBotThreads: () => "threads",
+      slackSettings: () => "slack",
+      updateTaskView: {},
+    },
+  };
+});
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
 // Needs you's open asks read, refreshed when a computer refuses or leaves; idle here.
 vi.mock("./openAsksRead", async () => {
@@ -82,7 +89,7 @@ vi.mock("./openAsksRead", async () => {
   const idle = Atom.make(AsyncResult.initial());
   return { openAsks: () => idle };
 });
-// No computer is connected in these presentations, so no reader looks at the bot list beyond the roster.
+// The computers' presentations, empty unless a test links one.
 vi.mock("../../state/presentation", async () => {
   const { Atom } = await import("effect/reactivity");
   return { environmentPresentations: { presentationsAtom: Atom.make(new Map()) } };
@@ -99,6 +106,7 @@ vi.mock("../../connection/catalog", async () => {
   });
   return { environmentCatalog: { catalogValueAtom: catalog.atom } };
 });
+import { environmentPresentations } from "../../state/presentation";
 import { useMobileBotRoster, useMobileGoatBotMember } from "./useMobileBotRoster";
 import { followKeptPerComputerCatalog, resetKeptPerComputerForTests } from "./useKeptPerComputer";
 
@@ -119,6 +127,7 @@ afterEach(async () => {
   state.environmentId = "env";
   state.cause = null;
   state.slack = null;
+  state.refreshed = false;
   resetKeptPerComputerForTests();
 });
 
@@ -288,6 +297,7 @@ it("an answer already on its way to the kept list is not kept once its computer 
   // effects run first, so this lands exactly in that gap.
   function RemoveAfterRender() {
     useLayoutEffect(() => {
+      state.refreshed = true;
       registry.set(catalog.atom!, listed([]));
     }, []);
     return null;
@@ -329,6 +339,7 @@ it("an answer from before its computer was removed and added again is not kept",
   // Removed and added again after the roster rendered its answer, before that render's effects ran.
   function RemoveAndReAddAfterRender() {
     useLayoutEffect(() => {
+      state.refreshed = true;
       registry.set(catalog.atom!, listed([]));
       registry.set(catalog.atom!, listed(["env"]));
     }, []);
@@ -387,6 +398,63 @@ it("says nothing of Slack once the bot list is refused", async () => {
   await act(async () => root?.render(<Probe />));
   expect(value.slackEnabled).toBe(true);
   state.cause = { _tag: "EnvironmentAuthorizationError", message: "Not allowed." };
-  await act(async () => root?.render(<Probe />));
+  // As in the app, the refusing computer lists bots; it is not connected, so no other read runs.
+  const registry = AtomRegistry.make();
+  registry.set(
+    environmentPresentations.presentationsAtom as never,
+    new Map([
+      [
+        "env",
+        {
+          connection: { phase: "disconnected" },
+          serverConfig: { environment: { capabilities: state.capabilities } },
+        },
+      ],
+    ]),
+  );
+  await act(async () =>
+    root?.render(
+      <RegistryContext value={registry}>
+        <Probe />
+      </RegistryContext>,
+    ),
+  );
   expect(value.slackEnabled).toBe(false);
+});
+
+it("a member's chat never says it is missing while its computer's bot list is being read again", async () => {
+  state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
+  state.bots = echoBots;
+  state.botRef = { environmentId: "env", threadId: "bot" };
+  const registry = AtomRegistry.make();
+  const stopFollowing = followKeptPerComputerCatalog(registry);
+  registry.set(catalog.atom!, {
+    isReady: true,
+    entries: new Map([["env", { enabled: true }]]),
+  });
+  const said: boolean[] = [];
+  function MemberChat() {
+    said.push(useMobileGoatBotMember("echo").missing);
+    return null;
+  }
+  const draw = () =>
+    act(async () =>
+      root?.render(
+        <RegistryContext value={registry}>
+          <MemberChat />
+        </RegistryContext>,
+      ),
+    );
+  root = createRoot(document.createElement("div"));
+  await draw();
+  // Removed and added again: the list is read again, and its earlier answer shows marked waiting.
+  state.refreshed = true;
+  await act(async () => {
+    registry.set(catalog.atom!, { isReady: true, entries: new Map() });
+    registry.set(catalog.atom!, { isReady: true, entries: new Map([["env", { enabled: true }]]) });
+  });
+  state.refreshed = false;
+  await draw();
+  expect(said).not.toContain(true);
+  stopFollowing();
 });

@@ -12,46 +12,60 @@ export const KEPT_KINDS = ["bots", "asks"] as const;
 export type KeptKind = (typeof KEPT_KINDS)[number];
 let generation = 0;
 const keptFamily = Atom.family((_key: string) => Atom.make<unknown>(null).pipe(Atom.keepAlive));
-// A refusal is the time it was recorded, so only an answer that settled later clears it.
-const flagFamily = Atom.family((_key: string) =>
-  Atom.make<number | null>(null).pipe(Atom.keepAlive),
-);
-
-export const keptAtom = (kind: KeptKind, environmentId: EnvironmentId) =>
-  keptFamily(`${generation}:${kind}:${environmentId}`);
-/** Keys one computer in this generation; the refusal flags below are found by it. */
+const flagFamily = Atom.family((_key: string) => Atom.make(false).pipe(Atom.keepAlive));
+/** Keys one computer in this generation. */
 export const computerKey = (environmentId: EnvironmentId) => `${generation}:${environmentId}`;
-// Refused by the computer's connection (credential or scope), or its account signed out; only
-// reaching "connected" again clears it.
-export const connectionRefusedAtom = (key: string) => flagFamily(`connection:${key}`);
-// The computer's bot list was refused; only a bot list that settles after the refusal clears it.
-export const listRefusedAtom = (key: string) => flagFamily(`list:${key}`);
-
-// How many times the computer has left the catalog, and when it last did. A write prepared before a
-// removal is dropped, and an answer settled before it is not shown.
-export type Removal = { readonly count: number; readonly at: number };
-const removalFamily = Atom.family((_key: string) =>
-  Atom.make<Removal | null>(null).pipe(Atom.keepAlive),
-);
-export const removalAtom = (environmentId: EnvironmentId) =>
-  removalFamily(computerKey(environmentId));
+export const keptAtom = (kind: KeptKind, environmentId: EnvironmentId) =>
+  keptFamily(`${kind}:${computerKey(environmentId)}`);
+// Set on a refusal or removal: the read shows and keeps nothing until an answer settles while set.
+export const staleAtom = (kind: KeptKind, environmentId: EnvironmentId) =>
+  flagFamily(`stale:${kind}:${computerKey(environmentId)}`);
+// Refused by the computer's connection, or its account signed out; reaching "connected" clears it.
+export const connectionRefusedAtom = (environmentId: EnvironmentId) =>
+  flagFamily(`connection:${computerKey(environmentId)}`);
+// The follower's way to interrupt a computer's reads, so nothing in flight lands afterwards.
+const refreshers = new WeakMap<
+  AtomRegistry.AtomRegistry,
+  (environmentId: EnvironmentId, kind: KeptKind) => void
+>();
+export const setReadRefresher = (
+  registry: AtomRegistry.AtomRegistry,
+  refresh: (environmentId: EnvironmentId, kind: KeptKind) => void,
+) => refreshers.set(registry, refresh);
 
 export function resetKeptPerComputerForTests() {
   generation += 1;
 }
 
-export function forgetKept(registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentId) {
-  for (const kind of KEPT_KINDS) registry.set(keptAtom(kind, environmentId), null);
-}
-
-/** Refused: everything kept for the computer goes, a create held for it too, and it stays refused. */
-export function refuseComputer(
+/** The read starts over: what is in flight is interrupted first, so no answer from before counts. */
+export function startOver(
   registry: AtomRegistry.AtomRegistry,
   environmentId: EnvironmentId,
-  flag: Atom.Writable<number | null>,
+  kind: KeptKind,
+  refresh = true,
 ) {
-  registry.set(flag, Date.now());
-  forgetKept(registry, environmentId);
+  if (refresh) refreshers.get(registry)?.(environmentId, kind);
+  registry.set(keptAtom(kind, environmentId), null);
+  registry.set(staleAtom(kind, environmentId), true);
+}
+
+/** The connection refused this phone, or the account that reached the computer signed out. */
+export function refuseConnection(
+  registry: AtomRegistry.AtomRegistry,
+  environmentId: EnvironmentId,
+) {
+  registry.set(connectionRefusedAtom(environmentId), true);
+  for (const kind of KEPT_KINDS) startOver(registry, environmentId, kind);
+  forgetNewBotEnvironment(environmentId);
+}
+
+/**
+ * The bot list was refused. That refusal is its query's latest answer, with nothing in flight, so
+ * the list starts over without a new request; the asks are read again unless already starting over.
+ */
+export function refuseList(registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentId) {
+  startOver(registry, environmentId, "bots", false);
+  if (!registry.get(staleAtom("asks", environmentId))) startOver(registry, environmentId, "asks");
   forgetNewBotEnvironment(environmentId);
 }
 
@@ -61,6 +75,5 @@ export function refuseComputer(
  */
 export function refuseRelayOnlyComputers(registry: AtomRegistry.AtomRegistry): void {
   for (const [environmentId, entry] of registry.get(environmentCatalog.catalogValueAtom).entries)
-    if (removedWithRelay(entry))
-      refuseComputer(registry, environmentId, connectionRefusedAtom(computerKey(environmentId)));
+    if (removedWithRelay(entry)) refuseConnection(registry, environmentId);
 }

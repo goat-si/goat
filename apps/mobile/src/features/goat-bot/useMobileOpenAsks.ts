@@ -1,23 +1,11 @@
-import { createEnvironmentRpcQueryAtomFamily } from "@goat/client-runtime/state/runtime";
-import {
-  CHANNEL_GATEWAY_WS_METHODS,
-  type ChannelOpenAsk,
-  type EnvironmentId,
-} from "@goat/contracts";
+import type { ChannelOpenAsk, EnvironmentId } from "@goat/contracts";
 import { useEffect } from "react";
 
-import { connectionAtomRuntime } from "../../connection/runtime";
 import { useAppActive } from "../../lib/appState";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
+import { openAsks } from "./openAsksRead";
 import { useKeptPerComputer } from "./useKeptPerComputer";
-
-// What each bot waits on the person for, across the owner's bots, in one read.
-const openAsks = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
-  label: "environment-data:channel:list-open-asks",
-  tag: CHANNEL_GATEWAY_WS_METHODS.listOpenAsks,
-  staleTimeMs: 2_000,
-});
 
 export type MobileOpenAsks =
   /** A server before open asks: the roster keeps its per-bot badges and shows no strip. */
