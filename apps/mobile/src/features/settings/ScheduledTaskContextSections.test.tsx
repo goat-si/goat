@@ -146,12 +146,12 @@ const RESET_NOTICE =
   "Notifications changed to All runs because Important updates requires an existing thread.";
 const threadModesConfig = { environment: { capabilities: { scheduledTaskThreadModes: true } } };
 
-/** The route screen's wiring of both sections around one draft. */
 const projects = [
   { id: ProjectId.make("project"), title: "Synthetic" },
   { id: ProjectId.make("other"), title: "Other" },
 ] as never;
 
+/** The route screen's wiring of both sections around one draft. */
 function Editor({ initial, threadModes }: { initial: ScheduledTaskDraft; threadModes: boolean }) {
   const [draft, setDraft] = useState(initial);
   return (
