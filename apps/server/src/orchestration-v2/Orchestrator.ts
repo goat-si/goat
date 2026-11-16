@@ -5,7 +5,7 @@ import { isHistoryArchiveOnlyUpdate, withoutHistoryArchive } from "./goat/Histor
 import { makeReleaseFinishedDelegate } from "./goat/ReleaseFinishedDelegate.ts";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import { runsBehindSteerFollowUp, steerFollowUpQueuePosition } from "./steerFollowUpQueue.ts";
-import { usageLimitHoldsQueue } from "./usageLimitQueue.ts";
+import { usageLimitHoldsQueue, usageLimitHoldsQueuedRuns } from "./usageLimitQueue.ts";
 import { wakeWorkStartedAt } from "./wakeWorkStartedAt.ts";
 import { settlementAdmission } from "./goat/ThreadSettlementAdmission.ts";
 import {
@@ -3208,7 +3208,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         )
         .pipe(mapDispatchError(command));
       const automaticMessageIds = automaticIds(queuedMessages.values());
-      if (queuedRuns.some((run) => !automaticMessageIds.has(run.userMessageId))) {
+      const userRuns = queuedRuns.filter((run) => !automaticMessageIds.has(run.userMessageId));
+      const limitHeld = yield* usageLimitHoldsQueuedRuns(projection.runs, userRuns, (filter) =>
+        loadProjectionForCommand(command, ["turnItems", "providerSessions"], filter),
+      );
+      if (userRuns.length > 0 && !limitHeld) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
