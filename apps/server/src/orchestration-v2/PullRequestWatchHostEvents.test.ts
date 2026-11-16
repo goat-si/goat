@@ -28,6 +28,7 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as PullRequestWatchReactor from "./PullRequestWatchReactor.ts";
+import * as PullRequestEventFeeds from "./goat/PullRequestEventFeeds.ts";
 import * as RuntimeLayer from "./runtimeLayer.ts";
 import {
   layerCheckpointStoreTest,
@@ -374,9 +375,9 @@ describe("pull request watch host event feeds", () => {
       { length: 70 },
       (_, index) => [`github.com goat-si/goat#${String(index).padStart(3, "0")}`, index] as const,
     );
-    const forward = PullRequestWatchReactor.feedsToFollow(candidates);
-    const backward = PullRequestWatchReactor.feedsToFollow(candidates.toReversed());
-    assert.equal(PullRequestWatchReactor.MAX_EVENT_FEEDS, 64);
+    const forward = PullRequestEventFeeds.feedsToFollow(candidates);
+    const backward = PullRequestEventFeeds.feedsToFollow(candidates.toReversed());
+    assert.equal(PullRequestEventFeeds.MAX_EVENT_FEEDS, 64);
     assert.deepEqual(
       [...forward.keys()],
       candidates.slice(0, 64).map(([key]) => key),
