@@ -277,6 +277,7 @@ it("the main row shows no line once its computer is removed from the app, though
 
 it("the chat header's face rests while its computer refuses this client, even as the chat says the bot works", async () => {
   setup();
+  // The avatar alone has no links, and this file mocks the router's hooks.
   await using screen = await render(
     <GoatBotMainAvatar chatOpen activity={{ state: "working" }} waitingOverride={0} />,
     { router: false },
