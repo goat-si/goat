@@ -423,7 +423,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           heldPrompts.push(prompt);
           return;
         }
-        const id = `t3-prompt-${nextPromptId++}`;
+        const id = `goat-prompt-${nextPromptId++}`;
         yield* connection.send({ ...prompt.record, id });
         pendingPromptResponsesDrained ??= yield* Deferred.make<
           void,
