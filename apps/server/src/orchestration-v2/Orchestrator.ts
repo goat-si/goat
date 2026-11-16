@@ -3139,21 +3139,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         session.status !== "stopped" &&
         session.status !== "error",
     );
-    if (
-      (command.type === "thread.model-selection.set" || command.type === "provider.switch") &&
-      liveSessions.length > 0
-    ) {
-      const { runs } = yield* loadProjectionForCommand(command, ["runs"], { turnItemTypes: [] });
-      const refusal = activeTurnRefusal({
-        command,
-        releasesLiveSession: true,
-        hasActiveRun: runs.some(isBlockingRun),
-      });
-      if (refusal !== undefined)
+    const turnRefusal = activeTurnRefusal({
+      command,
+      threadWorktreePath: thread.worktreePath,
+      releasesLiveSession: liveSessions.length > 0,
+    });
+    if (turnRefusal !== undefined) {
+      const { runs } = yield* projectionStore
+        .getThreadRecords(command.threadId, ["runs"], { turnItemTypes: [] })
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      if (runs.some(isBlockingRun))
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
-          cause: refusal,
+          cause: turnRefusal,
         });
     }
     if (

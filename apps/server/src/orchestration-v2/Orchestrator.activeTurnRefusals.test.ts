@@ -234,3 +234,45 @@ it.effect.each(
       assert.deepEqual(after.providerTurns, before.providerTurns);
     }).pipe(Effect.provide(layerFor(selectionChange === "restart"))),
 );
+
+it.effect.each([
+  { case: "a person's change during a running turn", active: true, compareAndSet: false },
+  { case: "the same change after the turn completed", active: false, compareAndSet: false },
+  { case: "a compare-and-set rebind during a running turn", active: true, compareAndSet: true },
+])("a worktree change ending the turn is refused: $case", ({ active, compareAndSet }) =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const { threadId } = yield* seedThread(active);
+    const commandId = CommandId.make("change-worktree");
+    const dispatch = orchestrator.dispatch({
+      type: "thread.metadata.update",
+      commandId,
+      threadId,
+      worktreePath: "/other-worktree",
+      ...(compareAndSet ? { expectedWorktreePath: "/repo" } : {}),
+    });
+    if (active && !compareAndSet) {
+      yield* assertRefusedUnchanged(threadId, commandId, dispatch, "has a turn running");
+      return;
+    }
+    yield* dispatch;
+    assert.equal((yield* projections.getThread(threadId)).worktreePath, "/other-worktree");
+  }).pipe(Effect.provide(layerFor(false))),
+);
+
+it.effect("a worktree handoff that queues the agent's continuation proceeds during its turn", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const { threadId } = yield* seedThread(true);
+    yield* orchestrator.dispatch({
+      type: "thread.metadata.update",
+      commandId: CommandId.make("handoff-worktree"),
+      threadId,
+      worktreePath: "/handoff-worktree",
+      continuation: { messageId: MessageId.make("message:handoff"), text: "Continue there" },
+    });
+    assert.equal((yield* projections.getThread(threadId)).worktreePath, "/handoff-worktree");
+  }).pipe(Effect.provide(layerFor(false))),
+);
