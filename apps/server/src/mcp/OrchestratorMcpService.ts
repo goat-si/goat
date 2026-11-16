@@ -2841,14 +2841,13 @@ const make = Effect.gen(function* () {
               ),
             threadLaunch.committed(commandId),
             Effect.gen(function* () {
-              if (admitted.enabled) yield* permissions.complete(commandId);
               const threadId = derive.delegatedTaskThread({ commandId });
               yield* bindChildWork(channelChildWork, admission, { threadId });
               for (const run of (yield* threadManagement.getThreadRecords(threadId, ["runs"])).runs)
                 yield* threadLaunch.prepareRun({ commandId, threadId, runId: run.id });
+              if (admitted.enabled) yield* permissions.complete(commandId);
             }),
           );
-          if (admitted.enabled) yield* permissions.complete(commandId);
           const taskEvent = result.storedEvents.find(
             (stored) =>
               stored.event.type === "subagent.updated" &&
@@ -2879,6 +2878,8 @@ const make = Effect.gen(function* () {
               runId: childRunEvent.event.payload.id,
             });
           }
+          // Last, so a failed lane update cannot leave the child run unprepared.
+          if (admitted.enabled) yield* permissions.complete(commandId);
           return taskId;
         }),
       );
