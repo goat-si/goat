@@ -43,7 +43,7 @@ export function NativeSwitch(props: ThemedSwitchProps) {
               uncheckedBorderColor: inactiveThumb,
               disabledCheckedTrackColor: dim(activeTrack),
               disabledCheckedThumbColor: dim(activeThumb),
-              disabledCheckedBorderColor: dim(activeTrack),
+              disabledCheckedBorderColor: "transparent",
               disabledUncheckedTrackColor: dim(inactiveTrack),
               disabledUncheckedThumbColor: dim(inactiveThumb),
               disabledUncheckedBorderColor: dim(inactiveThumb),
