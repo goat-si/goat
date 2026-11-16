@@ -137,8 +137,8 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
   readonly onStrongRead?: (stored: Map<string, BearerConnectionCredential>) => void;
   /** Adds a device reached through the hub whose last attempt was refused. */
   readonly blockedDevice?: boolean;
-  /** The hub never sends a node list, so it can refuse before its first one. */
-  readonly silentNodes?: boolean;
+  /** Holds the node list back until `nodesReleased`, so the hub can refuse before its first one. */
+  readonly holdNodes?: boolean;
   /** Credential reads and writes that fail before the store answers again. */
   readonly failStoreReads?: number;
   readonly failStoreWrites?: number;
@@ -152,6 +152,7 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
   const reconnected = yield* Deferred.make<void>();
   const deviceRetried = yield* Deferred.make<void>();
   const storeFailed = yield* Deferred.make<void>();
+  const nodesReleased = yield* Deferred.make<void>();
   let storeReads = 0;
   let storeWrites = 0;
   const retried: EnvironmentId[] = [];
@@ -234,9 +235,12 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
                       options.subscriptionError ??
                         new HubNodesError({ reason: "host_unavailable", detail: "Try again" }),
                     )
-                  : options.silentNodes
-                    ? Stream.never
-                    : Stream.make(snapshot).pipe(Stream.concat(Stream.never));
+                  : (options.holdNodes
+                      ? Stream.fromEffect(Deferred.await(nodesReleased)).pipe(
+                          Stream.flatMap(() => Stream.make(snapshot)),
+                        )
+                      : Stream.make(snapshot)
+                    ).pipe(Stream.concat(Stream.never));
               }),
             ),
         } as unknown as WsRpcProtocolClient),
@@ -401,6 +405,7 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
     subscribed,
     reconciled,
     removed: h.removed,
+    nodesReleased,
     config,
     configs,
     counts: () => ({ reads, subscriptions }),
@@ -784,7 +789,7 @@ it.effect.each([
   "a hub's authentication refusal before its first node list keeps the routes reached through it only when %s (#3473, guard)",
   ([_marker, sessionEnded]) =>
     Effect.gen(function* () {
-      const h = yield* makeConnectedDiscovery({ blockedDevice: true, silentNodes: true });
+      const h = yield* makeConnectedDiscovery({ blockedDevice: true, holdNodes: true });
       yield* Deferred.await(h.subscribed);
       // Refused from a timer: adjust returns once everything the refusal woke has settled.
       yield* Effect.forkChild(
@@ -805,6 +810,18 @@ it.effect.each([
         ),
       );
       yield* TestClock.adjust("1 millis");
-      expect(yield* Deferred.isDone(h.removed)).toBe(!sessionEnded);
+      if (!sessionEnded) {
+        expect(yield* Deferred.await(h.removed)).toBe("hub:hub:node");
+        return;
+      }
+      // The hub comes back with its node list; the reconcile it runs follows the refusal.
+      yield* Deferred.succeed(h.nodesReleased, undefined);
+      yield* SubscriptionRef.set(h.supervisor.state, {
+        ...AVAILABLE_CONNECTION_STATE,
+        phase: "connected" as const,
+      });
+      yield* TestClock.adjust(0);
+      yield* Deferred.await(h.reconciled);
+      expect(yield* Deferred.isDone(h.removed)).toBe(false);
     }).pipe(Effect.scoped),
 );
