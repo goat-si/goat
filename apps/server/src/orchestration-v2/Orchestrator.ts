@@ -5788,7 +5788,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ? undefined
         : (activeRun ??
           worktreeMissingRun ??
-          // A held follow-up never starts after Stop, even once the steered run has ended.
           (steerFollowUpAfterStop
             ? projection.runs.find((run) => run.id === command.steerFollowUpOfRunId)
             : undefined));
@@ -9923,6 +9922,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         updatedAt: now,
         type: "run_interrupt_request",
         message: command.reason ?? RunExecutionService.USER_STOP_REASON,
+        holdsQueue: true,
       },
     });
   });
