@@ -197,6 +197,7 @@ Each move-out was checked against the removed text (diff empty, apart from the o
 - GOAT Bot routines are always stored as continue, and the web and mobile editors hide the mode control for them.
 - The important-updates check refuses a save when either the request or the kept binding has no thread.
 - freshSession is optional in the MCP scheduled task output (upstream: required), for older servers' output.
+- Left out of 4aab23cd72 (N7b-P3-4): upstream moves its managed runtime-mode ceiling check inside upsert, with its ScheduledTaskService.test.ts edit; GOAT has no managedRuntimeModeDenial. Upstream also adds a case to evals/mcp-tool-use/cases/pull-requests.ndjson, which GOAT does not carry. An agent needs two calls for an unbound continue task, as upstream.
 - Condition (3) is met through goat_schedule_update's bindToCurrentThread=false (the agent tool has no threadMode parameter); its description says that is the only way to unbind (380 characters). Agent surface audit and context budget pass, no budget raised.
 
 ### Known limits
