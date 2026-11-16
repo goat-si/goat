@@ -1,5 +1,33 @@
 import { expect, it } from "vite-plus/test";
-import { sanitizeTerminalHistoryChunk } from "./terminalHistoryReplay.ts";
+import {
+  MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH,
+  sanitizeTerminalHistoryChunk,
+} from "./terminalHistoryReplay.ts";
+
+it.each([
+  ["an OSC", "\u001b]0;", "x"],
+  ["a DCS", "\u001bPq", "?"],
+  ["a CSI", "\u001b[", "1;"],
+])("drops %s left unterminated past the pending cap and returns to ground", (_, start, unit) => {
+  let pending = "";
+  let visible = "";
+  const feed = (data: string) => {
+    const result = sanitizeTerminalHistoryChunk(pending, data);
+    pending = result.pendingControlSequence;
+    visible += result.visibleText;
+  };
+  feed(start);
+  // Just over the cap, in the 64 KiB chunks a PTY delivers.
+  const payload = unit.repeat(Math.ceil(MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH / unit.length));
+  for (let offset = 0; offset < payload.length; offset += 64 * 1024) {
+    feed(payload.slice(offset, offset + 64 * 1024));
+    expect(pending.length).toBeLessThanOrEqual(MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH);
+  }
+  expect(pending).toBe("");
+  expect(visible).toBe("");
+  feed("after\n");
+  expect(visible).toBe("after\n");
+});
 
 it("retains text after an unfinished OSC is interrupted by a new escape across chunks", () => {
   const first = sanitizeTerminalHistoryChunk("", "\u001b]0;unfinished\u001b");

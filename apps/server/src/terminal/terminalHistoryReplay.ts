@@ -193,7 +193,23 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
 const HISTORY_SEQUENCE_START = /\u001b/;
 const NEXT_HISTORY_SEQUENCE_START = new RegExp(HISTORY_SEQUENCE_START.source, "g");
 
+// UTF-16 code units of an unfinished sequence the server holds per terminal. Well above the
+// largest real payloads (OSC 52 clipboard, sixel DCS), which history keeps whole.
+export const MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH = 1024 * 1024;
+
 export function sanitizeTerminalHistoryChunk(
+  pendingControlSequence: string,
+  data: string,
+): { visibleText: string; pendingControlSequence: string } {
+  const result = sanitizeChunk(pendingControlSequence, data);
+  // A terminal shows none of an unfinished sequence, so past the cap history drops it and
+  // continues from ground state; the next sequence or text is kept again.
+  return result.pendingControlSequence.length > MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH
+    ? { visibleText: result.visibleText, pendingControlSequence: "" }
+    : result;
+}
+
+function sanitizeChunk(
   pendingControlSequence: string,
   data: string,
 ): { visibleText: string; pendingControlSequence: string } {
