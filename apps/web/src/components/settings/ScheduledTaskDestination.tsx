@@ -15,7 +15,7 @@ const THREAD_MODE_LABELS: Record<ScheduledTaskThreadMode, string> = {
 export function ScheduledTaskDestination({
   environmentId,
   threadId,
-  threadMode,
+  threadMode: draftMode,
   onThreadModeChange,
   botRoutine,
 }: {
@@ -26,6 +26,12 @@ export function ScheduledTaskDestination({
   readonly onThreadModeChange: ((mode: ScheduledTaskThreadMode) => void) | undefined;
   readonly botRoutine: boolean;
 }) {
+  // A server without thread modes runs one thread exactly when the task has one.
+  const threadMode: ScheduledTaskThreadMode = onThreadModeChange
+    ? draftMode
+    : threadId === null
+      ? "new_thread"
+      : "continue";
   const ref = threadId === null ? null : scopeThreadRef(environmentId, threadId);
   const shell = useThreadShell(ref);
   // The shell can omit older settled threads; their family read still carries the title.
