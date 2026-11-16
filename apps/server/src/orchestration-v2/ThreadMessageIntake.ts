@@ -248,19 +248,23 @@ export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(
     attachments: command.attachments ?? [],
   });
   return yield* threads
-    .dispatch({
-      ...command,
-      attachments: claimed.attachments,
-      ...(command.context
-        ? {
-            context: remapComposerContextAttachments(
-              command.context,
-              command.attachments ?? [],
-              claimed.attachments,
-            ),
-          }
-        : {}),
-    })
+    .dispatch(
+      {
+        ...command,
+        attachments: claimed.attachments,
+        ...(command.context
+          ? {
+              context: remapComposerContextAttachments(
+                command.context,
+                command.attachments ?? [],
+                claimed.attachments,
+              ),
+            }
+          : {}),
+      },
+      // A person's message: refused when its thread's missing worktree cannot be restored.
+      { refuseUnrestorableWorktree: true },
+    )
     .pipe(
       Effect.tap((result) =>
         releaseUnusedClaims(

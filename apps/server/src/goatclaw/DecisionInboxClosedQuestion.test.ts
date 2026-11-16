@@ -30,3 +30,16 @@ it.effect("a closed question's inbox item reads withdrawn, an answered one answe
     }
   }).pipe(Effect.provide(fixture())),
 );
+
+it.effect("a person's Cancel on a provider approval still reads answered", () =>
+  Effect.gen(function* () {
+    yield* seedPending("command");
+    const inbox = yield* Inbox.DecisionInbox;
+    const sql = yield* SqlClient.SqlClient;
+    const { id } = (yield* inbox.list(owner, { status: "open" })).items[0]!;
+    yield* sql`UPDATE orchestration_v2_projection_runtime_requests
+      SET status = 'resolved', resolved_at = '1970-01-01T00:00:01.000Z',
+        payload_json = ${JSON.stringify({ decision: "cancel" })}`;
+    expect((yield* inbox.get(owner, id)).status).toBe("answered");
+  }).pipe(Effect.provide(fixture())),
+);

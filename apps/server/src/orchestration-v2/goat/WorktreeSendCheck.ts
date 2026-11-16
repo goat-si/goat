@@ -1,4 +1,4 @@
-import type { ProjectId, ThreadId } from "@goat/contracts";
+import type { ProjectId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 
@@ -7,6 +7,8 @@ export interface SendTarget {
   readonly projectId: ProjectId;
   readonly worktreePath: string | null;
   readonly branch: string | null;
+  /** The instance the send's turn would run on. */
+  readonly instanceId: ProviderInstanceId;
 }
 
 /** The only reads the check makes: the folder, GOAT's worktrees folder, the project. No Git. */
@@ -14,6 +16,8 @@ export interface SendCheckReads {
   readonly exists: (path: string) => Effect.Effect<boolean>;
   readonly isManaged: (path: string) => Effect.Effect<boolean>;
   readonly projectExists: (projectId: ProjectId) => Effect.Effect<boolean>;
+  /** Turn start prepares no local workspace for an instance that runs in the cloud. */
+  readonly runsInCloud: (instanceId: ProviderInstanceId) => Effect.Effect<boolean>;
 }
 
 /**
@@ -26,6 +30,7 @@ export const worktreeSendRefusal = Effect.fn("WorktreeSendCheck.refusal")(functi
   thread: SendTarget,
 ) {
   if (thread.worktreePath === null || (yield* reads.exists(thread.worktreePath))) return undefined;
+  if (yield* reads.runsInCloud(thread.instanceId)) return undefined;
   const missing = `The worktree of thread ${thread.id} at ${thread.worktreePath} is missing, and GOAT can't recreate it`;
   if (thread.branch === null)
     return `${missing}: the thread has no branch to recreate it from. Move the thread to an existing folder, or start a new thread.`;
