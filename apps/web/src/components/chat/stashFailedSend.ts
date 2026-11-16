@@ -192,13 +192,15 @@ export function keepFailedSendInStash(input: {
     return imagesSettled;
   }
   const failedText = input.snapshot.messageText;
+  const lost = [...input.snapshot.images, ...input.snapshot.files].map((entry) => entry.name);
+  const lostSentence = `Your new draft was kept, but browser storage rejected the stash, so ${lost.join(", ")} could not be kept.`;
+  const them = lost.length === 1 ? "it" : "them";
   if (failedText.length === 0) {
-    const lost = [...input.snapshot.images, ...input.snapshot.files].map((entry) => entry.name);
     toastManager.add(
       stackedThreadToast({
         type: "error",
         title,
-        description: `Your new draft was kept, but browser storage rejected the stash, so ${lost.join(", ")} could not be kept. Attach ${lost.length === 1 ? "it" : "them"} again to send.`,
+        description: `${lostSentence} Attach ${them} again to send.`,
         timeout: 0,
         data: { hideCopyButton: true },
       }),
@@ -210,7 +212,9 @@ export function keepFailedSendInStash(input: {
       type: "error",
       title,
       description:
-        "Your new draft was kept, and browser storage rejected the stash. Copy the failed message to send it again.",
+        lost.length > 0
+          ? `${lostSentence} Copy the failed message and attach ${them} again to send it.`
+          : "Your new draft was kept, and browser storage rejected the stash. Copy the failed message to send it again.",
       // The toast holds the only copy of the failed text, so it stays until dismissed.
       timeout: 0,
       data: { hideCopyButton: true },
