@@ -1,7 +1,7 @@
 /**
  * Every tool /mcp serves is registered through guardedToolRegistration, so a call on an MCP client
- * session stops when that session is revoked or expires. Thread credentials carry no
- * session end and are never cut. Nested calls (goat_call, goat_eval steps) stop with their parent.
+ * session stops when that session is revoked or its row deleted; expiry never stops it. Thread
+ * credentials are never cut. Nested calls (goat_call, goat_eval steps) stop with their parent.
  */
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -23,8 +23,8 @@ const cutResult = (readOnly: boolean) =>
       {
         type: "text",
         text: readOnly
-          ? "This GOAT session was revoked or expired while the call ran, so GOAT stopped it. Nothing changed."
-          : "This GOAT session was revoked or expired while the call ran, so GOAT stopped it. Work it had started may have finished; check before repeating it with a new sign-in.",
+          ? "This GOAT session was revoked while the call ran, so GOAT stopped it. Nothing changed."
+          : "This GOAT session was revoked while the call ran, so GOAT stopped it. Work it had started may have finished; check before repeating it with a new sign-in.",
       },
     ],
   });

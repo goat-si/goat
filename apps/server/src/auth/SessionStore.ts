@@ -201,8 +201,8 @@ export class SessionStore extends Context.Service<
       sessionId: AuthSessionId,
     ) => Effect.Effect<void, SessionCredentialVerificationError>;
     /**
-     * Guards calls on this session's authority; every removal of its live grant cuts them. A verify
-     * that raced a removal leaves no live grant (the fences below), so its call is cut at once.
+     * Guards calls on this session's authority: a removal of its grant (a revoke or a deleted row)
+     * cuts them, expiry never does. A call whose verify raced a removal is cut as it starts.
      */
     readonly sessionEnd: (sessionId: AuthSessionId) => Effect.Effect<SessionEndLatches.SessionEnd>;
     readonly revoke: (
@@ -326,9 +326,7 @@ export const make = Effect.gen(function* () {
   const authorityLock = yield* Semaphore.make(1);
   const emitUpsert = (clientSession: AuthClientSession) =>
     PubSub.publish(changesPubSub, { type: "clientUpserted", clientSession }).pipe(Effect.asVoid);
-  const sessionEnds = SessionEndLatches.make((sessionId) =>
-    Effect.map(Ref.get(activeScopes), (s) => s.records.get(sessionId)?.expiresAt.epochMilliseconds),
-  );
+  const sessionEnds = SessionEndLatches.make();
 
   /** Removes the grants in one update, fenced against running verifies, cuts their calls, then announces each. */
   const removeGrants = (sessionIds: ReadonlyArray<AuthSessionId>) =>
