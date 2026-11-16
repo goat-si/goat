@@ -1267,113 +1267,125 @@ const make = Effect.gen(function* () {
           return yield* mapError(input, "resolve-project", threadId)("Project identity changed.");
         }
 
-        let runId: RunId | null = null;
-        let messageSequence: number | undefined;
-        let messageWasAlreadyAccepted = false;
-        if (input.initialMessage !== undefined) {
-          const messageCommandId = CommandId.make(`${input.commandId}:initial-message`);
-          const messageReceipt = yield* readReceipt(input, messageCommandId);
-          messageWasAlreadyAccepted = Option.isSome(messageReceipt);
-          const messageId =
-            input.initialMessage.messageId ??
-            (yield* ids.allocate
-              .message({ threadId, ordinal: 1 })
-              .pipe(Effect.mapError(mapError(input, "dispatch-message", threadId))));
-          yield* confirmLaunchStep(input.confirm, mapError(input, "dispatch-message", threadId));
-          const dispatched = yield* threads
-            .dispatch({
-              type: "message.dispatch",
-              commandId: messageCommandId,
-              threadId,
-              messageId,
-              text: input.initialMessage.text,
-              memoryGrantCeiling: input.initialMessage.memoryGrantCeiling ?? "none",
-              ...(input.initialMessage.scheduledTaskId === undefined
-                ? {}
-                : { scheduledTaskId: input.initialMessage.scheduledTaskId }),
-              ...(input.initialMessage.senderThreadId === undefined
-                ? {}
-                : { senderThreadId: input.initialMessage.senderThreadId }),
-              attachments: input.initialMessage.attachments,
-              ...(input.initialMessage.context ? { context: input.initialMessage.context } : {}),
-              ...(input.generateTitle === true ? { titleSeed: input.title } : {}),
-              modelSelection: input.modelSelection,
-              dispatchMode: { type: "defer_start", workspaceStrategy },
-              createdBy: input.createdBy,
-              creationSource: input.creationSource,
-            })
-            .pipe(Effect.mapError(mapError(input, "dispatch-message", threadId)));
-          // A concurrent retry can read no receipt and still replay the dispatch.
-          messageWasAlreadyAccepted ||= dispatched.replayed === true;
-          messageSequence = dispatched.sequence;
-          const runCreated = dispatched.storedEvents.find(
-            (stored) => stored.event.type === "run.created",
-          );
-          runId = runCreated?.event.type === "run.created" ? runCreated.event.payload.id : null;
-          if (runId === null) {
-            return yield* mapError(
-              input,
-              "dispatch-message",
-              threadId,
-            )("Initial message was accepted without a durable run.");
-          }
-        }
-
-        const projection = yield* threads
-          .getThreadProjection(threadId)
-          .pipe(Effect.mapError(mapError(input, "create-thread", threadId)));
-        const runIsPreparing =
-          runId !== null &&
-          projection.runs.some((run) => run.id === runId && run.status === "preparing");
-        const shouldSchedule = runId === null ? Option.isNone(launchReceipt) : runIsPreparing;
-        const boundWorktreePath = projection.thread.worktreePath;
-        const preparationStrategy: ThreadLaunchWorkspaceStrategy =
-          Option.isSome(launchReceipt) &&
-          workspaceStrategy.type === "root" &&
-          boundWorktreePath !== null
-            ? {
-                type: "existing_worktree",
-                worktreePath: boundWorktreePath,
-                branch: workspaceStrategy.branch,
-              }
-            : workspaceStrategy;
-        if (shouldSchedule) {
-          const ownsPreparation = yield* reservePreparation(input.commandId);
-          if (ownsPreparation) {
-            yield* Effect.gen(function* () {
-              const preparationStillRequired =
-                runId === null
-                  ? true
-                  : yield* threads.getThreadRecords(threadId, ["runs"], { runIds: [runId] }).pipe(
-                      Effect.map((current) =>
-                        current.runs.some((run) => run.id === runId && run.status === "preparing"),
-                      ),
-                      Effect.mapError(mapError(input, "update-thread", threadId)),
-                    );
-              if (preparationStillRequired) {
-                yield* schedulePreparation(
-                  { ...input, workspaceStrategy: preparationStrategy },
+        // Once the first message commits, its preparation is scheduled even if the launch is cut.
+        return yield* Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            let runId: RunId | null = null;
+            let messageSequence: number | undefined;
+            let messageWasAlreadyAccepted = false;
+            if (input.initialMessage !== undefined) {
+              const messageCommandId = CommandId.make(`${input.commandId}:initial-message`);
+              const failDispatch = mapError(input, "dispatch-message", threadId);
+              const messageReceipt = yield* readReceipt(input, messageCommandId);
+              messageWasAlreadyAccepted = Option.isSome(messageReceipt);
+              const messageId =
+                input.initialMessage.messageId ??
+                (yield* ids.allocate
+                  .message({ threadId, ordinal: 1 })
+                  .pipe(Effect.mapError(failDispatch)));
+              yield* restore(confirmLaunchStep(input.confirm, failDispatch));
+              const dispatched = yield* threads
+                .dispatch({
+                  type: "message.dispatch",
+                  commandId: messageCommandId,
                   threadId,
-                  runId,
-                );
-              } else {
-                yield* releasePreparation(input.commandId);
+                  messageId,
+                  text: input.initialMessage.text,
+                  memoryGrantCeiling: input.initialMessage.memoryGrantCeiling ?? "none",
+                  ...(input.initialMessage.scheduledTaskId === undefined
+                    ? {}
+                    : { scheduledTaskId: input.initialMessage.scheduledTaskId }),
+                  ...(input.initialMessage.senderThreadId === undefined
+                    ? {}
+                    : { senderThreadId: input.initialMessage.senderThreadId }),
+                  attachments: input.initialMessage.attachments,
+                  ...(input.initialMessage.context
+                    ? { context: input.initialMessage.context }
+                    : {}),
+                  ...(input.generateTitle === true ? { titleSeed: input.title } : {}),
+                  modelSelection: input.modelSelection,
+                  dispatchMode: { type: "defer_start", workspaceStrategy },
+                  createdBy: input.createdBy,
+                  creationSource: input.creationSource,
+                })
+                .pipe(Effect.mapError(failDispatch));
+              // A concurrent retry can read no receipt and still replay the dispatch.
+              messageWasAlreadyAccepted ||= dispatched.replayed === true;
+              messageSequence = dispatched.sequence;
+              const runCreated = dispatched.storedEvents.find(
+                (stored) => stored.event.type === "run.created",
+              );
+              runId = runCreated?.event.type === "run.created" ? runCreated.event.payload.id : null;
+              if (runId === null) {
+                return yield* mapError(
+                  input,
+                  "dispatch-message",
+                  threadId,
+                )("Initial message was accepted without a durable run.");
               }
-            }).pipe(Effect.onError(() => releasePreparation(input.commandId)));
-          }
-        }
+            }
 
-        return {
-          threadId,
-          projection,
-          // An attempt that failed after claiming the thread recorded nothing, so
-          // only a repeat of the final write counts as resumed.
-          resumed:
-            input.initialMessage === undefined
-              ? Option.isSome(launchReceipt) || claimed.replayed === true
-              : messageWasAlreadyAccepted,
-          ...(messageSequence === undefined ? {} : { sequence: messageSequence }),
-        };
+            const projection = yield* threads
+              .getThreadProjection(threadId)
+              .pipe(Effect.mapError(mapError(input, "create-thread", threadId)));
+            const runIsPreparing =
+              runId !== null &&
+              projection.runs.some((run) => run.id === runId && run.status === "preparing");
+            const shouldSchedule = runId === null ? Option.isNone(launchReceipt) : runIsPreparing;
+            const boundWorktreePath = projection.thread.worktreePath;
+            const preparationStrategy: ThreadLaunchWorkspaceStrategy =
+              Option.isSome(launchReceipt) &&
+              workspaceStrategy.type === "root" &&
+              boundWorktreePath !== null
+                ? {
+                    type: "existing_worktree",
+                    worktreePath: boundWorktreePath,
+                    branch: workspaceStrategy.branch,
+                  }
+                : workspaceStrategy;
+            if (shouldSchedule) {
+              const ownsPreparation = yield* reservePreparation(input.commandId);
+              if (ownsPreparation) {
+                yield* Effect.gen(function* () {
+                  const preparationStillRequired =
+                    runId === null
+                      ? true
+                      : yield* threads
+                          .getThreadRecords(threadId, ["runs"], { runIds: [runId] })
+                          .pipe(
+                            Effect.map((current) =>
+                              current.runs.some(
+                                (run) => run.id === runId && run.status === "preparing",
+                              ),
+                            ),
+                            Effect.mapError(mapError(input, "update-thread", threadId)),
+                          );
+                  if (preparationStillRequired) {
+                    yield* schedulePreparation(
+                      { ...input, workspaceStrategy: preparationStrategy },
+                      threadId,
+                      runId,
+                    );
+                  } else {
+                    yield* releasePreparation(input.commandId);
+                  }
+                }).pipe(Effect.onError(() => releasePreparation(input.commandId)));
+              }
+            }
+
+            return {
+              threadId,
+              projection,
+              // An attempt that failed after claiming the thread recorded nothing, so
+              // only a repeat of the final write counts as resumed.
+              resumed:
+                input.initialMessage === undefined
+                  ? Option.isSome(launchReceipt) || claimed.replayed === true
+                  : messageWasAlreadyAccepted,
+              ...(messageSequence === undefined ? {} : { sequence: messageSequence }),
+            };
+          }),
+        );
       });
     },
   );
