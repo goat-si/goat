@@ -116,8 +116,8 @@ export function MobileBotRoster(props: {
   useLayoutEffect(() => {
     mount.current = { mounted: true, visible, presenting, environmentId, readable: rosterReadable };
   }, [visible, presenting, environmentId, rosterReadable]);
-  // oxlint-disable-next-line goat/react-effect-budget -- An unmounted roster (the Bots / Threads switch) opens nothing when its create answers.
-  useEffect(() => {
+  // oxlint-disable-next-line goat/react-effect-budget -- An unmounted roster (the Bots / Threads switch) opens nothing when its create answers; a layout effect, so a dev reload's cleanup runs before the record is marked mounted again.
+  useLayoutEffect(() => {
     const owner = mount;
     return () => {
       owner.current = { ...owner.current, mounted: false };
