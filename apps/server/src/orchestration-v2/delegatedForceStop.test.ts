@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { EventId, NodeId, ProviderSessionId, ThreadId } from "@goat/contracts";
+import { EventId, NodeId, ProviderSessionId, ThreadId, TurnItemId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -184,11 +184,18 @@ it.effect("after a restart cancelled the run, the parent's force stops nothing",
       const after = yield* Effect.all({
         refusal: refusal(task),
         runs: runStatuses(task.childThreadId),
+        causes: runCauses(task.childThreadId),
         reason: interruptResult(task.childThreadId),
       }).pipe(Effect.provide(layerForAdapter(adapter, { database, sessions })));
       assert.deepEqual(
         { ...after, calls },
-        { refusal: "not_unresponsive", runs: ["cancelled"], reason: undefined, calls: [] },
+        {
+          refusal: "not_unresponsive",
+          runs: ["cancelled"],
+          causes: ["server_restart"],
+          reason: undefined,
+          calls: [],
+        },
       );
     }),
   ),
@@ -213,53 +220,54 @@ it.effect("the parent's Force stop of a cloud child refuses and leaves its run a
   }).pipe(Effect.provide(layerTest)),
 );
 
-it.effect(
-  "a Stop the provider confirms while force waits for the lock leaves the child alone",
-  () => {
-    const calls: Array<string> = [];
-    const sessions = Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
-      isLive: () => Effect.succeed(true),
-      otherWorkingThreads: () => Effect.succeed([]),
-      detach: () => Effect.sync(() => calls.push("detach")),
-      releaseUnlessBusy: () => Effect.sync(() => calls.push("release")).pipe(Effect.as(true)),
-    });
-    // Pauses force after its first check, before it takes the thread lock.
-    let gate:
-      | { readonly checked: Deferred.Deferred<void>; readonly proceed: Deferred.Deferred<void> }
-      | undefined;
-    let reads = 0;
-    const orchestrator = (service: Orchestrator.OrchestratorV2["Service"]) =>
-      ({
-        ...service,
-        getThreadRecords: (threadId, keys, options) =>
-          service
-            .getThreadRecords(threadId, keys, options)
-            .pipe(
-              Effect.tap(() =>
-                gate !== undefined &&
-                (keys as ReadonlyArray<string>).includes("turnItems") &&
-                reads++ === 0
-                  ? Deferred.succeed(gate.checked, undefined).pipe(
-                      Effect.andThen(Deferred.await(gate.proceed)),
-                    )
-                  : Effect.void,
-              ),
+it.effect.each([
+  { name: "the provider confirms the Stop", meanwhile: "ended", runs: ["interrupted"] },
+  { name: "a person asks to Stop again", meanwhile: "stopAgain", runs: ["running"] },
+] as const)("$name while force waits for the lock: the child is left alone", (row) => {
+  const calls: Array<string> = [];
+  const sessions = Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+    isLive: () => Effect.succeed(true),
+    otherWorkingThreads: () => Effect.succeed([]),
+    detach: () => Effect.sync(() => calls.push("detach")),
+    releaseUnlessBusy: () => Effect.sync(() => calls.push("release")).pipe(Effect.as(true)),
+  });
+  // Pauses force after its first check, before it takes the thread lock.
+  let gate:
+    | { readonly checked: Deferred.Deferred<void>; readonly proceed: Deferred.Deferred<void> }
+    | undefined;
+  let reads = 0;
+  const orchestrator = (service: Orchestrator.OrchestratorV2["Service"]) =>
+    ({
+      ...service,
+      getThreadRecords: (threadId, keys, options) =>
+        service
+          .getThreadRecords(threadId, keys, options)
+          .pipe(
+            Effect.tap(() =>
+              gate !== undefined &&
+              (keys as ReadonlyArray<string>).includes("turnItems") &&
+              reads++ === 0
+                ? Deferred.succeed(gate.checked, undefined).pipe(
+                    Effect.andThen(Deferred.await(gate.proceed)),
+                  )
+                : Effect.void,
             ),
-      }) satisfies Orchestrator.OrchestratorV2["Service"];
-    return Effect.gen(function* () {
-      const threads = yield* ThreadManagementService.ThreadManagementService;
-      const projections = yield* ProjectionStore.ProjectionStoreV2;
-      const task = yield* parentWithTask("force-race", "unanswered");
-      gate = { checked: yield* Deferred.make<void>(), proceed: yield* Deferred.make<void>() };
-      const forcing = yield* threads
-        .forceStopDelegatedTask(task)
-        .pipe(Effect.flip, Effect.forkChild);
-      yield* Deferred.await(gate.checked);
+          ),
+    }) satisfies Orchestrator.OrchestratorV2["Service"];
+  return Effect.gen(function* () {
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const task = yield* parentWithTask(`force-race-${row.meanwhile}`, "unanswered");
+    gate = { checked: yield* Deferred.make<void>(), proceed: yield* Deferred.make<void>() };
+    const forcing = yield* threads.forceStopDelegatedTask(task).pipe(Effect.flip, Effect.forkChild);
+    yield* Deferred.await(gate.checked);
+    const child = yield* (yield* Orchestrator.OrchestratorV2).getThreadProjection(
+      task.childThreadId,
+    );
+    const run = child.runs[0]!;
+    const now = yield* DateTime.now;
+    if (row.meanwhile === "ended") {
       // The provider confirms the Stop, so the run ends before force takes the lock.
-      const run = (yield* (yield* Orchestrator.OrchestratorV2).getThreadProjection(
-        task.childThreadId,
-      )).runs[0]!;
-      const now = yield* DateTime.now;
       yield* projections.apply({
         id: EventId.make("event:force-race:run-ended"),
         type: "run.updated",
@@ -268,17 +276,39 @@ it.effect(
         occurredAt: now,
         payload: { ...run, status: "interrupted", completedAt: now },
       });
-      yield* Deferred.succeed(gate.proceed, undefined);
-      const error = yield* Fiber.join(forcing);
-      assert.equal(
-        error._tag === "DelegatedForceStopRefused" ? error.reason : error._tag,
-        "not_unresponsive",
-      );
-      assert.deepEqual(calls, []);
-      assert.equal(yield* interruptResult(task.childThreadId), undefined);
-    }).pipe(Effect.provide(layerForAdapter(adapter, { sessions, orchestrator })));
-  },
-);
+    } else {
+      // A newer Stop waits for its own answer, so the run is active but no longer unresponsive.
+      const request = child.turnItems.find((item) => item.type === "run_interrupt_request")!;
+      const { unresponsiveAt: _unanswered, ...fresh } = request as typeof request & {
+        readonly unresponsiveAt?: unknown;
+      };
+      yield* projections.apply({
+        id: EventId.make("event:force-race:stop-again"),
+        type: "turn-item.updated",
+        threadId: task.childThreadId,
+        runId: run.id,
+        occurredAt: now,
+        payload: {
+          ...fresh,
+          id: TurnItemId.make("turn-item:force-race:stop-again"),
+          ordinal: request.ordinal + 1,
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+        } as typeof request,
+      });
+    }
+    yield* Deferred.succeed(gate.proceed, undefined);
+    const error = yield* Fiber.join(forcing);
+    assert.equal(
+      error._tag === "DelegatedForceStopRefused" ? error.reason : error._tag,
+      "not_unresponsive",
+    );
+    assert.deepEqual(calls, []);
+    assert.deepEqual(yield* runStatuses(task.childThreadId), [...row.runs]);
+    assert.equal(yield* interruptResult(task.childThreadId), undefined);
+  }).pipe(Effect.provide(layerForAdapter(adapter, { sessions, orchestrator })));
+});
 
 it.effect("the parent's Force stop detaches a child session another working thread shares", () => {
   const calls: Array<string> = [];
