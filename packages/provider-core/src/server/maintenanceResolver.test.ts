@@ -40,6 +40,7 @@ import {
 } from "./maintenanceResolver.ts";
 import { symlinksSupported } from "@goat/shared/testing/symlinks";
 import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
+import { linkIntoPackage, writeExecutable } from "./maintenanceResolver.testkit.ts";
 
 const driver = (value: string) => ProviderDriverKind.make(value);
 // Shell stubs use POSIX paths; Windows temp paths cannot split on colon.
@@ -90,21 +91,6 @@ const manualPackageTool: ProviderMaintenanceCapabilities = {
   packageName: "@example/package-tool",
   update: null,
 };
-
-function writeExecutable(path: string) {
-  NodeFS.mkdirSync(NodePath.dirname(path), { recursive: true });
-  NodeFS.writeFileSync(path, "#!/bin/sh\n");
-  NodeFS.chmodSync(path, 0o755);
-}
-
-function linkIntoPackage(tempDir: string, name: string, packageSegments: ReadonlyArray<string>) {
-  const target = NodePath.join(tempDir, ...packageSegments, "bin", `${name}.js`);
-  writeExecutable(target);
-  const link = NodePath.join(tempDir, "bin", name);
-  NodeFS.mkdirSync(NodePath.dirname(link), { recursive: true });
-  NodeFS.symlinkSync(target, link);
-  return link;
-}
 
 const noSpawn = lazyChildProcessSpawner(() =>
   Effect.die("maintenance resolution should not spawn a process here"),
