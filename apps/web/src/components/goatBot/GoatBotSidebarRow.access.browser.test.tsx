@@ -237,7 +237,7 @@ function expectClosed(screen: Awaited<ReturnType<typeof render>>) {
   expect(screen.container.querySelector("[data-slot=goat-bot-relative-time]")).toBeNull();
   expect(screen.getByRole("img", { name: "2 waiting for you" }).query()).toBeNull();
   expect(screen.container.querySelector("[data-slot=goat-bot-waiting-mark]")).toBeNull();
-  // Only the fixed "Main" label is left; the count and Slack badges are gone.
+  // Only the fixed "Main" label is left; the Slack badge is gone.
   expect(
     screen
       .getByTestId("badge")

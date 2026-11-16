@@ -28,9 +28,9 @@ export function GoatBotWaitingMark({ count }: { readonly count: number | undefin
     <span
       aria-hidden
       data-slot="goat-bot-waiting-mark"
-      // oxlint-disable-next-line goat/no-native-title-tooltip -- The same hover hint as the unread pill's title, on a mark hidden from focus and speech.
+      // oxlint-disable-next-line goat/no-native-title-tooltip -- The unread pill's hover hint; a Tooltip would make this hidden mark in the row's link its own hover trigger.
       title={`${count} waiting for you`}
-      // Amber falls under 4.5:1 on light hover and selected rows, so those take the row's text.
+      // Amber falls under 4.5:1 on light hover, selected and pressed rows, so those take the row's text.
       className="inline-flex shrink-0 items-center gap-0.5 text-xs font-medium leading-none text-warning-foreground group-hover/bot-row:text-sidebar-foreground group-active/bot-row:text-sidebar-foreground group-data-[active=true]/bot-row:text-sidebar-foreground sm:text-3xs"
     >
       <MessageCircleQuestionIcon className="size-3.5 sm:size-3" />
