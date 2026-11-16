@@ -4,6 +4,7 @@ import type {
   OrchestrationV2Run,
   OrchestrationV2ThreadProjection,
 } from "@goat/contracts";
+import { latestExecutedRun } from "@goat/shared/orchestrationV2ThreadError";
 import type * as DateTime from "effect/DateTime";
 
 /** Stop ended this task, so its result is not delivered to the parent agent. */
@@ -61,6 +62,16 @@ export function isBlockingRun(run: OrchestrationV2Run): boolean {
     run.status === "starting" ||
     run.status === "running" ||
     run.status === "waiting"
+  );
+}
+
+/** The run a follow-up to a finished remote task binds to: the latest active one, else the last that ran. */
+export function followUpOwnerRun(
+  runs: ReadonlyArray<OrchestrationV2Run>,
+): OrchestrationV2Run | null {
+  return (
+    runs.filter(isBlockingRun).toSorted((a, b) => b.ordinal - a.ordinal)[0] ??
+    latestExecutedRun(runs)
   );
 }
 
