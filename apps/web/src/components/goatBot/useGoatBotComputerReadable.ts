@@ -14,7 +14,7 @@ const notRevoked = () => false;
 
 /**
  * Whether this client may still read the computer: it is in the app's list and has not refused this
- * device. Mobile applies the same rule.
+ * device. Mobile's gate also closes during a start-over and after a denied bot-list read.
  */
 export function useGoatBotComputerReadable(environmentId: EnvironmentId | null): boolean {
   const { presentation, revoked } = useAccess(environmentId);

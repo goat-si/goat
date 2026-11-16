@@ -512,7 +512,9 @@ it.each([
     await userEvent.type(dialog.getByRole("textbox", { name: "Name" }), "{Enter}");
 
     expect(state.persist).not.toHaveBeenCalled();
-    await expect.element(dialog.getByRole("alert")).toHaveTextContent(why);
+    const alert = dialog.getByRole("alert");
+    await expect.element(alert).toBeVisible();
+    expect(alert.element().textContent).toBe(why);
     await expect.element(dialog.getByRole("textbox", { name: "Name" })).toHaveValue("Draft name");
   },
 );
