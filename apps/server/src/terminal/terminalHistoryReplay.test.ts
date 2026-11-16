@@ -1,6 +1,7 @@
 import { expect, it } from "vite-plus/test";
 import {
   MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH,
+  MAX_PENDING_HISTORY_ESCAPE_SEQUENCE_LENGTH,
   sanitizeTerminalHistoryChunk,
 } from "./terminalHistoryReplay.ts";
 
@@ -142,3 +143,31 @@ it.each([
     expect(sanitizeTerminalHistoryChunk("", data).visibleText).toBe(history);
   },
 );
+
+it.each([
+  ["CSI", "\u001b[", "1;", "m"],
+  ["plain escape", "\u001b", " ", "0"],
+])(
+  "stops holding an unfinished %s after its own limit, fed in 1 KiB chunks",
+  (_, start, unit, end) => {
+    const history = historyFeed();
+    const payload = unit.repeat((2 * MAX_PENDING_HISTORY_ESCAPE_SEQUENCE_LENGTH) / unit.length);
+    history.feed("before", start);
+    for (let offset = 0; offset < payload.length; offset += 1024) {
+      history.feed(payload.slice(offset, offset + 1024));
+      expect(history.pending.length).toBeLessThanOrEqual(
+        MAX_PENDING_HISTORY_ESCAPE_SEQUENCE_LENGTH,
+      );
+    }
+    history.feed(end + "after\n");
+    expect(history.visible).toBe("beforeafter\n");
+    expect(history.pending).toBe("");
+  },
+);
+
+it("keeps a CSI just under its limit whole", () => {
+  const csi = "\u001b[" + "1".repeat(MAX_PENDING_HISTORY_ESCAPE_SEQUENCE_LENGTH - 3) + "m";
+  const history = historyFeed();
+  history.feed(csi.slice(0, 1024), csi.slice(1024, 3000), csi.slice(3000), "after");
+  expect(history.visible).toBe(csi + "after");
+});

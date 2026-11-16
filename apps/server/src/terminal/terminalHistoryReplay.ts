@@ -198,6 +198,10 @@ const NEXT_HISTORY_SEQUENCE_START = new RegExp(HISTORY_SEQUENCE_START.source, "g
 // already drew it, and a replay shows neither the sequence nor its payload.
 export const MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH = 1024 * 1024;
 
+// An unfinished CSI or plain escape is never longer than a few hundred units in practice, and
+// the sanitizer rescans a held CSI on every chunk, so these are held far less.
+export const MAX_PENDING_HISTORY_ESCAPE_SEQUENCE_LENGTH = 4 * 1024;
+
 // Held while the rest of a sequence past the cap is swallowed: this marker, the sequence's kind,
 // and at most one code unit split across chunks. A held unfinished sequence always starts with ESC.
 const SWALLOWING = "swallowing:";
@@ -275,13 +279,15 @@ export function sanitizeTerminalHistoryChunk(
   const result = sanitizeChunk(pending, rest);
   const visibleText = swallowedEffect + result.visibleText;
   const held = result.pendingControlSequence;
-  if (held.length <= MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH) {
+  const kind = swallowedKind(held);
+  const limit =
+    kind === "]" || kind === "P"
+      ? MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH
+      : MAX_PENDING_HISTORY_ESCAPE_SEQUENCE_LENGTH;
+  if (held.length <= limit) {
     return { visibleText, pendingControlSequence: held };
   }
-  return {
-    visibleText,
-    pendingControlSequence: SWALLOWING + swallowedKind(held) + carriedUnit(held),
-  };
+  return { visibleText, pendingControlSequence: SWALLOWING + kind + carriedUnit(held) };
 }
 
 function sanitizeChunk(
