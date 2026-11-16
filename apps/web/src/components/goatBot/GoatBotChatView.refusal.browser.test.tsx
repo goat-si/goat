@@ -22,7 +22,6 @@ interface Connection {
 const state = vi.hoisted(() => ({
   presentations: [] as ReadonlyArray<unknown>,
   primaryId: null as string | null,
-  revoked: false,
   listeners: new Set<() => void>(),
   version: 0,
 }));
@@ -65,15 +64,6 @@ vi.mock(import("../../state/environments"), async (original) => ({
     return state.primaryId;
   }) as never,
 }));
-vi.mock("~/environments/primary/sessionCheck", () => ({
-  primarySessionCheck: {
-    subscribe: (listener: () => void) => {
-      state.listeners.add(listener);
-      return () => state.listeners.delete(listener);
-    },
-    revoked: () => state.revoked,
-  },
-}));
 vi.mock("../WorkspacePageHeader", () => ({
   WorkspacePageHeader: ({ children }: { children: ReactNode }) => <header>{children}</header>,
 }));
@@ -115,13 +105,11 @@ function presentation(
 interface Scenario {
   readonly presentations: ReadonlyArray<unknown>;
   readonly primaryId: EnvironmentId;
-  readonly revoked: boolean;
 }
 
 function setup(scenario: Scenario) {
   state.presentations = scenario.presentations;
   state.primaryId = scenario.primaryId;
-  state.revoked = scenario.revoked;
   state.listeners.clear();
   state.version = 0;
 }
@@ -152,9 +140,8 @@ const refusals: ReadonlyArray<[string, Scenario, boolean]> = [
   [
     "this tab's own server said its session is gone",
     {
-      presentations: [presentation(STUDIO, "Mac Studio", dropped, CLAIM)],
+      presentations: [presentation(STUDIO, "Mac Studio", blocked, CLAIM)],
       primaryId: STUDIO,
-      revoked: true,
     },
     true,
   ],
@@ -166,23 +153,21 @@ const refusals: ReadonlyArray<[string, Scenario, boolean]> = [
         presentation(STUDIO, "Mac Studio", blocked, CLAIM),
       ],
       primaryId: LAPTOP,
-      revoked: false,
     },
     true,
   ],
   [
     "an unclaimed primary that refused this device",
     {
-      presentations: [presentation(STUDIO, "Mac Studio", dropped, null)],
+      presentations: [presentation(STUDIO, "Mac Studio", blocked, null)],
       primaryId: STUDIO,
-      revoked: true,
     },
     false,
   ],
 ];
 
 it.each(refusals)(
-  "the bot chat says GOAT on Mac Studio did not accept this device (%s) in its banner, header and empty-chat notice, never offline, and keeps the move (#3550, access)",
+  "the bot chat says GOAT on Mac Studio did not accept this device (%s) in its banner and empty-chat notice, Not accepted in its header, never offline, and keeps the move (#3550, access)",
   async (_refusal, scenario, claimed) => {
     setup(scenario);
     await using screen = await render(<Harness />);
@@ -202,7 +187,6 @@ it.each(refusals)(
     expect(screen.getByText("Offline", { exact: true }).elements()).toHaveLength(0);
 
     await change(() => {
-      state.revoked = false;
       state.presentations = state.presentations.map((entry) =>
         (entry as { environmentId: string }).environmentId === STUDIO
           ? { ...(entry as object), connection: connected }
@@ -223,7 +207,6 @@ const notRefused: ReadonlyArray<[string, Scenario, string]> = [
     {
       presentations: [presentation(STUDIO, "Mac Studio", dropped, CLAIM)],
       primaryId: STUDIO,
-      revoked: false,
     },
     "Goatie runs on Mac Studio, which isn't connected.",
   ],
@@ -232,7 +215,6 @@ const notRefused: ReadonlyArray<[string, Scenario, string]> = [
     {
       presentations: [presentation(LAPTOP, "MacBook", blocked, CLAIM)],
       primaryId: LAPTOP,
-      revoked: false,
     },
     "Goatie's home (env-stud) isn't a computer this app knows.",
   ],

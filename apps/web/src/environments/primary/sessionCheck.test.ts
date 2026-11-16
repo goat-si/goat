@@ -13,15 +13,8 @@ vi.mock("../../state/presentation", async () => {
   const { Atom } = await import("effect/reactivity");
   return { environmentPresentations: { presentationsAtom: Atom.make(new Map()) } };
 });
-vi.mock("./auth", () => ({
-  isPrimaryAuthGateAuthenticated: () => page.cookie,
-  probePrimarySession: () => Promise.resolve("revoked"),
-}));
+vi.mock("./auth", () => ({ isPrimaryAuthGateAuthenticated: () => page.cookie }));
 vi.mock("./httpLayer", () => ({ isSameOriginBrowserPrimary: () => true }));
-vi.mock("../../lib/documentActivity", () => ({
-  getDocumentActivity: () => ({ visible: true }),
-  subscribeDocumentActivity: () => () => {},
-}));
 
 type Connection = Pick<EnvironmentConnectionPresentation, "phase" | "failure">;
 
