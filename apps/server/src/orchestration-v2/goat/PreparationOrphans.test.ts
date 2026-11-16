@@ -1,5 +1,9 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE } from "@goat/contracts";
+import {
+  CommandId,
+  GitCommandError,
+  ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -13,7 +17,8 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ThreadLaunch from "../ThreadLaunchService.ts";
 import * as ThreadManagement from "../ThreadManagementService.ts";
-import { makeHarness } from "../testkit/ThreadLaunchHarness.ts";
+import { preparationSettled } from "../testkit/preparationSettled.ts";
+import { makeHarness, project } from "../testkit/ThreadLaunchHarness.ts";
 import { launchInput } from "../testkit/threadLaunchInput.ts";
 import { makeClaimProbe, makeLaunchHold } from "./PreparationClaims.testkit.ts";
 import {
@@ -54,7 +59,9 @@ it.effect(
       assert.deepEqual(
         plan.map((row) => row.detail),
         [
-          "SEARCH orchestration_v2_projection_runs USING INDEX orchestration_v2_projection_runs_recovery_idx (status=?)",
+          "SEARCH runs USING INDEX orchestration_v2_projection_runs_recovery_idx (status=?)",
+          "CORRELATED SCALAR SUBQUERY 1",
+          "SEARCH item USING INDEX orchestration_v2_projection_turn_items_run_ordinal_idx (run_id=?)",
           "USE TEMP B-TREE FOR ORDER BY",
         ],
       );
@@ -137,6 +144,77 @@ it.effect("a run whose preparation is under way is not failed, however long it t
 
       yield* Deferred.succeed(allow, undefined);
       yield* released(launched.threadId, "command:slow");
+    }).pipe(Effect.provide(withCheck(harness, probe)));
+  }),
+);
+
+it.effect("a run retried right after a real preparation failure is not failed early", () =>
+  Effect.gen(function* () {
+    const probe = yield* makeOrphanProbe;
+    const hold = yield* makeLaunchHold;
+    const entered = yield* Deferred.make<void>();
+    const fail = yield* Deferred.make<void>();
+    let worktrees = 0;
+    const harness = makeHarness({
+      launchThreads: hold.wrap,
+      createWorktree: (request) =>
+        worktrees++ === 0
+          ? Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(fail)),
+              Effect.andThen(
+                Effect.fail(
+                  new GitCommandError({
+                    operation: "GitVcsDriver.createWorktree",
+                    command: "git worktree add",
+                    cwd: project.workspaceRoot,
+                    detail: "The branch is checked out elsewhere.",
+                  }),
+                ),
+              ),
+            )
+          : Effect.succeed({
+              worktree: {
+                path: "/repo-worktrees/retried",
+                refName: request.newRefName,
+                headSha: "abc",
+              },
+            } as never),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "command:retried",
+          thread: "thread:retried",
+          message: "Prepare, fail, retry",
+          workspace: { type: "worktree", baseRef: "main" },
+        }),
+      );
+      const runId = launched.projection.runs[0]!.id;
+      yield* Deferred.await(entered);
+      // Passes at 1, 2 and 3 minutes find the run while its preparation runs.
+      for (let pass = 1; pass <= 3; pass++) assert.equal(yield* probe.pass, "read");
+      yield* Deferred.succeed(fail, undefined);
+      assert.equal((yield* preparationSettled(launched.threadId)).runs[0]?.status, "failed");
+
+      // A person retries at once; the next pass lands before the Retry's preparation claims the run.
+      yield* hold.arm;
+      const retry = yield* launches
+        .retryPreparation({
+          commandId: CommandId.make("command:retried:retry"),
+          threadId: launched.threadId,
+          runId,
+        })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* hold.held;
+      assert.equal(yield* probe.pass, "read");
+      yield* hold.resume;
+      yield* Fiber.join(retry);
+      const outcome = yield* Effect.raceFirst(
+        probe.failed.pipe(Effect.as("failed early")),
+        released(launched.threadId, "command:retried:retry").pipe(Effect.as("prepared")),
+      );
+      assert.equal(outcome, "prepared");
     }).pipe(Effect.provide(withCheck(harness, probe)));
   }),
 );

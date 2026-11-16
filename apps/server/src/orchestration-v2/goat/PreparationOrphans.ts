@@ -34,6 +34,8 @@ export const NOT_STARTED_MESSAGE =
 export interface Suspect {
   readonly runId: RunId;
   readonly threadId: ThreadId;
+  /** When any of the run's items last changed; a Retry rewrites them, so it starts a new count. */
+  readonly lastItemChange: string | null;
 }
 
 export type SuspectRead = Effect.Effect<ReadonlyArray<Suspect>, SqlError.SqlError>;
@@ -45,27 +47,41 @@ export const RECOVERY_INDEX_STATUSES = ["queued", "preparing", "starting", "runn
 // or with bound values, SQLite does not see that the index applies and scans the table. INDEXED BY
 // fails the statement loudly if that index ever changes. The sort runs over preparing rows only.
 export const SUSPECTS_QUERY = `
-  SELECT run_id, thread_id FROM orchestration_v2_projection_runs
+  SELECT runs.run_id, runs.thread_id, (
+    SELECT MAX(item.updated_at) FROM orchestration_v2_projection_turn_items AS item
+    WHERE item.run_id = runs.run_id
+  ) AS last_item_change
+  FROM orchestration_v2_projection_runs AS runs
     INDEXED BY orchestration_v2_projection_runs_recovery_idx
-  WHERE status IN (${RECOVERY_INDEX_STATUSES.map((status) => `'${status}'`).join(", ")})
-    AND status = 'preparing'
-  ORDER BY requested_at, run_id
+  WHERE runs.status IN (${RECOVERY_INDEX_STATUSES.map((status) => `'${status}'`).join(", ")})
+    AND runs.status = 'preparing'
+  ORDER BY runs.requested_at, runs.run_id
   LIMIT ${PASS_LIMIT}`;
 
 const readSuspects = (sql: SqlClient.SqlClient): SuspectRead =>
-  sql.unsafe<{ readonly run_id: string; readonly thread_id: string }>(SUSPECTS_QUERY).pipe(
-    Effect.map((rows) =>
-      rows.map((row) => ({
-        runId: RunId.make(row.run_id),
-        threadId: ThreadId.make(row.thread_id),
-      })),
-    ),
-  );
+  sql
+    .unsafe<{
+      readonly run_id: string;
+      readonly thread_id: string;
+      readonly last_item_change: string | null;
+    }>(SUSPECTS_QUERY)
+    .pipe(
+      Effect.map((rows) =>
+        rows.map((row) => ({
+          runId: RunId.make(row.run_id),
+          threadId: ThreadId.make(row.thread_id),
+          lastItemChange: row.last_item_change,
+        })),
+      ),
+    );
+
+// A run's count belongs to one stretch of "preparing": a Retry changes the key, so it starts over.
+const countKey = (suspect: Suspect) => `${suspect.runId} ${suspect.lastItemChange ?? ""}`;
 
 /**
  * Fails runs left "preparing" with no preparation under way, such as a launch cut between its
  * commit and its preparation, so Retry works on them. A run counts from the first pass that read
- * it; a pass that finds its claim held (a preparation is running) starts its count again.
+ * it since its items last changed; a pass that finds its claim held starts its count again.
  */
 // Untraced: a span here would parent every pass for the server's life; each pass has its own.
 const start = Effect.fnUntraced(function* (suspects: SuspectRead) {
@@ -73,7 +89,7 @@ const start = Effect.fnUntraced(function* (suspects: SuspectRead) {
   const claims = yield* PreparationClaims;
   const failing = yield* Ref.make(false);
   const graceMillis = Duration.toMillis(PREPARATION_GRACE);
-  let firstSeen = new Map<RunId, number>();
+  let firstSeen = new Map<string, number>();
 
   const isPreparing = (suspect: Suspect) =>
     threads
@@ -117,18 +133,17 @@ const start = Effect.fnUntraced(function* (suspects: SuspectRead) {
     const now = yield* Clock.currentTimeMillis;
     const read = yield* suspects;
     firstSeen = new Map(
-      read.map((suspect) => [suspect.runId, firstSeen.get(suspect.runId) ?? now]),
+      read.map((suspect) => [countKey(suspect), firstSeen.get(countKey(suspect)) ?? now]),
     );
     const due = read.filter(
-      (suspect) => now - (firstSeen.get(suspect.runId) ?? now) >= graceMillis,
+      (suspect) => now - (firstSeen.get(countKey(suspect)) ?? now) >= graceMillis,
     );
     const exits = yield* Effect.forEach(due, (suspect) =>
       Effect.exit(claims.whileClaimed(suspect.runId, failOrphan(suspect))).pipe(
         Effect.tap((exit) =>
           Effect.sync(() => {
-            // A failed run counts afresh if a Retry brings it back; a claimed one is preparing.
-            if (Exit.isSuccess(exit) && exit.value) firstSeen.delete(suspect.runId);
-            else if (Exit.isSuccess(exit)) firstSeen.set(suspect.runId, now);
+            // A claimed run is being prepared, so its count starts again.
+            if (Exit.isSuccess(exit) && !exit.value) firstSeen.set(countKey(suspect), now);
           }),
         ),
       ),
