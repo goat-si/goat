@@ -4,11 +4,10 @@ import { afterEach, expect, it, vi } from "vite-plus/test";
 import { BotProfile } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
-// The roster's member rows through the real member-status hook: only the status read underneath
-// it, the thread shells and the native views stand in.
-// Home's work signals are not under test here.
-// Keeping answers for offline is not under test here: the live answer from a readable computer,
-// and nothing once that read is refused, as the real hook returns.
+// The roster's member rows through the real member-status hook; only the status read beneath it,
+// the thread shells and the native views stand in. Home's work signals are not under test, nor
+// keeping answers for offline: the live answer from a readable computer, and nothing once that
+// read is refused, as the real hook returns.
 vi.mock("./useKeptPerComputer", () => ({
   useKeptPerComputer: (
     _kind: string,
