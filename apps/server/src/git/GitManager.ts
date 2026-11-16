@@ -89,6 +89,14 @@ import * as SourceControlProvider from "@goat/source-control-core/server/SourceC
 import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import type { ChangeRequest } from "@goat/contracts";
+import {
+  type CommitAndBranchSuggestion,
+  formatCommitMessage,
+  isCommitAction,
+  parseCustomCommitMessage,
+  sanitizeCommitMessage,
+  sanitizeProgressText,
+} from "./commitMessage.ts";
 
 export interface GitActionProgressReporter {
   readonly publish: (event: GitActionProgressEvent) => Effect.Effect<void, never>;
@@ -165,7 +173,6 @@ export class GitManager extends Context.Service<
 >()("goat/git/GitManager") {}
 
 const COMMIT_TIMEOUT_MS = 10 * 60_000;
-const MAX_PROGRESS_TEXT_LENGTH = 500;
 const STATUS_RESULT_CACHE_TTL = Duration.seconds(1);
 const STATUS_RESULT_CACHE_CAPACITY = 2_048;
 const PR_LOOKUP_CACHE_TTL = Duration.seconds(60);
@@ -423,75 +430,6 @@ function limitCommandOutput(item: OrchestrationV2TurnItem): OrchestrationV2TurnI
   if (item.type !== "command_execution" || item.output === undefined) return item;
   if (item.output.length <= PR_THREAD_COMMAND_OUTPUT_CHARS) return item;
   return { ...item, output: `[truncated]\n${item.output.slice(-PR_THREAD_COMMAND_OUTPUT_CHARS)}` };
-}
-
-function sanitizeCommitMessage(generated: {
-  subject: string;
-  body: string;
-  branch?: string | undefined;
-}): {
-  subject: string;
-  body: string;
-  branch?: string | undefined;
-} {
-  const rawSubject = generated.subject.trim().split(/\r?\n/g)[0]?.trim() ?? "";
-  const subject = rawSubject.replace(/[.]+$/g, "").trim();
-  const safeSubject = subject.length > 0 ? subject.slice(0, 72).trimEnd() : "Update project files";
-  return {
-    subject: safeSubject,
-    body: generated.body.trim(),
-    ...(generated.branch !== undefined ? { branch: generated.branch } : {}),
-  };
-}
-
-function sanitizeProgressText(value: string): string | null {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    return null;
-  }
-  if (trimmed.length <= MAX_PROGRESS_TEXT_LENGTH) {
-    return trimmed;
-  }
-  return trimmed.slice(0, MAX_PROGRESS_TEXT_LENGTH).trimEnd();
-}
-
-interface CommitAndBranchSuggestion {
-  subject: string;
-  body: string;
-  branch?: string | undefined;
-  commitMessage: string;
-}
-
-function isCommitAction(
-  action: GitStackedAction,
-): action is "commit" | "commit_push" | "commit_push_pr" {
-  return action === "commit" || action === "commit_push" || action === "commit_push_pr";
-}
-
-function formatCommitMessage(subject: string, body: string): string {
-  const trimmedBody = body.trim();
-  if (trimmedBody.length === 0) {
-    return subject;
-  }
-  return `${subject}\n\n${trimmedBody}`;
-}
-
-function parseCustomCommitMessage(raw: string): { subject: string; body: string } | null {
-  const normalized = raw.replace(/\r\n/g, "\n").trim();
-  if (normalized.length === 0) {
-    return null;
-  }
-
-  const [firstLine, ...rest] = normalized.split("\n");
-  const subject = firstLine?.trim() ?? "";
-  if (subject.length === 0) {
-    return null;
-  }
-
-  return {
-    subject,
-    body: rest.join("\n").trim(),
-  };
 }
 
 function headBranchProbe(

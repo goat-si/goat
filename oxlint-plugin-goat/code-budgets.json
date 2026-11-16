@@ -181,7 +181,7 @@
   "apps/server/src/fleet/resources/fallbackPolicy.ts": { "nonNull": 1 },
   "apps/server/src/fleet/resources/placementRules.ts": { "nonNull": 2 },
   "apps/server/src/git/GitManager.test.ts": { "lines": 5190 },
-  "apps/server/src/git/GitManager.ts": { "lines": 3178 },
+  "apps/server/src/git/GitManager.ts": { "lines": 3124 },
   "apps/server/src/goatclaw/DecisionInbox.ts": { "nonNull": 9 },
   "apps/server/src/goatclaw/PermissionProfiles.ts": { "nonNull": 3 },
   "apps/server/src/guest/GuestShareService.ts": { "nonNull": 1 },
