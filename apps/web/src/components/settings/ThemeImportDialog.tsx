@@ -6,14 +6,13 @@ import { useMessages } from "gt-react";
 import { isThemeCssResourceError } from "@goat/shared/themeCssErrors";
 import { formatBytes } from "../../lib/formatBytes";
 import { validateThemeCssForSave } from "../../validateThemeCssForSave";
+import { renameTheme } from "../../themeCopy";
 import { THEME_CSS_RESOURCE_MESSAGE } from "../../themeCssMessages";
 import { cn } from "../../lib/utils";
 import {
   getCustomThemes,
   installCustomTheme,
-  parseThemeFile,
   removeCustomTheme,
-  THEME_FILE_VERSION,
   updateCustomTheme,
   type ThemeDefinition,
 } from "../../themePalette";
@@ -349,25 +348,14 @@ function ThemeImportBody({
     preferredName?: string | null,
   ): ThemeDefinition => {
     if (preferredName && preferredName.toLowerCase() !== theme.label.toLowerCase()) {
-      const candidate = parseThemeFile({
-        version: THEME_FILE_VERSION,
-        name: preferredName.slice(0, 48),
-        appearance: theme.appearance,
-        colors: theme.colors,
-        ...(theme.variants ? { variants: theme.variants } : {}),
-        ...(theme.managed ? { managed: true } : {}),
-      });
+      const candidate = renameTheme(theme, preferredName.slice(0, 48));
       if (!getCustomThemes().some((existing) => existing.id === candidate.id)) return candidate;
     }
     for (let copy = 1; copy < 100; copy += 1) {
-      const candidate = parseThemeFile({
-        version: THEME_FILE_VERSION,
-        name: `${theme.label.slice(0, 48 - ` (${copy})`.length)} (${copy})`,
-        appearance: theme.appearance,
-        colors: theme.colors,
-        ...(theme.variants ? { variants: theme.variants } : {}),
-        ...(theme.managed ? { managed: true } : {}),
-      });
+      const candidate = renameTheme(
+        theme,
+        `${theme.label.slice(0, 48 - ` (${copy})`.length)} (${copy})`,
+      );
       if (getCustomThemes().some((existing) => existing.id === candidate.id)) continue;
       return candidate;
     }
