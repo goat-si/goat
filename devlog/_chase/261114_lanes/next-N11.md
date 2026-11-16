@@ -149,7 +149,7 @@ Coordinator rulings: /Users/jun/handoff-in/chase/next-N11-coordinator-rulings.md
 
 ## N11b: terminal cap (goat#3539)
 
-Branch `chase/t3-261114-n11b-terminal-cap`, from the integration branch `chase/t3-261114-next` at `e7b14604c2` (coordinator decision: a server buffer without a limit is forbidden by docs/internals/server-resilience.md, "Every buffer the server holds has a bound"). Head `24e0d39ad7a454af7c4cdbf147e726c5a5c79529`, pushed, not merged yet; a fresh narrow review is due. Host pen-macbookair. goat#3538 stays an issue only.
+Branch `chase/t3-261114-n11b-terminal-cap`, from the integration branch `chase/t3-261114-next` at `e7b14604c2` (coordinator decision: a server buffer without a limit is forbidden by docs/internals/server-resilience.md, "Every buffer the server holds has a bound"). Round-2 head `24e0d39ad7a454af7c4cdbf147e726c5a5c79529` (fresh narrow review: APPROVE WITH NITS, P3 only); 24e0d39ad7 merged into the integration branch at `e0392ed8a9`. Follow-up head `fb8564131457dcc0b16727e3120fe9b331562fd0`, pushed, not merged yet; see N11b follow-up. Host pen-macbookair. goat#3538 stays an issue only.
 
 | commit       | change                                                                                                                |
 | ------------ | --------------------------------------------------------------------------------------------------------------------- |
@@ -166,7 +166,7 @@ Tests first, deterministic: an over-cap OSC, DCS and CSI each followed by its te
 ```
 
 - Upstream: pingdotgg/t3code main at `dfeaf7b137` has the same sanitizer (apps/server/src/terminal/Manager.ts:1374) with no cap, and no commit since `93cbca3fcb` touches it (`git log -S pendingControlSequence` and a message search are empty). Nothing to port; this is a GOAT fix.
-- Cap: `MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH` (1 MiB of UTF-16 code units) in apps/server/src/terminal/terminalHistoryReplay.ts, a GOAT module (upstream keeps the sanitizer in Manager.ts). The server holds at most the cap plus one chunk for an unfinished sequence. A sequence exactly at the cap is kept whole; the existing 64 KiB OSC 52 and DCS test still passes. The constant's comment says what happens to a longer sequence: history leaves it out whole, since the live terminal already drew it.
+- Cap: `MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH` (1 MiB of UTF-16 code units in 417bf95ef6 and 24e0d39ad7; 512 KiB, the client replay window, from 7c6c92bc1f) in apps/server/src/terminal/terminalHistoryReplay.ts, a GOAT module (upstream keeps the sanitizer in Manager.ts). The server holds at most the cap plus one chunk for an unfinished sequence. A sequence exactly at the cap is kept whole; the existing 64 KiB OSC 52 and DCS test still passes. The constant's comment says what happens to a longer sequence: history leaves it out whole, since the live terminal already drew it.
 - Swallowing (24e0d39ad7): once a sequence passes the cap, the rest of it is swallowed up to the end the sanitizer already recognises for its kind:
   - OSC: `findStringEnd` (BEL, ST, CAN/SUB, or an ESC that starts the next sequence).
   - DCS, PM and APC: `findStringEnd` (ST, CAN/SUB, an ESC that starts the next sequence, or a C1 control code point). SOS is not a string in this sanitizer (`ESC X` is a plain escape), so it ends like one.
@@ -193,3 +193,28 @@ Tests first, deterministic: an over-cap OSC, DCS and CSI each followed by its te
 - Rule 3: no existing dev expectation changed.
 - Checks on 24e0d39ad7: `vp test run src/terminal/` 159 passed (13 files); terminalHistoryReplay.test.ts 22 passed; `vp run typecheck` in apps/server 0; lint of the two files clean; `node scripts/goat-rename.ts --check` 0 (no test file moved).
 - NOT RUN: `vp run check:changed` (lane N6 holds the heavy slot on pen-macbookair); a real-client pass (an inline image or sixel over 1 MiB in a GOAT terminal, then a reload); `ci:full`.
+
+### N11b follow-up (review of 24e0d39ad7)
+
+Coordinator rulings: /Users/jun/handoff-in/chase/next-N11-coordinator-rulings.md (section "N11b review verdict and follow-up"); report: next-N11b-review-24e0d39a.md (APPROVE WITH NITS, P3 only). 24e0d39ad7 merged into the integration branch at `e0392ed8a9`. The in-band `swallowing:` marker stays: the reviewer found every return path safe. One commit per item on top of 24e0d39ad7. Follow-up head `fb8564131457dcc0b16727e3120fe9b331562fd0`, pushed, not merged yet.
+
+| item      | commit       | change                                                                                                                  |
+| --------- | ------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| N11b-P3-1 | `a1ce37d614` | fix(server): an unfinished CSI or plain escape is held for at most 4 KiB (`MAX_PENDING_HISTORY_ESCAPE_SEQUENCE_LENGTH`) |
+| N11b-P3-2 | `7c6c92bc1f` | fix(server): the string cap is the client replay window, `DEFAULT_MAX_TERMINAL_BUFFER_BYTES` (512 KiB)                  |
+| N11b-P3-4 | `bc31feb4c3` | test(server): a swallowed DCS ends at U+10000 split across chunks                                                       |
+| N11b-P3-3 | `fb85641314` | test(server): two test comments say what the tests check                                                                |
+
+- P3-1: past 4 KiB, an unfinished CSI or plain escape is swallowed to its end as before. Strings (OSC, DCS, PM, APC) keep the string cap.
+  - Fail-first: "stops holding an unfinished CSI / plain escape after its own limit, fed in 1 KiB chunks" failed with `expected 4098 to be less than or equal to 4096` and `expected 4097 …`. "keeps a CSI just under its limit whole" passed before and after.
+  - Cost on pen-macbookair (/tmp/n11-probe/csi1k.mts: `ESC [` then 1 MiB of `seq`-style output in 1 KiB chunks). Before: 6.3 s wall, 6.4 s CPU, slowest chunk 46.5 ms, up to 1,047,554 units held (the reviewer measured 3.5 s and 22-24 ms). After: 7 ms wall, 20 ms CPU, slowest chunk 4.2 ms, at most 3,074 units held.
+- P3-2: `MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH` is now derived from `DEFAULT_MAX_TERMINAL_BUFFER_BYTES` (packages/contracts/src/terminal.ts:6). The window counts UTF-8 bytes and the cap UTF-16 code units, which are equal for the ASCII payloads of inline images and sixel; the comment says so. The at-cap and over-cap tests use the constant and moved with it.
+  - Fail-first: "swallows a sequence longer than the client replay window, which no client could replay" failed with `expected 'before\u001b]1337;File=:QUJDQUJD…' to be 'beforeafter\n'`.
+  - The 64 MiB probe is unchanged: nothing visible, RSS +3 MiB, 176 ms.
+- P3-4: the case passes on the code. With the high-surrogate branch of `carriedUnit` removed, it fails with `expected 'before' to be 'before\u001b@\ufffdafter\n'`.
+- P3-3: comments only ("Nothing over the cap is held between chunks."; "Just over the cap, in 64 KiB chunks.").
+- Owed to #3519's integrated pass (N11b-P3-5), on web, desktop and mobile: print an inline image (OSC 1337) or a sixel picture over the 512 KiB cap in a GOAT terminal, then reload or attach from a second device. The scrollback before it remains, and no payload text shows. Dev, by contrast, fills the client's window with the sequence and shows only what came after it.
+- Issue: goat#3544. The server sanitizer treats ESC X (SOS) as a two-character escape, while the contracts parser treats it as a string (packages/contracts/src/terminal.ts:32-34). It predates the lane.
+- Rule 3: no existing dev expectation changed. All edited tests are this lane's own.
+- Checks on fb85641314: terminalHistoryReplay.test.ts 27 passed; `vp test run src/terminal/` 163 passed (13 files, on 7c6c92bc1f; later commits change only this test file); `vp run typecheck` in apps/server 0; lint of the two files clean; `node scripts/goat-rename.ts --check` 0.
+- NOT RUN: `vp run check:changed` (lane N6 holds the heavy slot on pen-macbookair); the real-client pass above; `ci:full`.
