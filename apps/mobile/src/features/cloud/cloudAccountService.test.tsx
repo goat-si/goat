@@ -75,7 +75,6 @@ vi.mock("../../state/use-thread-detail", () => ({
 
 import { environmentCatalog } from "../../connection/catalog";
 import { appAtomRegistry } from "../../state/atom-registry";
-import { environmentPresentations } from "../../state/presentation";
 import { followKeptPerComputerCatalog, useKeptPerComputer } from "../goat-bot/useKeptPerComputer";
 import { useMobileBotPreview } from "../goat-bot/useMobileBotPreview";
 import { deactivateCloudRelayAccount } from "./cloudAccountService";
@@ -145,24 +144,26 @@ const reply: OrchestrationV2ProjectedTurnItem = {
 it("signing out hides, at once, the main tile line and kept bot list of a computer reached only through the relay", async () => {
   conversation.items = [reply];
   const registry = appAtomRegistry;
-  const stop = followKeptPerComputerCatalog(
-    registry,
-    environmentPresentations.presentationsAtom as never,
-  );
+  const stop = followKeptPerComputerCatalog(registry);
   registry.set(environmentCatalog.catalogValueAtom as unknown as Atom.Writable<unknown>, catalog);
   const seen = new Map<EnvironmentId, { line: string | null; bots: unknown }>();
   const bots = { bots: [{ botId: "main" }] };
   function Computer(props: { readonly environmentId: EnvironmentId; readonly online: boolean }) {
     const data = props.online ? bots : null;
-    const kept = useKeptPerComputer("bots", props.environmentId, {
-      data,
-      successResult: null,
-      cause: null,
-      error: null,
-      isPending: false,
-      isSuccess: data !== null,
-      refresh: () => {},
-    });
+    const kept = useKeptPerComputer(
+      "bots",
+      props.environmentId,
+      {
+        data,
+        successResult: null,
+        cause: null,
+        error: null,
+        isPending: false,
+        isSuccess: data !== null,
+        refresh: () => {},
+      },
+      !props.online,
+    );
     const line = useMobileBotPreview({ environmentId: props.environmentId, threadId })?.text;
     seen.set(props.environmentId, { line: line ?? null, bots: kept });
     return null;

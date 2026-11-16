@@ -1,4 +1,4 @@
-import { Fragment, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import type { BotRosterEntry } from "@goat/client-runtime/goatBot";
 import {
   FACE_MOTION_RANK,
@@ -84,9 +84,6 @@ export function MobileHomeSegments(props: {
   );
 }
 
-// As Needs you says it of the asks it kept (MobileNeedsYouStrip).
-const STALE = "offline, may be out of date";
-
 export function MobileBotRosterView(props: {
   header?: ReactNode;
   bots: ReadonlyArray<BotRosterEntry>;
@@ -94,10 +91,6 @@ export function MobileBotRosterView(props: {
   slackEnabled: boolean;
   preview?: string;
   unread?: boolean;
-  /** The bots' computer is offline: what the rows show was read before and may be out of date. */
-  offline?: boolean;
-  /** Back online, the rows still show what was read before, until the first read answers. */
-  stale?: boolean;
   /** The main bot's computer may no longer be read here (refused or removed): its tile rests. */
   mainUnreadable?: boolean;
   /** The main bot's computer, whose Home may govern its work signals. */
@@ -132,7 +125,12 @@ export function MobileBotRosterView(props: {
   const bottomClearance =
     Math.max(insets.bottom, useWorkspaceTabs()?.bottomClearance ?? 0) -
     (Platform.OS === "ios" ? insets.bottom : 0);
-  const mainFace = useMobileGoatBotFace(null, props.mainUnreadable ? null : undefined);
+  const mainFace = useMobileGoatBotFace(
+    null,
+    props.mainUnreadable ? null : undefined,
+    undefined,
+    props.mainUnreadable,
+  );
   const mainSignals = useMobileBotRowSignals({
     environmentId: props.mainEnvironmentId ?? null,
     botId: BotId.make("main"),
@@ -178,69 +176,59 @@ export function MobileBotRosterView(props: {
         if (bot.kind === "main") {
           // The main bot leads the list as one tile, like a contact the person returns to most.
           return (
-            <Fragment key="main">
-              <Pressable
-                ref={rowRef}
-                onLayout={measure}
-                accessibilityRole="button"
-                onPress={() => props.onOpenBot(bot)}
-                onLongPress={longPress}
-                accessibilityState={{ selected }}
-                accessibilityLabel={[
-                  mainFaceLabel,
-                  bot.profile?.name ?? "GOAT Bot",
-                  props.unread ? "unread" : null,
-                  ...(mainSignals?.spoken ?? []),
-                  props.preview || null,
-                  props.offline && props.preview ? STALE : null,
-                ]
-                  .filter((part) => part !== null)
-                  .join(", ")}
-                className={
-                  selected
-                    ? "mx-4 my-2 items-center gap-2 rounded-2xl bg-thread-selected px-4 py-4"
-                    : "mx-4 my-2 items-center gap-2 rounded-2xl px-4 py-4"
-                }
-              >
-                <GoatBotFaceAvatar
-                  state={mainFace.state}
-                  size={88}
-                  motion={mainMotion}
-                  emoji={mainEmoji}
-                  surface={selected ? "selected" : "screen"}
-                />
-                <View className="max-w-full flex-row items-center gap-2">
-                  <Text
-                    numberOfLines={1}
-                    className="shrink text-base font-semibold text-foreground"
-                  >
-                    {bot.profile?.name ?? "GOAT Bot"}
-                  </Text>
-                  <MobileBotRowSignalMarks signals={mainSignals} />
-                </View>
-                {props.preview ? (
-                  <View className="max-w-full flex-row items-center gap-1">
-                    {props.unread ? (
-                      <View
-                        accessibilityElementsHidden
-                        className="h-2 w-2 rounded-full bg-adaptive-blue-500-400"
-                      />
-                    ) : null}
-                    <Text numberOfLines={1} className="shrink text-sm text-foreground-muted">
-                      {props.preview}
-                    </Text>
-                  </View>
-                ) : null}
-                {props.slackEnabled ? (
-                  <Text className="text-xs text-foreground-muted">Also in Slack</Text>
-                ) : null}
-              </Pressable>
-              {(props.offline || props.stale) && !props.mainUnreadable ? (
-                <Text className="px-4 pb-1 text-xs text-foreground-muted">
-                  {props.offline ? "Offline · this may be out of date" : "This may be out of date"}
+            <Pressable
+              key="main"
+              ref={rowRef}
+              onLayout={measure}
+              accessibilityRole="button"
+              onPress={() => props.onOpenBot(bot)}
+              onLongPress={longPress}
+              accessibilityState={{ selected }}
+              accessibilityLabel={[
+                mainFaceLabel,
+                bot.profile?.name ?? "GOAT Bot",
+                props.unread ? "unread" : null,
+                ...(mainSignals?.spoken ?? []),
+                props.preview || null,
+              ]
+                .filter((part) => part !== null)
+                .join(", ")}
+              className={
+                selected
+                  ? "mx-4 my-2 items-center gap-2 rounded-2xl bg-thread-selected px-4 py-4"
+                  : "mx-4 my-2 items-center gap-2 rounded-2xl px-4 py-4"
+              }
+            >
+              <GoatBotFaceAvatar
+                state={mainFace.state}
+                size={88}
+                motion={mainMotion}
+                emoji={mainEmoji}
+                surface={selected ? "selected" : "screen"}
+              />
+              <View className="max-w-full flex-row items-center gap-2">
+                <Text numberOfLines={1} className="shrink text-base font-semibold text-foreground">
+                  {bot.profile?.name ?? "GOAT Bot"}
                 </Text>
+                <MobileBotRowSignalMarks signals={mainSignals} />
+              </View>
+              {props.preview ? (
+                <View className="max-w-full flex-row items-center gap-1">
+                  {props.unread ? (
+                    <View
+                      accessibilityElementsHidden
+                      className="h-2 w-2 rounded-full bg-adaptive-blue-500-400"
+                    />
+                  ) : null}
+                  <Text numberOfLines={1} className="shrink text-sm text-foreground-muted">
+                    {props.preview}
+                  </Text>
+                </View>
               ) : null}
-            </Fragment>
+              {props.slackEnabled ? (
+                <Text className="text-xs text-foreground-muted">Also in Slack</Text>
+              ) : null}
+            </Pressable>
           );
         }
         return (
@@ -403,6 +391,7 @@ function MemberRow(props: {
     member.unreadable ? null : { environmentId: bot.environmentId, threadId: bot.sessionThreadId },
     // A status whose refresh failed is not read for the face either; it keeps the face it had.
     { status: stale ? null : status },
+    member.unreadable,
   );
   const latestText = latest === undefined ? "" : goatBotPreviewText(latest.text);
   const line =
@@ -419,7 +408,6 @@ function MemberRow(props: {
     unread ? "unread" : null,
     ...(signals?.spoken ?? []),
     line || null,
-    member.kept ? (member.offline ? STALE : "may be out of date") : null,
   ]
     .filter((part) => part !== null)
     .join(", ");

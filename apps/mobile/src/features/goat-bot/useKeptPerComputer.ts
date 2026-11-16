@@ -1,108 +1,66 @@
 import { useAtomSet, useAtomValue, RegistryContext } from "@effect/atom-react";
 import { accessDenied } from "@goat/client-runtime/goatBot";
-import type { EnvironmentPresentation } from "@goat/client-runtime/connection";
 import type { EnvironmentId } from "@goat/contracts";
+import * as Cause from "effect/Cause";
 import { Atom, type AtomRegistry } from "effect/reactivity";
 import { useContext, useEffect } from "react";
 
 import { environmentCatalog } from "../../connection/catalog";
+import { channelEnvironment } from "../../state/channels";
+import { environmentPresentations } from "../../state/presentation";
 import type { EnvironmentQueryView } from "../../state/query";
+import {
+  computerKey,
+  connectionRefusedAtom,
+  forgetKept,
+  keptAtom,
+  listRefusedAtom,
+  refuseComputer,
+  type KeptKind,
+} from "./keptPerComputerStore";
 
-// The last successful answer of a read, per computer, so the bot list, open asks and each member's
-// status still read while that computer is offline. Kept while the computer is in the app's
-// catalog: leaving the catalog, by any path, forgets it, and an answer denying access does too.
-const KINDS = ["bots", "asks", "status"] as const;
-type Kind = (typeof KINDS)[number];
-let generation = 0;
-const keptAtom = Atom.family((_key: string) => Atom.make<unknown>(null).pipe(Atom.keepAlive));
+export { resetKeptPerComputerForTests } from "./keptPerComputerStore";
+
 const NO_KEPT = Atom.make<unknown>(null);
-const keyOf = (kind: Kind, environmentId: EnvironmentId, part?: string) =>
-  `${generation}:${kind}:${environmentId}${part === undefined ? "" : `:${part}`}`;
-// Whether the computer last refused this phone, by its connection or its bot list. The connection
-// keeps a refusal only as its last failure, which the next unreachable attempt replaces; this keeps
-// it until a bot-list read succeeds, and until then nothing of that computer shows, kept or live.
-const deniedAtom = Atom.family((_key: string) => Atom.make(false).pipe(Atom.keepAlive));
-const NOT_DENIED = Atom.make(false);
-const deniedKeyOf = (environmentId: EnvironmentId) => `${generation}:${environmentId}`;
+// Derived in the same pass as the roster's own read, so no reader shows a line after a refusal.
+const readableAtom = Atom.family((key: string) => {
+  const environmentId = key.slice(key.indexOf(":") + 1) as EnvironmentId;
+  return Atom.make(
+    (get) =>
+      get(environmentCatalog.catalogValueAtom).entries.has(environmentId) &&
+      !get(connectionRefusedAtom(key)) &&
+      !get(listRefusedAtom(key)) &&
+      !currentListDenied(get, environmentId),
+  );
+});
+const NOT_READABLE = Atom.make(false);
 // How many times each computer has left the catalog, per registry. A write prepared before a
 // removal is dropped, even when the same computer has been added again since.
 const removals = new WeakMap<AtomRegistry.AtomRegistry, Map<EnvironmentId, number>>();
 const removalsOf = (registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentId) =>
   removals.get(registry)?.get(environmentId) ?? 0;
-// Member statuses kept, oldest first, per registry: forgetting a computer reaches every one, and
-// the store stays within its bounds by dropping the status kept longest ago.
-const statuses = new WeakMap<
-  AtomRegistry.AtomRegistry,
-  Map<string, { readonly environmentId: EnvironmentId; readonly part: string }>
->();
-const STATUSES_PER_COMPUTER = 100;
-const STATUSES_IN_ALL = 400;
-// Answers dropped to stay within the bounds: a row still on screen does not write that same answer
-// back (which would drop the next oldest, and so on); a new answer may be kept again. Weak, so it
-// holds nothing a row no longer holds.
-const evicted = new WeakSet<object>();
 
-function dropStatus(registry: AtomRegistry.AtomRegistry, key: string, evict = false) {
-  statuses.get(registry)?.delete(key);
-  const answer = registry.get(keptAtom(key));
-  if (evict && typeof answer === "object" && answer !== null) evicted.add(answer);
-  registry.set(keptAtom(key), null);
-}
-
-function noteStatus(
-  registry: AtomRegistry.AtomRegistry,
-  key: string,
-  environmentId: EnvironmentId,
-  part: string,
-) {
-  const kept =
-    statuses.get(registry) ??
-    new Map<string, { readonly environmentId: EnvironmentId; readonly part: string }>();
-  statuses.set(registry, kept);
-  kept.delete(key);
-  kept.set(key, { environmentId, part });
-  const ofComputer = [...kept.keys()].filter((at) => kept.get(at)?.environmentId === environmentId);
-  const oldestOfComputer = ofComputer[0];
-  if (ofComputer.length > STATUSES_PER_COMPUTER && oldestOfComputer !== undefined)
-    dropStatus(registry, oldestOfComputer, true);
-  const oldest = kept.keys().next();
-  if (kept.size > STATUSES_IN_ALL && !oldest.done) dropStatus(registry, oldest.value, true);
-}
-
-/** Drops the statuses kept for bots a successful bot list no longer lists as active. */
-function keepStatusesOf(
-  registry: AtomRegistry.AtomRegistry,
-  environmentId: EnvironmentId,
-  active: ReadonlySet<string>,
-) {
-  for (const [key, entry] of statuses.get(registry) ?? [])
-    if (entry.environmentId === environmentId && !active.has(entry.part)) dropStatus(registry, key);
-}
-
-export function resetKeptPerComputerForTests() {
-  generation += 1;
-}
-
-function forget(registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentId) {
-  for (const kind of KINDS) registry.set(keptAtom(keyOf(kind, environmentId)), null);
-  keepStatusesOf(registry, environmentId, new Set());
-  registry.set(deniedAtom(deniedKeyOf(environmentId)), false);
-}
-
-/** The computer refused this phone: everything kept for it goes, and it stays refused. */
-function refuse(registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentId) {
-  forget(registry, environmentId);
-  registry.set(deniedAtom(deniedKeyOf(environmentId)), true);
+/** The bot list the roster reads, shared: refused while the computer is connected and lists bots. */
+function currentListDenied(get: Atom.AtomContext, environmentId: EnvironmentId): boolean {
+  const presentation = get(environmentPresentations.presentationsAtom).get(environmentId);
+  const capabilities = presentation?.serverConfig?.environment.capabilities;
+  if (presentation?.connection.phase !== "connected" || capabilities?.goatBotProfiles !== true)
+    return false;
+  const list = get(
+    channelEnvironment.listBots({
+      environmentId,
+      input: capabilities.goatBotMembers === true ? { includeDeleted: true } : {},
+    }),
+  );
+  return list._tag === "Failure" && accessDenied(Cause.squash(list.cause));
 }
 
 /**
  * Installed once with the app's registry: a computer that leaves the catalog loses what was kept
- * for it. Returns the way to stop following.
+ * for it, and one whose connection is refused is marked so until it next connects. Returns the
+ * way to stop following.
  */
-export function followKeptPerComputerCatalog(
-  registry: AtomRegistry.AtomRegistry,
-  connections?: Atom.Atom<ReadonlyMap<EnvironmentId, Pick<EnvironmentPresentation, "connection">>>,
-): () => void {
+export function followKeptPerComputerCatalog(registry: AtomRegistry.AtomRegistry): () => void {
   const counts = new Map<EnvironmentId, number>();
   removals.set(registry, counts);
   let known = new Set<EnvironmentId>();
@@ -113,50 +71,54 @@ export function followKeptPerComputerCatalog(
       for (const environmentId of known)
         if (!now.has(environmentId)) {
           counts.set(environmentId, (counts.get(environmentId) ?? 0) + 1);
-          forget(registry, environmentId);
+          forgetKept(registry, environmentId);
+          registry.set(connectionRefusedAtom(computerKey(environmentId)), false);
+          registry.set(listRefusedAtom(computerKey(environmentId)), false);
         }
       known = now;
     },
     { immediate: true },
   );
-  // A refusal is seen here whatever is on screen, so nothing from that computer shows afterwards.
-  const stopRefusals =
-    connections === undefined
-      ? () => {}
-      : registry.subscribe(
-          connections,
-          (presentations) => {
-            for (const [environmentId, presentation] of presentations) {
-              const denied = deniedAtom(deniedKeyOf(environmentId));
-              if (!refusedConnection(presentation.connection) || registry.get(denied)) continue;
-              refuse(registry, environmentId);
-            }
-          },
-          { immediate: true },
-        );
+  const connected = new Set<EnvironmentId>();
+  const stopConnections = registry.subscribe(
+    environmentPresentations.presentationsAtom,
+    (presentations) => {
+      for (const [environmentId, { connection }] of presentations) {
+        const refused = connectionRefusedAtom(computerKey(environmentId));
+        if (connection.phase === "connected") {
+          if (!connected.has(environmentId) && registry.get(refused)) registry.set(refused, false);
+          connected.add(environmentId);
+          continue;
+        }
+        connected.delete(environmentId);
+        const reason = "failure" in connection ? connection.failure?.reason : null;
+        if ((reason === "authentication" || reason === "permission") && !registry.get(refused))
+          refuseComputer(registry, environmentId, refused);
+      }
+    },
+    { immediate: true },
+  );
   return () => {
     stopCatalog();
-    stopRefusals();
+    stopConnections();
   };
 }
 
 /**
- * The live answer when there is one, else the last successful one this phone read from that
- * computer: offline, and back online until the first read answers. A success still marked waiting
- * (a refresh in flight) is written too: its value is the server's last answer, and a refresh that
- * never finishes before the computer drops must not leave nothing kept.
+ * The live answer while the computer is connected; offline, the live answer if any, else the last
+ * successful one this phone read from that computer. Nothing while the computer is unreadable or
+ * this read is refused. A success still marked waiting (a refresh in flight) is written too: its
+ * value is the server's last answer, and a refresh that never finishes must not leave nothing kept.
  */
 export function useKeptPerComputer<A>(
-  kind: Kind,
+  kind: KeptKind,
   environmentId: EnvironmentId | null,
   live: EnvironmentQueryView<A>,
-  /** Keeps one answer per part of the computer (a member's status, by bot id). */
-  part?: string,
+  offline: boolean,
 ): A | null {
   const registry = useContext(RegistryContext);
   const readable = useComputerReadable(environmentId);
-  const key = environmentId === null ? null : keyOf(kind, environmentId, part);
-  const atom = key === null ? NO_KEPT : keptAtom(key);
+  const atom = environmentId === null ? NO_KEPT : keptAtom(kind, environmentId);
   const stored = useAtomValue(atom) as A | null;
   const store = useAtomSet(atom as Atom.Writable<unknown>);
   const settled = live.isSuccess ? live.data : null;
@@ -164,22 +126,15 @@ export function useKeptPerComputer<A>(
   const removalsAtRender = environmentId === null ? 0 : removalsOf(registry, environmentId);
   // oxlint-disable-next-line goat/react-effect-budget -- Remember each computer's last answer so it still reads after that computer drops.
   useEffect(() => {
-    if (environmentId === null || key === null) return;
-    // The bot list speaks for the whole computer: refused, nothing of it shows until a read succeeds,
-    // and a successful one drops the statuses of bots it no longer lists as active.
+    if (environmentId === null) return;
+    // The bot list speaks for the whole computer: refused, nothing of it shows until a list answers.
+    const listRefused = listRefusedAtom(computerKey(environmentId));
     if (kind === "bots" && denied) {
-      refuse(registry, environmentId);
+      refuseComputer(registry, environmentId, listRefused);
       return;
     }
-    if (kind === "bots" && settled !== null) {
-      registry.set(deniedAtom(deniedKeyOf(environmentId)), false);
-      const bots = (settled as { readonly bots?: ReadonlyArray<ListedBot> }).bots ?? [];
-      keepStatusesOf(
-        registry,
-        environmentId,
-        new Set(bots.filter((bot) => bot.state !== "deleted").map((bot) => bot.botId)),
-      );
-    }
+    if (kind === "bots" && settled !== null && registry.get(listRefused))
+      registry.set(listRefused, false);
     if (denied || !readable) {
       if (stored !== null) store(null);
       return;
@@ -189,46 +144,22 @@ export function useKeptPerComputer<A>(
     const unchanged =
       registry.get(environmentCatalog.catalogValueAtom).entries.has(environmentId) &&
       removalsOf(registry, environmentId) === removalsAtRender &&
-      !registry.get(deniedAtom(deniedKeyOf(environmentId)));
-    if (!unchanged || settled === null || settled === stored) return;
-    if (part !== undefined && typeof settled === "object" && evicted.has(settled)) return;
-    store(settled);
-    if (part !== undefined) noteStatus(registry, key, environmentId, part);
-  }, [
-    registry,
-    environmentId,
-    key,
-    kind,
-    part,
-    settled,
-    stored,
-    denied,
-    readable,
-    store,
-    removalsAtRender,
-  ]);
-  // A refused read still holds its earlier answer; it is not shown.
+      !registry.get(connectionRefusedAtom(computerKey(environmentId))) &&
+      !registry.get(listRefused);
+    if (unchanged && settled !== null && settled !== stored) store(settled);
+  }, [registry, environmentId, kind, settled, stored, denied, readable, store, removalsAtRender]);
   if (denied || !readable) return null;
-  return live.data ?? stored;
+  if (!offline || live.data !== null) return live.data;
+  return stored;
 }
 
 /**
- * Whether this phone may still read the computer: it is in the app's catalog and has not been
- * refused since its last successful bot-list read, by its connection (a revoked phone only ever
- * sees that) or by the bot list. Kept answers and cached messages from it show only while this holds.
+ * Whether this phone may still read the computer: it is in the app's catalog, its connection has
+ * not been refused since it last connected, and its bot list is not refused. Kept answers and
+ * cached messages from it show only while this holds.
  */
 export function useComputerReadable(environmentId: EnvironmentId | null): boolean {
-  const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
-  const denied = useAtomValue(
-    environmentId === null ? NOT_DENIED : deniedAtom(deniedKeyOf(environmentId)),
+  return useAtomValue(
+    environmentId === null ? NOT_READABLE : readableAtom(computerKey(environmentId)),
   );
-  return environmentId !== null && catalog.entries.has(environmentId) && !denied;
-}
-
-type ListedBot = { readonly botId: string; readonly state?: string };
-
-/** The connection stopped because the computer refuses this phone's credential or scope. */
-function refusedConnection(connection: EnvironmentPresentation["connection"]): boolean {
-  const reason = "failure" in connection ? connection.failure?.reason : null;
-  return reason === "authentication" || reason === "permission";
 }

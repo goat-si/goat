@@ -78,11 +78,15 @@ vi.mock("react-native", () => ({
     },
   },
 }));
-vi.mock("./useMobileBotPreview", () => ({
-  useMobileBotPreview: () => ({ text: "The build is waiting on you.", unread: false }),
-}));
 // The computers this phone may no longer read; the main bot's saved computer is "env" unless a test moves it.
 const readable = vi.hoisted(() => ({ refused: new Set(["old"]), botComputer: "env" }));
+// As the real preview, nothing from a computer this phone may no longer read.
+vi.mock("./useMobileBotPreview", () => ({
+  useMobileBotPreview: (botRef: { environmentId: string } | null) =>
+    botRef === null || readable.refused.has(botRef.environmentId)
+      ? null
+      : { text: "The build is waiting on you.", unread: false },
+}));
 vi.mock("./useKeptPerComputer", () => ({
   useComputerReadable: (environmentId: string | null) =>
     environmentId !== null && !readable.refused.has(environmentId),

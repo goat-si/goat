@@ -164,7 +164,7 @@ const linked = (connection: object, capabilities: object = {}) =>
 function mainTile() {
   resetKeptPerComputerForTests();
   const registry = AtomRegistry.make();
-  const stop = followKeptPerComputerCatalog(registry, presentationsAtom as never);
+  const stop = followKeptPerComputerCatalog(registry);
   registry.set(catalog.atom!, listed(["env"]));
   let preview: ReturnType<typeof useMobileBotPreview> = null;
   function Probe() {
@@ -172,15 +172,20 @@ function mainTile() {
     return null;
   }
   function BotList(props: { readonly cause: unknown; readonly offline: boolean }) {
-    useKeptPerComputer("bots", EnvironmentId.make("env"), {
-      data: props.cause === null && !props.offline ? botList : null,
-      successResult: null,
-      cause: props.cause,
-      error: null,
-      isPending: false,
-      isSuccess: props.cause === null && !props.offline,
-      refresh: () => {},
-    });
+    useKeptPerComputer(
+      "bots",
+      EnvironmentId.make("env"),
+      {
+        data: props.cause === null && !props.offline ? botList : null,
+        successResult: null,
+        cause: props.cause,
+        error: null,
+        isPending: false,
+        isSuccess: props.cause === null && !props.offline,
+        refresh: () => {},
+      },
+      props.offline,
+    );
     return null;
   }
   const root = createRoot(document.createElement("div"));
@@ -320,7 +325,7 @@ it("a reader outside the roster shows no line in any render after a refused bot 
   state.items = [message("b1", "assistant_message", "The build is waiting on you.")];
   resetKeptPerComputerForTests();
   const registry = AtomRegistry.make();
-  const stop = followKeptPerComputerCatalog(registry, presentationsAtom as never);
+  const stop = followKeptPerComputerCatalog(registry);
   registry.set(catalog.atom!, listed(["env"]));
   registry.set(presentationsAtom, linked({ phase: "connected" }, { goatBotProfiles: true }));
   registry.set(botListAtom, AsyncResult.success(botList));
@@ -329,7 +334,7 @@ it("a reader outside the roster shows no line in any render after a refused bot 
   let afterRefusal = false;
   // As the bot chat route reads them in one component: the shared bot list, then the line.
   function Route() {
-    useKeptPerComputer("bots", environmentId, useEnvironmentQuery(botListAtom));
+    useKeptPerComputer("bots", environmentId, useEnvironmentQuery(botListAtom), false);
     const line = useMobileBotPreview({ environmentId, threadId })?.text ?? null;
     lines.push({ afterRefusal, line });
     return null;

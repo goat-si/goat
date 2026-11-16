@@ -106,13 +106,7 @@ export function MobileNeedsYouStrip(props: {
     <Text className="border-t border-border px-4 py-2 text-xs text-foreground-muted">
       Offline · this may be out of date
     </Text>
-  ) : open.staleRetry === null ? (
-    open.pending ? (
-      <Text className="border-t border-border px-4 py-2 text-xs text-foreground-muted">
-        This may be out of date
-      </Text>
-    ) : null
-  ) : (
+  ) : open.staleRetry === null ? null : (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel="Couldn't refresh, this may be out of date. Try again"
@@ -145,7 +139,7 @@ export function MobileNeedsYouStrip(props: {
       <Pressable
         accessibilityRole="button"
         accessibilityState={{ expanded }}
-        accessibilityLabel={`${count} waiting for you${open.offline ? ", offline, may be out of date" : open.staleRetry || open.pending ? ", may be out of date" : ""}. ${line}`}
+        accessibilityLabel={`${count} waiting for you${open.offline ? ", offline, may be out of date" : open.staleRetry ? ", may be out of date" : ""}. ${line}`}
         onPress={() => setExpanded((value) => !value)}
         className="min-h-[44px] flex-row items-center gap-2 px-4 py-2"
       >

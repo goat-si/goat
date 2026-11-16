@@ -1,26 +1,19 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import {
-  accessDenied,
-  goatBotPreviewText,
-  type GoatBotRowStatus,
-} from "@goat/client-runtime/goatBot";
+import { accessDenied, type GoatBotRowStatus } from "@goat/client-runtime/goatBot";
 import type { BotProfile, ChannelGetBotStatusResult } from "@goat/contracts";
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 
 import { channelEnvironment } from "../../state/channels";
 import { useThreadShell } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
-import { useComputerReadable, useKeptPerComputer } from "./useKeptPerComputer";
-
-// The row shows one line; a kept message is cut, by characters, well past what a row can show.
-const KEPT_LINE_LENGTH = 200;
+import { useComputerReadable } from "./useKeptPerComputer";
 
 /**
  * How many of a member's tasks wait on a person, its conversation's newest message, and whether
  * that message is the bot's and arrived after the last visit. One cached read per member, read
- * again when its conversation changes or is visited; offline, the last answer kept for it, and
- * nothing once access is refused or the computer removed. \`status\` is what its row face reads.
+ * again only when that member's conversation changes or is visited. \`status\` is what its row face
+ * reads, null until the server has answered or once that read is refused.
  */
 export function useMobileMemberStatus(bot: BotProfile): {
   readonly waitingCount: number;
@@ -32,19 +25,14 @@ export function useMobileMemberStatus(bot: BotProfile): {
   readonly latest: ChannelGetBotStatusResult["latest"];
   readonly unread: boolean;
   readonly status: GoatBotRowStatus | null;
-  /** What the row shows was read before (offline, or before the first read after a reconnect). */
-  readonly kept: boolean;
-  /** The computer is not connected now. */
-  readonly offline: boolean;
   /** This phone may not read the member now: its status read or its computer refused it. */
   readonly unreadable: boolean;
 } {
   const { presentationById } = useEnvironments();
   const presentation = presentationById.get(bot.environmentId);
-  const offline = presentation?.connection.phase !== "connected";
   const supported =
     bot.state !== "deleted" &&
-    !offline &&
+    presentation?.connection.phase === "connected" &&
     presentation.serverConfig?.environment.capabilities.goatBotMembers === true;
   const status = useEnvironmentQuery(
     supported
@@ -62,38 +50,10 @@ export function useMobileMemberStatus(bot: BotProfile): {
   useEffect(() => {
     if (supported && revision !== null) refresh();
   }, [supported, revision, refresh]);
-  // Kept: the count and the row's one line of the newest message, never the work it saw going.
-  const answer = status.data;
-  const row = useMemo(
-    () =>
-      answer === null
-        ? null
-        : {
-            waitingCount: answer.waitingCount,
-            ...(answer.latest === undefined
-              ? {}
-              : {
-                  latest: {
-                    ...answer.latest,
-                    text: Array.from(goatBotPreviewText(answer.latest.text))
-                      .slice(0, KEPT_LINE_LENGTH)
-                      .join(""),
-                  },
-                }),
-          },
-    [answer],
-  );
-  const shown = useKeptPerComputer(
-    "status",
-    bot.state === "deleted" ? null : bot.environmentId,
-    { ...status, data: row },
-    bot.botId,
-  );
-  const kept = shown !== null && answer === null;
-  // Nothing this phone may no longer read reaches the row, its face included.
+  // A refused read still holds its earlier answer beside the refusal; it is not shown.
+  const refused = accessDenied(status.cause);
   const readable = useComputerReadable(bot.environmentId);
-  const unreadable = accessDenied(status.cause) || !readable;
-  const data = shown === null ? null : kept ? shown : answer;
+  const data = refused ? null : (status.data ?? null);
   const latest = data?.latest;
   // A server that records no visits (lastVisitedAt absent) cannot say what was read.
   const tracksVisits = shell !== null && shell.lastVisitedAt !== undefined;
@@ -113,7 +73,7 @@ export function useMobileMemberStatus(bot: BotProfile): {
     waitingState:
       supported && (!visitAware || status.error !== null)
         ? "unavailable"
-        : data !== null && !kept
+        : data !== null
           ? "ready"
           : "pending",
     latest,
@@ -124,10 +84,8 @@ export function useMobileMemberStatus(bot: BotProfile): {
         : {
             waitingCount: data.waitingCount,
             latest: data.latest,
-            ...(kept || answer?.tasks === undefined ? {} : { tasks: answer.tasks }),
+            ...(data.tasks === undefined ? {} : { tasks: data.tasks }),
           },
-    kept,
-    offline,
-    unreadable,
+    unreadable: refused || !readable,
   };
 }

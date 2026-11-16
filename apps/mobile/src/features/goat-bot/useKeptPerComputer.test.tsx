@@ -40,7 +40,7 @@ const listed = (ids: string[]) => ({
 function following() {
   resetKeptPerComputerForTests();
   const registry = AtomRegistry.make();
-  const stop = followKeptPerComputerCatalog(registry, presentationsAtom as never);
+  const stop = followKeptPerComputerCatalog(registry);
   registry.set(catalogAtom, listed(["env"]));
   return { registry, [Symbol.dispose]: stop };
 }
@@ -106,15 +106,20 @@ it("an open asks answer from before its computer was removed and added again is 
   let kept: unknown = null;
   function Asks(props: { readonly online: boolean }) {
     const data = props.online ? asks : null;
-    kept = useKeptPerComputer("asks", EnvironmentId.make("env"), {
-      data,
-      successResult: null,
-      cause: null,
-      error: null,
-      isPending: false,
-      isSuccess: data !== null,
-      refresh: () => {},
-    });
+    kept = useKeptPerComputer(
+      "asks",
+      EnvironmentId.make("env"),
+      {
+        data,
+        successResult: null,
+        cause: null,
+        error: null,
+        isPending: false,
+        isSuccess: data !== null,
+        refresh: () => {},
+      },
+      !props.online,
+    );
     return null;
   }
   // Removed and added again after Needs you rendered its answer, before that render's effects ran.

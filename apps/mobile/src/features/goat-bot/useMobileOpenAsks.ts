@@ -36,8 +36,6 @@ export type MobileOpenAsks =
       readonly staleRetry: (() => void) | null;
       /** The computer is offline; these are the asks last read from it. */
       readonly offline: boolean;
-      /** Back online, the first read has not answered; these are the asks last read before. */
-      readonly pending: boolean;
     };
 
 /**
@@ -59,7 +57,7 @@ export function useMobileOpenAsks(
     supported && connected ? openAsks({ environmentId, input: {} }) : null,
   );
   // Offline, the asks last read from this computer, kept through a later failed refresh.
-  const kept = useKeptPerComputer("asks", environmentId, asks);
+  const kept = useKeptPerComputer("asks", environmentId, asks, !connected);
   const inView = useAppActive() && visible;
   const refresh = asks.refresh;
   // oxlint-disable-next-line goat/react-effect-budget -- Read the open asks again each time the roster comes into view with the app in front.
@@ -79,7 +77,6 @@ export function useMobileOpenAsks(
       truncated: kept.truncated,
       staleRetry: null,
       offline: true,
-      pending: false,
     };
   }
   // The kept answer is the live one while connected, and nothing once access is refused.
@@ -95,8 +92,6 @@ export function useMobileOpenAsks(
       truncated: earlier.truncated,
       staleRetry: failed ? refresh : null,
       offline: false,
-      // The hook keeps the last answer until the first read after a reconnect answers.
-      pending: asks.data === null && !failed,
     };
   return { state: "loading" };
 }

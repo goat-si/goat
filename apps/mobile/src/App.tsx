@@ -29,7 +29,6 @@ import {
 import { RootStack } from "./Stack";
 import { appAtomRegistry } from "./state/atom-registry";
 import { followKeptPerComputerCatalog } from "./features/goat-bot/useKeptPerComputer";
-import { environmentPresentations } from "./state/presentation";
 import { subscribeComposerDraftModelReconciliation } from "./state/use-composer-drafts";
 import { environmentThreadShells, threadEnvironment } from "./state/threads";
 import { environmentShell } from "./state/shell";
@@ -108,7 +107,7 @@ const appServiceDisposers = [
   installPermissionUpdateNotice(),
   installThreadOutboxDelivery(),
   installComposerAttachmentUploads(),
-  followKeptPerComputerCatalog(appAtomRegistry, environmentPresentations.presentationsAtom),
+  followKeptPerComputerCatalog(appAtomRegistry),
 ];
 disposeOnFoundationReplace(typeof module === "undefined" ? undefined : module.hot, () => {
   for (const dispose of appServiceDisposers) dispose();

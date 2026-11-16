@@ -1,4 +1,4 @@
-import { accessDenied, botRoster, botRosterGroups } from "@goat/client-runtime/goatBot";
+import { botRoster, botRosterGroups } from "@goat/client-runtime/goatBot";
 import { useEffect } from "react";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
@@ -6,7 +6,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { pickMobileGoatBotHomeEnvironment } from "./goatBotHomeMode";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { syncMobileGoatBotMembers } from "./mobileGoatBotMembers";
-import { useKeptPerComputer } from "./useKeptPerComputer";
+import { useComputerReadable, useKeptPerComputer } from "./useKeptPerComputer";
 
 /**
  * The bot list: bots only. The work each bot started is listed in that bot's home sheet. While the
@@ -33,7 +33,8 @@ export function useMobileBotRoster() {
         })
       : null,
   );
-  const bots = useKeptPerComputer("bots", environmentId, profiles)?.bots;
+  const bots = useKeptPerComputer("bots", environmentId, profiles, !connected)?.bots;
+  const readable = useComputerReadable(environmentId);
   // oxlint-disable-next-line goat/react-effect-budget -- Keep the environment's send queue to the members the roster lists as active.
   useEffect(() => {
     if (environmentId !== null && supportsMembers && bots !== undefined)
@@ -53,12 +54,8 @@ export function useMobileBotRoster() {
     connected,
     computerLabel: selected?.label ?? null,
     environmentId,
-    slackEnabled: slack.data?.some((connection) => connection.enabled) === true,
+    slackEnabled: readable && slack.data?.some((connection) => connection.enabled) === true,
     error: profiles.error,
-    /** The bot list was refused in this very read: readers of this computer hide in the same render. */
-    refused: accessDenied(profiles.cause),
-    /** Back online, the list shown is the one read before, until the first read answers. */
-    stale: connected && profiles.data === null && bots !== undefined,
     /** Every bot the list holds, hidden and deleted included; null before it has answered. */
     listedBots: bots ?? null,
     /** Reads the bot list again; null while a read is under way or none has answered yet. */
@@ -97,7 +94,7 @@ export function useMobileGoatBotMember(botId: string | undefined) {
       : null,
   );
   // Offline, the list the roster last read here, so a member's chat opens without a new read.
-  const listed = useKeptPerComputer("bots", environmentId, profiles);
+  const listed = useKeptPerComputer("bots", environmentId, profiles, !connected);
   const member =
     botId === undefined || !supported
       ? null
