@@ -225,7 +225,10 @@ export function MobileBotRoster(props: {
                 title,
                 ...(destructive === true ? { attributes: { destructive: true } } : {}),
               }))}
-              onClose={() => setMenuOpen(false)}
+              // A roster leaving with its menu has nothing to update.
+              onClose={() => {
+                if (mount.current.mounted) setMenuOpen(false);
+              }}
               onPressAction={({ nativeEvent }) => {
                 if (choiceAllowed(openedOn.current))
                   actions.find((action) => action.id === nativeEvent.event)?.act();

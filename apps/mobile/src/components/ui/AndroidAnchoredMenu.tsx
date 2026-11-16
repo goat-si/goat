@@ -42,6 +42,25 @@ export type AndroidAnchoredMenuProps = {
   readonly children: ReactNode | ((open: () => void) => ReactNode);
 };
 
+/**
+ * An open counts from its request until it settles, once: a choice, Back, an outside tap, an anchor
+ * that cannot be measured, or the menu unmounting, whichever comes first.
+ */
+function useOwedOpen(onClose: (() => void) | undefined) {
+  const owed = useRef(false);
+  return {
+    request: () => {
+      owed.current = true;
+    },
+    isOwed: () => owed.current,
+    settle: () => {
+      if (!owed.current) return;
+      owed.current = false;
+      onClose?.();
+    },
+  };
+}
+
 export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
   const { scale, menuWidth: desiredMenuWidth } = useAndroidControlSizing();
   const [anchor, setAnchor] = useState<AnchorSnapshot | null>(null);
@@ -56,21 +75,31 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
 
   const keyboardVisible = useKeyboardState((state) => state.isVisible);
   const keyboardHeight = useKeyboardState((state) => state.height);
+  const owed = useOwedOpen(props.onClose);
+  const settleOnUnmount = useEffectEvent(owed.settle);
+  // oxlint-disable-next-line goat/react-effect-budget -- A menu whose row leaves while its open is pending or shown still settles that open with its owner.
+  useEffect(() => () => settleOnUnmount(), []);
   const close = () => {
     setAnchor(null);
     setPath([]);
     setOverlay(null);
     setRootHeight(null);
-    props.onClose?.();
+    owed.settle();
   };
-  const closedByUnmount = useEffectEvent(() => {
-    if (anchor !== null) props.onClose?.();
-  });
-  // A menu whose trigger leaves the screen while it is open still tells its owner it closed.
-  useEffect(() => () => closedByUnmount(), []);
 
   const open = () => {
-    anchorNode?.measureInWindow((x, y, width, height) => {
+    owed.request();
+    if (anchorNode === null) {
+      owed.settle();
+      return;
+    }
+    anchorNode.measureInWindow((x, y, width, height) => {
+      // Closed or unmounted meanwhile, or nothing to anchor to: no menu.
+      if (!owed.isOwed()) return;
+      if (width <= 0 || height <= 0) {
+        owed.settle();
+        return;
+      }
       setAnchor({ x, y, width, height, keyboardWasVisible: keyboardVisible });
     });
   };
