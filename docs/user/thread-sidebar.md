@@ -85,9 +85,9 @@ open tasks in place, turn off **Open task threads beside the main chat** in
 routines and memory, see [GOAT Bot](./goat-bot.md).
 
 The GOAT Bot row shows its latest message or task update. A blue dot means the bot has
-sent something since you last opened it; the number badge counts tasks awaiting your
-response. If the connected server does not track visits yet, the row shows its last
-activity time and waiting count until that server is updated.
+sent something since you last opened it; a question mark with a number counts tasks
+awaiting your response. If the connected server does not track visits yet, the row
+shows its last activity time and waiting count until that server is updated.
 
 On web and desktop, unpinning, settling, snoozing, and archiving a thread each show
 a notification with **Undo** for five seconds. Undo restores the thread's previous
