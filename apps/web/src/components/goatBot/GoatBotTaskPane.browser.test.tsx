@@ -45,6 +45,7 @@ const state = vi.hoisted(() => ({
   chips: new Map<string, unknown>(),
   attachmentSupport: null as { readonly maxUploadBytes: number | null } | null,
   released: [] as Array<ReadonlyArray<string>>,
+  connecting: false,
 }));
 // Records which draft files the task's message box gives back.
 vi.mock("./goatBotAttachments", async (original) => {
@@ -176,7 +177,9 @@ vi.mock("./useGoatBotSession", () => ({
   useGoatBotSession: (_items: unknown, taskId: string) => {
     state.session(taskId);
     return {
-      availability: { kind: "ready", bot: { environmentId: "env", threadId: "bot-thread" } },
+      availability: state.connecting
+        ? { kind: "connecting", environmentId: "env" }
+        : { kind: "ready", bot: { environmentId: "env", threadId: "bot-thread" } },
       canOperate: true,
       supportsTaskRetry: state.supportsRetry,
       visibleTurnItems: [],
@@ -569,6 +572,7 @@ function setup() {
   state.session.mockClear();
   state.attachmentSupport = null;
   state.released.length = 0;
+  state.connecting = false;
 }
 
 it("opens the scoped task and acknowledges it, then sends and closes", async () => {
@@ -599,8 +603,8 @@ const showingRows = (rows: ReadonlyArray<GoatBotRow>) => {
 };
 
 it("answers its task's question with the question, picked or typed as something else (#2977)", async () => {
-  state.send.mockClear();
-  using _rows = showingRows([
+  setup();
+  const rows: ReadonlyArray<GoatBotRow> = [
     {
       kind: "bot",
       id: "b1",
@@ -616,12 +620,24 @@ it("answers its task's question with the question, picked or typed as something 
       firstInGroup: true,
       groupPosition: "single",
     },
-  ]);
+  ];
+  using _rows = showingRows(rows);
   await using screen = await render(<Pane onClose={() => {}} />);
   await screen.getByRole("button", { name: "A. Keep" }).click();
   expect(state.send).toHaveBeenLastCalledWith("task-1", "Keep", [], "q1");
   await userEvent.type(screen.getByRole("textbox", { name: "Something else" }), "Both{Enter}");
   expect(state.send).toHaveBeenLastCalledWith("task-1", "Both", [], "q1");
+  // The pane keeps a typed answer while its question leaves the rows and the bot reconnects.
+  await userEvent.type(screen.getByRole("textbox", { name: "Something else" }), "Later");
+  state.rows = [];
+  state.connecting = true;
+  await screen.rerender(<Pane onClose={() => {}} />);
+  state.rows = rows;
+  state.connecting = false;
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await expect
+    .element(screen.getByRole("textbox", { name: "Something else" }))
+    .toHaveValue("Later");
 });
 
 const decodeProfile = Schema.decodeSync(BotProfile);
