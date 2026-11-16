@@ -83,9 +83,10 @@ The adapter supports:
 The public SDK does not currently expose native agent fork, conversation rollback, or interactive
 approval callbacks. A text-only steer reaches the current run without restarting it.
 When Cursor cannot deliver the steer, the same message is queued for the next turn after
-this run finishes. If you press Stop, that follow-up stays held until you resume the queue. Steers
-with attachments and provider or runtime changes that must apply immediately interrupt and restart
-the run.
+this run finishes. If you press Stop, that follow-up stays held until you resume the queue; if Stop
+arrives before Cursor answers the steer, the message stays in the stopped turn and is not sent, so
+send it again. Steers with attachments and provider or runtime changes that must apply immediately
+interrupt and restart the run.
 Same-provider Cursor forks use the orchestrator's portable full-thread context handoff into a fresh
 Cursor agent. The SDK has in-process custom callback tools, but the V2 adapter intentionally uses the
 authenticated, thread-scoped MCP server instead.
