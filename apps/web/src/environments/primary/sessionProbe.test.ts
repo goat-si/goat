@@ -55,6 +55,8 @@ it.effect.each([
   ],
   ["the server fails (500)", "unknown", json(500, { message: "database unavailable" })],
   ["the server is unavailable (503)", "unknown", json(503, { message: "restarting" })],
+  ["the server refuses the request (401)", "unknown", json(401, { message: "unauthorized" })],
+  ["the server forbids the request (403)", "unknown", json(403, { message: "forbidden" })],
   [
     "a 3xx response that reaches the client unfollowed",
     "unknown",
