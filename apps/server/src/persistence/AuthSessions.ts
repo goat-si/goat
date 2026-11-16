@@ -106,8 +106,16 @@ export type RevokeAuthSessionInput = typeof RevokeAuthSessionInput.Type;
 export const RevokeOtherAuthSessionsInput = Schema.Struct({
   currentSessionId: AuthSessionId,
   revokedAt: Schema.DateTimeUtcFromString,
+  /** Pen-bound rows are always kept; so are rows of this subject and method. */
+  keep: Schema.Struct({ subject: Schema.String, method: ServerAuthSessionMethod }),
 });
 export type RevokeOtherAuthSessionsInput = typeof RevokeOtherAuthSessionsInput.Type;
+
+export interface RevokedOtherAuthSessions {
+  readonly revoked: ReadonlyArray<AuthSessionId>;
+  /** Other unrevoked rows the revoke left alone. */
+  readonly kept: ReadonlyArray<AuthSessionId>;
+}
 
 export const SetAuthSessionLastConnectedAtInput = Schema.Struct({
   sessionId: AuthSessionId,
@@ -163,7 +171,7 @@ export class AuthSessionRepository extends Context.Service<
     ) => Effect.Effect<boolean, AuthSessionRepositoryError>;
     readonly revokeAllExcept: (
       input: RevokeOtherAuthSessionsInput,
-    ) => Effect.Effect<ReadonlyArray<AuthSessionId>, AuthSessionRepositoryError>;
+    ) => Effect.Effect<RevokedOtherAuthSessions, AuthSessionRepositoryError>;
     readonly setLastConnectedAt: (
       input: SetAuthSessionLastConnectedAtInput,
     ) => Effect.Effect<void, AuthSessionRepositoryError>;
@@ -477,15 +485,30 @@ export const make = Effect.gen(function* () {
       `,
   });
 
+  const keptOtherSessionRows = SqlSchema.findAll({
+    Request: RevokeOtherAuthSessionsInput,
+    Result: Schema.Struct({ sessionId: AuthSessionId }),
+    execute: ({ currentSessionId, keep }) =>
+      sql`
+        SELECT session_id AS "sessionId"
+        FROM auth_sessions
+        WHERE session_id <> ${currentSessionId}
+          AND revoked_at IS NULL
+          AND (pen_node_id IS NOT NULL OR (subject = ${keep.subject} AND method = ${keep.method}))
+      `,
+  });
+
   const revokeOtherSessionRows = SqlSchema.findAll({
     Request: RevokeOtherAuthSessionsInput,
     Result: Schema.Struct({ sessionId: AuthSessionId }),
-    execute: ({ currentSessionId, revokedAt }) =>
+    execute: ({ currentSessionId, revokedAt, keep }) =>
       sql`
         UPDATE auth_sessions
         SET revoked_at = ${revokedAt}
         WHERE session_id <> ${currentSessionId}
           AND revoked_at IS NULL
+          AND pen_node_id IS NULL
+          AND NOT (subject = ${keep.subject} AND method = ${keep.method})
         RETURNING session_id AS "sessionId"
       `,
   });
@@ -682,16 +705,21 @@ export const make = Effect.gen(function* () {
     );
 
   const revokeAllExcept: AuthSessionRepository["Service"]["revokeAllExcept"] = (input) =>
-    revokeOtherSessionRows(input).pipe(
-      Effect.mapError(
-        toPersistenceSqlOrDecodeError(
-          "AuthSessionRepository.revokeAllExcept:query",
-          "AuthSessionRepository.revokeAllExcept:decodeRows",
-          { currentSessionId: input.currentSessionId },
+    sql
+      .withTransaction(Effect.all([keptOtherSessionRows(input), revokeOtherSessionRows(input)]))
+      .pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "AuthSessionRepository.revokeAllExcept:query",
+            "AuthSessionRepository.revokeAllExcept:decodeRows",
+            { currentSessionId: input.currentSessionId },
+          ),
         ),
-      ),
-      Effect.map((rows) => rows.map((row) => row.sessionId)),
-    );
+        Effect.map(([kept, revoked]) => ({
+          revoked: revoked.map((row) => row.sessionId),
+          kept: kept.map((row) => row.sessionId),
+        })),
+      );
 
   const setLastConnectedAt: AuthSessionRepository["Service"]["setLastConnectedAt"] = (input) =>
     setLastConnectedAtRow(input).pipe(

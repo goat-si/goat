@@ -56,6 +56,7 @@ import {
   resolveSessionCookieName,
 } from "./utils.ts";
 import * as ChildSetupSession from "./childSetupSession.ts";
+import { REVOKE_OTHERS_KEEPS_DESKTOP } from "./revokeOthersKeeps.ts";
 import {
   createDefaultClientMetadata,
   toAuthClientSession,
@@ -440,6 +441,7 @@ export const make = Effect.gen(function* () {
         lastConnectedAt: row.value.lastConnectedAt,
         connected,
         principalKind: row.value.principalKind,
+        penBound: row.value.penBinding !== null,
       }),
     );
   });
@@ -676,6 +678,7 @@ export const make = Effect.gen(function* () {
           lastConnectedAt: null,
           connected: false,
           principalKind,
+          penBound: input?.penBinding !== undefined,
         }),
       );
 
@@ -984,6 +987,7 @@ export const make = Effect.gen(function* () {
           lastConnectedAt: row.lastConnectedAt,
           connected: connectedSessions.has(row.sessionId),
           principalKind: row.principalKind,
+          penBound: row.penBinding !== null,
         }),
       );
     },
@@ -1010,22 +1014,23 @@ export const make = Effect.gen(function* () {
     "SessionStore.revokeAllExcept",
   )(function* (sessionId) {
     const revokedAt = yield* DateTime.now;
-    const revokedSessionIds = yield* authSessions
+    const { revoked, kept } = yield* authSessions
       .revokeAllExcept({
         currentSessionId: sessionId,
         revokedAt,
+        keep: REVOKE_OTHERS_KEEPS_DESKTOP,
       })
       .pipe(
         Effect.mapError(
           (cause) => new OtherSessionsRevocationError({ currentSessionId: sessionId, cause }),
         ),
       );
-    // Every other row is now revoked or gone, including ones another process revoked earlier.
+    // Every other row is now revoked, gone (even if another process revoked it earlier), or kept.
+    // Kept rows are unrevoked, so they stay live here as they do in the durable check.
+    const spared = new Set([sessionId, ...kept]);
     const live = yield* liveSessionIds;
-    yield* settleEnded(
-      [...new Set([...revokedSessionIds, ...live])].filter((id) => id !== sessionId),
-    );
-    return revokedSessionIds.length;
+    yield* settleEnded([...new Set([...revoked, ...live])].filter((id) => !spared.has(id)));
+    return revoked.length;
   });
 
   const awaitInvalidation = Effect.fn(function* (sessionId: AuthSessionId) {
