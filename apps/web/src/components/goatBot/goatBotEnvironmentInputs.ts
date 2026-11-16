@@ -11,6 +11,8 @@ import type { EnvironmentPresentation } from "~/state/environments";
 export function goatBotEnvironmentInputs(
   environments: ReadonlyArray<EnvironmentPresentation>,
   primaryEnvironmentId: EnvironmentId | null,
+  /** Only the hook passes refusals; picking a computer never depends on them. */
+  refused?: ReadonlySet<EnvironmentId>,
 ): ReadonlyArray<GoatBotEnvironmentInput> {
   return environments.map((entry) => ({
     environmentId: entry.environmentId,
@@ -35,5 +37,6 @@ export function goatBotEnvironmentInputs(
       settingsLoaded: entry.serverConfig?.settings != null,
       home: entry.serverConfig?.settings?.goatBotHome ?? null,
     },
+    ...(refused?.has(entry.environmentId) ? { refused: true } : {}),
   }));
 }
