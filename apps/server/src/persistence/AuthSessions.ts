@@ -92,6 +92,11 @@ export const ListActiveAuthSessionsInput = Schema.Struct({
 });
 export type ListActiveAuthSessionsInput = typeof ListActiveAuthSessionsInput.Type;
 
+export const ListUnrevokedAuthSessionsInput = Schema.Struct({
+  sessionIds: Schema.Array(AuthSessionId),
+});
+export type ListUnrevokedAuthSessionsInput = typeof ListUnrevokedAuthSessionsInput.Type;
+
 export const RevokeAuthSessionInput = Schema.Struct({
   sessionId: AuthSessionId,
   revokedAt: Schema.DateTimeUtcFromString,
@@ -149,6 +154,10 @@ export class AuthSessionRepository extends Context.Service<
     readonly listActive: (
       input: ListActiveAuthSessionsInput,
     ) => Effect.Effect<ReadonlyArray<AuthSessionRecord>, AuthSessionRepositoryError>;
+    /** Those of sessionIds whose rows exist and are unrevoked, expired or not. */
+    readonly listUnrevoked: (
+      input: ListUnrevokedAuthSessionsInput,
+    ) => Effect.Effect<ReadonlyArray<AuthSessionId>, AuthSessionRepositoryError>;
     readonly revoke: (
       input: RevokeAuthSessionInput,
     ) => Effect.Effect<boolean, AuthSessionRepositoryError>;
@@ -227,6 +236,8 @@ const AuthSessionRawDbRow = Schema.Struct({
 });
 
 const decodeAuthSessionDbRow = Schema.decodeUnknownEffect(AuthSessionDbRow);
+/** Keeps each IN list well under SQLite's bound-parameter limit. */
+const UNREVOKED_CHUNK = 500;
 
 function toAuthSessionRecord(row: typeof AuthSessionDbRow.Type): AuthSessionRecord {
   return {
@@ -426,6 +437,18 @@ export const make = Effect.gen(function* () {
         SET last_connected_at = ${lastConnectedAt}
         WHERE session_id = ${sessionId}
           AND revoked_at IS NULL
+      `,
+  });
+
+  const unrevokedRows = SqlSchema.findAll({
+    Request: ListUnrevokedAuthSessionsInput,
+    Result: Schema.Struct({ sessionId: AuthSessionId }),
+    execute: ({ sessionIds }) =>
+      sql`
+        SELECT session_id AS "sessionId"
+        FROM auth_sessions
+        WHERE revoked_at IS NULL
+          AND ${sql.in("session_id", sessionIds)}
       `,
   });
 
@@ -629,6 +652,23 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  const listUnrevoked: AuthSessionRepository["Service"]["listUnrevoked"] = ({ sessionIds }) =>
+    Effect.forEach(
+      Array.from({ length: Math.ceil(sessionIds.length / UNREVOKED_CHUNK) }, (_, index) =>
+        sessionIds.slice(index * UNREVOKED_CHUNK, (index + 1) * UNREVOKED_CHUNK),
+      ),
+      (chunk) => unrevokedRows({ sessionIds: chunk }),
+    ).pipe(
+      NodeSqliteClient.readOnly,
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "AuthSessionRepository.listUnrevoked:query",
+          "AuthSessionRepository.listUnrevoked:decodeRows",
+        ),
+      ),
+      Effect.map((chunks) => chunks.flat().map((row) => row.sessionId)),
+    );
+
   const revoke: AuthSessionRepository["Service"]["revoke"] = (input) =>
     revokeSessionRows(input).pipe(
       Effect.mapError(
@@ -684,6 +724,7 @@ export const make = Effect.gen(function* () {
     createIfAbsent,
     getById,
     listActive,
+    listUnrevoked,
     revoke,
     revokeAllExcept,
     setLastConnectedAt,
