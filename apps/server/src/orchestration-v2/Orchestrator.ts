@@ -5,6 +5,7 @@ import { isHistoryArchiveOnlyUpdate, withoutHistoryArchive } from "./goat/Histor
 import { makeReleaseFinishedDelegate } from "./goat/ReleaseFinishedDelegate.ts";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import { runsBehindSteerFollowUp, steerFollowUpQueuePosition } from "./steerFollowUpQueue.ts";
+import { pendingThreadTitleGenerationEffect } from "./threadTitleGenerationEffect.ts";
 import { threadHasUnfinishedWork } from "./threadUnfinishedWork.ts";
 import { usageLimitHoldsQueue, usageLimitHoldsQueuedRuns } from "./usageLimitQueue.ts";
 import { wakeWorkStartedAt } from "./wakeWorkStartedAt.ts";
@@ -586,21 +587,6 @@ function nextRunOrdinal(projection: Pick<OrchestrationV2ThreadProjection, "runs"
 export { isSeparateTurnCommand } from "./SeparateTurnCommand.ts";
 
 const threadPullRequestLinksEqual = Schema.toEquivalence(Schema.NullOr(ThreadLinkedPullRequest));
-
-function pendingThreadTitleGenerationEffect(
-  commandId: CommandId,
-  threadId: ThreadId,
-  kind:
-    | { readonly type: "initial"; readonly messageId: MessageId }
-    | { readonly type: "regenerate" },
-): PendingOrchestrationEffectV2 {
-  return {
-    id: `effect:${commandId}:thread-title.generate`,
-    commandId,
-    threadId,
-    request: { type: "thread-title.generate", kind },
-  };
-}
 
 const WORKSPACE_PREPARATION_INPUT = "Preparing workspace";
 const RUNTIME_REQUEST_DELIVERY_FAILED_MESSAGE =
