@@ -87,7 +87,8 @@ export function GoatBotNeedsYou({
     });
   };
   const openNext = useStableCallback(() => {
-    if (!asks?.length) return false;
+    // The registration goes in a passive effect; until then the gate stops it here.
+    if (!readable || !asks?.length) return false;
     const previous = asks.findIndex((ask) => askKey(ask) === lastAsk.current);
     if (previous === asks.length - 1 && (canShowMore || reading)) {
       if (canShowMore) showMore();
