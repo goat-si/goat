@@ -262,6 +262,7 @@ import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRun
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import { makeHumanHandoffs } from "./goat/HumanHandoffs.ts";
 import { makeThreadRecordDispatches } from "./goat/ThreadRecordDispatches.ts";
+import { makeStaleQuestionWakes } from "./goat/StaleQuestionWake.ts";
 import {
   endOrphanedNativeSubagent,
   endRunlessRootTurns,
@@ -1162,6 +1163,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     ]);
   });
 
+  const { cancelStaleQuestionWakes } = makeStaleQuestionWakes({
+    projectionStore,
+    emitQueuedRunCancellation,
+    writeSystemEvents,
+    OrchestratorProjectionError,
+  });
+
   const startNextQueuedRun = Effect.fn("Orchestrator.startNextQueuedRun")(
     function* (
       threadId: ThreadId,
@@ -1173,13 +1181,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       },
     ) {
       if (!(yield* projectionStore.canStartQueuedRun(threadId))) return;
-      const projection = yield* readCommandProjection(threadId);
+      let projection = yield* readCommandProjection(threadId);
       if (
         projection.thread.archivedAt !== null ||
         projection.thread.deletedAt !== null ||
         projection.runs.some(isBlockingRun)
       ) {
         return;
+      }
+      if (yield* cancelStaleQuestionWakes(projection)) {
+        projection = yield* readCommandProjection(threadId);
       }
 
       const storedQueuedRun =
