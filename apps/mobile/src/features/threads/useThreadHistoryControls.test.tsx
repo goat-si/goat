@@ -75,7 +75,7 @@ it("shows the newer command failure over an older history error (#3556)", async 
   expect(view.controls.error).toBe("Studio is not connected.");
 });
 
-it("a failed jump to a message shows its failure too, so the jump ends (#3556)", async () => {
+it("a failed jump to a message shows its failure too (#3556)", async () => {
   await using view = await mountControls();
   mocks.load.mockResolvedValueOnce(offline());
   await act(async () => view.controls.onLoadThrough("entry-1"));
@@ -95,6 +95,14 @@ it("announces the failure to VoiceOver on iOS (#3556)", async () => {
   mocks.load.mockResolvedValueOnce(offline());
   await view.press();
   expect(mocks.announce).toHaveBeenCalledExactlyOnceWith("Studio is not connected.");
+});
+
+it("doesn't announce on Android, where the error line is a live region (#3556)", async () => {
+  await using view = await mountControls();
+  mocks.load.mockResolvedValueOnce(offline());
+  await view.press();
+  expect(view.controls.error).toBe("Studio is not connected.");
+  expect(mocks.announce).not.toHaveBeenCalled();
 });
 
 it("guard: pressing again clears the failure while the new load runs (#3556)", async () => {

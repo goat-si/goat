@@ -224,12 +224,15 @@ describe("model picker failures (#3556)", () => {
     expect(mocks.save).toHaveBeenCalledTimes(2);
   });
 
-  it("guard: an interrupted save shows nothing (#3556)", async () => {
-    await using mounted = await mountSession({}, { settingsLoaded: true });
-    mocks.save.mockResolvedValueOnce(
-      AsyncResult.failure(Cause.interrupt()) as AsyncResult.AsyncResult<unknown, unknown>,
-    );
-    await act(async () => mounted.session().toggleHidden(hideable));
-    expect(mocks.alert).not.toHaveBeenCalled();
-  });
+  it.each(["toggleHidden", "toggleFavorite"] as const)(
+    "guard: an interrupted save from %s shows nothing (#3556)",
+    async (toggle) => {
+      await using mounted = await mountSession({}, { settingsLoaded: true });
+      mocks.save.mockResolvedValueOnce(
+        AsyncResult.failure(Cause.interrupt()) as AsyncResult.AsyncResult<unknown, unknown>,
+      );
+      await act(async () => mounted.session()[toggle](hideable));
+      expect(mocks.alert).not.toHaveBeenCalled();
+    },
+  );
 });
