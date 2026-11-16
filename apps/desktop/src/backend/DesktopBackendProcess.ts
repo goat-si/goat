@@ -201,6 +201,7 @@ interface RunBackendProcessOptions extends DesktopBackendStartConfig {
   readonly onExitObserved?: () => Effect.Effect<void>;
   readonly onReady?: () => Effect.Effect<void>;
   readonly onReadinessFailure?: (reason: string) => Effect.Effect<void>;
+  readonly migratingDatabase?: Effect.Effect<boolean>;
   readonly onOutput?: (
     streamName: BackendProcessOutputStream,
     chunk: Uint8Array,
@@ -476,7 +477,10 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
 
     yield* probeReadiness().pipe(Effect.repeat({ while: (ready) => !ready }), Effect.forkScoped);
     const progressFiber = yield* progress
-      .watch((reason) => options.onReadinessFailure?.(reason) ?? Effect.void)
+      .watch(
+        (reason) => options.onReadinessFailure?.(reason) ?? Effect.void,
+        options.migratingDatabase,
+      )
       .pipe(Effect.forkScoped);
 
     const exit = yield* handle.exitCode.pipe(

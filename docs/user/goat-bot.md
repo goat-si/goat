@@ -105,11 +105,12 @@ bot's tasks, and a task opens in its own view.
   open and waiting work, or Slack. Each problem comes with the action that fixes it when you're
   allowed to take it. The full status stays in **Settings → GOAT Bot**.
 - **Routines** lists routines that post into this conversation, when they run next, how the last
-  run went, and a switch to pause them. **Check in on me** sets up a routine on the days and
-  hours you choose: the bot looks over its tasks and writes only when something needs you. A
-  routine whose last run failed shows **Run now**. **New routine** starts a routine request in the
-  message box for you to finish and send. On the phone, the **+** beside the chat's message box
-  offers it too, with your photos and files.
+  run went, and a switch to pause them. Dots under a routine show its recent runs; select one to
+  see what it said. **Check in on me** sets up a routine on the days and hours you choose: the bot
+  looks over its tasks and writes only when something needs you. A routine whose last run failed
+  shows **Run now**. **New routine** starts a routine request in the message box for you to finish
+  and send. On the phone, the **+** beside the chat's message box offers it too, with your photos
+  and files.
 - **New routine**, **Ask to change** and **Ask to forget** fill only a message box with no words or
   files in it; blank space counts as empty. If it holds your words or files, they stay as they
   are: send or clear them first.

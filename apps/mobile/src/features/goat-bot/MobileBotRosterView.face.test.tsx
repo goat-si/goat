@@ -226,17 +226,17 @@ it("works while the status says a task is going, and leaves an inactive shell id
   expect(faceOf("Scout")).toBe("idle");
 });
 
-it("waits first and says it once with its count, the badge's own number hidden from screen readers", async () => {
+it("waits first and says it once with its count, the waiting mark hidden from screen readers", async () => {
   setup({ scout: { waitingCount: 2, tasks: { active: true } } });
   await show();
   expect(faceOf("Scout")).toBe("waiting");
   expect(labelOf("Scout")).toBe("2 waiting for you, Scout, Finds sources");
-  const badge = [...(row("Scout")?.querySelectorAll("span") ?? [])].find(
+  const count = [...(row("Scout")?.querySelectorAll("span") ?? [])].find(
     (span) => span.textContent === "2",
   );
-  expect(badge?.getAttribute("aria-hidden")).toBe("true");
-  expect(badge?.getAttribute("data-important")).toBe("no-hide-descendants");
-  expect(badge?.getAttribute("aria-label")).toBeNull();
+  const mark = count?.closest("[aria-hidden='true']");
+  expect(mark?.getAttribute("data-important")).toBe("no-hide-descendants");
+  expect(count?.getAttribute("aria-label")).toBeNull();
 });
 
 it("keeps Reading through the face hold when the reply arrives, then moves on", async () => {

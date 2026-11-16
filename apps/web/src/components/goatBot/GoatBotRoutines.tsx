@@ -21,6 +21,7 @@ import { Switch } from "../ui/switch";
 import { GoatBotCheckInForm } from "./GoatBotCheckInForm";
 import { useGoatBotName } from "./goatBotMemberContext";
 import { GoatBotPanelEmpty, GoatBotPanelFailure } from "./GoatBotPanelEmpty";
+import { GoatBotRoutineRuns } from "./GoatBotRoutineRuns";
 import { GoatBotCardRow, GoatBotCardSkeleton, GoatBotShowMoreRow } from "./GoatBotSectionCard";
 
 /** What New routine puts in the message box: the person finishes the sentence. */
@@ -58,6 +59,8 @@ export function GoatBotRoutines(props: {
   readonly onRoutineFocused?: (() => void) | undefined;
   /** Whether that row may still take focus when it shows, or the person has moved on. */
   readonly routineMayFocus?: (() => boolean) | undefined;
+  /** Home sits beside the chat, where a task hiding the chat also hides Home. */
+  readonly docked?: boolean | undefined;
 }) {
   const nowMinute = useNowMinute();
   const botName = useGoatBotName();
@@ -104,6 +107,7 @@ export function GoatBotRoutines(props: {
     failure === null && findCheckInRoutine(props.tasks, props.threadId) === undefined;
   const hidden = rows.length - COLLAPSED_ROUTINES;
   const shown = showAll ? rows : rows.slice(0, COLLAPSED_ROUTINES);
+  const taskById = new Map(props.tasks.map((task) => [task.id, task]));
   return (
     <div className="flex flex-col">
       {failure === null ? null : <div className="px-3 py-3">{failure}</div>}
@@ -127,6 +131,10 @@ export function GoatBotRoutines(props: {
           key={row.id}
           environmentId={props.environmentId}
           row={row}
+          task={taskById.get(row.id)}
+          botThreadId={props.threadId}
+          botName={botName}
+          docked={props.docked ?? false}
           onFocused={row.id === props.focusRoutineId ? props.onRoutineFocused : undefined}
           mayFocus={props.routineMayFocus}
         />
@@ -168,11 +176,19 @@ function CheckInOffer(props: {
 function RoutineRow({
   environmentId,
   row,
+  task,
+  botThreadId,
+  botName,
+  docked,
   onFocused,
   mayFocus,
 }: {
   environmentId: EnvironmentId;
   row: BotRoutineRow;
+  task: BotRoutineSource | undefined;
+  botThreadId: ThreadId;
+  botName: string;
+  docked: boolean;
   /** Present while this row should take focus; called once it has, or once it may not. */
   onFocused?: (() => void) | undefined;
   mayFocus?: (() => boolean) | undefined;
@@ -262,6 +278,16 @@ function RoutineRow({
           onCheckedChange={(enabled) => void toggle(enabled)}
         />
       </div>
+      {task === undefined ? null : (
+        <GoatBotRoutineRuns
+          environmentId={environmentId}
+          botThreadId={botThreadId}
+          task={task}
+          title={row.title}
+          botName={botName}
+          docked={docked}
+        />
+      )}
       {error === null ? null : (
         <p role="alert" className="pt-1 text-xs text-destructive">
           Couldn't {row.enabled ? "pause" : "resume"} this routine: {error}
