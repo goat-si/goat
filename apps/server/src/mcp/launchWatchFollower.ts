@@ -77,11 +77,11 @@ export const restartOnDefect =
       }
     });
 
-/** What the launcher hears when its watch's follower kept failing; the run itself is unknown. */
+/** What the launcher hears when its follower kept failing; keyed by the newest run, so each send gets one. */
 export function lostTrackWake(watch: LaunchWatch): LaunchWatchWake {
   const name = named(watch, null);
   return {
-    ...wakeIds(watch, `lost-track:${watch.incarnation}:${watch.pendingRuns[0] ?? "idle"}`),
+    ...wakeIds(watch, `lost-track:${watch.incarnation}:${watch.pendingRuns.at(-1) ?? "idle"}`),
     text: `GOAT lost track of ${name.toLowerCase()} (${identity(watch)}); ${watch.host === null ? "the run" : "the remote run"} may still be running. Its follower failed ${FOLLOWER_RESTART_DELAYS_MS.length + 1} times in a row, so no end will be reported until your next goat_thread_send to it or a GOAT restart follows it again. Read it with goat_thread_status.`,
     notification: {
       source: { kind: "background_task" },
