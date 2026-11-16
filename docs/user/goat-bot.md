@@ -54,6 +54,8 @@ wait than the list shows, **Show more** lists the next ones.
 On a phone, while the computer GOAT Bot runs on is offline, the Bots list and **Needs you** show
 what the phone last read from it, which may be out of date. You can open a bot's conversation, but
 bots can't be added or changed until the computer is back. Closing the app forgets that list.
+**Settings → GOAT Bot** also shows the bot's settings as the phone last read them; they can't be
+changed until the computer is back.
 
 ## The face
 
