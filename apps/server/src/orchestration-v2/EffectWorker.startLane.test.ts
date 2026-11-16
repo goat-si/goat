@@ -13,12 +13,14 @@ import {
 } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Queue from "effect/Queue";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as CodexDetached from "../provider/CodexDetachedAppServerLive.ts";
@@ -607,5 +609,161 @@ it.effect("a goal block left after the survivor settles does not hold the queued
       });
       assert.equal(Option.getOrThrow(yield* claim).id, "goal-start");
     }).pipe(Effect.provide(CodexSurvivors.layer.pipe(Layer.provide(detached))));
+  }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
+);
+
+it.effect("starts another thread's turn while every worker holds a start that never returns", () =>
+  Effect.gen(function* () {
+    const outbox = yield* EffectOutbox.EffectOutboxV2;
+    const key = "start-lane:hung-provider-starts";
+    const wedgedThreadIds = Array.from(
+      { length: Math.max(2, Math.floor(NodeOS.availableParallelism() / 2)) },
+      (_, index) => ThreadId.make(`${key}:wedged:${index}`),
+    );
+    const otherThreadId = ThreadId.make(`${key}:other`);
+    const wedgedStarted = yield* Deferred.make<void>();
+    const otherStarted = yield* Deferred.make<void>();
+    const wedgedCount = yield* Ref.make(0);
+    const start = (threadId: ThreadId, id: string) => ({
+      id: `${key}:${id}`,
+      commandId: CommandId.make(`${key}:${id}`),
+      threadId,
+      request: { type: "provider-turn.start" as const, runId: RunId.make(`${key}:${id}`) },
+    });
+    yield* outbox.enqueue(wedgedThreadIds.map((threadId, index) => start(threadId, `w${index}`)));
+    const workerLayer = EffectWorker.layer.pipe(
+      Layer.provide(
+        Layer.merge(
+          Layer.succeed(EffectOutbox.EffectOutboxV2, outbox),
+          Layer.mock(EffectWorker.OrchestrationEffectExecutorV2)({
+            execute: (effect) =>
+              effect.threadId === otherThreadId
+                ? Deferred.succeed(otherStarted, undefined).pipe(Effect.asVoid)
+                : Ref.updateAndGet(wedgedCount, (count) => count + 1).pipe(
+                    Effect.flatMap((count) =>
+                      count === wedgedThreadIds.length
+                        ? Deferred.succeed(wedgedStarted, undefined)
+                        : Effect.void,
+                    ),
+                    Effect.andThen(Effect.never),
+                  ),
+          }),
+        ),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      yield* EffectWorker.runDaemonWithOptions({ concurrency: 1 }).pipe(Effect.forkScoped);
+      yield* Deferred.await(wedgedStarted);
+      yield* outbox.enqueue([start(otherThreadId, "other")]);
+      yield* outbox.notifyAvailable();
+      const other = yield* Deferred.await(otherStarted).pipe(
+        Effect.timeoutOption("1 hour"),
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust("1 hour");
+      assert.isTrue(
+        Option.isSome(yield* Fiber.join(other)),
+        "another thread's provider-turn.start never ran behind starts that never return",
+      );
+    }).pipe(
+      Effect.provide(workerLayer),
+      Effect.scoped,
+      Effect.ensuring(
+        Effect.forEach(
+          [...wedgedThreadIds, otherThreadId],
+          (threadId) =>
+            outbox.cancelUnsettled({
+              threadId,
+              effectTypes: ["provider-turn.start"],
+              reason: "fixture complete",
+            }),
+          { discard: true },
+        ).pipe(Effect.orDie),
+      ),
+    );
+  }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
+);
+
+it.effect("a start waits pending once each start slot has detached one hung start, then runs", () =>
+  Effect.gen(function* () {
+    const outbox = yield* EffectOutbox.EffectOutboxV2;
+    const key = "start-lane:detach-cap";
+    const slots = Math.max(2, Math.floor(NodeOS.availableParallelism() / 2));
+    const wedgedThreadIds = Array.from({ length: slots * 2 }, (_, index) =>
+      ThreadId.make(`${key}:wedged:${index}`),
+    );
+    const otherThreadId = ThreadId.make(`${key}:other`);
+    const allWedged = yield* Deferred.make<void>();
+    const releaseFirst = yield* Deferred.make<void>();
+    const otherStarted = yield* Deferred.make<void>();
+    const wedgedCount = yield* Ref.make(0);
+    const start = (threadId: ThreadId, id: string) => ({
+      id: `${key}:${id}`,
+      commandId: CommandId.make(`${key}:${id}`),
+      threadId,
+      request: { type: "provider-turn.start" as const, runId: RunId.make(`${key}:${id}`) },
+    });
+    const workerLayer = EffectWorker.layer.pipe(
+      Layer.provide(
+        Layer.merge(
+          Layer.succeed(EffectOutbox.EffectOutboxV2, outbox),
+          Layer.mock(EffectWorker.OrchestrationEffectExecutorV2)({
+            execute: (effect) =>
+              effect.threadId === otherThreadId
+                ? Deferred.succeed(otherStarted, undefined).pipe(Effect.asVoid)
+                : Ref.updateAndGet(wedgedCount, (count) => count + 1).pipe(
+                    Effect.flatMap((count) =>
+                      count === wedgedThreadIds.length
+                        ? Deferred.succeed(allWedged, undefined)
+                        : Effect.void,
+                    ),
+                    Effect.andThen(
+                      effect.threadId === wedgedThreadIds[0]
+                        ? Deferred.await(releaseFirst)
+                        : Effect.never,
+                    ),
+                  ),
+          }),
+        ),
+      ),
+    );
+    const within = <A>(effect: Effect.Effect<A>) =>
+      Effect.gen(function* () {
+        const fiber = yield* effect.pipe(Effect.timeoutOption("1 hour"), Effect.forkChild);
+        yield* TestClock.adjust("1 hour");
+        return yield* Fiber.join(fiber);
+      });
+    yield* Effect.gen(function* () {
+      yield* outbox.enqueue(wedgedThreadIds.map((threadId, index) => start(threadId, `w${index}`)));
+      yield* EffectWorker.runDaemonWithOptions({ concurrency: 1 }).pipe(Effect.forkScoped);
+      assert.isTrue(Option.isSome(yield* within(Deferred.await(allWedged))));
+
+      yield* outbox.enqueue([start(otherThreadId, "other")]);
+      yield* outbox.notifyAvailable();
+      assert.isTrue(Option.isNone(yield* within(Deferred.await(otherStarted))));
+      assert.deepInclude(Option.getOrThrow(yield* outbox.get(`${key}:other`)), {
+        status: "pending",
+        attemptCount: 0,
+      });
+
+      yield* Deferred.succeed(releaseFirst, undefined);
+      assert.isTrue(Option.isSome(yield* within(Deferred.await(otherStarted))));
+      assert.equal(yield* Ref.get(wedgedCount), wedgedThreadIds.length);
+    }).pipe(
+      Effect.provide(workerLayer),
+      Effect.scoped,
+      Effect.ensuring(
+        Effect.forEach(
+          [...wedgedThreadIds, otherThreadId],
+          (threadId) =>
+            outbox.cancelUnsettled({
+              threadId,
+              effectTypes: ["provider-turn.start"],
+              reason: "fixture complete",
+            }),
+          { discard: true },
+        ).pipe(Effect.orDie),
+      ),
+    );
   }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
 );
