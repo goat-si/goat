@@ -99,7 +99,8 @@ export function MobileBotProfileSheet(props: {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={saveLabel}
-            accessibilityHint={unavailable}
+            // A value, not a hint: hints can be turned off, and this is why Save is off.
+            accessibilityValue={unavailable === undefined ? undefined : { text: unavailable }}
             accessibilityState={{ disabled: saveDisabled }}
             disabled={saveDisabled}
             onPress={() => void save()}
@@ -111,7 +112,7 @@ export function MobileBotProfileSheet(props: {
           </Pressable>
         </View>
         {unavailable ? (
-          // Save's hint says it; this line is skipped so a screen reader says it once, at Save.
+          // Save says it; this line is skipped so a screen reader says it once, at Save.
           <Text
             accessibilityElementsHidden
             importantForAccessibility="no-hide-descendants"
