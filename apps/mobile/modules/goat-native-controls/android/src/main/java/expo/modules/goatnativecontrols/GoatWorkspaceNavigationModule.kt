@@ -20,6 +20,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -54,6 +55,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
@@ -182,7 +184,20 @@ class GoatWorkspaceNavigationView(
                     selected = selectedTab == tab,
                     onClick = { onTabSelected(mapOf("tab" to tab)) },
                     icon = { Icon(tabIconPainter(tab), contentDescription = null) },
-                    label = { Text(tabTitle(tab), fontSize = (12 * textScale).sp) },
+                    label = {
+                      // One line that shrinks to fit its item at large font scales, then ellipsizes.
+                      Text(
+                        tabTitle(tab),
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                        autoSize = TextAutoSize.StepBased(
+                          minFontSize = (8 * textScale).sp,
+                          maxFontSize = (12 * textScale).sp,
+                          stepSize = 0.5.sp,
+                        ),
+                      )
+                    },
                     colors = NavigationBarItemDefaults.colors(
                       selectedIconColor = Color(selectedColor),
                       selectedTextColor = Color(selectedColor),
