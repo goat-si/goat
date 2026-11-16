@@ -199,5 +199,5 @@ it.effect(
           (yield* sessions.verifyWebSocketToken(late.token, MAIN_LISTENER).pipe(Effect.flip))._tag,
         ).toBe("WebSocketSessionRevokedError");
       }).pipe(Effect.provide(Layer.merge(running, layerHubAccess)), Effect.scoped);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

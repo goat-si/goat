@@ -1,7 +1,9 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { AuthStandardClientScopes } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -65,7 +67,7 @@ it.effect.each(["revoked", "deleted"] as const)(
           ),
         ).toBe("The MCP session is no longer active.");
       }).pipe(Effect.provide(running), Effect.scoped);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each(["revoke", "revokeAllExcept"] as const)(
@@ -94,7 +96,7 @@ it.effect.each(["revoke", "revokeAllExcept"] as const)(
         yield* Fiber.join(waiting);
         expect(yield* store.readActiveScopes(current.sessionId)).toEqual(AuthStandardClientScopes);
       }).pipe(Effect.provide(running), Effect.scoped);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each(["fail", "die"] as const)(
@@ -135,7 +137,7 @@ it.effect.each(["fail", "die"] as const)(
         );
         yield* Fiber.join(waiting);
       }).pipe(Effect.provide(running), Effect.scoped);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -176,5 +178,5 @@ it.effect(
         );
         expect(new Set(removedIds).size).toBe(ids.size);
       }).pipe(Effect.provide(running), Effect.scoped);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
