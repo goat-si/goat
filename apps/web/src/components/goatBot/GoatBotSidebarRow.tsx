@@ -34,6 +34,7 @@ import { GoatBotMainAvatar } from "./GoatBotAvatar";
 import { useGoatBotPreferred } from "./GoatBotModeButton";
 import { GoatBotChannelContext } from "./goatBotChannelPort";
 import { GoatBotMainMenu } from "./GoatBotMemberRows";
+import { useGoatBotComputerReadable } from "./useGoatBotComputerReadable";
 import { useGoatBotSidebarWaiting } from "./useGoatBotWaitingCount";
 import { GoatBotRowSignals } from "./GoatBotRowSignals";
 import { useGoatBotReadMenu } from "./useGoatBotReadMenu";
@@ -70,9 +71,11 @@ function GoatBotSidebarObserver({
   main: BotProfile | null;
 }) {
   const waiting = useGoatBotSidebarWaiting();
-  const count = waiting.count;
-  const readMenu = useGoatBotReadMenu(count, name, { holdsNewBotOpen: true });
   const botRef = useGlobalAgentStore((state) => state.botRef);
+  // Before a bot is named, nothing has been read from its conversation.
+  const readable = useGoatBotComputerReadable(botRef?.environmentId ?? null) || botRef === null;
+  const count = readable ? waiting.count : undefined;
+  const readMenu = useGoatBotReadMenu(count, name, { holdsNewBotOpen: true });
   const pathname = useLocation({ select: (location) => location.pathname });
   const task = useLocation({
     select: (location) => (location.search as { task?: string } | undefined)?.task,
@@ -90,7 +93,7 @@ function GoatBotSidebarObserver({
     <SidebarGroup className="z-1">
       <SidebarMenu>
         <SidebarMenuItem>
-          {botRef && shell?.lastVisitedAt !== undefined ? (
+          {botRef && readable && shell?.lastVisitedAt !== undefined ? (
             <GoatBotSidebarPreview
               key={`${botRef.environmentId}:${botRef.threadId}`}
               name={name}
@@ -114,7 +117,8 @@ function GoatBotSidebarObserver({
               onClick={handleClick}
               readMenu={readMenu}
               preview={null}
-              at={shell?.updatedAt ?? null}
+              at={readable ? (shell?.updatedAt ?? null) : null}
+              readable={readable}
             />
           )}
           {main ? <GoatBotMainMenu environmentId={main.environmentId} main={main} /> : null}
@@ -186,6 +190,7 @@ function GoatBotSidebarPreview({
       readMenu={readMenu}
       preview={preview}
       at={preview?.at ?? shell?.updatedAt ?? null}
+      readable
     />
   );
 }
@@ -201,6 +206,7 @@ function GoatBotConversationRow({
   readMenu,
   preview,
   at,
+  readable,
 }: {
   name: string;
   avatar: string | null;
@@ -217,6 +223,8 @@ function GoatBotConversationRow({
   readMenu: GoatBotReadMenuProps;
   preview: GoatBotConversationPreview | null;
   at: string | null;
+  /** False once this client may no longer read the bot's computer: only the name and Main stay. */
+  readable: boolean;
 }) {
   return (
     <SidebarMenuButton
@@ -262,13 +270,15 @@ function GoatBotConversationRow({
               <RelativeTimeLabel timestamp={at} />
             </span>
           ) : null}
-          <GoatBotRowSignals
-            environmentId={waiting.environmentId}
-            botId={BotId.make("main")}
-            governed={waiting.governed}
-            waiting={count}
-            waitingState={waiting.state}
-          />
+          {readable ? (
+            <GoatBotRowSignals
+              environmentId={waiting.environmentId}
+              botId={BotId.make("main")}
+              governed={waiting.governed}
+              waiting={count}
+              waitingState={waiting.state}
+            />
+          ) : null}
           {count !== undefined && count > 0 ? (
             <Badge size="sm" variant="secondary" aria-hidden>
               {count}
@@ -279,7 +289,7 @@ function GoatBotConversationRow({
           <Badge size="sm" variant="secondary">
             Main
           </Badge>
-          {slackEnabled && (
+          {readable && slackEnabled && (
             <Badge size="sm" variant="secondary">
               Slack
             </Badge>
