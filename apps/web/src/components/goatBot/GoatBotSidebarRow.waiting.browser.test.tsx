@@ -189,6 +189,7 @@ it("a capable main row Home does not govern keeps the older count, and switches 
   setup();
   state.governed = false;
   state.waitingRead = false;
+  // No router: Link, useLocation and useParams are mocked above.
   await using screen = await render(<GoatBotSidebarRow />, { router: false });
   await expect.element(screen.getByRole("link", { name: counted(3) })).toBeVisible();
   expect(screen.getByLabelText(/unavailable/i).query()).toBeNull();
@@ -204,6 +205,7 @@ it("an older server's main row keeps its legacy count with no marks", async () =
   setup();
   state.h2 = false;
   state.status = false;
+  // No router: Link, useLocation and useParams are mocked above.
   await using screen = await render(<GoatBotSidebarRow />, { router: false });
   await expect.element(screen.getByRole("link", { name: counted(1) })).toBeVisible();
   expect(screen.getByLabelText(/unavailable/i).query()).toBeNull();
@@ -214,6 +216,7 @@ it("the main row's count reads nothing while the computer's config is unknown, n
   state.environmentId = "main-row-config-unknown" as EnvironmentId;
   state.governed = false;
   state.configKnown = false;
+  // No router: Link, useLocation and useParams are mocked above.
   await using screen = await render(<GoatBotSidebarRow />, { router: false });
   await expect.element(screen.getByRole("link", { name: /GOAT Bot/ })).toBeVisible();
   expect(state.listTasks).not.toHaveBeenCalled();
