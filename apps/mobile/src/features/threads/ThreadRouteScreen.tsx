@@ -1,5 +1,6 @@
 import { firstRouteParam } from "../terminal/terminalRouteHelpers.ts";
 import { useRememberThreadProject } from "./useRememberThreadProject";
+import { useThreadHistoryControls } from "./useThreadHistoryControls";
 import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
@@ -317,36 +318,10 @@ function ThreadRouteContent(
     label: "set thread interaction mode",
     reportFailure: false,
   });
-  const loadEarlierHistory = useAtomCommand(threadEnvironment.loadEarlierHistory, {
-    label: "load earlier thread history",
-    reportFailure: false,
-  });
-  const historyControls = (() => {
-    const history = selectedThreadDetailState.history;
-    if (!selectedThread) {
-      return undefined;
-    }
-    if (!history.hasMoreHistory && history.error === null) {
-      return undefined;
-    }
-    return {
-      hasMoreHistory: history.hasMoreHistory,
-      loading: history.loading,
-      error: history.error,
-      onLoadEarlier: () => {
-        void loadEarlierHistory({
-          environmentId: selectedThread.environmentId,
-          input: { threadId: selectedThread.id },
-        });
-      },
-      onLoadThrough: (throughEntryId: string) => {
-        void loadEarlierHistory({
-          environmentId: selectedThread.environmentId,
-          input: { threadId: selectedThread.id, throughEntryId },
-        });
-      },
-    };
-  })();
+  const historyControls = useThreadHistoryControls(
+    selectedThread,
+    selectedThreadDetailState.history,
+  );
   const navigation = useNavigation();
   const selectDetail = useSelectWorkspaceDetail();
   const openPullRequest = useOpenPullRequest();
