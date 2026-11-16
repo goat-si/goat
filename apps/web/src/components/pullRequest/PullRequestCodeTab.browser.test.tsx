@@ -6,6 +6,7 @@ import {
   type PullRequestDiffResult,
 } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
+import { page, userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
 
@@ -279,13 +280,22 @@ it("scrolls to a loaded file requested before the viewer mounts", async () => {
 it("previews an image the host sent no patch for at the pull request's head", async () => {
   setup(false, true);
   const container = document.createElement("div");
-  container.className = "flex h-[700px] w-[900px]";
+  container.className = "flex h-[700px] w-[900px] flex-col";
   const headSha = "0123456789abcdef0123456789abcdef01234567";
   await using _screen = await render(tab(0, null, null, { ...detail, headSha }), { container });
 
-  await vi.waitFor(() =>
-    expect(container.querySelector('img[alt="docs/shot.png"]')).not.toBeNull(),
-  );
+  // A file the host sent no patch for starts collapsed; the image shows once a person expands it.
+  const image = page.getByAltText("docs/shot.png", { exact: true });
+  await expect.element(image).not.toBeVisible();
+  const header = await vi.waitFor(() => {
+    const found = container
+      .querySelector("diffs-container")
+      ?.shadowRoot?.querySelector<HTMLElement>("[data-diffs-header]");
+    expect(found).toBeTruthy();
+    return found!;
+  });
+  await userEvent.click(header);
+  await expect.element(image).toBeVisible();
   expect(mocks.assetResources).toContainEqual({
     _tag: "github-media",
     cwd: "/workspace",
