@@ -1,5 +1,6 @@
 import type { AuthSessionId } from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
+import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
@@ -24,32 +25,36 @@ export const start = Effect.fnUntraced(function* (input: {
   const failing = yield* Ref.make(false);
   const check = Effect.fn("SessionStore.settleDurableRevocations")(function* () {
     const live = yield* input.liveIds;
-    if (live.length === 0) return;
+    if (live.length === 0) return false;
     const unrevoked = new Set(
       yield* NodeSqliteClient.backgroundReads(input.repository.listUnrevoked({ sessionIds: live })),
     );
     const ended = live.filter((sessionId) => !unrevoked.has(sessionId));
     if (ended.length > 0) yield* input.settle(ended);
+    return true;
   });
-  // Logs the first failure of a run and its recovery, not every five seconds in between.
+  // Logs the first failure of a run and the read that ends it, not every five seconds in between.
+  // A defect is a failure too, so the loop keeps going; only interruption (shutdown) ends it.
   const pass = check().pipe(
-    Effect.andThen(Ref.getAndSet(failing, false)),
+    Effect.flatMap((read) => (read ? Ref.getAndSet(failing, false) : Effect.succeed(false))),
     Effect.flatMap((recovered) =>
       recovered
         ? Effect.logInfo("Checking for sessions revoked elsewhere works again")
         : Effect.void,
     ),
-    Effect.catch((error) =>
-      Ref.getAndSet(failing, true).pipe(
-        Effect.flatMap((already) =>
-          already
-            ? Effect.void
-            : Effect.logWarning(
-                "Could not check for sessions revoked elsewhere; retrying every 5 seconds",
-                { reason: error._tag },
-              ),
+    Effect.catchCauseIf(
+      (cause) => !Cause.hasInterrupts(cause),
+      (cause) =>
+        Ref.getAndSet(failing, true).pipe(
+          Effect.flatMap((already) =>
+            already
+              ? Effect.void
+              : Effect.logWarning(
+                  "Could not check for sessions revoked elsewhere; retrying every 5 seconds",
+                  { cause: Cause.pretty(cause) },
+                ),
+          ),
         ),
-      ),
     ),
   );
   yield* Effect.sleep(CHECK_INTERVAL).pipe(Effect.andThen(pass), Effect.forever, Effect.forkScoped);
