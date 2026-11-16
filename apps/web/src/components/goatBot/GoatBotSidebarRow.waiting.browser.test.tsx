@@ -171,6 +171,7 @@ const counted = (count: number) => new RegExp(`^${count} waiting for you\\s*GOAT
 
 it("a governed main row counts only a successful visit-aware read, and marks the rest unavailable", async () => {
   setup();
+  // No router: the row's Link, useLocation and useParams are mocked above, so it needs none.
   await using screen = await render(<GoatBotSidebarRow />, { router: false });
   await expect.element(screen.getByRole("link", { name: counted(3) })).toBeVisible();
   expect(screen.getByLabelText(/unavailable/i).query()).toBeNull();
