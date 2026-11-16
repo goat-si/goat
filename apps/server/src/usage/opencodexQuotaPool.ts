@@ -365,3 +365,31 @@ export const makeOpenCodexQuotaPool = Effect.gen(function* () {
   );
   return { read, project };
 });
+
+const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "[::1]"];
+
+// OpenCodex listens on loopback, which an instance may name by any loopback host.
+export function servesEndpoint(source: UsageLimitSourceSnapshot, endpoint: string): boolean {
+  if (source.origin === endpoint) return true;
+  if (source.kind !== "opencodex" || source.origin === undefined) return false;
+  const served = URL.parse(source.origin);
+  const requested = URL.parse(endpoint);
+  return (
+    served !== null &&
+    requested !== null &&
+    requested.protocol === served.protocol &&
+    requested.port === served.port &&
+    LOOPBACK_HOSTS.includes(requested.hostname)
+  );
+}
+
+/** The OpenCodex pool answers when it knows the reset; otherwise a CLIProxyAPI hub does. */
+export function poolFirstResetAt(
+  serving: ReadonlyArray<UsageLimitSourceSnapshot>,
+  resetAt: (sources: ReadonlyArray<UsageLimitSourceSnapshot>) => string | null,
+): string | null {
+  return (
+    resetAt(serving.filter((source) => source.kind === "opencodex")) ??
+    resetAt(serving.filter((source) => source.kind !== "opencodex"))
+  );
+}

@@ -28,7 +28,12 @@ import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as Settings from "../serverSettings.ts";
 import { windowLimitsModel } from "../provider/claudeUsageLimits.ts";
 import { makeCliproxyApi } from "./cliproxyApi.ts";
-import { makeOpenCodexQuotaPool, quotaPoolSource } from "./opencodexQuotaPool.ts";
+import {
+  makeOpenCodexQuotaPool,
+  poolFirstResetAt,
+  quotaPoolSource,
+  servesEndpoint,
+} from "./opencodexQuotaPool.ts";
 import { cachedResolveSecret } from "../secrets/secretResolver.ts";
 
 export async function resolveUsageManagementKey(
@@ -280,23 +285,6 @@ export function hubPoolResetAt(
   return earliest === null ? null : DateTime.formatIso(DateTime.makeUnsafe(earliest));
 }
 
-const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "[::1]"];
-
-// OpenCodex listens on loopback, which an instance may name by any loopback host.
-function servesEndpoint(source: UsageLimitSourceSnapshot, endpoint: string): boolean {
-  if (source.origin === endpoint) return true;
-  if (source.kind !== "opencodex" || source.origin === undefined) return false;
-  const served = URL.parse(source.origin);
-  const requested = URL.parse(endpoint);
-  return (
-    served !== null &&
-    requested !== null &&
-    requested.protocol === served.protocol &&
-    requested.port === served.port &&
-    LOOPBACK_HOSTS.includes(requested.hostname)
-  );
-}
-
 export class UsageLimitResetFallback extends Context.Reference<{
   readonly resetAt: (
     driver: ProviderDriverKind,
@@ -322,21 +310,7 @@ export const layerResetFallback = Layer.effect(
         yield* sources.refresh.pipe(Effect.timeout("5 seconds"), Effect.ignore);
         const serving = yield* atEndpoint;
         const now = DateTime.toEpochMillis(yield* DateTime.now);
-        // The OpenCodex pool answers when it knows the reset; otherwise a CLIProxyAPI hub does.
-        return (
-          hubPoolResetAt(
-            serving.filter((source) => source.kind === "opencodex"),
-            driver,
-            model,
-            now,
-          ) ??
-          hubPoolResetAt(
-            serving.filter((source) => source.kind !== "opencodex"),
-            driver,
-            model,
-            now,
-          )
-        );
+        return poolFirstResetAt(serving, (from) => hubPoolResetAt(from, driver, model, now));
       }),
     };
   }),
