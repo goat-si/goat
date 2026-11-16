@@ -1,13 +1,19 @@
-import { makeThreadRequestsResolvedAnnouncer } from "@goat/client-runtime/state/thread-requests";
+import {
+  makeThreadRequestsResolvedAnnouncer,
+  userInputDraftKey,
+} from "@goat/client-runtime/state/thread-requests";
 import { ApprovalRequestId, EnvironmentId, RuntimeRequestId, ThreadId } from "@goat/contracts";
 import { beforeEach, expect, it, vi } from "vite-plus/test";
 import { useComposerDraftStore } from "./composerDraftStore";
+import { formatInlineContextReference } from "./lib/composerContextReferences";
+import { threadContextRecord, threadContextReference } from "./lib/composerContextRecords";
 import {
   questionAttachmentDraftId,
   countQuestionAttachments,
   questionAttachmentDraftPrefix,
   changeQuestionAttachmentPreparation,
   clearQuestionAttachmentDraft,
+  usePendingUserInputAnswers,
   useQuestionAttachmentPreparation,
 } from "./questionAttachments";
 
@@ -19,6 +25,7 @@ const requestId = ApprovalRequestId.make("request-1");
 beforeEach(() => {
   useComposerDraftStore.setState({ draftsByThreadKey: {}, draftThreadsByThreadKey: {} });
   useQuestionAttachmentPreparation.setState({ counts: {} });
+  usePendingUserInputAnswers.setState({}, true);
   release.mockClear();
 });
 it("keeps question files separate from the normal draft and other questions", () => {
@@ -126,13 +133,127 @@ it("clears attachment drafts for requests the thread resolved, wherever they wer
   const elsewhere = questionAttachmentDraftId(environmentId, otherThread, resolved, "first");
   for (const key of [keep, drop, elsewhere]) store.setPrompt(key, "Answer context");
   changeQuestionAttachmentPreparation(drop, 1);
+  usePendingUserInputAnswers.setState({
+    [userInputDraftKey(environmentId, threadId, resolved)]: { first: { customAnswer: "Sent" } },
+  });
 
   // The thread's projection synchronizes with only `pending` left, e.g. after
   // `resolved` was answered on another device while no composer showed it.
-  makeThreadRequestsResolvedAnnouncer(environmentId, threadId)([pending]);
+  makeThreadRequestsResolvedAnnouncer(
+    environmentId,
+    threadId,
+  )([
+    { id: pending, status: "pending" },
+    { id: resolved, status: "resolved" },
+  ]);
 
   expect(store.getComposerDraft(keep)?.prompt).toBe("Answer context");
   expect(store.getComposerDraft(drop)).toBeNull();
   expect(store.getComposerDraft(elsewhere)?.prompt).toBe("Answer context");
   expect(useQuestionAttachmentPreparation.getState().counts[drop]).toBeUndefined();
+  // An answered question's text was sent, so it does not come back as a draft.
+  expect(store.getComposerDraft({ environmentId, threadId })).toBeNull();
+  expect(usePendingUserInputAnswers.getState()).toEqual({});
+});
+
+// Stop cancels an open question; a provider timeout expires it. Neither sends the answer.
+it.each(["cancelled", "expired"] as const)(
+  "returns typed answers and their thread chips to the thread draft when a question is %s",
+  (status) => {
+    const store = useComposerDraftStore.getState();
+    const request = RuntimeRequestId.make("stopped");
+    const reference = threadContextRecord(
+      { environmentId, threadId: ThreadId.make("reference-thread") },
+      "Reference work",
+    );
+    const answer = `Purple, like ${formatInlineContextReference(threadContextReference(reference))}`;
+    store.setPrompt({ environmentId, threadId }, "Earlier draft");
+    store.setThreadContexts(questionAttachmentDraftId(environmentId, threadId, request, "first"), [
+      reference,
+    ]);
+    usePendingUserInputAnswers.setState({
+      [userInputDraftKey(environmentId, threadId, request)]: {
+        first: { customAnswer: answer },
+        second: { customAnswer: "  " },
+        third: { customAnswer: "Also this" },
+      },
+    });
+
+    makeThreadRequestsResolvedAnnouncer(environmentId, threadId)([{ id: request, status }]);
+
+    expect(store.getComposerDraft({ environmentId, threadId })).toMatchObject({
+      prompt: `Earlier draft
+
+${answer}
+
+Also this`,
+      threadContexts: [reference],
+    });
+    expect(usePendingUserInputAnswers.getState()).toEqual({});
+  },
+);
+
+// The same case appendAnswerToDraft and mobile's unsent-question-answers test run.
+it("keeps every returned answer, even one equal to the draft's last paragraph", () => {
+  const store = useComposerDraftStore.getState();
+  const request = RuntimeRequestId.make("stopped");
+  store.setPrompt({ environmentId, threadId }, "Draft\n\nYes\n");
+  usePendingUserInputAnswers.setState({
+    [userInputDraftKey(environmentId, threadId, request)]: {
+      first: { customAnswer: "Yes" },
+      second: { customAnswer: "Yes" },
+    },
+  });
+
+  makeThreadRequestsResolvedAnnouncer(
+    environmentId,
+    threadId,
+  )([{ id: request, status: "cancelled" }]);
+
+  expect(store.getComposerDraft({ environmentId, threadId })?.prompt).toBe(
+    "Draft\n\nYes\n\nYes\n\nYes",
+  );
+});
+
+it("moves a cancelled answer's images and files into the thread draft without releasing them", () => {
+  const store = useComposerDraftStore.getState();
+  const request = RuntimeRequestId.make("stopped");
+  const imageQuestion = questionAttachmentDraftId(environmentId, threadId, request, "first");
+  const fileQuestion = questionAttachmentDraftId(environmentId, threadId, request, "second");
+  const image = {
+    type: "image" as const,
+    id: "answer-image",
+    name: "screen.png",
+    mimeType: "image/png",
+    sizeBytes: 5,
+    previewUrl: "blob:answer-image",
+    file: new File(["image"], "screen.png", { type: "image/png" }),
+  };
+  store.addImages(imageQuestion, [image]);
+  store.addFiles(fileQuestion, [
+    {
+      type: "file",
+      id: "answer-file",
+      name: "log.txt",
+      mimeType: "text/plain",
+      sizeBytes: 3,
+      file: new File(["log"], "log.txt", { type: "text/plain" }),
+    },
+  ]);
+  usePendingUserInputAnswers.setState({
+    [userInputDraftKey(environmentId, threadId, request)]: { first: { customAnswer: "See" } },
+  });
+
+  makeThreadRequestsResolvedAnnouncer(
+    environmentId,
+    threadId,
+  )([{ id: request, status: "cancelled" }]);
+
+  const threadDraft = store.getComposerDraft({ environmentId, threadId });
+  expect(threadDraft?.prompt).toContain("See");
+  expect(threadDraft?.images.map((entry) => entry.id)).toEqual(["answer-image"]);
+  expect(threadDraft?.files.map((entry) => entry.id)).toEqual(["answer-file"]);
+  expect(store.getComposerDraft(imageQuestion)).toBeNull();
+  expect(store.getComposerDraft(fileQuestion)).toBeNull();
+  expect(release).not.toHaveBeenCalled();
 });

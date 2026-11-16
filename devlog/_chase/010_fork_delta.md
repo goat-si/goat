@@ -55,7 +55,7 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 커밋: #812
 - 경로: `oxlint-plugin-goat/{codeBudget.ts,code-budgets.json,update-code-budgets.ts,index.ts}`, `oxlint-plugin-goat/rules/code-budget.ts`, `vite.config.ts`, `docs/operations/{testing,code-quality}.md`, `AGENTS.md`
 - 정책: GOAT 전용. `goat/code-budget`은 1000줄 넘는 파일, baseline보다 커진 파일, 테스트 밖의 새 non-null 단언, 새 `any` 캐스트를 막는다. upstream의 플러그인 index와 lint 설정 변경은 받고 규칙 등록 한 줄씩을 다시 얹는다. upstream 머지가 baseline 파일을 키우면 `node oxlint-plugin-goat/update-code-budgets.ts`는 1로 끝난다. 머지 커밋에서 `--init`으로 baseline을 다시 쓰고, 올라간 항목이 upstream 줄에서 온 것인지 확인한다. GOAT 변경으로는 올리지 않는다.
-- Effect 4.1 (261114 N3): upstream 57cd05904d는 `Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)`를 줄마다 인라인으로 쓴다. 그 줄 때문에 budget을 넘는 GOAT 파일 31개는 대신 GOAT 공유 레이어 `@goat/shared/nodeServicesWithCrypto`(`packages/shared/src/nodeServicesWithCrypto.ts`)를 import한다(목록: `devlog/_chase/261114_lanes/next-N3.md`). 이 파일들의 upstream 변경을 받을 때 그 import를 유지한다.
+- Effect 4.1 (261114 N3): upstream 57cd05904d는 `Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)`를 줄마다 인라인으로 쓴다. 그 줄 때문에 budget을 넘는 GOAT 파일 32개는 대신 GOAT 공유 레이어 `@goat/shared/nodeServicesWithCrypto`(`packages/shared/src/nodeServicesWithCrypto.ts`)를 import한다(목록: `devlog/_chase/261114_lanes/next-N3.md`). 이 파일들의 upstream 변경을 받을 때 그 import를 유지한다.
 
 ### `composer-footer` 컴포저 푸터
 

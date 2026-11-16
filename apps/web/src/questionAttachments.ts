@@ -1,12 +1,31 @@
-import { scopedThreadKey } from "@goat/client-runtime/environment";
+import { scopedThreadKey, scopeThreadRef } from "@goat/client-runtime/environment";
+import type { PendingUserInputDraftAnswer } from "@goat/client-runtime/state/user-input-draft";
 import {
   onThreadRequestsResolved,
+  pruneResolvedUserInputDrafts,
   resolvedQuestionDraftKeys,
+  userInputDraftKey,
 } from "@goat/client-runtime/state/thread-requests";
-import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@goat/contracts";
+import type {
+  EnvironmentId,
+  RuntimeRequestId,
+  ScopedThreadRef,
+  ThreadContextRecord,
+  ThreadId,
+} from "@goat/contracts";
 import { create } from "zustand";
 import { DraftId, useComposerDraftStore } from "./composerDraftStore";
 import { releaseDraftAttachments } from "./lib/attachmentUploadQueue";
+import {
+  carryDisplacedCustomAnswerIntoPrompt,
+  threadContextsReferencedByAnswer,
+} from "./pendingUserInput";
+
+/** Edited question answers, keyed by `userInputDraftKey`; suggested answers are not stored. */
+export const usePendingUserInputAnswers = create<
+  Record<string, Record<string, PendingUserInputDraftAnswer>>
+>(() => ({}));
+export const usePendingUserInputQuestionIndex = create<Record<string, number>>(() => ({}));
 
 export function questionAttachmentDraftPrefix(
   environmentId: EnvironmentId,
@@ -113,8 +132,90 @@ function pruneResolvedQuestionAttachmentDrafts(
   }
 }
 
-// Attachment drafts persist across reloads, so a request resolved while this
-// client was away is pruned when its thread's projection first synchronizes.
-onThreadRequestsResolved(({ environmentId, threadId, pendingRequestIds }) =>
-  pruneResolvedQuestionAttachmentDrafts(environmentId, threadId, pendingRequestIds),
-);
+/** The thread's question drafts that hold attachments or chips for one of `requestIds`. */
+function questionDraftIdsForRequests(
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  requestIds: ReadonlySet<string>,
+): DraftId[] {
+  const prefix = questionAttachmentDraftPrefix(environmentId, threadId);
+  return Object.keys(useComposerDraftStore.getState().draftsByThreadKey).flatMap((key) => {
+    if (!key.startsWith(prefix)) return [];
+    try {
+      const [requestId] = JSON.parse(decodeURIComponent(key.slice(prefix.length))) as unknown[];
+      return typeof requestId === "string" && requestIds.has(requestId) ? [DraftId.make(key)] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+/**
+ * Stop cancels an open question and a provider timeout expires it; neither sent the typed
+ * answers, so their text, thread chips, images and files move to the thread's own draft (not a
+ * queued-message edit the composer may be showing). Attachments past the composer's limit stay
+ * behind and are released with the question.
+ */
+function returnUnsentAnswersToThreadDraft(
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  unansweredRequestIds: ReadonlyArray<RuntimeRequestId>,
+): void {
+  if (unansweredRequestIds.length === 0) return;
+  const answers = usePendingUserInputAnswers.getState();
+  const store = useComposerDraftStore.getState();
+  const target = scopeThreadRef(environmentId, threadId);
+  const currentPrompt = store.getComposerDraft(target)?.prompt ?? "";
+  let prompt = currentPrompt;
+  const threadContexts: ThreadContextRecord[] = [];
+  for (const requestId of unansweredRequestIds) {
+    const drafts = answers[userInputDraftKey(environmentId, threadId, requestId)] ?? {};
+    for (const [questionId, { customAnswer }] of Object.entries(drafts)) {
+      const nextPrompt = carryDisplacedCustomAnswerIntoPrompt(prompt, customAnswer);
+      if (nextPrompt === prompt) continue;
+      prompt = nextPrompt;
+      const questionDraft = store.getComposerDraft(
+        questionAttachmentDraftId(environmentId, threadId, requestId, questionId),
+      );
+      threadContexts.push(
+        ...threadContextsReferencedByAnswer(
+          customAnswer ?? "",
+          questionDraft?.threadContexts ?? [],
+        ),
+      );
+    }
+  }
+  let movedAttachments = false;
+  for (const draftId of questionDraftIdsForRequests(
+    environmentId,
+    threadId,
+    new Set(unansweredRequestIds),
+  )) {
+    const draft = store.getComposerDraft(draftId);
+    if (!draft || draft.images.length + draft.files.length === 0) continue;
+    // Moving replaces the thread's prompt; the combined prompt is written below.
+    store.moveComposerPromptAndImages(draftId, target);
+    movedAttachments = true;
+  }
+  if (prompt === currentPrompt && !movedAttachments) return;
+  store.setPrompt(target, prompt);
+  store.addThreadContexts(target, threadContexts, { appendReference: false });
+}
+
+// Resolution can come from anywhere: another device, an interrupt, the turn
+// ending, or a reload over drafts for requests resolved meanwhile. One listener,
+// so unsent answers and their attachments move before their drafts are pruned.
+onThreadRequestsResolved(({ environmentId, threadId, pendingRequestIds, unansweredRequestIds }) => {
+  returnUnsentAnswersToThreadDraft(environmentId, threadId, unansweredRequestIds);
+  usePendingUserInputAnswers.setState(
+    (existing) =>
+      pruneResolvedUserInputDrafts(existing, environmentId, threadId, pendingRequestIds),
+    true,
+  );
+  usePendingUserInputQuestionIndex.setState(
+    (existing) =>
+      pruneResolvedUserInputDrafts(existing, environmentId, threadId, pendingRequestIds),
+    true,
+  );
+  pruneResolvedQuestionAttachmentDrafts(environmentId, threadId, pendingRequestIds);
+});

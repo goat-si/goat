@@ -272,6 +272,10 @@ export class PullRequestService extends Context.Service<
     readonly activity: (
       input: PullRequestRef,
     ) => Effect.Effect<PullRequestActivity, PullRequestError>;
+    /** Emits when the host reports a change; empty where the host has no event feed. */
+    readonly changes: (input: PullRequestRef) => Stream.Stream<void>;
+    /** Whether the provider has an event feed, so a capped number of feeds goes where one exists. */
+    readonly followsChanges: (input: PullRequestRef) => Effect.Effect<boolean>;
     readonly threadComments: (
       input: PullRequestThreadCommentsInput,
     ) => Effect.Effect<PullRequestThreadCommentsResult, PullRequestError>;
@@ -3325,6 +3329,29 @@ export const make = Effect.gen(function* () {
       { discard: true },
     );
 
+  const changes: PullRequestService["Service"]["changes"] = (input) =>
+    Stream.unwrap(
+      requireProject(input).pipe(
+        Effect.map((project) =>
+          project.api.changeRequestEvents === undefined
+            ? Stream.empty
+            : project.api.changeRequestEvents({
+                cwd: project.project.workspaceRoot,
+                repository: project.repository,
+                host: project.host,
+                number: input.number,
+              }),
+        ),
+        Effect.orElseSucceed(() => Stream.empty),
+      ),
+    );
+
+  const followsChanges: PullRequestService["Service"]["followsChanges"] = (input) =>
+    requireProject(input).pipe(
+      Effect.map((project) => project.api.changeRequestEvents !== undefined),
+      Effect.orElseSucceed(() => false),
+    );
+
   const invalidate: PullRequestService["Service"]["invalidate"] = Effect.fn(
     "PullRequestService.invalidate",
   )(function* (input, options) {
@@ -3702,6 +3729,8 @@ export const make = Effect.gen(function* () {
       Cache.get(watchFingerprintCache, refCacheKey(input)),
     ),
     activity: credentialCached(activity),
+    changes,
+    followsChanges,
     preview: credentialCached(preview),
     threadComments,
     diff: credentialCached(diff),

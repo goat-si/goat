@@ -7,6 +7,7 @@ import {
   EventId,
   ExecutionEnvironmentDescriptor,
   MessageId,
+  OrchestrationV2DispatchCommandError,
   ORCHESTRATION_PROTOCOL_VERSION,
   ORCHESTRATION_V2_WS_METHODS,
   ProjectId,
@@ -381,11 +382,25 @@ const subscribe = <A>(first: ReadonlyArray<A>, register?: (queue: Queue.Queue<A>
     }),
   );
 
+const isDispatchCommandError = Schema.is(OrchestrationV2DispatchCommandError);
+
 const handlers: Record<string, (input: never) => unknown> = {
   [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (input: OrchestrationV2Command) =>
     Effect.suspend(() => {
       const handler = commandHandler;
-      return handler ? Effect.promise(() => handler(input)) : Effect.never;
+      if (!handler) return Effect.never;
+      // A handler rejecting with the server's dispatch error answers the command with it.
+      return Effect.tryPromise({
+        try: () => handler(input),
+        catch: (error) =>
+          isDispatchCommandError(error)
+            ? error
+            : new OrchestrationV2DispatchCommandError({
+                commandId: input.commandId,
+                commandType: input.type,
+                message: String(error),
+              }),
+      });
     }),
   [WS_METHODS.subscribeTerminalMetadata]: () =>
     subscribe<TerminalMetadataStreamEvent>([{ type: "snapshot", terminals: [] }], (queue) => {

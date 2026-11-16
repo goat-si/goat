@@ -2,18 +2,18 @@ import { setupSshComposer, state } from "~/test/sshComposerFixture";
 import { useLayoutEffect, useRef } from "react";
 import { expect, it, vi } from "vite-plus/test";
 
-it("sends a question answer through turn blockers and preserves it under answer guards", async () => {
-  await using fixture = await setupSshComposer();
+/** A thread with one open question and a send hook whose turn guards all block. */
+async function openQuestion(
+  fixture: Awaited<ReturnType<typeof setupSshComposer>>,
+  extraInput: Record<string, unknown> = {},
+) {
   const { EnvironmentId, NodeId, RuntimeRequestId, ThreadId, TurnItemId } =
     await import("@goat/contracts");
-  const { makeThreadRequestsResolvedAnnouncer } =
-    await import("@goat/client-runtime/state/thread-requests");
   const { AsyncResult } = await import("effect/reactivity");
   const { makeThreadFixture, makeThreadProjectionFixture } = await import("~/test-fixtures");
   const { AppAtomRegistryProvider } = await import("~/rpc/atomRegistry");
   const { useComposerDraftStore } = await import("~/composerDraftStore");
-  const { changeQuestionAttachmentPreparation, questionAttachmentDraftId } =
-    await import("~/questionAttachments");
+  const { questionAttachmentDraftId } = await import("~/questionAttachments");
   const { act } = await import("../../../test/render");
   const environmentId = EnvironmentId.make("question-send-env");
   const threadId = ThreadId.make("question-send-thread");
@@ -61,7 +61,6 @@ it("sends a question answer through turn blockers and preserves it under answer 
       },
     ],
   };
-  const { readEnvironmentScope } = await import("~/state/session");
   const { useComposerSend } = await import("./useComposerSend");
   const { usePendingThreadRequests } = await import("./usePendingThreadRequests");
   state.normal.mockResolvedValue(AsyncResult.success(undefined));
@@ -83,6 +82,7 @@ it("sends a question answer through turn blockers and preserves it under answer 
       setThreadError: () => {},
     });
     const input = {
+      ...extraInput,
       environmentId,
       routeThreadRef: target,
       activeThreadRef: target,
@@ -101,6 +101,8 @@ it("sends a question answer through turn blockers and preserves it under answer 
       respondingRequestIds: [],
       activePendingProgress: currentRequests.activePendingProgress,
       onAdvanceActivePendingUserInput: currentRequests.onAdvanceActivePendingUserInput,
+      onChangeActivePendingUserInputCustomAnswer:
+        currentRequests.onChangeActivePendingUserInputCustomAnswer,
       readPendingEnvironmentChange: () => null,
       refreshBeforeSend: () => null,
     } as unknown as Parameters<typeof useComposerSend>[0];
@@ -118,23 +120,48 @@ it("sends a question answer through turn blockers and preserves it under answer 
       </AppAtomRegistryProvider>,
     );
   await show();
-  await act(() => requests.onChangeActivePendingUserInputCustomAnswer("q", "My answer"));
+  return {
+    environmentId,
+    threadId,
+    requestId,
+    questionTarget,
+    show,
+    act,
+    requests: () => requests,
+    send: () => send(),
+    setUnavailable: (value: boolean) => {
+      unavailable = value;
+    },
+  };
+}
+
+it("sends a question answer through turn blockers and preserves it under answer guards", async () => {
+  await using fixture = await setupSshComposer();
+  const question = await openQuestion(fixture);
+  const { environmentId, threadId, requestId, questionTarget, show, act } = question;
+  const { readEnvironmentScope } = await import("~/state/session");
+  const { makeThreadRequestsResolvedAnnouncer } =
+    await import("@goat/client-runtime/state/thread-requests");
+  const { changeQuestionAttachmentPreparation } = await import("~/questionAttachments");
+  const requests = () => question.requests();
+  const send = () => question.send();
+  await act(() => requests().onChangeActivePendingUserInputCustomAnswer("q", "My answer"));
   vi.mocked(readEnvironmentScope).mockReturnValue(false);
   await act(async () => send());
   expect(state.normal).not.toHaveBeenCalled();
-  expect(requests.activePendingDraftAnswers.q?.customAnswer).toBe("My answer");
+  expect(requests().activePendingDraftAnswers.q?.customAnswer).toBe("My answer");
   vi.mocked(readEnvironmentScope).mockReturnValue(true);
-  unavailable = true;
+  question.setUnavailable(true);
   await show();
   await act(async () => send());
   expect(state.normal).not.toHaveBeenCalled();
-  expect(requests.activePendingDraftAnswers.q?.customAnswer).toBe("My answer");
-  unavailable = false;
+  expect(requests().activePendingDraftAnswers.q?.customAnswer).toBe("My answer");
+  question.setUnavailable(false);
   await act(() => changeQuestionAttachmentPreparation(questionTarget, 1));
   await show();
   await act(async () => send());
   expect(state.normal).not.toHaveBeenCalled();
-  expect(requests.activePendingDraftAnswers.q?.customAnswer).toBe("My answer");
+  expect(requests().activePendingDraftAnswers.q?.customAnswer).toBe("My answer");
   await act(() => changeQuestionAttachmentPreparation(questionTarget, -1));
   await act(async () => send());
   expect(state.normal).toHaveBeenCalledOnce();
@@ -144,6 +171,33 @@ it("sends a question answer through turn blockers and preserves it under answer 
       input: expect.objectContaining({ threadId, requestId, answers: { q: "My answer" } }),
     }),
   );
-  await act(() => makeThreadRequestsResolvedAnnouncer(environmentId, threadId)([]));
-  expect(requests.activePendingDraftAnswers.q?.customAnswer).toBeUndefined();
+  await act(() =>
+    makeThreadRequestsResolvedAnnouncer(
+      environmentId,
+      threadId,
+    )([{ id: requestId, status: "resolved" }]),
+  );
+  expect(requests().activePendingDraftAnswers.q?.customAnswer).toBeUndefined();
+});
+
+it("/side typed as an answer opens the side chat and leaves the question pending", async () => {
+  await using fixture = await setupSshComposer();
+  const question = await openQuestion(fixture, {
+    sideChatAvailable: true,
+    activeThreadKey: "question-send-thread-key",
+  });
+  const { useSideChatStore } = await import("../sideChat/sideChatStore");
+  const { act } = question;
+  await act(() =>
+    question.requests().onChangeActivePendingUserInputCustomAnswer("q", "/side what changed?"),
+  );
+
+  await act(async () => question.send());
+
+  expect(state.normal).not.toHaveBeenCalled();
+  expect(useSideChatStore.getState().pendingPrompts["question-send-thread-key"]).toBe(
+    "what changed?",
+  );
+  expect(question.requests().activePendingProgress).not.toBeNull();
+  expect(question.requests().activePendingDraftAnswers.q?.customAnswer ?? "").toBe("");
 });
