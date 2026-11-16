@@ -97,7 +97,6 @@ import {
   type OrchestrationV2InternalCommand,
   type OrchestrationV2LimitRecoveryUpdate,
   type OrchestrationV2ServerCommand,
-  type ThreadPullRequestKey,
   type ThreadPullRequestLink,
   type OrchestrationV2AppThread,
   type OrchestrationV2ContextHandoff,
@@ -187,7 +186,6 @@ import {
   syncedPullRequestWatch,
 } from "./goat/PullRequestAutoWatch.ts";
 import {
-  dropQueuedPullRequestWakes as dropQueuedWakes,
   endingWakeText,
   pullRequestWatchNote,
   takeHeldPullRequestContext,
@@ -218,6 +216,8 @@ import {
   withServerAttribution,
 } from "./GuestShareDecider.ts";
 import { makeGuestShare } from "./goat/GuestShare.ts";
+import { makeTaskCompletionDisposal } from "./goat/TaskCompletionDisposal.ts";
+import { makePullRequestWakeDrops } from "./goat/PullRequestWakeDrops.ts";
 import {
   computerUseStopEffect,
   delegatedTasksStopEffect,
@@ -2435,43 +2435,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
   });
 
-  /** Drops the wakes these delegated tasks still owe their parent; settled deliveries stay. */
-  const disposeTaskCompletionDeliveries = (input: {
-    readonly command: OrchestrationV2ServerCommand;
-    readonly events: Ref.Ref<Array<OrchestrationV2DomainEvent>>;
-    readonly tasks: ReadonlyArray<OrchestrationV2Subagent>;
-    readonly now: DateTime.Utc;
-  }) =>
-    Effect.forEach(
-      input.tasks.filter(
-        (task) =>
-          task.completionDelivery?.state !== "acknowledged" &&
-          task.completionDelivery?.state !== "delivered" &&
-          task.completionDelivery?.state !== "disposed",
-      ),
-      (task) =>
-        emit(
-          input.events,
-          input.command,
-        )({
-          type: "subagent.updated",
-          threadId: task.threadId,
-          ...(task.runId === null ? {} : { runId: task.runId }),
-          nodeId: task.id,
-          driver: task.driver,
-          providerInstanceId: task.providerInstanceId,
-          occurredAt: input.now,
-          payload: {
-            ...task,
-            completionDelivery: {
-              state: "disposed",
-              observedByRunId: null,
-            },
-            updatedAt: input.now,
-          },
-        }),
-      { discard: true },
-    );
+  const { disposeTaskCompletionDeliveries } = makeTaskCompletionDisposal({ emit });
 
   const disposeAllDelegatedCompletionCohorts = (input: {
     readonly command: OrchestrationV2Command;
@@ -2740,35 +2704,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
-  // A stopped watch, or one whose pull request merged or closed, drops the wakes it queued (#926);
-  // a push drops only the check results of earlier heads (#1056).
-  const dropQueuedPullRequestWakes = (
-    command: Extract<OrchestrationV2ServerCommand, ThreadPullRequestKey>,
-    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-    headSha?: string,
-  ) => {
-    const read = Effect.mapError(
-      (cause: unknown) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
-    );
-    return dropQueuedWakes(
-      command,
-      read(projectionStore.getThreadRecords(command.threadId, ["runs"])),
-      (runId) => read(projectionStore.getRunMessage(command.threadId, runId)),
-      (change) =>
-        "update" in change
-          ? emit(events, command)(change.update).pipe(Effect.asVoid)
-          : dispatchQueuedRunCancel(
-              {
-                type: "queued-run.cancel",
-                commandId: command.commandId,
-                threadId: command.threadId,
-                runId: change.cancel,
-              },
-              events,
-            ),
-      headSha,
-    );
-  };
+  const { dropQueuedPullRequestWakes } = makePullRequestWakeDrops({
+    projectionStore,
+    emit,
+    dispatchQueuedRunCancel: (command, events) => dispatchQueuedRunCancel(command, events),
+    OrchestratorProjectionError,
+  });
 
   const { shouldAutoWatchPullRequest } = makePullRequestAutoWatch({
     serverSettings,
