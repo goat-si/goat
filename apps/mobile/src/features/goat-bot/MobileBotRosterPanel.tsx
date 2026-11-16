@@ -75,12 +75,12 @@ export function MobileBotRoster(props: {
         ...button,
         onPress: () => {
           setMenuOpen(false);
-          // An alert cannot be withdrawn: a choice acts only while this roster is still shown, on
-          // its computer, and may read it, as the store says now, ahead of the next render.
+          // An alert cannot be withdrawn: a choice acts only while this roster is mounted and
+          // visible, on its computer, and may read it, as the store says now.
           const now = mount.current;
           const live = openedOn !== null && isComputerReadable(registry, openedOn);
-          if (now.mounted && now.environmentId === openedOn && now.readable && live)
-            button.onPress?.();
+          const shown = now.mounted && now.visible;
+          if (shown && now.environmentId === openedOn && now.readable && live) button.onPress?.();
         },
       })),
       { cancelable: true, onDismiss: () => setMenuOpen(false) },
