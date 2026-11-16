@@ -115,6 +115,8 @@ export const makeMove = (deps: MoveDeps) =>
     scope: McpInvocationScope,
     input: HubDeviceMoveInput,
     person?: HubPerson,
+    /** True once the caller stopped waiting; the move then never starts changing routing. */
+    stopped: Effect.Effect<boolean> = Effect.succeed(false),
   ) {
     const { fromAlias: from, toAlias: to } = input;
     if (from === to) return yield* invalid("fromAlias and toAlias must name different aliases.");
@@ -240,6 +242,10 @@ export const makeMove = (deps: MoveDeps) =>
         offered.fingerprint,
         fromEnvironment,
       );
+      // A move whose caller is gone asks no one and changes nothing; one under way finishes.
+      const refused = () =>
+        stop("Move stopped before changing anything: its caller stopped waiting.");
+      if (yield* stopped) return refused();
       if (input.decisionId !== undefined) yield* deps.approved(caller, input.decisionId, binding);
       else {
         const pin = yield* deps.ocx.pinnedFingerprint(to, offered.keyType);
@@ -263,9 +269,7 @@ export const makeMove = (deps: MoveDeps) =>
           });
         }
       }
-      // The move runs on as a server job when its call is cut; it never starts after its session ended.
-      if (yield* scope.sessionEnd?.ended ?? Effect.succeed(false))
-        return stop("Move stopped before changing anything: the session that asked for it ended.");
+      if (yield* stopped) return refused();
       yield* deps.audit(caller, to, "started", input.decisionId);
       mutating = true;
       if (record !== undefined) {

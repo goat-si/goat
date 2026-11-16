@@ -330,7 +330,7 @@ export const make = Effect.gen(function* () {
     Effect.map(Ref.get(activeScopes), (s) => s.records.get(sessionId)?.expiresAt.epochMilliseconds),
   );
 
-  /** Removes the grants in one update, fenced against running verifies, then announces each. */
+  /** Removes the grants in one update, fenced against running verifies, cuts their calls, then announces each. */
   const removeGrants = (sessionIds: ReadonlyArray<AuthSessionId>) =>
     Ref.update(activeScopes, (current) => {
       const records = new Map(current.records);
@@ -350,6 +350,8 @@ export const make = Effect.gen(function* () {
         ),
       ),
       Effect.asVoid,
+      // A removed grant always cuts its calls; an interrupt must not land between the two.
+      Effect.uninterruptible,
     );
   const emitRemoved = (sessionId: AuthSessionId) => removeGrants([sessionId]);
 

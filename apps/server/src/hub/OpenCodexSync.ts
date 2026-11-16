@@ -3,7 +3,6 @@ import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -14,6 +13,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { HubOcx, type HubOcxError, type OcxOutput, SYNC_EXIT } from "./HubOcx.ts";
 import { OpenCodexUpdateHost } from "./OpenCodexUpdateHost.ts";
+import { runAsServerJob } from "./serverJob.ts";
 import { CONTRACTS_ARGS, OCX_CONTRACT, probeContracts, syncHomeOf } from "./ocxContracts.ts";
 import {
   childAliases,
@@ -303,83 +303,79 @@ const make = Effect.gen(function* () {
     return { trigger: "plan", checkedAt, members } satisfies OpenCodexSyncReport;
   });
 
-  // A cut call stops waiting; the machine being synced finishes and no further machine starts.
+  // When the caller stops waiting, the machine being synced finishes and no further machine starts.
   const run = (scope: McpInvocationScope, permits: SyncPermits = everyone) =>
-    permit
-      .withPermit(
-        Effect.gen(function* () {
-          const checkedAt = yield* Clock.currentTimeMillis;
-          const initial: OpenCodexSyncReport = { trigger: "manual", checkedAt, members: [] };
-          yield* SubscriptionRef.set(report, initial);
-          const replace = (row: OpenCodexSyncMember) =>
-            SubscriptionRef.update(report, (current) =>
-              current === null
-                ? current
-                : {
-                    ...current,
-                    members: current.members.map((entry) =>
-                      entry.alias === row.alias ? row : entry,
-                    ),
-                  },
-            );
-          if (yield* Ref.get(updating)) {
-            const current = { ...initial, members: yield* updatingRows(scope) };
-            yield* SubscriptionRef.set(report, current);
-            return current;
-          }
-          const members = (yield* readPlan(scope, permits)).map(({ member }) => member);
-          yield* SubscriptionRef.set(report, { ...initial, members });
-          const perform = Effect.fn("OpenCodexSync.perform")(function* (
-            member: OpenCodexSyncMember,
-          ) {
-            if (yield* scope.sessionEnd?.ended ?? Effect.succeed(false)) {
-              const at = yield* Clock.currentTimeMillis;
-              return yield* replace({
-                ...member,
-                state: "skipped",
-                restartCodex: false,
-                reason: "interrupted",
-                at,
-              });
-            }
-            yield* replace({ ...member, state: "syncing" });
-            const action = syncOne(member.alias, scope, permits);
-            const done = yield* member.alias === null
-              ? action
-              : action.pipe(
-                  Effect.timeoutOption(SYNC_TIMEOUT_MS + 30_000),
-                  Effect.map((value): OpenCodexSyncMember =>
-                    Option.getOrElse(value, () => ({
-                      alias: member.alias,
-                      state: "failed",
-                      restartCodex: true,
-                      reason: "timed-out",
-                    })),
+    runAsServerJob(permit, serviceScope, "OpenCodexSync.run", (stopped) =>
+      Effect.gen(function* () {
+        const checkedAt = yield* Clock.currentTimeMillis;
+        const initial: OpenCodexSyncReport = { trigger: "manual", checkedAt, members: [] };
+        yield* SubscriptionRef.set(report, initial);
+        const replace = (row: OpenCodexSyncMember) =>
+          SubscriptionRef.update(report, (current) =>
+            current === null
+              ? current
+              : {
+                  ...current,
+                  members: current.members.map((entry) =>
+                    entry.alias === row.alias ? row : entry,
                   ),
-                  Effect.catchCauseIf(
-                    (cause) => !Cause.hasInterrupts(cause),
-                    () =>
-                      Effect.succeed({
-                        alias: member.alias,
-                        state: "failed" as const,
-                        restartCodex: true,
-                        reason: "unreachable",
-                      }),
-                  ),
-                );
-            yield* replace({ ...done, at: yield* Clock.currentTimeMillis });
-          });
-          const home = members.find((member) => member.alias === null);
-          if (home?.state === "ready") yield* perform(home);
-          yield* Effect.forEach(
-            members.filter((member) => member.alias !== null && member.state === "ready"),
-            perform,
-            { concurrency: 3, discard: true },
+                },
           );
-          return (yield* SubscriptionRef.get(report)) ?? initial;
-        }).pipe(Effect.withSpan("OpenCodexSync.run")),
-      )
-      .pipe(Effect.forkIn(serviceScope), Effect.flatMap(Fiber.join));
+        if (yield* Ref.get(updating)) {
+          const current = { ...initial, members: yield* updatingRows(scope) };
+          yield* SubscriptionRef.set(report, current);
+          return current;
+        }
+        const members = (yield* readPlan(scope, permits)).map(({ member }) => member);
+        yield* SubscriptionRef.set(report, { ...initial, members });
+        const perform = Effect.fn("OpenCodexSync.perform")(function* (member: OpenCodexSyncMember) {
+          if (yield* stopped) {
+            const at = yield* Clock.currentTimeMillis;
+            return yield* replace({
+              ...member,
+              state: "skipped",
+              restartCodex: false,
+              reason: "interrupted",
+              at,
+            });
+          }
+          yield* replace({ ...member, state: "syncing" });
+          const action = syncOne(member.alias, scope, permits);
+          const done = yield* member.alias === null
+            ? action
+            : action.pipe(
+                Effect.timeoutOption(SYNC_TIMEOUT_MS + 30_000),
+                Effect.map((value): OpenCodexSyncMember =>
+                  Option.getOrElse(value, () => ({
+                    alias: member.alias,
+                    state: "failed",
+                    restartCodex: true,
+                    reason: "timed-out",
+                  })),
+                ),
+                Effect.catchCauseIf(
+                  (cause) => !Cause.hasInterrupts(cause),
+                  () =>
+                    Effect.succeed({
+                      alias: member.alias,
+                      state: "failed" as const,
+                      restartCodex: true,
+                      reason: "unreachable",
+                    }),
+                ),
+              );
+          yield* replace({ ...done, at: yield* Clock.currentTimeMillis });
+        });
+        const home = members.find((member) => member.alias === null);
+        if (home?.state === "ready") yield* perform(home);
+        yield* Effect.forEach(
+          members.filter((member) => member.alias !== null && member.state === "ready"),
+          perform,
+          { concurrency: 3, discard: true },
+        );
+        return (yield* SubscriptionRef.get(report)) ?? initial;
+      }).pipe(Effect.withSpan("OpenCodexSync.run")),
+    );
 
   return OpenCodexSync.of({
     plan,

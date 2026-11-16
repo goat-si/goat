@@ -17,7 +17,6 @@ import { windowsRemoteLinkRelease } from "@goat/shared/opencodexRelease";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -41,6 +40,7 @@ import {
 } from "./HubOcx.ts";
 import { makeLeaveSteps } from "./hubLeave.ts";
 import { makeMove } from "./hubMove.ts";
+import { runAsServerJob } from "./serverJob.ts";
 import { makeRoutes } from "./hubRoutes.ts";
 import { makeProvisionedLinks, type ProvisionedLinkReleases } from "./HubProvisionedLinks.ts";
 import {
@@ -878,11 +878,11 @@ const make = Effect.gen(function* () {
     join: (scope, input, person) => permit.withPermits(1)(join(scope, input, person)),
     leave: (scope, input, person) => permit.withPermits(1)(leave(scope, input, person)),
     repair: (scope, input, person) => permit.withPermits(1)(repair(scope, input, person)),
-    // A cut call stops waiting; the move keeps its permit and finishes, so no device is left unlinked.
+    // A move under way finishes when its caller goes, so no device is left in no hub.
     move: (scope, input, person) =>
-      permit
-        .withPermits(1)(move(scope, input, person))
-        .pipe(Effect.forkIn(serviceScope), Effect.flatMap(Fiber.join)),
+      runAsServerJob(permit, serviceScope, "HubMembership.move", (stopped) =>
+        move(scope, input, person, stopped),
+      ),
     routes: routes.list,
     updateRoutes: (scope, input, person) =>
       permit.withPermits(1)(routes.update(scope, input, person)),

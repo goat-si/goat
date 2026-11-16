@@ -53,8 +53,9 @@ export const make = (
 
   const sessionEnd = (sessionId: AuthSessionId): SessionEnd => ({
     ended: Effect.map(remaining(sessionId), (left) => left <= 0),
-    run: (effect) =>
-      Effect.uninterruptibleMask((restore) =>
+    // Untraced: it wraps every MCP tool call, which already has its own span.
+    run: Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
+      return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const fiber = yield* Effect.forkChild(effect);
           const call: Guarded = { fiber, cut: false };
@@ -88,7 +89,8 @@ export const make = (
             ),
           );
         }),
-      ),
+      );
+    }),
   });
 
   return { cut, sessionEnd };
