@@ -307,6 +307,11 @@ the message as its next turn. Pass `-` as the message to read it from stdin.
 `--wait` prints the agent's reply. It exits 1 when the run fails or stops, and
 2 when the agent waits for an answer you give in the app. Add `--json` for a
 result that always includes the thread id.
+With `start --wait`, and with `send --wait` to a thread that was idle when you
+sent the message, a turn that ends waiting on tasks or background work keeps
+the wait going until that work wakes the agent and the woken run ends; you get
+that reply instead. A send to a busy thread returns that turn's reply, and a
+message someone else sends meanwhile ends the wait with the first reply.
 
 Every other capability is a command too. `goat describe` lists them, `goat describe thread`
 shows one resource, and `goat describe thread.read` prints its arguments. Run one as

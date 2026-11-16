@@ -102,6 +102,7 @@ import {
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { observeResize } from "~/lib/observeResize";
+import { focusPreviewWebview } from "./focusPreviewWebview";
 
 interface Props {
   threadRef: ScopedThreadRef;
@@ -112,12 +113,6 @@ interface Props {
     annotation: PreviewAnnotationPayload,
     image: ComposerImageAttachment | null,
   ) => void;
-}
-
-function focusPreviewWebview(runtimeTabId: string) {
-  document
-    .querySelector<HTMLElement>(`[data-preview-viewport="${CSS.escape(runtimeTabId)}"] webview`)
-    ?.focus();
 }
 
 export function PreviewView({
@@ -842,6 +837,10 @@ export function PreviewView({
       switch (action) {
         case "refresh":
           handleRefresh();
+          return;
+        case "back":
+        case "forward":
+          (action === "back" ? handleBack : handleForward)();
           return;
         case "focus-url":
           setFocusUrlNonce((value) => (value ?? 0) + 1);

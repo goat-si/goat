@@ -69,6 +69,7 @@ import {
   remoteTaskQuestionNotice,
 } from "./reportFrame.ts";
 import { storeInboxReport } from "./RemoteReportInbox.ts";
+import { recordRemoteFollowUp, type RemoteFollowUp } from "./remoteTaskFollowUp.ts";
 import { dispatchMonitorMessage } from "./remoteMonitorMessage.ts";
 import { persistThreadObservation, threadKnownRun } from "./remoteThreadObservation.ts";
 import {
@@ -155,6 +156,8 @@ export class RemoteDispatchCoordinator extends Context.Service<
       threadId: string,
     ) => Effect.Effect<boolean, RemoteDispatchError>;
     readonly resume: (host: string, threadId: string) => Effect.Effect<void, RemoteDispatchError>;
+    /** A send that starts a run on the thread of one of the caller's finished remote tasks. */
+    readonly followUp: RemoteFollowUp;
     /** Stops following dismissable thread dispatches without contacting their host. */
     readonly dismiss: (
       selector: DismissSelector,
@@ -1219,6 +1222,7 @@ const make = Effect.gen(function* () {
     launch,
     cancel,
     resume,
+    followUp: (input) => taskEffect(recordRemoteFollowUp(input, (id) => start(id))),
     dismiss,
     claimDelete,
     clearDelete,

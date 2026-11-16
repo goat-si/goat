@@ -34,6 +34,7 @@ import {
   cancelledAppOwnedTask,
   mayStartSubagentFollowup,
   metadataUpdateContinuation,
+  followUpOwnerRun,
   isBlockingRun,
   isLiveRun,
   hasLiveRun,
@@ -8000,9 +8001,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         task.id === (child.forkedFrom?.type === "node" ? child.forkedFrom.nodeId : undefined),
     );
     if (original === undefined || original.result === null) return;
-    const owner =
-      parent.runs.filter(isBlockingRun).toSorted((a, b) => b.ordinal - a.ordinal)[0] ??
-      latestExecutedRun(parent.runs);
+    const owner = followUpOwnerRun(parent.runs);
     if (owner === null || owner.rootNodeId === null) return;
     const now = message.createdAt;
     const adapter = yield* providerAdapters.get(run.providerInstanceId);
