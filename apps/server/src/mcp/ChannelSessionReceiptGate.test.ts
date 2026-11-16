@@ -435,7 +435,7 @@ it.effect(
       expect(writes).toBe(1);
     }).pipe(
       Effect.provide(
-        // Only what McpHttpServer.layer provides: the test supplies no receipt gate.
+        // Only what McpHttpServer.layerMcpTransport provides: the test supplies no receipt gate.
         McpHttpServer.provideAdmission(McpHttpServer.catalogRegistrations.note).pipe(
           Layer.provide(
             Layer.mock(Notes.NotesService)({
