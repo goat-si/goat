@@ -2,6 +2,7 @@ import { database, fixture, origin, remote } from "./RemoteDispatchCoordinator.t
 import { assert, it } from "@effect/vitest";
 import { derive } from "@goat/provider-core/server/IdAllocator";
 import {
+  CommandId,
   MessageId,
   NodeId,
   ProviderDriverKind,
@@ -16,6 +17,7 @@ import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 
 import * as Coordinator from "./RemoteDispatchCoordinator.ts";
+import { followUpCorrelationId } from "./remoteTaskFollowUp.ts";
 
 const parentRunId = RunId.make("origin-run");
 const followUpRunId = RunId.make("remote-run-2");
@@ -151,19 +153,87 @@ it.effect("a follow-up to a finished remote task is a new task that wakes its pa
   }).pipe(Effect.provide(database)),
 );
 
-it.effect("a retried follow-up send records one task", () =>
+it.effect.each(["running", "settled"] as const)(
+  "a retried follow-up send whose task is recorded returns that task, its row %s",
+  (state) =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* Effect.gen(function* () {
+        const c = yield* Coordinator.RemoteDispatchCoordinator;
+        yield* seedFinishedTask(f);
+        const first = yield* followUp(c);
+        const [register] = registered(f.attemptedCommands);
+        const taskId = register && derive.delegatedTaskNode({ commandId: register.commandId });
+        const finished = f.recordedTasks[0];
+        if (taskId === undefined || finished === undefined) return assert.fail("no task");
+        f.recordedTasks.push({ ...finished, id: taskId, status: "running", result: null });
+        yield* f.sql`UPDATE remote_dispatches SET state = ${state} WHERE task_id = ${taskId}`;
+        const again = yield* followUp(c);
+        assert.deepEqual(again, first);
+        assert.lengthOf(registered(f.attemptedCommands), 1);
+        assert.lengthOf(yield* f.sql`SELECT task_id FROM remote_dispatches WHERE kind = 'task'`, 1);
+      }).pipe(Effect.provide(f.layer));
+    }).pipe(Effect.provide(database)),
+);
+
+/** The row a crash between the INSERT and the registration leaves behind. */
+const orphanRow = (f: Effect.Success<typeof fixture>, state: "running" | "settled") =>
+  Effect.gen(function* () {
+    const correlationId = followUpCorrelationId(origin, "box", MessageId.make("message-2"));
+    const commandId = CommandId.make(`remote-task-follow-up:${correlationId}`);
+    const taskId = derive.delegatedTaskNode({ commandId });
+    const at = DateTime.formatIso(yield* DateTime.now);
+    yield* f.sql`INSERT INTO remote_dispatches
+      (correlation_id, kind, origin_thread_id, host, remote_thread_id, launched_run_id, read_key,
+        delivery, reports_supported, state, task_id, parent_run_id, relay_send, created_at, updated_at)
+      VALUES (${correlationId}, 'task', ${origin}, 'box', ${remote}, ${followUpRunId}, 'key',
+        'wake', 0, ${state}, ${taskId}, ${parentRunId}, 0, ${at}, ${at})`;
+    return taskId;
+  });
+
+it.effect(
+  "a retry after a crash before registration registers once and wakes the parent once",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* Effect.gen(function* () {
+        const c = yield* Coordinator.RemoteDispatchCoordinator;
+        yield* seedFinishedTask(f);
+        const taskId = yield* orphanRow(f, "running");
+        const result = yield* followUp(c);
+        assert.equal("taskId" in result ? result.taskId : undefined, taskId);
+        assert.lengthOf(registered(f.attemptedCommands), 1);
+        const wait = yield* Queue.take(f.calls);
+        yield* Queue.offer(
+          wait.reply,
+          Effect.succeed({
+            host: "box",
+            threadId: remote,
+            runId: followUpRunId,
+            status: "completed",
+            timedOut: false,
+          }),
+        );
+        while ((yield* Queue.take(f.notifications)).type !== "delegated_task.remote.result");
+        const results = f.attemptedCommands.filter(
+          (command) => command.type === "delegated_task.remote.result",
+        );
+        assert.lengthOf(results, 1);
+      }).pipe(Effect.provide(f.layer));
+    }).pipe(Effect.provide(database)),
+);
+
+it.effect("a retry after the orphan row settled says the task was not recorded", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
     yield* Effect.gen(function* () {
       const c = yield* Coordinator.RemoteDispatchCoordinator;
       yield* seedFinishedTask(f);
-      const first = yield* followUp(c);
-      const again = yield* followUp(c);
-      assert.deepEqual(again, first);
-      const rows = yield* f.sql<{
-        readonly task_id: string;
-      }>`SELECT task_id FROM remote_dispatches WHERE kind = 'task'`;
-      assert.lengthOf(rows, 1);
+      yield* orphanRow(f, "settled");
+      const refused = yield* Effect.flip(followUp(c));
+      assert.include(refused.message, "The message was sent, but its task was not recorded");
+      // Never a task that waits on a row nothing follows any more.
+      assert.lengthOf(registered(f.attemptedCommands), 0);
     }).pipe(Effect.provide(f.layer));
   }).pipe(Effect.provide(database)),
 );

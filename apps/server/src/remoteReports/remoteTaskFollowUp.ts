@@ -37,6 +37,12 @@ export type RemoteFollowUp = (
 ) => Effect.Effect<OrchestratorMcpThreadSendResult, OrchestratorMcpFailure | RemoteDispatchError>;
 
 const isMcpFailure = Schema.is(OrchestratorMcpFailure);
+/** The message id there is the send's, so a retry that reached the same send records once. */
+export const followUpCorrelationId = (originThreadId: ThreadId, host: string, messageId: string) =>
+  `rr-followup-${NodeCrypto.createHash("sha256")
+    .update(`${originThreadId}\u001f${host}\u001f${messageId}`)
+    .digest("hex")
+    .slice(0, 32)}`;
 const notRecorded = (clientRequestId: string | undefined) =>
   new OrchestratorMcpFailure({
     code: "orchestration_error",
@@ -85,26 +91,32 @@ export const recordRemoteFollowUp = Effect.fn("remoteReports.recordRemoteFollowU
     task.length === 0
   )
     return sent;
-  // The message id there is the send's, so a retry that reached the same send records once.
-  const correlationId = `rr-followup-${NodeCrypto.createHash("sha256")
-    .update(`${input.originThreadId}\u001f${host}\u001f${sent.messageId}`)
-    .digest("hex")
-    .slice(0, 32)}`;
+  const correlationId = followUpCorrelationId(input.originThreadId, host, sent.messageId);
   const commandId = CommandId.make(`remote-task-follow-up:${correlationId}`);
   const taskId: NodeId = derive.delegatedTaskNode({ commandId });
   const at = DateTime.formatIso(yield* DateTime.now);
   const failed = Effect.fail(notRecorded(input.request.clientRequestId));
   // Followed through goat_thread_wait on its own run: the reports there belong to the first task.
+  // Only a duplicate key is a replay; any other constraint failure is an error.
   const inserted = yield* sql<{
     readonly correlation_id: string;
-  }>`INSERT OR IGNORE INTO remote_dispatches
+  }>`INSERT INTO remote_dispatches
     (correlation_id, kind, origin_thread_id, host, remote_thread_id, launched_run_id, read_key,
       delivery, reports_supported, state, task_id, parent_run_id, relay_send, created_at,
       updated_at, memory_grant_ceiling)
     VALUES (${correlationId}, 'task', ${input.originThreadId}, ${host}, ${sent.threadId},
       ${sent.runId}, ${NodeCrypto.randomBytes(32).toString("hex")}, 'wake', 0, 'running',
       ${taskId}, ${owner.id}, 0, ${at}, ${at}, ${finished.memoryGrantCeiling ?? "none"})
+    ON CONFLICT(correlation_id) DO NOTHING
     RETURNING correlation_id`.pipe(Effect.catch(() => failed));
+  if (inserted.length === 0) {
+    // A retry after full success returns its task; one after a crash before registration
+    // registers only while the row is still followed, never a task nothing will settle.
+    if (parent?.subagents.some((recorded) => recorded.id === taskId)) return { ...sent, taskId };
+    const [row] = yield* sql<{ readonly state: string }>`SELECT state FROM remote_dispatches
+      WHERE correlation_id = ${correlationId}`.pipe(Effect.catch(() => failed));
+    if (row?.state !== "running") return yield* failed;
+  }
   yield* threads
     .dispatch({
       type: "delegated_task.remote.register",
