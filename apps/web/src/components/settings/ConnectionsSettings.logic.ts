@@ -26,6 +26,7 @@ import {
   type AdvertisedEndpoint,
   type AuthClientSession,
   type AuthGrantScope,
+  type AuthOtherClientSessionsRevokeResult,
   type AuthPairingLink,
   AuthTerminalOperateScope,
   AuthTerminalReadScope,
@@ -203,29 +204,35 @@ export function canRevokeOtherClients(
   );
 }
 
-/** Names what Revoke others kept, from the rows the person saw when they pressed it. */
-export function revokeOthersToast(
-  revokedCount: number,
-  sessionsAtPress: ReadonlyArray<Pick<ServerClientSessionRecord, "current" | "keptByRevokeOthers">>,
-) {
-  const others = sessionsAtPress.filter((session) => !session.current);
-  const desktop = others.some((session) => session.keptByRevokeOthers === "desktop");
-  const pen = others.filter((session) => session.keptByRevokeOthers === "pen").length;
-  const kept = [
-    ...(desktop ? ["the desktop app's own session"] : []),
-    ...(pen === 0 ? [] : [pen === 1 ? "1 Pen session" : `${pen} Pen sessions`]),
+/** Names what the server says Revoke others kept; the list on screen can be missing or stale. */
+export function revokeOthersToast({ revokedCount, kept }: AuthOtherClientSessionsRevokeResult) {
+  const title = revokedCount === 1 ? "Revoked 1 other client" : `Revoked ${revokedCount} clients`;
+  if (kept === undefined)
+    return {
+      type: "success" as const,
+      title,
+      description:
+        "Revoke others may keep sessions signed in with the desktop app's built-in credential and Pen members' sessions. Check the list below for what is still signed in.",
+    };
+  const parts = [
+    ...(kept.desktop === 0
+      ? []
+      : [
+          `${kept.desktop} ${kept.desktop === 1 ? "session" : "sessions"} signed in with the desktop app's built-in credential`,
+        ]),
+    ...(kept.pen === 0 ? [] : [`${kept.pen} Pen ${kept.pen === 1 ? "session" : "sessions"}`]),
   ];
   const hint =
-    (desktop ? 1 : 0) + pen === 1
-      ? "Revoke it below if you need to."
-      : "Revoke them one by one below if you need to.";
+    kept.desktop + kept.pen === 1
+      ? "Revoke it below if you do not recognise it."
+      : "Revoke them one by one below if you do not recognise them.";
   return {
     type: "success" as const,
-    title: revokedCount === 1 ? "Revoked 1 other client" : `Revoked ${revokedCount} clients`,
+    title,
     description:
-      kept.length === 0
+      parts.length === 0
         ? "Other paired clients will need a new pairing link before reconnecting."
-        : `Kept ${kept.join(" and ")}. ${hint}`,
+        : `Kept ${parts.join(" and ")}. ${hint}`,
   };
 }
 

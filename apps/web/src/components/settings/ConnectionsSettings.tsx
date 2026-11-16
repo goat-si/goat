@@ -465,8 +465,7 @@ export function ConnectionsSettings() {
     setIsRevokingOtherDesktopClients(true);
     setDesktopAccessManagementMutationError(null);
     const settled = await settlePromise(async () => {
-      const revokedCount = await revokeOtherServerClientSessions();
-      toastManager.add(revokeOthersToast(revokedCount, desktopClientSessions));
+      toastManager.add(revokeOthersToast(await revokeOtherServerClientSessions()));
     });
     if (settled._tag === "Failure") {
       const error = Cause.squash(settled.cause);
