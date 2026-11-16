@@ -1,5 +1,6 @@
 import type { EnvironmentId, RuntimeRequestId, ThreadId } from "@goat/contracts";
 import { userInputDraftKey } from "@goat/client-runtime/state/thread-requests";
+import { appendAnswerToDraft } from "@goat/client-runtime/state/user-input-draft";
 
 import type { PendingUserInputDraftAnswer } from "../lib/threadActivity";
 import { scopedThreadKey } from "../lib/scopedEntities";
@@ -49,27 +50,31 @@ export function returnUnsentAnswersToThreadDraft(input: {
   const threadKey = scopedThreadKey(environmentId, threadId);
   const prefix = questionAttachmentDraftPrefix(environmentId, threadId);
   const before = input.drafts[threadKey]?.attachments.length ?? 0;
-  let next = input.drafts;
+  const next = { ...input.drafts };
+  let changed = false;
   for (const requestId of input.unansweredRequestIds) {
     const answers = input.answers[userInputDraftKey(environmentId, threadId, requestId)] ?? {};
     for (const questionId of questionIds(input.drafts, answers, prefix, requestId)) {
       const question =
         input.drafts[questionAttachmentDraftKey(environmentId, threadId, requestId, questionId)];
-      const text = answers[questionId]?.customAnswer?.trim() ?? "";
+      const answer = answers[questionId]?.customAnswer;
       const attachments = question?.attachments ?? [];
-      if (text.length === 0 && attachments.length === 0) continue;
-      next = mergeComposerDraftContentState(next, threadKey, {
-        text,
+      if (!answer?.trim() && attachments.length === 0) continue;
+      // The join web uses; mergeComposerDraftText would drop an answer equal to existing text.
+      const draft = next[threadKey] ?? { text: "", attachments: [] };
+      next[threadKey] = { ...draft, text: appendAnswerToDraft(draft.text, answer) };
+      const merged = mergeComposerDraftContentState(next, threadKey, {
+        text: "",
         attachments,
         ...(question?.context ? { context: question.context } : {}),
-      });
+      })[threadKey];
+      if (merged) next[threadKey] = merged;
+      changed = true;
     }
   }
   const merged = next[threadKey];
-  if (merged === undefined || merged === input.drafts[threadKey]) return next;
+  if (!changed || merged === undefined) return input.drafts;
   // The thread composer shows non-image files only as chips, so moved files get theirs.
-  return {
-    ...next,
-    [threadKey]: restoreMissingComposerFileReferences(merged, merged.attachments.slice(before)),
-  };
+  next[threadKey] = restoreMissingComposerFileReferences(merged, merged.attachments.slice(before));
+  return next;
 }

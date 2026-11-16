@@ -193,6 +193,28 @@ Also this`,
   },
 );
 
+// The same case appendAnswerToDraft and mobile's unsent-question-answers test run.
+it("keeps every returned answer, even one equal to the draft's last paragraph", () => {
+  const store = useComposerDraftStore.getState();
+  const request = RuntimeRequestId.make("stopped");
+  store.setPrompt({ environmentId, threadId }, "Draft\n\nYes\n");
+  usePendingUserInputAnswers.setState({
+    [userInputDraftKey(environmentId, threadId, request)]: {
+      first: { customAnswer: "Yes" },
+      second: { customAnswer: "Yes" },
+    },
+  });
+
+  makeThreadRequestsResolvedAnnouncer(
+    environmentId,
+    threadId,
+  )([{ id: request, status: "cancelled" }]);
+
+  expect(store.getComposerDraft({ environmentId, threadId })?.prompt).toBe(
+    "Draft\n\nYes\n\nYes\n\nYes",
+  );
+});
+
 it("moves a cancelled answer's images and files into the thread draft without releasing them", () => {
   const store = useComposerDraftStore.getState();
   const request = RuntimeRequestId.make("stopped");

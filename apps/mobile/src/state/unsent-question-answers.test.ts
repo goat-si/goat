@@ -90,4 +90,27 @@ describe("returnUnsentAnswersToThreadDraft", () => {
       }),
     ).toBe(drafts);
   });
+
+  // The same case appendAnswerToDraft and web's questionAttachments test run.
+  it("keeps every returned answer, even one equal to the draft's last paragraph", () => {
+    const drafts: Record<string, ComposerDraft> = {
+      [threadKey]: { text: "Draft\n\nYes\n", attachments: [] },
+    };
+    const answers = {
+      [userInputDraftKey(environmentId, threadId, stopped)]: {
+        first: { customAnswer: "Yes" },
+        second: { customAnswer: "Yes" },
+      },
+    };
+
+    const next = returnUnsentAnswersToThreadDraft({
+      drafts,
+      answers,
+      environmentId,
+      threadId,
+      unansweredRequestIds: [stopped],
+    });
+
+    expect(next[threadKey]?.text).toBe("Draft\n\nYes\n\nYes\n\nYes");
+  });
 });
