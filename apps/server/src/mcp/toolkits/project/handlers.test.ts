@@ -17,6 +17,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import type * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -186,7 +187,7 @@ const launchFromThread = (params: {
       expect(launchedInput).toBeUndefined();
     }
     const exit = yield* toolkit
-      .handle("goat_thread_launch", input)
+      .handle("goat_thread_launch", input as Schema.Json)
       .pipe(
         Stream.unwrap,
         Stream.runCollect,
