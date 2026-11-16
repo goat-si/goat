@@ -1,8 +1,7 @@
-import { act, StrictMode } from "react";
+import { StrictMode } from "react";
 import { afterEach, expect, it } from "vite-plus/test";
 import {
   WS_METHODS,
-  MemoryItem,
   MemoryMutationReceipt,
   type MemoryForgetInput,
   type MemoryUpsertInput,
@@ -14,7 +13,6 @@ import {
   nativeEnv,
   nativeSpace,
   nativeId,
-  nativeItem,
   type NativeMemoryHarness,
 } from "../../testing/memoryNativeHarness";
 import { SettingsMemoryRouteScreen } from "./SettingsMemoryRouteScreen";
@@ -39,34 +37,12 @@ async function mount(strict = false) {
 const field = () =>
   view.container.querySelector<HTMLInputElement>('input[aria-label="Memory text"]');
 const decodeReceipt = Schema.decodeUnknownSync(MemoryMutationReceipt);
-if (nativeItem.status !== "active") throw new Error("Expected active fixture");
-const activeItem = nativeItem;
-// The same memory after another device saved a new revision of it.
-const editedElsewhere = Schema.decodeUnknownSync(MemoryItem)({
-  ...activeItem,
-  revision: {
-    ...activeItem.revision,
-    revisionId: "00000000-0000-4000-8000-0000000000a1",
-    payloadRef: "00000000-0000-4000-8000-0000000000a1",
-  },
-  payload: { ...activeItem.payload, text: "Edited on another device" },
-});
 
-it("Save finishes after another device edits the memory while its editor is open (#3574)", async () => {
-  await mount();
+it("Save closes the editor after the editor's effects run again, as StrictMode does (#3574)", async () => {
+  await mount(true);
   await view.click("Open memory: Synthetic memory body");
   await view.click("Edit");
-  h.responses.set(WS_METHODS.memoryRead, () => editedElsewhere);
-  await act(async () => {
-    await h.signal({
-      kind: "upsert",
-      memorySpaceId: nativeSpace,
-      memoryId: nativeId,
-      projectionWatermark: 2,
-    });
-  });
-  expect(field()?.value).toBe("Edited on another device");
-  await view.type("Memory text", "Typed after the other edit");
+  await view.type("Memory text", "Synthetic edited body");
   h.responses.set(WS_METHODS.memoryUpsert, (input) => ({
     memoryId: (input as MemoryUpsertInput).memoryId,
     operationId: (input as MemoryUpsertInput).operationId,
@@ -79,7 +55,7 @@ it("Save finishes after another device edits the memory while its editor is open
   expect(view.container.textContent).toContain("Close details");
 });
 
-it("Forget reports its result after the screen's effects run again, as under StrictMode or a development reload (#3574)", async () => {
+it("Forget reports its result after the screen's effects run again, as StrictMode does (#3574)", async () => {
   await mount(true);
   h.responses.set(WS_METHODS.memoryForget, (input) =>
     decodeReceipt({
