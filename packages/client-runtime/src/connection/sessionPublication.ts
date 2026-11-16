@@ -37,15 +37,19 @@ export function replacedSincePress(
 }
 
 /** Makes a connected lease current, numbering its session before anything can read it. */
-export const publishLease = Effect.fn("SessionPublication.publishLease")(function* (
-  environmentId: EnvironmentId,
-  current: {
-    readonly prepared: SubscriptionRef.SubscriptionRef<Option.Option<PreparedConnection>>;
-    readonly session: SubscriptionRef.SubscriptionRef<Option.Option<RpcSession>>;
+export const publishLease = Effect.fn("SessionPublication.publishLease")(
+  function* (
+    environmentId: EnvironmentId,
+    current: {
+      readonly prepared: SubscriptionRef.SubscriptionRef<Option.Option<PreparedConnection>>;
+      readonly session: SubscriptionRef.SubscriptionRef<Option.Option<RpcSession>>;
+    },
+    lease: { readonly prepared: PreparedConnection; readonly session: RpcSession },
+  ) {
+    yield* SubscriptionRef.set(current.prepared, Option.some(lease.prepared));
+    recordSessionPublished(environmentId, lease.session);
+    yield* SubscriptionRef.set(current.session, Option.some(lease.session));
   },
-  lease: { readonly prepared: PreparedConnection; readonly session: RpcSession },
-) {
-  yield* SubscriptionRef.set(current.prepared, Option.some(lease.prepared));
-  recordSessionPublished(environmentId, lease.session);
-  yield* SubscriptionRef.set(current.session, Option.some(lease.session));
-});
+  // A numbered session that never became current would end the first-session exemption early.
+  Effect.uninterruptible,
+);
