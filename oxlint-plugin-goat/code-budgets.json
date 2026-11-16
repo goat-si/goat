@@ -855,7 +855,7 @@
   "packages/ssh/src/hostKey.ts": { "nonNull": 4 },
   "packages/ssh/src/preflight.ts": { "nonNull": 1 },
   "packages/ssh/src/probeOptions.ts": { "nonNull": 3 },
-  "packages/ssh/src/tunnel.core.test.ts": { "lines": 3012 },
+  "packages/ssh/src/tunnel.core.test.ts": { "lines": 2889 },
   "packages/ssh/src/tunnel.fixture.ts": { "nonNull": 1 },
   "packages/ssh/src/tunnel.pending-manager.test.ts": { "lines": 1947 },
   "packages/ssh/src/tunnel.runtime-status.test.ts": { "lines": 1066 },
