@@ -291,6 +291,12 @@ function profile(screen: Screen) {
   return page.elementLocator(section as HTMLElement);
 }
 
+function status(screen: Screen) {
+  const section = screen.container.querySelector("section#goat-bot-status");
+  expect(section).not.toBeNull();
+  return page.elementLocator(section as HTMLElement);
+}
+
 async function editWithDraft(screen: Screen) {
   await profile(screen).getByRole("button", { name: "Edit" }).click();
   const dialog = page.getByRole("dialog");
@@ -393,7 +399,7 @@ it("the Edit dialog never reopens by itself on reconnect; the person's draft is 
   await expect.element(dialog.getByRole("button", { name: "Save" })).toBeEnabled();
 });
 
-it.each([
+const REFUSALS = [
   {
     refusal: "this tab's own server says its session is gone",
     refuse: () => {
@@ -413,7 +419,9 @@ it.each([
         { ...kept(), error: "Not accepted." },
       ),
   },
-])(
+];
+
+it.each(REFUSALS)(
   "a refusal ($refusal) closes the dialog, hides the bot's name and says this device was not accepted, never Offline (#3504, access)",
   async ({ refuse }) => {
     setup();
@@ -425,7 +433,7 @@ it.each([
     expect(page.getByRole("dialog").query()).toBeNull();
     const row = profile(screen);
     await expect
-      .element(row.getByText("GOAT on Mac Studio did not accept this device."))
+      .element(row.getByText("GOAT on Mac Studio did not accept this device"))
       .toBeVisible();
     await expect.element(row.getByText("GOAT Bot", { exact: true })).toBeVisible();
     expect(row.getByText("Goatie").query()).toBeNull();
@@ -450,7 +458,7 @@ it("after a refusal, access coming back shows Loading… and nothing read before
 
   await change(() => home(BLOCKED, { ...kept(), error: "Not accepted." }));
   await expect
-    .element(profile(screen).getByText("GOAT on Mac Studio did not accept this device."))
+    .element(profile(screen).getByText("GOAT on Mac Studio did not accept this device"))
     .toBeVisible();
   // Access is back; the query still holds its pre-refusal answer while the fresh read is pending.
   await change(() => home(CONNECTED, { ...kept(), isPending: true }));
@@ -486,7 +494,7 @@ it.each([
   {
     change: "the home refused this device",
     connection: BLOCKED,
-    why: "GOAT on Mac Studio did not accept this device.",
+    why: "GOAT on Mac Studio did not accept this device",
   },
 ])(
   "Save (Enter in the form) after $change reached the store, before the screen re-rendered, sends nothing and says why (#3504, access)",
@@ -541,7 +549,7 @@ it("a denied bot-list read while connected hides the kept profile, closes the di
   await expect
     .element(
       profile(screen).getByText(
-        "GOAT on Mac Studio did not let this device read the bot's profile.",
+        "GOAT on Mac Studio did not let this device read the bot's profile",
       ),
     )
     .toBeVisible();
@@ -659,4 +667,69 @@ it("removing the home computer from the app hides the Profile section and closes
 
   expect(screen.container.querySelector("section#goat-bot-profile")).toBeNull();
   expect(page.getByRole("dialog").query()).toBeNull();
+});
+
+it.each(REFUSALS)(
+  "a refusal ($refusal) makes Status say this device was not accepted, as Profile does, never offline, and access back says Answers on (#3532, access)",
+  async ({ refuse }) => {
+    setup();
+    await using screen = await render(<GoatBotSettingsPanel />);
+
+    await change(refuse);
+
+    const card = status(screen);
+    await expect
+      .element(card.getByText("GOAT on Mac Studio did not accept this device"))
+      .toBeVisible();
+    await expect.element(card.getByRole("button", { name: "Make MacBook the home" })).toBeVisible();
+    expect(card.getByText(/Home machine is offline/).query()).toBeNull();
+    expect(card.getByText("Checking the model…").query()).toBeNull();
+    expect(card.getByRole("listitem").elements()).toHaveLength(1);
+    await expect
+      .element(profile(screen).getByText("GOAT on Mac Studio did not accept this device"))
+      .toBeVisible();
+
+    await change(() => {
+      state.revoked = false;
+      home(CONNECTED, { ...kept(), dataUpdatedAt: READ_AFTER });
+    });
+
+    await expect.element(status(screen).getByText("Answers on Mac Studio")).toBeVisible();
+  },
+);
+
+it("an unreachable home that has not refused this device still says Home machine is offline (#3532, guard)", async () => {
+  setup();
+  state.primaryId = STUDIO;
+  await using screen = await render(<GoatBotSettingsPanel />);
+
+  await change(() => home(RECONNECTING, { ...kept(), isPending: true }));
+
+  const card = status(screen);
+  await expect.element(card.getByText("Home machine is offline (Mac Studio)")).toBeVisible();
+  expect(card.getByText(/did not accept/).query()).toBeNull();
+});
+
+it("a refused home then removed from the app never says it did not accept this device (#3532, guard)", async () => {
+  setup();
+  await using screen = await render(<GoatBotSettingsPanel />);
+  await change(() => {
+    state.primaryId = STUDIO;
+    state.revoked = true;
+    home(BLOCKED, { ...kept(), error: "Not accepted." });
+  });
+  await expect
+    .element(status(screen).getByText("GOAT on Mac Studio did not accept this device"))
+    .toBeVisible();
+
+  await change(() => {
+    state.presentation = null;
+    state.environments = [environment(LAPTOP, "MacBook", false)];
+  });
+
+  expect(
+    status(screen)
+      .getByText(/did not accept/)
+      .query(),
+  ).toBeNull();
 });
