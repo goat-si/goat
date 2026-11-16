@@ -491,3 +491,23 @@ it("with thread modes, moving a bound task to another project leaves its thread 
     notificationPolicy: "all_runs",
   });
 });
+
+it("without thread modes, moving a bound task to another project keeps its thread, as an older server does", async () => {
+  const task = setup("important_updates", true, {}, false);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  await userEvent.click(page.getByRole("combobox", { name: "Project" }));
+  await userEvent.click(page.getByRole("option", { name: "Other" }));
+  await expect
+    .element(page.getByText("Each run continues this conversation", { exact: false }))
+    .toBeVisible();
+  await expect
+    .element(page.getByText("Notifications changed to All runs", { exact: false }))
+    .not.toBeInTheDocument();
+  await userEvent.click(page.getByRole("button", { name: "Save task" }));
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  const sent = state.upsert.mock.calls.at(-1)?.[0]?.input;
+  expect(sent).toMatchObject({ threadId: "bound", notificationPolicy: "important_updates" });
+  expect(sent).not.toHaveProperty("threadMode");
+});
