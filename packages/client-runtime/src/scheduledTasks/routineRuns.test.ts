@@ -165,8 +165,18 @@ it("a finish time that cannot be read says Unknown time, and an unreadable start
 
 const at = "2026-11-14T09:00:00.000Z";
 const enUSShort = /^[A-Z][a-z]{2} \d{1,2}, \d{2}:\d{2}$/;
-// Kathmandu is UTC+5:45, so its minutes differ from almost every device zone's.
+// Kathmandu is UTC+5:45; on a device set to UTC, a dropped zone reads 09:00 instead of 14:45.
 const kathmandu = "Asia/Kathmandu";
+const onUtcDevice = (check: () => void) => {
+  const before = process.env.TZ;
+  try {
+    process.env.TZ = "UTC";
+    check();
+  } finally {
+    if (before === undefined) delete process.env.TZ;
+    else process.env.TZ = before;
+  }
+};
 // The 24-hour time in `timeZone` as the device's own locale writes it, in its own digits.
 const deviceClock = (timeZone: string) =>
   new Intl.DateTimeFormat(undefined, {
@@ -177,11 +187,13 @@ const deviceClock = (timeZone: string) =>
   }).format(Date.parse(at));
 
 it("an invalid locale falls back to the device locale and keeps a valid zone, without throwing", () => {
-  const options = { locale: "not a locale!", timeZone: kathmandu, hour12: false } as const;
-  const time = routineRunTime(at, options);
-  expect(time.endsWith(deviceClock(kathmandu))).toBe(true);
-  expect(time.endsWith(deviceClock("UTC"))).toBe(false);
-  expect(routineRunTime(at, options)).toBe(time);
+  onUtcDevice(() => {
+    const options = { locale: "not a locale!", timeZone: kathmandu, hour12: false } as const;
+    const time = routineRunTime(at, options);
+    expect(time.endsWith(deviceClock(kathmandu))).toBe(true);
+    expect(time.endsWith(deviceClock("UTC"))).toBe(false);
+    expect(routineRunTime(at, options)).toBe(time);
+  });
 });
 
 it("an invalid zone falls back to the device zone and keeps a valid locale, without throwing", () => {
@@ -191,17 +203,20 @@ it("an invalid zone falls back to the device zone and keeps a valid locale, with
 });
 
 it("a null or Symbol locale reads in the device locale, without throwing", () => {
-  for (const locale of [null, Symbol("locale")]) {
-    const time = routineRunTime(at, {
-      locale: locale as never,
-      timeZone: kathmandu,
-      hour12: false,
-    });
-    expect(time.endsWith(deviceClock(kathmandu))).toBe(true);
-    expect(routineRunFinished(at, at, { locale: locale as never, timeZone: kathmandu })).toMatch(
-      /^finished /,
-    );
-  }
+  onUtcDevice(() => {
+    for (const locale of [null, Symbol("locale")]) {
+      const time = routineRunTime(at, {
+        locale: locale as never,
+        timeZone: kathmandu,
+        hour12: false,
+      });
+      expect(time.endsWith(deviceClock(kathmandu))).toBe(true);
+      expect(time.endsWith(deviceClock("UTC"))).toBe(false);
+      expect(routineRunFinished(at, at, { locale: locale as never, timeZone: kathmandu })).toMatch(
+        /^finished /,
+      );
+    }
+  });
 });
 
 it("a time that is not a string gives 'Unknown time', and a start that is not one is not the finish's day", () => {
