@@ -84,11 +84,12 @@ pen-macbookpro2, one heavy job (none other running). Tree: lane head merged with
 
 ## Surfaces
 
-Server only: MCP thread, task, queue and schedule tools (local, remote and relay callers read through the same service); CLI thread reads (explicit 20000 characters). No web, mobile or desktop change in this push. No settings, contracts or agent-visible descriptions change (audit and context budget unchanged).
+Server only: MCP thread, task, queue and schedule tools (local, remote and relay callers read through the same service); CLI thread reads (explicit 20000 characters). No web, mobile or desktop change in this push. No settings or contracts change; after the N6 merge, two agent-visible texts change (goat_thread_list default, goat_thread_read tail rule; below), audit and context budget pass unchanged.
 
 ## Known limits
 
 - goat_thread_read and goat_thread_list default to 10 items and 500 characters per item (85b160658f); callers that need more pass limits.
+- A summary read acknowledges a finished child after showing an excerpt (dev's rule); a tail read does not when it cuts the result item (below).
 - The acknowledgement's revision check reads the parent's transfers when a command names a revision (kept from GOAT, not upstream's child read).
 
 ## NOT RUN
@@ -97,3 +98,25 @@ Server only: MCP thread, task, queue and schedule tools (local, remote and relay
 - 591188471a (N6's C9 not on the integration branch), L13 4aab23cd72 and 18866e52e4 (follow-up push).
 - PostgreSQL-backed relay tests (no PostgreSQL on this Mac).
 
+## Merge with N6 and review fixes (2026-11-16, head `370a3b3c0d238f85e842ba59fc272f8b90c8fe7a`)
+
+Fresh review of `6162bd8be3`: APPROVE WITH NITS (two P2). These commits follow it on `chase/t3-261114-n7-mcp-reads`:
+
+| step | commit | result |
+| --- | --- | --- |
+| merge | `7c1d8adbf1d2664ea19729d7d2e2fc1439895da2` | merges `origin/chase/t3-261114-next` at `e1c031a498da9b005787d9097b9799fe1b38785a` (lane N6). One textual conflict, oxlint-plugin-goat/code-budgets.json. Entries set to the merged files' real lengths, measured with countLines in the merged tree: Orchestrator.ts 13556 (was 13908 here, 13630 on the integration branch), OrchestratorMcpService.ts 3957 (auto-merged to 3949; N6 adds 8 lines; N7-P2-2), Orchestrator.control-reads.test.ts 1655. The auto-merged OrchestratorMcpService.ts, threadAccess.ts, Orchestrator.ts and ThreadManagementService.ts typecheck. |
+| fail-first | `e54e8d1fbbfcd72f3236ee38f727d8752b759ae2` | lazyThreads "a tail read that cuts the child's result leaves its completion wake to deliver it whole", on the code before the fix: "Tests 1 failed", AssertionError: expected [ [ { …(2) }, …(1) ] ] to deeply equal [] (the tail read acknowledged a result whose item was textTruncated). The fixture's read helper gains an optional items argument; no existing assertion changes. |
+| fix | `370a3b3c0d238f85e842ba59fc272f8b90c8fe7a` | N7-P3-2: HostThreadsMcpService acknowledges a tail read only when the finished run's result item (its newest assistant_message or error, as subagentResultForRun picks it) is not cut (mcp/tailReadResult.ts); the agent pages with itemId and textOffset=nextTextOffset, and the plain read that reaches the end acknowledges (pageIncludesTerminalTaskResult). Same for local and host reads. Summary reads unchanged. N7-P2-1: goat_thread_list limit says "Default 10." (was "Default 50."; allHosts keeps 50, not stated); goat_thread_read's guide says a tail read acknowledges when it shows the result whole. |
+
+Coordinator decision (verbatim, next-N7-coordinator-rulings.md, part 1 review, item 3):
+
+> N7-P3-2 (code; coordinator decision). A tail read of a finished child must not acknowledge a result it showed only in part: when the terminal result item is cut (textTruncated), the read does not acknowledge, the agent gets nextTextOffset, and the page that reaches the end acknowledges, the same rule the small-ports lane set for plain reads. Otherwise the smaller 500-character default cancels the completion wake that would have delivered the whole result. Test first. Summary reads keep their existing rule.
+
+- N7-P3-1: three carried assertions check SQL text and are upstream's own, carried under rule 1: OrchestratorMcpToolkit.integration.test.ts:640 and :642 ("AND run_id IN", "AND subagent_id IN"), ProjectionStore.test.ts:1693 (MIN(ordinal)). GOAT-written checks assert EXPLAIN plans only.
+- What agents see: goat_thread_list returns 10 threads per page by default (allHosts 50), goat_thread_read 10 items and 500 characters per item; both descriptions now say so where they state a default.
+- N7-P3-3: the unused staleTasks testkit option stays (ruling kept the hook as on dev); removal can follow.
+- Budgets: agent surface audit --check passes and regenerating docs/internals/agent-surface-audit.md changes nothing; context-budget --check passes, every harness within its budget, none raised (ACP instructions 6,143 B of 6,144 B, unchanged). HostThreadsMcpService.ts 998 lines (no entry, limit 1000).
+
+Checks on the merged tree (pen-macbookpro2, no other check:changed or full vitest running): `node scripts/goat-rename.ts --check` 0; typecheck packages/contracts and apps/server exit 0, no errors; lint and format of the touched and merged files pass (code budget included). Focused tests, one file at a time, all pass: N7 activity 7, childWork 4, lazyThreads 19, executedModel 1, responseBudget 2, reviewContinuationLanes 4, stoppedChildRead 1, thread handlers 9, toolkit integration 6, HostThreadsMcpService 28, control-reads 16, stopRepair 3, commandReads 2, shellReads 14, ProjectionStore 50, DelegatedCompletionDelivery 27; N6 activeTurnRefusals 14, QuestionEscalationService.staleWake 2, ThreadManagementService.worktreeSend 3, DelegatedCompletionDelivery.followupSubagents 1, ThreadStop.staleNativeSubagent 1, ThreadMessageIntake 10, UsageLimitQueue 3, WorktreeSendCheck 5, DecisionInboxClosedQuestion 1.
+
+NOT RUN at this head: `vp run check:changed` and the full vitest suite (part 2 runs on this Mac); real client (no visible change); PostgreSQL relay tests.
