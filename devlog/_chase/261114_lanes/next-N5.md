@@ -1,6 +1,6 @@
 # N5 Usage, L09 retry 2 (lane record)
 
-Lane branch: `chase/t3-261114-n5-usage`, based on dev `c66dc0f1fd`, merged with dev `3ed0b802b6` last (head `f7e90419eb4858e083e45e0020d9464801a9243c` after the review follow-up, verified on origin; fix round `51b9ca4e92` merged into the integration branch `chase/t3-261114-next` at `0f43887b43`; the first READY was `ef033514e9bd2442db614f63964fc4efa690ebb3`). Host pen-macmini (Node 26.12.1). Rows from #3176: `7fab4ef978`, `9a614e34a6`, L311 `a09e54a363` (decision C26 A). Class C4: stored scan-cache format (v14 to v15, plus `coveredSince`) and contract fields (`UsageSummaryInput.provisional`, `UsageLimitSourceSnapshot.origin`, `ServerProviderAuth.endpoint`).
+Lane branch: `chase/t3-261114-n5-usage`, based on dev `c66dc0f1fd`, merged with dev `3ed0b802b6` last (head `f7e90419eb4858e083e45e0020d9464801a9243c` after the review follow-up, verified on origin; follow-up `f7e90419eb` merged into the integration branch at `b2fb30748a`; fix round `51b9ca4e92` merged into the integration branch `chase/t3-261114-next` at `0f43887b43`; the first READY was `ef033514e9bd2442db614f63964fc4efa690ebb3`). Host pen-macmini (Node 26.12.1). Rows from #3176: `7fab4ef978`, `9a614e34a6`, L311 `a09e54a363` (decision C26 A). Class C4: stored scan-cache format (v14 to v15, plus `coveredSince`) and contract fields (`UsageSummaryInput.provisional`, `UsageLimitSourceSnapshot.origin`, `ServerProviderAuth.endpoint`).
 
 ## Rows and commits
 
