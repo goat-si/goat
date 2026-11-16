@@ -42,7 +42,9 @@ export function createPrimarySessionCheck(
   sources: PrimarySessionCheckSources,
 ): PrimarySessionCheck {
   const listeners = new Set<() => void>();
-  let detach: (() => void) | null = null;
+  // The first reader starts it; its listeners then stay for the tab's life so no connect or
+  // visibility change is missed. With no reader mounted only the timer and the reads pause.
+  let started = false;
   let connectedOnce = false;
   let revoked = false;
   let episode: { id: number; step: number; dueAt: number; done: boolean } | null = null;
@@ -62,7 +64,9 @@ export function createPrimarySessionCheck(
   };
   const schedule = () => {
     clearTimer();
-    if (detach === null || episode === null || episode.done || inFlight || dueWhileHidden) return;
+    if (listeners.size === 0 || episode === null || episode.done || inFlight || dueWhileHidden) {
+      return;
+    }
     timer = setTimeout(read, Math.max(0, episode.dueAt - Date.now()));
   };
   const advance = () => {
@@ -122,28 +126,22 @@ export function createPrimarySessionCheck(
   const onVisibility = () => {
     if (!dueWhileHidden || !sources.visible()) return;
     dueWhileHidden = false;
-    read();
+    schedule();
   };
 
   return {
     subscribe(listener) {
       listeners.add(listener);
-      if (detach === null) {
-        const stopConnection = sources.subscribeConnection(follow);
-        const stopVisibility = sources.subscribeVisible(onVisibility);
-        detach = () => {
-          stopConnection();
-          stopVisibility();
-        };
+      if (!started) {
+        started = true;
+        sources.subscribeConnection(follow);
+        sources.subscribeVisible(onVisibility);
         follow();
-        schedule();
       }
+      schedule();
       return () => {
         listeners.delete(listener);
-        if (listeners.size > 0 || detach === null) return;
-        detach();
-        detach = null;
-        clearTimer();
+        if (listeners.size === 0) clearTimer();
       };
     },
     revoked: () => revoked,
