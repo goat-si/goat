@@ -126,8 +126,7 @@ import { sshWorktreeErrorFeedback } from "../../lib/sshWorktreeSubmission";
 import { sshWorktreeSendBlockReason } from "../../lib/sshWorktree";
 import { submitSshWorktree } from "../../lib/sshWorktreeSubmission";
 import { sshStartedNotOpenedToast } from "./sshStartedNotOpenedToast";
-import { useRightPanelStore } from "../../rightPanelStore";
-import { useSideChatStore } from "../sideChat/sideChatStore";
+import { queueSideChatQuestion, startSideChatOverAnswer } from "../sideChat/sideChatFromComposer";
 import { waitForThreadShell } from "../../state/entities";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { vcsEnvironment } from "../../state/vcs";
@@ -210,6 +209,7 @@ export function useComposerSend(input: ComposerSendInput) {
     respondingRequestIds,
     activePendingProgress,
     onAdvanceActivePendingUserInput,
+    onChangeActivePendingUserInputCustomAnswer,
     onRespondToApproval: onRespondToApprovalStable,
     beginLocalDispatch,
     resetLocalDispatch,
@@ -496,6 +496,15 @@ export function useComposerSend(input: ComposerSendInput) {
     }
     const sendCtx = composerRef.current?.getSendContext();
     if (activePendingProgress && sendCtx?.answeringPendingUserInput !== false) {
+      const sideChat = {
+        progress: activePendingProgress,
+        composer: sendCtx,
+        sideChatAvailable,
+        threadKey: activeThreadKey,
+        threadRef: activeThreadRef,
+        clearAnswer: onChangeActivePendingUserInputCustomAnswer,
+      };
+      if (!directAnnotation && startSideChatOverAnswer(sideChat)) return;
       if (directAnnotation) notifyDirectAnnotationAttached(true);
       else if (
         activeThread &&
@@ -952,10 +961,7 @@ export function useComposerSend(input: ComposerSendInput) {
         ? parseSideChatCommand(trimmed)
         : null;
     if (sideChatCommand && activeThreadKey !== null && activeThreadRef !== null) {
-      if (sideChatCommand.prompt !== "") {
-        useSideChatStore.getState().setPendingPrompt(activeThreadKey, sideChatCommand.prompt);
-      }
-      useRightPanelStore.getState().open(activeThreadRef, "side-chat");
+      queueSideChatQuestion(activeThreadKey, activeThreadRef, sideChatCommand.prompt);
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
