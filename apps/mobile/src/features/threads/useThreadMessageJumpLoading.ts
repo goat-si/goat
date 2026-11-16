@@ -26,23 +26,30 @@ export function useThreadMessageJumpLoading(input: {
   const jumpMessageLoaded =
     jumpMessageId !== null &&
     input.feed.some((entry) => entry.type === "message" && entry.id === jumpMessageId);
-  // An attempt is in flight while more have started than settled; settling re-runs the effect.
-  const attemptsStarted = useRef(0);
-  const [attemptsSettled, setAttemptsSettled] = useState(0);
+  // Per thread, an attempt is in flight while more have started than settled; the screen is reused
+  // across threads, and settling re-runs the effect.
+  const attemptsStarted = useRef(new Map<string, number>());
+  const [attemptsSettled, setAttemptsSettled] = useState<ReadonlyMap<string, number>>(
+    () => new Map(),
+  );
   // History down to the message in one request; another page if it is not there yet.
   const loadEarlierForJump = useEffectEvent(() => {
     if (jumpMessageId === null || !history) return;
-    attemptsStarted.current += 1;
+    attemptsStarted.current.set(threadKey, (attemptsStarted.current.get(threadKey) ?? 0) + 1);
     void history.onLoadThrough(jumpMessageId).then((loaded) => {
       if (!loaded) finishThreadMessageJump(threadKey);
-      setAttemptsSettled((count) => count + 1);
+      setAttemptsSettled((settled) =>
+        new Map(settled).set(threadKey, (settled.get(threadKey) ?? 0) + 1),
+      );
     });
   });
   const ready = input.ready;
   // oxlint-disable-next-line goat/react-effect-budget -- Loads history until the jump's message is in the feed, then ends the jump.
   useEffect(() => {
     if (jumpMessageId === null || jumpMessageLoaded || !ready) return;
-    if (history?.loading || attemptsStarted.current !== attemptsSettled) return;
+    const inFlight =
+      (attemptsStarted.current.get(threadKey) ?? 0) !== (attemptsSettled.get(threadKey) ?? 0);
+    if (history?.loading || inFlight) return;
     if (!history?.hasMoreHistory) {
       finishThreadMessageJump(threadKey);
       return;
