@@ -67,7 +67,7 @@ const startingOverAtom = Atom.family((key: string) => {
     return !(list._tag === "Failure" && !list.waiting && accessDenied(Cause.squash(list.cause)));
   });
 });
-// A removed computer's presentation can outlive its catalog entry and report the refusal again.
+// An unlisted computer is never refused, whatever its flag says.
 const refusedAtom = Atom.family((key: string) => {
   const environmentId = key.slice(key.indexOf(":") + 1) as EnvironmentId;
   return Atom.make(
@@ -127,6 +127,8 @@ export function followKeptPerComputerCatalog(registry: AtomRegistry.AtomRegistry
     environmentPresentations.presentationsAtom,
     (presentations) => {
       for (const [environmentId, { connection }] of presentations) {
+        // Presentations list only catalog ids, and they update before the catalog callback runs.
+        if (removed.delete(environmentId)) readded.add(environmentId);
         const refused = connectionRefusedAtom(environmentId);
         const reason = "failure" in connection ? connection.failure?.reason : null;
         const blocked =

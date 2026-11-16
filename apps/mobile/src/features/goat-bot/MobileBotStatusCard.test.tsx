@@ -241,25 +241,14 @@ it("guard: a home that is only offline still says it is offline (#3532)", async 
   expect(container.textContent).not.toContain("did not accept this device");
 });
 
-it("guard: a refusal seen again after the home left the app's computers counts as offline (#3532)", async () => {
-  using follow = following();
-  state.homeConnected = false;
-  follow.registry.set(presentationsAtom, homeLink(blocked("authentication")));
-  follow.registry.set(catalogAtom, listed(["env-laptop"]));
-  // The removed home's presentation outlives its entry and reports the refusal once more.
-  follow.registry.set(presentationsAtom, homeLink(blocked("authentication")));
-  await render({ rows: "unavailable" }, follow.registry);
-  expect(container.textContent).toContain("Home machine is offline (Mac Studio)");
-  expect(container.textContent).not.toContain("did not accept this device");
-});
-
-/** The home refused, was removed, refused once more late, and was added back. */
+/** The home refused, was removed, and was added back while its old connection state was held. */
 function readdedAfterRefusal(registry: AtomRegistry.AtomRegistry) {
   registry.set(presentationsAtom, homeLink(blocked("authentication")));
   registry.set(catalogAtom, listed(["env-laptop"]));
+  // As in the app, the presentation of the id that is back arrives before the catalog's update.
   registry.set(presentationsAtom, homeLink(blocked("authentication")));
   registry.set(catalogAtom, listed(["env-studio", "env-laptop"]));
-  // Back in the catalog, its presentation can still carry the removed connection's last state.
+  // Listed again, its presentation still carries the removed connection's last state.
   registry.set(presentationsAtom, homeLink(blocked("authentication")));
 }
 
