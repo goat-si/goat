@@ -18,6 +18,7 @@ import * as Haptics from "expo-haptics";
 import { AsyncResult } from "effect/reactivity";
 import { createContext, use, useEffect, useRef, useState, type ReactNode } from "react";
 
+import { isAtomCommandInterrupted } from "@goat/client-runtime/state/runtime";
 import * as Dialog from "../../components/ui/Dialog";
 import { environmentCatalog } from "../../connection/catalog";
 import {
@@ -37,6 +38,7 @@ import {
   compatibleRuntimeModeForChoices,
   runtimeModeChoicesForSupportedModes,
 } from "./thread-settings-options";
+import { commandFailureText } from "../../lib/commandFailureText";
 import { canSelectModel, modelFavoriteKey } from "./thread-settings-sheet-state";
 
 const EMPTY_MODEL_FAVORITES: ReadonlyArray<{
@@ -208,6 +210,13 @@ export function ThreadSettingsSessionProvider(
         },
       },
     });
+    // A later toggle of the same model replaces this one; only the latest says why it failed.
+    if (
+      result._tag === "Failure" &&
+      !isAtomCommandInterrupted(result) &&
+      pendingFavorites.current.get(key) === pending
+    )
+      Dialog.alert("Favorites not saved", commandFailureText(result));
     if (
       AsyncResult.isSuccess(result) &&
       registry.get(environmentServerConfigsAtom).get(environmentId)?.settings.favorites ===
@@ -252,9 +261,14 @@ export function ThreadSettingsSessionProvider(
           ],
         },
       },
-    }).then(() => {
+    }).then((result) => {
       pendingHidden.current.delete(option.key);
       setPendingHiddenKeys(new Set(pendingHidden.current));
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result))
+        Dialog.alert(
+          option.isHidden ? "Could not show the model" : "Could not hide the model",
+          commandFailureText(result),
+        );
     });
   };
   const [showLegacyToggle, setShowLegacyToggle] = useState(false);
