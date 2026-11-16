@@ -11,5 +11,12 @@ export const REMOTE_ARCHIVE_FETCH = `  goat_fetch() {
 
 export const REMOTE_ARCHIVE_EXTRACT = `  case "$GOAT_PLATFORM_KEY" in
     win32-*) "$(cygpath -S)/tar.exe" -xf "$GOAT_STAGING/$GOAT_ARCHIVE" -C "$GOAT_STAGING" --strip-components=1 ;; # GNU tar cannot read zip.
-    *) tar -xzf "$GOAT_STAGING/$GOAT_ARCHIVE" -C "$GOAT_STAGING" --strip-components=1 ;;
+    *)
+      if ! GOAT_TAR_ERROR="$(tar -xzf "$GOAT_STAGING/$GOAT_ARCHIVE" -C "$GOAT_STAGING" --strip-components=1 2>&1)"; then
+        # Some tars (BusyBox) gunzip internally, so gzip is only blamed once extraction fails.
+        if command -v gzip >/dev/null 2>&1; then printf '%s\\n' "$GOAT_TAR_ERROR" >&2
+        else printf 'Remote host needs gzip to unpack %s. Install gzip on it and try again.\\n' "$GOAT_ARCHIVE" >&2
+        fi
+        exit 1
+      fi ;;
   esac`;
