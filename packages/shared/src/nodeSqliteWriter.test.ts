@@ -681,7 +681,7 @@ it.effect(
   let tick = 0;
   Object.defineProperty(require("node:perf_hooks").performance, "now", { value: () => tick });
   Date.now = () => 1234567;
-  for (const [prototype, method] of [[sqlite.DatabaseSync.prototype, "prepare"], [sqlite.StatementSync.prototype, "all"]]) {
+  for (const [prototype, method] of [[sqlite.DatabaseSync.prototype, "prepare"], [sqlite.StatementSync.prototype, "iterate"]]) {
     const original = prototype[method];
     prototype[method] = function(...args) {
       try { return original.apply(this, args); } finally { tick += 75; }

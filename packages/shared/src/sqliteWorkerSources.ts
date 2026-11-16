@@ -1,5 +1,8 @@
+import { rowBatchesSource } from "./sqliteRowBatches.ts";
+
 // Inline worker source also runs in bundles and single-executable builds without module files.
 export const readerWorkerSource = `
+${rowBatchesSource}
 const { parentPort, workerData } = require("node:worker_threads");
 const { DatabaseSync } = require("node:sqlite");
 let db;
@@ -37,7 +40,7 @@ const prepare = (sql, cached) => {
 };
 parentPort.on("message", (request) => {
   if (request.type === "initialize") return initialize();
-  const { id, sql, params, cached, values, raw, safeIntegers } = request;
+  const { id, sql, params, cached, values, raw, safeIntegers, received } = request;
   let operation = "open";
   let started = performance.now();
   let prepareMs;
@@ -52,7 +55,8 @@ parentPort.on("message", (request) => {
     statement.setReadBigInts(safeIntegers);
     if (statement.columns().length > 0) {
       statement.setReturnArrays(values);
-      const rows = statement.all(...params);
+      const rows = collectRows(statement.iterate(...params), received, (batch) =>
+        parentPort.postMessage({ id, rows: batch, more: true }));
       nativeMs = performance.now() - started;
       parentPort.postMessage({ id, rows, prepareMs, nativeMs });
     } else {
@@ -61,6 +65,8 @@ parentPort.on("message", (request) => {
       parentPort.postMessage({ id, rows: raw ? result : [], prepareMs, nativeMs });
     }
   } catch (error) {
+    // A failed iterator can report its previous SQLite error when the statement is reused.
+    statements.delete(sql);
     if (operation === "prepare") prepareMs = performance.now() - started;
     if (operation === "execute" && nativeMs === undefined) nativeMs = performance.now() - started;
     parentPort.postMessage({
