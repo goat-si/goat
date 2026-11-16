@@ -293,4 +293,13 @@ describe("mobile SQLite namespace copy", () => {
     expect(has("goat-client.db-wal")).toBe(false);
     expect(has("goat-client.db.publishing")).toBe(false);
   });
+
+  it("guard: a publishing record with no old database is dropped and goat-client.db is kept (#3549)", async () => {
+    put("goat-client.db", "rows the app wrote");
+    put("goat-client.db.publishing");
+    await openMigratedMobileDatabase();
+    expect(native.files.get(native.pathOf("goat-client.db"))).toBe("rows the app wrote");
+    expect(has("goat-client.db.publishing")).toBe(false);
+    expect(native.backup).not.toHaveBeenCalled();
+  });
 });
