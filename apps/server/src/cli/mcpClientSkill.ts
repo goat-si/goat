@@ -280,7 +280,7 @@ It prints \`Filtered for this MCP client credential.\`; a rejected token gets a 
 
 \`\`\`sh
 goat auth client list                 # names, session ids and last use, never the tokens
-goat auth client revoke <session-id>  # new connections and credential checks are refused at once; existing authority and open connections end at the next check, within about 5 seconds; an MCP request already admitted finishes on the scopes it was admitted with and can still write or start work until then (#3593)
+goat auth client revoke <session-id>  # new connections and credential checks are refused at once; existing authority, open connections and MCP requests in progress end at the next check, within about 5 seconds
 \`\`\`
 
 To rotate, create a new token and update \`GOAT_MCP_TOKEN\` where the client reads it. Where a

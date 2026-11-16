@@ -822,9 +822,10 @@ pairing links and revoke client sessions. Revoking an unused link prevents new
 pairings; revoke a device's session to remove its existing access.
 `goat auth session revoke <id>` does the same from the command line: the session
 is refused at once, and a running server closes its open connections within
-about 5 seconds. An MCP request that was admitted before the revoke runs to
-completion on the access it was admitted with, and can still write or start work
-until it finishes. More commands are listed by `goat auth --help`.
+about 5 seconds. An MCP request still in progress is cut at the same moment: the
+agent sees the call fail and has to sign in again. Work the request had already
+handed to the server, such as a turn it started, keeps running. More commands are
+listed by `goat auth --help`.
 
 A session with an open connection stays listed after its access credential
 expires. **Settings → Connections** shows which sessions are connected;
