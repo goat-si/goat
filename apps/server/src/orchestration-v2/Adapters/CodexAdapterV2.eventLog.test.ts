@@ -28,6 +28,7 @@ import {
   makeCodexReplayTranscript,
   makeCodexReplayTurn,
 } from "./CodexReplay.testkit.ts";
+import { withConfigReads } from "./CodexReplay.testkit.ts";
 
 const layer = Layer.mergeAll(
   MemoryDerivedCache.layer,
@@ -102,7 +103,7 @@ it.effect("writes two root threads' frames to their own logs on one shared sessi
             providerSessionId: openInput.providerSessionId,
             ...(openInput.logThreadFor === undefined ? {} : { threadFor: openInput.logThreadFor }),
           });
-          const driver = yield* CodexReplay.makeReplayDriver(transcript);
+          const driver = yield* CodexReplay.makeReplayDriver(withConfigReads(transcript));
           const context = yield* Layer.build(CodexReplay.layerReplayWithDriver(driver));
           const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
             Effect.provide(context),

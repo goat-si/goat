@@ -87,6 +87,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
 import { timelineItemsWithinBudget } from "./threadReadItems.ts";
 import * as Stream from "effect/Stream";
 import * as CloudSource from "../orchestration-v2/CloudTaskSourceService.ts";
@@ -105,6 +106,7 @@ import {
 import * as ReviewExport from "./reviewExport.ts";
 import { recordRemoteTaskResult } from "../remoteReports/recordRemoteTaskResult.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
+import { forceModeRefusal, forceStopRemoteTask } from "../remoteReports/remoteTaskForceStop.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { cloudTaskForRun } from "./cloudTaskView.ts";
 import { hostFailure } from "./hostFailure.ts";
@@ -151,7 +153,7 @@ import { acceptRemoteSender, withRemoteSender } from "./remoteSender.ts";
 import { stableCommandId, stablePart } from "./stableCommandId.ts";
 import { makeContinueReviewTask } from "./reviewContinuation.ts";
 import { makeRemoteTaskTargets } from "./goat/RemoteTaskTargets.ts";
-import { statusFromShell, threadRun } from "./threadStatus.ts";
+import { runStop, STOP_TURN_ITEM_TYPES, statusFromShell, threadRun } from "./threadStatus.ts";
 import * as View from "./threadListView.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
@@ -884,6 +886,7 @@ const make = Effect.gen(function* () {
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const remoteDispatch = yield* RemoteDispatchCoordinator.RemoteDispatchCoordinator;
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
+  const sqlForRemoteForce = yield* Effect.serviceOption(SqlClient.SqlClient);
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const providerAdapters = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
   const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
@@ -1356,6 +1359,96 @@ const make = Effect.gen(function* () {
       ? crypto.randomUUIDv4().pipe(Effect.orDie)
       : Effect.succeed(clientRequestId);
 
+  // The described run's unanswered Stop, which agents otherwise cannot see.
+  const readRunStop = (threadId: ThreadId, runId: RunId | null) =>
+    runId === null
+      ? Effect.succeed(undefined)
+      : threadManagement
+          .getThreadRecords(threadId, ["turnItems"], {
+            turnItemRunIds: [runId],
+            turnItemTypes: [...STOP_TURN_ITEM_TYPES],
+          })
+          .pipe(
+            Effect.mapError(threadManagementFailure),
+            Effect.map((records) => runStop(runId, records.turnItems)),
+          );
+  // goat#2338: ownership of a remote task is decided in forceCancelTask, the rest by its host.
+  const forceCancelRemoteTask = Effect.fn("OrchestratorMcpService.forceCancelRemoteTask")(
+    function* (
+      scope: McpThreadInvocationScope,
+      taskId: NodeId,
+      correlationId: string,
+    ): Effect.fn.Return<OrchestratorMcpTaskCancelResult, OrchestratorMcpFailure> {
+      if (Option.isNone(sqlForRemoteForce))
+        return yield* failure("orchestration_error", "Remote task storage is unavailable.");
+      const forced = yield* forceStopRemoteTask(correlationId, authorizeRemoteWrite(scope)).pipe(
+        Effect.provideService(SqlClient.SqlClient, sqlForRemoteForce.value),
+        Effect.provideService(SshRemoteDispatch.SshRemoteDispatch, ssh),
+      );
+      const task = yield* readTask(scope, taskId);
+      return {
+        taskId,
+        status: isTerminalTaskStatus(task.status) ? task.status : "cancel_requested",
+        forceStop: {
+          outcome: forced.outcome,
+          sharedWithThreadIds: forced.sharedWithThreadIds,
+          note: `The child's run on ${forced.host} was ended by force, so its work may be incomplete. Its result arrives as that host reports it; read it with task.read.`,
+        },
+      };
+    },
+  );
+  const forceCancelTask = Effect.fn("OrchestratorMcpService.forceCancelTask")(function* (
+    scope: McpThreadInvocationScope,
+    taskId: NodeId,
+  ): Effect.fn.Return<OrchestratorMcpTaskCancelResult, OrchestratorMcpFailure> {
+    yield* requireCapability(scope);
+    const { subagents } = yield* threadManagement
+      .getThreadRecords(scope.thread.threadId, ["subagents"], { subagentIds: [taskId] })
+      .pipe(Effect.mapError(threadManagementFailure));
+    const remote = subagents.find(
+      (task) => task.id === taskId && task.origin === "app_owned" && task.promotedAt === undefined,
+    )?.remote;
+    if (remote !== undefined)
+      return yield* forceCancelRemoteTask(scope, taskId, remote.correlationId);
+    const childThreadId = subagents.find((task) => task.id === taskId)?.childThreadId ?? null;
+    // Force writes only to the child, which its user may have raised above the parent's modes.
+    const [parent, child] = yield* Effect.forEach(
+      [scope.thread.threadId, childThreadId],
+      (threadId) =>
+        threadId === null
+          ? Effect.succeed(null)
+          : threadManagement
+              .getThreadShell(threadId)
+              .pipe(Effect.mapError(threadManagementFailure)),
+    );
+    if (parent && child && child.deletedAt === null) {
+      yield* resolveRuntimeMode(parent.runtimeMode, child.runtimeMode).pipe(
+        Effect.andThen(resolveInteractionMode(parent.interactionMode, child.interactionMode)),
+        Effect.mapError((error) => forceModeRefusal(error.message)),
+      );
+    }
+    const forced = yield* threadManagement
+      .forceStopDelegatedTask({ parentThreadId: scope.thread.threadId, taskId })
+      .pipe(
+        Effect.mapError((error) =>
+          error._tag === "DelegatedForceStopRefused"
+            ? failure("task_not_cancellable", error.message)
+            : error._tag === "OrchestrationV2ForceStopThreadError" && error.reason !== undefined
+              ? failure("task_not_cancellable", `${error.reason}: ${error.message}`)
+              : threadManagementFailure(error),
+        ),
+      );
+    const task = yield* readTask(scope, taskId);
+    return {
+      taskId,
+      status: isTerminalTaskStatus(task.status) ? task.status : "cancel_requested",
+      forceStop: {
+        outcome: forced.outcome,
+        sharedWithThreadIds: forced.sharedWithThreadIds,
+        note: "The child's run was ended by force, so its work may be incomplete. Its lane slot is released as the run ends; read it with task.read.",
+      },
+    };
+  });
   const readTask = Effect.fn("OrchestratorMcpService.readTask")(function* (
     scope: McpThreadInvocationScope,
     taskId: NodeId,
@@ -1517,6 +1610,10 @@ const make = Effect.gen(function* () {
             ? "queued"
             : "running";
     const latestRun = ThreadManagementService.latestRun(childControls);
+    const stop = yield* readRunStop(
+      task.childThreadId,
+      (ThreadManagementService.latestActiveRun(childControls) ?? latestRun)?.id ?? null,
+    );
     const questionRunIds = childControls.runs
       .filter(
         (run) =>
@@ -1635,6 +1732,7 @@ const make = Effect.gen(function* () {
         latestTerminalResultContextTransferId === resultContextTransferId
           ? null
           : latestTerminalResultContextTransferId,
+      ...(stop === undefined ? {} : { stop }),
       hasPendingQuestion:
         !isTerminalTaskStatus(status) &&
         childControls.runtimeRequests.some(
@@ -2261,6 +2359,7 @@ const make = Effect.gen(function* () {
           incrementalThreadRead: true,
           scheduledTasks: true,
           maxBatchThreads: 20,
+          taskForceStop: true,
         },
       };
     }),
@@ -2902,6 +3001,7 @@ const make = Effect.gen(function* () {
       }),
     cancelTask: Effect.fn("OrchestratorMcpService.cancelTask")(function* (callerScope, input) {
       const scope = yield* requireThreadScope(callerScope, "task_cancel");
+      if (input.force === true) return yield* forceCancelTask(scope, input.taskId);
       const current = yield* readTask(scope, input.taskId);
       const key = yield* requestKey(input.clientRequestId);
       const parentProjection = yield* threadManagement
@@ -3573,12 +3673,9 @@ const make = Effect.gen(function* () {
         parent === undefined || input.tail !== undefined
           ? []
           : directAppOwnedChildTasks(parent, target, returnedRunIds);
-      if (
-        parent !== undefined &&
-        scope.thread !== undefined &&
-        tasks.length > 0 &&
-        (input.textOffset ?? 0) === 0
-      ) {
+      // A read past the end of an item's text shows the agent nothing to acknowledge.
+      const readPastEnd = (input.textOffset ?? 0) > 0 && items.every((item) => !item.text);
+      if (parent !== undefined && scope.thread !== undefined && tasks.length > 0 && !readPastEnd) {
         for (const task of tasks) {
           const transfer = taskResultTransfer(parent, target, task);
           const resultRunId = transfer?.sourcePoint.runId ?? delegatedTaskRun(target, task)?.id;
@@ -3614,7 +3711,9 @@ const make = Effect.gen(function* () {
         target.runs.find((run) => run.id === (shell.activeRunId ?? shell.latestRunId)),
       );
       const summaryDigest = summary ? yield* readSummary(shell, target, timeline.totalItems) : null;
+      const stop = yield* readRunStop(shell.id, shell.activeRunId ?? shell.latestRunId);
       return {
+        ...(stop === undefined ? {} : { stop }),
         ...(cloudTask === undefined ? {} : { cloudTask }),
         thread,
         recentRuns,
@@ -3810,7 +3909,7 @@ const make = Effect.gen(function* () {
           .getThreadRecords(input.threadId, ["runs", "turnItems", "providerThreads"], {
             runIds,
             turnItemRunIds: runIds,
-            turnItemTypes: ["user_message", "assistant_message", "error"],
+            turnItemTypes: ["user_message", "assistant_message", "error", ...STOP_TURN_ITEM_TYPES],
           })
           .pipe(Effect.mapError(threadManagementFailure));
         const cloudTask = cloudTaskForRun(

@@ -167,3 +167,64 @@ it("removes a cancelled queued read without starting it", async () => {
   await Promise.all(reads);
   expect(read).not.toHaveBeenCalled();
 });
+
+it("a Check's value replaces its reference's cached failure and leaves other cached secrets alone", async () => {
+  const settings = decodeSettings({
+    secretProviders: {
+      vault: { kind: "one_password", label: "Vault", config: { account: "team" } },
+    },
+  });
+  const checked = decodeReference({ provider: "vault", reference: "op://work/item/password" });
+  const other = decodeReference({ provider: "vault", reference: "op://work/other/password" });
+  const read = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("locked"))
+    .mockResolvedValueOnce("other-value");
+  const resolve = makeSecretResolver(read);
+  await expect(resolve(settings.secretProviders, checked)).rejects.toThrow("Could not read secret");
+  expect(await resolve(settings.secretProviders, other)).toBe("other-value");
+  resolve.prime(settings.secretProviders, checked, "checked-value");
+  expect(await resolve(settings.secretProviders, checked)).toBe("checked-value");
+  expect(await resolve(settings.secretProviders, other)).toBe("other-value");
+  expect(read).toHaveBeenCalledTimes(2);
+});
+
+it("a read in flight when a Check primes its reference cannot overwrite the checked value", async () => {
+  const settings = decodeSettings({
+    secretProviders: {
+      vault: { kind: "one_password", label: "Vault", config: { account: "team" } },
+    },
+  });
+  const checked = decodeReference({ provider: "vault", reference: "op://work/item/password" });
+  const gate = Promise.withResolvers<string>();
+  const read = vi.fn(() => gate.promise);
+  const resolve = makeSecretResolver(read);
+  const inFlight = resolve(settings.secretProviders, checked);
+  resolve.prime(settings.secretProviders, checked, "checked-value");
+  // The earlier reader's 1Password prompt is dismissed after the Check succeeded.
+  gate.reject(new Error("dismissed"));
+  await expect(inFlight).rejects.toThrow("Could not read secret");
+  expect(await resolve(settings.secretProviders, checked)).toBe("checked-value");
+  expect(read).toHaveBeenCalledTimes(1);
+});
+
+it("a Check never grows the secret cache past its bound", async () => {
+  const settings = decodeSettings({
+    secretProviders: {
+      vault: { kind: "one_password", label: "Vault", config: { account: "team" } },
+    },
+  });
+  const read = vi.fn().mockResolvedValue("fixture");
+  const resolve = makeSecretResolver(read);
+  const ref = (index: number) =>
+    decodeReference({ provider: "vault", reference: `op://work/item/field${index}` });
+  for (let index = 0; index < 128; index++) await resolve(settings.secretProviders, ref(index));
+  resolve.prime(settings.secretProviders, ref(128), "checked-value");
+  await expect(resolve(settings.secretProviders, ref(128))).rejects.toThrow(
+    "Secret provider cache is full",
+  );
+  // A reference already cached is still replaced.
+  resolve.prime(settings.secretProviders, ref(0), "checked-value");
+  expect(await resolve(settings.secretProviders, ref(0))).toBe("checked-value");
+  expect(read).toHaveBeenCalledTimes(128);
+});

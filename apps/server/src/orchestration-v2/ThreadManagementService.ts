@@ -31,6 +31,7 @@ import {
   type OrchestrationV2ThreadTranscript,
   type OrchestrationV2ThreadShell,
   type OrchestrationV2TurnItem,
+  type NodeId,
   ProjectId,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   ProviderInstanceId,
@@ -84,6 +85,11 @@ import {
   ThreadManagementError,
 } from "./ThreadManagementErrors.ts";
 import { ThreadManagementBackgroundWaitError } from "./threadManagementBackgroundWait.ts";
+import {
+  DelegatedForceStopRefused,
+  forceStopDelegatedTask,
+  forceStopUnresponsiveRun,
+} from "./delegatedForceStop.ts";
 
 export * from "./ThreadManagementErrors.ts";
 export { ThreadManagementBackgroundWaitError };
@@ -324,6 +330,31 @@ export interface ThreadManagementServiceShape {
   readonly forceStopThread: (
     input: OrchestrationV2ForceStopThreadInput,
   ) => Effect.Effect<OrchestrationV2ForceStopThreadResult, OrchestrationV2ForceStopThreadError>;
+  /** goat#2338: the parent's Force stop of its own task's unresponsive child; refuses otherwise. */
+  readonly forceStopDelegatedTask: (input: {
+    readonly parentThreadId: ThreadId;
+    readonly taskId: NodeId;
+  }) => Effect.Effect<
+    OrchestrationV2ForceStopThreadResult & {
+      readonly childThreadId: ThreadId;
+      readonly runId: RunId;
+    },
+    | OrchestrationV2ForceStopThreadError
+    | DelegatedForceStopRefused
+    | Orchestrator.OrchestratorV2Error
+  >;
+  /** goat#2338: Force stop of the thread's live run, refused unless its Stop went unanswered. */
+  readonly forceStopUnresponsiveRun: (input: {
+    readonly threadId: ThreadId;
+    readonly runId?: RunId | undefined;
+    readonly reason: string;
+    readonly subject: string;
+  }) => Effect.Effect<
+    OrchestrationV2ForceStopThreadResult & { readonly runId: RunId },
+    | OrchestrationV2ForceStopThreadError
+    | DelegatedForceStopRefused
+    | Orchestrator.OrchestratorV2Error
+  >;
   readonly awaitBackgroundTasks: (input: {
     readonly threadId: ThreadId;
     readonly taskIds: ReadonlyArray<string>;
@@ -1640,10 +1671,12 @@ const make = Effect.gen(function* () {
     return { type: "interrupt_requested", run: interruptibleRun, dispatch } as const;
   });
 
-  const forceStopThread: ThreadManagementServiceShape["forceStopThread"] = Effect.fn(
-    "ThreadManagementService.forceStopThread",
-  )(
-    function* (input) {
+  const forceStop = Effect.fn("ThreadManagementService.forceStopThread")(
+    function* (
+      input: OrchestrationV2ForceStopThreadInput,
+      reason: string,
+      recheck?: (target: OrchestrationV2Run | undefined) => Effect.Effect<void, Error>,
+    ) {
       // Under the thread lock no new run can be created between the check and the kill. The
       // settlement below dispatches, which takes that lock itself, so it runs after release.
       const { records, target, killed } = yield* threadDispatch.withLock(
@@ -1677,6 +1710,7 @@ const make = Effect.gen(function* () {
               reason: "cloud",
             });
           }
+          if (recheck !== undefined) yield* recheck(target);
           // Shared scopes are never tracked per thread, so this only kills the thread's own agent.
           const killed = yield* agentScope.kill(input.threadId);
           return { records, target, killed };
@@ -1701,7 +1735,7 @@ const make = Effect.gen(function* () {
                 commandId,
                 threadId: input.threadId,
                 runId: run.id,
-                reason: FORCE_STOP_REASON,
+                reason,
               })
             : orchestrator.dispatch({
                 type: "thread.background-work.settle",
@@ -1709,12 +1743,12 @@ const make = Effect.gen(function* () {
                 threadId: input.threadId,
                 providerThreadId: providerTurn.providerThreadId,
                 providerTurnId: providerTurn.id,
-                reason: FORCE_STOP_REASON,
+                reason,
               });
       }
       const { shared, releasing, sharedWith } = yield* tearDownForceStoppedRun(
         { threadDispatch, orchestrator, sessions, layerScope },
-        { threadId: input.threadId, target, detail: FORCE_STOP_REASON },
+        { threadId: input.threadId, target, detail: reason },
       );
       return {
         outcome: killed ? "killed" : shared ? "shared" : releasing ? "releasing" : "released",
@@ -1730,6 +1764,8 @@ const make = Effect.gen(function* () {
         ),
       ),
   );
+  const forceStopThread: ThreadManagementServiceShape["forceStopThread"] = (input) =>
+    forceStop(input, FORCE_STOP_REASON);
 
   const stopWorkflow: ThreadManagementServiceShape["stopWorkflow"] = Effect.fn(
     "ThreadManagementService.stopWorkflow",
@@ -1971,6 +2007,20 @@ const make = Effect.gen(function* () {
     stopDelegatedTasks,
     stopWorkflow,
     forceStopThread,
+    forceStopDelegatedTask: (input) =>
+      forceStopDelegatedTask(
+        {
+          getThreadRecords: orchestrator.getThreadRecords,
+          getThreadShell: orchestrator.getThreadShell,
+          forceStop,
+        },
+        input,
+      ),
+    forceStopUnresponsiveRun: (input) =>
+      forceStopUnresponsiveRun(
+        { getThreadRecords: orchestrator.getThreadRecords, forceStop },
+        input,
+      ),
     awaitBackgroundTasks,
     getThreadEventSequence: orchestrator.getThreadEventSequence,
     recoverDelegatedTask: orchestrator.recoverDelegatedTask,

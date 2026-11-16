@@ -12,6 +12,8 @@ import {
   RemoteResolveBindingResult,
   OriginBoundDeleteInput,
   OriginBoundDeleteResult,
+  OriginBoundForceStopInput,
+  OriginBoundForceStopResult,
 } from "@goat/contracts";
 import { Tool, Toolkit } from "effect/ai";
 import * as RemoteReportService from "../../../remoteReports/RemoteReportService.ts";
@@ -68,6 +70,12 @@ const BoundDeleteReceiptTool = Tool.make(agentSurfaceRegistry["origin.bound_dele
   parameters: OriginBoundDeleteInput,
   success: OriginBoundDeleteResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["origin.bound_delete_receipt"]));
+const BoundForceStopTool = Tool.make(agentSurfaceRegistry["origin.force_stop"].name, {
+  ...boundDelete,
+  description: agentSurfaceRegistry["origin.force_stop"].description,
+  parameters: OriginBoundForceStopInput,
+  success: OriginBoundForceStopResult,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["origin.force_stop"]));
 export const RemoteReportToolkit = Toolkit.make(
   ReportTool,
   ReceiptTool,
@@ -75,4 +83,5 @@ export const RemoteReportToolkit = Toolkit.make(
   ResolveBindingTool,
   BoundDeleteTool,
   BoundDeleteReceiptTool,
+  BoundForceStopTool,
 );

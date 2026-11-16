@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import { MessageId, ProviderTurnId, RunId } from "@goat/contracts";
+import type { CodexAppServerReplayEntry } from "effect-codex-app-server/replay";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -8,6 +9,7 @@ import * as Option from "effect/Option";
 import { TestClock } from "effect/testing";
 
 import { fixture, layerAdapterTest } from "./CodexAdapterV2.attachment.testkit.ts";
+import { CODEX_TEST_MODEL_SELECTION, CODEX_TEST_RUNTIME_POLICY } from "./CodexAdapterV2.testkit.ts";
 import { makeCodexReplayTurn } from "./CodexReplay.testkit.ts";
 
 type Fixture = ReturnType<typeof fixture>;
@@ -75,13 +77,22 @@ const open = (scenario: string) =>
     return f;
   });
 const starts = (replay: Replay) => replay.requests.filter((method) => method === "turn/start");
+// Codex's answer to a thread load while a turn still runs on it.
+const busyThread = (f: Fixture, id: number): CodexAppServerReplayEntry => {
+  const entry = f.answer(id);
+  if (entry.type !== "emit_inbound") return entry;
+  const frame = entry.frame as { result: { thread: Record<string, unknown> } };
+  const thread = { ...frame.result.thread, status: { type: "active", activeFlags: [] } };
+  return { ...entry, frame: { ...frame, result: { ...frame.result, thread } } };
+};
 
 describe("Codex turn start on a busy native thread", () => {
   // Was: steer into the earlier run's turn. The maintainer chose to stop such a turn instead. The
   // likely incident path: a Stop Codex never confirmed ends the run in GOAT while Codex keeps the turn
-  // running, and the next message used to send turn/start onto it.
+  // running, and the next message used to send turn/start onto it. Such a Stop now keeps the run open
+  // until Force stop detaches the thread, after which a resumed Codex can still run that turn.
   it.effect(
-    "regression: after a Stop Codex never confirmed, the next run stops that turn before starting instead of queueing one (H2)",
+    "regression: after a Stop Codex never confirmed and Force stop's unload, the next run stops that turn before starting instead of queueing one (H2)",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -90,9 +101,40 @@ describe("Codex turn start on a busy native thread", () => {
           yield* f.turnStart(3, 1, false);
           expect(f, 4, "turn/interrupt", { threadId: f.nativeThreadId, turnId: "turn-1" });
           f.entries.push({ type: "emit_inbound", afterMs: 1_000, frame: { id: 4, result: {} } });
-          interrupt(f, 5, "turn-1");
+          expect(f, 5, "thread/unsubscribe", { threadId: f.nativeThreadId });
+          answer(f, 5, { status: "unsubscribed" });
+          // Codex still holds the thread and runs the turn GOAT stopped, so the resume only rejoins it.
+          f.read(6, "active");
+          expect(f, 7, "thread/resume", { threadId: f.nativeThreadId, excludeTurns: true });
+          f.entries.push(busyThread(f, 7));
+          expect(f, 8, "thread/turns/list", {
+            threadId: f.nativeThreadId,
+            itemsView: "summary",
+            sortDirection: "desc",
+            limit: 10,
+          });
+          answer(f, 8, {
+            data: [makeCodexReplayTurn({ id: "turn-1", status: "inProgress" })],
+            nextCursor: null,
+          });
+          interrupt(f, 9, "turn-1");
           turnEnded(f, "turn-1", "interrupted");
-          yield* f.turnStart(6, 2, false);
+          // The rejoined thread kept the config it had, so the now quiet thread reloads under GOAT's.
+          const loaded = (id: number) => {
+            expect(f, id, "thread/loaded/list", {});
+            answer(f, id, { data: [f.nativeThreadId], nextCursor: null });
+          };
+          loaded(10);
+          f.goalGet(11, f.nativeThreadId, { result: { goal: null } });
+          loaded(12);
+          expect(f, 13, "thread/unsubscribe", { threadId: f.nativeThreadId });
+          answer(f, 13, { status: "unsubscribed" });
+          f.resume(14, f.threadParams());
+          yield* f.turnStart(15, 2, {
+            computerUse: false,
+            screenCode: false,
+            reloadedAfterRestart: true,
+          });
           f.turnCompleted(2);
           const replay = yield* f.open;
           yield* replay.startTurn(1);
@@ -101,17 +143,37 @@ describe("Codex turn start on a busy native thread", () => {
               providerThread: replay.providerThread,
               providerTurnId: ProviderTurnId.make((yield* runTurn(replay, scenario, 1)).id),
             })
-            .pipe(Effect.forkScoped);
+            .pipe(Effect.flip, Effect.forkScoped);
           yield* TestClock.adjust("12 seconds");
-          yield* Fiber.join(stopped);
+          assert.equal((yield* Fiber.join(stopped))._tag, "ProviderAdapterInterruptTimeoutError");
+          assert.isTrue(Option.isNone(yield* replay.reportedTerminal));
+          // Force stop detaches the thread from the shared app-server.
+          yield* replay.runtime.unloadThread!({ providerThread: replay.providerThread });
           assert.equal((yield* replay.terminal).status, "interrupted");
+          yield* replay.runtime.resumeThread({
+            threadId: replay.threadId,
+            providerThread: replay.providerThread,
+            runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+            modelSelection: CODEX_TEST_MODEL_SELECTION,
+          });
           yield* replay.startTurn(2);
           assert.equal((yield* replay.terminal).status, "completed");
           assert.deepStrictEqual(
-            replay.requests.filter(
-              (method) => method === "turn/interrupt" || method === "turn/start",
+            replay.requests.filter((method) =>
+              ["turn/interrupt", "turn/start", "thread/unsubscribe", "thread/resume"].includes(
+                method,
+              ),
             ),
-            ["turn/start", "turn/interrupt", "turn/interrupt", "turn/start"],
+            [
+              "turn/start",
+              "turn/interrupt",
+              "thread/unsubscribe",
+              "thread/resume",
+              "turn/interrupt",
+              "thread/unsubscribe",
+              "thread/resume",
+              "turn/start",
+            ],
           );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),

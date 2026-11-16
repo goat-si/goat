@@ -1,4 +1,5 @@
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -8,9 +9,10 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as AntigravityInstallation from "./AntigravityInstallation.ts";
+import * as ModelManifest from "./ModelManifest.ts";
 import type { AntigravityReleaseAsset } from "./antigravityRelease.ts";
 
 export const serverContents = "antigravity runtime\n";
@@ -118,6 +120,14 @@ interface HarnessOptions {
   readonly useDefaultValidation?: boolean;
   readonly useBundledRelease?: boolean;
   readonly connectTimeout?: boolean;
+  /** Leaves the release unset, so the installer looks up Google's CLI manifest over the pinned one. */
+  readonly native?: boolean;
+  readonly nativeVersion?: string;
+  /** Rewrites the published manifest; null answers 503. */
+  readonly nativeManifest?: (manifest: { version: string; url: string; sha512: string }) => unknown;
+  readonly manifest?: Effect.Effect<ModelManifest.ModelManifestData>;
+  /** The CLI download answers with a redirect here, followed as fetch does unless refused. */
+  readonly redirectTo?: string;
 }
 
 export const makeHarness = Effect.fn("test.makeAntigravityInstallation")(function* (
@@ -141,6 +151,9 @@ export const makeHarness = Effect.fn("test.makeAntigravityInstallation")(functio
     });
   }
   const stagingReleased = yield* Deferred.make<void>();
+  const nativeSha512 = Hex.encode(
+    yield* (yield* Crypto.Crypto).digest("SHA-512", archive).pipe(Effect.orDie),
+  );
   const requests: string[] = [];
   const validations: Array<{
     executable: AntigravityInstallation.AntigravityExecutable;
@@ -160,7 +173,7 @@ export const makeHarness = Effect.fn("test.makeAntigravityInstallation")(functio
   });
   const installation = yield* AntigravityInstallation.makeAntigravityInstallation({
     baseDir,
-    ...(options.useBundledRelease ? {} : { releaseAsset: asset }),
+    ...(options.useBundledRelease || options.native ? {} : { releaseAsset: asset }),
     ...(options.useDefaultValidation
       ? {}
       : {
@@ -177,11 +190,34 @@ export const makeHarness = Effect.fn("test.makeAntigravityInstallation")(functio
     Effect.provideService(HostProcess.Platform, platform),
     Effect.provideService(HostProcess.Architecture, arch),
     Effect.provideService(HostProcess.Environment, { PATH: options.path ?? "" }),
+    Effect.provideService(ModelManifest.ModelManifest, {
+      current: options.manifest ?? Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
+      refresh: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
+      forceRefresh: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
+      refreshOnDemand: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
+      refreshInBackground: Effect.void,
+    }),
     Effect.provideService(
       HttpClient.HttpClient,
-      HttpClient.make((request) =>
+      HttpClient.make((request, _url, _signal, fiber) =>
         Effect.suspend(() => {
           requests.push(request.url);
+          if (options.native && request.url.includes("/manifests/")) {
+            return Effect.succeed(nativeManifestResponse(request, platform, nativeSha512, options));
+          }
+          if (options.redirectTo !== undefined && request.url.includes("storage.googleapis.com")) {
+            const init = Context.getOrUndefined(fiber.context, FetchHttpClient.RequestInit);
+            if (init?.redirect === "error" || init?.redirect === "manual")
+              return Effect.fail(
+                new HttpClientError.HttpClientError({
+                  reason: new HttpClientError.TransportError({
+                    request,
+                    cause: new TypeError("fetch failed: unexpected redirect"),
+                  }),
+                }),
+              );
+            requests.push(options.redirectTo);
+          }
           if (options.connectTimeout)
             return Effect.fail(
               new HttpClientError.HttpClientError({
@@ -230,3 +266,33 @@ export const terminalState = (
     Stream.runHead,
     Effect.map(Option.getOrThrow),
   );
+
+const nativeManifestResponse = (
+  request: Parameters<typeof HttpClientResponse.fromWeb>[0],
+  platform: NodeJS.Platform,
+  sha512: string,
+  options: HarnessOptions,
+) => {
+  const version = options.nativeVersion ?? "1.5.7";
+  const folder = platform === "win32" ? "windows-x64" : "linux-x64";
+  const file = platform === "win32" ? "cli_windows_x64.exe" : "cli_linux_x64.tar.gz";
+  const manifest = {
+    version,
+    url:
+      "https://storage.googleapis.com/antigravity-public/antigravity-cli/" +
+      version +
+      "-123/" +
+      folder +
+      "/" +
+      file,
+    sha512,
+  };
+  const published =
+    options.nativeManifest === undefined ? manifest : options.nativeManifest(manifest);
+  return HttpClientResponse.fromWeb(
+    request,
+    published === null
+      ? new Response("unavailable", { status: 503 })
+      : new Response(encodeJsonString(published)),
+  );
+};

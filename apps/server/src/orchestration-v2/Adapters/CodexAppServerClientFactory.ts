@@ -96,6 +96,65 @@ export const makeCodexAppServerSpawnCommand = Effect.fn(
   });
 });
 
+const MAX_ROUTED_PROTOCOL_REQUESTS = 1_024;
+
+/**
+ * One app-server serves every Codex thread on an instance, so each frame goes to the thread it
+ * belongs to: a response to its request's thread, a child to its parent's.
+ */
+function makeCodexProtocolThreadRouter(
+  threadFor: ((nativeThreadId: string) => ThreadId | undefined) | undefined,
+) {
+  const learned = new Map<string, ThreadId>();
+  const byRequest = new Map<string, ThreadId>();
+  const lookup = (nativeThreadId: string) =>
+    threadFor?.(nativeThreadId) ?? learned.get(nativeThreadId);
+  return (
+    direction: "incoming" | "outgoing",
+    frame: unknown,
+    nativeThreadId: string | undefined,
+  ): ThreadId | undefined => {
+    const id = objectField(frame, "id");
+    const isRequest = typeof objectField(frame, "method") === "string";
+    const requestKey =
+      typeof id === "string" || typeof id === "number"
+        ? `${isRequest === (direction === "outgoing") ? "client" : "server"}:${id}`
+        : undefined;
+    if (!isRequest) {
+      if (requestKey === undefined) return undefined;
+      const threadId = byRequest.get(requestKey);
+      byRequest.delete(requestKey);
+      const resultThreadId = threadString(
+        objectField(objectField(objectField(frame, "result"), "thread"), "id"),
+      );
+      if (threadId !== undefined && resultThreadId !== undefined)
+        learned.set(resultThreadId, threadId);
+      return threadId ?? (resultThreadId === undefined ? undefined : lookup(resultThreadId));
+    }
+    let threadId = nativeThreadId === undefined ? undefined : lookup(nativeThreadId);
+    if (threadId === undefined && nativeThreadId !== undefined) {
+      const spawn = objectField(
+        objectField(
+          objectField(objectField(objectField(frame, "params"), "thread"), "source"),
+          "subAgent",
+        ),
+        "thread_spawn",
+      );
+      const parentThreadId = threadString(objectField(spawn, "parent_thread_id"));
+      threadId = parentThreadId === undefined ? undefined : lookup(parentThreadId);
+      if (threadId !== undefined) learned.set(nativeThreadId, threadId);
+    }
+    if (threadId !== undefined && requestKey !== undefined) {
+      byRequest.set(requestKey, threadId);
+      // A request Codex never answers must not keep its entry forever.
+      const oldest = byRequest.keys().next();
+      if (byRequest.size > MAX_ROUTED_PROTOCOL_REQUESTS && !oldest.done)
+        byRequest.delete(oldest.value);
+    }
+    return threadId;
+  };
+}
+
 export function makeCodexAppServerProtocolLogger(input: {
   readonly nativeEventLogger: ProviderEventLoggers.EventNdjsonLogger | undefined;
   readonly threadId: ThreadId;
@@ -107,13 +166,15 @@ export function makeCodexAppServerProtocolLogger(input: {
     return undefined;
   }
 
+  const routeThread = makeCodexProtocolThreadRouter(input.threadFor);
   return (event) => {
     if (!shouldPersistProviderEvent("native", event)) return Effect.void;
     const nativeThreadId = nativeThreadIdOf(event);
+    // A frame tied to no thread, such as initialized, stays with the session's opener.
     const threadId =
-      nativeThreadId === undefined
-        ? input.threadId
-        : (input.threadFor?.(nativeThreadId) ?? input.threadId);
+      (event.stage === "decoded"
+        ? routeThread(event.direction, event.payload, nativeThreadId)
+        : undefined) ?? input.threadId;
     return nativeEventLogger
       .write(
         {

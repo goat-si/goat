@@ -1,5 +1,7 @@
 import type { ServerProvider, ServerProviderState } from "@goat/contracts";
 import type * as CodexSchema from "effect-codex-app-server/schema";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import type { CodexAppServerProviderSnapshot } from "./CodexProvider.ts";
 
 function codexAccountAuthLabel(
@@ -58,6 +60,44 @@ function codexAccountEmail(account: CodexSchema.V2GetAccountResponse["account"])
 
 // Codex keeps `requiresOpenaiAuth` for its built-in provider even when `openai_base_url` sends
 // requests elsewhere (OpenCodex); the missing login stays decisive for OpenAI or unverified endpoints.
+const CodexRoutingConfig = Schema.Struct({
+  model_provider: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  openai_base_url: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  model_providers: Schema.optionalKey(
+    Schema.Record(
+      Schema.String,
+      Schema.Struct({ base_url: Schema.optionalKey(Schema.NullOr(Schema.String)) }),
+    ),
+  ),
+});
+const decodeCodexRoutingConfig = Schema.decodeUnknownOption(CodexRoutingConfig);
+
+function routesToNativeOpenai(config: unknown): boolean {
+  const decoded = decodeCodexRoutingConfig(config);
+  if (Option.isNone(decoded)) return false;
+  const routing = decoded.value;
+  const providerId = routing.model_provider ?? "openai";
+  const provider = routing.model_providers?.[providerId];
+  if (providerId !== "openai" && !provider) return false;
+  const baseUrl =
+    providerId === "openai" ? routing.openai_base_url || undefined : provider?.base_url;
+  // A provider without an override uses Codex's auth-dependent OpenAI default.
+  if (baseUrl == null) return true;
+  if (!URL.canParse(baseUrl)) return false;
+  const url = new URL(baseUrl);
+  return (
+    url.protocol === "https:" &&
+    (url.hostname === "api.openai.com" || url.hostname === "chatgpt.com")
+  );
+}
+
+// A stored login does not mean this provider's traffic spends that login's quota.
+export const codexRoutesSpendNativeQuota = (
+  account: CodexSchema.V2GetAccountResponse,
+  config: unknown,
+): boolean =>
+  account.requiresOpenaiAuth && account.account?.type !== "apiKey" && routesToNativeOpenai(config);
+
 export function routesAwayFromOpenAi(effectiveBaseUrl: string | undefined): boolean {
   const host = URL.parse(effectiveBaseUrl ?? "")?.hostname.replace(/\.+$/, "");
   return (

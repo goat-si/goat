@@ -10,24 +10,20 @@ import { makeMemoryProviderAuthority } from "./MemoryProviderAuthority.ts";
 import { isReleasedRuntimeRequest } from "./ReleasedRuntimeRequest.ts";
 import * as CodexRoute from "../provider/CodexRouteService.ts";
 import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapterInfrastructure.ts";
-import type { MemorySnapshotPolicy } from "../memory/MemorySnapshot.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
   isOrchestrationV2WorkActive,
-  ModelSelection,
   type AuthEnvironmentScope,
-  type MemoryTaskGrantCeiling,
+  type OrchestrationV2AppThread,
+  type OrchestrationV2Run,
+  type OrchestrationV2Subagent,
   type RunId,
-  type ScreenBindingHints,
-  type TurnCapability,
-  type NodeId,
   OrchestrationV2DomainEvent,
   OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
   ProviderInstanceId,
-  type ProviderInteractionMode,
   ProviderSessionId,
   ThreadId,
   type ProviderThreadId,
@@ -63,6 +59,7 @@ import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
 import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import type * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as ServerSettings from "../serverSettings.ts";
 import * as CuaDriver from "../cua/CuaDriver.ts";
 import * as ComputerUse from "../cua/ComputerUseAttachment.ts";
@@ -95,7 +92,6 @@ import {
   ProviderSessionActivityError,
   ProviderSessionCloseError,
   ProviderSessionLookupError,
-  ProviderSessionManagerV2Error,
   ProviderSessionOpenError,
   ProviderSessionReleaseError,
   ProviderSessionReleaseReason,
@@ -103,6 +99,16 @@ import {
 import { prepareScreenTurn, sameScreenBindingHints } from "./ScreenSkills.ts";
 import { instanceUrlOpener } from "../urlOpener/UrlOpenerShim.ts";
 
+import type {
+  ProviderMemoryPrepareInput,
+  McpCredentialRotation,
+  ProviderSessionManagerV2Shape,
+} from "./ProviderSessionManagerTypes.ts";
+export type {
+  ProviderMemoryPrepareInput,
+  McpCredentialRotation,
+  ProviderSessionManagerV2Shape,
+} from "./ProviderSessionManagerTypes.ts";
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
 const RELEASE_SCOPE_CLOSE_TIMEOUT_MS = 30 * 1000;
@@ -130,118 +136,29 @@ export {
   ProviderSessionReleaseReason,
 } from "./ProviderSessionManagerErrors.ts";
 
-export interface ProviderMemoryPrepareInput {
-  readonly runId?: RunId;
-  readonly delegatedTaskId?: NodeId;
-  readonly threadId: ThreadId;
-  readonly providerInstanceId: ProviderInstanceId;
-  /** Explicit null is ordinary; missing legacy task authority is none. */
-  readonly memoryGrantCeiling?: MemoryTaskGrantCeiling | null;
-  readonly readOnly?: boolean;
-  /** Plan turns never get computer use. */
-  readonly interactionMode?: ProviderInteractionMode;
-  readonly dispatchScopes?: ReadonlyArray<AuthEnvironmentScope>;
-  /** What this turn's `@computer` / `@browser` chips asked for; the next turn starts over. */
-  readonly turnCapabilities?: ReadonlyArray<TurnCapability>;
-  readonly screenBindingHints?: ScreenBindingHints;
-}
-
-/** What opening a provider session for a turn admits; the same for a new or a shared session. */
-export interface McpCredentialRotation {
-  readonly threadId: ThreadId;
-  readonly providerInstanceId: ProviderInstanceId;
-  readonly providerSessionId: string;
-  readonly grantedScopes: ReadonlyArray<AuthEnvironmentScope>;
-  readonly memoryPolicy: McpSessionRegistry.McpMemoryPolicy;
-}
-
-export interface ProviderSessionManagerV2Shape {
-  /** Positive execution authority with prepare identity; callers also match the run/task projection. */
-  readonly memoryAccessInputs?: (
-    threadId: ThreadId,
-    providerInstanceId: ProviderInstanceId,
-  ) => Effect.Effect<
-    | (ProviderMemoryPrepareInput & {
-        readonly currentMemoryGrant: Exclude<MemoryTaskGrantCeiling, "none">;
-      })
-    | undefined
+/** Matches planDelegatedCompletionDelivery: true while a delegated task's result still wakes the thread. */
+export const delegatedTaskWillWake = (records: {
+  readonly thread: Pick<OrchestrationV2AppThread, "archivedAt" | "deletedAt">;
+  readonly runs: ReadonlyArray<Pick<OrchestrationV2Run, "id" | "delegatedCompletion">>;
+  readonly subagents: ReadonlyArray<
+    Pick<OrchestrationV2Subagent, "origin" | "status" | "runId" | "completionDelivery">
   >;
-  readonly currentMemoryPolicy?: (threadId: ThreadId) => Effect.Effect<MemorySnapshotPolicy>;
-  readonly prepareMcpSession?: (input: ProviderMemoryPrepareInput) => Effect.Effect<void>;
-  readonly mcpCredentialRotations?: Stream.Stream<McpCredentialRotation>;
-
-  readonly shutdown: Effect.Effect<void>;
-  readonly open: (input: {
-    readonly threadId: ThreadId;
-    readonly providerSessionId: ProviderSessionId;
-    readonly modelSelection: ModelSelection;
-    readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
-    readonly runId?: RunId;
-    readonly delegatedTaskId?: NodeId;
-    readonly memoryGrantCeiling?: MemoryTaskGrantCeiling | null;
-    readonly readOnly?: boolean;
-    readonly dispatchScopes?: ReadonlyArray<AuthEnvironmentScope>;
-    readonly turnCapabilities?: ReadonlyArray<TurnCapability>;
-    readonly screenBindingHints?: ScreenBindingHints;
-    readonly resumeFromSession?: OrchestrationV2ProviderSession;
-    readonly initialNativeThreadId?: string;
-    readonly initialProviderItemIdentityVersion?: 2;
-    /** Set for a new turn: a process that predates its model is restarted when idle, or refused. */
-    readonly startsTurn?: boolean;
-  }) => Effect.Effect<
-    ProviderAdapter.ProviderAdapterV2SessionRuntime,
-    ProviderSessionManagerV2Error
-  >;
-  readonly get: (
-    providerSessionId: ProviderSessionId,
-  ) => Effect.Effect<
-    Option.Option<ProviderAdapter.ProviderAdapterV2SessionRuntime>,
-    ProviderSessionManagerV2Error
-  >;
-  readonly isLive: (providerSessionId: ProviderSessionId) => Effect.Effect<boolean>;
-  readonly close: (
-    providerSessionId: ProviderSessionId,
-  ) => Effect.Effect<void, ProviderSessionManagerV2Error>;
-  readonly closeInstance: (
-    instanceId: ProviderInstanceId,
-  ) => Effect.Effect<void, ProviderSessionManagerV2Error>;
-  readonly release: (input: {
-    readonly providerSessionId: ProviderSessionId;
-    readonly reason: ProviderSessionReleaseReason;
-    readonly detail?: string;
-  }) => Effect.Effect<void, ProviderSessionManagerV2Error>;
-  readonly detach: (input: {
-    readonly providerSessionId: ProviderSessionId;
-    readonly threadId: ThreadId;
-    readonly detail?: string;
-    readonly revokeMcpCredential?: boolean;
-  }) => Effect.Effect<void, ProviderSessionManagerV2Error>;
-  /** Ends a turn start's catalog-restart reservation once that start attempt has exited. */
-  readonly settleTurnStart: (input: {
-    readonly threadId: ThreadId;
-    readonly runId: RunId;
-  }) => Effect.Effect<void>;
-  /**
-   * Releases the session unless, at the moment of removal, a turn other than run `runOrdinal`'s
-   * on `ownProviderThreadIds` is busy on it. Checked atomically with turn starts. Succeeds with
-   * whether it was released.
-   */
-  readonly releaseUnlessBusy: (input: {
-    readonly providerSessionId: ProviderSessionId;
-    readonly ownProviderThreadIds: ReadonlyArray<ProviderThreadId>;
-    readonly runOrdinal: number;
-    readonly reason: ProviderSessionReleaseReason;
-    readonly detail?: string;
-  }) => Effect.Effect<boolean, ProviderSessionManagerV2Error>;
-  /**
-   * Other threads with a run or background work on this session's shared process; empty when
-   * it serves one thread.
-   */
-  readonly otherWorkingThreads: (input: {
-    readonly providerSessionId: ProviderSessionId;
-    readonly threadId: ThreadId;
-  }) => Effect.Effect<ReadonlyArray<ThreadId>>;
-}
+}): boolean =>
+  records.thread.archivedAt === null &&
+  records.thread.deletedAt === null &&
+  records.subagents.some((task) => {
+    const run = records.runs.find((candidate) => candidate.id === task.runId);
+    const delivery = task.completionDelivery?.state;
+    return (
+      task.origin === "app_owned" &&
+      isOrchestrationV2WorkActive(task.status) &&
+      run !== undefined &&
+      (run.delegatedCompletion?.disposition ?? "open") === "open" &&
+      delivery !== "acknowledged" &&
+      delivery !== "delivered" &&
+      delivery !== "disposed"
+    );
+  });
 
 export class ProviderSessionManagerV2 extends Context.Service<
   ProviderSessionManagerV2,
@@ -366,6 +283,16 @@ export const layerWithOptions = (
       const providerEventIngestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
       const installationGate = yield* ProviderInstallationGate.current;
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const withPendingWake = <C extends McpProviderSession.McpProviderSessionConfig>(
+        threadId: ThreadId,
+        config: C,
+      ): C => ({
+        ...config,
+        hasPendingWake: projectionStore.getThreadRecords(threadId, ["runs", "subagents"]).pipe(
+          Effect.map(delegatedTaskWillWake),
+          Effect.orElseSucceed(() => false),
+        ),
+      });
       const agentScope = yield* AgentScope;
       const agentAccessSettings = Effect.fn("ProviderSessionManagerV2.agentAccessSettings")(
         function* (threadId: ThreadId, readOnly: boolean) {
@@ -671,7 +598,7 @@ export const layerWithOptions = (
                     yield* mcpSessions.set(
                       yield* withNativeSubagentLimit(
                         threadId,
-                        withUrlOpener(withTurnSkills(existing)),
+                        withUrlOpener(withTurnSkills(withPendingWake(threadId, existing))),
                       ),
                     );
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
@@ -719,7 +646,11 @@ export const layerWithOptions = (
                 yield* mcpSessions.set(
                   yield* withNativeSubagentLimit(
                     threadId,
-                    withUrlOpener(withTurnSkills({ ...credential.config, goatMcpServers })),
+                    withUrlOpener(
+                      withTurnSkills(
+                        withPendingWake(threadId, { ...credential.config, goatMcpServers }),
+                      ),
+                    ),
                   ),
                 );
                 yield* Ref.update(
@@ -1341,11 +1272,19 @@ export const layerWithOptions = (
           // Capture runtime identity before yielding; replacements can reuse the session id.
           const probedRuntime = entry.runtime;
           const hasPendingWork =
-            probedRuntime.hasPendingBackgroundWork === undefined
+            (probedRuntime.hasPendingBackgroundWork === undefined
               ? false
               : yield* probedRuntime.hasPendingBackgroundWork.pipe(
                   Retirement.unlessInterrupted(false),
-                );
+                )) ||
+            // Closing now would skip the archive of a child whose parent has not taken its result.
+            Option.isSome(
+              yield* Effect.findFirst(entry.idleThreadUnloads.keys(), (threadId) =>
+                delegatedChildArchive(threadId).pipe(
+                  Effect.map((child) => child === "awaiting_delivery"),
+                ),
+              ),
+            );
           const now = yield* Clock.currentTimeMillis;
           const pinnedSinceMs = entry.pinnedSinceMs ?? now;
           const pastPinCeiling = entry.retiring || now - pinnedSinceMs >= maxIdlePinMs;
@@ -1392,6 +1331,18 @@ export const layerWithOptions = (
               pinnedForMs: now - pinnedSinceMs,
             });
           }
+          // Closing skips the threads' own idle unloads, so archive delivered children first.
+          yield* Effect.forEach(
+            entry.idleThreadUnloads,
+            ([threadId, pending]) =>
+              unloadIdleThread({
+                providerSessionId: input.providerSessionId,
+                threadId,
+                generation: pending.generation,
+                archiveOnly: true,
+              }),
+            { discard: true },
+          );
           // Adapter probes yield; guard busyTurns and idleGeneration atomically when removing the entry.
           yield* releaseEntry({
             providerSessionId: input.providerSessionId,
@@ -1835,11 +1786,44 @@ export const layerWithOptions = (
         },
       );
 
+      // Provider clients list a delegated child as an ordinary conversation, so a
+      // finished one is archived once its parent has the result.
+      const delegatedChildArchive = Effect.fn("ProviderSessionManager.delegatedChildArchive")(
+        function* (threadId: ThreadId) {
+          const { thread, runs } = yield* projectionStore.getThreadRecords(threadId, ["runs"], {
+            runStatuses: [],
+            includeLatestRun: true,
+          });
+          // Follow-up tasks name their run; the initial task is the node the child forked from.
+          const taskId =
+            runs.at(-1)?.delegatedTaskId ??
+            (thread.forkedFrom?.type === "node" ? thread.forkedFrom.nodeId : undefined);
+          const parentThreadId = thread.lineage.parentThreadId;
+          if (parentThreadId === null || taskId === undefined) return undefined;
+          const task = (yield* projectionStore.getThreadRecords(parentThreadId, ["subagents"], {
+            subagentIds: [taskId],
+          })).subagents[0];
+          if (
+            task?.origin !== "app_owned" ||
+            task.childThreadId !== threadId ||
+            task.status !== "completed"
+          ) {
+            return undefined;
+          }
+          const delivery = task.completionDelivery?.state;
+          if (delivery === "pending" || delivery === "claimed") return "awaiting_delivery";
+          return delivery === "delivered" || delivery === "acknowledged" ? "ready" : undefined;
+        },
+        (effect) => effect.pipe(Effect.orElseSucceed(() => undefined)),
+      );
+
       const unloadIdleThread = Effect.fn("ProviderSessionManager.unloadIdleThread")(
         function* (input: {
           readonly providerSessionId: ProviderSessionId;
           readonly threadId: ThreadId;
           readonly generation: number;
+          /** Session release unloads only the threads it would archive, and never waits. */
+          readonly archiveOnly?: boolean;
         }): Effect.fn.Return<void> {
           const outcome = yield* threadAttachment.withLock(
             threadAttachmentKey(input),
@@ -1866,6 +1850,11 @@ export const layerWithOptions = (
                       .hasPendingBackgroundWorkForThread(pending.providerThread)
                       .pipe(Effect.catchCause(() => Effect.succeed(false)));
               if (hasPendingWork) return "deferred" as const;
+              const child = yield* delegatedChildArchive(input.threadId);
+              // Unloading now would miss the archive once the parent takes the result.
+              if (child === "awaiting_delivery") return "deferred" as const;
+              const archive = child === "ready";
+              if (input.archiveOnly === true && !archive) return "skipped" as const;
               const unloading = yield* Ref.modify(sessions, (current) => {
                 const latest = current.get(key);
                 if (
@@ -1889,8 +1878,23 @@ export const layerWithOptions = (
                 return [true, updated] as const;
               });
               if (!unloading) return "skipped" as const;
-              yield* unloadThread({ providerThread: pending.providerThread }).pipe(
-                Effect.timeout(UNLOAD_THREAD_TIMEOUT_MS),
+              const unload = (archiveThread: boolean) =>
+                unloadThread({
+                  providerThread: pending.providerThread,
+                  archive: archiveThread,
+                }).pipe(Effect.timeout(UNLOAD_THREAD_TIMEOUT_MS));
+              yield* unload(archive).pipe(
+                // A failed or timed-out archive may have left the thread loaded.
+                Effect.catch((cause) =>
+                  archive
+                    ? Effect.logWarning("orchestration-v2.driver-session.idle-archive-failed", {
+                        providerSessionId: input.providerSessionId,
+                        threadId: input.threadId,
+                        providerThreadId: pending.providerThread.id,
+                        cause,
+                      }).pipe(Effect.andThen(unload(false)))
+                    : Effect.fail(cause),
+                ),
                 Effect.catchCause((cause) =>
                   Effect.logWarning("orchestration-v2.driver-session.idle-unload-failed", {
                     providerSessionId: input.providerSessionId,
@@ -1904,7 +1908,7 @@ export const layerWithOptions = (
             }),
           );
           // Wait outside the lock so the next attach is not blocked.
-          if (outcome === "deferred") {
+          if (outcome === "deferred" && input.archiveOnly !== true) {
             yield* Effect.sleep(Duration.millis(idleTimeoutMs));
             return yield* unloadIdleThread(input);
           }

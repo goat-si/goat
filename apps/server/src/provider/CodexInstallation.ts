@@ -4,7 +4,6 @@ import {
   type ProviderInstallState,
   type ServerProviderCompatibilityAdvisory,
 } from "@goat/contracts";
-import { cliArchiveTarCommand } from "@goat/shared/cliRelease";
 import { compareSemverVersions, satisfiesSemverRange } from "@goat/shared/semver";
 import { collectUint8StreamText } from "@goat/shared/collectStreamText";
 import { providerProbeEnvironment } from "@goat/provider-core/server/snapshotProbe";
@@ -29,134 +28,40 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { V2ConfigRequirementsReadResponse } from "effect-codex-app-server/schema";
 import * as NodeCrypto from "node:crypto";
 import * as ServerConfig from "../config.ts";
+import { selectManagedRelease } from "./managedRelease.ts";
+import { extractCodexPackage } from "./CodexInstallationExtract.ts";
+import { UPSTREAM_MAX_ARCHIVE_BYTES, lookupCodexUpstreamRelease } from "./CodexUpstreamRelease.ts";
 import * as ModelManifest from "./ModelManifest.ts";
 import { resolveProviderCompatibility } from "./providerCompatibility.ts";
+import {
+  ActiveRelease,
+  CodexInstallationError,
+  InstalledRelease,
+  PackageManifest,
+  STARTUP_STDERR_MAX_BYTES,
+  STARTUP_STDOUT_MAX_BYTES,
+  STARTUP_WARNINGS,
+  decodeStartupConfig,
+  decodeVersion,
+  encodeActive,
+  encodeRecord,
+  installationError,
+  resolveCodexReleaseAsset,
+  wrapFailure,
+  type CodexAcquisitionOptions,
+  type CodexExecutable,
+  type CodexReleaseAsset,
+} from "./CodexInstallationRelease.ts";
+
+export { CodexInstallationError };
+export type { CodexAcquisitionOptions, CodexExecutable, CodexReleaseAsset };
 
 const DRIVER = ProviderDriverKind.make("codex");
 const STAGING_STALE_AFTER_MS = 24 * 60 * 60_000;
-const Version = Schema.String.check(Schema.isPattern(/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/u));
-const ActiveRelease = Schema.Struct({ version: Version });
-const InstalledRelease = Schema.Struct({
-  version: Version,
-  target: Schema.String,
-  sha256: Schema.String,
-});
-const PackageManifest = Schema.Struct({
-  layoutVersion: Schema.Literal(1),
-  version: Version,
-  target: Schema.String,
-  entrypoint: Schema.String,
-});
-const decodeVersion = Schema.decodeUnknownEffect(Version);
-const encodeRecord = Schema.encodeEffect(Schema.fromJsonString(InstalledRelease));
-const encodeActive = Schema.encodeEffect(Schema.fromJsonString(ActiveRelease));
-// The one-shot envelope is not in the protocol bundle. Source: openai/codex
-// 1277bcfddc69800c5e3538dccf3f26bedbd80290, app-server/src/startup_config.rs.
-const decodeStartupConfig = Schema.decodeUnknownOption(
-  Schema.fromJsonString(
-    Schema.Union([
-      Schema.Struct({ error: Schema.Struct({ code: Schema.Int, message: Schema.String }) }),
-      Schema.Struct({
-        appServerVersion: Schema.NonEmptyString,
-        configRequirements: V2ConfigRequirementsReadResponse,
-        error: Schema.optionalKey(Schema.Never),
-      }),
-    ]),
-  ),
-);
-const STARTUP_WARNINGS = {
-  configuration: "Codex startup check warning: local configuration validation failed.",
-  invalid: "Codex startup check warning: the diagnostic returned an invalid response.",
-  unsupported: "Codex startup check warning: this executable does not support the diagnostic.",
-  unavailable: "Codex startup check warning: the diagnostic could not complete.",
-  timeout: "Codex startup check warning: the diagnostic timed out.",
-} as const;
-const STARTUP_STDOUT_MAX_BYTES = 64 * 1024;
-const STARTUP_STDERR_MAX_BYTES = 4 * 1024;
-export interface CodexReleaseAsset {
-  readonly version: string;
-  readonly target: string;
-  readonly url: string;
-  readonly sha256: string;
-  readonly archiveBytes: number;
-}
-const RELEASES: Readonly<Record<string, CodexReleaseAsset>> = {
-  "darwin-arm64": {
-    version: "0.166.0",
-    target: "aarch64-apple-darwin",
-    url: "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-package-aarch64-apple-darwin.tar.gz",
-    sha256: "55a440cb579f970abe7c79ab181e54b0ea4c419be99f333bbd868eebac9c21f0",
-    archiveBytes: 165951869,
-  },
-  "darwin-x64": {
-    version: "0.166.0",
-    target: "x86_64-apple-darwin",
-    url: "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-package-x86_64-apple-darwin.tar.gz",
-    sha256: "1cb65690230be5982c654ba2655e3a3b594dce9c55b780e78bfdfeff829d7ad9",
-    archiveBytes: 180076524,
-  },
-  "linux-arm64": {
-    version: "0.166.0",
-    target: "aarch64-unknown-linux-musl",
-    url: "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-package-aarch64-unknown-linux-musl.tar.gz",
-    sha256: "7821b77dda2e6283fb1f63f3165177a271da8833e857cf673c6ca1c9db3bfcc6",
-    archiveBytes: 187370368,
-  },
-  "linux-x64": {
-    version: "0.166.0",
-    target: "x86_64-unknown-linux-musl",
-    url: "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-package-x86_64-unknown-linux-musl.tar.gz",
-    sha256: "1d44b28bc4ac9937d7d3532264baa68a507ce364956a0d4ebb856f331cdee254",
-    archiveBytes: 199694962,
-  },
-  "win32-arm64": {
-    version: "0.166.0",
-    target: "aarch64-pc-windows-msvc",
-    url: "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-package-aarch64-pc-windows-msvc.tar.gz",
-    sha256: "9383152a72f97bb5dd148493c8214e4fed38d805aa2c3297cb3739f7f130becf",
-    archiveBytes: 187024318,
-  },
-  "win32-x64": {
-    version: "0.166.0",
-    target: "x86_64-pc-windows-msvc",
-    url: "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-package-x86_64-pc-windows-msvc.tar.gz",
-    sha256: "d559bb88e74d471265857b93b7f19bc250dae527673b9191b33534478093f6bc",
-    archiveBytes: 202589789,
-  },
-};
-const resolveCodexReleaseAsset = (platform: NodeJS.Platform, arch: string) =>
-  RELEASES[`${platform}-${arch}`] ?? null;
-export class CodexInstallationError extends Schema.TaggedError<CodexInstallationError>()(
-  "CodexInstallationError",
-  {
-    operation: Schema.String,
-    detail: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message() {
-    return this.detail;
-  }
-}
-const isInstallationError = Schema.is(CodexInstallationError);
-const installationError = (operation: string, detail: string, cause?: unknown) =>
-  new CodexInstallationError({ operation, detail, ...(cause === undefined ? {} : { cause }) });
-const wrapFailure = (operation: string, detail: string) => (cause: unknown) =>
-  isInstallationError(cause) ? cause : installationError(operation, detail, cause);
-export interface CodexExecutable {
-  readonly executablePath: string;
-  readonly source: "managed" | "local";
-  readonly version: string;
-  readonly managedVersionDirectory: string | null;
-  readonly startupWarning?: (typeof STARTUP_WARNINGS)[keyof typeof STARTUP_WARNINGS];
-}
-export interface CodexAcquisitionOptions {
-  /** Use only GOAT's managed release, even when Codex is on PATH. */
-  readonly managedOnly?: boolean;
-}
+const UPDATE_CHECK_INTERVAL_MS = 60 * 60_000;
+const UPDATE_CHECK_TIMEOUT = "20 seconds";
 interface CodexInstallationService {
   readonly managedDirectory: string;
   readonly resolve: (
@@ -170,12 +75,23 @@ interface CodexInstallationService {
   ) => Effect.Effect<ServerProviderCompatibilityAdvisory | undefined>;
   readonly start: Effect.Effect<ProviderInstallState, CodexInstallationError>;
   /** Installs GOAT's pinned release even when a supported Codex is on PATH. */
-  readonly startManagedOnly: Effect.Effect<ProviderInstallState, CodexInstallationError>;
+  /**
+   * Installs or re-checks GOAT's managed release only, whatever runs on PATH. `allowUpdate` false
+   * (OpenCodex child setup, which nobody pressed) never moves past the installed release.
+   */
+  readonly startManagedOnly: (input: {
+    readonly allowUpdate: boolean;
+  }) => Effect.Effect<ProviderInstallState, CodexInstallationError>;
   readonly cancel: (
     operationId: string,
   ) => Effect.Effect<ProviderInstallState, CodexInstallationError>;
   readonly state: Effect.Effect<ProviderInstallState>;
   readonly changes: Stream.Stream<ProviderInstallState>;
+  /**
+   * Looks up OpenAI's newest Codex release, at most hourly, and offers it
+   * through `state.version` when it is newer than the managed install.
+   */
+  readonly checkForUpdate: Effect.Effect<void>;
   readonly remove: (
     protectedBinaryPaths?: ReadonlyArray<string>,
   ) => Effect.Effect<void, CodexInstallationError>;
@@ -223,15 +139,31 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
   const activePath = path.join(managedDirectory, "active.json");
   const executableName = platform === "win32" ? "codex.exe" : "codex";
   const gate = yield* Semaphore.make(1);
+  const updateCheckGate = yield* Semaphore.make(1);
   let leases = 0;
   let running: { readonly operationId: string; readonly fiber: Fiber.Fiber<void> } | undefined;
+  let upstream: CodexReleaseAsset | null = null;
+  let upstreamCheckedAt: number | null = null;
+
+  // A local Codex is used as is, so only a managed install is ever updated.
+  const managedVersion = (current: ProviderInstallState) =>
+    current.source === "managed" ? current.installedVersion : null;
+  // What `start` installs next. Clients compare `version` with
+  // `installedVersion` to offer an update.
+  const offer = (installedVersion: string | null) => {
+    const release = selectManagedRelease(installedVersion, asset, upstream);
+    return {
+      version: release?.version ?? installedVersion,
+      totalBytes: release?.archiveBytes ?? null,
+    };
+  };
+
   const state = yield* SubscriptionRef.make<ProviderInstallState>({
     driver: DRIVER,
     operationId: null,
     phase: "idle",
     downloadedBytes: 0,
-    totalBytes: asset?.archiveBytes ?? null,
-    version: asset?.version ?? null,
+    ...offer(null),
     installedVersion: null,
     executablePath: null,
     canRemove: false,
@@ -316,6 +248,45 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
       )
     );
   });
+  const isSupported = (version: string) =>
+    compatibility(version).pipe(Effect.map((advisory) => advisory?.status === "supported"));
+  // Forgets what the manifest withdrew after it was seen. Managed resolution
+  // refuses a withdrawn install, so the pin replaces it rather than a re-check.
+  const keptInstall = Effect.fn("CodexInstallation.keptInstall")(function* (
+    installedVersion: string | null,
+  ) {
+    if (upstream && !(yield* isSupported(upstream.version))) upstream = null;
+    return installedVersion !== null && (yield* isSupported(installedVersion))
+      ? installedVersion
+      : null;
+  });
+  const lookupUpstream = asset
+    ? lookupCodexUpstreamRelease({ http, target: asset.target, isSupported })
+    : Effect.succeed(null);
+  // A check already in flight covers concurrent subscribers, including when it fails.
+  const checkForUpdate = updateCheckGate
+    .withPermitsIfAvailable(1)(
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        if (upstreamCheckedAt === null || now - upstreamCheckedAt >= UPDATE_CHECK_INTERVAL_MS) {
+          // A failed lookup counts too, and keeps whatever release was offered before.
+          upstreamCheckedAt = now;
+          upstream = yield* lookupUpstream.pipe(
+            Effect.timeout(UPDATE_CHECK_TIMEOUT),
+            Effect.orElseSucceed(() => upstream),
+          );
+        }
+        // A running install already published the release it is installing.
+        yield* SubscriptionRef.updateEffect(state, (current) =>
+          isRunning(current)
+            ? Effect.succeed(current)
+            : keptInstall(managedVersion(current)).pipe(
+                Effect.map((kept) => ({ ...current, ...offer(kept) })),
+              ),
+        );
+      }),
+    )
+    .pipe(Effect.ignore);
   const resolveManaged = Effect.fn("CodexInstallation.resolveManaged")(
     function* () {
       const active = yield* readRecord(activePath, ActiveRelease);
@@ -582,6 +553,14 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
     );
   const install = Effect.fn("CodexInstallation.install")(
     function* (release: CodexReleaseAsset) {
+      const ensureEligible = Effect.fn("CodexInstallation.ensureEligible")(function* () {
+        if (release.version !== asset?.version && !(yield* isSupported(release.version))) {
+          return yield* installationError(
+            "verify",
+            "This Codex release was withdrawn. Check for updates and try again.",
+          );
+        }
+      });
       yield* decodeVersion(release.version);
       yield* fs.makeDirectory(managedDirectory, { recursive: true });
       yield* SubscriptionRef.update(state, (current) => ({ ...current, canRemove: true }));
@@ -598,12 +577,14 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
             mode: 0o600,
             flag: "wx",
           });
+          yield* ensureEligible();
           yield* fs.rename(pointer, activePath);
           yield* SubscriptionRef.update(
             state,
             (current) =>
               ({
                 ...current,
+                ...offer(release.version),
                 phase: "succeeded",
                 source: "managed",
                 installedVersion: release.version,
@@ -626,6 +607,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
             "verify",
             "The existing managed Codex release differs from the official package. Remove it and reinstall.",
           );
+        yield* ensureEligible();
         yield* validate(existing, release.version).pipe(
           Effect.scoped,
           Effect.timeout("90 seconds"),
@@ -641,6 +623,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
       const runtime = path.join(staging, "runtime");
       yield* fs.makeDirectory(runtime);
       const hash = NodeCrypto.createHash("sha256");
+      const maxArchiveBytes = release.archiveBytes ?? UPSTREAM_MAX_ARCHIVE_BYTES;
       let downloadedBytes = 0;
       let lastProgressAt = yield* Clock.currentTimeMillis;
       const response = yield* http
@@ -650,7 +633,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
         Stream.tap((chunk) =>
           Effect.gen(function* () {
             downloadedBytes += chunk.byteLength;
-            if (downloadedBytes > release.archiveBytes)
+            if (downloadedBytes > maxArchiveBytes)
               return yield* installationError(
                 "download",
                 "The Codex download exceeded the expected release size.",
@@ -674,7 +657,10 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
             ),
         }),
       );
-      if (downloadedBytes !== release.archiveBytes || hash.digest("hex") !== release.sha256)
+      if (
+        (release.archiveBytes !== null && downloadedBytes !== release.archiveBytes) ||
+        hash.digest("hex") !== release.sha256
+      )
         return yield* installationError(
           "download",
           "The Codex download failed its size or SHA-256 check. Nothing was installed.",
@@ -688,26 +674,16 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
             message: "Extracting Codex.",
           }) satisfies ProviderInstallState,
       );
-      // Bare `tar` on Windows can resolve to Git's MSYS tar, which reads `C:\...` as a remote host.
-      const tarCommand = cliArchiveTarCommand(platform, environment);
-      const entries = (yield* runCommand(tarCommand, ["-tzf", archivePath])).trim().split(/\r?\n/u);
-      const types = (yield* runCommand(tarCommand, ["-tvzf", archivePath])).trim().split(/\r?\n/u);
-      if (
-        entries.length > 10000 ||
-        entries.length !== types.length ||
-        types.some((line) => !["-", "d"].includes(line[0] ?? "")) ||
-        entries.some((entry) => {
-          const parts = entry.replace(/\/$/u, "").split("/");
-          return (
-            !entry ||
-            entry.includes("\\") ||
-            entry.startsWith("/") ||
-            parts.some((part) => part === ".." || part === "." || part === "" || part.includes(":"))
-          );
-        })
-      )
-        return yield* installationError("extract", "The Codex archive contains unsafe entries.");
-      yield* runCommand(tarCommand, ["-xzf", archivePath, "-C", runtime]);
+      yield* extractCodexPackage({
+        fs,
+        path,
+        spawner,
+        platform,
+        environment,
+        run: runCommand,
+        archivePath,
+        runtime,
+      });
       yield* SubscriptionRef.update(
         state,
         (current) =>
@@ -718,6 +694,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
           }) satisfies ProviderInstallState,
       );
       const executable = yield* fromDirectory(runtime, release.version, release.target);
+      yield* ensureEligible();
       yield* validate(executable, release.version).pipe(
         Effect.scoped,
         Effect.timeout("90 seconds"),
@@ -760,14 +737,66 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
       ),
     ),
   );
-  const startWith = (managedOnly: boolean) =>
+  // Nothing newer is known, so "reinstall" re-checks the active runtime rather
+  // than replacing it with an older pinned release.
+  const reverify = Effect.fn("CodexInstallation.reverify")(
+    function* () {
+      const active = yield* readRecord(activePath, ActiveRelease);
+      const executable = yield* completedRelease(active.version);
+      yield* validate(executable, executable.version).pipe(
+        Effect.scoped,
+        Effect.timeout("90 seconds"),
+      );
+      const kept = yield* keptInstall(executable.version);
+      if (kept === null) {
+        yield* SubscriptionRef.update(state, (current) => ({ ...current, ...offer(kept) }));
+        return yield* installationError(
+          "verify",
+          "This Codex release was withdrawn. Check for updates and try again.",
+        );
+      }
+      yield* SubscriptionRef.update(
+        state,
+        (current) =>
+          ({
+            ...current,
+            ...offer(kept),
+            phase: "succeeded",
+            source: "managed",
+            installedVersion: executable.version,
+            executablePath: executable.executablePath,
+            message: null,
+          }) satisfies ProviderInstallState,
+      );
+    },
+    Effect.mapError(
+      wrapFailure(
+        "verify",
+        "The installed Codex runtime could not start. Remove it and reinstall.",
+      ),
+    ),
+  );
+  // Managed-only work reads the release active.json names; the shared state can name a local Codex.
+  const activeManagedVersion = readRecord(activePath, ActiveRelease).pipe(
+    Effect.map((active): string | null => active.version),
+    Effect.orElseSucceed(() => null),
+  );
+  const startWith = (managedOnly: boolean, allowUpdate = true) =>
     gate
       .withPermit(
         Effect.gen(function* () {
           const current = yield* SubscriptionRef.get(state);
           if (isRunning(current)) return current;
           if (!managedOnly && (yield* reuseLocal())) return yield* SubscriptionRef.get(state);
-          if (!asset) {
+          const installedVersion = yield* keptInstall(
+            managedOnly ? yield* activeManagedVersion : managedVersion(current),
+          );
+          const release = selectManagedRelease(
+            installedVersion,
+            asset,
+            allowUpdate ? upstream : null,
+          );
+          if (!release && installedVersion === null) {
             return yield* installationError(
               "start",
               `OpenAI does not publish a Codex runtime for ${platform}-${arch}. Use a supported remote environment or a custom executable.`,
@@ -777,14 +806,13 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
           const next: ProviderInstallState = {
             ...current,
             operationId,
-            phase: "downloading",
+            phase: release ? "downloading" : "verifying",
             downloadedBytes: 0,
-            totalBytes: asset.archiveBytes,
-            version: asset.version,
-            message: "Downloading Codex.",
+            ...offer(installedVersion),
+            message: release ? "Downloading Codex." : "Checking Codex.",
           };
           yield* SubscriptionRef.set(state, next);
-          const work = install(asset).pipe(
+          const work = (release ? install(release) : reverify()).pipe(
             Effect.onExit((exit) =>
               Exit.isFailure(exit)
                 ? SubscriptionRef.update(state, (value) => {
@@ -818,7 +846,8 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
       )
       .pipe(Effect.mapError(wrapFailure("start", "Could not start the Codex installation.")));
   const start = startWith(false);
-  const startManagedOnly = startWith(true);
+  const startManagedOnly = (input: { readonly allowUpdate: boolean }) =>
+    startWith(true, input.allowUpdate);
 
   const cancel = Effect.fn("CodexInstallation.cancel")(function* (operationId: string) {
     return yield* gate.withPermit(
@@ -866,6 +895,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
             (current) =>
               ({
                 ...current,
+                ...offer(null),
                 operationId: null,
                 phase: "idle",
                 downloadedBytes: 0,
@@ -917,11 +947,13 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
     if (!(yield* fs.exists(activePath))) return;
     const active = yield* readRecord(activePath, ActiveRelease);
     const installed = yield* completedRelease(active.version);
+    const kept = yield* keptInstall(installed.version);
     yield* SubscriptionRef.update(
       state,
       (current) =>
         ({
           ...current,
+          ...offer(kept),
           installedVersion: installed.version,
           executablePath: installed.executablePath,
           source: "managed",
@@ -953,6 +985,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
     cancel,
     state: SubscriptionRef.get(state),
     changes: SubscriptionRef.changes(state),
+    checkForUpdate,
     remove,
   });
 });

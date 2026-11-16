@@ -413,6 +413,10 @@ row above the composer shows the goal and its progress.
   stop the turn only when it is working on the goal. Other goal commands wait for
   the turn to end.
 
+With Antigravity, send `/goal` followed by the objective; that is the only form it accepts.
+Bare `/goal`, `/goal clear`, `/goal pause` and `/goal resume` are refused, and its 1.4.5
+runtime has no goals. See [Antigravity](./providers-antigravity.md#run-a-native-goal).
+
 ## Context in your message
 
 Type `@` and a model or provider name to name a model for the agent, for example when delegating.

@@ -460,7 +460,7 @@
   "apps/server/src/workspace/WorkspaceFileSystem.test.ts": { "lines": 1290 },
   "apps/server/src/workspace/atomicWorkspaceWrite.ts": { "nonNull": 1 },
   "apps/server/src/ws.test.ts": { "lines": 1384 },
-  "apps/server/src/ws.ts": { "lines": 3532, "nonNull": 1 },
+  "apps/server/src/ws.ts": { "lines": 3535, "nonNull": 1 },
   "apps/web/scripts/generate-solar-icons.ts": { "nonNull": 6 },
   "apps/web/src/browser/ServerBrowserSurface.tsx": { "lines": 1037 },
   "apps/web/src/browserFaviconStore.ts": { "nonNull": 2 },

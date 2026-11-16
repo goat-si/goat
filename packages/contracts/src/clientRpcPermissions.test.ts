@@ -100,6 +100,11 @@ describe("memory client guards", () => {
     for (const method of [WS_METHODS.memoryHubSettingsGet, WS_METHODS.memoryHubSettingsUpdate])
       expect(clientRpcRequiredScopes(method, {})).toEqual(["settings:write"]);
   });
+  it("keeps reading a secret reference from clients that cannot write settings", () => {
+    expect(clientRpcRequiredScopes(WS_METHODS.serverCheckSecretSource, {})).toEqual([
+      "settings:write",
+    ]);
+  });
   it("lets readers list and check hub nodes but needs settings write to change them", () => {
     for (const method of [
       WS_METHODS.hubNodesList,

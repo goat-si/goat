@@ -22,6 +22,7 @@ export {
   PROCESS_BOUND_EFFECT_TYPES,
   REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS,
 } from "./EffectOutboxEffectTypes.ts";
+import type { EffectRow } from "./effectOutboxRow.ts";
 import * as EffectExecutionFences from "./EffectExecutionFences.ts";
 import { effectTypesForLane } from "./EffectExecutionPolicy.ts";
 import type {
@@ -161,23 +162,6 @@ export interface EffectOutboxV2Shape {
 export class EffectOutboxV2 extends Context.Service<EffectOutboxV2, EffectOutboxV2Shape>()(
   "goat/orchestration-v2/EffectOutbox/EffectOutboxV2",
 ) {}
-
-type EffectRow = {
-  readonly effect_id: string;
-  readonly command_id: string;
-  readonly thread_id: string;
-  readonly effect_type: string;
-  readonly payload_json: string;
-  readonly status: string;
-  readonly attempt_count: number;
-  readonly available_at: string;
-  readonly lease_owner: string | null;
-  readonly lease_expires_at: string | null;
-  readonly created_at: string;
-  readonly updated_at: string;
-  readonly completed_at: string | null;
-  readonly last_error: string | null;
-};
 
 const encodeRequest = Schema.encodeSync(Schema.fromJsonString(OrchestrationEffectRequestV2));
 const encodeIds = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));

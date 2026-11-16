@@ -1,6 +1,7 @@
 import {
   SecretProviderId,
   SecretReference,
+  type SecretSourceCheckResult,
   isOnePasswordReference,
   type EnvironmentId,
 } from "@goat/contracts";
@@ -10,6 +11,8 @@ import { useState } from "react";
 import { isSecretsFeatureEnabled } from "../../env";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { classifySecretProvider } from "./SecretProviderDialog.logic";
@@ -32,6 +35,12 @@ export function SecretReferencePicker({
   const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const [pending, setPending] = useState<string | null>(null);
   const [invalid, setInvalid] = useState(false);
+  const [check, setCheck] = useState<{
+    readonly reference: string;
+    readonly result: SecretSourceCheckResult | null;
+  } | null>(null);
+  const permitted = useAtomValue(serverEnvironment.checkSecretSource.permissionAtom(environmentId));
+  const checkSecretSource = useAtomCommand(serverEnvironment.checkSecretSource);
   const choices = Object.entries(providers).filter(
     ([, provider]) => classifySecretProvider(provider).kind === "one_password",
   );
@@ -47,6 +56,29 @@ export function SecretReferencePicker({
       ? "Stored value"
       : (providers[selected as SecretProviderId]?.label ?? selected);
   const missingProvider = value !== undefined && providers[value.provider] === undefined;
+  // Older servers lack the check; offering it there would only fail.
+  const canCheck =
+    permitted === true &&
+    config?.environment.capabilities.secretSourceCheck === true &&
+    value !== undefined &&
+    value.provider === selected &&
+    !missingProvider;
+  const shownCheck = check !== null && check.reference === value?.reference ? check : null;
+  const runCheck = async (source: SecretReference) => {
+    setCheck({ reference: source.reference, result: null });
+    const response = await checkSecretSource({ environmentId, input: { source } });
+    setCheck((current) =>
+      current?.reference !== source.reference
+        ? current
+        : {
+            reference: source.reference,
+            result:
+              response._tag === "Success"
+                ? response.value
+                : { _tag: "Failed", detail: "Could not reach the server" },
+          },
+    );
+  };
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
       <Select
@@ -92,6 +124,22 @@ export function SecretReferencePicker({
             } else setInvalid(true);
           }}
         />
+      ) : null}
+      {canCheck && value !== undefined ? (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={disabled || (shownCheck !== null && shownCheck.result === null)}
+          onClick={() => void runCheck(value)}
+        >
+          Check
+        </Button>
+      ) : null}
+      {shownCheck?.result?._tag === "Resolved" ? (
+        <span role="status">Read just now. Providers that use it were reloaded.</span>
+      ) : null}
+      {shownCheck?.result?._tag === "Failed" ? (
+        <span role="alert">{shownCheck.result.detail}</span>
       ) : null}
       {invalid ? <span role="alert">Use a reference like op://vault/item/field.</span> : null}
       {missingProvider ? (

@@ -75,6 +75,14 @@ import {
   subagentThreadTitle,
 } from "@goat/provider-core/server/subagentProjection";
 import * as CursorAgentSdk from "./CursorAgentSdk.ts";
+import {
+  addCursorTurnUsage,
+  type CursorProjectionTarget,
+  type ActiveCursorToolCall,
+  type ActiveCursorSubagent,
+  type ActiveCursorTextStream,
+  type ActiveCursorTurn,
+} from "./activeTurn.ts";
 import { isCursorSdkError } from "./sdk.ts";
 import { cursorRunPrompt, type CursorRunPrompt } from "./steerPrompt.ts";
 import {
@@ -112,7 +120,11 @@ export const CursorProviderCapabilitiesV2 = {
     emitsTurnStarted: true,
     emitsTurnCompleted: true,
     supportsInterrupt: true,
-    supportsActiveSteering: false,
+    supportsActiveSteering: true,
+    // A steer can move a foreground subagent to the background. Mailbox wakes
+    // stay queued so a notification does not cut into the live turn.
+    activeSteeringInterruptsTools: true,
+    activeSteeringAcceptsAttachments: false,
     supportsSteeringByInterruptRestart: true,
     supportsQueuedMessages: true,
     terminalStatusQuality: "strong",
@@ -274,95 +286,11 @@ const classifyCursorModelRejection =
       ? new CursorModelUnavailableError({ model: modelSelection.model, cause: error.cause })
       : error;
 
-interface CursorProjectionTarget {
-  readonly threadId: ThreadId;
-  readonly runId: ProviderAdapter.ProviderAdapterV2TurnInput["runId"] | null;
-  readonly rootNodeId: OrchestrationV2ExecutionNode["rootNodeId"];
-  readonly parentNodeId: OrchestrationV2ExecutionNode["id"];
-  readonly providerThreadId: OrchestrationV2ProviderThread["id"] | null;
-  readonly providerTurnId: OrchestrationV2ProviderTurn["id"] | null;
-}
-
 // Cursor results can omit output; retain more streamed fallback than the persisted tail.
 const MAX_CURSOR_STREAMED_OUTPUT_CHARS = 256 * 1024;
 // After a turn ends, a retryable error can resume an older checkpoint and report failure despite an answer.
 const CURSOR_RESUME_NO_PROGRESS_MESSAGE =
   "Agent turn stopped after repeated resume attempts made no progress";
-
-interface ActiveCursorToolCall {
-  readonly callId: string;
-  toolCall: ToolCall;
-  readonly target: CursorProjectionTarget;
-  readonly ordinal: number;
-  readonly startedAt: DateTime.Utc;
-  streamedOutput: string;
-}
-
-interface ActiveCursorSubagent {
-  task: OrchestrationV2Subagent;
-  toolCall: Extract<ToolCall, { readonly type: "task" }>;
-  readonly callId: string;
-  readonly childThreadId: ThreadId;
-  readonly childRootNodeId: OrchestrationV2ExecutionNode["id"];
-  readonly turnItemId: OrchestrationV2TurnItem["id"];
-  readonly turnItemOrdinal: number;
-  nextChildOrdinal: number;
-  resultProjected: boolean;
-}
-
-interface ActiveCursorTextSegment {
-  readonly nativeItemId: string;
-  readonly startedAt: DateTime.Utc;
-  text: string;
-}
-
-interface ActiveCursorTextStream {
-  current: ActiveCursorTextSegment | null;
-  nextSegment: number;
-}
-
-interface ActiveCursorTurn {
-  readonly input: ProviderAdapter.ProviderAdapterV2TurnInput;
-  readonly run: CursorAgentSdk.CursorAgentSdkRun;
-  readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
-  readonly startedAt: DateTime.Utc;
-  readonly completed: Deferred.Deferred<void, never>;
-  readonly itemOrdinals: Map<string, number>;
-  readonly tools: Map<string, ActiveCursorToolCall>;
-  readonly subagents: Map<string, ActiveCursorSubagent>;
-  readonly assistant: ActiveCursorTextStream;
-  assistantReply: CursorTransportFailure;
-  readonly reasoning: ActiveCursorTextStream;
-  /** The user text this run sent, before GOAT and runtime instructions; absent for /compress. */
-  readonly prompt: CursorRunPrompt | undefined;
-  interrupted: boolean;
-  finalized: boolean;
-  /** The agent's latest turn ended and no new work has started since. */
-  turnEnded: boolean;
-  readonly session: CursorAgentSdk.CursorAgentSdkSession;
-  /** What Cursor billed for this run, summed over its turn-ended updates. */
-  usage: CursorTurnUsage | undefined;
-}
-
-type CursorTurnUsage = NonNullable<Extract<InteractionUpdate, { type: "turn-ended" }>["usage"]>;
-
-const addCursorTurnUsage = (
-  total: CursorTurnUsage | undefined,
-  usage: CursorTurnUsage,
-): CursorTurnUsage => {
-  if (total === undefined) return usage;
-  const reasoningTokens =
-    total.reasoningTokens === undefined && usage.reasoningTokens === undefined
-      ? undefined
-      : (total.reasoningTokens ?? 0) + (usage.reasoningTokens ?? 0);
-  return {
-    inputTokens: total.inputTokens + usage.inputTokens,
-    outputTokens: total.outputTokens + usage.outputTokens,
-    cacheReadTokens: total.cacheReadTokens + usage.cacheReadTokens,
-    cacheWriteTokens: total.cacheWriteTokens + usage.cacheWriteTokens,
-    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
-  };
-};
 
 interface CursorLiveAgent {
   readonly cwd: string | null;
@@ -2230,13 +2158,71 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               ...turnInput,
               message: { ...turnInput.message, text: "/compress" },
             }),
-          steerTurn: (turnInput) =>
-            Effect.fail(
-              new ProviderAdapter.ProviderAdapterSteerRunUnsupportedError({
+          steerTurn: Effect.fn("CursorAdapterV2.steerTurn")(
+            function* (turnInput: ProviderAdapter.ProviderAdapterV2SteerInput) {
+              const context = yield* Ref.get(activeTurn);
+              if (
+                context === null ||
+                context.finalized ||
+                context.providerTurnId !== turnInput.providerTurnId
+              ) {
+                return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+                  driver: CursorAgentSdk.CURSOR_PROVIDER,
+                  detail: `Cursor provider turn ${turnInput.providerTurnId} is not active.`,
+                });
+              }
+              // The live run already has the runtime instructions from startTurn.
+              const text = yield* providerMessageTextWithAttachmentPaths({
+                text: yield* resolveCursorSkillText(
+                  turnInput.message.text,
+                  context.input.runtimePolicy.cwd ?? undefined,
+                ).pipe(
+                  Effect.provideService(FileSystem.FileSystem, fileSystem),
+                  Effect.provideService(Path.Path, path),
+                ),
+                attachments: turnInput.message.attachments,
+                resolveAttachmentPath: host.resolveAttachmentPath,
+                resolveExtractedTextPath: host.resolveExtractedTextPath,
+              });
+              if (text.trim().length === 0) {
+                return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+                  driver: CursorAgentSdk.CURSOR_PROVIDER,
+                  detail: "Cursor steer requires non-empty text.",
+                });
+              }
+              const outcome =
+                context.run.steer === undefined
+                  ? "revert_to_followup"
+                  : yield* context.run.steer(text);
+              if (outcome === "complete_delivered") {
+                return;
+              }
+              if (context.interrupted) {
+                return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+                  driver: CursorAgentSdk.CURSOR_PROVIDER,
+                  detail: "Cursor steer was interrupted before the run could take it.",
+                });
+              }
+              return yield* new ProviderAdapter.ProviderAdapterSteerDeclinedError({
                 driver: CursorAgentSdk.CURSOR_PROVIDER,
                 providerThreadId: turnInput.providerThread.id,
-              }),
-            ),
+                providerTurnId: turnInput.providerTurnId,
+              });
+            },
+            (effect, turnInput) =>
+              effect.pipe(
+                Effect.mapError((cause) =>
+                  cause._tag === "ProviderAdapterSteerDeclinedError"
+                    ? cause
+                    : new ProviderAdapter.ProviderAdapterSteerRunError({
+                        driver: CursorAgentSdk.CURSOR_PROVIDER,
+                        providerThreadId: turnInput.providerThread.id,
+                        providerTurnId: turnInput.providerTurnId,
+                        cause,
+                      }),
+                ),
+              ),
+          ),
           interruptTurn: Effect.fn("CursorAdapterV2.interruptTurn")(
             function* (turnInput: ProviderAdapter.ProviderAdapterV2InterruptInput) {
               const context = yield* Ref.get(activeTurn);

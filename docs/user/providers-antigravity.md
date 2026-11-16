@@ -51,22 +51,30 @@ account.
 
 ## Runtime installation
 
-Managed installation supports Apple Silicon macOS, Linux x64 or ARM64, and Windows
-x64 or ARM64. Intel Macs can connect to a supported remote environment. Allow
-several GB of free disk space, especially on Linux.
+Managed installation supports Apple Silicon and Intel macOS, Linux x64 or ARM64,
+and Windows x64 or ARM64. When Google's release channel is unreachable, every one
+of these installs the 1.4.5 runtime GOAT tested, except musl Linux: that runtime is
+built for glibc, so musl Linux installs only Google's native CLI, and while the
+channel is down setup reports that no release is available. Allow several GB of free disk space,
+especially on Linux.
 On Linux ARM64, Google's runtime needs a kernel with 4 KiB memory pages, so it
 does not run on kernels with larger pages, such as Asahi Linux or Raspberry Pi 5.
 
 ### Use a manual installation
 
-Download the archive for your environment from the [official ACP Registry][registry].
-Extract the ACP executable and its `localharness_external` helper into the same
-directory, at the same version. Make both executable on macOS or Linux; Windows
-uses `.exe` files.
-
-Set **Binary path** to the ACP executable on the environment and update it yourself.
+Install [Antigravity CLI](https://antigravity.google/docs/getting-started) on the environment.
+Set **Binary path** to its `agy` executable and update it yourself.
 Leave the field blank to use the managed runtime, or a compatible executable on
 `PATH` if no managed runtime is installed.
+
+### Update the managed runtime
+
+When provider update checks find a newer Antigravity release, choose **Update
+Antigravity** in provider settings. Updating from the 1.4.5 runtime moves to Google's
+native CLI, and you may need to sign in again. Threads already running finish on
+their original runtime; new sessions use the update. If the new release fails its
+check, the previous runtime stays in use. See
+[Install GOAT](./install.md) for when GOAT looks for updates.
 
 ## Models and threads
 
@@ -135,6 +143,17 @@ Before removing a managed runtime, disable its instances and cancel any active
 installation. Clear any explicit binary path pointing into that runtime. Removal
 is refused while the runtime is in use.
 
+## Run a native goal
+
+When your Antigravity runtime offers `/goal`, send `/goal` followed by a verifiable
+objective. Antigravity keeps working until it completes the goal or you cancel it.
+If you still use the older 1.4.5 runtime, update Antigravity in provider settings,
+then refresh provider status.
+
+Use Stop to interrupt a running goal, then ask Antigravity to stop pursuing it
+before starting more work. Ordinary follow-ups wait until the running turn ends.
+GOAT does not support Antigravity goal status, pause, resume, or clear commands.
+
 ## Check access and troubleshoot
 
 Open **Usage > Limits** to see the remaining Gemini and shared Claude/GPT allowances
@@ -152,5 +171,4 @@ If Google reports `SUBSCRIPTION_REQUIRED`, an account restriction, or a usage li
 follow the provider's message and any retry time. See [Google's account plans][plans]
 for eligibility.
 
-[registry]: https://github.com/agentclientprotocol/registry/blob/main/antigravity-acp/agent.json
 [plans]: https://antigravity.google/docs/plans

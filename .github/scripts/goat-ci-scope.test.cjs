@@ -650,6 +650,17 @@ describe("planRun", () => {
     }
   });
 
+  it("runs the full suite when the selected tests outgrow what test-changed takes", async () => {
+    // providerEnv.ts selects every test file, and goat-ci.yml hands test-changed its list in one
+    // environment string, which Linux caps at 128 KiB.
+    const result = await plan(pr(), labels([]), ["packages/shared/src/testing/providerEnv.ts"]);
+    assert.equal(result.full, true);
+    assert.equal(result.quick, false);
+    assert.deepEqual(result.tasks, TASKS);
+    assert.deepEqual(result.changedTests, { vitest: [], node: [] });
+    assert.match(result.reasons.get("full"), /test files for the changes/);
+  });
+
   it("widens a quick run with ci:server and ci:memory, drafts included", async () => {
     const result = await plan(pr({ draft: true }), labels([SERVER_LABEL, MEMORY_LABEL]));
     assert.deepEqual(result.tasks, [

@@ -297,3 +297,37 @@ it("exposes cause from shell and recent-run fallback, preserving legacy omission
   } as unknown as Parameters<typeof statusFromRead>[0];
   expect(statusFromRead(read).run?.terminationCause).toEqual({ kind: "agent_stop" });
 });
+
+describe("stop", () => {
+  const stopRequest = (unresponsiveAt?: string) =>
+    ({
+      type: "run_interrupt_request",
+      runId: "run-1",
+      ordinal: 3,
+      message: "Stopped by user",
+      ...(unresponsiveAt === undefined ? {} : { unresponsiveAt: at(unresponsiveAt) }),
+    }) as unknown as OrchestrationV2TurnItem;
+  const stopResult = {
+    type: "run_interrupt_result",
+    runId: "run-1",
+    ordinal: 4,
+    message: "Interrupted",
+  } as unknown as OrchestrationV2TurnItem;
+  const running = shell({ status: "running", activeRunId: "run-1" as never });
+
+  it("reports a Stop the provider never confirmed while its run stays open", () => {
+    const status = statusFromShell(
+      running,
+      [run("run-1", "running")],
+      [stopRequest("2026-10-13T01:05:00.000Z")],
+    );
+    expect(status.stop).toEqual({ state: "unresponsive", since: "2026-10-13T01:05:00.000Z" });
+    expect(status.terminal).toBe(false);
+  });
+
+  it("reports no stop while the provider may still confirm it, or after it did", () => {
+    for (const items of [[stopRequest()], [stopRequest("2026-10-13T01:05:00.000Z"), stopResult]]) {
+      expect(statusFromShell(running, [run("run-1", "running")], items).stop).toBeUndefined();
+    }
+  });
+});

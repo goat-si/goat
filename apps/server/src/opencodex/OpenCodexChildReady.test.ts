@@ -87,6 +87,7 @@ it.layer(NodeServices.layer)("OpenCodexChildReady", (it) => {
       expect((yield* f.call("installCodex")).kind).toBe("ok");
       expect(f.resolveCalls.length).toBeGreaterThan(0);
       expect(f.resolveCalls.every((managedOnly) => managedOnly === true)).toBe(true);
+      expect(f.installUpdates).toEqual([false]);
     }),
   );
 

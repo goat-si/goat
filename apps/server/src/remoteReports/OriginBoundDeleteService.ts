@@ -7,6 +7,8 @@ import {
   OrchestratorMcpFailure,
   type OriginBoundDeleteInput,
   type OriginBoundDeleteResult,
+  type OriginBoundForceStopInput,
+  type OriginBoundForceStopResult,
   type ThreadId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
@@ -26,18 +28,13 @@ import {
   McpThreadDeletionPolicy,
 } from "../orchestration-v2/goat/McpThreadDeletionPolicy.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import { boundOriginLabel } from "./originBinding.ts";
+import { originBoundForceStop } from "./OriginBoundForceStop.ts";
 
 export const originBoundDeleteCommandId = (correlationId: string, requestKey: string): CommandId =>
   CommandId.make(
     `origin-delete:${correlationId}:${NodeCrypto.createHash("sha256").update(requestKey, "utf8").digest("hex")}`,
   );
-
-const notBound = () =>
-  new OrchestratorMcpFailure({
-    code: "thread_not_found",
-    classification: "not_bound",
-    message: "This read key is not bound to that thread.",
-  });
 
 const StoredReceipt = Schema.Struct({
   status: Schema.Literals(["accepted", "rejected"]),
@@ -47,11 +44,6 @@ const StoredReceipt = Schema.Struct({
 type StoredReceipt = typeof StoredReceipt.Type;
 const decodeReceipt = Schema.decodeUnknownEffect(StoredReceipt);
 const decodeSequence = Schema.decodeUnknownEffect(NonNegativeInt);
-
-const keysMatch = (supplied: Buffer, storedHex: string) => {
-  const stored = Buffer.from(storedHex, "hex");
-  return stored.length === supplied.length && NodeCrypto.timingSafeEqual(supplied, stored);
-};
 
 const outcome = (commandId: CommandId, receipt: StoredReceipt): OriginBoundDeleteResult =>
   receipt.status === "accepted"
@@ -76,6 +68,11 @@ export class OriginBoundDeleteService extends Context.Service<
     readonly receipt: (
       input: OriginBoundDeleteInput,
     ) => Effect.Effect<OriginBoundDeleteResult, OrchestratorMcpFailure>;
+    /** goat#2338: the origin's Force stop of the bound task thread's unresponsive run. */
+    readonly forceStop: (
+      input: OriginBoundForceStopInput,
+      limits: CallerLimits,
+    ) => Effect.Effect<OriginBoundForceStopResult, OrchestratorMcpFailure>;
   }
 >()("goat/remoteReports/OriginBoundDeleteService") {}
 
@@ -101,19 +98,7 @@ const make = Effect.gen(function* () {
   const authorize = Effect.fn("OriginBoundDeleteService.authorize")(function* (
     input: OriginBoundDeleteInput,
   ) {
-    const rows = yield* sql<{ readonly threadId: ThreadId; readonly readKeyHash: string }>`
-      SELECT thread_id AS "threadId", read_key_hash AS "readKeyHash"
-      FROM remote_report_bindings
-      WHERE correlation_id = ${input.correlationId}
-    `.pipe(Effect.mapError(unavailable));
-    const binding = rows[0];
-    const supplied = NodeCrypto.createHash("sha256").update(input.readKey, "utf8").digest();
-    if (
-      binding === undefined ||
-      !keysMatch(supplied, binding.readKeyHash) ||
-      binding.threadId !== input.threadId
-    )
-      return yield* notBound();
+    yield* boundOriginLabel(sql, input);
   });
   const dispatchDelete = Effect.fn("OriginBoundDeleteService.dispatch")(function* (
     threadId: ThreadId,
@@ -186,6 +171,12 @@ const make = Effect.gen(function* () {
     ),
     receipt: Effect.fn("OriginBoundDeleteService.receipt")((input) =>
       settle(input, true, undefined),
+    ),
+    forceStop: Effect.fn("OriginBoundDeleteService.forceStop")((input, limits) =>
+      originBoundForceStop(input, limits).pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+        Effect.provideService(ThreadManagement.ThreadManagementService, threads),
+      ),
     ),
   });
 });

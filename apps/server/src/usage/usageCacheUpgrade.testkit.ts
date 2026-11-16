@@ -20,7 +20,7 @@ export function registerCacheUpgradeTest(
   setup: typeof Main.setup,
   layerService: typeof Main.layerService,
 ) {
-  it.live.each([4, 5, 6, 7, 8, 10])(
+  it.live.each([4, 5, 6, 7, 8, 10, 11, 12, 13])(
     "upgrades a v%s cache: reparses live Codex usage, keeps deleted rollouts, removes the old file",
     (version) =>
       Effect.gen(function* () {
@@ -121,7 +121,7 @@ export function registerCacheUpgradeTest(
             60 + 20 * (version === 4 ? 1 : 2),
           );
           yield* upgraded.awaitPersisted;
-          assert.strictEqual(SCAN_CACHE_FILE_NAME, "usage-scan-cache-v13.json");
+          assert.strictEqual(SCAN_CACHE_FILE_NAME, "usage-scan-cache-v14.json");
           assert.deepStrictEqual(
             (yield* Effect.promise(() => NodeFSP.readdir(stateDir)))
               .filter((name) => name.startsWith("usage-scan-cache"))

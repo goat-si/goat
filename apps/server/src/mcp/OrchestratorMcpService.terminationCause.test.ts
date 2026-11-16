@@ -60,6 +60,7 @@ it.effect("thread read exposes run cause", () =>
       Layer.mock(ThreadManagementService.ThreadManagementService)({
         getThreadShell: () => Effect.succeed(shell),
         getProjectThreadRecords: () => Effect.succeed({ ...target, runs: [run] }),
+        getThreadRecords: () => Effect.succeed({ turnItems: [] } as never),
         getTimelinePage: () =>
           Effect.succeed({ items: [], totalItems: 0, hasMore: false, hasEarlier: false }),
       }),

@@ -556,10 +556,12 @@ forwarded to another host is such a client read, so it drops `afterPosition=-1`,
 which older hosts reject, and sends `beforePosition` only as an optional argument.
 `afterPosition=-1` starts any read at the oldest item, and
 `afterPosition=nextPosition` reads newer items. The server stops adding items
-once the result reaches about 30,000 characters and reports the rest through
-`earlierPosition` or `hasMore`. Claude Code saves MCP results over its token
-limit to a file instead of showing them, so a read has to fit whatever `limit`
-an agent asks for.
+once the result's JSON reaches about 30,000 bytes (bytes, since CJK text runs near
+one token per character) and reports the rest through `earlierPosition` or
+`hasMore`. An item too large for the budget on its own is cut and marked with
+`textTruncated` and `nextTextOffset`; `itemId` with `textOffset` reads the rest.
+Claude Code saves MCP results over its token limit to a file instead of showing
+them, so a read has to fit whatever `limit` an agent asks for.
 
 Thread and message results include required `createdBy` and `creationSource`
 provenance. MCP-created threads and user-role messages use `createdBy: "agent"`

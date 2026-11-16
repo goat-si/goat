@@ -316,7 +316,7 @@ it("readThread pages cut-off text without splitting an emoji across pages", asyn
               hasMore: false,
               hasEarlier: false,
             }),
-          getThreadRecords: () => Effect.succeed(projection),
+          getThreadRecords: () => Effect.succeed({ ...projection, turnItems: [] }),
           getProjectThreadRecords: () => Effect.succeed(projection),
           getThreadShell: () =>
             Effect.succeed(projection.thread as unknown as OrchestrationV2ThreadShell),
@@ -458,9 +458,10 @@ it("taskStatus returns task.providerInstanceId rather than the driver kind", asy
           getThreadRecords: (threadId, _sections, options) => {
             if (threadId === parentThreadId) {
               parentMessageRoles.push(options?.messageRoles);
-              return Effect.succeed(parentProjection);
+              return Effect.succeed({ ...parentProjection, turnItems: [] });
             }
-            if (threadId === childThreadId) return Effect.succeed(childProjection);
+            if (threadId === childThreadId)
+              return Effect.succeed({ ...childProjection, turnItems: [] });
             return Effect.die(`unexpected thread ${threadId}`);
           },
         } satisfies Partial<ThreadManagementService.ThreadManagementService["Service"]>),
@@ -740,7 +741,8 @@ it("readThread and sendToThread reach threads in other projects", async () => {
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           getThreadRecords: (threadId) => {
             if (threadId === parentThreadId) return Effect.succeed(parentProjection);
-            if (threadId === foreignThreadId) return Effect.succeed(foreignProjection(threadId));
+            if (threadId === foreignThreadId)
+              return Effect.succeed({ ...foreignProjection(threadId), turnItems: [] });
             return Effect.die(`unexpected thread ${threadId}`);
           },
           getThreadShell: (threadId) =>
@@ -952,7 +954,7 @@ it.each([
           Layer.mock(ThreadManagementService.ThreadManagementService)({
             getTimelinePage: () =>
               Effect.succeed({ items: [], totalItems: 0, hasMore: false, hasEarlier: false }),
-            getThreadRecords: () => Effect.succeed(projection),
+            getThreadRecords: () => Effect.succeed({ ...projection, turnItems: [] }),
             getThreadShell: () =>
               Effect.succeed(projection.thread as unknown as OrchestrationV2ThreadShell),
             getProjectThreadRecords: () => Effect.succeed(projection),

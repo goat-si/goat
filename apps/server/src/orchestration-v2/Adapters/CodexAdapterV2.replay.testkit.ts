@@ -1,4 +1,9 @@
-import { CodexSettings, ProviderSessionId, ThreadId } from "@goat/contracts";
+import {
+  CodexSettings,
+  ProviderSessionId,
+  type ServerProviderModel,
+  ThreadId,
+} from "@goat/contracts";
 import type * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -28,6 +33,7 @@ import {
   makeCodexReplayTranscript,
   makeCodexReplayTurn,
 } from "./CodexReplay.testkit.ts";
+import { withConfigReads } from "./CodexReplay.testkit.ts";
 
 const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
 
@@ -68,6 +74,8 @@ export const makeCodexReplayHarness = (
   readChildMetadata?: Parameters<typeof withCodexReplayChildMetadata>[2],
   beforeEmitInbound?: CodexReplay.CodexAppServerReplayDriver["beforeEmitInbound"],
   observeSleeps = false,
+  onNotification: (method: string) => Effect.Effect<void> = () => Effect.void,
+  offeredModels?: Effect.Effect<ReadonlyArray<ServerProviderModel>>,
 ) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -118,7 +126,7 @@ export const makeCodexReplayHarness = (
         Effect.gen(function* () {
           processEnvironment = openInput.environment;
           const driver = yield* CodexReplay.makeReplayDriver(
-            transcript,
+            withConfigReads(transcript),
             beforeEmitInbound ? { beforeEmitInbound } : {},
           );
           const client = Layer.build(CodexReplay.layerReplayWithDriver(driver));
@@ -145,7 +153,8 @@ export const makeCodexReplayHarness = (
                     ...client,
                     handleServerNotification: (method, handler) =>
                       client.handleServerNotification(method, (payload) =>
-                        handler(payload).pipe(
+                        onNotification(method).pipe(
+                          Effect.andThen(handler(payload)),
                           Effect.andThen(
                             Effect.sync(() => {
                               if (
@@ -185,6 +194,7 @@ export const makeCodexReplayHarness = (
       settings: DEFAULT_CODEX_SETTINGS,
       environment: {},
       clientFactory,
+      ...(offeredModels === undefined ? {} : { offeredModels }),
       crypto: yield* Crypto.Crypto,
       fileSystem,
       idAllocator,

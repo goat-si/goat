@@ -42,6 +42,7 @@ import {
   makeCodexReplayTranscript,
   makeCodexReplayTurn,
 } from "./CodexReplay.testkit.ts";
+import { withConfigReads } from "./CodexReplay.testkit.ts";
 
 const layerTest = Layer.mergeAll(
   MemoryDerivedCache.layer,
@@ -86,7 +87,7 @@ it.effect("a restart continuation with no survivor to adopt is model-checked bef
         3,
       ),
     });
-    const driver = yield* CodexReplay.makeReplayDriver(transcript);
+    const driver = yield* CodexReplay.makeReplayDriver(withConfigReads(transcript));
     const requests: Array<string> = [];
     // The turn's model reached GOAT's list after this process read its catalog.
     const offered: Array<ServerProviderModel> = [];
@@ -228,7 +229,7 @@ it.effect(
           prompt: "x",
         }).slice(0, 3),
       });
-      const driver = yield* CodexReplay.makeReplayDriver(transcript);
+      const driver = yield* CodexReplay.makeReplayDriver(withConfigReads(transcript));
       const adapter = yield* CodexAdapter.makeCodexAdapterV2({
         instanceId: CodexAdapter.CODEX_DEFAULT_INSTANCE_ID,
         settings: yield* decodeCodexSettings({}),
