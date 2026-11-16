@@ -23,6 +23,11 @@ vi.mock("./useKeptPerComputer", () => ({
   useComputerReadable: () => true,
 }));
 vi.mock("./useMobileBotRowSignals", () => ({ useMobileBotRowSignals: () => null }));
+// No computer connected here: the preview reads no bot list.
+vi.mock("../../state/presentation", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return { environmentPresentations: { presentationsAtom: Atom.make(new Map()) } };
+});
 vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));
 
 // A member's chat opened through its route and read, then its roster row: the route, the real
