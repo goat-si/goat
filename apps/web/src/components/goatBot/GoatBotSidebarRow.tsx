@@ -255,15 +255,18 @@ function GoatBotConversationRow({
         <span className="flex min-w-0 items-center gap-2">
           {/* The time wraps onto a hidden second line before the counts would run under the options button. */}
           <span className="flex h-5 min-w-0 flex-1 flex-wrap content-start items-center gap-x-2 overflow-hidden">
-            <span
-              className={
-                preview?.unread
-                  ? "min-w-0 flex-1 truncate font-semibold text-sidebar-foreground"
-                  : "min-w-0 flex-1 truncate"
-              }
-            >
-              {name}
-              {preview?.unread ? <span className="sr-only">, unread</span> : null}
+            {/* Under one letter and its ellipsis (26px) the name fades out; it stays in the link's name. */}
+            <span className="@container min-w-0 flex-1">
+              <span
+                className={
+                  preview?.unread
+                    ? "block truncate font-semibold text-sidebar-foreground @max-[1.625rem]:opacity-0"
+                    : "block truncate @max-[1.625rem]:opacity-0"
+                }
+              >
+                {name}
+                {preview?.unread ? <span className="sr-only">, unread</span> : null}
+              </span>
             </span>
             {at ? (
               <span
