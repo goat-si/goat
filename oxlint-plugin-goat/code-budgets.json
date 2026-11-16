@@ -696,7 +696,7 @@
   "packages/client-runtime/src/state/remoteLaunches.ts": { "nonNull": 1 },
   "packages/client-runtime/src/state/runtime.test.ts": { "lines": 1276 },
   "packages/client-runtime/src/state/server.test.ts": { "lines": 1411 },
-  "packages/client-runtime/src/state/server.ts": { "lines": 1796, "nonNull": 1 },
+  "packages/client-runtime/src/state/server.ts": { "lines": 1776, "nonNull": 1 },
   "packages/client-runtime/src/state/shell-sync.test.ts": { "lines": 1111 },
   "packages/client-runtime/src/state/subagentDisplay.ts": { "nonNull": 1 },
   "packages/client-runtime/src/state/subagentRuntime.ts": { "nonNull": 2 },

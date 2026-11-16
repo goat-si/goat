@@ -101,7 +101,10 @@ export function sharedSessions(
   return shared;
 }
 export const decodeCachedSources = Schema.decodeUnknownOption(
-  Schema.Struct({ sources: Schema.Record(Schema.String, CachedSource) }),
+  Schema.Struct({
+    sources: Schema.Record(Schema.String, CachedSource),
+    coveredSince: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
+  }),
 );
 
 export interface ScannedDir {
@@ -119,6 +122,8 @@ export interface ScannedDir {
         readonly malformedRecords: number;
       }[]
     | null;
+  /** Every transcript path the walk listed, in walk order, whatever its mtime. */
+  readonly walked?: readonly string[];
   readonly refreshing?: true;
 }
 
