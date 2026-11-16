@@ -146,7 +146,9 @@ describe("mobile SQLite namespace copy", () => {
       "exec:PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode = DELETE;",
       "close:goat-client.db.migration",
       `close:${LEGACY_MOBILE_DATABASE_NAME}`,
+      "create:goat-client.db.publishing",
       "move:goat-client.db",
+      "delete:goat-client.db.publishing",
       "open:goat-client.db",
     ]);
     expect(has(LEGACY_MOBILE_DATABASE_NAME)).toBe(true);
