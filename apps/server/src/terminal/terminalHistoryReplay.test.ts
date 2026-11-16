@@ -18,7 +18,7 @@ function historyFeed() {
         const result = sanitizeTerminalHistoryChunk(pending, data);
         pending = result.pendingControlSequence;
         visible += result.visibleText;
-        // At most the cap plus one chunk is ever held, and O(1) once a sequence is past it.
+        // Nothing over the cap is held between chunks.
         expect(pending.length).toBeLessThanOrEqual(CAP);
       }
     },
@@ -31,7 +31,7 @@ function historyFeed() {
   };
 }
 
-// Just over the cap, in the 64 KiB chunks a PTY delivers.
+// Just over the cap, in 64 KiB chunks.
 function overCap(start: string, unit: string): string[] {
   const payload = unit.repeat(Math.ceil((CAP + 1 - start.length) / unit.length));
   const chunks = [start];
