@@ -1,3 +1,4 @@
+import { DEFAULT_MAX_TERMINAL_BUFFER_BYTES } from "@goat/contracts";
 import { BoundedTerminalHistory } from "./BoundedTerminalHistory.ts";
 
 // Pop beyond Ghostty's eight-entry Kitty stacks on both screens before clearing
@@ -193,10 +194,14 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
 const HISTORY_SEQUENCE_START = /\u001b/;
 const NEXT_HISTORY_SEQUENCE_START = new RegExp(HISTORY_SEQUENCE_START.source, "g");
 
-// UTF-16 code units of an unfinished sequence the server holds per terminal. A longer one (a large
-// inline image, sixel picture or OSC 52 copy) is left out of history whole: the live terminal
-// already drew it, and a replay shows neither the sequence nor its payload.
-export const MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH = 1024 * 1024;
+// UTF-16 code units of an unfinished string sequence held per terminal: the clients' replay window,
+// which counts UTF-8 bytes (the same for ASCII image and sixel payloads). A longer one is left out
+// of history whole; the live terminal already drew it and no client could replay it.
+export const MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH = DEFAULT_MAX_TERMINAL_BUFFER_BYTES;
+
+// An unfinished CSI or plain escape is never longer than a few hundred units in practice, and
+// the sanitizer rescans a held CSI on every chunk, so these are held far less.
+export const MAX_PENDING_HISTORY_ESCAPE_SEQUENCE_LENGTH = 4 * 1024;
 
 // Held while the rest of a sequence past the cap is swallowed: this marker, the sequence's kind,
 // and at most one code unit split across chunks. A held unfinished sequence always starts with ESC.
@@ -275,13 +280,15 @@ export function sanitizeTerminalHistoryChunk(
   const result = sanitizeChunk(pending, rest);
   const visibleText = swallowedEffect + result.visibleText;
   const held = result.pendingControlSequence;
-  if (held.length <= MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH) {
+  const kind = swallowedKind(held);
+  const limit =
+    kind === "]" || kind === "P"
+      ? MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH
+      : MAX_PENDING_HISTORY_ESCAPE_SEQUENCE_LENGTH;
+  if (held.length <= limit) {
     return { visibleText, pendingControlSequence: held };
   }
-  return {
-    visibleText,
-    pendingControlSequence: SWALLOWING + swallowedKind(held) + carriedUnit(held),
-  };
+  return { visibleText, pendingControlSequence: SWALLOWING + kind + carriedUnit(held) };
 }
 
 function sanitizeChunk(

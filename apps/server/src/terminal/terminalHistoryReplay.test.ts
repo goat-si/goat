@@ -1,6 +1,8 @@
+import { DEFAULT_MAX_TERMINAL_BUFFER_BYTES } from "@goat/contracts";
 import { expect, it } from "vite-plus/test";
 import {
   MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH,
+  MAX_PENDING_HISTORY_ESCAPE_SEQUENCE_LENGTH,
   sanitizeTerminalHistoryChunk,
 } from "./terminalHistoryReplay.ts";
 
@@ -16,7 +18,7 @@ function historyFeed() {
         const result = sanitizeTerminalHistoryChunk(pending, data);
         pending = result.pendingControlSequence;
         visible += result.visibleText;
-        // At most the cap plus one chunk is ever held, and O(1) once a sequence is past it.
+        // Nothing over the cap is held between chunks.
         expect(pending.length).toBeLessThanOrEqual(CAP);
       }
     },
@@ -29,7 +31,7 @@ function historyFeed() {
   };
 }
 
-// Just over the cap, in the 64 KiB chunks a PTY delivers.
+// Just over the cap, in 64 KiB chunks.
 function overCap(start: string, unit: string): string[] {
   const payload = unit.repeat(Math.ceil((CAP + 1 - start.length) / unit.length));
   const chunks = [start];
@@ -142,3 +144,52 @@ it.each([
     expect(sanitizeTerminalHistoryChunk("", data).visibleText).toBe(history);
   },
 );
+
+it.each([
+  ["CSI", "\u001b[", "1;", "m"],
+  ["plain escape", "\u001b", " ", "0"],
+])(
+  "stops holding an unfinished %s after its own limit, fed in 1 KiB chunks",
+  (_, start, unit, end) => {
+    const history = historyFeed();
+    const payload = unit.repeat((2 * MAX_PENDING_HISTORY_ESCAPE_SEQUENCE_LENGTH) / unit.length);
+    history.feed("before", start);
+    for (let offset = 0; offset < payload.length; offset += 1024) {
+      history.feed(payload.slice(offset, offset + 1024));
+      expect(history.pending.length).toBeLessThanOrEqual(
+        MAX_PENDING_HISTORY_ESCAPE_SEQUENCE_LENGTH,
+      );
+    }
+    history.feed(end + "after\n");
+    expect(history.visible).toBe("beforeafter\n");
+    expect(history.pending).toBe("");
+  },
+);
+
+it("keeps a CSI just under its limit whole", () => {
+  const csi = "\u001b[" + "1".repeat(MAX_PENDING_HISTORY_ESCAPE_SEQUENCE_LENGTH - 3) + "m";
+  const history = historyFeed();
+  history.feed(csi.slice(0, 1024), csi.slice(1024, 3000), csi.slice(3000), "after");
+  expect(history.visible).toBe(csi + "after");
+});
+
+it("swallows a sequence longer than the client replay window, which no client could replay", () => {
+  // The window is UTF-8 bytes and the cap UTF-16 units; image and sixel payloads are ASCII.
+  const history = historyFeed();
+  const start = "\u001b]1337;File=:";
+  history.feed(
+    "before",
+    start,
+    "QUJD".repeat(DEFAULT_MAX_TERMINAL_BUFFER_BYTES / 4),
+    "\u0007after\n",
+  );
+  expect(history.visible).toBe("beforeafter\n");
+});
+
+it("ends a swallowed DCS at a C1 code point whose surrogate pair is split across chunks", () => {
+  // U+10000's UTF-8 bytes run as C1 controls inside a DCS: 0x90 then 0x80, which ends it.
+  const history = historyFeed();
+  history.feed("before", ...overCap("\u001bPq", "?"), "\ud800", "\udc00after\n");
+  expect(history.visible).toBe("before\u001b@\ufffdafter\n");
+  expect(history.pending).toBe("");
+});
