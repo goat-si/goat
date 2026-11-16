@@ -10,7 +10,6 @@ import {
   type ComposerFileAttachment,
   type ComposerThreadDraftState,
   type PersistedComposerFileAttachment,
-  type PersistedComposerImageAttachment,
   composerFileDedupKey,
   composerFileMatchesReattachMarker,
   composerFileNeedsReattach,
@@ -22,14 +21,12 @@ import { type ComposerPromptEditorHandle } from "../ComposerPromptEditor";
 import {
   MAX_STASH_ENTRIES,
   type PromptStashEntry,
-  partitionStashAttachments,
   usePromptStashStore,
 } from "../../promptStashStore";
 import { type PendingUserInput } from "../../session-logic";
 import { type ReviewCommentContext } from "../../reviewCommentContext";
 import { collapseExpandedComposerCursor } from "../../composer-logic";
 import { collectComposerPromptInlineTokens } from "../../composer-editor-mentions";
-import { compressImageForStash } from "../../lib/imageCompression";
 import { formatInlineContextReference } from "~/lib/composerContextReferences";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { pendingDraftWork } from "./pendingDraftWork";
@@ -47,7 +44,6 @@ import {
 } from "../../lib/attachmentUploadQueue";
 import { remainingComposerAttachmentSlots } from "./composerThreadImport";
 import { replaceComposerContextReferences } from "@goat/shared/composerContextReferences";
-import { resizeSnapShotSource } from "../../lib/snapShotSource";
 import { registerCommands } from "../../shortcuts/dispatcher";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../../terminalUiStateStore";
 import { toastManager } from "../ui/toast";
@@ -62,6 +58,7 @@ import {
   useState,
 } from "react";
 import { BackgroundThreadContext } from "./backgroundThread";
+import { encodeImagesForStash } from "./stashFailedSend";
 import { useStableCallback } from "../../hooks/useStableCallback";
 
 /**
@@ -599,38 +596,9 @@ export function useComposerStash(input: {
         });
       }
 
-      // Images are re-encoded for the stash rather than stored verbatim: the
-      // composer allows up to 10MB per image, but localStorage gives the whole
-      // origin ~5MB.
-      const candidateAttachments: PersistedComposerImageAttachment[] = [];
-      const oversizedImageNames: string[] = [];
-      const unreadableImageNames: string[] = [];
-      for (const image of images) {
-        const result = await compressImageForStash(image.file);
-        if (!result.ok) {
-          (result.reason === "too-large" ? oversizedImageNames : unreadableImageNames).push(
-            image.name,
-          );
-          continue;
-        }
-        candidateAttachments.push({
-          id: image.id,
-          name: image.name,
-          mimeType: result.image.mimeType,
-          sizeBytes: result.image.sizeBytes,
-          dataUrl: result.image.dataUrl,
-          ...(image.source
-            ? { source: resizeSnapShotSource(image.source, result.image.imageSize) }
-            : {}),
-        });
-      }
-      const { kept, droppedNames } = partitionStashAttachments(candidateAttachments);
-
-      const { attached, durable: imagesDurable } = finalizeStashEntryImages(entryId, {
-        attachments: kept,
-        droppedImageNames: [...oversizedImageNames, ...droppedNames],
-        unreadableImageNames,
-      });
+      const encoded = await encodeImagesForStash(images);
+      const kept = encoded.attachments;
+      const { attached, durable: imagesDurable } = finalizeStashEntryImages(entryId, encoded);
       if (attached) {
         if (!imagesDurable && durable && images.length > 0) {
           toastManager.add({

@@ -135,6 +135,7 @@ import { waitForThreadShell } from "../../state/entities";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { vcsEnvironment } from "../../state/vcs";
 import type { ComposerSendInput } from "./useComposerSend.input";
+import { keepFailedSendInStash } from "./stashFailedSend";
 
 const sshWorkspaceLaunchCommand = vcsEnvironment.sshWorkspaceLaunch;
 
@@ -1604,16 +1605,20 @@ export function useComposerSend(input: ComposerSendInput) {
         );
         clearBackgroundDraftSubmissionByRef(scopeThreadRef(environmentId, threadIdForSend));
       }
+      // Only an acknowledged send replaces its optimistic row, so a failed one leaves here.
+      setOptimisticUserMessages((existing) => {
+        const next = existing.filter((message) => message.id !== messageIdForSend);
+        return next.length === existing.length ? existing : next;
+      });
+      optimisticBlobPreviews.release(optimisticMessage);
       if (
-        !composerDraftHasUserContent(
+        composerDraftHasUserContent(
           useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
         )
       ) {
-        setOptimisticUserMessages((existing) => {
-          const next = existing.filter((message) => message.id !== messageIdForSend);
-          return next.length === existing.length ? existing : next;
-        });
-        optimisticBlobPreviews.release(optimisticMessage);
+        const interrupted = isAtomCommandInterrupted(failure);
+        keepFailedSendInStash({ snapshot: sendSnapshot, environmentId, interrupted });
+      } else {
         const retryComposerImages = restoreComposerDraft(composerDraftTarget, sendSnapshot);
         if (currentRouteThreadKeyRef.current === routeThreadKey) {
           promptRef.current = messageTextForSend;
