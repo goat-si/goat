@@ -280,3 +280,95 @@ Merged: `21d4694900` went into the integration branch as `1f34e35e42` (#3397) on
 NOT RUN: the real-provider reproduction for goat#3348; a real-client pass (no client code changed).
 
 Model: anthropic/claude-opus-5-5 via Codex in GOAT on pen-mac-studio, coordinated by anthropic/claude-opus-5-5
+
+## af9b4e41de delta
+
+Lane branch: chase/t3-261114-orchestrator-handoff, based on origin/chase/t3-261114-all `50b8ca19dd`. Lane head: `ce488830ec5391354d61e4b4f8ada3d9092397c5` (not merged yet).
+
+Commits:
+
+- `3947534e1f` fix(server): a worktree handoff on Claude or Pi completes its run and starts the continuation (upstream `af9b4e41de`, #36360; card #1139)
+- `8464e9783a` merges origin/chase/t3-261114-all `9253116afa` (small ports `077313a6c1`, L09 delta `9d7281d0c4`) with no conflicts. The two sides share no file; no test mocks, import by import, a module whose imports changed, and no test moved, so goat-rename's TEST_TITLES are unchanged.
+- `f9f3f928d2` merges origin/chase/t3-261114-all `590cee0efb` (CI scope `61050c40e4`, small-ports follow-up `b3d3c918ec`, L02 run 7 `fc3f4f3143`) with no conflicts; `git merge-tree` against it was clean before the merge. The same mock and TEST_TITLES checks find nothing to add.
+- `ce488830ec` test(server): a handoff continuation shows its prompt once its run starts or fails (integration review part B, item 3).
+
+Decision: adapt. On an exclusive session (Claude, Pi, and also Cursor, ACP, Muse and OpenCode v1) the worktree binding detaches the thread, which closes the session. No terminal follows, so the calling run failed with "The provider event stream closed unexpectedly", and the continuation, sent in a separate later command, waited behind it. Now:
+
+- The continuation rides on the binding: thread.metadata.update gains an optional `continuation`, and the orchestrator queues it in the same commit, under the message intake lock and, for a subagent follow-up, the parent lock (apps/server/src/orchestration-v2/Orchestrator.ts:12752).
+- The session manager names the detached thread on the stream error it ends subscribers with (apps/server/src/orchestration-v2/ProviderSessionManager.ts:762, :1170).
+- The run executor settles that error, when it names this run's thread after a workspace handoff, as a completed run without asking the closed session to interrupt; anything else takes the failure path as before (apps/server/src/orchestration-v2/RunExecutionService.ts:1594).
+- goat_worktree_handoff sends the continuation with the binding and reports started or queued from that command's events (apps/server/src/mcp/WorktreeMcpService.ts:341). ThreadManagementService checks that the thread's provider is enabled for it, as for a message.
+
+GOAT adaptations:
+
+- `metadataUpdateContinuation` lives in goat/OrchestratorRunState.ts beside `mayStartSubagentFollowup`. The native-subagent refusal moved verbatim from the message.dispatch case into goat/TimelineRecords.ts as `refuseMessageTarget`, together with GOAT's channel-only check, so a continuation passes the same two refusals a message does.
+- `continuation` is server-issued. The public dispatch intake refuses it, as it refuses a fork workspace (apps/server/src/orchestration-v2/ThreadMessageIntake.ts:156), so a client cannot queue an agent-attributed turn through a metadata update. The hub proxy already refuses thread.metadata.update (packages/contracts/src/hubProxy.ts:70).
+- Upstream's ProviderSwitch handoff test is GOAT's ProviderSwitchBackground "interrupts the handoff tool call that releases its own session", which runs the real Claude capabilities and now expects the run to complete.
+- The handoff integration test runs on the real Codex, Claude and Pi capability sets in place of upstream's pooled and exclusive pair; @goat/provider-pi/server re-exports `PiProviderCapabilitiesV2` for it.
+
+Left out: upstream's four-way release parameterization in ProviderSessionManager.test.ts, because GOAT never ported that test. A new test covers the field with two of its cases (detach and stream failure).
+
+Budgets, on the merged head against the tip `590cee0efb` (no entry changed, and nothing had to move out; `git diff origin/chase/t3-261114-all -- oxlint-plugin-goat/code-budgets.json` is empty):
+
+| File | Lines | Budget |
+|---|---|---|
+| Orchestrator.ts | 13899 to 13901 | 13908 |
+| EffectWorker.ts (not changed here; L02) | 998 | 1005 |
+| RunExecutionService.ts | 2053 to 2095 | 2172 |
+| ThreadManagementService.ts | 2054 to 2066 | 2201 |
+| ProviderSessionManager.ts | 3025 to 3028 | 3128 |
+| ProviderSessionManager.test.ts | 5917 to 5973 | 6326 |
+| contracts orchestrationV2.ts | 4474 to 4476 | 4478 |
+
+### Integration review part B
+
+1. Upstream's ProviderSessionManager hunks change `failSubscribers` and the release call that feeds it, and both are still in ProviderSessionManager.ts after the L01 and L02 splits (:752, :1170). The release input already carried `detachedThreadId` (:1128), and the detach sets it (:2970). ProviderAdapterEventStreamError lives in provider-core, so ProviderSessionManagerTypes.ts and ProviderSessionManagerErrors.ts gain nothing. The new test sits in ProviderSessionManager.test.ts on the split harness's `layerTest` (test/ProviderSessionManagerHarness.testkit.ts) with ExclusiveCapabilities.
+2. Decision: L02's Force stop teardown keeps marking the thread as detached. Its `sessions.detach` (apps/server/src/orchestration-v2/ForceStopTeardown.ts:77) is GOAT closing the session because this thread left it, which is what the field says. On an exclusive session whose release was refused as busy, the stream error therefore names the thread. It cannot turn a Force stop into a completed handoff, for two reasons. The handoff settle also needs the run's workspace to have moved (RunExecutionService.ts:1594). And Force stop dispatches `run.interrupt` before the teardown (ThreadManagementService.ts:1734), so even after a real handoff the completed write refuses against the stored Stop (`unlessInterruptRequested`, RunExecutionService.ts:1015) and the run settles interrupted. Without a workspace move the failure path runs as before. Leaving the field off for Force stop would make it mean "detached, except by Force stop", for no behaviour gained. ForceStopTeardown.test.ts passes on the merged head.
+3. The continuation is a `queued_turn` user message, hidden while its run is queued by L03's rule (packages/shared/src/orchestrationV2Timeline.ts:59, :109). SelectionRestart.integration.test.ts:365 asserts, on Codex, Claude and Pi, that the continuation's prompt is hidden while queued and shown when its run fails or completes, through `createOrchestrationV2TurnItemVisibility`.
+
+### Fail-first
+
+The final tests on the tip with the source changes reverted (tests and the Pi re-export kept): 7 failures.
+
+- "a workspace handoff on Codex / Claude / Pi completes its run and starts the queued continuation": `expected [] to deeply equal [ 'queued' ]`, because the binding committed no continuation.
+- "interrupts the handoff tool call that releases its own session" (real Claude capabilities): `expected 'failed' to equal 'completed'`.
+- "commits the continuation with the thread binding": `expected { status: 'failed', … } to deeply equal { status: 'scheduled', delivery: 'queued' }`.
+- "refuses a client-sent metadata update that carries a handoff continuation": the command reached dispatch.
+- "refuses messages to a native subagent thread without touching it": the continuation was not refused.
+
+With the first test's continuation assertion relaxed on the tip, the exclusive (Claude-shaped) run ends `failed` instead of `completed`, and the Codex run starts one turn instead of two. With only ProviderSessionManager.ts reverted, "ProviderSessionManagerV2 names the detached thread only when a detach ends the stream" fails with `expected undefined to equal 'thread-provider-session-manager-named-detach'`.
+
+After the fix: 7 server files (281 tests) and contracts orchestrationV2.test.ts (36 tests) pass; server typecheck exit 0.
+
+### detachedThreadId compatibility
+
+`detachedThreadId` is `Schema.optional` on ProviderAdapterEventStreamError (packages/provider-core/src/server/ProviderAdapter.ts:436). That error passes in-process from the session manager to the run executor and never crosses a wire: a stored failure carries only a text message picked by the error's tag (packages/provider-core/src/server/failure.ts:50), so no client and no other server decodes the field. The wire change in this port is `continuation`, `Schema.optional` on thread.metadata.update (packages/contracts/src/orchestrationV2.ts:3138). It is a plain optional and not ForwardCompatibleOptional because only the server sends it, to itself, and an older Struct decode already drops an unknown key.
+
+- (a) Newer server, older client: the field never reaches an event. The handoff commits exactly the event types that a metadata update and a queued message already produced (checkpoint-scope.created, message.updated, node.updated, provider-session.detached, run-attempt.created, run.created, thread.metadata-updated), asserted in SelectionRestart.integration.test.ts. The contracts diff touches only the command, so an older client decodes the same events and projections. goat_worktree_handoff's result keeps its shape (`{status: "scheduled", delivery}`), asserted in WorktreeMcpService.test.ts.
+- (b) Newer client, older server, field absent: no client sends `continuation`, and the intake refuses one from a client (ThreadMessageIntake.test.ts). A binding without it decodes with no continuation invented (orchestrationV2.test.ts, "handoff continuation from older or newer peers") and binds as before. A stream error without `detachedThreadId`, which a provider failure or any release other than a detach produces, fails the run as before and assumes no continuation (ProviderSessionManager.test.ts stream-failure case; RunExecutionService.ts:1594 requires the field to equal the run's thread).
+
+### Gate
+
+Two runs, both on pen-macbookair. No PostgreSQL is installed; all runs used pipefail.
+
+- Gate on `8464e9783a` (`3947534e1f` with the tip at `9253116afa`), `vp run check:changed` over 1381 files: unused patches, format, lint, knip 1/2 and 2/2, graphql x2, agent context budget, agent surface audit, typecheck (42 packages) and node --test (10 files) pass. Because the tip's L09 line in packages/shared/src/testing/providerEnv.ts selects every test file, the vitest step ran the full suite. I stopped it through its own session after 95 minutes without a summary, following the coordinator's note that the full matrix runs on each #3397 push. An earlier start on `3947534e1f` alone was stopped when the tip moved.
+- Gate on the final head `ce488830ec` (tip `590cee0efb` merged), `vp run check:changed` over 1576 files: the same eleven static steps pass (typecheck 42 packages 85.4s, knip 2/2 82.4s, node --test 149.3s). The full-suite vitest step was stopped through its session, as above.
+- Focused files on `ce488830ec`, all passing: SelectionRestart.integration, WorktreeMcpService, ThreadMessageIntake, ClaudeReplayFixtures.integration, ProviderSwitchBackground.integration, ProviderSessionManager, RunExecutionService, ForceStopTeardown, ProviderSwitch.integration and ThreadManagementService (10 files, 393 tests); contracts orchestrationV2.test.ts (36); shared orchestrationV2Timeline.test.ts (90). Server typecheck exit 0.
+- `node scripts/goat-rename.ts --check`: 0 lines with T3 residue in 0 files, 0 dropped paths, before each push.
+
+No known-failure triage applies, since no vitest summary was produced. The known host failures (goat#3479, #3417, #3425, #3238, #3363, #3418, the PostgreSQL files, goat#3489) were therefore neither seen nor ruled out here.
+
+### Surfaces
+
+- **Web, desktop, mobile:** no client code changed. After a handoff on Claude or Pi, the calling run now shows completed instead of failed with "The provider event stream closed unexpectedly", and the continuation message is queued and starts as the next run in the worktree. Both render through existing rows (run status, a queued agent message), so there is no capture: no layout or component changed, and the integration tests assert the projection every client reads.
+- **Agents/MCP:** goat_worktree_handoff's result keeps its shape. A continuation that cannot be queued (for example, a disabled provider) now fails the handoff as operation_failed and removes the new worktree. Before, the binding stayed and the continuation reported failed. This matches upstream.
+- **Providers:** every exclusive-session adapter settles a handoff this way. Codex and OpenCode v2 (pooled) get the same-commit continuation.
+
+### Known limits
+
+- No live provider run: the Claude and Pi cases use their capability sets on the replay harness.
+- A replayed goat_worktree_handoff call (same derived ids) reports delivery "queued" whatever the first call did, since a replayed command returns no new events.
+
+NOT RUN: the full vitest suite to completion on either head (stopped; CI's full matrix covers it on #3397); a real-client pass and a real Claude or Pi turn (no client code changed; a real turn costs money); an independent C4 review lane; CI.
+
+Model: anthropic/claude-opus-5-5 via Codex in GOAT on pen-macbookair
