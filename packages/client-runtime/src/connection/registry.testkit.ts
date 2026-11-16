@@ -148,6 +148,8 @@ export const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(func
     readonly holdSshDisconnect?: (target: DesktopSshEnvironmentTarget) => Effect.Effect<void>;
     /** Direct addresses the connected server reports. */
     readonly directEndpoints?: ServerConfig["directEndpoints"];
+    /** The protocol client of each new session, so a test can see where requests went. */
+    readonly sessionClient?: (environmentId: EnvironmentId) => RpcSession.RpcSession["client"];
   },
 ) {
   const storedTargets = yield* Ref.make<ReadonlyArray<ConnectionTarget>>(initialTargets);
@@ -399,7 +401,9 @@ export const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(func
       yield* Ref.update(sessions, (current) => [...current, { closed }]);
       const session = yield* Effect.acquireRelease(
         Effect.succeed({
-          client: {} as RpcSession.RpcSession["client"],
+          client:
+            options?.sessionClient?.(target.environmentId) ??
+            ({} as RpcSession.RpcSession["client"]),
           initialConfig:
             options?.directEndpoints === undefined
               ? Effect.die(new Error("Config is not used by registry tests."))
