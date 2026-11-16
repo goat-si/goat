@@ -2,6 +2,8 @@
 
 Lane branch: `chase/t3-261114-n13a-office`, head `6216af373677f0f6f7b85560335fd4c7e64d37f4` (based on dev `02511156b0`, merged with dev `79a5cafe96`). Host pen-macmini (juniui-Macmini.local, macOS 27.0, 10 cores, Node 26.12.1). Rows from #3176 decided 2026-11-16 by the owner (O18-O21, option A) and the coordinator (L323 with the test edits on card 10.025 line 930). Every row is C4 (new dependency or version bump, lockfile, license notices).
 
+Merge: 6216af3736 merged into the integration branch at f03a6481b7 (`chase/t3-261114-next`, 2026-11-17; git's own result, no conflict).
+
 ## Rows and commits
 
 Upstream order is bc3eb6d2b2, 787c59c802, c8e8b58ee6, 6464729c56, fd033dfec3, 5cff012416; the lane follows the plan's order. `84478e09c1`, which upstream lands between bc3eb6d2b2 and 787c59c802, is already in dev through #3291.
@@ -92,6 +94,8 @@ The 34,818,280 bytes of CJK faces ship in every copy of the web client, not only
 
 The decision is the owner's; the coordinator asked him. Until he answers, `bc3eb6d2b2` stays as ported. If he prefers to hold the fonts, the lane takes `5b1181c6a1` out in a follow-up commit when the coordinator says so.
 
+Owner's answer (2026-11-17, verbatim): "그대로 머지 (크기 증가 수용, 중복 사본 줄이기는 후속 이슈로)". The size growth is accepted and `bc3eb6d2b2` stays as ported; reducing the duplicate copies is goat#3579 (https://github.com/goat-si/goat/issues/3579): CJK preview fonts ship in every copy of the web client; measure, then reduce the copies.
+
 ### WORD_LIMITS before and after (`787c59c802`, P3-1)
 
 Checked against officeArchive.ts on `02511156b0` and on the head (officeArchive.ts:10).
@@ -128,6 +132,20 @@ In /tmp/n13a-captures on pen-macmini until the coordinator sends the PR number. 
 | Word (Japanese)       | before-word.png  | after-client-word.png  |
 | Excel                 | before-sheet.png | after-client-sheet.png |
 | PowerPoint (Japanese) | before-slide.png | after-client-slide.png |
+
+Uploaded to #3519 on 2026-11-17 with `node scripts/pr-assets.ts upload 3519`, names prefixed `n13a-`; every image URL returned 200:
+
+- `n13a-before-word.png`: https://raw.githubusercontent.com/goat-si/goat/47f78ae019a86e8fa36fd31316dcf45c9854d6da/3519/n13a-before-word.png
+- `n13a-after-client-word.png`: https://raw.githubusercontent.com/goat-si/goat/47f78ae019a86e8fa36fd31316dcf45c9854d6da/3519/n13a-after-client-word.png
+- `n13a-before-sheet.png`: https://raw.githubusercontent.com/goat-si/goat/47f78ae019a86e8fa36fd31316dcf45c9854d6da/3519/n13a-before-sheet.png
+- `n13a-after-client-sheet.png`: https://raw.githubusercontent.com/goat-si/goat/47f78ae019a86e8fa36fd31316dcf45c9854d6da/3519/n13a-after-client-sheet.png
+- `n13a-before-slide.png`: https://raw.githubusercontent.com/goat-si/goat/47f78ae019a86e8fa36fd31316dcf45c9854d6da/3519/n13a-before-slide.png
+- `n13a-after-client-slide.png`: https://raw.githubusercontent.com/goat-si/goat/47f78ae019a86e8fa36fd31316dcf45c9854d6da/3519/n13a-after-client-slide.png
+- `n13a-built-web-slide-en.png`: https://raw.githubusercontent.com/goat-si/goat/47f78ae019a86e8fa36fd31316dcf45c9854d6da/3519/n13a-built-web-slide-en.png
+- `n13a-built-web-slide-ja.png`: https://raw.githubusercontent.com/goat-si/goat/47f78ae019a86e8fa36fd31316dcf45c9854d6da/3519/n13a-built-web-slide-ja.png
+- `n13a-after-client-sheet-resized.png`: https://raw.githubusercontent.com/goat-si/goat/47f78ae019a86e8fa36fd31316dcf45c9854d6da/3519/n13a-after-client-sheet-resized.png
+- `n13a-built-web-sheet-resize.gif` (the resize drag, 10 fps, 960 px wide, made from the mp4 with ffmpeg): https://raw.githubusercontent.com/goat-si/goat/33129bdee04245d794ec5caddd9184842b434c15/3519/n13a-built-web-sheet-resize.gif
+- `n13a-built-web-sheet-resize.mp4`: https://raw.githubusercontent.com/goat-si/goat/47f78ae019a86e8fa36fd31316dcf45c9854d6da/3519/n13a-built-web-sheet-resize.mp4 (pr-assets reports it broken as an embed: raw.githubusercontent.com serves it as application/octet-stream, so the PR body embeds the GIF and can link the mp4)
 
 ### PowerPoint in the built web app (N13A-P2-3)
 
