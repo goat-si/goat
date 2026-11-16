@@ -33,6 +33,7 @@ import {
   type SupervisorConnectionState,
 } from "./model.ts";
 import * as RpcSession from "../rpc/session.ts";
+import { publishLease } from "./sessionPublication.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
@@ -1090,8 +1091,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       Effect.ensuring(Queue.clear(betterRouteChecks).pipe(Effect.asVoid)),
       Effect.forkScoped,
     );
-    yield* SubscriptionRef.set(prepared, Option.some(active.lease.prepared));
-    yield* SubscriptionRef.set(session, Option.some(active.lease.session));
+    yield* publishLease(target.environmentId, { prepared, session }, active.lease);
     if (options?.learnRoutes !== undefined) {
       yield* learnRoutesFrom(options.learnRoutes, connectedLease).pipe(Effect.forkScoped);
     }

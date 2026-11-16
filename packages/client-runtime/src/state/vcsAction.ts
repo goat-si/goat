@@ -21,7 +21,7 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 import * as Persistence from "../platform/persistence.ts";
 import { runStreamGuarded, RpcPermissionGuard } from "../rpc/client.ts";
 import {
-  createRuntimeCommand,
+  createEnvironmentCommand,
   runStreamInEnvironment,
   type AtomCommand,
   type AtomCommandResult,
@@ -434,8 +434,8 @@ export function createVcsActionManager<R, E>(
     }
     const target = targetKey === null ? null : parseVcsActionTargetKey(targetKey);
     const stateAtom = targetKey === null ? EMPTY_VCS_ACTION_ATOM : vcsActionStateAtom(targetKey);
-    const command = createRuntimeCommand<
-      EnvironmentRegistry | Persistence.EnvironmentCacheStore | R,
+    const environmentCommand = createEnvironmentCommand<
+      Persistence.EnvironmentCacheStore | R,
       E,
       RunVcsStackedActionInput,
       GitRunStackedActionResult,
@@ -527,6 +527,24 @@ export function createVcsActionManager<R, E>(
         );
       }),
     });
+    const environmentId = requestedTarget.environmentId;
+    const command: AtomCommand<RunVcsStackedActionInput, GitRunStackedActionResult, unknown> = {
+      label: environmentCommand.label,
+      run: (registry, input) =>
+        environmentId === null
+          ? Promise.resolve(
+              AsyncResult.failure(
+                Cause.fail(
+                  new VcsActionUnavailableError({
+                    operation: "run_change_request",
+                    environmentId,
+                    cwd: requestedTarget.cwd,
+                  }),
+                ),
+              ),
+            )
+          : environmentCommand.run(registry, { environmentId, input }),
+    };
     runStackedActionCommands.set(commandKey, command);
     return command;
   };

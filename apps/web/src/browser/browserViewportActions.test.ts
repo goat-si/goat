@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { EnvironmentRegistry as EnvironmentRegistryTypes } from "@goat/client-runtime/connection";
+import type {
+  EnvironmentRegistry as EnvironmentRegistryTypes,
+  EnvironmentSupervisor as EnvironmentSupervisorTypes,
+} from "@goat/client-runtime/connection";
 
 import {
   type AuthSessionState,
@@ -35,16 +38,30 @@ vi.mock("@goat/client-runtime/state/session", async () => {
 });
 vi.mock("~/state/preview", async () => {
   const { WS_METHODS } = await import("@goat/contracts");
-  const { EnvironmentRegistry } = await import("@goat/client-runtime/connection");
+  const { EnvironmentRegistry, EnvironmentSupervisor } =
+    await import("@goat/client-runtime/connection");
   const { createEnvironmentRpcCommand } = await import("@goat/client-runtime/state/runtime");
   const Effect = await import("effect/Effect");
   const Layer = await import("effect/Layer");
+  const Option = await import("effect/Option");
+  const SubscriptionRef = await import("effect/SubscriptionRef");
   const { Atom } = await import("effect/reactivity");
+  // Environment commands run inside their computer's supervisor; this one is not connected.
+  const disconnected = SubscriptionRef.make(Option.none()).pipe(
+    Effect.map(
+      (session) =>
+        ({ session }) as unknown as EnvironmentSupervisorTypes.EnvironmentSupervisor["Service"],
+    ),
+  );
   const runtime = Atom.runtime(
     Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, {
       run: (environmentId, effect) => {
         boundary.destinations.push(environmentId);
-        return effect;
+        return Effect.provideServiceEffect(
+          effect,
+          EnvironmentSupervisor.EnvironmentSupervisor,
+          disconnected,
+        );
       },
     } as EnvironmentRegistryTypes.EnvironmentRegistry["Service"]),
   );

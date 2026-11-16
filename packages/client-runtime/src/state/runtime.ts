@@ -3,6 +3,7 @@ import { environmentConnectionAtoms } from "./environmentConnections.ts";
 export { environmentSessionGenerationAtom } from "./environmentConnections.ts";
 import type { QueryPersistence } from "./queryPersistence.ts";
 import { createCommandPermissions } from "./commandPermissions.ts";
+import { inIssuingSession, latestSessionPublication, pressedAt } from "./commandSession.ts";
 import { followStreamInEnvironment } from "./environmentStreams.ts";
 import { reuseUnchanged } from "./serverConfigProjection.ts";
 export { runStreamInEnvironment, followStreamInEnvironment } from "./environmentStreams.ts";
@@ -425,6 +426,7 @@ export async function executeAtomQuery<A, E>(
   );
 }
 
+/** Commands that run on a computer use createEnvironmentCommand, which checks their session. */
 export function createRuntimeCommand<R, ER, W, A, E>(
   runtime: Atom.AtomRuntime<R, ER>,
   options: {
@@ -438,15 +440,17 @@ export function createRuntimeCommand<R, ER, W, A, E>(
   const concurrency = options.concurrency ?? { mode: "parallel" as const };
   return {
     label: options.label,
-    run: (registry, input) =>
-      settleAtomCommandResult(() =>
+    run: (registry, input) => {
+      const pressed = latestSessionPublication();
+      return settleAtomCommandResult(() =>
         scheduler.schedule(registry, concurrency, input, () => {
           const atom = runtime
-            .atom(options.execute(input, registry))
+            .atom(options.execute(input, registry).pipe(pressedAt(pressed)))
             .pipe(Atom.withLabel(options.label));
           return executeAtomQuery(registry, atom, { reportDefect: false, reportFailure: false });
         }),
-      ),
+      );
+    },
   };
 }
 
@@ -795,7 +799,7 @@ export function createEnvironmentCommand<R, ER, Input, A, E>(
     execute: (target, registry) =>
       runInEnvironment(
         target.environmentId,
-        options.execute(target.input, registry, target.environmentId),
+        inIssuingSession(() => options.execute(target.input, registry, target.environmentId)),
       ),
   });
 }

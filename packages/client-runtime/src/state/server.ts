@@ -36,9 +36,10 @@ import {
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
   createEnvironmentSubscriptionAtomFamily,
-  createRuntimeCommand,
+  createEnvironmentCommand,
   scheduleAtomCommandEffect,
 } from "./runtime.ts";
+import { requireIssuingSession } from "./commandSession.ts";
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import { createProviderAuthCommands } from "./providerAuthCommands.ts";
@@ -835,17 +836,18 @@ export function createServerEnvironmentAtoms<R, E>(
   );
   const updateStateAtom = (environmentId: EnvironmentId | null) =>
     environmentId === null ? EMPTY_SERVER_UPDATE_STATE_ATOM : updateStateValueAtom(environmentId);
-  const updateServer = createRuntimeCommand<
+  const updateServer = createEnvironmentCommand<
     EnvironmentRegistry.EnvironmentRegistry | Persistence.EnvironmentCacheStore | R,
     E,
-    ServerUpdateTarget,
+    ServerUpdateTarget["input"],
     ServerSelfUpdateResult,
     unknown
   >(runtime, {
     label: "environment-data:server:update-server",
     scheduler: updateScheduler,
     concurrency: configConcurrency,
-    execute: Effect.fn("ServerUpdate.updateServer")(function (target, atomRegistry) {
+    execute: Effect.fn("ServerUpdate.updateServer")(function (input, atomRegistry, environmentId) {
+      const target: ServerUpdateTarget = { environmentId, input };
       const stateAtom = serverUpdateStateAtom(target.environmentId);
       let targetVersion = target.input.targetVersion;
       let fromVersion =
@@ -883,6 +885,7 @@ export function createServerEnvironmentAtoms<R, E>(
           configConcurrency,
           target,
           Effect.gen(function* () {
+            yield* environmentRegistry.run(target.environmentId, requireIssuingSession());
             const currentConfig = atomRegistry.get(configValueAtom(target.environmentId));
             fromVersion = currentConfig?.environment.serverVersion ?? targetVersion;
             atomRegistry.set(stateAtom, {

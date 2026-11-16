@@ -60,9 +60,14 @@ const grant = (allowed: boolean): AuthSessionState => ({
   scopes: allowed ? [AuthOrchestrationOperateScope] : [],
   permissions: allowed ? [AuthOrchestrationOperateScope] : [],
 });
+// Environment commands run inside their computer's supervisor; this one is not connected.
+const DISCONNECTED = SubscriptionRef.make(Option.none<RpcSession>()).pipe(
+  Effect.map((session) => ({ session }) as unknown as EnvironmentSupervisor["Service"]),
+);
 const runtime = Atom.runtime(
   Layer.succeed(EnvironmentRegistry, {
-    run: (_id: EnvironmentId, effect: Effect.Effect<unknown>) => effect,
+    run: (_id: EnvironmentId, effect: Effect.Effect<unknown>) =>
+      Effect.provideServiceEffect(effect, EnvironmentSupervisor, DISCONNECTED),
   } as unknown as EnvironmentRegistry["Service"]),
 );
 const permissions = createCommandPermissions(runtime, WS_METHODS.scheduledTasksDelete);

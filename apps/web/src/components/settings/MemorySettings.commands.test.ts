@@ -11,13 +11,15 @@ import {
   type MemoryImportProviderInput,
   type MemoryImportProviderResult,
 } from "@goat/contracts";
-import { EnvironmentRegistry } from "@goat/client-runtime/connection";
+import { EnvironmentRegistry, EnvironmentSupervisor } from "@goat/client-runtime/connection";
 import { createEnvironmentRpcCommand } from "@goat/client-runtime/state/runtime";
 import { createMemoryImportWorkflow } from "@goat/client-runtime/memory-import-workflow";
 import { memoryImportRecoveryStorage } from "../../lib/memoryImportRecoveryStorage";
 import { memorySyncFixture } from "../../test/memorySyncFixture";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Cause from "effect/Cause";
 import { Atom, AtomRegistry, AsyncResult } from "effect/reactivity";
 
@@ -32,12 +34,23 @@ const space = MemorySpaceId.make("00000000-0000-4000-8000-000000000001");
 function harness() {
   const registry = AtomRegistry.make();
   const destinations: EnvironmentId[] = [];
+  // Environment commands run inside their computer's supervisor; this one is not connected.
+  const disconnected = SubscriptionRef.make(Option.none()).pipe(
+    Effect.map(
+      (session) =>
+        ({ session }) as unknown as EnvironmentSupervisor.EnvironmentSupervisor["Service"],
+    ),
+  );
   // Only the transport is substituted: real commands, session atoms, admission and store remain.
   const runtime = Atom.runtime(
     Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, {
       run: (id, effect) => {
         destinations.push(id);
-        return effect;
+        return Effect.provideServiceEffect(
+          effect,
+          EnvironmentSupervisor.EnvironmentSupervisor,
+          disconnected,
+        );
       },
     } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
   );
