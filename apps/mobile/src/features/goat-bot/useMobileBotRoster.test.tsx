@@ -48,7 +48,9 @@ vi.mock("../../state/environments", () => ({
   }),
 }));
 vi.mock("../../state/query", () => ({
-  useEnvironmentQuery: (query: string | null) => {
+  useEnvironmentQuery: (atom: string | object | null) => {
+    // The bot list is a real atom, so a refusal can refresh it; the other reads are names.
+    const query = atom === null || typeof atom === "string" ? atom : "profiles";
     if (query) state.calls.push(query);
     // An offline computer answers nothing. Like a real read, an answer keeps its identity.
     const profiles = query === "profiles" && state.connected ? answerOf(state.bots) : null;
@@ -64,15 +66,22 @@ vi.mock("../../state/query", () => ({
     };
   },
 }));
+const profilesRead = vi.hoisted(() => ({ atom: {} }));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
-    listBots: () => "profiles",
+    listBots: () => profilesRead.atom,
     listBotThreads: () => "threads",
     slackSettings: () => "slack",
     updateTaskView: {},
   },
 }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
+// Needs you's open asks read, refreshed when a computer refuses or leaves; idle here.
+vi.mock("./openAsksRead", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const idle = Atom.make(AsyncResult.initial());
+  return { openAsks: () => idle };
+});
 // No computer is connected in these presentations, so no reader looks at the bot list beyond the roster.
 vi.mock("../../state/presentation", async () => {
   const { Atom } = await import("effect/reactivity");

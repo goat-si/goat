@@ -125,6 +125,12 @@ vi.mock("../../state/channels", async () => {
   const read = Atom.make<AsyncResult.AsyncResult<unknown, unknown>>(AsyncResult.initial());
   return { channelEnvironment: { listBots: () => read } };
 });
+// Needs you's open asks read, refreshed when a computer refuses or leaves; idle here.
+vi.mock("./openAsksRead", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const idle = Atom.make(AsyncResult.initial());
+  return { openAsks: () => idle };
+});
 vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({
     botRef: { environmentId: readable.botComputer, threadId: "bot" },

@@ -48,9 +48,17 @@ vi.mock("../../state/environments", () => ({
     ]),
   }),
 }));
-vi.mock("../../state/channels", () => ({
-  channelEnvironment: { botStatus: () => "status", listBots: () => null },
-}));
+vi.mock("../../state/channels", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const idle = Atom.make(AsyncResult.initial());
+  return { channelEnvironment: { botStatus: () => "status", listBots: () => idle } };
+});
+// Needs you's open asks read, refreshed when a computer refuses or leaves; idle here.
+vi.mock("./openAsksRead", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const idle = Atom.make(AsyncResult.initial());
+  return { openAsks: () => idle };
+});
 // The presentations the follower watches; each show sets the computer's connection.
 vi.mock("../../state/presentation", async () => {
   const { Atom } = await import("effect/reactivity");

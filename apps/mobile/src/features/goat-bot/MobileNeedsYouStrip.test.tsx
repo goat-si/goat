@@ -182,7 +182,11 @@ vi.mock("@goat/client-runtime/state/runtime", async () => {
   return { createEnvironmentRpcQueryAtomFamily: () => () => read };
 });
 vi.mock("../../connection/runtime", () => ({ connectionAtomRuntime: {} }));
-vi.mock("../../state/channels", () => ({ channelEnvironment: { listBots: () => null } }));
+vi.mock("../../state/channels", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const idle = Atom.make(AsyncResult.initial());
+  return { channelEnvironment: { listBots: () => idle } };
+});
 vi.mock("../../state/presentation", async () => {
   const { Atom: A } = await import("effect/reactivity");
   return { environmentPresentations: { presentationsAtom: A.make(new Map()) } };

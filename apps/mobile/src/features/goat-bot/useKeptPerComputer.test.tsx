@@ -21,7 +21,15 @@ vi.mock("../../state/presentation", async () => {
   const { Atom } = await import("effect/reactivity");
   return { environmentPresentations: { presentationsAtom: Atom.make(new Map()) } };
 });
-vi.mock("../../state/channels", () => ({ channelEnvironment: { listBots: () => null } }));
+// Each read is a stand-in query a test makes; the follower refreshes these same atoms.
+const queries = vi.hoisted(() => ({}) as Record<"bots" | "botsActive" | "asks", { atom: unknown }>);
+vi.mock("../../state/channels", () => ({
+  channelEnvironment: {
+    listBots: (target: { input: { includeDeleted?: boolean } }) =>
+      queries[target.input.includeDeleted === true ? "bots" : "botsActive"].atom,
+  },
+}));
+vi.mock("./openAsksRead", () => ({ openAsks: () => queries.asks.atom }));
 import { environmentCatalog } from "../../connection/catalog";
 import { environmentPresentations } from "../../state/presentation";
 import { useEnvironmentQuery } from "../../state/query";
@@ -155,24 +163,85 @@ it("an open asks answer from before its computer was removed and added again is 
 });
 
 type Read = AsyncResult.AsyncResult<unknown, unknown>;
-const refusal = (previous: AsyncResult.Success<unknown, unknown>) =>
+const refusal = (previous?: AsyncResult.Success<unknown, unknown>) =>
   AsyncResult.failure(
     Cause.fail({ _tag: "EnvironmentAuthorizationError", message: "Not allowed." }),
-    { previousSuccess: Option.some(previous) },
+    previous === undefined ? undefined : { previousSuccess: Option.some(previous) },
   );
-// Answers carry the time they settled; the clock stands still until a test moves it.
+
+// Time passes before every answer lands, as it does between a request and its answer.
 const T0 = Date.parse("2026-11-16T10:00:00.000Z");
-function frozenClock() {
-  vi.useFakeTimers({ toFake: ["Date"], now: T0 });
+let now = T0;
+const later = () => vi.setSystemTime((now += 1_000));
+
+/**
+ * A stand-in query. Each build is one request, showing the last answer marked waiting until it
+ * answers; a refresh starts a new request, and the one it replaced lands nowhere.
+ */
+function query() {
+  let requests = 0;
+  const atom = Atom.writable(
+    (get): Read => {
+      requests += 1;
+      return AsyncResult.waitingFrom(get.self<Read>());
+    },
+    (ctx, value: Read) => ctx.setSelf(value),
+  ).pipe(Atom.keepAlive);
   return {
-    later: () => vi.setSystemTime(T0 + 1_000),
-    [Symbol.dispose]: () => vi.useRealTimers(),
+    atom,
+    get requests() {
+      return requests;
+    },
+    answer: (registry: AtomRegistry.AtomRegistry, value: Read, request = requests) =>
+      act(async () => {
+        later();
+        const landed = AsyncResult.isSuccess(value)
+          ? AsyncResult.success(value.value, { waiting: value.waiting })
+          : value;
+        if (request === requests) registry.set(atom, landed);
+      }),
   };
 }
 
-/** One computer's read through the real query view, as a roster reader holds it. */
-function reader(kind: "bots" | "asks", registry: AtomRegistry.AtomRegistry) {
-  const read = Atom.make<Read>(AsyncResult.initial());
+/** A computer in the catalog with fresh reads, and the way to change its connection. */
+function computer() {
+  vi.useFakeTimers({ toFake: ["Date"], now: T0 });
+  const follow = following();
+  const reads = { bots: query(), botsActive: query(), asks: query() };
+  Object.assign(queries, reads);
+  const link = (phase: "connected" | "refused") =>
+    act(async () =>
+      follow.registry.set(
+        presentationsAtom,
+        new Map([
+          [
+            "env",
+            {
+              connection:
+                phase === "connected"
+                  ? { phase }
+                  : { phase: "error", failure: { kind: "blocked", reason: "authentication" } },
+              serverConfig: {
+                environment: { capabilities: { goatBotProfiles: true, goatBotMembers: true } },
+              },
+            },
+          ],
+        ]),
+      ),
+    );
+  return {
+    registry: follow.registry,
+    ...reads,
+    link,
+    [Symbol.dispose]: () => {
+      follow[Symbol.dispose]();
+      vi.useRealTimers();
+    },
+  };
+}
+
+/** One reader of the computer through the real query view, as a roster reader holds it. */
+function reader(kind: "bots" | "asks", registry: AtomRegistry.AtomRegistry, read: Atom.Atom<Read>) {
   const environmentId = EnvironmentId.make("env");
   let shown: unknown = null;
   let readable = false;
@@ -182,14 +251,6 @@ function reader(kind: "bots" | "asks", registry: AtomRegistry.AtomRegistry) {
     return null;
   }
   const root = createRoot(document.createElement("div"));
-  const mount = () =>
-    act(async () =>
-      root.render(
-        <RegistryContext value={registry}>
-          <Reader />
-        </RegistryContext>,
-      ),
-    );
   return {
     get shown() {
       return shown;
@@ -197,78 +258,176 @@ function reader(kind: "bots" | "asks", registry: AtomRegistry.AtomRegistry) {
     get readable() {
       return readable;
     },
-    mount,
+    mount: () =>
+      act(async () =>
+        root.render(
+          <RegistryContext value={registry}>
+            <Reader />
+          </RegistryContext>,
+        ),
+      ),
     unmount: () => act(async () => root.render(<RegistryContext value={registry} />)),
-    answer: (result: Read) => act(async () => registry.set(read, result)),
     [Symbol.asyncDispose]: () => act(async () => root.unmount()),
   };
 }
 
+const someBots = () => AsyncResult.success({ bots: [] });
+
+it("a refusal starts no request that could be refused again: a refused list reads the asks again once, a refused connection each read once", async () => {
+  using env = computer();
+  await env.link("connected");
+  await using bots = reader("bots", env.registry, env.bots.atom);
+  await using asks = reader("asks", env.registry, env.asks.atom);
+  await bots.mount();
+  await asks.mount();
+  await env.bots.answer(env.registry, someBots());
+  await env.asks.answer(env.registry, AsyncResult.success({ asks: [], total: 0 }));
+  const requests = () => ({ bots: env.bots.requests, asks: env.asks.requests });
+  const before = requests();
+  await env.bots.answer(env.registry, refusal());
+  await act(async () => {});
+  expect(requests()).toEqual({ bots: before.bots, asks: before.asks + 1 });
+  // The connection is refused too, and the computer goes on refusing whatever it is asked.
+  await env.link("refused");
+  await env.bots.answer(env.registry, refusal());
+  await act(async () => {});
+  expect(requests()).toEqual({ bots: before.bots + 1, asks: before.asks + 2 });
+});
+
+it("an answer that lands in the same step as a connection refusal does not show after the reconnect", async () => {
+  using env = computer();
+  await env.link("connected");
+  await using bots = reader("bots", env.registry, env.bots.atom);
+  await bots.mount();
+  await env.bots.answer(env.registry, someBots());
+  const inStep = someBots();
+  await act(async () => {
+    env.registry.set(env.bots.atom, inStep);
+    env.registry.set(
+      presentationsAtom,
+      new Map([
+        [
+          "env",
+          { connection: { phase: "error", failure: { kind: "blocked", reason: "permission" } } },
+        ],
+      ]),
+    );
+  });
+  await env.link("connected");
+  expect(bots.shown).toBeNull();
+  expect(bots.readable).toBe(false);
+  const fresh = someBots();
+  await env.bots.answer(env.registry, fresh);
+  expect(bots.shown).toBe(fresh.value);
+});
+
+it("after a connection refusal, the answer it found stays hidden on a remount and for a second reader that mounts later", async () => {
+  using env = computer();
+  await env.link("connected");
+  await using first = reader("bots", env.registry, env.bots.atom);
+  await first.mount();
+  await env.bots.answer(env.registry, someBots());
+  await env.link("refused");
+  await env.link("connected");
+  await first.unmount();
+  await first.mount();
+  expect(first.shown).toBeNull();
+  await using second = reader("bots", env.registry, env.bots.atom);
+  await second.mount();
+  expect(second.shown).toBeNull();
+  const fresh = someBots();
+  await env.bots.answer(env.registry, fresh);
+  expect({ first: first.shown, second: second.shown }).toEqual({
+    first: fresh.value,
+    second: fresh.value,
+  });
+});
+
 it("a refused bot list stays refused through a cached answer still waiting on its read", async () => {
-  using clock = frozenClock();
-  using follow = following();
-  await using list = reader("bots", follow.registry);
-  const before = AsyncResult.success({ bots: [] });
+  using env = computer();
+  await env.link("connected");
+  await using list = reader("bots", env.registry, env.bots.atom);
   await list.mount();
-  await list.answer(before);
-  await list.answer(refusal(before));
+  const before = someBots();
+  await env.bots.answer(env.registry, before);
+  await env.bots.answer(env.registry, refusal(before));
   expect(list.readable).toBe(false);
-  clock.later();
-  await list.answer(AsyncResult.success({ bots: [] }, { waiting: true }));
+  await env.bots.answer(env.registry, AsyncResult.success({ bots: [] }, { waiting: true }));
   expect(list.readable).toBe(false);
 });
 
-it("a refused bot list stays refused when its answer from before the refusal is delivered again, or on a remount", async () => {
-  using clock = frozenClock();
-  using follow = following();
-  await using list = reader("bots", follow.registry);
-  const before = AsyncResult.success({ bots: [] });
+it("a refused bot list shows nothing of its answer from before the refusal, also after a remount", async () => {
+  using env = computer();
+  await env.link("connected");
+  await using list = reader("bots", env.registry, env.bots.atom);
   await list.mount();
-  await list.answer(before);
-  await list.answer(refusal(before));
-  clock.later();
-  await list.answer(before);
-  expect(list.readable).toBe(false);
+  const before = someBots();
+  await env.bots.answer(env.registry, before);
+  await env.bots.answer(env.registry, refusal(before));
+  expect({ shown: list.shown, readable: list.readable }).toEqual({ shown: null, readable: false });
   await list.unmount();
   await list.mount();
-  expect(list.readable).toBe(false);
+  expect({ shown: list.shown, readable: list.readable }).toEqual({ shown: null, readable: false });
 });
 
 it("a bot list that settles after the refusal makes the computer readable again", async () => {
-  using clock = frozenClock();
-  using follow = following();
-  await using list = reader("bots", follow.registry);
-  const before = AsyncResult.success({ bots: [] });
+  using env = computer();
+  await env.link("connected");
+  await using list = reader("bots", env.registry, env.bots.atom);
   await list.mount();
-  await list.answer(before);
-  await list.answer(refusal(before));
-  clock.later();
-  await list.answer(AsyncResult.success({ bots: [] }));
+  const before = someBots();
+  await env.bots.answer(env.registry, before);
+  await env.bots.answer(env.registry, refusal(before));
+  await env.bots.answer(env.registry, someBots());
   expect(list.readable).toBe(true);
 });
 
+it("a read in flight across a connection refusal that answers after it does not show after the reconnect", async () => {
+  using env = computer();
+  await env.link("connected");
+  await using list = reader("bots", env.registry, env.bots.atom);
+  await list.mount();
+  const inFlight = env.bots.requests;
+  await env.link("refused");
+  await env.bots.answer(env.registry, someBots(), inFlight);
+  await env.link("connected");
+  expect(list.shown).toBeNull();
+});
+
 it.each(["bots", "asks"] as const)(
-  "%s: an answer that settled before its computer was removed and added again does not show after the re-add",
+  "%s: an answer from before its computer was removed and added again does not show after the re-add",
   async (kind) => {
-    using clock = frozenClock();
-    using follow = following();
-    await using read = reader(kind, follow.registry);
-    const before = AsyncResult.success(kind === "bots" ? { bots: [] } : { asks: [], total: 0 });
+    using env = computer();
+    await env.link("connected");
+    await using read = reader(kind, env.registry, env[kind].atom);
     await read.mount();
-    await read.answer(before);
+    const before = AsyncResult.success(kind === "bots" ? { bots: [] } : { asks: [], total: 0 });
+    await env[kind].answer(env.registry, before);
     expect(read.shown).toBe(before.value);
     await act(async () => {
-      follow.registry.set(catalogAtom, listed([]));
-      follow.registry.set(catalogAtom, listed(["env"]));
+      env.registry.set(catalogAtom, listed([]));
+      env.registry.set(catalogAtom, listed(["env"]));
     });
-    clock.later();
-    // The query read again after the re-add still holds its earlier answer, marked waiting.
-    await read.answer(AsyncResult.waiting(before));
     expect(read.shown).toBeNull();
-    await read.answer(before);
-    expect(read.shown).toBeNull();
-    // The same content, answered again after the re-add, keeps its identity and shows.
-    await read.answer(AsyncResult.success(before.value));
+    const after = AsyncResult.success(before.value);
+    await env[kind].answer(env.registry, after);
     expect(read.shown).toBe(before.value);
+  },
+);
+
+it.each(["bots", "asks"] as const)(
+  "%s: a read in flight across a removal and re-add does not show after the re-add",
+  async (kind) => {
+    using env = computer();
+    await env.link("connected");
+    await using read = reader(kind, env.registry, env[kind].atom);
+    await read.mount();
+    const inFlight = env[kind].requests;
+    await act(async () => {
+      env.registry.set(catalogAtom, listed([]));
+      env.registry.set(catalogAtom, listed(["env"]));
+    });
+    await env[kind].answer(env.registry, AsyncResult.success({ bots: [], asks: [] }), inFlight);
+    expect(read.shown).toBeNull();
   },
 );

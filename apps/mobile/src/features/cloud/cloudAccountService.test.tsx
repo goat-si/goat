@@ -65,7 +65,17 @@ vi.mock("../../state/presentation", async () => {
   const { Atom } = await import("effect/reactivity");
   return { environmentPresentations: { presentationsAtom: Atom.make(new Map()) } };
 });
-vi.mock("../../state/channels", () => ({ channelEnvironment: { listBots: () => null } }));
+vi.mock("../../state/channels", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const idle = Atom.make(AsyncResult.initial());
+  return { channelEnvironment: { listBots: () => idle } };
+});
+// Needs you's open asks read, refreshed when a computer refuses or leaves; idle here.
+vi.mock("../goat-bot/openAsksRead", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const idle = Atom.make(AsyncResult.initial());
+  return { openAsks: () => idle };
+});
 // Each computer's main bot conversation, as the phone holds it.
 vi.mock("../../state/entities", () => ({ useThreadShell: () => null }));
 const conversation = vi.hoisted(() => ({ items: [] as unknown[] }));
