@@ -12,7 +12,8 @@ import { EnvironmentHttpCommonError, PRIMARY_LOCAL_ENVIRONMENT_ID } from "@goat/
 import type { EnvironmentHttpCommonError as EnvironmentHttpCommonErrorType } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { HttpClientError } from "effect/http";
+import { FetchHttpClient, HttpClientError } from "effect/http";
+import * as Option from "effect/Option";
 
 import {
   getPairingTokenFromUrl,
@@ -187,6 +188,40 @@ export async function fetchSessionState(): Promise<AuthSessionState> {
       });
     }
   });
+}
+
+/** What one read of this tab's own session says; only the server's decoded "no" is `revoked`. */
+export type PrimarySessionAnswer = "revoked" | "signed-in" | "unknown";
+
+/** Refuses redirects for one request, keeping the other fetch options its context carries. */
+const refusingRedirects = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.flatMap(Effect.serviceOption(FetchHttpClient.RequestInit), (init) =>
+    Effect.provideService(effect, FetchHttpClient.RequestInit, {
+      ...Option.getOrElse(init, () => ({})),
+      redirect: "error",
+    }),
+  );
+
+/** One auth/session read with no retry: a failed, slow, redirected or unexpected answer is unknown. */
+export const readPrimarySessionAnswer: Effect.Effect<
+  PrimarySessionAnswer,
+  never,
+  PrimaryEnvironmentHttpClient
+> = PrimaryEnvironmentHttpClient.pipe(
+  // A followed redirect could read another server's answer, where this cookie is not sent.
+  Effect.flatMap((client) => refusingRedirects(client.auth.session({ headers: {} }))),
+  Effect.timeout("10 seconds"),
+  Effect.map((session): PrimarySessionAnswer => (session.authenticated ? "signed-in" : "revoked")),
+  Effect.catchCause(() => Effect.succeed<PrimarySessionAnswer>("unknown")),
+);
+
+export function probePrimarySession(): Promise<PrimarySessionAnswer> {
+  return runPrimaryHttp(readPrimarySessionAnswer).catch((): PrimarySessionAnswer => "unknown");
+}
+
+/** Whether this tab signed in to its own server, so it holds that server's credential. */
+export function isPrimaryAuthGateAuthenticated(): boolean {
+  return resolvedAuthenticatedGateState?.status === "authenticated";
 }
 
 function readHttpApiStatus(error: unknown): number | null {
