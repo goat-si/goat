@@ -1,10 +1,13 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentConnectionPhase } from "@goat/client-runtime/connection";
+import { accessDenied } from "@goat/client-runtime/goatBot";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { BotProfile, EnvironmentId } from "@goat/contracts";
+import * as Cause from "effect/Cause";
 import { useState } from "react";
 
 import { persistClientSettingsPatch, useClientSettings } from "../../hooks/useSettings";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { channelEnvironment } from "../../state/channels";
 import { readEnvironment, useEnvironment } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
@@ -37,39 +40,47 @@ function GoatBotProfileSection() {
       ? channelEnvironment.listBots({ environmentId: environment.environmentId, input: {} })
       : null,
   );
-  // At a refusal, note the held answer's settle time; it changes only when a read succeeds, and
-  // none is sent while refused, so a different time means a read since access returned.
+  // The read itself refused (the connection did not): the same as a refusal for this section.
+  const denied = accessDenied(profiles.failure);
+  const refused = !readable || denied;
+  // From a refusal until a read settles after it, the answer held at the refusal stays hidden. A
+  // settled success is a new object only when a read succeeds, so it is compared by identity.
   const [seen, setSeen] = useState(() => ({
     environmentId,
-    readable,
-    heldAtRefusal: readable ? null : profiles.dataUpdatedAt,
+    refused,
+    hold: refused ? { held: profiles.successResult } : null,
   }));
-  if (seen.environmentId !== environmentId || seen.readable !== readable) {
-    const sameComputer = seen.environmentId === environmentId;
-    setSeen({
-      environmentId,
-      readable,
-      heldAtRefusal: readable ? (sameComputer ? seen.heldAtRefusal : null) : profiles.dataUpdatedAt,
-    });
+  const sameComputer = seen.environmentId === environmentId;
+  const hold = sameComputer ? seen.hold : null;
+  const nextHold = refused
+    ? (hold ?? { held: profiles.successResult })
+    : hold !== null && profiles.successResult !== null && profiles.successResult !== hold.held
+      ? null
+      : hold;
+  if (!sameComputer || seen.refused !== refused || nextHold !== hold) {
+    setSeen({ environmentId, refused, hold: nextHold });
   }
   if (!supported) return null;
-  const refusedLine = `GOAT on ${environment.label ?? "this computer"} did not accept this device.`;
+  const label = environment.label ?? "this computer";
+  const refusedLine = `GOAT on ${label} did not accept this device.`;
+  const deniedLine = `GOAT on ${label} did not let this device read the bot's profile.`;
   // A refusal swaps the row out, which drops an open dialog and the profile it was read from.
   return (
     <SettingsSection id="goat-bot-profile" title="Profile">
-      {readable ? (
+      {refused ? (
+        <SettingsRow
+          {...searchableSetting("goat-bot-profile")}
+          title="GOAT Bot"
+          status={readable ? deniedLine : refusedLine}
+        />
+      ) : (
         <GoatBotProfileRow
           key={environment.environmentId}
           environmentId={environment.environmentId}
           phase={presentation.connection.phase}
-          readAfter={seen.environmentId === environmentId ? seen.heldAtRefusal : null}
+          holdBack={nextHold !== null}
           refusedLine={refusedLine}
-        />
-      ) : (
-        <SettingsRow
-          {...searchableSetting("goat-bot-profile")}
-          title="GOAT Bot"
-          status={refusedLine}
+          deniedLine={deniedLine}
         />
       )}
     </SettingsSection>
@@ -79,14 +90,16 @@ function GoatBotProfileSection() {
 function GoatBotProfileRow({
   environmentId,
   phase,
-  readAfter,
+  holdBack,
   refusedLine,
+  deniedLine,
 }: {
   readonly environmentId: EnvironmentId;
   readonly phase: EnvironmentConnectionPhase;
-  /** Set after a refusal: the answer held then, by its settle time, stays hidden. */
-  readonly readAfter: number | null;
+  /** After a refusal, until a read settles: the answer held at the refusal is not shown. */
+  readonly holdBack: boolean;
   readonly refusedLine: string;
+  readonly deniedLine: string;
 }) {
   // Read in every phase: offline the query keeps its last answer and sends nothing.
   const profiles = useEnvironmentQuery(channelEnvironment.listBots({ environmentId, input: {} }));
@@ -98,7 +111,7 @@ function GoatBotProfileRow({
   const starting = phase === "connecting";
   const offline = !connected && !starting;
   const canEdit = mayEdit && connected;
-  const answer = readAfter === null || profiles.dataUpdatedAt !== readAfter ? profiles.data : null;
+  const answer = holdBack ? null : profiles.data;
   const main = answer?.bots.find((bot) => bot.role === "main");
   return (
     <>
@@ -137,6 +150,11 @@ function GoatBotProfileRow({
           onSubmit={async (changes) => {
             // The screen may lag a drop or a refusal the store already has.
             if (!readGoatBotComputerReadable(environmentId)) return refusedLine;
+            const read = appAtomRegistry.get(
+              channelEnvironment.listBots({ environmentId, input: {} }),
+            );
+            if (read._tag === "Failure" && accessDenied(Cause.squash(read.cause)))
+              return deniedLine;
             if (readEnvironment(environmentId)?.connection.phase !== "connected") {
               return `${editing.name}'s computer isn't connected.`;
             }

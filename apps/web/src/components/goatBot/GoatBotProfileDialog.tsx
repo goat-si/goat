@@ -59,11 +59,11 @@ export function GoatBotProfileDialog(props: {
   const nameMissing = blankName && nameChecked;
   const nameRef = useRef<HTMLInputElement>(null);
   const reasonId = useId();
-  // A failed save that already says why is not repeated beside Save.
-  const unavailable =
-    !busy && !props.canSubmit && error !== props.unavailableReason
-      ? props.unavailableReason
-      : undefined;
+  const alertId = useId();
+  const blocked = !busy && !props.canSubmit && props.unavailableReason !== undefined;
+  // A failed save that already says why stands in for the line beside Save.
+  const alertSaysWhy = blocked && error === props.unavailableReason;
+  const unavailable = blocked && !alertSaysWhy ? props.unavailableReason : undefined;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -154,7 +154,11 @@ export function GoatBotProfileDialog(props: {
               <p className="text-sm text-muted-foreground">The bot needs a name.</p>
             ) : null}
             {error ? (
-              <p role="alert" className="text-sm text-destructive-foreground">
+              <p
+                role="alert"
+                id={alertSaysWhy ? alertId : undefined}
+                className="text-sm text-destructive-foreground"
+              >
                 {error}
               </p>
             ) : null}
@@ -171,7 +175,9 @@ export function GoatBotProfileDialog(props: {
             <Button
               type="submit"
               disabled={busy || !props.canSubmit}
-              aria-describedby={unavailable === undefined ? undefined : reasonId}
+              aria-describedby={
+                unavailable !== undefined ? reasonId : alertSaysWhy ? alertId : undefined
+              }
             >
               {busy ? "Saving…" : "Save"}
             </Button>
