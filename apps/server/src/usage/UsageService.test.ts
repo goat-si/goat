@@ -6,6 +6,7 @@ import { registerCacheUpgradeTest } from "./usageCacheUpgrade.testkit.ts";
 import { registerCompressedRolloutTest } from "./usageCompressedRollout.testkit.ts";
 import { registerClaudeCopiesTests } from "./usageClaudeCopies.testkit.ts";
 import { registerProvisionalTests } from "./usageProvisional.testkit.ts";
+import { registerCodexTierReparseTest } from "./usageCodexTierReparse.testkit.ts";
 // @effect-diagnostics nodeBuiltinImport:off - the suite seeds and grows real transcript trees on disk, outside the service's Effect FileSystem
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
@@ -295,7 +296,7 @@ const writeCursorLogin = (home: string) =>
     await NodeFSP.writeFile(authPath, "{}");
   });
 
-const seedCodexHistory = (input: {
+export const seedCodexHistory = (input: {
   id: string;
   nativeTurnId?: string;
   sessionId?: string;
@@ -2451,6 +2452,7 @@ describe("UsageService", () => {
 
   registerClaudeCopiesTests(setup, layerService, claudeLine);
   registerProvisionalTests(setup, layerService, claudeLine);
+  registerCodexTierReparseTest(setup, layerService, seedCodexHistory);
   it.effect(
     "keeps large-record totals and costs exact through append, dedupe, restart and cleanup",
     () =>

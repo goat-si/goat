@@ -20,7 +20,7 @@ export function registerCacheUpgradeTest(
   setup: typeof Main.setup,
   layerService: typeof Main.layerService,
 ) {
-  it.live.each([4, 5, 6, 7, 8, 10, 11, 12, 13])(
+  it.live.each([4, 5, 6, 7, 8, 10, 11, 12, 13, 14])(
     "upgrades a v%s cache: reparses live Codex usage, keeps deleted rollouts, removes the old file",
     (version) =>
       Effect.gen(function* () {
@@ -83,6 +83,8 @@ export function registerCacheUpgradeTest(
                 version === 4 ? 0 : 1,
               ]);
               if (version === 4) delete file.cs.speed;
+              // Fields a v14 server never wrote, so the file is the one it leaves behind.
+              delete file.cs.latestCumulativeAtMs;
               if (version < 6) {
                 delete file.cs.lastCumulativeUsage;
                 delete file.cs.malformedRecords;
@@ -93,7 +95,10 @@ export function registerCacheUpgradeTest(
                 file.cs.malformedRecords = 1;
               }
             }
-            const text = encodeUnknownJsonString({ ...document, version });
+            const { coveredSince: _coveredSince, ...written } = document as typeof document & {
+              coveredSince?: unknown;
+            };
+            const text = encodeUnknownJsonString({ ...written, version });
             await NodeFSP.rm(cachePath);
             await NodeFSP.writeFile(legacyPath, text);
             if (version === 6) {
@@ -121,7 +126,7 @@ export function registerCacheUpgradeTest(
             60 + 20 * (version === 4 ? 1 : 2),
           );
           yield* upgraded.awaitPersisted;
-          assert.strictEqual(SCAN_CACHE_FILE_NAME, "usage-scan-cache-v14.json");
+          assert.strictEqual(SCAN_CACHE_FILE_NAME, "usage-scan-cache-v15.json");
           assert.deepStrictEqual(
             (yield* Effect.promise(() => NodeFSP.readdir(stateDir)))
               .filter((name) => name.startsWith("usage-scan-cache"))
