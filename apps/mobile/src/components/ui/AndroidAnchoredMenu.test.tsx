@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { StrictMode, act, useState } from "react";
+import { Activity, StrictMode, act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -69,7 +69,7 @@ const click = (container: HTMLElement, label: string) =>
     ?.click();
 
 /** The real menu under an owner that counts it open from the request until the menu settles it. */
-async function mountMenu() {
+async function mountMenu(options: { inTab?: boolean } = {}) {
   h.held.length = 0;
   const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "measureInWindow");
   Object.defineProperty(HTMLElement.prototype, "measureInWindow", {
@@ -96,12 +96,20 @@ async function mountMenu() {
       </>
     );
   }
+  // A workspace tab: hiding it runs every effect cleanup and keeps state, as Android's tab panes do.
+  function Tab() {
+    const [shown, setShown] = useState(true);
+    return (
+      <>
+        <Activity mode={shown ? "visible" : "hidden"}>
+          <Owner />
+        </Activity>
+        <button onClick={() => setShown((value) => !value)}>Switch tab</button>
+      </>
+    );
+  }
   await act(async () =>
-    root.render(
-      <StrictMode>
-        <Owner />
-      </StrictMode>,
-    ),
+    root.render(<StrictMode>{options.inTab === true ? <Tab /> : <Owner />}</StrictMode>),
   );
   const items = () =>
     [...container.querySelectorAll('[role="menu"] button')].map((button) => button.textContent);
@@ -173,4 +181,20 @@ it("guard: an outside tap closes a measured menu and tells its owner once", asyn
   expect(menu.closed).toHaveBeenCalledTimes(1);
   await menu.removeRow();
   expect(menu.closed).toHaveBeenCalledTimes(1);
+});
+
+it("tells its owner once when its tab hides it, and shows no stale menu when the tab returns (#3575)", async () => {
+  await using menu = await mountMenu({ inTab: true });
+  await menu.request();
+  await menu.measure(300, 48);
+  expect(menu.items()).toEqual(["Hide"]);
+  await menu.press("Switch tab");
+  expect(menu.closed).toHaveBeenCalledTimes(1);
+  await menu.press("Switch tab");
+  expect(menu.items()).toEqual([]);
+  // A fresh open still works and settles once more.
+  await menu.request();
+  await menu.measure(300, 48);
+  await menu.press("Outside the menu");
+  expect(menu.closed).toHaveBeenCalledTimes(2);
 });
