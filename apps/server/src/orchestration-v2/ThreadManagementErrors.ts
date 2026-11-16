@@ -141,6 +141,16 @@ export class ThreadManagementProviderInstanceDisabledError extends Schema.Tagged
   }
 }
 
+/** A send refused before it was stored: the thread's missing worktree cannot be restored. */
+export class ThreadManagementWorktreeUnrestorableError extends Schema.TaggedError<ThreadManagementWorktreeUnrestorableError>()(
+  "ThreadManagementWorktreeUnrestorableError",
+  { threadId: ThreadId, detail: Schema.String },
+) {
+  override get message(): string {
+    return `${this.detail} The message was not sent.`;
+  }
+}
+
 export const ThreadManagementError = Schema.Union([
   ThreadManagementThreadNotFoundError,
   ThreadManagementRunNotFoundError,
@@ -153,5 +163,6 @@ export const ThreadManagementError = Schema.Union([
   ThreadManagementProjectThreadsListError,
   ThreadManagementDurableRunProjectionError,
   ThreadManagementProviderInstanceDisabledError,
+  ThreadManagementWorktreeUnrestorableError,
 ]);
 export type ThreadManagementError = typeof ThreadManagementError.Type;
