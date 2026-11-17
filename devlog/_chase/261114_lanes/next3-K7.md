@@ -1336,3 +1336,30 @@ index a548eec7e6..7ad89d7d85 100644
 
 NOT RUN for row 9: a real slow-link attach measurement (upstream's 5,555 ms to 751 ms is not reproduced here); a running older GOAT server; a mobile native run (client-runtime covers the mobile path).
 
+
+## Coordinator, run 1836, every lane (verbatim)
+
+EVERY LANE: a typecheck or test claim names the package as vp resolves it (apps/server is "goat"), and a filter that matches nothing is not a pass.
+
+K7 under it: every typecheck in this lane ran with no filter, as `vp run typecheck` inside the package directory. vp resolves the packages as @goat/contracts (packages/contracts), @goat/client-runtime (packages/client-runtime), @goat/shared (packages/shared), goat (apps/server), @goat/web (apps/web) and @goat/mobile (apps/mobile). Test claims name their files and the counts that ran, and none of them rests on a filter that matched nothing.
+
+## READY (rows 1-9)
+
+Integration merge, once: `git merge --no-edit origin/chase/t3-261114-next3` with lane head 1e1518f039d61c90a8284434af96abd58aed3a7c and integration head 259883c788bb32d5601023932e07f879bde9af60. git reported "Auto-merging oxlint-plugin-goat/code-budgets.json / CONFLICT (content): Merge conflict in oxlint-plugin-goat/code-budgets.json". The only hunk was apps/server/src/terminal/Manager.ts: ours 3103, base 3118, theirs 3116. It is settled by countLines of the merged file (wc -l 3103). Merge commit 9fb762a2b5f969b2948b3edb22bf12b42a07d3e2, with parents 1e1518f039 and 259883c788.
+
+Lane gate on the merge commit, `vp run check:changed origin/chase/t3-261114-next3`, exit 0: format, lint, knip 1/2 and 2/2, graphql (apps/server), agent surface audit, agent context budget, typecheck (42 packages) and test (478 files, 9646 tests) all pass.
+
+Focused runs after the merge, whole files with no -t: the @goat/web files beside the changed web files (Sidebar.browser, Sidebar.drag.browser, Sidebar.logic.browser, Sidebar.pointer.browser, Sidebar.renderIsolation.browser, Sidebar.shiftGuard.browser, Sidebar.shortcuts.browser, Sidebar.shortcuts.noBrowser.browser, chat/useThreadLifecycle.browser, hooks/useThreadActionMenu), 10 files, 43 passed.
+
+Row 7 reruns under the 22:45 rule, whole files, on 1e1518f039: goat (apps/server) src/relay (AgentAwarenessRelay{,.startup,.subagent,.userWait}, HeldHooksWaker, SubagentWaits), ProjectionPendingRequest.test.ts, ShellStream.test.ts and ProjectionStore.notifications.test.ts: 9 files, 70 passed. @goat/shared agentAwareness.test.ts: 29 passed. @goat/client-runtime state/threadShell.test.ts: 15 passed.
+
+Exports changed, against section 3 (condition (e)). Shipped as planned in section 3: rpc/client.ts currentSession, requestInSession, runStreamInSession and subscriptionRetryDelay (requestGuarded keeps its name and becomes a wrapper); dispatch.ts dispatchMessage's resend flag; commands.ts StartThreadTurnInput.resendAfterSocketLoss; serverUpdate.ts (matchesServerUpdateResumeEvent's acceptedAt and validateServerUpdateReadyEvent's foreign outcome), re-exported from state/server.ts; markdownImages.ts WorkspaceFile relative; contracts assets.ts media-file hostOnly; terminal.ts retainedTerminalHistory and TerminalAttachInput.maxHistoryBytes; orchestrationV2.ts userOnly, lastTitleRegeneration and outcome; threadTitle.ts outcome schemas; orchestratorMcp.ts thread detail lastTitleRegeneration (optional); threadCommands.ts regenerateTitle and armTitleRegeneration; new state/threadTitleRegeneration.ts; shared agentAwareness.ts turnItemCanChangeUserWait.
+Different from section 3: (1) state/runtime.ts environmentConnectionAtom is NOT added, because GOAT already exports environmentConnectionAtoms (state/environmentConnections.ts). (2) SubagentRequestAwareness.waitsForInput is NOT added; row 7 carries the user-only wait by PendingRuntimeRequestSummary.userOnly and turnItemCanChangeUserWait, under the coordinator's 22:32 points.
+Not in section 3 (new modules from move-outs and adaptations): client-runtime operations/commandInputs.ts (nine input interfaces, re-exported as types from commands.ts; CommandMetadata is now exported), state/threadResumeCache.ts, state/threadSubscriptionRecovery.ts (makeThreadSubscriptionRecovery), serverUpdate.ts readAcceptingReady and SERVER_UPDATE_RESUME_TIMEOUT, and hubNodes.ts isUnknownRequestTagError (row 3, a37c72ff48). contracts: goalCommand.ts (parseGoalCommand and OrchestrationV2GoalCommand, re-exported from orchestrationV2.ts) and mcpClampedInt.ts (clampedPositiveInt). goat (apps/server): OrchestratorModeLimitError.ts (re-exported from Orchestrator.ts), terminal/childCommandName.ts and terminal/retainedAttachHistory.ts.
+
+For the review: row 9's shared retainedTerminalHistory is GOAT's whole client trim, which also drops the rest of a control sequence the cut lands in. Upstream's helper cuts by bytes only. Fork delta `terminal-retained-history`. The case "starts a bounded snapshot after a control sequence its cut lands in" pins it and fails under the mutation that drops the sequence step.
+
+Claims on card 10.028: claims 1-7 and 9, and the runtime.test.ts claim, were cut. Claim 8 was released. Claims 10 and 11 (ws.ts readClientOwners, rpc.ts preview RPCs) go with rows 10 and 11 to K7b and were not cut here.
+
+NOT RUN for the lane: the P1 real-client pass (rows 6, 7 and 8 captures, the web title toasts, the mobile alert); a mobile native run; a running older GOAT release (older peers are shown by schema decode cases and optional-field tests); a live GOAT Connect relay (row 5); a slow-link terminal attach measurement (row 9); goat-ci (the coordinator dispatches lane=quick on this head). K7b (rows 10 and 11, dc3fdc6a3e and 2482b03a01, and 8b2763f638's catalog half) sends its C4 plan after this READY.
+
