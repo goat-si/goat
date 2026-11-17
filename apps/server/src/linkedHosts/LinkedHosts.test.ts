@@ -657,12 +657,14 @@ describe("LinkedHosts", () => {
           });
           const found = yield* links.find("build-box");
           const token = Option.getOrThrow(found).token;
-          const session = yield* hostAuth.authenticateMcpClient(
-            onMainListener(
-              HttpServerRequest.fromWeb(
-                new Request(`http://127.0.0.1/mcp`, {
-                  headers: { host: HOST, authorization: `Bearer ${token}` },
-                }),
+          const session = yield* Effect.scoped(
+            hostAuth.authenticateMcpClient(
+              onMainListener(
+                HttpServerRequest.fromWeb(
+                  new Request(`http://127.0.0.1/mcp`, {
+                    headers: { host: HOST, authorization: `Bearer ${token}` },
+                  }),
+                ),
               ),
             ),
           );

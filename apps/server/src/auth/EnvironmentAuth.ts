@@ -41,6 +41,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -60,6 +61,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { requestUrl } from "../requestUrl.ts";
 import { MCP_CLIENT_SUBJECT } from "./mcpClientSubject.ts";
 import { mcpClientScopes } from "./mcpClientScopes.ts";
+import type { SessionEnd } from "./SessionEndLatches.ts";
 import { ADMINISTRATIVE_BOOTSTRAP_SUBJECT, canDelegateHubProxy } from "./hubProxyDelegation.ts";
 
 export { mcpClientScopes };
@@ -102,6 +104,7 @@ export interface McpClientSession {
   readonly reauthorize?: (
     required: ReadonlyArray<AuthEnvironmentScope>,
   ) => Effect.Effect<void, EnvironmentAuthorizationError>;
+  readonly sessionEnd?: SessionEnd;
 }
 
 export interface AuthenticatedSession {
@@ -251,7 +254,11 @@ export class EnvironmentAuth extends Context.Service<
     ) => Effect.Effect<string, ServerAuthInternalError>;
     readonly authenticateMcpClient: (
       request: HttpServerRequest.HttpServerRequest,
-    ) => Effect.Effect<McpClientSession, ServerAuthCredentialError | ServerAuthInternalError>;
+    ) => Effect.Effect<
+      McpClientSession,
+      ServerAuthCredentialError | ServerAuthInternalError,
+      Scope.Scope
+    >;
     readonly issueMcpClientSession: (input: {
       readonly label: string;
       readonly access: AuthMcpClientAccess;
@@ -972,9 +979,9 @@ export const make = Effect.gen(function* () {
   const authenticateMcpClient: EnvironmentAuth["Service"]["authenticateMcpClient"] = (request) => {
     const token = parseBearerToken(request);
     if (token === null) return Effect.fail(new ServerAuthMissingCredentialError({}));
-    return sessions.verify(token, connectionOf(request)).pipe(
+    return sessions.admitMcpCall(token, connectionOf(request)).pipe(
       mapSessionVerificationErrors,
-      Effect.flatMap((session) =>
+      Effect.flatMap(({ session, sessionEnd }) =>
         session.subject === MCP_CLIENT_SUBJECT && session.method === "bearer-access-token"
           ? sessions.markUsed(session.sessionId).pipe(
               Effect.as({
@@ -988,6 +995,7 @@ export const make = Effect.gen(function* () {
                   ? { childSetupPurpose: session.childSetupPurpose }
                   : {}),
                 reauthorize: reauthorizeSession(sessions, session.sessionId),
+                sessionEnd,
                 approvals:
                   session.scopes.includes(AuthOrchestrationOperateScope) &&
                   session.scopes.includes(AuthOrchestrationApproveScope),

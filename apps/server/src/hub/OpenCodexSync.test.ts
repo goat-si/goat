@@ -11,6 +11,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
+import { guardedScope, layerSessionStore, startCallEndedBy } from "../auth/SessionEnd.testkit.ts";
 import { dependencies, serveOverHttp } from "../mcp/agentSurface.testkit.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
@@ -564,16 +565,9 @@ it.effect("marks an interrupted update sync as failed instead of leaving it sync
     });
   }),
 );
-/** Runs a sync as a caller would; `stop` ends that caller the way a cancel or dropped request does. */
-const startSync = (sync: OpenCodexSync["Service"]) =>
-  Effect.gen(function* () {
-    const fiber = yield* sync.run(scope).pipe(Effect.forkChild({ startImmediately: true }));
-    return { stop: Fiber.interrupt(fiber) };
-  });
-
-it.effect(
-  "a sync whose caller stops finishes the machine it is on and skips the machines it has not started",
-  () =>
+it.effect.each(["stop", "revoke"] as const)(
+  "a sync whose caller ends by %s finishes the machine it is on and skips the machines it has not started",
+  (how) =>
     Effect.gen(function* () {
       const fleet = makeFleet();
       const started = yield* Deferred.make<void>();
@@ -582,11 +576,14 @@ it.effect(
         Effect.andThen(Deferred.await(gate)),
       );
       const { sync } = yield* setup(fleet);
-      const running = yield* startSync(sync);
+      const running = yield* startCallEndedBy(sync.run(scope), how);
       yield* Deferred.await(started);
       // The caller is gone while ocx syncs this Home, with Codex possibly stopped mid-restart.
       yield* running.stop;
+      // Released at once: the job's next check already sees its caller gone.
+      expect(yield* running.interrupted).toBe(true);
       yield* Deferred.succeed(gate, undefined);
+      expect(yield* running.cut).toBe(true);
       // The next run waits on the permit the running sync holds until it finishes.
       yield* sync.exclusive(Effect.void);
       // ocx ran to its end on this machine, and no other machine was started.
@@ -599,12 +596,12 @@ it.effect(
         ["lidge-ts", "skipped", "interrupted"],
         ["mac-studio", "skipped", "interrupted"],
       ]);
-    }),
+    }).pipe(Effect.provide(layerSessionStore)),
 );
 
-it.effect(
-  "a sync cut while it waits for another run leaves no job and keeps that run's report",
-  () =>
+it.effect.each(["stop", "revoke"] as const)(
+  "a sync whose caller ends by %s while it waits for another run leaves no job and keeps that run's report",
+  (how) =>
     Effect.gen(function* () {
       const fleet = makeFleet();
       const started = yield* Deferred.make<void>();
@@ -618,25 +615,26 @@ it.effect(
       const { sync } = yield* setup(fleet);
       const first = yield* sync.run(scope).pipe(Effect.forkChild({ startImmediately: true }));
       yield* Deferred.await(started);
-      const queued = yield* sync.run(scope).pipe(Effect.forkChild({ startImmediately: true }));
-      yield* Fiber.interrupt(queued);
+      const queued = yield* startCallEndedBy(sync.run(scope), how);
+      yield* queued.stop;
       // Queued behind anything the cut call left waiting, while the first run still holds the permit.
       const after = yield* Effect.forkChild(sync.exclusive(Effect.void));
       yield* Deferred.succeed(gate, undefined);
       const report = yield* Fiber.join(first);
       yield* Fiber.join(after);
+      expect(yield* queued.cut).toBe(true);
       expect(homeSyncs).toBe(1);
       expect(yield* sync.latest).toEqual(report);
-    }),
+    }).pipe(Effect.provide(layerSessionStore)),
 );
 
-it.effect.each(["notifications/cancelled", "a dropped request"] as const)(
+it.effect.each(["notifications/cancelled", "a dropped request", "a revoke"] as const)(
   "%s over /mcp during goat_hub_opencodex_sync lets this machine finish and skips the rest",
-  (stop) =>
-    Effect.gen(function* () {
+  (stop) => {
+    const gate = Deferred.makeUnsafe<void>();
+    return Effect.gen(function* () {
       const fleet = makeFleet();
       const started = yield* Deferred.make<void>();
-      const gate = yield* Deferred.make<void>();
       fleet.onHomeSync = Deferred.succeed(started, undefined).pipe(
         Effect.andThen(Deferred.await(gate)),
       );
@@ -650,10 +648,12 @@ it.effect.each(["notifications/cancelled", "a dropped request"] as const)(
             .run(runScope, permits)
             .pipe(Effect.onInterrupt(() => Deferred.succeed(callerGone, undefined))),
       };
-      const outside: McpInvocationScope = {
+      const base: McpInvocationScope = {
         ...scope,
         client: { sessionId: "outside", label: "Outside agent", access: "full-access" },
       };
+      const guarded = yield* guardedScope(base);
+      const outside = stop === "a revoke" ? guarded.scope : base;
       const http = yield* serveOverHttp(
         { outside },
         McpHttpServer.catalogRegistrations.hostStatus.pipe(
@@ -666,7 +666,11 @@ it.effect.each(["notifications/cancelled", "a dropped request"] as const)(
         .callTool("outside", "goat_hub_opencodex_sync", {})
         .pipe(Effect.forkChild({ startImmediately: true }));
       yield* Deferred.await(started);
-      if (stop === "notifications/cancelled")
+      if (stop === "a revoke") {
+        yield* guarded.revoke;
+        // Nothing awaited since the revoke returned: the caller's interruption has already run.
+        expect(yield* Deferred.isDone(callerGone)).toBe(true);
+      } else if (stop === "notifications/cancelled")
         yield* http.notify("outside", "notifications/cancelled", { requestId });
       else yield* Fiber.interrupt(running);
       yield* Deferred.await(callerGone);
@@ -674,7 +678,13 @@ it.effect.each(["notifications/cancelled", "a dropped request"] as const)(
       const after = yield* Effect.forkChild(sync.exclusive(Effect.void));
       yield* Deferred.succeed(gate, undefined);
       yield* Fiber.join(after);
-      yield* Fiber.interrupt(running);
+      if (stop === "a revoke") {
+        const result = yield* Fiber.join(running);
+        expect(result.isError).toBe(true);
+        expect(
+          result.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
+        ).toContain("This GOAT session was revoked while the call ran, so GOAT stopped it.");
+      } else yield* Fiber.interrupt(running);
       expect(fleet.calls).toEqual(["home sync --restart-codex"]);
       expect(fleet.holds).toBe(0);
       const report = yield* sync.latest;
@@ -684,5 +694,11 @@ it.effect.each(["notifications/cancelled", "a dropped request"] as const)(
         ["lidge-ts", "skipped", "interrupted"],
         ["mac-studio", "skipped", "interrupted"],
       ]);
-    }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
+    }).pipe(
+      // A failed assertion still releases the job, so the test ends on it and not on teardown.
+      Effect.ensuring(Deferred.succeed(gate, undefined)),
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(layerSessionStore, layerTestLoopback)),
+    );
+  },
 );

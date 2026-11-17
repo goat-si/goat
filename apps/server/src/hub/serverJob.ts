@@ -1,4 +1,5 @@
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
@@ -20,8 +21,12 @@ export const runAsServerJob = Effect.fnUntraced(function* <A, E, R>(
   return yield* Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
       let stopped = false;
+      // The body waits until the caller's stop handler is installed below; the caller opens it from
+      // inside that handler's region, or the handler opens it after setting `stopped`.
+      const handlerInstalled = Deferred.makeUnsafe<void>();
       yield* restore(Semaphore.take(permit, 1));
-      const running = yield* body(Effect.sync(() => stopped)).pipe(
+      const running = yield* Deferred.await(handlerInstalled).pipe(
+        Effect.andThen(body(Effect.sync(() => stopped))),
         Effect.tapCause((cause) =>
           Cause.hasDies(cause)
             ? // The fixed job name only: a defect's text could carry anything.
@@ -31,12 +36,16 @@ export const runAsServerJob = Effect.fnUntraced(function* <A, E, R>(
         Effect.ensuring(Semaphore.release(permit, 1)),
         Effect.forkIn(serviceScope),
       );
-      return yield* restore(Fiber.join(running)).pipe(
+      return yield* restore(
+        Deferred.succeed(handlerInstalled, undefined).pipe(Effect.andThen(Fiber.join(running))),
+      ).pipe(
+        // An interruption recorded while uninterruptible fires on entering `restore`, before the open.
         Effect.onInterrupt(() =>
           Effect.sync(() => {
             stopped = true;
           }),
         ),
+        Effect.ensuring(Deferred.succeed(handlerInstalled, undefined)),
       );
     }),
   );

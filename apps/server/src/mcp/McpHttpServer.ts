@@ -1,4 +1,4 @@
-import { tracedToolRegistration } from "./toolSpans.ts";
+import { guardedToolRegistration } from "./McpSessionCut.ts";
 import {
   boundSnapshotMetadata,
   cutText,
@@ -721,7 +721,7 @@ const withListedNames = <A, E, R>(
       ...server,
       addTool: (options) =>
         server.addTool(
-          tracedToolRegistration(
+          guardedToolRegistration(
             forwardedContentRegistration(
               listedRegistration(
                 advertisedRegistration(options, tools[options.tool.name]?.parametersSchema.ast),

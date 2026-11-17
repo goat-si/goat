@@ -28,6 +28,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import { HttpServerRequest } from "effect/http";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -576,7 +577,14 @@ export const layerMcpClientAuthenticator = Layer.effect(
     return McpHttpServer.McpClientAuthenticator.of({
       authenticate: Effect.fn("McpHttpServer.McpClientAuthenticator.authenticate")(
         function (request) {
-          return environmentAuth.authenticateMcpClient(request).pipe(
+          // The admission lives until this request ends; every HTTP request runs in its own scope.
+          return Effect.flatMap(Effect.serviceOption(Scope.Scope), (scope) =>
+            Option.isSome(scope)
+              ? environmentAuth
+                  .authenticateMcpClient(request)
+                  .pipe(Effect.provideService(Scope.Scope, scope.value))
+              : Effect.die(new Error("MCP client authentication must run in its request's scope.")),
+          ).pipe(
             Effect.flatMap((client) =>
               Clock.currentTimeMillis.pipe(
                 Effect.map((issuedAt): McpInvocationContext.McpInvocationScope => ({
@@ -585,6 +593,7 @@ export const layerMcpClientAuthenticator = Layer.effect(
                     ? {}
                     : { grantedScopes: client.grantedScopes }),
                   ...(client.reauthorize === undefined ? {} : { reauthorize: client.reauthorize }),
+                  ...(client.sessionEnd === undefined ? {} : { sessionEnd: client.sessionEnd }),
                   ...(client.childSetupPurpose === undefined
                     ? {}
                     : { childSetupPurpose: client.childSetupPurpose }),
