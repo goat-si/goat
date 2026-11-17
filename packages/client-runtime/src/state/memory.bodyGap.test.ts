@@ -485,3 +485,19 @@ it.effect("a draft written without a starting revision still purges on any chang
     }),
   ),
 );
+it.effect(
+  "an edited draft survives a re-scan that runs past the read's minute, then its release",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* openEdit(true);
+        yield* h.change("upsert", blocked("scanner_pending"));
+        // The held reply expires after its minute while the scanner is still queued.
+        yield* TestClock.adjust("61 seconds");
+        yield* waitFor(h.registry, h.body, Option.isNone);
+        expect(h.registry.get(h.edit)).toBe(h.text);
+        yield* h.change("invalidate", item);
+        expect(h.registry.get(h.edit)).toBe(h.text);
+      }),
+    ),
+);
