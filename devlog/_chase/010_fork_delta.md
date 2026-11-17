@@ -287,7 +287,7 @@ G13 `goat-copy`, G14 `launch-watch`.
 
 - 커밋: next3 K10 (upstream 23e3465ec6)
 - 경로: `packages/contracts/src/threadFamilyLookup.ts`, `apps/server/src/orchestration-v2/ThreadFamilyLookup.ts`, `packages/client-runtime/src/state/threadLineageLookup.ts`, `apps/web/src/state/threadLinkLookup.ts`, `apps/mobile/src/state/threadLinkLookup.ts`
-- 정책: upstream의 `orchestration.getThreadLinkMetadata` RPC와 `threadLinkMetadata` capability는 들이지 않는다. GOAT는 같은 답을 `getThreadFamily`의 lookupOnly 읽기(`lookupTitles` 옆 `lookupProjectIds`, 100개 한도)로 주고, 한 메시지의 링크를 한 번의 paged 읽기로 묻는다. 다음 사이클은 upstream의 그 메서드와 이를 쓰는 변경을 이 읽기로 대신한다고 표시하고 포트하지 않는다.
+- 정책: upstream의 `orchestration.getThreadLinkMetadata` RPC와 `threadLinkMetadata` capability는 들이지 않는다. GOAT는 같은 답을 `getThreadFamily`의 lookupOnly 읽기(`lookupTitles` 옆 `lookupProjectIds`, 100개 한도)로 주고, 한 메시지의 링크를 한 번의 paged 읽기로 묻는다. 다음 사이클은 upstream의 그 메서드와 이를 쓰는 변경을 이 읽기로 대신한다고 표시하고 포트하지 않는다. upstream의 환경을 담은 링크와 그 도달 검사(1c3d5f7e82)는 GOAT 링크가 스레드 id만 담는 동안 해당 없다.
 
 ## 깨끗하게 머지되고도 깨지는 것
 

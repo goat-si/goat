@@ -90,9 +90,25 @@ export function hasThreadLinks(markdown: string): boolean {
   );
 }
 
+// Each unheld link of a message asks for its ids on every render; streaming re-renders often.
+const THREAD_LINK_IDS_CACHE_LIMIT = 256;
+const threadLinkIdsCache = new Map<string, ReadonlyArray<ThreadId>>();
+
 /** Every thread a message links, as written and percent-decoded, once each, outside code. */
-export function threadLinkIds(markdown: string): ThreadId[] {
+export function threadLinkIds(markdown: string): ReadonlyArray<ThreadId> {
   if (!hasThreadLinks(markdown)) return [];
+  const cached = threadLinkIdsCache.get(markdown);
+  if (cached !== undefined) return cached;
+  const ids = scanThreadLinkIds(markdown);
+  if (threadLinkIdsCache.size >= THREAD_LINK_IDS_CACHE_LIMIT) {
+    const oldest = threadLinkIdsCache.keys().next();
+    if (!oldest.done) threadLinkIdsCache.delete(oldest.value);
+  }
+  threadLinkIdsCache.set(markdown, ids);
+  return ids;
+}
+
+function scanThreadLinkIds(markdown: string): ReadonlyArray<ThreadId> {
   const ids = new Set<ThreadId>();
   for (const match of markdown.matchAll(THREAD_LINK_OUTSIDE_CODE)) {
     const href = match.groups?.angleHref ?? match.groups?.href;
