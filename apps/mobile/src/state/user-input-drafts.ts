@@ -13,6 +13,7 @@ import {
   type PendingUserInputDraftAnswer,
 } from "../lib/threadActivity";
 import { scopedThreadKey } from "../lib/scopedEntities";
+import { referencedComposerContext } from "../lib/composerContext";
 import { appAtomRegistry } from "./atom-registry";
 import { questionAttachmentDraftKey, questionAttachmentDraftPrefix } from "./question-attachments";
 import {
@@ -120,13 +121,15 @@ export function returnUnsentAnswersToThreadDraft(input: {
       const answer = answers[questionId]?.customAnswer;
       const attachments = question?.attachments ?? [];
       if (!answer?.trim() && attachments.length === 0) continue;
+      // A question draft keeps deleted chips for undo; only the answer's own chips come back.
+      const context = referencedComposerContext(answer ?? "", question?.context);
       // The join web uses; mergeComposerDraftText would drop an answer equal to existing text.
       const draft = next[threadKey] ?? { text: "", attachments: [] };
       next[threadKey] = { ...draft, text: appendAnswerToDraft(draft.text, answer) };
       const merged = mergeComposerDraftContentState(next, threadKey, {
         text: "",
         attachments,
-        ...(question?.context ? { context: question.context } : {}),
+        ...(context ? { context } : {}),
       })[threadKey];
       if (merged) next[threadKey] = merged;
       changed = true;
