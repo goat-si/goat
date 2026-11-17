@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { AuthSessionId, EnvironmentId } from "@goat/contracts";
@@ -27,7 +28,7 @@ const layerStore = SessionStore.layer.pipe(
     }),
   ),
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-session-end-" })),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 const mcpClient = {
@@ -115,7 +116,7 @@ it.effect.each(["revoked by the command line", "deleted, as Pen cleanup leaves i
         yield* call.hasStopped;
         expect(yield* Fiber.join(call.outcome)).toEqual(Option.none());
       }).pipe(Effect.provide(running), Effect.scoped);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("a call that starts after its session was removed is cut at once without running", () =>
