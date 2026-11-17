@@ -278,7 +278,7 @@ It prints `Filtered for this MCP client credential.`; a rejected token gets a 40
 
 ```sh
 goat auth client list                 # names, session ids and last use, never the tokens
-goat auth client revoke <session-id>  # new connections and credential checks are refused at once; existing authority, open connections and MCP requests in progress end at the next check, within about 5 seconds; a request still running on a session that had already expired is not stopped (Revoke others in Settings stops it, except on the Pen and desktop sessions it keeps, whose requests keep running until you revoke that session by itself)
+goat auth client revoke <session-id>  # new connections and credential checks are refused at once; existing authority, open connections and MCP requests in progress end at the next check, within about 5 seconds; a request still running on a session that had already expired is not stopped (Revoke others in Settings stops it, but it keeps Pen members' sessions; a request on an expired Pen session can run until it finishes or GOAT restarts)
 ```
 
 To rotate, create a new token and update `GOAT_MCP_TOKEN` where the client reads it. Where a

@@ -835,10 +835,13 @@ keeps running. More commands are listed by `goat auth --help`.
 
 **Revoke others** keeps sessions signed in with the desktop app's built-in
 credential, normally the desktop app on that computer, and sessions Pen members
-hold; both are marked **Kept by Revoke others**, and MCP requests they have in
-progress keep running. If you do not recognise one or suspect it, revoke it by
-itself, which also stops its requests in progress. After you revoke the desktop
-app's session, quit and reopen GOAT on that computer.
+hold; both are marked **Kept by Revoke others**. An MCP request a Pen member's
+session has in progress keeps running. If you do not recognise a kept session or
+suspect it, revoke it by itself in Settings, which also stops its requests in
+progress. A Pen member's session whose sign-in has expired is no longer listed,
+and nothing in Settings or on the command line stops a request it still has
+running, so that request can continue until it finishes or GOAT restarts. After
+you revoke the desktop app's session, quit and reopen GOAT on that computer.
 
 A session with an open connection stays listed after its access credential
 expires. **Settings → Connections** shows which sessions are connected;
