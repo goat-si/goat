@@ -28,9 +28,9 @@ export const MEMORY_EDIT_CLOSED =
   "Edit closed because this memory is no longer the version you started from. Your unsaved text was not kept.";
 
 /**
- * The details view's edit across the one-minute body expiry. The shared draft is the only place
- * the text lives: an edit the person changed outlives the expiry, an untouched one closes with the
- * body, and any other gap (another version, a forget, a disconnect) closes it.
+ * The details view's edit across the one-minute body expiry. The edit snapshot holds no text; the
+ * shared draft holds the typing and the text it started from. An edit the person changed outlives
+ * the expiry, an untouched one closes with the body, and the shared draft decides any other change.
  */
 export function useMemoryEditSession({
   environmentId,

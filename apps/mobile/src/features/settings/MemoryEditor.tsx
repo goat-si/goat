@@ -38,7 +38,7 @@ export function MemoryEditor({
   readonly start?: MemoryEditStart;
   /** The visible body that seeds the draft when the editor opens. */
   readonly seedText?: string;
-  /** An existing memory can be saved only once the draft differs from it. */
+  /** An existing memory can be saved only once the person has changed the draft. */
   readonly edited?: boolean;
   /** Hides the text while a reread decides whether an untouched edit still stands. */
   readonly masked?: boolean;
