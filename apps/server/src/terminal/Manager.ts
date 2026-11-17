@@ -32,10 +32,7 @@ import {
 } from "./terminalHistoryReplay.ts";
 export { BoundedTerminalHistory } from "./BoundedTerminalHistory.ts";
 
-import {
-  isWorkspaceLeaseUnavailableError,
-  withWorkspaceLease,
-} from "../workspace/workspaceLease.ts";
+import { makeTerminalLeaseOrder, type TerminalLeaseBusy } from "./terminalLeaseOrder.ts";
 import {
   DEFAULT_TERMINAL_ID,
   DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
@@ -2334,13 +2331,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     ),
   );
 
-  /** Runs under the checkout's lease; claims of other GOAT servers that cannot be read fail like an unreachable cwd. */
-  const withTerminalLease = <A, E, R>(cwd: string, effect: Effect.Effect<A, E, R>) =>
-    withWorkspaceLease(path.resolve(cwd), effect).pipe(
-      Effect.catchIf(isWorkspaceLeaseUnavailableError, (error) =>
-        Effect.fail(new TerminalCwdStatError({ cwd, cause: error })),
-      ),
-    );
+  const { tryTerminalLease, withThreadLockAndLease } = makeTerminalLeaseOrder({
+    resolve: (cwd) => path.resolve(cwd),
+    withThreadLock,
+  });
 
   const openWithWorkspaceLease = Effect.fn("terminal.openLocked")(function* <
     E extends OrchestratorMcpFailure = never,
@@ -2492,12 +2486,12 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   });
 
   const openLocked = (input: TerminalOpenInput) =>
-    withTerminalLease(input.worktreePath ?? input.cwd, openWithWorkspaceLease(input)).pipe(
+    tryTerminalLease(input.worktreePath ?? input.cwd, openWithWorkspaceLease(input)).pipe(
       Effect.map(snapshot),
     );
 
   const open: TerminalManager["Service"]["open"] = (input) =>
-    withThreadLock(
+    withThreadLockAndLease(
       input.threadId,
       resolveLaunchInputEnvironment(input).pipe(Effect.flatMap(openLocked)),
     );
@@ -2595,7 +2589,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   // Snapshot listeners run under that lock and must not block.
   const streamSession = (
     input: TerminalObserveInput,
-    initial: Effect.Effect<TerminalSessionSnapshot | null, TerminalError>,
+    initial: Effect.Effect<TerminalSessionSnapshot | null, TerminalError | TerminalLeaseBusy>,
     listener: (event: TerminalAttachStreamEvent) => Effect.Effect<void>,
     registerCleanup?: (stop: () => void) => void,
   ) => {
@@ -2670,8 +2664,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       deliverLive = true;
       return stop;
     }).pipe(
-      (effect) => withThreadLock(input.threadId, effect),
       Effect.onError(() => Effect.sync(stop)),
+      (effect) => withThreadLockAndLease(input.threadId, effect),
     );
   };
 
@@ -2700,9 +2694,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     viewerId,
   ) => {
     const viewer = viewerId ?? `stream:${++anonymousViewerCount}`;
-    let detach = () => {};
+    let detach: (() => void) | undefined;
     const initial = Effect.suspend(() => {
-      detach = retainViewerOnce(
+      // A rerun after its folder was busy keeps the first retention.
+      detach ??= retainViewerOnce(
         input,
         viewer,
         input.cols !== undefined && input.rows !== undefined
@@ -2719,14 +2714,14 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         ((stop) =>
           registerCleanup(() => {
             stop();
-            detach();
+            detach?.();
           })),
     ).pipe(
       Effect.map((stop) => () => {
         stop();
-        detach();
+        detach?.();
       }),
-      Effect.onError(() => Effect.sync(detach)),
+      Effect.onError(() => Effect.sync(() => detach?.())),
     );
   };
 
@@ -3043,11 +3038,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   });
 
   const restart: TerminalManager["Service"]["restart"] = (input) =>
-    withThreadLock(
+    withThreadLockAndLease(
       input.threadId,
       resolveLaunchInputEnvironment(input).pipe(
         Effect.flatMap((resolved) =>
-          withTerminalLease(
+          tryTerminalLease(
             resolved.worktreePath ?? resolved.cwd,
             restartResolved(resolved).pipe(Effect.map(snapshot)),
           ),
@@ -3151,11 +3146,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   });
 
   const agentOperations = makeAgentTerminalOperations({
-    withThreadLock,
+    withThreadLock: withThreadLockAndLease,
     sessionsForThread,
     requireSession,
     open: (input) =>
-      withTerminalLease(input.cwd, openWithWorkspaceLease(input, input.owner, input.authorize)),
+      tryTerminalLease(input.cwd, openWithWorkspaceLease(input, input.owner, input.authorize)),
     mutate: Effect.fn("terminal.agentMutateLocked")(function* (
       session: TerminalSessionState,
       input: AgentTerminalMutateInput,
@@ -3170,7 +3165,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         case "clear":
           return yield* clearLocked(input, input.owner, input.authorize);
         case "restart":
-          yield* withTerminalLease(
+          yield* tryTerminalLease(
             session.worktreePath ?? session.cwd,
             restartResolved(
               {

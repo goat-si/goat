@@ -200,7 +200,8 @@ const waitForForeignClaim = <A, E, R>(
  * Lets effect, run for the holder of a folder's lease, take that same folder's lease without
  * waiting on itself: a restore holds a worktree's lease and runs its setup script, whose terminal
  * asks for it. A reentrant section takes no permit and no claim; only the holder's own do. Only
- * withWorkspaceLease reenters: a try never waits on the holder, so it stays Busy.
+ * withWorkspaceLease and tryEnterWorkspaceLease reenter: a plain try stays Busy. A reentrant
+ * section must not outlive the holder's call, whose release waits for it without a bound.
  */
 export const reuseHeldWorkspaceLease = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.provideService(effect, ReuseHeldLease, true);
@@ -273,10 +274,33 @@ export const tryWithWorkspaceLease = <A, E, R>(
   cwd: string,
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<Option.Option<A>, E | WorkspaceLeaseUnavailableError, R> =>
+  tryAdmitted(cwd, effect, false);
+
+/**
+ * None instead of waiting, for work that must not wait while it holds something else. A marked
+ * holder reenters as withWorkspaceLease does, and a free folder that others are already queued
+ * for is busy, so this never overtakes a waiter.
+ */
+export const tryEnterWorkspaceLease = <A, E, R>(
+  cwd: string,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<Option.Option<A>, E | WorkspaceLeaseUnavailableError, R> =>
+  Effect.acquireUseRelease(
+    enterHeld(cwd),
+    (held): Effect.Effect<Option.Option<A>, E | WorkspaceLeaseUnavailableError, R> =>
+      held !== undefined ? Effect.map(effect, Option.some) : tryAdmitted(cwd, effect, true),
+    leaveHeld,
+  );
+
+const tryAdmitted = <A, E, R>(
+  cwd: string,
+  effect: Effect.Effect<A, E, R>,
+  behindWaiters: boolean,
+): Effect.Effect<Option.Option<A>, E | WorkspaceLeaseUnavailableError, R> =>
   Effect.acquireUseRelease(
     admit(cwd),
     (admission): Effect.Effect<Option.Option<A>, E | WorkspaceLeaseUnavailableError, R> =>
-      admission.kind === "admitted"
+      admission.kind === "admitted" && (!behindWaiters || admission.lease.users === 1)
         ? admission.lease.semaphore
             .withPermitsIfAvailable(1)(
               withForeignClaim(

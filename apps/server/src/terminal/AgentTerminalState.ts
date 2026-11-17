@@ -7,6 +7,7 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import type { BoundedTerminalHistory } from "./BoundedTerminalHistory.ts";
+import type { TerminalLeaseBusy } from "./terminalLeaseOrder.ts";
 
 const DEFAULT_READ_BYTES = 8 * 1024;
 const MAX_READ_BYTES = 32 * 1024;
@@ -125,10 +126,11 @@ function descriptor(session: AgentTerminalSession, owner?: string): AgentTermina
 }
 
 export function makeAgentTerminalOperations<S extends AgentTerminalSession>(operations: {
+  /** The thread's terminal lock; work that finds its folder busy runs again once it is free. */
   readonly withThreadLock: <A, E>(
     threadId: string,
-    effect: Effect.Effect<A, E>,
-  ) => Effect.Effect<A, E>;
+    effect: Effect.Effect<A, E | TerminalLeaseBusy>,
+  ) => Effect.Effect<A, E | TerminalError>;
   readonly sessionsForThread: (threadId: string) => Effect.Effect<ReadonlyArray<S>>;
   readonly requireSession: (
     threadId: string,
@@ -136,11 +138,11 @@ export function makeAgentTerminalOperations<S extends AgentTerminalSession>(oper
   ) => Effect.Effect<S, TerminalError>;
   readonly open: (
     input: AgentTerminalOpenInput & { readonly terminalId: string },
-  ) => Effect.Effect<S, TerminalError | OrchestratorMcpFailure>;
+  ) => Effect.Effect<S, TerminalError | OrchestratorMcpFailure | TerminalLeaseBusy>;
   readonly mutate: (
     session: S,
     input: AgentTerminalMutateInput,
-  ) => Effect.Effect<void, TerminalError | OrchestratorMcpFailure>;
+  ) => Effect.Effect<void, TerminalError | OrchestratorMcpFailure | TerminalLeaseBusy>;
 }): AgentTerminalMethods {
   const agentList = Effect.fn("terminal.agentList")(function* (
     input: AgentTerminalInput & { readonly owner?: string },
