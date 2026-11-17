@@ -298,3 +298,33 @@ it.effect("keeps the host on line counts a detail read already filled in", () =>
     );
   }),
 );
+
+it.effect(
+  "counts a repository as a project's only while an active project's origin or upstream is it",
+  () =>
+    Effect.gen(function* () {
+      const projects = [
+        forkProject("p1", "/goat"),
+        project({ id: "p2", title: "web", workspaceRoot: "/web", repository: "acme/web" }),
+      ];
+      const service = yield* makeService({
+        projects,
+        providers: [fakePullRequestProvider(SourceControlProviderKind.make("github"), {})],
+      });
+      const has = (repository: string, host = "github.com") =>
+        service.hasProjectRepository({ host, repository });
+      assert.deepStrictEqual(
+        yield* Effect.all([
+          has("goat-si/goat"),
+          has("SAMPLE-TOOLS/Upstream"),
+          has("acme/web"),
+          has("victim/private"),
+          has("acme/web", "gitlab.com"),
+        ]),
+        [true, true, true, false, false],
+      );
+      // acme/web's project is removed; the next lookup reads the project list again.
+      projects.splice(1, 1);
+      assert.strictEqual(yield* has("acme/web"), false);
+    }),
+);

@@ -5,9 +5,15 @@ import * as Layer from "effect/Layer";
 import { HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as BuiltInDrivers from "../sourceControl/builtInDrivers.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import { sourceControlMediaResponse } from "./sourceControlMediaResponse.ts";
+
+// The repositories these cases name are their projects' own.
+const layerProjects = Layer.mock(PullRequestService.PullRequestService)({
+  hasProjectRepository: () => Effect.succeed(true),
+});
 
 describe("sourceControlMediaResponse", () => {
   it.effect("passes on a host's refusal of a pull request image with no body", () => {
@@ -49,7 +55,10 @@ describe("sourceControlMediaResponse", () => {
       expect(response.status).toBe(403);
       expect(response.headers["content-type"]).toBeUndefined();
       expect(response.headers["content-length"]).toBeUndefined();
-    }).pipe(Effect.provide(Layer.mergeAll(layerDrivers, layerIdentities)), Effect.scoped);
+    }).pipe(
+      Effect.provide(Layer.mergeAll(layerDrivers, layerIdentities, layerProjects)),
+      Effect.scoped,
+    );
   });
 
   it.effect(
@@ -84,7 +93,10 @@ describe("sourceControlMediaResponse", () => {
         );
         expect(requests).toEqual([{ url, headers: {} }]);
         expect(response.status).toBe(404);
-      }).pipe(Effect.provide(Layer.mergeAll(layerDrivers, layerIdentities)), Effect.scoped);
+      }).pipe(
+        Effect.provide(Layer.mergeAll(layerDrivers, layerIdentities, layerProjects)),
+        Effect.scoped,
+      );
     },
   );
 });

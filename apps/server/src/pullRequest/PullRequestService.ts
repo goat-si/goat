@@ -201,6 +201,11 @@ type CredentialRef = PullRequestRef & { readonly [credentialNamespace]?: string 
 export class PullRequestService extends Context.Service<
   PullRequestService,
   {
+    /** Whether `repository` on `host` is the origin or upstream of an active project. */
+    readonly hasProjectRepository: (input: {
+      readonly host: string;
+      readonly repository: string;
+    }) => Effect.Effect<boolean, PullRequestError>;
     readonly findCloudSessionPullRequest: (input: {
       readonly projectId: ProjectId;
       readonly repository: string;
@@ -361,6 +366,15 @@ export interface SupportedProject {
   /** The upstream a fork was made from, listed only when asked for. */
   readonly upstream: boolean;
 }
+
+/** requireProject's own-repository match: `repository` on `host`, or on any host when undefined. */
+const listsRepository = (
+  candidate: SupportedProject,
+  repository: string,
+  host: string | undefined,
+) =>
+  candidate.repository.toLowerCase() === repository.toLowerCase() &&
+  (host === undefined || host === candidate.host);
 
 interface WorkspaceProjects {
   readonly supported: ReadonlyArray<SupportedProject>;
@@ -675,17 +689,23 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  // Every active project, unlike requireProject's one, since a client's read scope is the environment.
+  const hasProjectRepository: PullRequestService["Service"]["hasProjectRepository"] = (input) => {
+    const host = input.host.trim().toLowerCase();
+    return listWorkspaceProjects({ host }).pipe(
+      Effect.map(({ supported }) =>
+        supported.some((candidate) => listsRepository(candidate, input.repository.trim(), host)),
+      ),
+    );
+  };
+
   // Azure derives organization from the checkout; require the matching repository.
   const requireProject = (ref: PullRequestRef): Effect.Effect<SupportedProject, PullRequestError> =>
     listWorkspaceProjects({ projectId: ref.projectId }).pipe(
       Effect.flatMap(({ supported }): Effect.Effect<SupportedProject, PullRequestError> => {
         const repository = ref.repository.trim();
         const host = ref.host?.trim().toLowerCase();
-        const own = supported.find(
-          (candidate) =>
-            candidate.repository.toLowerCase() === repository.toLowerCase() &&
-            (host === undefined || host === candidate.host),
-        );
+        const own = supported.find((candidate) => listsRepository(candidate, repository, host));
         if (own !== undefined) return Effect.succeed(own);
         if (host === undefined) {
           if (supported.length === 0) {
@@ -3645,6 +3665,7 @@ export const make = Effect.gen(function* () {
   const revisions = (ref: SubscriptionRef.SubscriptionRef<number>) =>
     SubscriptionRef.changes(ref).pipe(Stream.filter((revision) => revision > 0));
   return PullRequestService.of({
+    hasProjectRepository,
     findCloudSessionPullRequest,
     withSharedProjectReads,
     routing,

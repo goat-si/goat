@@ -34,6 +34,7 @@ import {
   screenshotPng,
 } from "./AssetAccess.testkit.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import { fakeSourceControlDriverInstance } from "@goat/source-control-testing/fakeSourceControlDriver";
 import * as BuiltInDrivers from "../sourceControl/builtInDrivers.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
@@ -1573,7 +1574,17 @@ describe("AssetAccess", () => {
       yield* sourceControlMediaResponse({ ...asset, repository: "enterprise/private" }, {});
       expect(fetched.at(-1)?.repository).toBe("enterprise/private");
     }).pipe(
-      Effect.provide(Layer.mergeAll(layerTest, layerDrivers, layerIdentities)),
+      Effect.provide(
+        Layer.mergeAll(
+          layerTest,
+          layerDrivers,
+          layerIdentities,
+          // Both repositories this case names belong to projects here.
+          Layer.mock(PullRequestService.PullRequestService)({
+            hasProjectRepository: () => Effect.succeed(true),
+          }),
+        ),
+      ),
       Effect.scoped,
     );
   });

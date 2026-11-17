@@ -52,6 +52,7 @@ import {
 } from "./http.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
+import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 describe("MCP app asset responses", () => {
@@ -592,6 +593,7 @@ describe("signed media HTTP route", () => {
             Layer.mock(NativeAppIconResolver.NativeAppIconResolver)({}),
             Layer.succeed(BuiltInDrivers.SourceControlDrivers, []),
             Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
+            Layer.mock(PullRequestService.PullRequestService)({}),
           ).pipe(Layer.provide(NodeServices.layer), Layer.provideMerge(layerFileResponse)),
         ),
       );
