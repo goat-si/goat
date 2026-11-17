@@ -133,7 +133,8 @@ import { isWorkspaceImagePreviewPath } from "@goat/shared/filePreview";
 import { mcpToolResultWithRawImages } from "@goat/shared/toolOutput";
 import {
   canApplyClaudeSelectionLive,
-  claudeLiveSelectionFlagSettings,
+  applyClaudeSelectionLive,
+  applyClaudeSelectionToRunningQuery,
 } from "./ClaudeLiveSelection.ts";
 import { normalizeClaudeTurnTokenUsage } from "../../provider/ClaudeTurnTokenUsage.ts";
 import { toMcpElicitationResponse } from "../../provider/CodexMcpElicitation.ts";
@@ -9228,26 +9229,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             (existing.selection.apiModelId === compiledSelection.apiModelId ||
               existing.openedPermissionMode === queryPolicy.permissionMode)
           ) {
-            const live = existing;
-            // Preserve launcher-selected models unless the model changed or a failed update left it unknown.
-            yield* (
-              live.selection.queryIdentity === "" ||
-              live.selection.apiModelId !== compiledSelection.apiModelId
-                ? live.query.setModel(compiledSelection.apiModelId)
-                : Effect.void
-            ).pipe(
-              Effect.andThen(
-                live.query.applyFlagSettings(claudeLiveSelectionFlagSettings(compiledSelection)),
-              ),
-              Effect.tapError(() =>
-                Effect.sync(() => {
-                  live.selection = { ...live.selection, queryIdentity: "" };
-                }),
-              ),
-            );
-            if (live.selection.apiModelId !== compiledSelection.apiModelId)
-              live.reportedModel = undefined;
-            live.selection = compiledSelection;
+            yield* applyClaudeSelectionLive(existing, compiledSelection);
           }
           if (
             existing !== null &&
@@ -10490,6 +10472,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               true,
             ),
           steerTurn,
+          applyModelSelection: ({ providerThread, modelSelection }) =>
+            Effect.flatMap(Ref.get(queryContext), (live) =>
+              applyClaudeSelectionToRunningQuery(
+                live,
+                compileClaudeModelSelection(modelSelection, modelCatalog),
+                providerThread.nativeThreadRef?.nativeId,
+              ),
+            ),
           stopTask: Effect.fn("ClaudeAdapterV2.stopTask")(function* ({ providerThread, taskId }) {
             const liveQuery = yield* Ref.get(queryContext);
             const task = (yield* Ref.get(sessionSubagentsByTaskId)).get(taskId);
