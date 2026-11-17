@@ -121,6 +121,17 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
         expect(yield* observe).not.toBe(yield* observe);
       }),
   );
+  it.effect("advertises that it checks a reply before an agent reads it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped();
+      const descriptor = yield* Effect.flatMap(
+        ServerEnvironment.ServerEnvironment,
+        (environment) => environment.getDescriptor,
+      ).pipe(Effect.provide(Layer.fresh(layerServerEnvironment(baseDir))));
+      expect(descriptor.capabilities.replyToResponse).toBe(true);
+    }),
+  );
   it.effect.each([
     { desktopAppUpdate: false, advertised: undefined },
     { desktopAppUpdate: true, advertised: true },
