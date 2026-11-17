@@ -42,7 +42,7 @@ on:
         description: all (default), server (full server suite), memory-growth, windows (Windows tests), or quick (check and typecheck)
         type: choice
         default: all
-        options: [all, server, memory-growth, windows, quick, netns-probe]
+        options: [all, server, memory-growth, windows, quick]
 
 permissions:
   contents: read
@@ -240,13 +240,13 @@ jobs:
       # install downloads only when this Playwright version's shell is missing, and a missing system
       # library fails the step.
       - name: Install Chromium headless shell
-        if: matrix.task == 'test' || matrix.task == 'test-server' || matrix.task == 'test-changed' || matrix.task == 'build' || matrix.task == 'probe-netns'
+        if: matrix.task == 'test' || matrix.task == 'test-server' || matrix.task == 'test-changed' || matrix.task == 'build'
         env:
           TASK: ${{ matrix.task }}
         run: |
           # The changed tests may be web or server browser tests, so that task installs both.
           case "$TASK" in
-            test|build|probe-netns) clis=(apps/web/node_modules/playwright/cli.js) ;;
+            test|build) clis=(apps/web/node_modules/playwright/cli.js) ;;
             test-server) clis=(apps/server/node_modules/playwright-core/cli.js) ;;
             *) clis=(apps/web/node_modules/playwright/cli.js apps/server/node_modules/playwright-core/cli.js) ;;
           esac
@@ -308,51 +308,6 @@ jobs:
         env:
           ALCHEMY_TEST_DEV: "true"
         run: vp run --filter goat-relay test
-
-      # Branch-only goat#3646 probe, not for merge: can the web browser test step run in a
-      # loopback-only network namespace on the lidge runners, under the runner's user and AppArmor?
-      - name: Probe loopback-only network namespace (goat#3646)
-        if: matrix.task == 'probe-netns'
-        env:
-          VITEST_PW_DEBUG: "1"
-        run: |
-          set -u
-          uid=$(id -u)
-          gid=$(id -g)
-          echo "id: $(id)"
-          uname -a
-          grep PRETTY_NAME /etc/os-release
-          echo "virt: $(systemd-detect-virt 2>&1)"
-          echo "apparmor label: $(cat /proc/self/attr/current 2>&1)"
-          for key in kernel.unprivileged_userns_clone kernel.apparmor_restrict_unprivileged_userns kernel.apparmor_restrict_unprivileged_unconfined user.max_user_namespaces user.max_net_namespaces; do
-            echo "$key=$(sysctl -n "$key" 2>&1)"
-          done
-          ip -br link
-          unshare --version
-          if command -v bwrap >/dev/null; then bwrap --version; else echo "bwrap: not installed"; fi
-          results=()
-          probe() {
-            local name=$1
-            shift
-            echo "::group::$name"
-            local status=0
-            "$@" || status=$?
-            echo "::endgroup::"
-            echo "$name: exit $status"
-            results+=("$name: exit $status")
-          }
-          probe "unshare user+net as mapped root, lo up" unshare --user --map-root-user --net sh -c 'ip link set lo up && ip -br link && ip -br addr'
-          probe "unshare user+net, back to the runner uid" unshare --user --map-root-user --net sh -c "ip link set lo up && exec unshare --user --map-user=$uid --map-group=$gid sh -c 'id && ip -br link && ip -br addr'"
-          if command -v bwrap >/dev/null; then
-            probe "bwrap unshare-user unshare-net" bwrap --unshare-user --unshare-net --dev-bind / / --proc /proc sh -c 'id && ip -br addr'
-          fi
-          cd apps/web
-          file=src/components/ReopenClosedViewShortcut.browser.test.tsx
-          probe "browser test file, host network" vp test run --project browser "$file"
-          probe "browser test file in the namespace, runner uid" unshare --user --map-root-user --net sh -c "ip link set lo up && exec unshare --user --map-user=$uid --map-group=$gid vp test run --project browser $file"
-          probe "browser test file in the namespace, mapped root" unshare --user --map-root-user --net sh -c "ip link set lo up && exec vp test run --project browser $file"
-          printf '%s\n' "${results[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
-          printf '%s\n' "${results[@]}" | grep -q '^browser test file in the namespace, runner uid: exit 0$'
 
       # web stays here. The other suites are their own matrix tasks so a
       # slow server shard does not block them. `check` above is still the aggregate.
