@@ -300,12 +300,17 @@ it.effect("keeps the host on line counts a detail read already filled in", () =>
 );
 
 it.effect(
-  "counts a repository as a project's only while an active project's origin or upstream is it",
+  "counts a repository only while a project that is not deleted, archived or not, has it as origin or upstream",
   () =>
     Effect.gen(function* () {
       const projects = [
         forkProject("p1", "/goat"),
         project({ id: "p2", title: "web", workspaceRoot: "/web", repository: "acme/web" }),
+        // Archived, as requireProject already reads its pull requests.
+        {
+          ...project({ id: "p3", title: "docs", workspaceRoot: "/docs", repository: "acme/docs" }),
+          archivedAt: "2026-07-03T00:00:00Z",
+        },
       ];
       const service = yield* makeService({
         projects,
@@ -318,10 +323,11 @@ it.effect(
           has("goat-si/goat"),
           has("SAMPLE-TOOLS/Upstream"),
           has("acme/web"),
+          has("acme/docs"),
           has("victim/private"),
           has("acme/web", "gitlab.com"),
         ]),
-        [true, true, true, false, false],
+        [true, true, true, true, false, false],
       );
       // acme/web's project is removed; the next lookup reads the project list again.
       projects.splice(1, 1);
