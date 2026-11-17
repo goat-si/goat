@@ -288,3 +288,10 @@ NOT RUN: a goat-ci run on the merge commit daf4b9bb3b; the 385-file check:change
 ## Coordinator, 15:04:18 UTC (verbatim, part 3)
 
 > 3. N15bb at c63e00683b: received (5 commits on e04442e66c, 9 files; I read the list: two move-outs, the stop guard, the Publish empty state, two descriptor assertions). I read the diff in full and merge when run 44109073502 is green; nothing else needed from N15b. Its typecheck rests on that run, recorded as such.
+
+### Run 44109073502 failed; fix `ce893ca4ea`
+
+- Run 44109073502 on c63e00683b failed two jobs. goat-typecheck: TS2304 "Cannot find name 'resolveThreadBranchMetadataPatch'" at GitActionsControl.tsx:240. goat-check (knip): "unused export resolveThreadBranchMetadataPatch" at GitActionsControl.logic.ts:424. Cause: my move-out 73467df4f6 pruned imports with a pattern that read the spread in `...resolveThreadBranchMetadataPatch(` as a property access, so that import was dropped. The local checks did not catch it: lint has no undefined-name rule for TypeScript, the browser tests never reach that branch, and the typecheck was not run locally (token held by P1).
+- Fix `ce893ca4ea`: the import is restored and the budget entry follows the real length (1375). A recheck of every name the old import block declared, against both files, finds no other dropped import. Locally after the fix: knip exports exit 0; GitActionsControl.browser, GitActionsControl.logic and PublishRepositoryDialog.browser tests: 34 passed; format and lint passed at commit.
+- Run 44109073502 cancelled (failed, jobs still queued). New goat-ci run on ce893ca4ea (workflow_dispatch, lane all): https://github.com/goat-si/goat/actions/runs/44113761706.
+- Run 44101194777 on daf4b9bb3b (the integration tree's full check) finished with conclusion success.
