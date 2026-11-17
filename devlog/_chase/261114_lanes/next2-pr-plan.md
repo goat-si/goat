@@ -114,6 +114,13 @@ Coordinator to lane coordinator, 2026-11-17 09:00:17 UTC (verbatim):
 3. X1's comment on goat#3646: noted.
    The read-only lidge thread runs as mcp:4aab4f3e-fca0-409b-8e39-0d4fe8ce5e3c on alias lidge (the first launch attempt at 09:01 UTC got "lidge's GOAT runtime is waiting for a verified idle response before replacement"; lidge-ts answered the same, so one machine; the retry on lidge succeeded).
 
+Coordinator to lane coordinator, 2026-11-17 09:12:32 UTC (verbatim).
+
+1. S4 READY at 13309271ae: checked on origin (two commits on ed4268897e, 5 files +242/-17). The fresh C4 review is running (Opus 5.5 xhigh, read-only, task goat-next2-S4-final-13309271): the start window in every ordering and the sweep test's determinism; for goat#3522 the cache and stored-asset bridge, redirects per hop, the comparison against attack inputs, the hosts the fetcher can reach, the tests and the one authorised input change, clients and compatibility. S4 stands by; no push to its branch until I send the verdict. The Known limits line it proposes is accepted for #3660's body as written.
+2. X1, the probe: YES to ONE more netns-probe run whose only change is running the same browser file inside "bwrap --unshare-user --unshare-net --dev-bind / / --proc /proc" on one lidge runner. In that run also print, from inside the namespace, ip -br addr (loopback only) and the Chromium log lines matching net::ERR_ (none expected). If it passes, propose the wrapper for goat-test's Test step as a diff plus ONE full goat-test run inside it, and answer in the proposal: what the browser tests can no longer reach and whether any test needs it (the tests that fail outside URLs on purpose must fail the same way); what happens on a runner without bwrap or where the profile refuses (the step must fail loudly, never fall back to the host network silently); and whether the epyc runners and the hosted runners need the same wrapper or a guard by runner label. If it fails, option 1 stands and waits for the lidge thread's report.
+3. X1 goat#3493 (65e4257046), N4 O8 (3c1a80335d) and CF1's local commits: noted; their READYs come at the lane heads. X1's check:changed waits for the nightly's Desktop macOS arm64 job, as you said.
+4. The Wi-Fi link on the runner host (wlp13s0 UP beside the wired interface) is a strong suspect: the lidge thread should say whether its address or route changed at the two timestamps (a DHCP renewal, a roam between access points, IPv6 router advertisements).
+
 ## Appendix: 85 carried #3176 rows outside next-pr-plan.md (verdict needed)
 
 - `479ee74135` persists PR metadata in drafts: changes draft normalization used by the persisted-state migration (`apps/web/src/composerDraftStore.ts:2084`, `:2242`).
