@@ -125,6 +125,7 @@ import {
   type UnavailableRequirementOf,
 } from "./pullRequestProviderErrors.ts";
 import { noteRefinedHost, unreadListResult, withListResult } from "./pullRequestListFallback.ts";
+import { withOverviewThreads } from "./pullRequestActivityFields.ts";
 import { VERDICT_LABELS } from "./pullRequestReviewVerdictLabels.ts";
 
 export interface PullRequestMergeEvent extends PullRequestRef {
@@ -1564,6 +1565,7 @@ export const make = Effect.gen(function* () {
                 ? {}
                 : { reviewThreadsTruncated: activity.reviewThreadsTruncated }),
               reviewThreads: activity.reviewThreads,
+              ...withOverviewThreads(activity),
               commits: activity.commits,
               ...(activity.reactions === undefined ? {} : { reactions: activity.reactions }),
             })),

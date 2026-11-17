@@ -6,7 +6,7 @@ import {
   resolvePullRequestReviewAnchor,
   type PullRequestAnchor,
 } from "@goat/shared/pullRequestAnchor";
-import type { PullRequestActivity } from "@goat/contracts";
+import { pullRequestConversationThreads, type PullRequestActivity } from "@goat/contracts";
 import type { ActivityFilter } from "./pullRequestActivityFilter";
 import type { GuideDiffFocus } from "./guide/guideDiffFocus";
 
@@ -32,7 +32,10 @@ export function linkedActivityFilter(
 /** The activity row a comment link names: a thread opens its discussion, a comment its row. */
 export function activityLinkTarget(
   url: string | undefined,
-  activity: Pick<PullRequestActivity, "comments" | "reviewThreads"> | null | undefined,
+  activity:
+    | Pick<PullRequestActivity, "comments" | "reviewThreads" | "overviewThreads">
+    | null
+    | undefined,
 ) {
   const location = parsePullRequestAnchor(url);
   if (location?.kind !== "timeline") return { targetKey: null, targetThread: null };
@@ -40,9 +43,11 @@ export function activityLinkTarget(
     ? resolvePullRequestReviewAnchor(location.anchor, activity.comments, activity.reviewThreads)
     : location.anchor;
   const targetThread =
-    activity?.reviewThreads.find((thread) =>
-      thread.comments.some((comment) => pullRequestAnchorMatchesUrl(anchor, comment.url)),
-    ) ?? null;
+    (activity &&
+      pullRequestConversationThreads(activity).find((thread) =>
+        thread.comments.some((comment) => pullRequestAnchorMatchesUrl(anchor, comment.url)),
+      )) ??
+    null;
   const targetComment = activity?.comments.find((comment) =>
     pullRequestAnchorMatchesUrl(anchor, comment.url),
   );

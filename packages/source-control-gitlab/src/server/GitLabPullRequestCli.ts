@@ -71,7 +71,7 @@ import type {
   PullRequestReaction,
   PullRequestReactionContent,
   PullRequestReviewCommentDraft,
-  PullRequestReviewThread,
+  PullRequestConversationThread,
   PullRequestReviewVerdict,
   PullRequestReviewerCandidateList,
 } from "@goat/contracts";
@@ -697,7 +697,7 @@ export const make = Effect.gen(function* () {
     readonly repository: string;
     readonly number: number;
     readonly page: number;
-    readonly collected: ReadonlyArray<PullRequestReviewThread>;
+    readonly collected: ReadonlyArray<PullRequestConversationThread>;
     readonly collectedDiffRefs: ReadonlyMap<string, GitLabDiffRefs>;
     readonly collectedFindingIds: ReadonlyArray<string>;
   }): Effect.Effect<GitLabDiscussionThreads, GitLabPullRequestCliError> =>

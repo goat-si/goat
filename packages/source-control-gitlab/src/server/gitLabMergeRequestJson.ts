@@ -39,7 +39,7 @@ import type {
   PullRequestMergeCapabilities,
   PullRequestMergeMethod,
   PullRequestReactionContent,
-  PullRequestReviewThread,
+  PullRequestConversationThread,
   PullRequestReviewerCandidate,
   PullRequestState,
 } from "@goat/contracts";
@@ -564,7 +564,7 @@ export interface GitLabDiffRefs {
 }
 
 export interface GitLabDiscussions {
-  readonly threads: ReadonlyArray<PullRequestReviewThread>;
+  readonly threads: ReadonlyArray<PullRequestConversationThread>;
   /** GitLab moves a thread onto each new diff that still has its line; this is the last one. */
   readonly diffRefsByThreadId: ReadonlyMap<string, GitLabDiffRefs>;
   /** First notes of unresolved discussions on the MR itself rather than a diff line. */
@@ -583,7 +583,7 @@ export function decodeDiscussionsJson(
   if (!Result.isSuccess(decoded)) {
     return Result.fail(decoded.failure);
   }
-  const threads: PullRequestReviewThread[] = [];
+  const threads: PullRequestConversationThread[] = [];
   const diffRefsByThreadId = new Map<string, GitLabDiffRefs>();
   const overviewFindingIds: string[] = [];
   for (const entry of decoded.success) {
@@ -591,11 +591,30 @@ export function decodeDiscussionsJson(
     if (!Exit.isSuccess(discussion)) continue;
     const notes = (discussion.value.notes ?? []).filter((note) => note.system !== true);
     const root = notes[0];
-    const position = root?.position;
-    if (root !== undefined && !position && root.resolvable === true && root.resolved !== true) {
-      overviewFindingIds.push(String(root.id));
+    if (root === undefined) continue;
+    const comments = notes.map((note) => ({
+      id: String(note.id),
+      author: toActor(note.author),
+      body: note.body ?? "",
+      createdAt: note.created_at,
+      url: null,
+    }));
+    const position = root.position;
+    if (!position) {
+      // A thread started on the overview: resolvable, unlike a single comment.
+      if (root.resolvable !== true) continue;
+      if (root.resolved !== true) overviewFindingIds.push(String(root.id));
+      threads.push({
+        id: discussion.value.id,
+        path: null,
+        line: null,
+        side: "right",
+        isResolved: root.resolved === true,
+        isOutdated: false,
+        comments,
+      });
+      continue;
     }
-    if (root === undefined || !position) continue;
     const location = gitLabDiscussionPosition(position);
     if (location === null) continue;
     if (position.base_sha && position.start_sha && position.head_sha) {
@@ -610,13 +629,7 @@ export function decodeDiscussionsJson(
       ...location,
       isResolved: root.resolved === true,
       isOutdated: false,
-      comments: notes.map((note) => ({
-        id: String(note.id),
-        author: toActor(note.author),
-        body: note.body ?? "",
-        createdAt: note.created_at,
-        url: null,
-      })),
+      comments,
     });
   }
   return Result.succeed({

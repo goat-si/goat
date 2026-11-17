@@ -662,6 +662,7 @@ const make = Effect.gen(function* () {
             reviewers: [],
             comments: [],
             reviewThreads: [],
+            ...(activity.overviewThreads === undefined ? {} : { overviewThreads: [] }),
             commits: [],
             reactions: [],
           },
@@ -683,8 +684,11 @@ const make = Effect.gen(function* () {
         const reviewers = take(activity.reviewers ?? []);
         const comments = take(activity.comments);
         const reviewThreads = take(activity.reviewThreads);
+        // GitLab's overview threads: absent from other hosts and from older servers.
+        const overviewThreads = take(activity.overviewThreads ?? []);
         const commits = take(activity.commits);
         const reactions = take(activity.reactions ?? []);
+        const hasOverview = activity.overviewThreads !== undefined;
         return {
           ...identityOf(target),
           activity: {
@@ -693,11 +697,13 @@ const make = Effect.gen(function* () {
             ...(activity.reviewers === undefined ? {} : { reviewers: reviewers.kept }),
             comments: comments.kept,
             reviewThreads: reviewThreads.kept,
+            ...(hasOverview ? { overviewThreads: overviewThreads.kept } : {}),
             commits: commits.kept,
             ...(activity.reactions === undefined ? {} : { reactions: reactions.kept }),
           },
           commentsOmitted: comments.omitted,
           reviewThreadsOmitted: reviewThreads.omitted,
+          ...(hasOverview ? { overviewThreadsOmitted: overviewThreads.omitted } : {}),
           commitsOmitted: commits.omitted,
           reviewersOmitted: reviewers.omitted,
           reactionsOmitted: reactions.omitted,
