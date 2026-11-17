@@ -165,6 +165,7 @@ import { useOfflineSnapshotAge } from "../connection/useOfflineSnapshotAge";
 import { threadVisitTracker } from "./threadVisitTracker";
 export type { ThreadDetailScreenProps } from "./ThreadDetailScreenProps";
 import type { ThreadDetailScreenProps } from "./ThreadDetailScreenProps";
+import { useToolCallVisibility } from "../../state/toolCallVisibility";
 const USAGE_LIMITS_PANEL_GAP = 12;
 const USAGE_LIMITS_PANEL_MIN_HEIGHT = 44;
 // Connection failures survive retries and app suspension.
@@ -289,6 +290,7 @@ function ThreadDetailBody(
     threadId: props.selectedThread.id,
   });
   const composerError = useAtomValue(threadComposerErrorsAtom)[selectedThreadKey]?.message ?? null;
+  const toolCallVisibility = useToolCallVisibility();
   const queuedCount = useThreadQueuedCount(props.selectedThreadDetailRef);
   const turnSubagents = useThreadTurnSubagents(props.selectedThreadDetailRef);
   const agentsSegment = resolveSubagentPillSegment(turnSubagents);
@@ -1217,6 +1219,7 @@ function ThreadDetailBody(
           >
             <WorkspaceMutationIdProvider threadRef={props.selectedThreadDetailRef}>
               <ThreadFeed
+                toolCallVisibility={toolCallVisibility}
                 environmentId={props.environmentId}
                 offline={props.connectionStateLabel !== "connected"}
                 threadId={props.selectedThread.id}

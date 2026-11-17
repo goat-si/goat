@@ -7,6 +7,7 @@ import {
 } from "./TimelineListFooter";
 import { useClientSettings } from "../../hooks/useSettings";
 import { useDeferredWorkLoading } from "./useDeferredWorkLoading";
+import { liveAnswerPreview, useTimelineDisplay } from "./MessagesTimeline.toolCallVisibility";
 import { AudioPreviewUnmountContext } from "../files/AudioPreview";
 import type { OpenThreadOptions } from "../../lib/sentFromNavigation";
 import { TimelineHistoryControl } from "./TimelineHistoryControl";
@@ -551,6 +552,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const screenReaderAnnouncements = useClientSettings(
     (settings) => settings.screenReaderAnnouncements,
   );
+  const display = useTimelineDisplay(findActive, citationRequest);
   // Imported turns and post-steer work fold under synthetic keys, not the entries' run ids.
   const findFoldRunIds = findActive
     ? timelineTurnFoldRunIdsByEntryId({
@@ -559,6 +561,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
         runningRunId,
         isWorking,
         runlessWorkActive,
+        ...display,
       })
     : null;
   const activeFindRunId =
@@ -600,6 +603,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
         runningRunId,
         isWorking,
         runlessWorkActive,
+        ...display,
       })
     ).get(citedEntry.id);
     setCitationExpandedFor(citationRequest.key);
@@ -653,6 +657,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     availableRevertTurnCounts,
     worktreeSetup,
     cloudRun,
+    ...display,
   });
   const rows = useStableRows(rawRows, listIdentityKey);
   // Run status/timestamps change per stream event; keep them out of shared row context.
@@ -751,6 +756,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
           runningRunId,
           isWorking,
           runlessWorkActive,
+          ...display,
         })
       ).get(entryId),
     onNavigate: navigateTimeline,
@@ -1091,6 +1097,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
     isPreparingWorktree,
     providerStartingLabel: latestRun?.providerStartingLabel ?? null,
     latestRunId: latestRun?.runId ?? null,
+    liveAnswerPreview:
+      isWorking && display.toolCallVisibility === "zen" ? liveAnswerPreview(timelineEntries) : null,
   };
   // Mounted in both the empty and filled timeline so a thread's first turn
   // starts from a baseline instead of a fresh, silent region.
@@ -1205,6 +1213,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     runningRunId,
     isWorking,
     runlessWorkActive,
+    toolCallVisibility: display.toolCallVisibility,
     rows,
     contentInsetEndAdjustment,
   });

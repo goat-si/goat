@@ -65,6 +65,7 @@ import {
   type ScheduledTaskId,
   type ScopedThreadRef,
 } from "@goat/contracts";
+import type { ToolCallVisibility } from "@goat/contracts/settings";
 import { renderAssistantCitationsAsText } from "@goat/shared/assistantCitations";
 import { encodeComposerContextFragment } from "@goat/shared/composerContextClipboard";
 import { parseThreadLinkHref, resolveThreadLinkRef } from "@goat/shared/threadLinks";
@@ -316,6 +317,7 @@ export interface ThreadFeedHandle {
 }
 
 export interface ThreadFeedProps {
+  readonly toolCallVisibility?: ToolCallVisibility;
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
   readonly setupWorkingStartedAt?: string | null;
   readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
@@ -1896,6 +1898,10 @@ function useThreadFeedPresentation(
       props.activeWorkStartedAt,
       props.runlessWorkActive ?? false,
       feedCache,
+      {
+        toolCallVisibility: props.toolCallVisibility ?? "showAll",
+        revealedMessageId: props.jumpToMessageId ?? null,
+      },
     ),
     props.feed,
     props.queuedMessages,
