@@ -8,6 +8,7 @@ import {
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { environmentPresentations } from "../../state/presentation";
 import { environmentServerConfigsAtom } from "../../state/server";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import { fileAttachmentCapabilityBlockReason } from "./composerAttachmentFiles";
 
 export function readEnvironmentPresentation(environmentId: EnvironmentId) {
@@ -36,4 +37,16 @@ export function liveAttachmentCapabilities(
         config?.environment.capabilities.fileAttachments?.maxUploadBytes ?? null,
     }),
   };
+}
+
+/** Why a multiple-model send needs a new thread in a Git project. */
+export function showMultipleModelsNeedGitThread() {
+  toastManager.add(
+    stackedThreadToast({
+      type: "warning",
+      title: "Choose models and a base branch",
+      description:
+        "Multiple models need a new thread in a Git project. Each gets its own worktree.",
+    }),
+  );
 }

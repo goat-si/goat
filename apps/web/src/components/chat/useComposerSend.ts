@@ -134,6 +134,7 @@ import {
   draftHasNonPromptContent,
   liveAttachmentCapabilities,
   readEnvironmentPresentation,
+  showMultipleModelsNeedGitThread,
 } from "./useComposerSend.helpers";
 import { keepFailedSendInStash } from "./stashFailedSend";
 
@@ -730,14 +731,7 @@ export function useComposerSend(input: ComposerSendInput) {
       return;
     }
     if (multipleModelBlock === "needs-new-git-thread") {
-      toastManager.add(
-        stackedThreadToast({
-          type: "warning",
-          title: "Choose models and a base branch",
-          description:
-            "Multiple models need a new thread in a Git project. Each gets its own worktree.",
-        }),
-      );
+      showMultipleModelsNeedGitThread();
       return;
     }
     const {
