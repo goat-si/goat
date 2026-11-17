@@ -1332,6 +1332,9 @@ const CHAT_MARKDOWN_COMPONENTS = {
                   _tag: "media-file" as const,
                   threadId: threadRef.threadId,
                   path: filePath,
+                  ...(imageSource._tag === "WorkspaceFile" && imageSource.relative
+                    ? { hostOnly: true as const }
+                    : {}),
                 },
                 onOpen: () => useRightPanelStore.getState().openFile(threadRef, filePath),
               }
@@ -1410,6 +1413,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
             _tag: "media-file",
             threadId: threadRef.threadId,
             path: imageSource.path,
+            ...(imageSource.relative ? { hostOnly: true as const } : {}),
           }}
           alt={altText}
           kind={kind}
