@@ -73,6 +73,8 @@ Coordinator to lane coordinator, 2026-11-17 07:55:54 UTC (verbatim):
 4. HOST NOTE for after the merge: the owner asked for nightly, stable, TestFlight and Android releases once #3519 is in dev. The mobile builds (Xcode archive, Gradle) run on juns-MacBook-Pro in a thread I launch when pass C has stopped its simulator, emulator and Metro; keep N12, N15a and N15b off that Mac until I say it is free. The nightly build signs on the Mac Studio runner: X1 on pen-mac-studio is light (reading CI logs, one browser test file), keep it so until the nightly's macOS jobs have finished.
 5. Thread A: done, noted (records 8fa2d4d94d under cdb1cabfd7).
 
+Coordinator to lane coordinator, 2026-11-17 08:44:59 UTC (verbatim): "#3519 IS MERGED. goat-ci-result SUCCESS on d1177ac841 (pull request run 44038808221, every suite green, goat-test included); out of draft; node scripts/merge-pr.ts 3519 merged it at head d1177ac841 at 08:43:14 UTC. THE SQUASH COMMIT ON DEV: S = 3ecea04f193e48fac0685a718f6ae782f74911aa ("chore(chase): upstream catch-up cycle 261114, second PR (remaining #3176 ports) (#3519)"), dev's tip."
+
 ## Appendix: 85 carried #3176 rows outside next-pr-plan.md (verdict needed)
 
 - `479ee74135` persists PR metadata in drafts: changes draft normalization used by the persisted-state migration (`apps/web/src/composerDraftStore.ts:2084`, `:2242`).
