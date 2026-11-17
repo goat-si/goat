@@ -18,6 +18,7 @@ import {
 import type { Dialog } from "playwright-core";
 
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
+import type { RestoredProfiles, SavedProfileCatalog } from "./SavedBrowserProfiles.ts";
 
 /** What a new agent tab opens with: isolated, or one persistent profile. */
 export type RequestedSession =
@@ -29,14 +30,32 @@ const refuse = (tag: string, message: string) =>
 
 const describe = (profile: BrowserProfile) => profile.name + " (id " + profile.id + ")";
 
+const resolveCatalog = (catalog: SavedProfileCatalog): SavedProfileCatalog => {
+  const profiles = resolveBrowserProfiles(catalog.profiles);
+  return {
+    profiles,
+    defaultProfileId:
+      findBrowserProfile(profiles, catalog.defaultProfileId)?.id ?? DEFAULT_BROWSER_PROFILE_ID,
+  };
+};
+
 export class SessionProfiles {
-  private reported: {
-    readonly profiles: ReadonlyArray<BrowserProfile>;
-    readonly defaultProfileId: string;
-  } | null = null;
+  private reported: SavedProfileCatalog | null;
+  /** The saved catalog could not be read at startup; cleared by the next report. */
+  private savedUnreadable: boolean;
 
   private readonly byClient = new Map<number, PreviewReportProfilesInput>();
   private nextClient = 0;
+
+  constructor(restored: RestoredProfiles = { _tag: "None" }) {
+    this.reported = restored._tag === "Restored" ? resolveCatalog(restored.catalog) : null;
+    this.savedUnreadable = restored._tag === "Unreadable";
+  }
+
+  /** The catalog to save after a report. */
+  get catalog() {
+    return this.reported;
+  }
 
   connect() {
     return this.nextClient++;
@@ -50,6 +69,7 @@ export class SessionProfiles {
   report(client: number, input: PreviewReportProfilesInput) {
     this.byClient.delete(client);
     this.byClient.set(client, input);
+    this.savedUnreadable = false;
     this.rebuild();
   }
 
@@ -63,12 +83,10 @@ export class SessionProfiles {
       latest = report;
     }
     if (latest === undefined) return;
-    const profiles = resolveBrowserProfiles([...byId.values()]);
-    this.reported = {
-      profiles,
-      defaultProfileId:
-        findBrowserProfile(profiles, latest.defaultProfileId)?.id ?? DEFAULT_BROWSER_PROFILE_ID,
-    };
+    this.reported = resolveCatalog({
+      profiles: [...byId.values()],
+      defaultProfileId: latest.defaultProfileId,
+    });
   }
 
   private get profiles() {
@@ -83,6 +101,7 @@ export class SessionProfiles {
         ...(profile.kind === "incognito" ? { incognito: true } : {}),
       })),
       ...(this.reported ? { defaultProfileId: this.reported.defaultProfileId } : {}),
+      ...(this.savedUnreadable ? { savedProfilesUnreadable: true as const } : {}),
     };
   }
 

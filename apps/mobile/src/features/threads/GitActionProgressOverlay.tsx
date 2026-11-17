@@ -65,7 +65,10 @@ export function GitActionProgressOverlay(props: {
       className="absolute inset-x-3 z-[100]"
       style={{ top }}
       pointerEvents="box-none"
-      onAccessibilityEscape={onDismiss}
+      // Only a finished action's banner is the shown result; escaping a running one must not clear another thread's.
+      onAccessibilityEscape={
+        progress.phase === "success" || progress.phase === "error" ? onDismiss : undefined
+      }
     >
       <Toast
         singleLine
@@ -80,6 +83,8 @@ export function GitActionProgressOverlay(props: {
         }
         busy={progress.phase === "running"}
         action={openLabel ? { label: openLabel, onPress: handlePress } : undefined}
+        // A failure stays until dismissed, so its banner shows the close button.
+        onDismiss={progress.phase === "error" ? onDismiss : undefined}
       />
     </Animated.View>
   );

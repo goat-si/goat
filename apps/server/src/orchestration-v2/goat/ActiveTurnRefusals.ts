@@ -1,3 +1,7 @@
+import type { OrchestrationV2ThreadProjection } from "@goat/contracts";
+
+import { isBlockingRun } from "./OrchestratorRunState.ts";
+
 /** Agent- and client-visible: why a selection change waits for the running turn. */
 const PROVIDER_SELECTION_BUSY =
   "This thread has a turn running, and this provider change would end it. Wait for the turn to finish, or press Stop, then try again.";
@@ -5,6 +9,10 @@ const PROVIDER_SELECTION_BUSY =
 /** Agent- and client-visible: why a worktree change waits for the running turn. */
 const WORKTREE_CHANGE_BUSY =
   "This thread has a turn running, and moving it to another worktree would end it. Wait for the turn to finish, or press Stop, then try again.";
+
+/** Agent- and client-visible: why a permission mode change waits for the running turn. */
+const RUNTIME_MODE_BUSY =
+  "This thread has a turn running, and changing its permission mode would end it. Wait for the turn to finish, or press Stop first.";
 
 /**
  * The refusal for a change during an active run, or undefined when it ends no turn. Only releasing
@@ -20,11 +28,40 @@ export function activeTurnRefusal(input: {
   };
   readonly threadWorktreePath: string | null;
   readonly releasesLiveSession: boolean;
-}): string | undefined {
+}): { readonly cause: string; readonly refusal: "active_turn" } | undefined {
+  const cause = refusalText(input);
+  return cause === undefined ? undefined : { cause, refusal: "active_turn" };
+}
+
+/**
+ * A refusal means "not now": it commits no rejected receipt, so a retry with the same command id
+ * (the phone's outbox sends one per message) is decided again once the turn has ended.
+ */
+export const isActiveTurnRefusal = (error: {
+  readonly _tag: string;
+  readonly refusal?: "active_turn" | undefined;
+}): boolean => error._tag === "OrchestratorDispatchError" && error.refusal === "active_turn";
+
+/** Whether the refused change ends a blocking run: a mode change matches by the run's instance. */
+export function endsTurn(
+  commandType: string,
+  runs: OrchestrationV2ThreadProjection["runs"],
+  released: OrchestrationV2ThreadProjection["providerSessions"],
+): boolean {
+  const blocking = runs.filter(isBlockingRun);
+  if (commandType !== "thread.runtime-mode.set") return blocking.length > 0;
+  return blocking.some((run) =>
+    released.some((session) => session.providerInstanceId === run.providerInstanceId),
+  );
+}
+
+function refusalText(input: Parameters<typeof activeTurnRefusal>[0]): string | undefined {
   const { command } = input;
   if (!input.releasesLiveSession) return undefined;
   if (command.type === "thread.model-selection.set" || command.type === "provider.switch")
     return PROVIDER_SELECTION_BUSY;
+  // Only providers that cannot switch modes inside a session release one for a mode change.
+  if (command.type === "thread.runtime-mode.set") return RUNTIME_MODE_BUSY;
   if (
     command.type === "thread.metadata.update" &&
     command.worktreePath !== undefined &&

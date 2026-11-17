@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Scheduler from "effect/Scheduler";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as ServerConfig from "../config.ts";
@@ -134,6 +135,62 @@ it.effect("a call that starts after its session was removed is cut at once witho
     expect(outcome).toEqual(Option.none());
     expect(ran).toBe(false);
   }).pipe(Effect.provide(layerStore)),
+);
+
+it.effect(
+  "a call that starts after its session was removed never runs, wherever the caller's scheduler turn ends",
+  () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore.SessionStore;
+      const issued = yield* store.issue(mcpClient);
+      const end = (yield* store.admitMcpCall(issued.token, MAIN_LISTENER)).sessionEnd;
+      yield* store.revoke(issued.sessionId);
+      const budgets = Array.from({ length: 63 }, (_, index) => index + 2);
+      // A turn that ends between the fork and the mark's read starts the call first.
+      const seen = yield* Effect.forEach(budgets, (budget) => {
+        let ran = false;
+        return end
+          .run(
+            Effect.sync(() => {
+              ran = true;
+            }),
+          )
+          .pipe(
+            Effect.provideService(Scheduler.MaxOpsBeforeYield, budget),
+            Effect.map((outcome) => ({ budget, ran, outcome })),
+          );
+      });
+      expect(seen).toEqual(
+        budgets.map((budget) => ({ budget, ran: false, outcome: Option.none() })),
+      );
+    }).pipe(Effect.provide(layerStore)),
+);
+
+it.effect(
+  "a revoke after a call finished keeps its result; a call that revokes its own session stops there",
+  () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore.SessionStore;
+      const finished = yield* store.issue(mcpClient);
+      const finishedEnd = (yield* store.admitMcpCall(finished.token, MAIN_LISTENER)).sessionEnd;
+      const result = yield* finishedEnd.run(Effect.succeed("done"));
+      yield* store.revoke(finished.sessionId);
+      expect(result).toEqual(Option.some("done"));
+
+      const own = yield* store.issue(mcpClient);
+      const ownEnd = (yield* store.admitMcpCall(own.token, MAIN_LISTENER)).sessionEnd;
+      let after = false;
+      const outcome = yield* ownEnd.run(
+        store.revoke(own.sessionId).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              after = true;
+            }),
+          ),
+        ),
+      );
+      expect({ outcome, after }).toEqual({ outcome: Option.none(), after: false });
+    }).pipe(Effect.provide(layerStore)),
 );
 
 it.effect("expiry never cuts a call: one running past its session's expiry runs to its end", () =>

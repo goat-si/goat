@@ -7,6 +7,7 @@ import { SidebarInset } from "../components/ui/sidebar";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { retainThreadFindForRoute } from "../components/chat/threadFindStore";
 import { ThreadLinkPrompt } from "../components/promptLinks/ThreadLinkPrompt";
+import { SideChatCitationReveal } from "../lib/assistantCitationNavigation";
 import { usePrimaryEnvironmentId } from "../state/environments";
 import { useShownThreadRouteTarget } from "../hooks/useShownThreadRouteTarget";
 
@@ -25,6 +26,9 @@ function ChatRouteLayout() {
       {shownTarget?.kind === "server" && !modalOpen ? (
         <ThreadLinkPrompt threadRef={shownTarget.threadRef} />
       ) : null}
+      <SideChatCitationReveal
+        threadRef={shownTarget?.kind === "server" && !modalOpen ? shownTarget.threadRef : null}
+      />
       {shownTarget ? (
         <ThreadRouteView target={shownTarget} background={modalOpen} />
       ) : modalOpen ? (

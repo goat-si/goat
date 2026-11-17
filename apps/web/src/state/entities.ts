@@ -353,6 +353,14 @@ export function useEnvironmentSupportsServerBrowser(environmentId: EnvironmentId
   );
 }
 
+/** Server browser viewers can stop a loading page; older servers ignore the request. */
+export function useEnvironmentSupportsServerBrowserStop(environmentId: EnvironmentId): boolean {
+  return (
+    useServerConfigs().get(environmentId)?.environment.capabilities.serverBrowserStopLoading ===
+    true
+  );
+}
+
 export function readEnvironmentSupportsServerBrowser(environmentId: EnvironmentId): boolean {
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities

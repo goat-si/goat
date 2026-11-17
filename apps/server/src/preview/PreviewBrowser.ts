@@ -25,66 +25,66 @@ import { openZipArchive } from "../zipArchive.ts";
 // https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json
 // Never pin below 156.0.8078.70: the shell has no CRLSet and older SPKI blocklists trust
 // compromised eMudhra intermediates (crrev.com/c/8627687).
-const VERSION = "157.0.8103.38";
-const CHROME_VERSION = "157.0.8103.38";
+const VERSION = "157.0.8103.78";
+const CHROME_VERSION = "157.0.8103.78";
 export type PreviewBrowserVariant = "headless-shell" | "chrome";
 
 const ARCHIVES = {
   linux64: {
-    bytes: 128_168_542,
-    sha256: "deafffa74660b34853a4119c361fd427ac8c9fcb62db51ddb8a797cd83a4ba2d",
+    bytes: 127_965_683,
+    sha256: "f90329720fb61e5a76da9b6b509b6ad12a484c9c5df0359403e935177c6d153a",
   },
   "linux-arm64": {
-    bytes: 128_171_139,
-    sha256: "b9b910a57b2a15eb3e55000a2339f93a973934a413ebfc6e585a50ec6c42fd6c",
+    bytes: 128_047_138,
+    sha256: "912fbf877e53de34d7b3cca5104f3b95607d41bd35412ccc6cd2a599ff0c0dbf",
   },
   "mac-arm64": {
-    bytes: 104_773_711,
-    sha256: "e6a6b13551aa12f951d0891d79282606b13742837c8fa0505e1272bae116ce82",
+    bytes: 104_822_985,
+    sha256: "17bf66d53c1b1104dcb641c5b331cd4ac5d200c778f5feed0934a0b92deaf8d6",
   },
   "mac-x64": {
-    bytes: 110_442_262,
-    sha256: "79821745d0a72d2ba752d981284ed0a9e6fa320dad133596941a17dba6186de3",
+    bytes: 110_132_547,
+    sha256: "f1a6a9561eaf1f409849538de663695d36d72fbf1ebca4d42e47c7b5f2a157f3",
   },
   win32: {
-    bytes: 120_390_416,
-    sha256: "35e0d45c0136448f7b587f6fb7195a0686127a4dfdc23ef3b0e04b5e9ffe16cd",
+    bytes: 120_403_126,
+    sha256: "d9829c59dcc79d9e6e920f8ab841f2a9a055dcf54229d756ac0b42dfec303910",
   },
   win64: {
-    bytes: 126_513_060,
-    sha256: "1ff4540855478ba0848e03f1ef8d455f77d058b38285df91bc34273788a73446",
+    bytes: 126_047_001,
+    sha256: "2138c1583d25d6f3abec5269943b2f430207d87a539895aa9e90cc4697ec0e1f",
   },
 } as const;
 
 const CHROME_ARCHIVES = {
   linux64: {
-    bytes: 203_502_190,
-    sha256: "8cdeb344e9b2cefe59f4aea8d1d93d5d93054c03cde217665c16fc1f62e72a66",
+    bytes: 203_266_906,
+    sha256: "9223832977a13db3646201b1341c1f9cf08afa3ceae92540116d7b0c062364fb",
     executablePath: "chrome",
   },
   "linux-arm64": {
-    bytes: 203_276_965,
-    sha256: "5517510e61657ff43ee9ab804ecd1a499b3d5bd3caf72f097516bd6565ba5a17",
+    bytes: 203_144_198,
+    sha256: "f354d666822a11d8fe99e923c44be77dd226fab2750c5b5947e6318818bf10f1",
     executablePath: "chrome",
   },
   "mac-arm64": {
-    bytes: 196_562_867,
-    sha256: "3406b38b52b7d341d74450eb7b369be038c9fec9894c8b8a9e9e9f97333caf2f",
+    bytes: 196_634_479,
+    sha256: "bf3b49d0fe62a62397e98641aa736ef813c46014f03ec13d4913442e6966c7fc",
     executablePath: "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
   },
   "mac-x64": {
-    bytes: 207_117_913,
-    sha256: "c6fcc2869b0d5a421e880d7bcdabe96e4261c4100e125fc4e4daf6346474efa6",
+    bytes: 207_246_731,
+    sha256: "8f9590a4e011ba4ea135f50c711f8bf2c7f32b1fac20de68d1b85f010f095ab3",
     executablePath: "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
   },
   win32: {
-    bytes: 190_957_520,
-    sha256: "be61f767e50b6d94586710afa138535306084b438d9e30bee600a538e16a278a",
+    bytes: 190_974_375,
+    sha256: "313261468c4b205198778b112c9ac6e44dff0ff501085b0f9336d7feae2b3715",
     executablePath: "chrome.exe",
   },
   win64: {
-    bytes: 210_600_182,
-    sha256: "ae0deef27d449e1d7529df7705d609bab102de48464da13567ed3dd2ee1a0586",
+    bytes: 209_854_321,
+    sha256: "5f6ec40206407112702e163bf694d07f9fdc8ccbd346c70ce61fa62f716493f9",
     executablePath: "chrome.exe",
   },
 } as const;

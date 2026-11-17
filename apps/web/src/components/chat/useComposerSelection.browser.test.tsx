@@ -36,7 +36,8 @@ vi.mock(import("../../state/threads"), async (original) => {
 });
 
 import { render } from "../../../test/render";
-import { deriveEffectiveComposerModelState, useComposerDraftStore } from "../../composerDraftStore";
+import { useComposerDraftStore } from "../../composerDraftStore";
+import { deriveEffectiveComposerModelState } from "../../composerModelState";
 import { AppAtomRegistryProvider, appAtomRegistry } from "../../rpc/atomRegistry";
 import { useComposerSelection } from "./useComposerSelection";
 

@@ -11,7 +11,7 @@ import {
   HardDriveIcon,
   MemoryStickIcon,
 } from "~/components/solar";
-import { ChevronDown, ChevronRight } from "~/components/solar/nodes";
+import { ChevronDownIcon, ChevronRightIcon } from "~/components/solar";
 import type {
   BackgroundBooleanState,
   EnvironmentId,
@@ -28,6 +28,7 @@ import type {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
+import { categoryLabel } from "./resourceTelemetryLabels";
 import { RegistryContext } from "@effect/atom-react";
 import { useContext, useRef, useState, type ReactNode } from "react";
 import {
@@ -47,7 +48,6 @@ import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useRelativeTimeState } from "../../hooks/useRelativeTimeState";
 import { Button } from "../ui/button";
-import { MorphIcon } from "~/components/MorphIcon";
 import { ScrollArea } from "../ui/scroll-area";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -106,31 +106,6 @@ function formatProcessName(process: Pick<ResourceTelemetryProcess, "command" | "
   const firstToken = process.command.trim().split(/\s+/)[0] ?? process.command;
   const normalized = firstToken.replace(/^['"]|['"]$/g, "");
   return normalized.split(/[\\/]/).findLast((segment) => segment.length > 0) ?? normalized;
-}
-
-function categoryLabel(category: ResourceTelemetryProcessCategory): string {
-  switch (category) {
-    case "server":
-      return "Server";
-    case "server-child":
-      return "Backend child";
-    case "provider-root":
-      return "Provider";
-    case "terminal-root":
-      return "Terminal";
-    case "electron-main":
-      return "Electron main";
-    case "electron-renderer":
-      return "Renderer";
-    case "electron-gpu":
-      return "GPU";
-    case "electron-utility":
-      return "Electron utility";
-    case "resource-monitor":
-      return "Monitor";
-    case "unknown-t3":
-      return "GOAT process";
-  }
 }
 
 function categoryDotClass(category: ResourceTelemetryProcessCategory): string {
@@ -484,7 +459,11 @@ function ProcessTreeName({
           onClick={() => onToggle(process)}
           aria-label={collapsed ? `Expand ${name}` : `Collapse ${name}`}
         >
-          <MorphIcon className="size-3.5" icon={collapsed ? ChevronRight : ChevronDown} />
+          {collapsed ? (
+            <ChevronRightIcon className="size-3.5" />
+          ) : (
+            <ChevronDownIcon className="size-3.5" />
+          )}
         </Button>
       ) : (
         <span className="size-5" aria-hidden />

@@ -2,12 +2,7 @@ import { isSideChatThread } from "@goat/contracts";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import type { ScopedThreadRef } from "@goat/contracts";
 
-/** `/side` or `/side <question>` sent from a thread's composer. */
-export function parseSideChatCommand(text: string): { readonly prompt: string } | null {
-  const match = /^\/side(?:\s+([\s\S]*))?$/i.exec(text.trim());
-  if (!match) return null;
-  return { prompt: match[1]?.trim() ?? "" };
-}
+export { parseSideChatCommand } from "@goat/client-runtime/state/unsent-question-answers";
 
 /**
  * The side chat a thread shows: its newest live one. Clearing a side chat deletes it, so

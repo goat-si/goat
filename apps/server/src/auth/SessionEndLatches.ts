@@ -53,7 +53,11 @@ export const make = () => {
       run: Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
         return yield* Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
-            const fiber = yield* Effect.forkChild(effect);
+            // The mark is read again when the call starts: a turn that ends right after the fork
+            // starts the child before this fiber reads the mark below.
+            const fiber = yield* Effect.forkChild(
+              Effect.suspend(() => (admission.removed ? Effect.interrupt : effect)),
+            );
             // Added before the mark is read: a removal either finds this call or already marked it.
             admission.calls.add(fiber);
             return yield* Effect.gen(function* () {

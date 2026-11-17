@@ -17,6 +17,7 @@ import { CommandId, MessageId } from "@goat/contracts";
 import {
   mcpAppAllowAttribute,
   mcpAppFileName,
+  mcpAppFrameUrl,
   mcpAppReferencesEqual,
   type McpAppReference,
 } from "@goat/shared/mcpApp";
@@ -168,7 +169,7 @@ export function ThreadMcpApp(props: {
     [app],
   );
   const asset = useAssetUrlState(props.environmentId, resource);
-  if (uri === null && asset._tag === "Success") setUri(asset.url);
+  if (uri === null && asset._tag === "Success") setUri(mcpAppFrameUrl(asset.url, theme.appearance));
   const [generation, setGeneration] = useState(0);
   const [crashed, setCrashed] = useState(false);
   const restart = () => {

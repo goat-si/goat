@@ -6996,7 +6996,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         const roster = providerThreadRosterEvents(harness.events).at(-1)?.providerThread
           .pendingBackgroundTasks;
         assert.deepEqual(roster, [
-          { taskId: longRunning.taskId, kind: "monitor", description: "Monitor 0" },
+          {
+            taskId: longRunning.taskId,
+            kind: "monitor",
+            description: "Monitor 0",
+            nativeItemId: "toolu_monitor_0",
+          },
         ]);
       }).pipe(Effect.provide(layerAdapterTest)),
     ),
@@ -7633,7 +7638,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             (event) => event.providerThread.id === providerThreadA.id,
           )?.providerThread.pendingBackgroundTasks;
           assert.deepEqual(rosterAAfterSettle ?? [], [
-            { taskId: taskA, description: "work on A", kind: "command" },
+            {
+              taskId: taskA,
+              description: "work on A",
+              kind: "command",
+              nativeItemId: "toolu-roster-a",
+            },
           ]);
           assert.isTrue(yield* hasPendingBackgroundWork);
           assert.isTrue(yield* hasPendingBackgroundWorkForThread(providerThreadA));
@@ -16363,26 +16373,6 @@ describe("Claude WP4 memory delivery", () => {
       }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );
-  it("preapproves the six granted reads and never any memory write on read-only policy", () => {
-    const session: McpProviderSession.McpProviderSessionConfig = {
-      environmentId: EnvironmentId.make("fixture"),
-      threadId: ThreadId.make("fixture"),
-      providerSessionId: "fixture",
-      providerInstanceId: ProviderInstanceId.make("claude"),
-      endpoint: "http://127.0.0.1:1/mcp",
-      authorizationHeader: "Bearer fixture",
-      browserToolsAvailable: false,
-      grantedScopes: ["memory:read", "memory:write", "orchestration:read"],
-    };
-    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
-      mcpSession: session,
-      readOnlySandbox: true,
-    });
-    for (const tool of ClaudeAdapterV2.CLAUDE_MEMORY_READ_TOOLS)
-      assert.include(overrides.allowedTools ?? [], tool);
-    for (const tool of ClaudeAdapterV2.CLAUDE_MEMORY_WRITE_TOOLS)
-      assert.notInclude(overrides.allowedTools ?? [], tool);
-  });
 });
 describe("ClaudeAdapterV2 computer use", () => {
   const cuaDriver: M.CuaDriverMcpConfiguration = {

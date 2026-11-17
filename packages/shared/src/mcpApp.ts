@@ -9,6 +9,18 @@ export const MCP_APP_OUTPUT_KEY = GOAT_MCP_APP_OUTPUT_KEY;
 /** Frame URL query parameter carrying the host's color scheme before `ui/initialize`. */
 export const MCP_APP_COLOR_SCHEME_PARAM = "goat-color-scheme";
 
+/**
+ * The URL a client loads an MCP App from: the app paints before `ui/initialize`, so it reads
+ * the initial scheme from here. Plain string work, since React Native's URL cannot set params.
+ */
+export function mcpAppFrameUrl(assetUrl: string, appearance: "light" | "dark"): string {
+  const hashAt = assetUrl.indexOf("#");
+  const base = hashAt === -1 ? assetUrl : assetUrl.slice(0, hashAt);
+  const hash = hashAt === -1 ? "" : assetUrl.slice(hashAt);
+  const separator = base.includes("?") ? "&" : "?";
+  return `${base}${separator}${MCP_APP_COLOR_SCHEME_PARAM}=${appearance}${hash}`;
+}
+
 const MCP_APP_MIN_HEIGHT = 80;
 export const MCP_APP_DEFAULT_HEIGHT = 320;
 export const MCP_APP_MAX_HEIGHT = 2000;

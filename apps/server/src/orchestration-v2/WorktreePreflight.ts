@@ -25,6 +25,30 @@ export class ThreadLaunchBaseRefError extends Schema.TaggedError<ThreadLaunchBas
   }
 }
 
+export class ThreadLaunchNotRepositoryError extends Schema.TaggedError<ThreadLaunchNotRepositoryError>()(
+  "ThreadLaunchNotRepositoryError",
+  {
+    projectId: ProjectId,
+    projectTitle: Schema.String,
+    workspaceRoot: Schema.String,
+    /** Why Git could not say; set when detection itself failed. */
+    checkFailed: Schema.optional(Schema.String),
+  },
+) {
+  override get message(): string {
+    const project = `project "${this.projectTitle}" (${this.workspaceRoot})`;
+    return this.checkFailed === undefined
+      ? `Project "${this.projectTitle}" (${this.workspaceRoot}) is not a Git repository.`
+      : `GOAT could not check whether ${project} is a Git repository (${this.checkFailed}).`;
+  }
+}
+
+export type WorktreePreflightError =
+  | ThreadLaunchBaseRefError
+  | ThreadLaunchBranchError
+  | ThreadLaunchBranchConflictError
+  | ThreadLaunchNotRepositoryError;
+
 export class ThreadLaunchBranchConflictError extends Schema.TaggedError<ThreadLaunchBranchConflictError>()(
   "ThreadLaunchBranchConflictError",
   {
@@ -80,6 +104,22 @@ export function makeWorktreePreflight({
         .getByCommandId(input.commandId)
         .pipe(Effect.orElseSucceed(() => Option.none()));
       if (Option.isSome(receipt) && receipt.value.status === "accepted") return;
+    }
+    // Upstream lets a failed detection through to preparation; GOAT refuses a folder it could not check.
+    const repository = Option.getOrUndefined(
+      yield* projects.getById(input.projectId).pipe(Effect.orElseSucceed(() => Option.none())),
+    );
+    if (repository !== undefined) {
+      const root = yield* git.repositoryRoot(repository.workspaceRoot).pipe(Effect.result);
+      if (root._tag === "Failure" || root.success === null)
+        return yield* new ThreadLaunchNotRepositoryError({
+          projectId: repository.id,
+          projectTitle: repository.title,
+          workspaceRoot: repository.workspaceRoot,
+          ...(root._tag === "Failure"
+            ? { checkFailed: root.failure.message.split("\n")[0] ?? "" }
+            : {}),
+        });
     }
     const { branch } = strategy;
     if (branch !== undefined && !isTemporaryWorktreeBranch(branch)) {

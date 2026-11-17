@@ -29,6 +29,31 @@ it("commits a dismissal when the thread switches during the exit transition", as
   await vi.waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
 });
 
+it("shows a dismissed notice again when the same notice comes back", async () => {
+  const onDismiss = vi.fn();
+  const item: ComposerBannerStackItem = {
+    id: "reply-to",
+    variant: "default",
+    icon: <InfoIcon />,
+    title: "Replying to",
+    dismissLabel: "Cancel reply",
+    onDismiss,
+  };
+  await using screen = await render(<ComposerBannerStack items={[item]} />);
+
+  await userEvent.click(screen.getByRole("button", { name: "Cancel reply" }));
+  await vi.waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+  await screen.rerender(<ComposerBannerStack items={[]} />);
+  await screen.rerender(<ComposerBannerStack items={[{ ...item }]} />);
+
+  // The exit transition hides a notice by opacity alone, so check what a person sees.
+  await expect.element(screen.getByText("Replying to")).toBeVisible();
+  const notice = screen.getByText("Replying to").element();
+  await vi.waitFor(() =>
+    expect(notice.closest("[data-composer-banner-drawer] > div")).toHaveStyle({ opacity: "1" }),
+  );
+});
+
 function noticeRow(width: string, children: ReactNode) {
   return (
     <div data-testid="row" className="flex items-center gap-1.5" style={{ width }}>

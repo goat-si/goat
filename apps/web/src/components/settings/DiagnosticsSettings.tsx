@@ -11,12 +11,13 @@ import {
   FolderOpenIcon,
   InfoIcon,
 } from "~/components/solar";
-import { ChevronDown, ChevronRight } from "~/components/solar/nodes";
+import { ChevronDownIcon, ChevronRightIcon } from "~/components/solar";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import { useRef, useState, type ReactNode } from "react";
+import { StatsGrid } from "./DiagnosticsStatsGrid";
 import type {
   ServerProcessDiagnosticsEntry,
   ServerProcessResourceHistorySummary,
@@ -34,7 +35,6 @@ import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { Button } from "../ui/button";
-import { MorphIcon } from "~/components/MorphIcon";
 import { ScrollArea } from "../ui/scroll-area";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -113,30 +113,6 @@ function StatBlock({
       >
         {value}
       </div>
-    </div>
-  );
-}
-
-function StatsGrid({ children }: { children: ReactNode }) {
-  return (
-    <div className="relative grid grid-cols-2 sm:grid-cols-4">
-      <span
-        className="pointer-events-none absolute inset-y-0 left-1/2 w-px bg-border/60"
-        aria-hidden
-      />
-      <span
-        className="pointer-events-none absolute inset-x-0 top-1/2 h-px bg-border/60 sm:hidden"
-        aria-hidden
-      />
-      <span
-        className="pointer-events-none absolute inset-y-0 left-1/4 hidden w-px bg-border/60 sm:block"
-        aria-hidden
-      />
-      <span
-        className="pointer-events-none absolute inset-y-0 left-3/4 hidden w-px bg-border/60 sm:block"
-        aria-hidden
-      />
-      {children}
     </div>
   );
 }
@@ -272,7 +248,11 @@ function ProcessNameCell({
           aria-label={isExpanded ? `Collapse ${name}` : `Expand ${name}`}
           onClick={() => onToggle(process.pid)}
         >
-          <MorphIcon className="size-3.5" icon={isExpanded ? ChevronDown : ChevronRight} />
+          {isExpanded ? (
+            <ChevronDownIcon className="size-3.5" />
+          ) : (
+            <ChevronRightIcon className="size-3.5" />
+          )}
         </Button>
       ) : (
         <span className="size-5 shrink-0" aria-hidden="true" />

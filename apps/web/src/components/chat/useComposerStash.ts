@@ -60,6 +60,7 @@ import {
 import { BackgroundThreadContext } from "./backgroundThread";
 import { encodeImagesForStash, reportStashedImages } from "./stashFailedSend";
 import { useStableCallback } from "../../hooks/useStableCallback";
+import { restoreStashedReply } from "./composerReply";
 
 /**
  * The prompt stash: saving the draft aside, restoring or deleting an entry, the badge pulse,
@@ -123,6 +124,7 @@ export function useComposerStash(input: {
   } = input;
   const getComposerDraft = useComposerDraftStore((store) => store.getComposerDraft);
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
+  const setComposerDraftReplyTo = useComposerDraftStore((store) => store.setReplyTo);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const addComposerDraftFiles = useComposerDraftStore((store) => store.addFiles);
   const removeComposerDraftPreviewAnnotation = useComposerDraftStore(
@@ -204,6 +206,7 @@ export function useComposerStash(input: {
     const rewrittenContextIds = entry.records
       ? importContextRecords(entry.records, null, composerDraftTarget)
       : new Map<string, string>();
+    restoreStashedReply(entry.records ?? [], composerDraftTarget);
     const restoredPrompt = replaceComposerContextReferences(entry.prompt, (reference) => {
       const contextId = rewrittenContextIds.get(reference.contextId);
       return contextId
@@ -460,7 +463,9 @@ export function useComposerStash(input: {
     const attachmentDraft = readAttachmentDraft();
     const images = [...attachmentDraft.images];
     const files = [...attachmentDraft.files];
+    const replyTo = getComposerDraft(composerDraftTarget)?.replyTo;
     const stashedRecords: ComposerContextRecord[] = [
+      ...(replyTo ? [replyTo] : []),
       ...composerThreadContexts,
       ...readTerminalContexts().map(terminalContextRecord),
       ...composerReviewComments.map(reviewCommentContextRecord),
@@ -565,6 +570,7 @@ export function useComposerStash(input: {
       clearComposerDraftPromptAndImages(stashTarget);
       clearComposerDraftTerminalContexts(stashTarget);
       setComposerDraftThreadContexts(stashTarget, []);
+      setComposerDraftReplyTo(stashTarget, null);
       for (const comment of composerReviewComments) {
         removeComposerDraftReviewComment(stashTarget, comment.id);
       }

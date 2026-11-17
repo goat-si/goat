@@ -5,7 +5,6 @@ export { worktreeSetupAgentStarted } from "@goat/client-runtime/worktree-setup";
 import { isLiveSubagentTurnItem } from "@goat/client-runtime/state/subagentRuntime";
 import * as DateTime from "effect/DateTime";
 import * as Equal from "effect/Equal";
-import { assistantCitationLabel, collectAssistantCitations } from "@goat/shared/assistantCitations";
 import { shallow } from "zustand/vanilla/shallow";
 import { claudeResumeCompactionAge } from "@goat/shared/claudeCompaction";
 import { IDLE_COMPACTING_LABELS, IDLE_COMPACTION_TITLES } from "@goat/client-runtime/user-message";
@@ -26,6 +25,7 @@ import {
   toolGroupSummaryKind,
   workEntryCommandActions,
   contextCompactionTokenCounts,
+  workEntriesViewedImagePaths,
   type ToolGroupSummaryKind,
 } from "@goat/client-runtime/work-log/presentation";
 export { toolGroupAction } from "@goat/client-runtime/work-log/presentation";
@@ -40,6 +40,7 @@ import {
   type TimelineEntry,
   type WorkLogEntry,
 } from "../../session-logic";
+import { deriveTerminalAssistantMessageIds } from "./terminalAssistantMessages";
 import {
   type ChatMessage,
   type ProposedPlan,
@@ -578,6 +579,13 @@ type MessagesTimelineRowContent =
       lineCounts?: WorkLogLineCounts;
     }
   | {
+      /** Images the agent opened in the tool group above, kept visible while the group is collapsed. */
+      kind: "viewed-images";
+      id: string;
+      createdAt: string;
+      paths: ReadonlyArray<string>;
+    }
+  | {
       kind: "turn-fold";
       deferredWorkItemIds?: ReadonlyArray<string>;
       id: string;
@@ -712,6 +720,17 @@ function expandedWorkGroupRow(
   };
 }
 
+function viewedImagesRows(
+  groupId: string,
+  createdAt: string,
+  groupedEntries: ReadonlyArray<WorkLogEntry>,
+): Array<Extract<MessagesTimelineRow, { kind: "viewed-images" }>> {
+  const paths = workEntriesViewedImagePaths(groupedEntries);
+  return paths.length === 0
+    ? []
+    : [{ kind: "viewed-images", id: `${groupId}:viewed-images`, createdAt, paths }];
+}
+
 export function resolveAssistantMessageCopyState({
   text,
   showCopyButton,
@@ -727,32 +746,6 @@ export function resolveAssistantMessageCopyState({
     text: hasText ? (visible ? renderCodexDirectivesForCopy(text) : text) : null,
     visible,
   };
-}
-
-function deriveTerminalAssistantMessageIds(timelineEntries: ReadonlyArray<TimelineEntry>) {
-  const lastAssistantMessageIdByResponseKey = new Map<string, string>();
-  let nullTurnResponseIndex = 0;
-
-  for (const timelineEntry of timelineEntries) {
-    if (timelineEntry.kind !== "message") {
-      continue;
-    }
-    const { message } = timelineEntry;
-    if (message.role === "user") {
-      nullTurnResponseIndex += 1;
-      continue;
-    }
-    if (message.role !== "assistant") {
-      continue;
-    }
-
-    const responseKey = message.runId
-      ? `turn:${message.runId}`
-      : `unkeyed:${nullTurnResponseIndex}`;
-    lastAssistantMessageIdByResponseKey.set(responseKey, message.id);
-  }
-
-  return new Set(lastAssistantMessageIdByResponseKey.values());
 }
 
 interface TurnFold {
@@ -1695,9 +1688,17 @@ export function deriveMessagesTimelineRows(input: {
     if (activeWorkRow === null) return;
     nextRows.push(activeWorkRow);
     hasActivityRow ||= activeWorkRow.active;
-    if (!activeWorkRow.expanded) return;
+    if (activeWorkRow.expanded) {
+      nextRows.push(
+        expandedWorkGroupRow(
+          activeWorkRow.groupId,
+          activeWorkRow.createdAt,
+          activeWorkRow.groupedEntries,
+        ),
+      );
+    }
     nextRows.push(
-      expandedWorkGroupRow(
+      ...viewedImagesRows(
         activeWorkRow.groupId,
         activeWorkRow.createdAt,
         activeWorkRow.groupedEntries,
@@ -1971,6 +1972,13 @@ export function deriveMessagesTimelineRows(input: {
             );
           }
         }
+        nextRows.push(
+          ...viewedImagesRows(
+            workGroupId(timelineEntry.id),
+            timelineEntry.createdAt,
+            visibleGroupedEntries,
+          ),
+        );
       }
       index = cursor - 1;
       continue;
@@ -2157,6 +2165,7 @@ export function deriveMessagesTimelineRows(input: {
     if (failedGroupAnchor) {
       const groupId = workGroupId(failedGroupAnchor.id);
       const expanded = input.expandedWorkGroupIds?.has(groupId) ?? false;
+      const groupedEntries = visibleActiveToolEntries.map((entry) => entry.entry);
       nextRows.push({
         kind: "thinking",
         id: LIVE_ACTIVITY_ROW_ID,
@@ -2165,14 +2174,9 @@ export function deriveMessagesTimelineRows(input: {
         expanded,
       });
       if (expanded) {
-        nextRows.push(
-          expandedWorkGroupRow(
-            groupId,
-            failedGroupAnchor.createdAt,
-            visibleActiveToolEntries.map((entry) => entry.entry),
-          ),
-        );
+        nextRows.push(expandedWorkGroupRow(groupId, failedGroupAnchor.createdAt, groupedEntries));
       }
+      nextRows.push(...viewedImagesRows(groupId, failedGroupAnchor.createdAt, groupedEntries));
     } else {
       nextRows.push({
         kind: "thinking",
@@ -2385,6 +2389,15 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     case "proposed-plan":
       return a.proposedPlan === (b as typeof a).proposedPlan;
 
+    case "viewed-images": {
+      const bv = b as typeof a;
+      return (
+        a.createdAt === bv.createdAt &&
+        a.paths.length === bv.paths.length &&
+        a.paths.every((path, index) => path === bv.paths[index])
+      );
+    }
+
     case "html-render": {
       // Tool updates rebuild entries; preserve frames for unchanged pages.
       const bh = b as typeof a;
@@ -2463,33 +2476,6 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       );
     }
   }
-}
-
-const MAX_COLLAPSED_USER_MESSAGE_LINES = 8;
-const MAX_COLLAPSED_USER_MESSAGE_LENGTH = 600;
-const MARKDOWN_LINK = /!?\[([^\]\n]*)\]\((?:<[^>\n]*>|[^\s)]*)\)/g;
-
-function visibleUserMessageText(text: string): string {
-  const linkLabels = (segment: string) => segment.replace(MARKDOWN_LINK, "$1");
-  let visible = "";
-  let cursor = 0;
-  for (const match of collectAssistantCitations(text)) {
-    visible += linkLabels(text.slice(cursor, match.start)) + assistantCitationLabel(match.citation);
-    cursor = match.end;
-  }
-  return visible + linkLabels(text.slice(cursor));
-}
-
-export function shouldCollapseUserMessage(text: string): boolean {
-  const visible = visibleUserMessageText(text);
-  if (visible.trim().length === 0) {
-    return false;
-  }
-
-  return (
-    visible.length > MAX_COLLAPSED_USER_MESSAGE_LENGTH ||
-    visible.split("\n").length > MAX_COLLAPSED_USER_MESSAGE_LINES
-  );
 }
 
 export function handoffRunsSignature(runs: ReadonlyArray<HandoffTimelineRun>): string {

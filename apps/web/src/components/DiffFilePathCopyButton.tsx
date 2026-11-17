@@ -1,4 +1,4 @@
-import { Check, Copy } from "~/components/solar/nodes";
+import { CheckIcon, CopyIcon } from "~/components/solar";
 import { useRef } from "react";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { cn } from "../lib/utils";
@@ -8,7 +8,6 @@ import {
   showAnchoredCopySuccessToast,
 } from "./ui/anchoredCopyToast";
 import { Button } from "./ui/button";
-import { MorphIcon } from "~/components/MorphIcon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 export function DiffFilePathCopyButton({ filePath }: { filePath: string }) {
@@ -32,10 +31,11 @@ export function DiffFilePathCopyButton({ filePath }: { filePath: string }) {
           />
         }
       >
-        <MorphIcon
-          className={cn("size-3", isCopied && "text-success")}
-          icon={isCopied ? Check : Copy}
-        />
+        {isCopied ? (
+          <CheckIcon className={cn("size-3", isCopied && "text-success")} />
+        ) : (
+          <CopyIcon className={cn("size-3", isCopied && "text-success")} />
+        )}
       </TooltipTrigger>
       <TooltipPopup>
         <p>{isCopied ? "Copied" : "Copy path"}</p>

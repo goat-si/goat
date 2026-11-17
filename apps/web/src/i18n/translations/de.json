@@ -70,5 +70,16 @@
   "7e4d81ca21a72019": "Loslösen bestätigen",
   "1d5052cbe70d0b28": "Archivieren bestätigen",
   "d5dd27a4eb853248": "Löschen bestätigen",
-  "86b43caa9ff41ea2": "Tastenkürzel zum Beenden"
+  "86b43caa9ff41ea2": "Tastenkürzel zum Beenden",
+  "7bfe35051f932b93": "Freigabe nötig",
+  "b67d6bd5c4e311b7": "Braucht deine Eingabe",
+  "624506a403296638": "Arbeitet",
+  "0cb9ffcd1fb46b0c": "Nur Status",
+  "cf0f7fc3df26fa75": "Status und Nachrichten",
+  "3bf40445a706e4c9": "Alles",
+  "a3048aaa541b7744": "Aktivität",
+  "216ed20b6f40fa6f": "Screenreader-Ansagen",
+  "0ce04933a7047deb": "Fenstertitel für Screenreader",
+  "a0bb7e0657eef5b7": "Was ein Screenreader aus dem geöffneten Thread hört: wenn ein Durchlauf beginnt, dich braucht und endet. „Status und Nachrichten“ ergänzt, was der Agent vor seiner letzten Nachricht schreibt. „Alles“ ergänzt jeden Schritt.",
+  "364dd15f43025a40": "Beginnt den Fenstertitel mit dem Status des Threads, etwa „Freigabe nötig“, und seinem Namen, damit Screenreader beides zuerst vorlesen, wenn du die App wechselst. Taskleisten, geteilte Bildschirme und Zeiterfassungen sehen ihn ebenfalls."
 }

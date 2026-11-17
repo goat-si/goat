@@ -5,6 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import { hiddenTrackedChange } from "./hiddenTrackedChange.ts";
 import { WorktreeSnapshotError } from "./WorktreeSnapshotStore.ts";
 
 export interface CapturedWorktreeSnapshot {
@@ -59,13 +60,9 @@ const program = Effect.fn("WorktreeSnapshot.capture")(function* (cwd: string) {
   if ((yield* run(["for-each-ref", "--format=%(refname)", "refs/worktree", "refs/bisect"])).trim())
     return yield* fail("per-worktree refs exist");
   if ((yield* run(["ls-files", "-u", "-z"])).length) return yield* fail("unmerged entries exist");
-  const flags = (yield* run(["ls-files", "-v", "-z"])).split("\0").filter(Boolean);
-  for (const entry of flags) {
-    const tag = entry[0] ?? "";
-    if (tag >= "a" && tag <= "z") return yield* fail("assume-unchanged entry exists");
-    if (tag === "S" && (yield* fs.exists(path.join(cwd, entry.slice(2)))))
-      return yield* fail("skip-worktree entry exists on disk");
-  }
+  const hidden = yield* hiddenTrackedChange(cwd);
+  if (hidden !== null)
+    return yield* fail(`has uncommitted changes hidden from git status (${hidden})`);
   const debug = yield* run(["ls-files", "--debug", "-z"]);
   if (
     [...debug.matchAll(/flags: ([0-9a-f]+)/g)].some(
@@ -114,7 +111,11 @@ const program = Effect.fn("WorktreeSnapshot.capture")(function* (cwd: string) {
   const tempIndex = path.join(tmp, "index");
   yield* fs.copyFile(path.resolve(cwd, indexPath), tempIndex);
   const env = { ...identity, GIT_INDEX_FILE: tempIndex };
-  yield* run(["add", "-A", "--"], env);
+  // A sparse checkout's tracked files outside its patterns are left out by a plain add, edits too.
+  const sparse = (yield* run(["config", "--type=bool", "--default=false", "core.sparseCheckout"]))
+    .trim()
+    .startsWith("true");
+  yield* run(["add", "-A", ...(sparse ? ["--sparse"] : []), "--"], env);
   // A nested repository is only a gitlink here: its files and history would be lost. Submodules
   // already in the index and registered in .gitmodules pass, since cleanup's submodule check
   // (which walks exactly those) keeps dirty or unpushed ones first.

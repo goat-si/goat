@@ -70,5 +70,16 @@
   "7e4d81ca21a72019": "Unpin confirmation",
   "1d5052cbe70d0b28": "Archive confirmation",
   "d5dd27a4eb853248": "Delete confirmation",
-  "86b43caa9ff41ea2": "Quit shortcut"
+  "86b43caa9ff41ea2": "Quit shortcut",
+  "7bfe35051f932b93": "Needs approval",
+  "b67d6bd5c4e311b7": "Needs your input",
+  "624506a403296638": "Working",
+  "0cb9ffcd1fb46b0c": "Status only",
+  "cf0f7fc3df26fa75": "Status and messages",
+  "3bf40445a706e4c9": "Everything",
+  "a3048aaa541b7744": "Activity",
+  "216ed20b6f40fa6f": "Screen reader announcements",
+  "0ce04933a7047deb": "Screen reader window title",
+  "a0bb7e0657eef5b7": "What a screen reader hears from the open thread: a turn starting, needing you, and ending. Status and messages adds what the agent writes before its last message. Everything adds each step.",
+  "364dd15f43025a40": "Start the window title with the thread's status, like Needs approval, and its name, so screen readers read them first when you switch apps. Taskbars, shared screens, and time trackers see it too."
 }

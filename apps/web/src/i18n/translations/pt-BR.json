@@ -70,5 +70,16 @@
   "7e4d81ca21a72019": "Confirmação ao desafixar",
   "1d5052cbe70d0b28": "Confirmação ao arquivar",
   "d5dd27a4eb853248": "Confirmação ao excluir",
-  "86b43caa9ff41ea2": "Atalho de saída"
+  "86b43caa9ff41ea2": "Atalho de saída",
+  "7bfe35051f932b93": "Precisa de aprovação",
+  "b67d6bd5c4e311b7": "Precisa da sua resposta",
+  "624506a403296638": "Trabalhando",
+  "0cb9ffcd1fb46b0c": "Somente status",
+  "cf0f7fc3df26fa75": "Status e mensagens",
+  "3bf40445a706e4c9": "Tudo",
+  "a3048aaa541b7744": "Atividade",
+  "216ed20b6f40fa6f": "Anúncios do leitor de tela",
+  "0ce04933a7047deb": "Título da janela para leitores de tela",
+  "a0bb7e0657eef5b7": "O que um leitor de tela ouve da conversa aberta: um turno começando, precisando de você e terminando. “Status e mensagens” acrescenta o que o agente escreve antes da última mensagem. “Tudo” acrescenta cada etapa.",
+  "364dd15f43025a40": "Começa o título da janela com o status da conversa, como “Precisa de aprovação”, e o nome dela, para que leitores de tela os leiam primeiro quando você troca de aplicativo. Barras de tarefas, telas compartilhadas e controladores de tempo também o veem."
 }

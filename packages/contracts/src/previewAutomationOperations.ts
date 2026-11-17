@@ -33,6 +33,7 @@ export const PREVIEW_AUTOMATION_SERVER_OPERATIONS = [
   "back",
   "forward",
   "reload",
+  "stopLoading",
   "logs",
   "fetch",
   "scrollCollect",

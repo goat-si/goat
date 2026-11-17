@@ -16,7 +16,15 @@ import { threadSearchMatchKey } from "@goat/client-runtime/state/thread-search";
 import { type EnvironmentId, type SidebarProjectGroupingMode } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useFocusEffect } from "@react-navigation/native";
-import { use, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import {
+  use,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+} from "react";
 import {
   Platform,
   ScrollView,
@@ -95,12 +103,15 @@ import {
 import { createSwipeRowActivation } from "./swipe-row-activation";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-swipe-actions";
 import { useFabScroll } from "./FabScrollContext";
+import { holdLaunchSplashForHomeRows, settleLaunchSplashHomeRows } from "./home-launch-splash";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import { ThreadListFilters } from "./ThreadListFilters";
 import { DecisionInboxRow } from "../decisions/DecisionInboxRow";
 import { deriveHomeEmptyState, NO_THREADS_DETAIL } from "./home-empty-state";
 
 interface HomeScreenProps {
+  /** Whether this list is the one on screen; see `useHomeRouteVisible`. Absent means on screen. */
+  readonly visible?: boolean;
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
@@ -679,6 +690,12 @@ export function HomeScreen(props: HomeScreenProps) {
     props.threads.some((thread) => thread.archivedAt === null) ||
     props.pendingTasks.length > 0 ||
     threadListV2Layout.settledCount > 0;
+  // A hidden list gets no layout, so it never reports its rows as laid out.
+  const hasRowsToLayOut = props.visible !== false && hasAnyThreads && threadListV2Items.length > 0;
+  // oxlint-disable-next-line goat/react-effect-budget -- holds the native launch splash, which is outside React, until the rows are gone or this list unmounts; a layout effect runs before the splash hides in this commit
+  useLayoutEffect(() => {
+    return hasRowsToLayOut ? holdLaunchSplashForHomeRows() : undefined;
+  }, [hasRowsToLayOut]);
   const selectedEnvironmentLabel =
     props.selectedEnvironmentId === null
       ? null
@@ -825,7 +842,10 @@ export function HomeScreen(props: HomeScreenProps) {
               <AnimatedLegendList
                 itemLayoutAnimation={primaryColumn ? THREAD_SIDEBAR_ROW_LAYOUT : undefined}
                 ref={listRef}
-                onLoad={() => activateVisibleRows(threadListV2Items)}
+                onLoad={() => {
+                  settleLaunchSplashHomeRows();
+                  activateVisibleRows(threadListV2Items);
+                }}
                 onTouchStart={(event) => trackListTouches(event, true)}
                 onTouchEnd={(event) => trackListTouches(event, false)}
                 onTouchCancel={(event) => trackListTouches(event, false)}
