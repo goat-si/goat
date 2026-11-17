@@ -2,7 +2,13 @@ import { sourceControlClients } from "@goat/client-runtime/source-control-client
 import { SymbolView } from "../../../components/ui/AppSymbol";
 import type { ComponentProps } from "react";
 import { View } from "react-native";
+import { AppText as Text } from "../../../components/ui/AppText";
 import { Button } from "../../../components/ui/Button";
+import {
+  type GitActionThread,
+  useGitActionResultNotification,
+} from "../../../state/use-vcs-action-state";
+import { useThreadSelection } from "../../../state/use-thread-selection";
 
 export function SheetActionButton(props: {
   readonly icon: ComponentProps<typeof SymbolView>["name"];
@@ -14,6 +20,32 @@ export function SheetActionButton(props: {
   return (
     <View className="flex-1">
       <Button {...props} fullWidth />
+    </View>
+  );
+}
+
+/** A failed Git action's message for a thread (the selected one by default), on a screen that covers its banner. */
+export function GitActionFailure(props: { readonly thread?: GitActionThread }) {
+  const { selectedThread } = useThreadSelection();
+  const { result, dismiss } = useGitActionResultNotification(
+    props.thread ??
+      (selectedThread === null
+        ? null
+        : { environmentId: selectedThread.environmentId, threadId: selectedThread.id }),
+  );
+  if (result?.type !== "error") return null;
+  return (
+    <View
+      accessibilityRole="alert"
+      className="gap-1 rounded-[18px] border border-border bg-card px-4 py-3"
+    >
+      <Text className="font-goat-medium text-sm text-danger-foreground">{result.title}</Text>
+      {result.description ? (
+        <Text selectable className="text-sm text-foreground-muted">
+          {result.description}
+        </Text>
+      ) : null}
+      <Button label="Dismiss" tone="text" onPress={dismiss} />
     </View>
   );
 }

@@ -16,7 +16,7 @@ import { NativeStackScreenOptions } from "../../../native/StackHeader";
 import { AppText as Text } from "../../../components/ui/AppText";
 import { useSelectedThreadGitActions } from "../../../state/use-selected-thread-git-actions";
 import { useThreadSelection } from "../../../state/use-thread-selection";
-import { SheetActionButton } from "./gitSheetComponents";
+import { GitActionFailure, SheetActionButton } from "./gitSheetComponents";
 
 type GitConfirmSheetProps = StaticScreenProps<{
   readonly environmentId: string;
@@ -162,6 +162,7 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
               : undefined
           }
         >
+          <GitActionFailure />
           <View className="android:gap-2 android:rounded-[20px] android:bg-card android:p-3 ios:items-center ios:gap-1 ios:px-5 ios:pb-3 ios:pt-4">
             {Platform.OS !== "android" ? (
               <Text className="text-xs font-goat-bold tracking-[1px] uppercase text-foreground-muted">
