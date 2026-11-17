@@ -11,6 +11,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
+import { layerSessionStore, startGuardedCall } from "../auth/SessionEnd.testkit.ts";
 import { dependencies, serveOverHttp } from "../mcp/agentSurface.testkit.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
@@ -564,16 +565,20 @@ it.effect("marks an interrupted update sync as failed instead of leaving it sync
     });
   }),
 );
-/** Runs a sync as a caller would; `stop` ends that caller the way a cancel or dropped request does. */
-const startSync = (sync: OpenCodexSync["Service"]) =>
+/**
+ * Runs a sync as a caller would; `stop` ends that caller as a cancel or dropped request does, or,
+ * for "revoke", as revoking the MCP session it came in on does.
+ */
+const startSync = (sync: OpenCodexSync["Service"], how: "stop" | "revoke") =>
   Effect.gen(function* () {
+    if (how === "revoke") return { stop: (yield* startGuardedCall(sync.run(scope))).revoke };
     const fiber = yield* sync.run(scope).pipe(Effect.forkChild({ startImmediately: true }));
     return { stop: Fiber.interrupt(fiber) };
   });
 
-it.effect(
-  "a sync whose caller stops finishes the machine it is on and skips the machines it has not started",
-  () =>
+it.effect.each(["stop", "revoke"] as const)(
+  "a sync whose caller ends by %s finishes the machine it is on and skips the machines it has not started",
+  (how) =>
     Effect.gen(function* () {
       const fleet = makeFleet();
       const started = yield* Deferred.make<void>();
@@ -582,7 +587,7 @@ it.effect(
         Effect.andThen(Deferred.await(gate)),
       );
       const { sync } = yield* setup(fleet);
-      const running = yield* startSync(sync);
+      const running = yield* startSync(sync, how);
       yield* Deferred.await(started);
       // The caller is gone while ocx syncs this Home, with Codex possibly stopped mid-restart.
       yield* running.stop;
@@ -599,7 +604,7 @@ it.effect(
         ["lidge-ts", "skipped", "interrupted"],
         ["mac-studio", "skipped", "interrupted"],
       ]);
-    }),
+    }).pipe(Effect.provide(layerSessionStore)),
 );
 
 it.effect(
