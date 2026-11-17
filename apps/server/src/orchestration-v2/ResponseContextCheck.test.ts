@@ -26,30 +26,79 @@ const forkOfFork = ThreadId.make("fork-of-fork");
 const sideOfFork = ThreadId.make("side-of-fork");
 const loopA = ThreadId.make("loop-a");
 const loopB = ThreadId.make("loop-b");
+const deletedFork = ThreadId.make("deleted-fork");
+const belowDeleted = ThreadId.make("below-deleted");
+const archivedFork = ThreadId.make("archived-fork");
+const belowArchived = ThreadId.make("below-archived");
+const otherProject = ThreadId.make("other-project");
+const belowOtherProject = ThreadId.make("below-other-project");
+const sibling = ThreadId.make("sibling");
+const child = ThreadId.make("child");
+const orphan = ThreadId.make("orphan");
+const missing = ThreadId.make("missing");
+const chain = Array.from({ length: 41 }, (_, index) => ThreadId.make(`chain-${index}`));
 
 // Side chats and run forks both show their source's history as inherited rows.
 const runFork = (threadId: ThreadId) => ({ type: "run", threadId, runId: "run-1" });
-const threads = new Map<ThreadId, { sideChatOf: ThreadId | null; forkedFrom: unknown }>([
+const threads = new Map<
+  ThreadId,
+  {
+    sideChatOf: ThreadId | null;
+    forkedFrom: unknown;
+    deletedAt?: string;
+    archivedAt?: string;
+    projectId?: string;
+  }
+>([
   [side, { sideChatOf: main, forkedFrom: runFork(main) }],
   [fork, { sideChatOf: null, forkedFrom: runFork(main) }],
   [forkOfFork, { sideChatOf: null, forkedFrom: runFork(fork) }],
   [sideOfFork, { sideChatOf: fork, forkedFrom: runFork(fork) }],
   [loopA, { sideChatOf: null, forkedFrom: runFork(loopB) }],
   [loopB, { sideChatOf: null, forkedFrom: runFork(loopA) }],
+  [deletedFork, { sideChatOf: null, forkedFrom: runFork(main), deletedAt: "2026-11-17T00:00:00Z" }],
+  [belowDeleted, { sideChatOf: null, forkedFrom: runFork(deletedFork) }],
+  [
+    archivedFork,
+    { sideChatOf: null, forkedFrom: runFork(main), archivedAt: "2026-11-17T00:00:00Z" },
+  ],
+  [belowArchived, { sideChatOf: null, forkedFrom: runFork(archivedFork) }],
+  [otherProject, { sideChatOf: null, forkedFrom: null, projectId: "project-2" }],
+  [belowOtherProject, { sideChatOf: null, forkedFrom: runFork(otherProject) }],
+  [sibling, { sideChatOf: null, forkedFrom: runFork(main) }],
+  [child, { sideChatOf: null, forkedFrom: runFork(fork) }],
+  [orphan, { sideChatOf: null, forkedFrom: runFork(missing) }],
+  ...chain.map(
+    (threadId, index) =>
+      [threadId, { sideChatOf: null, forkedFrom: runFork(chain[index - 1] ?? main) }] as const,
+  ),
 ]);
 
 const items = new Map<string, Partial<OrchestrationV2TurnItem>>([
   ["main/item-1", { type: "assistant_message", messageId: MessageId.make("m1") }],
   ["main/item-user", { type: "user_message", messageId: MessageId.make("m2") }],
   ["other/item-9", { type: "assistant_message", messageId: MessageId.make("m9") }],
+  ["deleted-fork/item-1", { type: "assistant_message", messageId: MessageId.make("m1") }],
+  ["archived-fork/item-1", { type: "assistant_message", messageId: MessageId.make("m1") }],
+  ["other-project/item-1", { type: "assistant_message", messageId: MessageId.make("m1") }],
+  ["sibling/item-1", { type: "assistant_message", messageId: MessageId.make("m1") }],
+  ["child/item-1", { type: "assistant_message", messageId: MessageId.make("m1") }],
+  ["orphan/item-1", { type: "assistant_message", messageId: MessageId.make("m1") }],
 ]);
 
+const threadReads: Array<ThreadId> = [];
 const store = Layer.mock(ProjectionStoreV2)({
-  getThread: (threadId) =>
-    Effect.succeed({
-      id: threadId,
-      ...(threads.get(threadId) ?? { sideChatOf: null, forkedFrom: null }),
-    } as never),
+  getThread: (threadId) => {
+    threadReads.push(threadId);
+    return threadId === missing
+      ? Effect.fail(new Error("no such thread") as never)
+      : Effect.succeed({
+          id: threadId,
+          deletedAt: null,
+          archivedAt: null,
+          ...(threads.get(threadId) ?? { sideChatOf: null, forkedFrom: null }),
+        } as never);
+  },
   getTurnItem: ({ threadId, itemId }) =>
     Effect.succeed((items.get(`${threadId}/${itemId}`) ?? null) as OrchestrationV2TurnItem | null),
   getThreadRecords: (threadId) =>
@@ -163,6 +212,58 @@ describe("a reply to a response, checked by the server before an agent reads it"
       expect(text).toContain(UNAVAILABLE);
       expect(text).not.toContain("thread.read");
     }),
+  );
+
+  it.effect(
+    "reads each thread of a long fork chain once, up to the thread that holds the response",
+    () =>
+      Effect.gen(function* () {
+        threadReads.length = 0;
+        const text = yield* providerText(reply(), chain.at(-1)!);
+        expect(text).toContain('args:{threadId: "main", itemId: "item-1"}');
+        expect(threadReads).toHaveLength(chain.length + 1);
+        expect(new Set(threadReads).size).toBe(threadReads.length);
+      }),
+  );
+
+  it.effect(
+    "never names a deleted ancestor, but still reads what it inherited from further up",
+    () =>
+      Effect.gen(function* () {
+        const deleted = yield* providerText(reply({ threadId: deletedFork }), belowDeleted);
+        expect(deleted).toContain(UNAVAILABLE);
+        expect(deleted).not.toContain("thread.read");
+        const above = yield* providerText(reply(), belowDeleted);
+        expect(above).toContain('args:{threadId: "main", itemId: "item-1"}');
+      }),
+  );
+
+  it.effect("reads from an archived ancestor and from an ancestor in another project", () =>
+    Effect.gen(function* () {
+      const archived = yield* providerText(reply({ threadId: archivedFork }), belowArchived);
+      expect(archived).toContain('args:{threadId: "archived-fork", itemId: "item-1"}');
+      const project = yield* providerText(reply({ threadId: otherProject }), belowOtherProject);
+      expect(project).toContain('args:{threadId: "other-project", itemId: "item-1"}');
+    }),
+  );
+
+  it.effect(
+    "never names a sibling, a child or an unknown thread the receiving thread does not descend from",
+    () =>
+      Effect.gen(function* () {
+        for (const [named, receiving] of [
+          [sibling, fork],
+          [child, fork],
+          [missing, orphan],
+        ] as const) {
+          const text = yield* providerText(reply({ threadId: named }), receiving);
+          expect(text).toContain(UNAVAILABLE);
+          expect(text).not.toContain("thread.read");
+        }
+        // An ancestor that cannot be read ends the walk; the thread's own responses still read.
+        const own = yield* providerText(reply({ threadId: orphan }), orphan);
+        expect(own).toContain('args:{threadId: "orphan", itemId: "item-1"}');
+      }),
   );
 
   it.effect(

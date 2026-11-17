@@ -3,6 +3,7 @@ import {
   type ResponseContextRecord,
   ThreadId,
 } from "@goat/contracts";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { Atom } from "effect/reactivity";
 import { useRef } from "react";
 import { expect, it, vi } from "vite-plus/test";
@@ -11,6 +12,7 @@ import "~/index.css";
 import type { ComposerHandleRef } from "../../composerHandleContext";
 import { AppAtomRegistryProvider, appAtomRegistry } from "../../rpc/atomRegistry";
 import { environmentPresentations } from "../../state/presentation";
+import { environmentThreadShells } from "../../state/threads";
 import type { ChatComposerHandle } from "./chatComposerHandle";
 import { useComposerReplyTarget } from "./composerReplyTarget";
 import { MessagesTimeline } from "./MessagesTimeline";
@@ -47,17 +49,22 @@ const inheritedResponse: Entry = {
   } as unknown as OrchestrationV2ProjectedTurnItem,
 } as Entry;
 
-function serverConfigs(replyToResponse: boolean) {
+function serverConfigs(replyToResponse: boolean, parentShell: unknown = undefined) {
   const configs = new Map([
     [ENVIRONMENT_ID, { environment: { capabilities: { replyToResponse } } }],
   ]);
+  const parentShellAtom = environmentThreadShells.threadShellAtom(
+    scopeThreadRef(ENVIRONMENT_ID, PARENT),
+  );
   const get = appAtomRegistry.get.bind(appAtomRegistry);
   return vi
     .spyOn(appAtomRegistry, "get")
     .mockImplementation(((atom: Atom.Atom<unknown>) =>
       atom === environmentPresentations.serverConfigsAtom
         ? configs
-        : get(atom)) as typeof appAtomRegistry.get);
+        : parentShell !== undefined && atom === parentShellAtom
+          ? parentShell
+          : get(atom)) as typeof appAtomRegistry.get);
 }
 
 function SideChatColumn({ handleRef }: { handleRef: ComposerHandleRef }) {
@@ -97,6 +104,15 @@ it("names the thread that holds the response when Reply is on a row a side chat 
 
 it("offers no Reply when the thread's server does not check replies", async () => {
   using _configs = serverConfigs(false);
+  const target = composer();
+  await using screen = await renderElement(<SideChatColumn handleRef={target.ref} />);
+
+  await expect.element(screen.getByText("The empty state now renders a hint.")).toBeVisible();
+  expect(screen.buttons("Reply to this response")).toHaveLength(0);
+});
+
+it("offers no Reply on a row inherited from a deleted thread, which no agent can read", async () => {
+  using _configs = serverConfigs(true, { id: PARENT, deletedAt: "2026-11-17T00:00:00Z" });
   const target = composer();
   await using screen = await renderElement(<SideChatColumn handleRef={target.ref} />);
 
