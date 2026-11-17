@@ -151,10 +151,10 @@ Setup: one `vp run dev` in this worktree (isolated `.goat`, ports 7095 web and 1
 
 ## Still open
 
-- N12c at e79c46a7de: the coordinator's read and the CI it dispatches (rule of 16:08:00 item 2).
+- N12c at e79c46a7de: the coordinator read the diff and dispatched run 44123436045 (lane=quick, check and typecheck; 16:16:28 item 2); it merges n12c by fast-forward when that run is green. Nothing more on n12b.
 - P1 rows 1 to 4 above, with row 3 re-checked on n12c (Stop on a desktop-rendered tab leaves what had loaded, no error toast, the address kept); issue #3683.
 
-NOT RUN: the desktop Stop check on a real desktop build (P1 row 3, now with n12c); goat-ci on e79c46a7de (the coordinator dispatches); the C23 and C25 device checks and goat_preview_stop from a live agent turn (P1 rows 1, 2 and 4); a test of the hard reload clearing the marker (no milestone to await).
+NOT RUN: the desktop Stop check on a real desktop build (P1 row 3, now with n12c); the full suites on e79c46a7de (lane=quick only under the 16:16:28 CI rule; the full suites run on the integration head); the C23 and C25 device checks and goat_preview_stop from a live agent turn (P1 rows 1, 2 and 4); a test of the hard reload clearing the marker (no milestone to await).
 
 
 ## Coordinator answers (verbatim)
@@ -224,4 +224,10 @@ NOT RUN: the desktop Stop check on a real desktop build (P1 row 3, now with n12c
 > 2. CI IS STARVED, by load: six lidge runners, all busy, five lane-all runs plus #3682's pull request run queued behind them (its goat-scope waited 13 minutes). RULE UNTIL I LIFT IT: a follow-up branch goes into the integration branch on goat-check, goat-typecheck, goat-test-changed, goat-build and its own packages' test jobs green on the exact head, plus my read (and the narrow review where I ordered one). I then cancel the rest of that branch's run. The full suites run on the integration head, which stays the gate for dev. No lane re-runs or re-dispatches a lane-all run without asking me; no lane polls a run in a long turn.
 >
 > 3. N12, relay verbatim, send with mode steer: your follow-ups are IN at 2c0e5563f3. The desktop Stop row is still FAIL and still yours, per my 15:26:04 ruling, now as a NEW branch chase/t3-261114-next2-n12c-desktop-stop cut from 3a254fa1a5: one paragraph to me first (the upstream commit and path:line for ERR_ABORTED after a stop, where the GOAT fix goes), 45 minutes from receipt, a failing-first test at the desktop preview manager's level, then check:changed and a push; do not dispatch a lane-all run: tell me the head and I dispatch what it needs.
+
+> Coordinator to lane coordinator (2026-11-17 16:16:28 UTC), on N14's READY, N12c and your status notes. Relay each part to its lane.
+>
+> 2. N12c at e79c46a7de: I read the production diff (stopLoad records the current load number, stops, and that load's ERR_ABORTED settles as success; a newer navigate or a blocked unload still fails). I dispatched ONE run with lane=quick (check and typecheck): https://github.com/goat-si/goat/actions/runs/44123436045. With N12's local check:changed (exit 0, 7 test files, 111 tests; its report) that is the gate under the CI rule; I merge it by fast-forward when that run is green. N12 is done after that; nothing more on n12b.
+>
+> 3. THE CI RULE, refined: a follow-up branch gets lane=quick from me (two jobs), never lane=all, while the pool is starved; its tests are the lane's local check:changed (or the beside files under the 12:07:55 rule) plus the reviewer's own runs; the full suites run on the integration head. Accordingly I CANCELLED the lane-all runs 44115576485 (SF1 410daab8e6: check, typecheck, build, mobile, desktop, contracts, client-runtime, shared, server 2/4 were green; test-changed had not started) and 44115010294 (N4c 4fa20e693f: check, typecheck, build, test-changed, desktop, mobile, contracts, client-runtime, shared were green). Neither lane re-dispatches. N14's lane-all run 44118636205 stays: that lane is wide and its web suite matters.
 
