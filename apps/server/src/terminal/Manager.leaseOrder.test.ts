@@ -358,4 +358,32 @@ it.layer(
         assert.deepEqual(ptyAdapter.spawnInputs, []);
       }),
   );
+
+  it.effect(
+    "an open that waited starts in its folder when its thread is not bound to a worktree",
+    () =>
+      Effect.gen(function* () {
+        const folder = yield* heldFolder;
+        const fs = yield* FileSystem.FileSystem;
+        const ptyAdapter = new FakePtyAdapter();
+        const manager = yield* TerminalManager.makeWithOptions({
+          logsDir: yield* fs.makeTempDirectoryScoped({ prefix: "goat-terminal-logs-" }),
+          ptyAdapter,
+          processKillGraceMs: 1,
+          threadWorktree: { current: () => Effect.succeedSome(null) },
+        });
+        const holder = yield* folder.hold(Effect.void);
+        yield* Deferred.await(folder.held);
+        const opened = yield* manager
+          .open(openInput({ cwd: folder.cwd, worktreePath: folder.cwd }))
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.succeed(folder.release, undefined);
+        yield* Fiber.join(holder);
+        assert.strictEqual((yield* Fiber.join(opened)).status, "running");
+        assert.deepEqual(
+          ptyAdapter.spawnInputs.map((spawned) => spawned.cwd),
+          [folder.cwd],
+        );
+      }),
+  );
 });
