@@ -1,6 +1,8 @@
 import { registerCodexLoadKeyCheck } from "./ProviderSessionLoadKey.testkit.ts";
 import {
   makeThreadCreatedEvent,
+  makeMemoryReadHold,
+  openMemoryRun,
   readPreparedRunDto,
 } from "./test/ProviderSessionManagerMemoryDto.testkit.ts";
 export { makeThreadCreatedEvent } from "./test/ProviderSessionManagerMemoryDto.testkit.ts";
@@ -2281,6 +2283,64 @@ it.effect("current memory DTO denies an archived destination before a deferred d
     );
   }),
 );
+it.effect(
+  "a memory policy rotation during a run row read keeps the current memory access evidence",
+  () =>
+    Effect.gen(function* () {
+      const hold = yield* makeMemoryReadHold;
+      yield* Effect.gen(function* () {
+        const { threadId, runId, taskId } = yield* openMemoryRun("memory-rotation-during-read");
+        yield* hold.arm;
+        const read = yield* readPreparedRunDto(threadId, runId, taskId).pipe(Effect.forkChild);
+        yield* hold.entered;
+        // The rotation re-prepares the thread with equal content while the read is held.
+        yield* hold.rotate;
+        yield* hold.release;
+        assert.equal((yield* Fiber.join(read)).currentMemoryAccess?.access, "read_write");
+      }).pipe(Effect.provide(hold.layer));
+    }),
+);
+it.effect.each(["another run", "an archived destination"] as const)(
+  "a prepare during a run row read that changes its memory access evidence (%s) shows none",
+  (change) =>
+    Effect.gen(function* () {
+      const hold = yield* makeMemoryReadHold;
+      yield* Effect.gen(function* () {
+        const archived = change === "an archived destination";
+        const run = yield* openMemoryRun(
+          archived ? "memory-evidence-archive" : "memory-evidence-run",
+        );
+        const { sink, ids, manager, threadId, now } = run;
+        const store = yield* ProjectionStore.ProjectionStoreV2;
+        yield* hold.arm;
+        const read = yield* readPreparedRunDto(threadId, run.runId, run.taskId).pipe(
+          Effect.forkChild,
+        );
+        yield* hold.entered;
+        const before = yield* store.getThreadProjection(threadId);
+        const archive = (archivedAt: DateTime.Utc | null) =>
+          Effect.gen(function* () {
+            const id = yield* ids.allocate.event({ threadId });
+            const payload = { ...before.thread, archivedAt };
+            const type = archivedAt === null ? "thread.unarchived" : "thread.archived";
+            yield* sink.write({ events: [{ id, type, threadId, occurredAt: now, payload }] });
+          });
+        if (archived) yield* archive(now);
+        yield* manager.prepareMcpSession!({
+          threadId,
+          providerInstanceId: modelSelection.instanceId,
+          runId: archived ? run.runId : RunId.make("memory-evidence-other-run"),
+          delegatedTaskId: archived ? run.taskId : NodeId.make("memory-evidence-other-task"),
+          memoryGrantCeiling: "read_write",
+        });
+        // Unarchived again: only the stored prepare's destinationUsable still differs.
+        if (archived) yield* archive(null);
+        yield* hold.release;
+        assert.isUndefined((yield* Fiber.join(read)).currentMemoryAccess);
+      }).pipe(Effect.provide(hold.layer));
+    }),
+);
+
 it.effect(
   "scheduled task DTO stays unknown while read-only RuntimePolicyV2 actually prepares read",
   () =>

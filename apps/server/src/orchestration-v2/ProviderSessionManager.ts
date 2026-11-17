@@ -6,7 +6,7 @@ import {
 import { needsAttached, sessionScopedArtifactThreadId } from "./sessionScopedArtifactThreadId.ts";
 import { goatMcpServersFor, nativeSubagentLimiter } from "./goatSessionConfig.ts";
 import { repairSchedule } from "../retryJitter.ts";
-import { makeMemoryProviderAuthority } from "./MemoryProviderAuthority.ts";
+import { makeMemoryProviderAuthority, prepareEvidence } from "./MemoryProviderAuthority.ts";
 import { delegatedTaskWillWake } from "./delegatedTaskWake.ts";
 import { isReleasedRuntimeRequest } from "./ReleasedRuntimeRequest.ts";
 import * as CodexRoute from "../provider/CodexRouteService.ts";
@@ -2449,6 +2449,7 @@ export const layerWithOptions = (
               prepared.providerSessionId === undefined
             )
               return undefined;
+            const evidence = prepareEvidence(prepared);
             const entry = (yield* Ref.get(sessions)).get(sessionKey(prepared.providerSessionId));
             if (
               entry?.runtime.instanceId !== providerInstanceId ||
@@ -2458,9 +2459,10 @@ export const layerWithOptions = (
             // Use execution's current authority, including registry expiry and
             // revocation, rather than reconstructing it from prepare metadata.
             const policy = yield* currentMemoryPolicy(threadId);
-            if (policy.grant === "none" || memoryPrepareInputs.get(threadId) !== prepared)
+            const latest = memoryPrepareInputs.get(threadId);
+            if (policy.grant === "none" || !latest || prepareEvidence(latest) !== evidence)
               return undefined;
-            return { ...prepared, currentMemoryGrant: policy.grant };
+            return { ...latest, currentMemoryGrant: policy.grant };
           }),
         mcpCredentialRotations: Option.isSome(admission)
           ? admission.value.rotations
