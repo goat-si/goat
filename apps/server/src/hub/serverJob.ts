@@ -6,8 +6,9 @@ import * as Semaphore from "effect/Semaphore";
 
 /**
  * Runs `body` as a server-owned job once the caller holds `permit`, so a caller gone before its
- * turn leaves no job and one permit means one job at a time. The started body runs to its end;
- * `stopped` says its caller stopped waiting, so it finishes what is under way and starts nothing new.
+ * turn leaves no job and one permit means one job at a time. The caller leaving does not interrupt
+ * the started body (its own timeouts and closing `serviceScope` still do); `stopped` says the caller
+ * left, so the body finishes what is under way and starts nothing new.
  */
 export const runAsServerJob = <A, E, R>(
   permit: Semaphore.Semaphore,
@@ -22,10 +23,8 @@ export const runAsServerJob = <A, E, R>(
       const running = yield* body(Effect.sync(() => stopped)).pipe(
         Effect.tapCause((cause) =>
           Cause.hasDies(cause)
-            ? Effect.logError("A server-owned job ended with a defect.", {
-                job,
-                cause: Cause.pretty(cause),
-              })
+            ? // The fixed job name only: a defect's text could carry anything.
+              Effect.logError("A server-owned job ended with a defect.", { job })
             : Effect.void,
         ),
         Effect.ensuring(Semaphore.release(permit, 1)),

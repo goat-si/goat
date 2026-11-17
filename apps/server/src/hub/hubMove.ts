@@ -243,12 +243,14 @@ export const makeMove = (deps: MoveDeps) =>
         fromEnvironment,
       );
       // A move whose caller is gone asks no one and changes nothing; one under way finishes.
+      // Each check sits right before a side effect, after the read or write that could outlast a stop.
       const refused = () =>
         stop("Move stopped before changing anything: its caller stopped waiting.");
       if (yield* stopped) return refused();
       if (input.decisionId !== undefined) yield* deps.approved(caller, input.decisionId, binding);
       else {
         const pin = yield* deps.ocx.pinnedFingerprint(to, offered.keyType);
+        if (yield* stopped) return refused();
         if (pin !== offered.fingerprint || !caller.owner) {
           const reason =
             pin !== offered.fingerprint
@@ -271,6 +273,10 @@ export const makeMove = (deps: MoveDeps) =>
       }
       if (yield* stopped) return refused();
       yield* deps.audit(caller, to, "started", input.decisionId);
+      if (yield* stopped) {
+        yield* deps.audit(caller, to, "failed", input.decisionId);
+        return refused();
+      }
       mutating = true;
       if (record !== undefined) {
         const failure = yield* deps.leaveDevice(from, record.id, fromCaller.connection, steps);

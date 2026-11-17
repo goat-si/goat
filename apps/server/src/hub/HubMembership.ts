@@ -878,7 +878,7 @@ const make = Effect.gen(function* () {
     join: (scope, input, person) => permit.withPermits(1)(join(scope, input, person)),
     leave: (scope, input, person) => permit.withPermits(1)(leave(scope, input, person)),
     repair: (scope, input, person) => permit.withPermits(1)(repair(scope, input, person)),
-    // A move under way finishes when its caller goes, so no device is left in no hub.
+    // A caller leaving does not interrupt a move under way; a later failure or shutdown still can.
     move: (scope, input, person) =>
       runAsServerJob(permit, serviceScope, "HubMembership.move", (stopped) =>
         move(scope, input, person, stopped),
