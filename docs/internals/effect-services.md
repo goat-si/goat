@@ -121,6 +121,18 @@ runtimes. Don't create a managed or Atom runtime per feature to hand it out. Whe
 fail and callers need a fallback, keep the failure typed: an error on the operation or an explicit
 optional-service layer. Don't route around the layer with an imperative runtime.
 
+## Reads under the database connection lock
+
+Every query of the server's SQLite client runs under one connection lock (`withPermits(1)` in
+`packages/shared/src/nodeSqliteClient.ts`). Since Effect 4.1 a semaphore hands a released permit to
+the waiters already queued, in order: a fiber that reaches the lock while another is queued waits
+its turn instead of taking the free permit at once. A database read can therefore take a scheduler
+turn, and other fibers run in it. Code that captures an object from a `Map` or `Ref`, yields on a
+read, and then compares it by identity (`!==`) with a fresh read sees an equal object written
+meanwhile as a change. Compare the fields that decide the answer, as `prepareEvidence` in
+`apps/server/src/orchestration-v2/MemoryProviderAuthority.ts` does, and keep identity checks for
+tokens whose replacement always means a real change.
+
 ## Errors
 
 - **Attributes.** Failures are `Schema.TaggedError` classes with structured attributes: the
