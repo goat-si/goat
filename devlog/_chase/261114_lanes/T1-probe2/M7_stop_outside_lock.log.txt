@@ -1,0 +1,154 @@
+note: You are running `vp test` as a Vite+ built-in command. If you meant to run the test npm script, use `vpr test` instead.
+
+ RUN  v5.0.5 /private/tmp/t1-review-ee1e6123/apps/server
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE close sent while an open waits on a held folder
+REVIEW-PROBE close-during-wait {"closedBeforeRelease":true,"openSucceeded":true,"spawned":1,"aliveAfterClose":true,"killed":[false]}
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE close sent while an open waits on a held folder
+[23:18:28.788] INFO (#21): Server shutdown phase started { phase: 'terminalSessions' }
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE close sent while an open waits on a held folder
+[23:18:28.791] INFO (#21): Server shutdown phase finished { phase: 'terminalSessions', durationMs: 3, outcome: 'success' }
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE close sent while an open waits on a held folder
+[23:18:28.794] ERROR (#21): Error [AssertionError]: the person's close was overtaken: a shell runs after it: expected true to be false
+    at /private/tmp/t1-review-ee1e6123/apps/server/src/terminal/review.probe.test.ts:84:14 {
+  actual: true,
+  expected: false,
+  showDiff: true,
+  operator: 'strictEqual',
+  [cause]: undefined
+}
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE thread-wide close with history deletion while an open waits
+REVIEW-PROBE thread-close-during-wait {"spawned":1,"aliveAfterThreadClose":true}
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE thread-wide close with history deletion while an open waits
+[23:18:28.802] INFO (#30): Server shutdown phase started { phase: 'terminalSessions' }
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE thread-wide close with history deletion while an open waits
+[23:18:28.804] INFO (#30): Server shutdown phase finished { phase: 'terminalSessions', durationMs: 1, outcome: 'success' }
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE thread-wide close with history deletion while an open waits
+[23:18:28.806] ERROR (#30): Error [AssertionError]: a thread-wide close was overtaken: expected true to be false
+    at /private/tmp/t1-review-ee1e6123/apps/server/src/terminal/review.probe.test.ts:106:14 {
+  actual: true,
+  expected: false,
+  showDiff: true,
+  operator: 'strictEqual',
+  [cause]: undefined
+}
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE newer open in another folder while an older open waits
+REVIEW-PROBE newer-open-other-folder {"newerDoneBeforeRelease":false,"spawnCwds":["other(newer)","held(older)"],"final":{"cwd":"held(older)","status":"running","pid":9001}}
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE newer open in another folder while an older open waits
+[23:18:28.812] INFO (#39): Server shutdown phase started { phase: 'terminalSessions' }
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE newer open in another folder while an older open waits
+[23:18:28.813] INFO (#39): Server shutdown phase finished { phase: 'terminalSessions', durationMs: 1, outcome: 'success' }
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE newer open in another folder while an older open waits
+[23:18:28.816] ERROR (#39): Error [AssertionError]: the stale request won: expected 'held(older)' to equal 'other(newer)'
+    at /private/tmp/t1-review-ee1e6123/apps/server/src/terminal/review.probe.test.ts:134:14 {
+  actual: 'held(older)',
+  expected: 'other(newer)',
+  showDiff: true,
+  operator: 'strictEqual',
+  [cause]: undefined
+}
+
+ ❯ src/terminal/review.probe.test.ts (9 tests | 3 failed) 101ms
+   ❯ review probes (9)
+     × PROBE close sent while an open waits on a held folder 20ms
+     × PROBE thread-wide close with history deletion while an open waits 10ms
+     × PROBE newer open in another folder while an older open waits 11ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/terminal/review.probe.test.ts > review probes > PROBE close sent while an open waits on a held folder
+AssertionError: the person's close was overtaken: a shell runs after it: expected true to be false
+
+- Expected
++ Received
+
+- false
++ true
+
+ ❯ src/terminal/review.probe.test.ts:84:14
+     82|       };
+     83|       yield* report("close-during-wait", out);
+     84|       assert.isFalse(out.aliveAfterClose, "the person's close was over…
+       |              ^
+     85|     }),
+     86|   );
+ ❯ ~effect/Effect/successCont ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:1496:28
+ ❯ ~effect/Effect/evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:1041:30
+ ❯ FiberImpl.runLoop ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:709:43
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:637:23
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:626:29
+ ❯ Array.<anonymous> ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:1224:17
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:660:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  src/terminal/review.probe.test.ts > review probes > PROBE thread-wide close with history deletion while an open waits
+AssertionError: a thread-wide close was overtaken: expected true to be false
+
+- Expected
++ Received
+
+- false
++ true
+
+ ❯ src/terminal/review.probe.test.ts:106:14
+    104|       const out = { spawned: ptyAdapter.spawnInputs.length, aliveAfter…
+    105|       yield* report("thread-close-during-wait", out);
+    106|       assert.isFalse(out.aliveAfterThreadClose, "a thread-wide close w…
+       |              ^
+    107|     }),
+    108|   );
+ ❯ ~effect/Effect/successCont ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:1496:28
+ ❯ ~effect/Effect/evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:1041:30
+ ❯ FiberImpl.runLoop ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:709:43
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:637:23
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:626:29
+ ❯ Array.<anonymous> ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:1224:17
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:660:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  src/terminal/review.probe.test.ts > review probes > PROBE newer open in another folder while an older open waits
+AssertionError: the stale request won: expected 'held(older)' to equal 'other(newer)'
+
+Expected: "other(newer)"
+Received: "held(older)"
+
+ ❯ src/terminal/review.probe.test.ts:134:14
+    132|       };
+    133|       yield* report("newer-open-other-folder", out);
+    134|       assert.strictEqual((out.final as any)?.cwd, "other(newer)", "the…
+       |              ^
+    135|     }),
+    136|   );
+ ❯ ~effect/Effect/successCont ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:1496:28
+ ❯ ~effect/Effect/evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:1041:30
+ ❯ FiberImpl.runLoop ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:709:43
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:637:23
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:626:29
+ ❯ Array.<anonymous> ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:1224:17
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:660:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+
+ Test Files  1 failed | 6 passed (7)
+      Tests  3 failed | 112 passed (115)
+   Start at  23:18:26
+   Duration  14.45s (tests 53%, import 34%, transform 12%)
+
+     Import  2085 modules were evaluated 6574 times · 4.81s total, 34% of tracked time
+             ~3.28s faster with isolate: false — shared modules are evaluated once per worker instead of once per file
+             learn more: https://vitest.dev/guide/improving-performance#test-isolation
+

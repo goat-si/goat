@@ -1,0 +1,16 @@
+#!/bin/bash
+T=/tmp/t1-review-ee1e6123
+REPO=/Users/jun/.goat/desktop-nightly/worktrees/goat/goat-e8746a1f-5ab098a8b08bfc00
+OUT=$T/.review-mutations
+FILES="apps/server/src/terminal/terminalLeaseOrder.ts apps/server/src/workspace/workspaceLease.ts apps/server/src/terminal/Manager.ts"
+restore() { for f in $FILES; do git -C $REPO show ee1e6123:$f > $T/$f; done; }
+TESTS="src/terminal/Manager.leaseOrder.test.ts src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts src/orchestration-v2/goat/ThreadWorkspaceService.setupTerminal.test.ts src/workspace/workspaceLease.test.ts src/workspace/workspaceLease.reentrant.test.ts src/terminal/Manager.test.ts src/terminal/review.probe.test.ts"
+for m in "$@"; do
+  restore
+  if ! node $OUT/mutate.mjs $m; then echo "MUTATION $m NOT APPLIED"; continue; fi
+  (cd $T/apps/server && vp test run $TESTS --testTimeout=20000 > $OUT/$m.log 2>&1)
+  echo "== $m: $(grep -E "^ +Tests " $OUT/$m.log)"
+  grep -E "^ +(FAIL|×)" $OUT/$m.log | sed -E "s/ [0-9]+ms$//" | sort -u | sed "s/^/   /"
+done
+restore
+for f in $FILES; do cmp <(git -C $REPO show ee1e6123:$f) $T/$f && echo "restored $f"; done

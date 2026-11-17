@@ -1,0 +1,292 @@
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
+import { assert, it } from "@effect/vitest";
+import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+
+import * as ProcessRunner from "../processRunner.ts";
+import { tryWithWorkspaceLease, withWorkspaceLease } from "../workspace/workspaceLease.ts";
+import { createManager, openInput } from "./Manager.testkit.ts";
+
+const report = (name: string, value: unknown) =>
+  Effect.sync(() => console.log("REVIEW-PROBE " + name + " " + JSON.stringify(value)));
+
+const heldFolder = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const { join } = yield* Path.Path;
+  const base = yield* fs.makeTempDirectoryScoped({ prefix: "goat-review-probe-" });
+  const cwd = join(base, "held");
+  const other = join(base, "other");
+  yield* fs.makeDirectory(cwd);
+  yield* fs.makeDirectory(other);
+  const held = yield* Deferred.make<void>();
+  const release = yield* Deferred.make<void>();
+  const hold = withWorkspaceLease(
+    cwd,
+    Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release))),
+  ).pipe(Effect.forkChild);
+  return { cwd, other, held, release, hold };
+});
+
+const shellOf = (manager: any, threadId: string, terminalId: string) =>
+  Effect.exit(manager.getShell({ threadId, terminalId }));
+
+const cwdOf = (manager: any, threadId: string, terminalId: string) =>
+  Effect.gen(function* () {
+    let cwd: unknown = null;
+    const stop = yield* manager.observeStream({ threadId, terminalId }, (event: any) =>
+      Effect.sync(() => {
+        if (event.type === "snapshot") cwd = { cwd: event.snapshot.cwd, status: event.snapshot.status, pid: event.snapshot.pid };
+      }),
+    );
+    stop();
+    return cwd;
+  });
+
+it.layer(
+  Layer.mergeAll(
+    NodeServices.layer,
+    McpProviderSessions.layer,
+    ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer)),
+  ),
+  { excludeTestServices: true },
+)("review probes", (it) => {
+  it.effect("PROBE close sent while an open waits on a held folder", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      const folder = yield* heldFolder;
+      const input = openInput({ cwd: folder.cwd, terminalId: "x" });
+      const holder = yield* folder.hold;
+      yield* Deferred.await(folder.held);
+      const opened = yield* Effect.exit(manager.open(input)).pipe(Effect.forkChild({ startImmediately: true }));
+      const closed = yield* Effect.exit(manager.close({ threadId: input.threadId, terminalId: "x" })).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      const closedBeforeRelease = closed.pollUnsafe() !== undefined;
+      yield* Deferred.succeed(folder.release, undefined);
+      yield* Fiber.join(holder);
+      const openExit = yield* Fiber.join(opened);
+      yield* Fiber.join(closed);
+      const shell = yield* shellOf(manager, input.threadId, "x");
+      const out = {
+        closedBeforeRelease,
+        openSucceeded: Exit.isSuccess(openExit),
+        spawned: ptyAdapter.spawnInputs.length,
+        aliveAfterClose: Exit.isSuccess(shell),
+        killed: ptyAdapter.processes.map((p: any) => p.killed),
+      };
+      yield* report("close-during-wait", out);
+      assert.isFalse(out.aliveAfterClose, "the person's close was overtaken: a shell runs after it");
+    }),
+  );
+
+  it.effect("PROBE thread-wide close with history deletion while an open waits", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      const folder = yield* heldFolder;
+      const input = openInput({ cwd: folder.cwd, terminalId: "x" });
+      const holder = yield* folder.hold;
+      yield* Deferred.await(folder.held);
+      const opened = yield* Effect.exit(manager.open(input)).pipe(Effect.forkChild({ startImmediately: true }));
+      const closed = yield* Effect.exit(manager.close({ threadId: input.threadId, deleteHistory: true })).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.succeed(folder.release, undefined);
+      yield* Fiber.join(holder);
+      yield* Fiber.join(opened);
+      yield* Fiber.join(closed);
+      const shell = yield* shellOf(manager, input.threadId, "x");
+      const out = { spawned: ptyAdapter.spawnInputs.length, aliveAfterThreadClose: Exit.isSuccess(shell) };
+      yield* report("thread-close-during-wait", out);
+      assert.isFalse(out.aliveAfterThreadClose, "a thread-wide close was overtaken");
+    }),
+  );
+
+  it.effect("PROBE newer open in another folder while an older open waits", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      const folder = yield* heldFolder;
+      const holder = yield* folder.hold;
+      yield* Deferred.await(folder.held);
+      const older = yield* Effect.exit(manager.open(openInput({ terminalId: "x", cwd: folder.cwd }))).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      const newer = yield* Effect.exit(manager.open(openInput({ terminalId: "x", cwd: folder.other }))).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      const newerDoneBeforeRelease = newer.pollUnsafe() !== undefined;
+      yield* Deferred.succeed(folder.release, undefined);
+      yield* Fiber.join(holder);
+      yield* Fiber.join(older);
+      yield* Fiber.join(newer);
+      const final = yield* cwdOf(manager, "thread-1", "x");
+      const out = {
+        newerDoneBeforeRelease,
+        spawnCwds: ptyAdapter.spawnInputs.map((s: any) => (s.cwd === folder.cwd ? "held(older)" : "other(newer)")),
+        final: final && { ...(final as any), cwd: (final as any).cwd === folder.cwd ? "held(older)" : "other(newer)" },
+      };
+      yield* report("newer-open-other-folder", out);
+      assert.strictEqual((out.final as any)?.cwd, "other(newer)", "the stale request won");
+    }),
+  );
+
+  it.effect("PROBE N concurrent opens on one thread in a free folder", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager(5, { maxRetainedInactiveSessions: 100 } as any);
+      const folder = yield* heldFolder;
+      const done: Array<string> = [];
+      const fibers = [];
+      for (let i = 0; i < 12; i++)
+        fibers.push(
+          yield* manager
+            .open(openInput({ terminalId: "t" + i, cwd: folder.cwd }))
+            .pipe(Effect.tap(() => Effect.sync(() => done.push("t" + i))), Effect.forkChild({ startImmediately: true })),
+        );
+      for (const f of fibers) yield* Fiber.join(f);
+      const out = { done, spawned: ptyAdapter.spawnInputs.length, free: yield* tryWithWorkspaceLease(folder.cwd, Effect.void) };
+      yield* report("n-opens-one-thread-free", out);
+      assert.strictEqual(out.spawned, 12);
+      assert.deepEqual(done, Array.from({ length: 12 }, (_, i) => "t" + i));
+    }),
+  );
+
+  it.effect("PROBE N concurrent opens on N threads in one free folder", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      const folder = yield* heldFolder;
+      const done: Array<string> = [];
+      const fibers = [];
+      for (let i = 0; i < 12; i++)
+        fibers.push(
+          yield* manager
+            .open(openInput({ threadId: "thread-" + i, terminalId: "t", cwd: folder.cwd }))
+            .pipe(Effect.tap(() => Effect.sync(() => done.push("thread-" + i))), Effect.forkChild({ startImmediately: true })),
+        );
+      for (const f of fibers) yield* Fiber.join(f);
+      const out = { done, spawned: ptyAdapter.spawnInputs.length };
+      yield* report("n-opens-n-threads-free", out);
+      assert.strictEqual(out.spawned, 12);
+    }),
+  );
+
+  it.effect("PROBE N opens while a holder holds the folder", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      const folder = yield* heldFolder;
+      const holder = yield* folder.hold;
+      yield* Deferred.await(folder.held);
+      const done: Array<string> = [];
+      const fibers = [];
+      for (let i = 0; i < 6; i++)
+        fibers.push(
+          yield* manager
+            .open(openInput({ terminalId: "t" + i, cwd: folder.cwd }))
+            .pipe(Effect.tap(() => Effect.sync(() => done.push("same-thread t" + i))), Effect.forkChild({ startImmediately: true })),
+        );
+      for (let i = 0; i < 6; i++)
+        fibers.push(
+          yield* manager
+            .open(openInput({ threadId: "thread-x" + i, terminalId: "t", cwd: folder.cwd }))
+            .pipe(Effect.tap(() => Effect.sync(() => done.push("thread-x" + i))), Effect.forkChild({ startImmediately: true })),
+        );
+      const doneBeforeRelease = done.length;
+      // the thread's other terminal in another folder still works meanwhile
+      yield* manager.open(openInput({ terminalId: "other", cwd: folder.other }));
+      yield* Deferred.succeed(folder.release, undefined);
+      yield* Fiber.join(holder);
+      for (const f of fibers) yield* Fiber.join(f);
+      const out = { doneBeforeRelease, done, spawned: ptyAdapter.spawnInputs.length, free: yield* tryWithWorkspaceLease(folder.cwd, Effect.void) };
+      yield* report("n-opens-while-held", out);
+      assert.strictEqual(out.spawned, 13);
+    }),
+  );
+
+  it.effect("PROBE a holder that releases and retakes with withWorkspaceLease (FIFO) and with a try", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      const folder = yield* heldFolder;
+      const events: Array<string> = [];
+      const holder = yield* folder.hold;
+      yield* Deferred.await(folder.held);
+      const opened = yield* manager
+        .open(openInput({ terminalId: "x", cwd: folder.cwd }))
+        .pipe(Effect.tap(() => Effect.sync(() => events.push("open"))), Effect.forkChild({ startImmediately: true }));
+      // release, then retake 5 times; each hold yields once inside
+      const loop = Effect.gen(function* () {
+        yield* Deferred.succeed(folder.release, undefined);
+        yield* Fiber.join(holder);
+        for (let i = 0; i < 5; i++)
+          yield* withWorkspaceLease(folder.cwd, Effect.sync(() => events.push("hold" + i)).pipe(Effect.andThen(Effect.yieldNow)));
+      });
+      yield* loop;
+      yield* Fiber.join(opened);
+      const events2: Array<string> = [];
+      const holder2 = yield* withWorkspaceLease(folder.cwd, Effect.never).pipe(Effect.forkChild({ startImmediately: true }));
+      const opened2 = yield* manager
+        .open(openInput({ terminalId: "y", cwd: folder.cwd }))
+        .pipe(Effect.tap(() => Effect.sync(() => events2.push("open"))), Effect.forkChild({ startImmediately: true }));
+      yield* Fiber.interrupt(holder2);
+      for (let i = 0; i < 5; i++) {
+        const got = yield* tryWithWorkspaceLease(folder.cwd, Effect.sync(() => events2.push("try" + i)).pipe(Effect.andThen(Effect.yieldNow)));
+        if (got._tag === "None") events2.push("try" + i + " busy");
+      }
+      yield* Fiber.join(opened2);
+      yield* report("retake-loop", { withWorkspaceLease: events, tryRetake: events2, spawned: ptyAdapter.spawnInputs.length });
+    }),
+  );
+
+  it.effect("PROBE FIFO: a terminal try right after a release does not overtake a queued waiter", () =>
+    Effect.gen(function* () {
+      const { manager } = yield* createManager();
+      const folder = yield* heldFolder;
+      const events: Array<string> = [];
+      const gate = yield* Deferred.make<void>();
+      const holderReady = yield* Deferred.make<void>();
+      const holder = yield* withWorkspaceLease(
+        folder.cwd,
+        Deferred.succeed(holderReady, undefined).pipe(Effect.andThen(Deferred.await(gate))),
+      ).pipe(
+        Effect.andThen(manager.open(openInput({ terminalId: "x", cwd: folder.cwd }))),
+        Effect.tap(() => Effect.sync(() => events.push("terminal opened"))),
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(holderReady);
+      const waiter = yield* withWorkspaceLease(folder.cwd, Effect.sync(() => events.push("waiter entered"))).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.succeed(gate, undefined);
+      yield* Fiber.join(holder);
+      yield* Fiber.join(waiter);
+      yield* report("fifo-after-release", events);
+      assert.deepEqual(events, ["waiter entered", "terminal opened"]);
+    }),
+  );
+
+  it.effect("PROBE attach rerun keeps one viewer: a later wider open is not bounded by a ghost viewer", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      const folder = yield* heldFolder;
+      const holder = yield* folder.hold;
+      yield* Deferred.await(folder.held);
+      const input = openInput({ terminalId: "x", cwd: folder.cwd, cols: 40, rows: 10 });
+      const attach = yield* manager.attachStream(input, () => Effect.void, undefined, "viewer-a").pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.succeed(folder.release, undefined);
+      yield* Fiber.join(holder);
+      const stop = yield* Fiber.join(attach);
+      stop();
+      // the only viewer left; a new open asks 120x30
+      const snap = yield* manager.open(openInput({ terminalId: "x", cwd: folder.cwd, cols: 120, rows: 30 }));
+      const out = { cols: snap.cols, rows: snap.rows, spawned: ptyAdapter.spawnInputs.length };
+      yield* report("viewer-after-rerun", out);
+      assert.strictEqual(out.cols, 120);
+    }),
+  );
+});
+

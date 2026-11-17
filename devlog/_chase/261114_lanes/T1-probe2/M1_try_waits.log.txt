@@ -1,0 +1,404 @@
+note: You are running `vp test` as a Vite+ built-in command. If you meant to run the test npm script, use `vpr test` instead.
+
+ RUN  v5.0.5 /private/tmp/t1-review-ee1e6123/apps/server
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE N opens while a holder holds the folder
+[23:10:56.043] INFO (#153): Server shutdown phase started { phase: 'terminalSessions' }
+[23:10:56.043] INFO (#153): Server shutdown phase finished { phase: 'terminalSessions', durationMs: 0, outcome: 'success' }
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE N opens while a holder holds the folder
+[23:10:56.044] ERROR (#153): [Error [InterruptError]: All fibers interrupted without error] {
+  [cause]: InterruptCause: The fiber was interrupted by:
+      at fiber (unknown) {
+    [cause]: undefined
+  }
+}
+
+ ❯ src/terminal/review.probe.test.ts (9 tests | 1 failed) 20068ms
+   ❯ review probes (9)
+     × PROBE N opens while a holder holds the folder 20006ms
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeOpen and a person's terminal open both finish
+[23:11:25.475] INFO (#1): Server shutdown phase started { phase: 'terminalSessions' }
+[23:11:25.475] INFO (#1): Server shutdown phase finished { phase: 'terminalSessions', durationMs: 0, outcome: 'success' }
+[23:11:25.476] ERROR (#1): [Error [InterruptError]: All fibers interrupted without error] {
+  [cause]: InterruptCause: The fiber was interrupted by:
+      at fiber (unknown) {
+    [cause]: undefined
+  }
+}
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal open both finish
+[23:11:26.634] WARN (#142): failed to snapshot processes for terminal subprocess polling {
+  reason: {
+    _tag: 'TerminalSubprocessCheckError',
+    command: 'ps',
+    exitCode: 0,
+    timedOut: false,
+    stdoutTruncated: true
+  }
+}
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal open both finish
+[23:11:28.725] WARN (#142): failed to snapshot processes for terminal subprocess polling {
+  reason: {
+    _tag: 'TerminalSubprocessCheckError',
+    command: 'ps',
+    exitCode: 0,
+    timedOut: false,
+    stdoutTruncated: true
+  }
+}
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal open both finish
+[23:11:32.816] WARN (#142): failed to snapshot processes for terminal subprocess polling {
+  reason: {
+    _tag: 'TerminalSubprocessCheckError',
+    command: 'ps',
+    exitCode: 0,
+    timedOut: false,
+    stdoutTruncated: true
+  }
+}
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal open both finish
+[23:11:40.906] WARN (#142): failed to snapshot processes for terminal subprocess polling {
+  reason: {
+    _tag: 'TerminalSubprocessCheckError',
+    command: 'ps',
+    exitCode: 0,
+    timedOut: false,
+    stdoutTruncated: true
+  }
+}
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal open both finish
+[23:11:45.484] INFO (#99): Server shutdown phase started { phase: 'terminalSessions' }
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal open both finish
+[23:11:45.485] INFO (#99): Server shutdown phase finished { phase: 'terminalSessions', durationMs: 0, outcome: 'success' }
+[23:11:45.485] ERROR (#99): [Error [InterruptError]: All fibers interrupted without error] {
+  [cause]: InterruptCause: The fiber was interrupted by:
+      at fiber (unknown) {
+    [cause]: undefined
+  }
+}
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal restart both finish
+[23:11:46.636] WARN (#273): failed to snapshot processes for terminal subprocess polling {
+  reason: {
+    _tag: 'TerminalSubprocessCheckError',
+    command: 'ps',
+    exitCode: 0,
+    timedOut: false,
+    stdoutTruncated: true
+  }
+}
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal restart both finish
+[23:11:48.723] WARN (#273): failed to snapshot processes for terminal subprocess polling {
+  reason: {
+    _tag: 'TerminalSubprocessCheckError',
+    command: 'ps',
+    exitCode: 0,
+    timedOut: false,
+    stdoutTruncated: true
+  }
+}
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal restart both finish
+[23:11:52.822] WARN (#273): failed to snapshot processes for terminal subprocess polling {
+  reason: {
+    _tag: 'TerminalSubprocessCheckError',
+    command: 'ps',
+    exitCode: 0,
+    timedOut: false,
+    stdoutTruncated: true
+  }
+}
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal restart both finish
+[23:12:00.922] WARN (#273): failed to snapshot processes for terminal subprocess polling {
+  reason: {
+    _tag: 'TerminalSubprocessCheckError',
+    command: 'ps',
+    exitCode: 0,
+    timedOut: false,
+    stdoutTruncated: true
+  }
+}
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal restart both finish
+[23:12:05.494] INFO (#230): Server shutdown phase started { phase: 'terminalSessions' }
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal restart both finish
+[23:12:05.496] INFO (#230): Server shutdown phase finished { phase: 'terminalSessions', durationMs: 2, outcome: 'success' }
+[23:12:05.496] ERROR (#230): [Error [InterruptError]: All fibers interrupted without error] {
+  [cause]: InterruptCause: The fiber was interrupted by:
+      at fiber (unknown) {
+    [cause]: undefined
+  }
+}
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal attach both finish
+[23:12:06.670] WARN (#404): failed to snapshot processes for terminal subprocess polling {
+  reason: {
+    _tag: 'TerminalSubprocessCheckError',
+    command: 'ps',
+    exitCode: 0,
+    timedOut: false,
+    stdoutTruncated: true
+  }
+}
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal attach both finish
+[23:12:08.767] WARN (#404): failed to snapshot processes for terminal subprocess polling {
+  reason: {
+    _tag: 'TerminalSubprocessCheckError',
+    command: 'ps',
+    exitCode: 0,
+    timedOut: false,
+    stdoutTruncated: true
+  }
+}
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal attach both finish
+[23:12:12.858] WARN (#404): failed to snapshot processes for terminal subprocess polling {
+  reason: {
+    _tag: 'TerminalSubprocessCheckError',
+    command: 'ps',
+    exitCode: 0,
+    timedOut: false,
+    stdoutTruncated: true
+  }
+}
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal attach both finish
+[23:12:20.962] WARN (#404): failed to snapshot processes for terminal subprocess polling {
+  reason: {
+    _tag: 'TerminalSubprocessCheckError',
+    command: 'ps',
+    exitCode: 0,
+    timedOut: false,
+    stdoutTruncated: true
+  }
+}
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal attach both finish
+[23:12:25.504] INFO (#361): Server shutdown phase started { phase: 'terminalSessions' }
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal attach both finish
+[23:12:25.506] INFO (#361): Server shutdown phase finished { phase: 'terminalSessions', durationMs: 1, outcome: 'success' }
+[23:12:25.506] ERROR (#361): [Error [InterruptError]: All fibers interrupted without error] {
+  [cause]: InterruptCause: The fiber was interrupted by:
+      at fiber (unknown) {
+    [cause]: undefined
+  }
+}
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal agent open both finish
+[23:12:26.664] WARN (#536): failed to snapshot processes for terminal subprocess polling {
+  reason: {
+    _tag: 'TerminalSubprocessCheckError',
+    command: 'ps',
+    exitCode: 0,
+    timedOut: false,
+    stdoutTruncated: true
+  }
+}
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal agent open both finish
+[23:12:28.752] WARN (#536): failed to snapshot processes for terminal subprocess polling {
+  reason: {
+    _tag: 'TerminalSubprocessCheckError',
+    command: 'ps',
+    exitCode: 0,
+    timedOut: false,
+    stdoutTruncated: true
+  }
+}
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal agent open both finish
+[23:12:32.863] WARN (#536): failed to snapshot processes for terminal subprocess polling {
+  reason: {
+    _tag: 'TerminalSubprocessCheckError',
+    command: 'ps',
+    exitCode: 0,
+    timedOut: false,
+    stdoutTruncated: true
+  }
+}
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal agent open both finish
+[23:12:40.955] WARN (#536): failed to snapshot processes for terminal subprocess polling {
+  reason: {
+    _tag: 'TerminalSubprocessCheckError',
+    command: 'ps',
+    exitCode: 0,
+    timedOut: false,
+    stdoutTruncated: true
+  }
+}
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal agent open both finish
+[23:12:45.515] INFO (#493): Server shutdown phase started { phase: 'terminalSessions' }
+
+stdout | src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal agent open both finish
+[23:12:45.516] INFO (#493): Server shutdown phase finished { phase: 'terminalSessions', durationMs: 1, outcome: 'success' }
+[23:12:45.516] ERROR (#493): [Error [InterruptError]: All fibers interrupted without error] {
+  [cause]: InterruptCause: The fiber was interrupted by:
+      at fiber (unknown) {
+    [cause]: undefined
+  }
+}
+
+ ❯ src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts (5 tests | 5 failed) 100054ms
+   × a restore paused beforeOpen and a person's terminal open both finish 20009ms
+   × a restore paused beforeSentinel and a person's terminal open both finish 20009ms
+   × a restore paused beforeSentinel and a person's terminal restart both finish 20011ms
+   × a restore paused beforeSentinel and a person's terminal attach both finish 20010ms
+   × a restore paused beforeSentinel and a person's terminal agent open both finish 20010ms
+stdout | src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an agent open on a held folder waits without the thread lock and returns its terminal
+[23:13:08.323] INFO (#21): Server shutdown phase started { phase: 'terminalSessions' }
+[23:13:08.324] INFO (#21): Server shutdown phase finished { phase: 'terminalSessions', durationMs: 0, outcome: 'success' }
+
+stdout | src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an agent open on a held folder waits without the thread lock and returns its terminal
+[23:13:08.326] ERROR (#21): [Error [InterruptError]: All fibers interrupted without error] {
+  [cause]: InterruptCause: The fiber was interrupted by:
+      at fiber (unknown) {
+    [cause]: undefined
+  }
+}
+
+stdout | src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an open that waited finds the terminal the holder opened meanwhile and reuses it
+[23:13:28.330] INFO (#26): Server shutdown phase started { phase: 'terminalSessions' }
+[23:13:28.331] INFO (#26): Server shutdown phase finished { phase: 'terminalSessions', durationMs: 0, outcome: 'success' }
+
+stdout | src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an open that waited finds the terminal the holder opened meanwhile and reuses it
+[23:13:28.332] ERROR (#26): [Error [InterruptError]: All fibers interrupted without error] {
+  [cause]: InterruptCause: The fiber was interrupted by:
+      at fiber (unknown) {
+    [cause]: undefined
+  }
+}
+
+stdout | src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an attach waiting on a held folder ends when its client leaves and leaves nothing behind
+[23:13:48.334] INFO (#31): Server shutdown phase started { phase: 'terminalSessions' }
+[23:13:48.334] INFO (#31): Server shutdown phase finished { phase: 'terminalSessions', durationMs: 0, outcome: 'success' }
+
+stdout | src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an attach waiting on a held folder ends when its client leaves and leaves nothing behind
+[23:13:48.335] ERROR (#31): [Error [InterruptError]: All fibers interrupted without error] {
+  [cause]: InterruptCause: The fiber was interrupted by:
+      at fiber (unknown) {
+    [cause]: undefined
+  }
+}
+
+stdout | src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an attach left while it waits for the thread after the folder frees gives both back
+[23:14:08.340] INFO (#37): Server shutdown phase started { phase: 'terminalSessions' }
+[23:14:08.340] INFO (#37): Server shutdown phase finished { phase: 'terminalSessions', durationMs: 0, outcome: 'success' }
+
+stdout | src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an attach left while it waits for the thread after the folder frees gives both back
+[23:14:08.341] ERROR (#37): [Error [InterruptError]: All fibers interrupted without error] {
+  [cause]: InterruptCause: The fiber was interrupted by:
+      at fiber (unknown) {
+    [cause]: undefined
+  }
+}
+
+ ❯ src/terminal/Manager.leaseOrder.test.ts (4 tests | 4 failed) 80030ms
+   ❯ TerminalManager lease order (4)
+     × an agent open on a held folder waits without the thread lock and returns its terminal 20010ms
+     × an open that waited finds the terminal the holder opened meanwhile and reuses it 20005ms
+     × an attach waiting on a held folder ends when its client leaves and leaves nothing behind 20004ms
+     × an attach left while it waits for the thread after the folder frees gives both back 20006ms
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 10 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an agent open on a held folder waits without the thread lock and returns its terminal
+Error: Test timed out in 20000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ Array.<anonymous> src/terminal/Manager.leaseOrder.test.ts:78:6
+     76|   { excludeTestServices: true },
+     77| )("TerminalManager lease order", (it) => {
+     78|   it.effect(
+       |      ^
+     79|     "an agent open on a held folder waits without the thread lock and …
+     80|     () =>
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/10]⎯
+
+ FAIL  src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an open that waited finds the terminal the holder opened meanwhile and reuses it
+Error: Test timed out in 20000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ Array.<anonymous> src/terminal/Manager.leaseOrder.test.ts:110:6
+    108|   );
+    109|
+    110|   it.effect(
+       |      ^
+    111|     "an open that waited finds the terminal the holder opened meanwhil…
+    112|     () =>
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/10]⎯
+
+ FAIL  src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an attach waiting on a held folder ends when its client leaves and leaves nothing behind
+Error: Test timed out in 20000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ Array.<anonymous> src/terminal/Manager.leaseOrder.test.ts:132:6
+    130|   );
+    131|
+    132|   it.effect(
+       |      ^
+    133|     "an attach waiting on a held folder ends when its client leaves an…
+    134|     () =>
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/10]⎯
+
+ FAIL  src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an attach left while it waits for the thread after the folder frees gives both back
+Error: Test timed out in 20000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ Array.<anonymous> src/terminal/Manager.leaseOrder.test.ts:163:6
+    161|   );
+    162|
+    163|   it.effect(
+       |      ^
+    164|     "an attach left while it waits for the thread after the folder fre…
+    165|     () =>
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/10]⎯
+
+ FAIL  src/terminal/review.probe.test.ts > review probes > PROBE N opens while a holder holds the folder
+Error: Test timed out in 20000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ Array.<anonymous> src/terminal/review.probe.test.ts:177:6
+    175|   );
+    176|
+    177|   it.effect("PROBE N opens while a holder holds the folder", () =>
+       |      ^
+    178|     Effect.gen(function* () {
+    179|       const { manager, ptyAdapter } = yield* createManager();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/10]⎯
+
+ FAIL  src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeOpen and a person's terminal open both finish
+ FAIL  src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal open both finish
+ FAIL  src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal restart both finish
+ FAIL  src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal attach both finish
+ FAIL  src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal agent open both finish
+Error: Test timed out in 20000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts:282:12
+    280|   ["beforeSentinel", "attach"],
+    281|   ["beforeSentinel", "agent open"],
+    282| ] as const)("a restore paused %s and a person's terminal %s both finis…
+       |            ^
+    283|   restoreWhileAPersonAsks(window, person),
+    284| );
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/10]⎯
+
+
+ Test Files  3 failed | 4 passed (7)
+      Tests  10 failed | 105 passed (115)
+   Start at  23:10:34
+   Duration  213.90s (tests 97%, import 2%, transform 1%)
+

@@ -1,0 +1,199 @@
+note: You are running `vp test` as a Vite+ built-in command. If you meant to run the test npm script, use `vpr test` instead.
+
+ RUN  v5.0.5 /private/tmp/t1-review-ee1e6123/apps/server
+
+stdout | src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an open that waited finds the terminal the holder opened meanwhile and reuses it
+[23:17:40.866] INFO (#32): Server shutdown phase started { phase: 'terminalSessions' }
+
+stdout | src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an open that waited finds the terminal the holder opened meanwhile and reuses it
+[23:17:40.868] INFO (#32): Server shutdown phase finished { phase: 'terminalSessions', durationMs: 1, outcome: 'success' }
+
+stdout | src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an open that waited finds the terminal the holder opened meanwhile and reuses it
+[23:17:40.869] ERROR (#32): Error [AssertionError]: expected 2 to equal 1
+    at /private/tmp/t1-review-ee1e6123/apps/server/src/terminal/Manager.leaseOrder.test.ts:126:16 {
+  actual: 2,
+  expected: 1,
+  showDiff: true,
+  operator: 'strictEqual',
+  [cause]: undefined
+}
+
+ ❯ src/terminal/Manager.leaseOrder.test.ts (4 tests | 1 failed) 42ms
+   ❯ TerminalManager lease order (4)
+     × an open that waited finds the terminal the holder opened meanwhile and reuses it 8ms
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE close sent while an open waits on a held folder
+REVIEW-PROBE close-during-wait {"closedBeforeRelease":true,"openSucceeded":true,"spawned":1,"aliveAfterClose":true,"killed":[false]}
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE close sent while an open waits on a held folder
+[23:17:41.644] INFO (#21): Server shutdown phase started { phase: 'terminalSessions' }
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE close sent while an open waits on a held folder
+[23:17:41.646] INFO (#21): Server shutdown phase finished { phase: 'terminalSessions', durationMs: 2, outcome: 'success' }
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE close sent while an open waits on a held folder
+[23:17:41.648] ERROR (#21): Error [AssertionError]: the person's close was overtaken: a shell runs after it: expected true to be false
+    at /private/tmp/t1-review-ee1e6123/apps/server/src/terminal/review.probe.test.ts:84:14 {
+  actual: true,
+  expected: false,
+  showDiff: true,
+  operator: 'strictEqual',
+  [cause]: undefined
+}
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE thread-wide close with history deletion while an open waits
+REVIEW-PROBE thread-close-during-wait {"spawned":1,"aliveAfterThreadClose":true}
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE thread-wide close with history deletion while an open waits
+[23:17:41.652] INFO (#30): Server shutdown phase started { phase: 'terminalSessions' }
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE thread-wide close with history deletion while an open waits
+[23:17:41.652] INFO (#30): Server shutdown phase finished { phase: 'terminalSessions', durationMs: 0, outcome: 'success' }
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE thread-wide close with history deletion while an open waits
+[23:17:41.653] ERROR (#30): Error [AssertionError]: a thread-wide close was overtaken: expected true to be false
+    at /private/tmp/t1-review-ee1e6123/apps/server/src/terminal/review.probe.test.ts:106:14 {
+  actual: true,
+  expected: false,
+  showDiff: true,
+  operator: 'strictEqual',
+  [cause]: undefined
+}
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE newer open in another folder while an older open waits
+REVIEW-PROBE newer-open-other-folder {"newerDoneBeforeRelease":false,"spawnCwds":["other(newer)","held(older)"],"final":{"cwd":"held(older)","status":"running","pid":9001}}
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE newer open in another folder while an older open waits
+[23:17:41.656] INFO (#39): Server shutdown phase started { phase: 'terminalSessions' }
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE newer open in another folder while an older open waits
+[23:17:41.658] INFO (#39): Server shutdown phase finished { phase: 'terminalSessions', durationMs: 1, outcome: 'success' }
+
+stdout | src/terminal/review.probe.test.ts > review probes > PROBE newer open in another folder while an older open waits
+[23:17:41.659] ERROR (#39): Error [AssertionError]: the stale request won: expected 'held(older)' to equal 'other(newer)'
+    at /private/tmp/t1-review-ee1e6123/apps/server/src/terminal/review.probe.test.ts:134:14 {
+  actual: 'held(older)',
+  expected: 'other(newer)',
+  showDiff: true,
+  operator: 'strictEqual',
+  [cause]: undefined
+}
+
+ ❯ src/terminal/review.probe.test.ts (9 tests | 3 failed) 63ms
+   ❯ review probes (9)
+     × PROBE close sent while an open waits on a held folder 13ms
+     × PROBE thread-wide close with history deletion while an open waits 4ms
+     × PROBE newer open in another folder while an older open waits 6ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an open that waited finds the terminal the holder opened meanwhile and reuses it
+AssertionError: expected 2 to equal 1
+
+- Expected
++ Received
+
+- 1
++ 2
+
+ ❯ src/terminal/Manager.leaseOrder.test.ts:126:16
+    124|         const fromHolder = yield* Fiber.join(holder);
+    125|         const fromPerson = yield* Fiber.join(person);
+    126|         assert.strictEqual(ptyAdapter.spawnInputs.length, 1);
+       |                ^
+    127|         assert.strictEqual(fromPerson.pid, fromHolder.pid);
+    128|         assert.strictEqual(fromPerson.status, "running");
+ ❯ ~effect/Effect/successCont ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:1496:28
+ ❯ ~effect/Effect/evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/core.ts:586:30
+ ❯ FiberImpl.runLoop ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:709:43
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:637:23
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:626:29
+ ❯ Array.<anonymous> ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:1224:17
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:660:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  src/terminal/review.probe.test.ts > review probes > PROBE close sent while an open waits on a held folder
+AssertionError: the person's close was overtaken: a shell runs after it: expected true to be false
+
+- Expected
++ Received
+
+- false
++ true
+
+ ❯ src/terminal/review.probe.test.ts:84:14
+     82|       };
+     83|       yield* report("close-during-wait", out);
+     84|       assert.isFalse(out.aliveAfterClose, "the person's close was over…
+       |              ^
+     85|     }),
+     86|   );
+ ❯ ~effect/Effect/successCont ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:1496:28
+ ❯ ~effect/Effect/evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:1041:30
+ ❯ FiberImpl.runLoop ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:709:43
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:637:23
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:626:29
+ ❯ Array.<anonymous> ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:1224:17
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:660:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  src/terminal/review.probe.test.ts > review probes > PROBE thread-wide close with history deletion while an open waits
+AssertionError: a thread-wide close was overtaken: expected true to be false
+
+- Expected
++ Received
+
+- false
++ true
+
+ ❯ src/terminal/review.probe.test.ts:106:14
+    104|       const out = { spawned: ptyAdapter.spawnInputs.length, aliveAfter…
+    105|       yield* report("thread-close-during-wait", out);
+    106|       assert.isFalse(out.aliveAfterThreadClose, "a thread-wide close w…
+       |              ^
+    107|     }),
+    108|   );
+ ❯ ~effect/Effect/successCont ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:1496:28
+ ❯ ~effect/Effect/evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:1041:30
+ ❯ FiberImpl.runLoop ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:709:43
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:637:23
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:626:29
+ ❯ Array.<anonymous> ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:1224:17
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:660:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+ FAIL  src/terminal/review.probe.test.ts > review probes > PROBE newer open in another folder while an older open waits
+AssertionError: the stale request won: expected 'held(older)' to equal 'other(newer)'
+
+Expected: "other(newer)"
+Received: "held(older)"
+
+ ❯ src/terminal/review.probe.test.ts:134:14
+    132|       };
+    133|       yield* report("newer-open-other-folder", out);
+    134|       assert.strictEqual((out.final as any)?.cwd, "other(newer)", "the…
+       |              ^
+    135|     }),
+    136|   );
+ ❯ ~effect/Effect/successCont ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:1496:28
+ ❯ ~effect/Effect/evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:1041:30
+ ❯ FiberImpl.runLoop ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:709:43
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:637:23
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:626:29
+ ❯ Array.<anonymous> ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:1224:17
+ ❯ FiberImpl.evaluate ../../../../../Users/jun/.goat/desktop-nightly/worktrees/goat/chase-t3-261114-next2-n-8691c05d0b29374e/node_modules/.pnpm/effect@4.1.3/node_modules/effect/src/internal/effect.ts:660:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯
+
+
+ Test Files  2 failed | 5 passed (7)
+      Tests  4 failed | 111 passed (115)
+   Start at  23:17:36
+   Duration  16.21s (tests 52%, import 34%, transform 13%, setup 1%)
+
+     Import  2085 modules were evaluated 6574 times · 5.39s total, 34% of tracked time
+             ~3.68s faster with isolate: false — shared modules are evaluated once per worker instead of once per file
+             learn more: https://vitest.dev/guide/improving-performance#test-isolation
+

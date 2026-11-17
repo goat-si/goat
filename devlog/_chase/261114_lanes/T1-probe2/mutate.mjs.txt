@@ -1,0 +1,33 @@
+import fs from "node:fs";
+const root = "/tmp/t1-review-ee1e6123/apps/server/src/";
+const muts = {
+  M1_try_waits: [["terminal/terminalLeaseOrder.ts",
+    "cwdUnavailable(cwd, tryEnterWorkspaceLease(options.resolve(cwd), effect))",
+    "cwdUnavailable(cwd, withWorkspaceLease(options.resolve(cwd), effect).pipe(Effect.map(Option.some)))"]],
+  M2_no_users_check: [["workspace/workspaceLease.ts",
+    "admission.kind === \"admitted\" && (!behindWaiters || admission.lease.users === 1)",
+    "admission.kind === \"admitted\""]],
+  M3_busy_keeps_thread_lock: [["terminal/terminalLeaseOrder.ts",
+    "return settle(options.withThreadLock(threadId, effect));",
+    "return options.withThreadLock(threadId, effect.pipe(Effect.catchIf((error): error is TerminalLeaseBusy => error instanceof TerminalLeaseBusy, ({ cwd }) => cwdUnavailable(cwd, withWorkspaceLease(options.resolve(cwd), reuseHeldWorkspaceLease(effect)))))) as any;"]],
+  M4_rerun_stale_read: [["terminal/Manager.ts",
+    "    const existing = yield* getSession(input.threadId, terminalId);\n    if (Option.isNone(existing)) {\n      yield* flushPersist",
+    "    const existing = staleExisting.has(requestedInput) ? staleExisting.get(requestedInput) : yield* getSession(input.threadId, terminalId);\n    staleExisting.set(requestedInput, existing);\n    if (Option.isNone(existing)) {\n      yield* flushPersist"],
+    ["terminal/Manager.ts", "export { BoundedTerminalHistory } from \"./BoundedTerminalHistory.ts\";", "export { BoundedTerminalHistory } from \"./BoundedTerminalHistory.ts\";\nconst staleExisting = new WeakMap<object, any>();"]],
+  M5_no_mark_check: [["workspace/workspaceLease.ts",
+    "const key = fiber.getRef(ReuseHeldLease)\n      ? canonical(cwd, fiber.getRef(HostProcess.Platform))\n      : undefined;",
+    "const key = canonical(cwd, fiber.getRef(HostProcess.Platform));"]],
+  M6_viewer_retained_twice: [["terminal/Manager.ts", "detach ??= retainViewerOnce(", "detach = retainViewerOnce("]],
+  M7_stop_outside_lock: [["terminal/Manager.ts",
+    "      Effect.onError(() => Effect.sync(stop)),\n      (effect) => withThreadLockAndLease(input.threadId, effect),",
+    "      (effect) => withThreadLockAndLease(input.threadId, effect),\n      Effect.onError(() => Effect.sync(stop)),"]],
+};
+const name = process.argv[2];
+for (const [file, from, to] of muts[name]) {
+  const p = root + file;
+  const src = fs.readFileSync(p, "utf8");
+  const n = src.split(from).length - 1;
+  if (n !== 1) { console.error("PATTERN COUNT " + n + " in " + file + " for " + name); process.exit(3); }
+  fs.writeFileSync(p, src.replace(from, to));
+}
+console.log("applied " + name);

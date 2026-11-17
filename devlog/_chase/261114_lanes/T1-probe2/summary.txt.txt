@@ -1,0 +1,93 @@
+applied M1_try_waits
+== M1_try_waits:       Tests  10 failed | 105 passed (115)
+        × PROBE N opens while a holder holds the folder
+        × an agent open on a held folder waits without the thread lock and returns its terminal
+        × an attach left while it waits for the thread after the folder frees gives both back
+        × an attach waiting on a held folder ends when its client leaves and leaves nothing behind
+        × an open that waited finds the terminal the holder opened meanwhile and reuses it
+      × a restore paused beforeOpen and a person's terminal open both finish
+      × a restore paused beforeSentinel and a person's terminal agent open both finish
+      × a restore paused beforeSentinel and a person's terminal attach both finish
+      × a restore paused beforeSentinel and a person's terminal open both finish
+      × a restore paused beforeSentinel and a person's terminal restart both finish
+    FAIL  src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeOpen and a person's terminal open both finish
+    FAIL  src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal agent open both finish
+    FAIL  src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal attach both finish
+    FAIL  src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal open both finish
+    FAIL  src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal restart both finish
+    FAIL  src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an agent open on a held folder waits without the thread lock and returns its terminal
+    FAIL  src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an attach left while it waits for the thread after the folder frees gives both back
+    FAIL  src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an attach waiting on a held folder ends when its client leaves and leaves nothing behind
+    FAIL  src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an open that waited finds the terminal the holder opened meanwhile and reuses it
+    FAIL  src/terminal/review.probe.test.ts > review probes > PROBE N opens while a holder holds the folder
+applied M2_no_users_check
+== M2_no_users_check:       Tests  4 failed | 111 passed (115)
+        × PROBE FIFO: a terminal try right after a release does not overtake a queued waiter
+        × PROBE close sent while an open waits on a held folder
+        × PROBE newer open in another folder while an older open waits
+        × PROBE thread-wide close with history deletion while an open waits
+    FAIL  src/terminal/review.probe.test.ts > review probes > PROBE FIFO: a terminal try right after a release does not overtake a queued waiter
+    FAIL  src/terminal/review.probe.test.ts > review probes > PROBE close sent while an open waits on a held folder
+    FAIL  src/terminal/review.probe.test.ts > review probes > PROBE newer open in another folder while an older open waits
+    FAIL  src/terminal/review.probe.test.ts > review probes > PROBE thread-wide close with history deletion while an open waits
+applied M3_busy_keeps_thread_lock
+== M3_busy_keeps_thread_lock:       Tests  9 failed | 106 passed (115)
+        × PROBE N opens while a holder holds the folder
+        × an agent open on a held folder waits without the thread lock and returns its terminal
+        × an attach left while it waits for the thread after the folder frees gives both back
+        × an open that waited finds the terminal the holder opened meanwhile and reuses it
+      × a restore paused beforeOpen and a person's terminal open both finish
+      × a restore paused beforeSentinel and a person's terminal agent open both finish
+      × a restore paused beforeSentinel and a person's terminal attach both finish
+      × a restore paused beforeSentinel and a person's terminal open both finish
+      × a restore paused beforeSentinel and a person's terminal restart both finish
+    FAIL  src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeOpen and a person's terminal open both finish
+    FAIL  src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal agent open both finish
+    FAIL  src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal attach both finish
+    FAIL  src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal open both finish
+    FAIL  src/orchestration-v2/goat/ThreadWorkspaceService.setupLockOrder.test.ts > a restore paused beforeSentinel and a person's terminal restart both finish
+    FAIL  src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an agent open on a held folder waits without the thread lock and returns its terminal
+    FAIL  src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an attach left while it waits for the thread after the folder frees gives both back
+    FAIL  src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an open that waited finds the terminal the holder opened meanwhile and reuses it
+    FAIL  src/terminal/review.probe.test.ts > review probes > PROBE N opens while a holder holds the folder
+applied M4_rerun_stale_read
+== M4_rerun_stale_read:       Tests  4 failed | 111 passed (115)
+        × PROBE close sent while an open waits on a held folder
+        × PROBE newer open in another folder while an older open waits
+        × PROBE thread-wide close with history deletion while an open waits
+        × an open that waited finds the terminal the holder opened meanwhile and reuses it
+    FAIL  src/terminal/Manager.leaseOrder.test.ts > TerminalManager lease order > an open that waited finds the terminal the holder opened meanwhile and reuses it
+    FAIL  src/terminal/review.probe.test.ts > review probes > PROBE close sent while an open waits on a held folder
+    FAIL  src/terminal/review.probe.test.ts > review probes > PROBE newer open in another folder while an older open waits
+    FAIL  src/terminal/review.probe.test.ts > review probes > PROBE thread-wide close with history deletion while an open waits
+applied M5_no_mark_check
+== M5_no_mark_check:       Tests  4 failed | 111 passed (115)
+        × PROBE close sent while an open waits on a held folder
+        × PROBE newer open in another folder while an older open waits
+        × PROBE thread-wide close with history deletion while an open waits
+      × a fiber forked during a hold enters only after the holder ends unless marked
+    FAIL  src/terminal/review.probe.test.ts > review probes > PROBE close sent while an open waits on a held folder
+    FAIL  src/terminal/review.probe.test.ts > review probes > PROBE newer open in another folder while an older open waits
+    FAIL  src/terminal/review.probe.test.ts > review probes > PROBE thread-wide close with history deletion while an open waits
+    FAIL  src/workspace/workspaceLease.reentrant.test.ts > a fiber forked during a hold enters only after the holder ends unless marked
+applied M6_viewer_retained_twice
+== M6_viewer_retained_twice:       Tests  4 failed | 111 passed (115)
+        × PROBE attach rerun keeps one viewer: a later wider open is not bounded by a ghost viewer
+        × PROBE close sent while an open waits on a held folder
+        × PROBE newer open in another folder while an older open waits
+        × PROBE thread-wide close with history deletion while an open waits
+    FAIL  src/terminal/review.probe.test.ts > review probes > PROBE attach rerun keeps one viewer: a later wider open is not bounded by a ghost viewer
+    FAIL  src/terminal/review.probe.test.ts > review probes > PROBE close sent while an open waits on a held folder
+    FAIL  src/terminal/review.probe.test.ts > review probes > PROBE newer open in another folder while an older open waits
+    FAIL  src/terminal/review.probe.test.ts > review probes > PROBE thread-wide close with history deletion while an open waits
+applied M7_stop_outside_lock
+== M7_stop_outside_lock:       Tests  3 failed | 112 passed (115)
+        × PROBE close sent while an open waits on a held folder
+        × PROBE newer open in another folder while an older open waits
+        × PROBE thread-wide close with history deletion while an open waits
+    FAIL  src/terminal/review.probe.test.ts > review probes > PROBE close sent while an open waits on a held folder
+    FAIL  src/terminal/review.probe.test.ts > review probes > PROBE newer open in another folder while an older open waits
+    FAIL  src/terminal/review.probe.test.ts > review probes > PROBE thread-wide close with history deletion while an open waits
+restored apps/server/src/terminal/terminalLeaseOrder.ts
+restored apps/server/src/workspace/workspaceLease.ts
+restored apps/server/src/terminal/Manager.ts
