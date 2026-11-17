@@ -39,7 +39,7 @@ describe("thread family lookup compatibility", () => {
       threads: Schema.Array(Schema.Unknown),
       lookupTitles: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
     });
-    expect(Schema.decodeUnknownSync(olderFamily)(answer)).toEqual({
+    expect(Schema.decodeSync(olderFamily)(answer)).toEqual({
       snapshotSequence: 0,
       threads: [],
       lookupTitles: { fork: "Fork" },
