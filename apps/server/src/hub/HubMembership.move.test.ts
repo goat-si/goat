@@ -4,9 +4,14 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
+import * as Layer from "effect/Layer";
 import * as Statement from "effect/sql/Statement";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
-import { layerSessionStore, startGuardedCall } from "../auth/SessionEnd.testkit.ts";
+import { guardedScope, layerSessionStore, startCallEndedBy } from "../auth/SessionEnd.testkit.ts";
+import { dependencies, serveOverHttp } from "../mcp/agentSurface.testkit.ts";
+import * as McpHttpServer from "../mcp/McpHttpServer.ts";
+import { HubMembership } from "./HubMembership.ts";
 import { PINNED, scope, setup, threadScope } from "./HubMembership.testkit.ts";
 
 const OLD = "lnk_0123456789abcdef";
@@ -312,17 +317,6 @@ const startMove = (hub: Effect.Success<ReturnType<typeof setup>>, input: HubDevi
       .pipe(Effect.forkChild({ startImmediately: true }));
     return { stop: Fiber.interrupt(fiber) };
   });
-/** As startMove, or, for "revoke", a move on an MCP session that `stop` revokes. */
-const startMoveEndedBy = (
-  hub: Effect.Success<ReturnType<typeof setup>>,
-  input: HubDeviceMoveInput,
-  how: "stop" | "revoke",
-) =>
-  how === "stop"
-    ? startMove(hub, input)
-    : Effect.map(startGuardedCall(hub.membership.move(scope, input)), (call) => ({
-        stop: call.revoke,
-      }));
 // The next membership change waits on the permit a running move holds until it finishes.
 const afterMoves = (hub: Effect.Success<ReturnType<typeof setup>>) =>
   Effect.exit(hub.membership.move(scope, { fromAlias: "not an alias", toAlias: "x" }));
@@ -340,11 +334,14 @@ it.effect.each(["stop", "revoke"] as const)(
           Effect.andThen(Deferred.await(gate)),
         ),
       });
-      const moving = yield* startMoveEndedBy(hub, move, how);
+      const moving = yield* startCallEndedBy(hub.membership.move(scope, move), how);
       yield* Deferred.await(revoked);
       // The caller is gone here, with the device routing through no hub.
       yield* moving.stop;
+      // Nothing awaited since the stop returned: the caller's interruption has already run.
+      expect(yield* moving.interrupted).toBe(true);
       yield* Deferred.succeed(gate, undefined);
+      expect(yield* moving.cut).toBe(true);
       yield* afterMoves(hub);
       expect(hub.calls).toContain(`home link add pen-mini --expect-fingerprint ${PINNED} --json`);
       expect((yield* hub.audit).filter(({ action }) => action === "hub.move").at(-1)).toMatchObject(
@@ -378,10 +375,13 @@ it.effect.each([
           Effect.andThen(Deferred.await(gate)),
         ),
       });
-      const moving = yield* startMoveEndedBy(hub, move, how);
+      const moving = yield* startCallEndedBy(hub.membership.move(scope, move), how);
       yield* Deferred.await(probing);
       yield* moving.stop;
+      // Released at once: the job's next check already sees its caller gone.
+      expect(yield* moving.interrupted).toBe(true);
       yield* Deferred.succeed(gate, undefined);
+      expect(yield* moving.cut).toBe(true);
       yield* afterMoves(hub);
       expect(hub.calls.filter((call) => /revoke|disconnect|link add/.test(call))).toEqual([]);
       expect((yield* hub.inboxItems).items).toEqual([]);
@@ -393,12 +393,63 @@ it.effect.each([
     }).pipe(Effect.provide(layerSessionStore)),
 );
 
+it.effect(
+  "goat_hub_device_move over /mcp, revoked while its job checks the target, returns the cut and asks no owner",
+  () => {
+    const gate = Deferred.makeUnsafe<void>();
+    return Effect.gen(function* () {
+      const probing = yield* Deferred.make<void>();
+      const hub = yield* setup({
+        ...asking,
+        duringProbe: Deferred.succeed(probing, undefined).pipe(
+          Effect.andThen(Deferred.await(gate)),
+        ),
+      });
+      const callerGone = yield* Deferred.make<void>();
+      const membership: HubMembership["Service"] = {
+        ...hub.membership,
+        move: (moveScope, input) =>
+          hub.membership
+            .move(moveScope, input)
+            .pipe(Effect.onInterrupt(() => Deferred.succeed(callerGone, undefined))),
+      };
+      const outside = yield* guardedScope(scope);
+      const http = yield* serveOverHttp(
+        { outside: outside.scope },
+        McpHttpServer.catalogRegistrations.hostStatus.pipe(
+          Layer.provide(Layer.mergeAll(dependencies, Layer.succeed(HubMembership, membership))),
+        ),
+      );
+      const running = yield* http
+        .callTool("outside", "goat_hub_device_move", move)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(probing);
+      yield* outside.revoke;
+      // Released at once: the job's next check already sees its caller gone.
+      expect(yield* Deferred.isDone(callerGone)).toBe(true);
+      yield* Deferred.succeed(gate, undefined);
+      const result = yield* Fiber.join(running);
+      yield* afterMoves(hub);
+      expect(result.isError).toBe(true);
+      expect(
+        result.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
+      ).toContain("This GOAT session was revoked while the call ran, so GOAT stopped it.");
+      expect(hub.calls.filter((call) => /revoke|disconnect|link add/.test(call))).toEqual([]);
+      expect((yield* hub.inboxItems).items).toEqual([]);
+    }).pipe(
+      // A failed assertion still releases the job, so the test ends on it and not on teardown.
+      Effect.ensuring(Deferred.succeed(gate, undefined)),
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(layerSessionStore, layerTestLoopback)),
+    );
+  },
+);
+
 it.effect("a move on an MCP session that stays live is not refused", () =>
   Effect.gen(function* () {
     const hub = yield* setup({ linked: ["mini"], pin: PINNED });
-    const call = yield* startGuardedCall(hub.membership.move(scope, move));
-    const moved = yield* Fiber.join(call.fiber);
-    expect(moved._tag).toBe("Some");
+    const call = yield* startCallEndedBy(hub.membership.move(scope, move), "revoke");
+    expect(yield* call.cut).toBe(false);
     expect(hub.calls).toContain(`home link add pen-mini --expect-fingerprint ${PINNED} --json`);
   }).pipe(Effect.provide(layerSessionStore)),
 );

@@ -294,12 +294,26 @@ it.effect.each(["revoked by the command line", "Pen-bound and its row is deleted
 );
 
 it.effect(
-  "Revoke others keeps a kept Pen session's running call and cuts a revoked one's, and settling the revoked id again changes nothing",
+  "Revoke others keeps a kept Pen session's call and grant and cuts a revoked one's; a later check that settles the revoked id again changes nothing",
   () =>
     Effect.gen(function* () {
       const check = yield* makeCheckProbe;
       const probe = yield* makeProbe;
-      const { running } = yield* makeServerAndCli(check.wrap);
+      // Each durable read: the ids the check held live, and those its rows still showed unrevoked.
+      const reads: Array<{ live: ReadonlyArray<string>; unrevoked: ReadonlyArray<string> }> = [];
+      const { running } = yield* makeServerAndCli((repository) =>
+        check.wrap({
+          ...repository,
+          listUnrevoked: (input) =>
+            repository
+              .listUnrevoked(input)
+              .pipe(
+                Effect.tap((unrevoked) =>
+                  Effect.sync(() => reads.push({ live: input.sessionIds, unrevoked })),
+                ),
+              ),
+        }),
+      );
       yield* Effect.gen(function* () {
         const auth = yield* EnvironmentAuth.EnvironmentAuth;
         const store = yield* SessionStore.SessionStore;
@@ -330,13 +344,24 @@ it.effect(
         yield* Queue.take(probe.arrived);
         // A durable check snapshots both ids before the press and settles the revoked one again.
         yield* check.pass(revoked.revokeOthers);
+        const settledAgain = reads.at(-1);
+        // Checks run one after another, so this read returning means the one above settled.
         expect(yield* check.next).toBe("read");
+        expect(settledAgain?.live).toContain(revoked.sessionId);
+        expect(settledAgain?.unrevoked).not.toContain(revoked.sessionId);
         yield* Deferred.succeed(probe.gate, undefined);
         const keptResult = yield* Fiber.join(keptCall);
         const revokedResult = yield* Fiber.join(revokedCall);
         expect(yield* Ref.get(probe.landed)).toEqual(["gated-kept"]);
-        expect(textOf(keptResult)).not.toContain(CUT);
+        expect(keptResult.isError).not.toBe(true);
+        expect(keptResult.structuredContent).toMatchObject({ title: "gated-kept" });
         expect(textOf(revokedResult)).toContain(CUT);
+        const grant = (sessionId: typeof pen.sessionId) =>
+          store
+            .readActiveScopes(sessionId)
+            .pipe(Effect.match({ onFailure: (error) => error._tag, onSuccess: () => "live" }));
+        expect(yield* grant(pen.sessionId)).toBe("live");
+        expect(yield* grant(revoked.sessionId)).not.toBe("live");
       }).pipe(
         Effect.provide(served(probe).pipe(Layer.provideMerge(layerAuthOver(running)))),
         Effect.scoped,
