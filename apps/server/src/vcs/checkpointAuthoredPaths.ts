@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 
+import { resolveTurnStart } from "./checkpointTurnStart.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 
 /** Paths a turn wrote between two checkpoints, leaving out what moving HEAD brought in. */
@@ -8,20 +9,21 @@ export const makeListAuthoredPaths = (
 ): VcsDriver.VcsCheckpointOps["listAuthoredPaths"] =>
   Effect.fn("GitVcsDriver.checkpoints.listAuthoredPaths")(function* (input) {
     const operation = "GitVcsDriver.checkpoints.listAuthoredPaths";
+    const turnStart = yield* resolveTurnStart(execute, input);
     const heads = yield* execute({
       operation,
       cwd: input.cwd,
       args: [
         "log",
         "--no-walk=unsorted",
-        "--format=%P %ct",
-        `${input.fromCheckpointRef}^{commit}`,
+        "--format=%ct %P",
+        `${turnStart}^{commit}`,
         `${input.toCheckpointRef}^{commit}`,
       ],
     });
     const [fromLine = "", toLine = ""] = heads.stdout.trimEnd().split("\n");
-    const [startHead = "", capturedAt = ""] = fromLine.split(" ");
-    const [endHead = ""] = toLine.split(" ");
+    const [capturedAt = "", startHead = ""] = fromLine.split(" ");
+    const [, endHead = ""] = toLine.split(" ");
     if (startHead === "" || endHead === "" || startHead === endHead) {
       return null;
     }
@@ -48,7 +50,7 @@ export const makeListAuthoredPaths = (
     // Remerge diffs retain merge conflict fixes while excluding clean upstream changes.
     const pathLists = yield* Effect.all(
       [
-        listPaths(["diff", startHead, `${input.fromCheckpointRef}^{commit}`]),
+        listPaths(["diff", startHead, `${turnStart}^{commit}`]),
         listPaths(["diff", endHead, `${input.toCheckpointRef}^{commit}`]),
         listPaths(["log", "--format=", "--diff-merges=remerge", `${endHead}..${startHead}`]),
         listPaths([

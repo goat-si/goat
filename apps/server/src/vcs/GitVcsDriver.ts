@@ -50,6 +50,7 @@ import {
 } from "./GitWorkspaceSnapshotMaterialize.ts";
 import { makeListAuthoredPaths } from "./checkpointAuthoredPaths.ts";
 import { restoreCheckpointFiles } from "./checkpointSkipWorktreeRestore.ts";
+import * as CheckpointTurnStart from "./checkpointTurnStart.ts";
 import { chunkPathsForGitCheckIgnore } from "./gitCheckIgnoreChunks.ts";
 import { parseGitRemoteVerboseOutput } from "./gitRemoteParsing.ts";
 
@@ -890,6 +891,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     readonly cwd: string;
     readonly ref: string;
     readonly strict: boolean;
+    readonly previousCheckpointRef?: VcsDriver.VcsCaptureCheckpointInput["previousCheckpointRef"];
   }): Effect.fn.Return<GitWorkspaceSnapshotResult, VcsError | GitWorkspaceSnapshotError> {
     const operation = VcsProcess.CHECKPOINT_CAPTURE_OPERATION;
     const readUntracked = Effect.fn("GitVcsDriver.snapshot.readUntracked")(function* () {
@@ -936,6 +938,12 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     return yield* Effect.gen(function* () {
       const capturedHead = yield* resolveHeadCommit(input.cwd);
       const headExists = capturedHead !== null;
+      // Read pinned to the same HEAD, so a switch landing while files are staged is the next one's.
+      const headMoves =
+        headExists && !input.strict
+          ? yield* CheckpointTurnStart.readHeadMoves(execute, input.cwd)
+          : [];
+      const headMark = CheckpointTurnStart.headMarkFor(headMoves, capturedHead);
       const untrackedBefore = input.strict ? yield* readUntracked() : [];
       if (input.strict) {
         if (!headExists)
@@ -1393,8 +1401,20 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         !/(?:^|\0)160000 /u.test(treeEntries.stdout);
       const message = input.strict
         ? `goat snapshot ref=${input.ref}`
-        : `goat checkpoint ref=${input.ref}`;
-      // HEAD is the parent so listAuthoredPaths can see how HEAD moved between checkpoints.
+        : `goat checkpoint ref=${input.ref}${CheckpointTurnStart.headMarkTrailer(headMark)}`;
+      const turnStart = yield* CheckpointTurnStart.buildTurnStart({
+        execute,
+        operation,
+        cwd: input.cwd,
+        checkpointRef: input.ref,
+        previousCheckpointRef: input.previousCheckpointRef,
+        headMark,
+        headMoves,
+        indexConfig,
+        durableWrite,
+        commitEnv,
+      });
+      // HEAD is the first parent so listAuthoredPaths can see how HEAD moved between checkpoints.
       const commitTreeResult = yield* execute({
         operation,
         cwd: input.cwd,
@@ -1403,6 +1423,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           "commit-tree",
           treeOid,
           ...(capturedHead === null ? [] : ["-p", capturedHead]),
+          ...(turnStart === null ? [] : ["-p", turnStart]),
           "-m",
           message,
         ],
@@ -1479,6 +1500,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         cwd: input.cwd,
         ref: input.checkpointRef,
         strict: false,
+        previousCheckpointRef: input.previousCheckpointRef,
       }).pipe(
         Effect.map(({ commitOid, complete }) => ({ commitOid, complete })),
         Effect.mapError((error) =>
@@ -1584,15 +1606,13 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         "checkpoint.fallback_from_to_head": input.fallbackFromToHead,
       });
 
-      let fromRevision: string = input.fromCheckpointRef;
+      let fromRevision = yield* CheckpointTurnStart.resolveTurnStart(execute, input);
       if (input.fallbackFromToHead === true) {
         const resolvedFromCommit = yield* resolveCheckpointCommit(
           input.cwd,
           input.fromCheckpointRef,
         );
-        if (resolvedFromCommit) {
-          fromRevision = resolvedFromCommit;
-        } else {
+        if (!resolvedFromCommit) {
           const headCommit = yield* resolveHeadCommit(input.cwd);
           if (!headCommit) {
             return yield* new VcsProcessExitError({
