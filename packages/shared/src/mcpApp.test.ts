@@ -7,6 +7,7 @@ import {
   injectMcpAppCookieBootstrap,
   MCP_APP_COLOR_SCHEME_PARAM,
   mcpAppContentSecurityPolicy,
+  mcpAppFrameUrl,
   mcpAppToolCallableByApp,
   readMcpAppCsp,
   readMcpAppReference,
@@ -123,6 +124,16 @@ describe("injectMcpAppThemeBootstrap", () => {
     expect(initialScheme(`?${MCP_APP_COLOR_SCHEME_PARAM}=light`)).toBe("light");
     expect(initialScheme(`?${MCP_APP_COLOR_SCHEME_PARAM}=normal`)).toBe("normal");
     expect(initialScheme("")).toBe("normal");
+  });
+
+  it("carries the host's color scheme in the frame URL a client loads", () => {
+    const search = (url: string) => new URL(url).searchParams;
+    const plain = mcpAppFrameUrl("https://host/attachments/app.html", "dark");
+    expect(search(plain).get(MCP_APP_COLOR_SCHEME_PARAM)).toBe("dark");
+    const signed = mcpAppFrameUrl("https://host/attachments/app.html?token=a%2Bb#top", "light");
+    expect(search(signed).get("token")).toBe("a+b");
+    expect(search(signed).get(MCP_APP_COLOR_SCHEME_PARAM)).toBe("light");
+    expect(new URL(signed).hash).toBe("#top");
   });
 });
 
