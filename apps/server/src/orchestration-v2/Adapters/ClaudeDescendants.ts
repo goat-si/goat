@@ -140,9 +140,12 @@ export const makeClaudeDescendantSampler = Effect.fn("ClaudeDescendantSampler.ma
       // After exit the CLI's pid may belong to an unrelated process, so only tracked jobs are roots.
       const observe = (rows: ReadonlyArray<ClaudeProcessRow>, cliRunning: boolean) => {
         const running = new Set(rows.map(identity));
+        // An identity missing from a whole table has exited and cannot return, so a long session
+        // keeps only live jobs.
+        for (const key of tracked.keys()) if (!running.has(key)) tracked.delete(key);
         const roots = [
           ...(cliRunning ? [cliPid] : []),
-          ...[...tracked.values()].flatMap((row) => (running.has(identity(row)) ? [row.pid] : [])),
+          ...[...tracked.values()].map((row) => row.pid),
         ];
         for (const row of claudeDescendants(rows, roots)) tracked.set(identity(row), row);
         return running;

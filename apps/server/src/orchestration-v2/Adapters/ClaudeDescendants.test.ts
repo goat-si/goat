@@ -93,3 +93,19 @@ it("parses ps rows with their start times and skips malformed lines", () => {
     [row(100, 1, "Tue Nov 17 21:00:00 2026"), row(200, 100, "Tue Nov 17 21:00:01 2026", 100)],
   );
 });
+
+// regression (review P2-1): rows a whole table no longer lists are dropped, so a session's map
+// holds only live jobs and a later process with the same identity is not one of its own.
+it.effect("forgets a job a whole table no longer lists", () =>
+  Effect.gen(function* () {
+    const { state, sampler } = fakeTable([row(100, 1, "A"), row(200, 100, "B")]);
+    const tracker = (yield* sampler).track(100);
+    yield* tracker.refresh;
+    state.rows = [row(100, 1, "A")];
+    yield* tracker.refresh;
+    // The same pid and start time again, now under launchd: never seen as this CLI's job.
+    state.rows = [row(200, 1, "B")];
+    yield* tracker.stop;
+    assert.deepEqual(state.killed, []);
+  }),
+);
