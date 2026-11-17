@@ -108,7 +108,10 @@ const rollBackOverLeftover = (row: Row) =>
                 });
                 calls.push("create");
                 // Git refuses a folder that is not empty, so a create that reaches here saw it moved.
-                assert.isFalse(yield* fileSystem.exists(worktreePath).pipe(Effect.orDie));
+                const entries = yield* fileSystem
+                  .readDirectory(worktreePath)
+                  .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+                assert.deepEqual(entries, []);
                 yield* fileSystem
                   .makeDirectory(path.join(worktreePath, ".git"), { recursive: true })
                   .pipe(Effect.orDie);
@@ -180,23 +183,34 @@ const rollBackOverLeftover = (row: Row) =>
     };
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
 
-it.effect.each<Row & { readonly name: string }>([
-  { name: "holding unsaved files" },
-  // The shape "locks rollback with %s" used for a healthy worktree before the ported rule.
-  { name: "that is empty", empty: true },
-])("Edit from here sets aside a folder without .git $name and names it", (row) =>
-  Effect.gen(function* () {
-    const { exit, calls, siblings, notices, setAsidePath, inPlace, setAsideFiles } =
-      yield* rollBackOverLeftover(row);
-    assert.equal(exit._tag, "Success");
-    assert.deepEqual(calls, ["prune", "create", "session", "files", "projection"]);
-    assert.equal(siblings.length, 2);
-    assert.match(setAsidePath ?? "", /feature-set-aside-[^/\\]+$/);
-    assert.equal(setAsideFiles, row.empty ? null : "keep");
-    assert.isNull(inPlace);
-    assert.equal(notices.length, 1);
-    assert.include(notices[0]?.message ?? "", setAsidePath ?? "missing");
-  }),
+it.effect(
+  "Edit from here sets aside a folder without .git holding unsaved files and names it",
+  () =>
+    Effect.gen(function* () {
+      const { exit, calls, siblings, notices, setAsidePath, inPlace, setAsideFiles } =
+        yield* rollBackOverLeftover({});
+      assert.equal(exit._tag, "Success");
+      assert.deepEqual(calls, ["prune", "create", "session", "files", "projection"]);
+      assert.equal(siblings.length, 2);
+      assert.match(setAsidePath ?? "", /feature-set-aside-[^/\\]+$/);
+      assert.equal(setAsideFiles, "keep");
+      assert.isNull(inPlace);
+      assert.equal(notices.length, 1);
+      assert.include(notices[0]?.message ?? "", setAsidePath ?? "missing");
+    }),
+);
+
+// The shape "locks rollback with %s" used for a healthy worktree before the ported rule.
+it.effect(
+  "Edit from here recreates an empty folder without .git in place, setting nothing aside",
+  () =>
+    Effect.gen(function* () {
+      const { exit, calls, siblings, notices } = yield* rollBackOverLeftover({ empty: true });
+      assert.equal(exit._tag, "Success");
+      assert.deepEqual(calls, ["prune", "create", "session", "files", "projection"]);
+      assert.deepEqual(siblings, ["feature"]);
+      assert.deepEqual(notices, []);
+    }),
 );
 
 it.effect("a failed checkout puts the set-aside folder and its files back", () =>

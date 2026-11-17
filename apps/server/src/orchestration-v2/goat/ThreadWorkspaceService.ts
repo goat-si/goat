@@ -70,13 +70,13 @@ const make = Effect.gen(function* () {
   const restorePending = yield* makeRestorePending;
   const setAside = yield* makeSetAsideFolder;
   const recreateScratchFolder = yield* makeRecreateScratchFolder;
-  // Ready for a terminal: present, not mid-restore, and not just a failed removal's leftovers.
+  // Ready for a terminal: present, not mid-restore, not empty, not just a failed removal's leftovers.
   const ready = (worktreePath: string) =>
-    Effect.zipWith(
+    Effect.all([
       restorePending.ready(worktreePath),
       setAside.leftover(worktreePath),
-      (present, leftover) => present && !leftover,
-    );
+      setAside.missing(worktreePath),
+    ]).pipe(Effect.map(([present, leftover, missing]) => present && !leftover && !missing));
 
   const recordRestoreNotice = Effect.fn("ThreadWorkspace.recordRestoreNotice")(function* (
     threadId: ThreadId,

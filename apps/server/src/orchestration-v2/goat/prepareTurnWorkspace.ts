@@ -55,7 +55,9 @@ export const makePrepareTurnWorkspace = Effect.gen(function* () {
         if (Option.getOrNull(bound)?.worktreePath !== worktreePath) return "rebound" as const;
         if (branch === null) return void (yield* recreateScratchFolder(worktreePath));
         const ready =
-          (yield* restorePending.ready(worktreePath)) && !(yield* setAside.leftover(worktreePath));
+          (yield* restorePending.ready(worktreePath)) &&
+          !(yield* setAside.leftover(worktreePath)) &&
+          !(yield* setAside.missing(worktreePath));
         if (ready || !(yield* isManagedWorktreePath(worktreePath))) return undefined;
         const project = yield* projects.getById(thread.projectId).pipe(
           Effect.map(Option.getOrUndefined),

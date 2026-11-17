@@ -30,19 +30,14 @@ export const makeSetAsideFolder = Effect.gen(function* () {
         }),
       ),
     );
-  return {
-    /** Present but without the `.git` link a linked worktree has. */
-    lostCheckout: (worktreePath: string) =>
-      Effect.all([fs.exists(worktreePath), fs.exists(path.join(worktreePath, ".git"))]).pipe(
-        Effect.map(([present, linked]) => present && !linked),
-        Effect.orElseSucceed(() => false),
-      ),
-    /** Present without its `.git` link and holding nothing but what a failed removal leaves. */
-    leftover: (worktreePath: string) =>
-      Effect.all([fs.exists(worktreePath), fs.exists(path.join(worktreePath, ".git"))]).pipe(
-        Effect.flatMap(([present, linked]) =>
-          !present || linked
-            ? Effect.succeed(false)
+  /** What sits at the path when its `.git` link is gone; errors count as a healthy checkout. */
+  const contents = (worktreePath: string) =>
+    Effect.all([fs.exists(worktreePath), fs.exists(path.join(worktreePath, ".git"))]).pipe(
+      Effect.flatMap(([present, linked]) =>
+        !present
+          ? Effect.succeed("absent" as const)
+          : linked
+            ? Effect.succeed("checkout" as const)
             : fs.readDirectory(worktreePath).pipe(
                 Effect.flatMap((entries) =>
                   Effect.forEach(entries, (entry) =>
@@ -53,11 +48,27 @@ export const makeSetAsideFolder = Effect.gen(function* () {
                       : Effect.succeed(false),
                   ),
                 ),
-                Effect.map((leftovers) => leftovers.every(Boolean)),
+                Effect.map((leftovers) =>
+                  leftovers.length === 0
+                    ? ("empty" as const)
+                    : leftovers.every(Boolean)
+                      ? ("leftovers" as const)
+                      : ("files" as const),
+                ),
               ),
-        ),
-        Effect.orElseSucceed(() => false),
       ),
+      Effect.orElseSucceed(() => "checkout" as const),
+    );
+  return {
+    /** Present without its `.git` link and holding something; Git takes an empty folder as it is. */
+    lostCheckout: (worktreePath: string) =>
+      Effect.map(contents(worktreePath), (found) => found === "leftovers" || found === "files"),
+    /** Present without its `.git` link and holding nothing but what a failed removal leaves. */
+    leftover: (worktreePath: string) =>
+      Effect.map(contents(worktreePath), (found) => found === "leftovers"),
+    /** Absent, or an empty folder without a checkout: a new checkout can be made right there. */
+    missing: (worktreePath: string) =>
+      Effect.map(contents(worktreePath), (found) => found === "absent" || found === "empty"),
     /** Runs `recreate` with the folder set aside and succeeds with where the folder went. */
     around: <A, E, R>(worktreePath: string, recreate: Effect.Effect<A, E, R>) =>
       Effect.acquireUseRelease(

@@ -243,7 +243,7 @@ export const layer: Layer.Layer<
         // A failed removal can leave the folder without its checkout; only a file restore replaces it.
         const leftover = restoreFiles && (yield* setAside.lostCheckout(worktreePath));
         if (
-          (leftover || !(yield* fileSystem.exists(worktreePath))) &&
+          (leftover || (yield* setAside.missing(worktreePath))) &&
           (yield* isManagedWorktreePath(worktreePath))
         ) {
           const project = yield* projects.get(context.thread.projectId);

@@ -24,6 +24,7 @@ interface Row {
   readonly userFile?: boolean;
   readonly unmanaged?: boolean;
   readonly setupFails?: boolean;
+  readonly empty?: boolean;
 }
 
 // `git worktree remove` can skip dependency folders (pnpm junctions on Windows) and leave them behind.
@@ -53,7 +54,12 @@ const startTurnOverLeftover = (row: Row) =>
     );
     git(repo, "worktree", "add", "-q", "-b", "feature", worktreePath);
     git(repo, "worktree", "remove", "--force", worktreePath);
-    NodeFS.mkdirSync(NodePath.join(worktreePath, "node_modules", "pkg"), { recursive: true });
+    NodeFS.mkdirSync(
+      row.empty ? worktreePath : NodePath.join(worktreePath, "node_modules", "pkg"),
+      {
+        recursive: true,
+      },
+    );
     if (row.userFile) NodeFS.writeFileSync(NodePath.join(worktreePath, "notes.md"), "keep me");
     const thread = shell({ id: threadId, branch: "feature", worktreePath });
     const fakes = Layer.mergeAll(
@@ -138,6 +144,18 @@ it.effect("a turn sets aside a worktree folder left with only dependencies and r
       item.type === "notification" ? (item.detail ?? "") : "",
       setAsidePath ?? "missing",
     );
+  }),
+);
+
+it.effect("a turn recreates an empty worktree folder in place, setting nothing aside", () =>
+  Effect.gen(function* () {
+    const { prepared, siblings, linked } = yield* startTurnOverLeftover({ empty: true });
+    assert.equal(prepared._tag, "Ready");
+    const restored = prepared._tag === "Ready" ? prepared.restored : undefined;
+    assert.equal(restored?.restoredFrom, "branch");
+    assert.isUndefined(restored?.setAsidePath);
+    assert.isTrue(linked);
+    assert.deepEqual(siblings, ["feature"]);
   }),
 );
 
