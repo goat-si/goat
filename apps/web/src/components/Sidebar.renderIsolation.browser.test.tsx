@@ -6,8 +6,10 @@ import { userEvent } from "vite-plus/test/browser";
 
 import { act, fakeTimers, render } from "../../test/render";
 import { makeThreadFixture } from "../test-fixtures";
+import { environmentCatalog } from "../connection/catalog";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
+import { AppAtomRegistryProvider, appAtomRegistry } from "../rpc/atomRegistry";
 import { useProjects, useQuietThreadShells } from "../state/entities";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import type { Project } from "../types";
@@ -95,11 +97,19 @@ describe("sidebar render isolation", () => {
     stack.defer(() => terminal.remove());
     stack.defer(() => useTerminalUiStateStore.getState().setTerminalOpen(routeThreadRef, false));
     await using screen = await render(
-      <SidebarProvider>
-        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
-      </SidebarProvider>,
+      <AppAtomRegistryProvider>
+        <SidebarProvider>
+          <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+        </SidebarProvider>
+      </AppAtomRegistryProvider>,
     );
     await expect.element(screen.getByText("Thread 4").first()).toBeInTheDocument();
+    // The environment catalog loads after mount and redraws the sidebar once; count from there.
+    await vi.waitFor(() => {
+      expect(appAtomRegistry.get(environmentCatalog.catalogValueAtom).isReady).toBe(true);
+      expect(appAtomRegistry.get(environmentCatalog.networkStatusValueAtom)).not.toBe("unknown");
+    });
+    await act(() => undefined);
     const rowRenders = () => vi.mocked(SortableThreadRow).mock.calls.length;
 
     using _timers = fakeTimers();
