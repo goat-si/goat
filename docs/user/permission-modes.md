@@ -27,9 +27,10 @@ including OpenCode and Antigravity, fall back to asking. On Grok, commands its r
 to you for approval. On fx, prompts it still sends also come to you.
 
 Some providers, including Codex and Antigravity, change mode inside a running turn. Others
-cannot, so on them GOAT keeps a mode change until the turn ends or you press **Stop**: a
-message you send with another mode stays in the composer with the reason on the web and desktop,
-and the phone sends it once the turn ends.
+cannot, so on them GOAT refuses a mode change while a turn runs. On the web and desktop, a message
+sent with another mode stays in the composer with the reason; send it again once the turn ends, or
+press **Stop** first. On the phone, the message waits in its outbox, shows the reason, and goes out
+under the new mode once the turn ends.
 
 Muse Code offers only **Supervised** and **Full access**. A Muse thread already set to another mode
 runs in **Supervised**.
