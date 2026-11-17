@@ -727,7 +727,7 @@
   "packages/contracts/src/providerRuntime.ts": { "lines": 1155 },
   "packages/contracts/src/relay.ts": { "lines": 1063 },
   "packages/contracts/src/rpc.ts": { "lines": 2788 },
-  "packages/contracts/src/settings.ts": { "lines": 2052 },
+  "packages/contracts/src/settings.ts": { "lines": 2003 },
   "packages/effect-acp/scripts/generate.ts": { "nonNull": 1 },
   "packages/effect-acp/src/client.test.ts": { "lines": 1661 },
   "packages/effect-acp/src/client.ts": { "lines": 1365 },
