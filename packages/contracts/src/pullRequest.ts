@@ -376,12 +376,16 @@ export const PullRequestListCursors = Schema.Record(
 );
 export type PullRequestListCursors = typeof PullRequestListCursors.Type;
 
+export const PULL_REQUEST_LIST_PROJECT_LIMIT = 100;
+
 export const PullRequestListInput = Schema.Struct({
   state: PullRequestListState,
   involvement: Schema.optional(PullRequestInvolvement),
   filters: Schema.optional(PullRequestListFilters),
   projectId: Schema.optional(ProjectId),
-  projectIds: Schema.optional(Schema.Array(ProjectId).check(Schema.isMaxLength(100))),
+  projectIds: Schema.optional(
+    Schema.Array(ProjectId).check(Schema.isMaxLength(PULL_REQUEST_LIST_PROJECT_LIMIT)),
+  ),
   host: Schema.optional(TrimmedNonEmptyString),
   /** Also list the upstream repositories forks were made from. */
   includeUpstream: Schema.optional(Schema.Boolean),
@@ -397,6 +401,8 @@ export const PullRequestProviderSummary = Schema.Struct({
   searchesOnHost: Schema.Boolean,
   actions: Schema.optional(ForwardCompatibleArray(PullRequestAction)),
   projectCount: PositiveInt,
+  /** SSH checkouts can resolve to an HTTP authority different from their stored identity. */
+  projectIds: Schema.optional(Schema.Array(ProjectId)),
   configured: Schema.Boolean,
   detail: Schema.NullOr(TrimmedNonEmptyString),
 });

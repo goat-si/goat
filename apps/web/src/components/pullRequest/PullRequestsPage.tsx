@@ -112,6 +112,8 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { cn } from "~/lib/utils";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
+import { usePullRequestHostReads } from "./usePullRequestHostReads";
+import { pullRequestListTargets } from "./pullRequestListTargets";
 
 /**
  * One whole page from the host and no more: every provider asks for one row beyond the page as
@@ -134,6 +136,7 @@ export function PullRequestsPage() {
     sort === "ready" || sort === "largest" || sort === "smallest" ? "eager" : "visible";
   const navigate = useNavigate({ from: "/pull-requests" });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const hostReads = usePullRequestHostReads();
   const {
     capableEnvironments,
     scopedEnvironmentId,
@@ -148,11 +151,12 @@ export function PullRequestsPage() {
     selectedProject,
     queryEnvironmentIds,
     environmentQueries,
+    preferredEnvironmentQueries,
     assignmentKey,
     linkedSelection,
     expectedHosts,
     projectsKnown,
-  } = usePullRequestScope(search);
+  } = usePullRequestScope(search, hostReads.hostReads);
   const rightPanelRef = capableEnvironments.length === 0 ? null : PULL_REQUESTS_PANEL_REF;
   const openPanelPullRequestUrl = useOpenPanelPullRequestUrl(rightPanelRef);
   const rightPanelState = useRightPanelStore((state) =>
@@ -250,9 +254,9 @@ export function PullRequestsPage() {
     localFilters,
     hasLocalFilters,
   } = usePullRequestQueryFilters(search, typedQuery);
-  const turnRefreshes = usePullRequestTurnRefreshes(
-    environmentQueries.map(({ environmentId }) => environmentId),
-  );
+  const turnRefreshes = usePullRequestTurnRefreshes([
+    ...new Set(environmentQueries.map(({ environmentId }) => environmentId)),
+  ]);
   const turnRefreshToken = turnRefreshes
     .map(([environmentId, revision]) => `${environmentId}:${revision}`)
     .join("|");
@@ -283,27 +287,20 @@ export function PullRequestsPage() {
     setPage({ key: filterKey, size: PAGE_SIZE, cursors: null, regrown: [] });
   }
 
-  const listTargets = environmentQueries.flatMap(({ environmentId, projectIds }) => {
-    const cursors = sentCursors?.[environmentId];
-    if (sentCursors !== null && cursors === undefined && !sentRegrown.includes(environmentId)) {
-      return [];
-    }
-    return [
+  const listTargetsFor = (queries: typeof environmentQueries) =>
+    pullRequestListTargets(
+      queries,
       {
-        environmentId,
-        input: {
-          state: search.state,
-          involvement: search.involvement,
-          limit: pageSize,
-          ...listScope,
-          ...(projectIds ? { projectIds } : {}),
-          ...(hasFilters ? { filters } : {}),
-          ...(sentParsed.text ? { query: sentParsed.text } : {}),
-          ...(cursors === undefined ? {} : { cursors }),
-        } satisfies PullRequestListInput,
+        state: search.state,
+        involvement: search.involvement,
+        limit: pageSize,
+        ...listScope,
+        ...(hasFilters ? { filters } : {}),
+        ...(sentParsed.text ? { query: sentParsed.text } : {}),
       },
-    ];
-  });
+      { sent: sentCursors, regrown: sentRegrown },
+    );
+  const listTargets = listTargetsFor(environmentQueries);
   const listQuery = usePullRequestList(listTargets);
 
   /**
@@ -311,18 +308,17 @@ export function PullRequestsPage() {
    * say which question it belongs to: mid-switch the text has already changed and the data has
    * not, and a search's answer would file itself under the workspace.
    */
-  const baselineTargets = environmentQueries.map(({ environmentId, projectIds }) => ({
-    environmentId,
-    input: {
+  const baselineTargetsFor = (queries: typeof environmentQueries) =>
+    pullRequestListTargets(queries, {
       state: search.state,
       involvement: search.involvement,
       limit: PAGE_SIZE,
       ...listScope,
-      ...(projectIds ? { projectIds } : {}),
       ...(menuFiltered ? { filters: menuFilters } : {}),
-    } satisfies PullRequestListInput,
-  }));
+    });
+  const baselineTargets = baselineTargetsFor(environmentQueries);
   const baselineQuery = usePullRequestList(baselineTargets);
+  hostReads.observe(baselineQuery.observations, listQuery.observations);
   const baselineEmpty =
     baselineQuery.data?.entries.length === 0 &&
     baselineQuery.data.errors.length === 0 &&
@@ -864,6 +860,11 @@ export function PullRequestsPage() {
     await Promise.all(
       queryEnvironmentIds.map((environmentId) => invalidate({ environmentId, input: {} })),
     );
+    listQuery.refresh([
+      ...listTargetsFor(preferredEnvironmentQueries),
+      ...baselineTargetsFor(preferredEnvironmentQueries),
+    ]);
+    hostReads.reset();
     setInvalidating(false);
     refreshListAndStats(requestedStatsScope);
     setDetailRefreshToken((token) => token + 1);

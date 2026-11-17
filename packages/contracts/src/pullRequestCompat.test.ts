@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import { PullRequestSetFilesViewedInput, PullRequestThreadComment } from "./pullRequest.ts";
+import { PullRequestUnavailableError } from "./pullRequestErrors.ts";
 
 // What the schemas looked like before these fields, as an older peer still decodes them.
 const OlderThreadComment = PullRequestThreadComment.mapFields(
@@ -16,6 +17,11 @@ const decodeComment = Schema.decodeUnknownSync(PullRequestThreadComment);
 const decodeOlderComment = Schema.decodeUnknownSync(OlderThreadComment);
 const decodePress = Schema.decodeUnknownSync(PullRequestSetFilesViewedInput);
 const decodeOlderPress = Schema.decodeUnknownSync(OlderSetFilesViewedInput);
+const decodeUnavailable = Schema.decodeUnknownSync(PullRequestUnavailableError);
+// An older client knew the error without listResult.
+const decodeOlderUnavailable = Schema.decodeUnknownSync(
+  Schema.TaggedStruct("PullRequestUnavailableError", { reason: Schema.String }),
+);
 
 /** A payload as it arrives off the wire. */
 const wire = (value: object): unknown => JSON.parse(JSON.stringify(value));
@@ -50,5 +56,43 @@ describe("pull request wire fields across versions", () => {
       const files = [{ path: "a.ts", viewed: true, revision }];
       expect(() => decodePress(wire({ ...reference, files }))).toThrow();
     }
+  });
+});
+
+describe("a failed list's partial result", () => {
+  const providers = ["github.com", "gitlab.com", "bitbucket.org"].map((host) => ({
+    host,
+    kind: "github",
+    searchesOnHost: true,
+    projectCount: 500,
+    projectIds: Array.from({ length: 500 }, (_, index) => `project-${host}-${index}`),
+    configured: false,
+    detail: "GitHub CLI is not authenticated. Run gh auth login on the server.",
+  }));
+  const errors = Array.from({ length: 500 }, (_, index) => ({
+    projectId: `project-${index}`,
+    projectTitle: `a-long-organisation-name/a-long-repository-name-${index}`,
+    message: `a-long-organisation-name/a-long-repository-name-${index} could not be read.`,
+  }));
+  const listResult = {
+    viewers: {},
+    providers,
+    entries: [],
+    errors,
+    truncated: false,
+    nextCursors: {},
+  };
+  const failure = {
+    _tag: "PullRequestUnavailableError",
+    reason: "cli-unauthenticated",
+    listResult,
+  };
+
+  it("decodes on a newer client, is ignored by an older one, and stays bounded", () => {
+    expect(decodeUnavailable(wire(failure)).listResult?.errors).toHaveLength(500);
+    expect(decodeOlderUnavailable(wire(failure))).not.toHaveProperty("listResult");
+    const bytes = new TextEncoder().encode(JSON.stringify(wire(failure))).length;
+    // 500 unreadable repositories and three hosts naming 500 projects each.
+    expect(bytes).toBeLessThan(160_000);
   });
 });

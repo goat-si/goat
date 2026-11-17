@@ -229,6 +229,12 @@ For a fork whose checkout also has an `upstream` remote, the list shows pull req
 fork's own `origin` repository. Turn on **Include upstream repos** in the filters to add the
 repository it was forked from.
 
+When several connected environments have a project for the same repository, the list reads it
+through one of them. If that environment cannot sign in to the host, the **All** list reads the
+repository through another environment that can, and each row names the environment it came from.
+Lists that depend on who is signed in (**Reviewing**, **Authored**, an author filter of "me") keep
+each repository's own environment, so they never show another account's pull requests.
+
 Ask an agent to edit a PR, comment, submit a review, reply to or resolve a review thread,
 manage reactions, labels and reviewers, or change its state through GOAT's MCP tools. The
 repository must be a project in the connected environment. Outside MCP clients need the

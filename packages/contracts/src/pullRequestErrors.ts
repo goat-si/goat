@@ -3,6 +3,7 @@ import * as HttpServerRespondable from "effect/http/HttpServerRespondable";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { PullRequestListResult } from "./pullRequest.ts";
 import { SourceControlProviderKind } from "./sourceControl.ts";
 
 /**
@@ -21,6 +22,7 @@ export class PullRequestUnavailableError extends Schema.TaggedError<PullRequestU
   {
     reason: PullRequestUnavailableReason,
     provider: Schema.optional(SourceControlProviderKind),
+    listResult: Schema.optional(PullRequestListResult),
     /**
      * What the host needs on the server, in its own words. Absent from older servers, which
      * shipped no such field, and for a host that names nothing.
@@ -52,6 +54,7 @@ export class PullRequestOperationError extends Schema.TaggedError<PullRequestOpe
     operation: Schema.String,
     detail: TrimmedNonEmptyString,
     reason: Schema.optional(Schema.Literal("not-found")),
+    listResult: Schema.optional(PullRequestListResult),
     cause: Schema.optional(Schema.Defect()),
   },
   { httpApiStatus: 502 },
