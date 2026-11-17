@@ -14,9 +14,13 @@ import * as PreparationOrphans from "./PreparationOrphans.ts";
 
 /**
  * A launch cut between its commit and its preparation: its run is preparing and nothing prepares
- * it. Launching the returned input resumes that launch.
+ * it. Launching the returned input resumes that launch. With `withoutWorkspace`, it is a raw
+ * deferred dispatch that names no workspace strategy.
  */
-export const orphanRun = Effect.fn("test.orphanRun")(function* (name: string) {
+export const orphanRun = Effect.fn("test.orphanRun")(function* (
+  name: string,
+  options: { readonly withoutWorkspace?: boolean } = {},
+) {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const input = launchInput({
     command: `command:${name}`,
@@ -45,7 +49,10 @@ export const orphanRun = Effect.fn("test.orphanRun")(function* (name: string) {
     text: name,
     attachments: [],
     modelSelection: input.modelSelection,
-    dispatchMode: { type: "defer_start", workspaceStrategy: { type: "root" } },
+    dispatchMode:
+      options.withoutWorkspace === true
+        ? { type: "defer_start" }
+        : { type: "defer_start", workspaceStrategy: { type: "root" } },
     createdBy: input.createdBy,
     creationSource: input.creationSource,
   });

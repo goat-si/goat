@@ -18,6 +18,7 @@ import * as Scope from "effect/Scope";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
+import { runFailure } from "../../mcp/threadStatus.ts";
 import * as ThreadLaunch from "../ThreadLaunchService.ts";
 import * as ThreadManagement from "../ThreadManagementService.ts";
 import { preparationSettled } from "../testkit/preparationSettled.ts";
@@ -140,6 +141,7 @@ it.effect(
         assert.ok(error?.type === "error");
         assert.equal(error.failure.code, ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE);
         assert.equal(error.failure.message, NOT_STARTED_MESSAGE);
+        assert.equal(runFailure(projection.runs[0] ?? null, projection.turnItems)?.canRetry, true);
 
         yield* launches.retryPreparation({
           commandId: CommandId.make("command:orphan:retry"),
@@ -148,6 +150,52 @@ it.effect(
         });
         yield* released(threadId, "command:orphan:retry");
         assert.notInclude(["preparing", "failed"], yield* runStatus(threadId, runId));
+      }).pipe(Effect.provide(withCheck(harness, probe)));
+    }),
+);
+
+it.effect(
+  "a raw deferred run with no workspace strategy, left with nothing starting it, is failed asking for the message again, and nothing offers Retry",
+  () =>
+    Effect.gen(function* () {
+      const probe = yield* makeOrphanProbe;
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const { threadId, runId } = yield* orphanRun("no-workspace", { withoutWorkspace: true });
+        yield* passesBeforeGrace(probe, Effect.void);
+        assert.equal(yield* probe.pass, "read");
+        assert.equal(yield* probe.failed, runId);
+
+        const projection = yield* threads.getThreadProjection(threadId);
+        const run = projection.runs.find((candidate) => candidate.id === runId);
+        assert.equal(run?.status, "failed");
+        // Web (turnItemPresentation.ts) and mobile (thread-work-log.tsx) offer Retry only for a
+        // failed run that has a workspacePreparation.
+        assert.isUndefined(run?.workspacePreparation);
+        const failedItems = projection.turnItems.filter(
+          (item) => item.runId === runId && item.status === "failed",
+        );
+        assert.deepEqual(
+          failedItems.map((item) => item.title),
+          ["The agent did not start", "The agent did not start"],
+        );
+        const error = failedItems.find((item) => item.type === "error");
+        assert.ok(error?.type === "error");
+        assert.equal(
+          error.failure.message,
+          "Nothing is starting this run, so the agent did not get your message. Send it again.",
+        );
+        assert.equal(runFailure(run ?? null, projection.turnItems)?.canRetry, false);
+        const retried = yield* threads
+          .dispatch({
+            type: "prepared-run.retry",
+            commandId: CommandId.make("command:no-workspace:retry"),
+            threadId,
+            runId,
+          })
+          .pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(retried));
       }).pipe(Effect.provide(withCheck(harness, probe)));
     }),
 );
