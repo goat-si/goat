@@ -501,3 +501,21 @@ it.effect(
       }),
     ),
 );
+it.effect(
+  "chosen behaviour: after a later change, an edited draft whose reread gets no answer within 60 seconds is discarded",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* openEdit(true);
+        // An earlier change the draft survived, so the next signal is a later one.
+        yield* h.change("upsert", item);
+        expect(h.registry.get(h.edit)).toBe(h.text);
+        yield* Queue.offer(h.signals, signal("upsert"));
+        yield* Queue.take(h.reads);
+        expect(h.registry.get(h.edit)).toBe(h.text);
+        yield* TestClock.adjust("60 seconds");
+        yield* waitFor(h.registry, h.edit, (text) => text === null);
+        expect(h.registry.get(h.edit)).toBeNull();
+      }),
+    ),
+);
