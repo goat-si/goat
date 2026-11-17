@@ -46,7 +46,6 @@ const inside = (path: Path.Path, parent: string, child: string) => {
  * configured there would otherwise make the nightly clean stable's worktrees.
  * A home seeded as a copy keeps only roots inside itself, since any folder its copied settings name
  * may hold stable's worktrees.
- * Roots and homes compare by real path, so an alias or a Windows 8.3 name cannot move a root.
  */
 export const ownWorktreeRoots = Effect.fnUntraced(function* (input: {
   readonly roots: ReadonlyArray<string>;

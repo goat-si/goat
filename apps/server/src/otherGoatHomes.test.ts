@@ -183,26 +183,28 @@ describe("otherGoatHomes", () => {
       ),
   );
 
-  it.effect("judges each app's worktree folder the same when its home arrives by another name", () =>
-    withHome((home) =>
-      Effect.gen(function* () {
-        const path = yield* Path.Path;
-        const fs = yield* FileSystem.FileSystem;
-        const roots = [
-          path.join(home, ".goat", "desktop", "worktrees"),
-          path.join(home, ".goat", "desktop-nightly", "worktrees"),
-        ];
-        for (const root of roots) yield* fs.makeDirectory(root, { recursive: true });
-        const named = yield* alias(home, path.join(home, "home-alias"));
-        const judge = (app: string) =>
-          ownWorktreeRoots({ roots, baseDir: path.join(named, ".goat", app) }).pipe(
-            Effect.provideService(HostProcess.HomeDirectory, named),
-          );
+  it.effect(
+    "judges each app's worktree folder the same when its home arrives by another name",
+    () =>
+      withHome((home) =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path;
+          const fs = yield* FileSystem.FileSystem;
+          const roots = [
+            path.join(home, ".goat", "desktop", "worktrees"),
+            path.join(home, ".goat", "desktop-nightly", "worktrees"),
+          ];
+          for (const root of roots) yield* fs.makeDirectory(root, { recursive: true });
+          const named = yield* alias(home, path.join(home, "home-alias"));
+          const judge = (app: string) =>
+            ownWorktreeRoots({ roots, baseDir: path.join(named, ".goat", app) }).pipe(
+              Effect.provideService(HostProcess.HomeDirectory, named),
+            );
 
-        assert.deepEqual(yield* judge("desktop-nightly"), [roots[1]]);
-        assert.deepEqual(yield* judge("desktop"), [roots[0]]);
-      }),
-    ),
+          assert.deepEqual(yield* judge("desktop-nightly"), [roots[1]]);
+          assert.deepEqual(yield* judge("desktop"), [roots[0]]);
+        }),
+      ),
   );
 
   it.effect("drops another app's worktree folder when its root is named through an alias", () =>
