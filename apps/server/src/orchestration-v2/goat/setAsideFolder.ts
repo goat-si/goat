@@ -19,15 +19,17 @@ export const setAsideSentence = (setAsidePath: string) =>
 export const makeSetAsideFolder = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  /** Whether the folder is back in place; when not, its files stay in the set-aside sibling. */
   const putBack = (worktreePath: string, setAsidePath: string) =>
     fs.remove(worktreePath, { recursive: true, force: true }).pipe(
       Effect.andThen(fs.rename(setAsidePath, worktreePath)),
+      Effect.as(true),
       Effect.catchCause((cause) =>
         Effect.logWarning("a worktree folder stayed set aside after a failed checkout", {
           worktreePath,
           setAsidePath,
           cause,
-        }),
+        }).pipe(Effect.as(false)),
       ),
     );
   /** What sits at the path when its `.git` link is gone; errors count as a healthy checkout. */
@@ -69,8 +71,15 @@ export const makeSetAsideFolder = Effect.gen(function* () {
     /** Absent, or an empty folder without a checkout: a new checkout can be made right there. */
     missing: (worktreePath: string) =>
       Effect.map(contents(worktreePath), (found) => found === "absent" || found === "empty"),
-    /** Runs `recreate` with the folder set aside and succeeds with where the folder went. */
-    around: <A, E, R>(worktreePath: string, recreate: Effect.Effect<A, E, R>) =>
+    /**
+     * Runs `recreate` with the folder set aside and succeeds with where the folder went. `held`
+     * names the set-aside folder while the files are there, so a later failure can say where.
+     */
+    around: <A, E, R>(
+      worktreePath: string,
+      recreate: Effect.Effect<A, E, R>,
+      held: { path: string | null } = { path: null },
+    ) =>
       Effect.acquireUseRelease(
         Effect.gen(function* () {
           const stamp = DateTime.formatIso(yield* DateTime.now).replace(/[:.]/g, "-");
@@ -80,11 +89,18 @@ export const makeSetAsideFolder = Effect.gen(function* () {
           );
           // Rename refuses a target that holds files, so nothing already there is replaced.
           yield* fs.rename(worktreePath, setAsidePath);
+          held.path = setAsidePath;
           return setAsidePath;
         }),
         (setAsidePath) => Effect.map(recreate, (result) => ({ result, setAsidePath })),
         (setAsidePath, exit) =>
-          Exit.isSuccess(exit) ? Effect.void : putBack(worktreePath, setAsidePath),
+          Exit.isSuccess(exit)
+            ? Effect.void
+            : putBack(worktreePath, setAsidePath).pipe(
+                Effect.map((back) => {
+                  if (back) held.path = null;
+                }),
+              ),
       ),
   };
 });

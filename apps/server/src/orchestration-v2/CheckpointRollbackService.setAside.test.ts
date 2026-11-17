@@ -11,6 +11,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -35,12 +36,23 @@ interface Row {
   readonly unmanaged?: boolean;
   readonly checkout?: boolean;
   readonly empty?: boolean;
+  readonly filesFail?: boolean;
+  readonly putBackFails?: boolean;
 }
 
 // A failed `git worktree remove` can leave the folder holding the person's files without its .git link.
 const rollBackOverLeftover = (row: Row) =>
   Effect.gen(function* () {
-    const { restoreFiles = true, createFails, shared, unmanaged, checkout, empty } = row;
+    const {
+      restoreFiles = true,
+      createFails,
+      shared,
+      unmanaged,
+      checkout,
+      empty,
+      filesFail,
+      putBackFails,
+    } = row;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const workspaceRoot = yield* fileSystem.realPath(
@@ -115,12 +127,24 @@ const rollBackOverLeftover = (row: Row) =>
                 yield* fileSystem
                   .makeDirectory(path.join(worktreePath, ".git"), { recursive: true })
                   .pipe(Effect.orDie);
+                // A folder whose entries cannot be removed keeps the new checkout from being undone.
+                if (putBackFails) {
+                  yield* fileSystem.chmod(path.dirname(worktreePath), 0o555).pipe(Effect.orDie);
+                  return yield* Effect.fail(new Error("the branch is gone") as never);
+                }
                 if (createFails) return yield* Effect.die("the branch is gone");
                 return {} as never;
               }),
           }),
           Layer.mock(CheckpointService.CheckpointServiceV2)({
-            restore: () => Effect.sync(() => void calls.push("files")),
+            restore: () =>
+              Effect.sync(() => void calls.push("files")).pipe(
+                Effect.andThen(
+                  filesFail
+                    ? Effect.fail(new Error("the checkpoint is unreadable") as never)
+                    : Effect.void,
+                ),
+              ),
           }),
           Layer.mock(EventSink.EventSinkV2)({
             write: ({ events }) =>
@@ -159,6 +183,7 @@ const rollBackOverLeftover = (row: Row) =>
         .execute({ threadId, providerThreadId, checkpointId, scopeId, restoreFiles })
         .pipe(Effect.exit);
     }).pipe(Effect.provide(testLayer));
+    if (putBackFails) yield* fileSystem.chmod(path.dirname(worktreePath), 0o755);
     const siblings = (yield* fileSystem.readDirectory(path.dirname(worktreePath))).toSorted();
     const notices = written.flatMap((event) =>
       event.type === "turn-item.updated" && event.payload.type === "system_notice"
@@ -211,6 +236,19 @@ it.effect(
       assert.deepEqual(siblings, ["feature"]);
       assert.deepEqual(notices, []);
     }),
+);
+
+it.effect.each<Row & { readonly name: string }>([
+  { name: "a later step fails", filesFail: true },
+  { name: "the files cannot be put back", putBackFails: true },
+])("Edit from here names the set-aside folder in its error when $name", (row) =>
+  Effect.gen(function* () {
+    const { exit, setAsidePath, setAsideFiles } = yield* rollBackOverLeftover(row);
+    assert.equal(exit._tag, "Failure");
+    assert.equal(setAsideFiles, "keep");
+    const error = exit._tag === "Failure" ? Cause.squash(exit.cause) : null;
+    assert.include(error instanceof Error ? error.message : "", setAsidePath ?? "missing");
+  }),
 );
 
 it.effect("a failed checkout puts the set-aside folder and its files back", () =>

@@ -55,10 +55,19 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
     threadId: ThreadId,
     providerThreadId: ProviderThreadId,
     checkpointId: CheckpointId,
+    /** Where the worktree folder's files are when the rollback failed after moving them aside. */
+    setAsidePath: Schema.optional(Schema.String),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
+    return this.setAsidePath === undefined
+      ? this.reasonMessage
+      : `${this.reasonMessage}
+${setAsideSentence(this.setAsidePath)}`;
+  }
+
+  private get reasonMessage(): string {
     switch (this.reason) {
       case "rollback-target-invalid":
         return `Rollback target ${this.checkpointId} for provider thread ${this.providerThreadId} on thread ${this.threadId} is incomplete or invalid.`;
@@ -140,13 +149,16 @@ export const layer: Layer.Layer<
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
     const setAside = yield* makeSetAsideFolder;
 
-    const execute = Effect.fn("orchestrationV2.checkpointRollback.execute")(function* (input: {
-      readonly threadId: ThreadId;
-      readonly providerThreadId: ProviderThreadId;
-      readonly checkpointId: CheckpointId;
-      readonly scopeId: CheckpointScopeId;
-      readonly restoreFiles?: boolean;
-    }) {
+    const execute = Effect.fn("orchestrationV2.checkpointRollback.execute")(function* (
+      input: {
+        readonly threadId: ThreadId;
+        readonly providerThreadId: ProviderThreadId;
+        readonly checkpointId: CheckpointId;
+        readonly scopeId: CheckpointScopeId;
+        readonly restoreFiles?: boolean;
+      },
+      aside: { path: string | null },
+    ) {
       const context = yield* projections.getCheckpointRollbackContext(input.threadId, input);
       const { providerThread, checkpoint, scope, targetAttempt, runsToRollback, staleCheckpoints } =
         context;
@@ -259,7 +271,7 @@ export const layer: Layer.Layer<
             );
             if (leftover) {
               if (!(yield* isolated)) return yield* sharedWorkspace();
-              setAsidePath = (yield* setAside.around(worktreePath, recreate)).setAsidePath;
+              setAsidePath = (yield* setAside.around(worktreePath, recreate, aside)).setAsidePath;
             } else {
               yield* recreate;
             }
@@ -421,9 +433,43 @@ export const layer: Layer.Layer<
         function* (input) {
           // Storage cleanup removes worktrees under the same lease.
           const thread = yield* projections.getThread(input.threadId);
-          yield* thread.worktreePath === null
-            ? execute(input)
-            : withWorkspaceLease(path.resolve(thread.worktreePath), execute(input));
+          const aside: { path: string | null } = { path: null };
+          yield* (
+            thread.worktreePath === null
+              ? execute(input, aside)
+              : withWorkspaceLease(path.resolve(thread.worktreePath), execute(input, aside))
+          ).pipe(
+            // A failure after the folder was moved aside says where its files are.
+            Effect.tapError(() =>
+              aside.path === null
+                ? Effect.void
+                : Effect.logWarning("Edit from here failed with the worktree folder set aside", {
+                    threadId: input.threadId,
+                    setAsidePath: aside.path,
+                  }),
+            ),
+            Effect.mapError((cause) =>
+              aside.path === null
+                ? cause
+                : isCheckpointRollbackExecutionError(cause)
+                  ? new CheckpointRollbackExecutionError({
+                      reason: cause.reason,
+                      threadId: cause.threadId,
+                      providerThreadId: cause.providerThreadId,
+                      checkpointId: cause.checkpointId,
+                      setAsidePath: aside.path,
+                      cause: cause.cause,
+                    })
+                  : new CheckpointRollbackExecutionError({
+                      reason: "unexpected-failure",
+                      threadId: input.threadId,
+                      providerThreadId: input.providerThreadId,
+                      checkpointId: input.checkpointId,
+                      setAsidePath: aside.path,
+                      cause,
+                    }),
+            ),
+          );
         },
         (effect, input) =>
           effect.pipe(
