@@ -472,6 +472,106 @@ it.effect(
     }).pipe(Effect.provide(layerFor(false))),
 );
 
+/** A live session of another provider instance beside the seeded one. */
+const attachOtherSession = (threadId: ThreadId, switchesInSession: boolean) =>
+  Effect.gen(function* () {
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const now = yield* DateTime.now;
+    yield* projections.apply({
+      id: EventId.make("active-turn:other-session"),
+      type: "provider-session.attached",
+      threadId,
+      occurredAt: now,
+      payload: {
+        id: ProviderSessionId.make("session:other"),
+        driver: adapter.driver,
+        providerInstanceId: otherInstanceId,
+        status: "ready",
+        cwd: "/repo",
+        model: modelSelection.model,
+        capabilities: {
+          ...CodexProviderCapabilitiesV2,
+          sessions: {
+            ...CodexProviderCapabilitiesV2.sessions,
+            supportsRuntimeModeSwitchInSession: switchesInSession,
+          },
+        },
+        createdAt: now,
+        updatedAt: now,
+        lastError: null,
+      },
+    });
+  });
+
+const setRuntimeMode = (threadId: ThreadId, commandId: CommandId) =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    return orchestrator.dispatch({
+      type: "thread.runtime-mode.set",
+      commandId,
+      threadId,
+      runtimeMode: "approval-required",
+    });
+  });
+
+it.effect.each([false, true])(
+  "a turn on a session that cannot switch is still refused beside another instance's session (switches: %s)",
+  (switchesInSession) =>
+    Effect.gen(function* () {
+      const { threadId } = yield* seedThread(true);
+      yield* reattachSession(threadId, { switchesInSession: false, status: "ready" });
+      yield* attachOtherSession(threadId, switchesInSession);
+      const commandId = CommandId.make("set-runtime-mode-beside-other");
+      yield* assertRefusedUnchanged(
+        threadId,
+        commandId,
+        yield* setRuntimeMode(threadId, commandId),
+        "changing its permission mode would end it",
+      );
+    }).pipe(Effect.provide(layerFor(false))),
+);
+
+it.effect.each(["preparing", "starting", "waiting"] as const)(
+  "a %s run with no provider thread yet is still refused when its instance's session would be released",
+  (status) =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const { threadId } = yield* seedThread(false);
+      yield* reattachSession(threadId, { switchesInSession: false, status: "ready" });
+      const now = yield* DateTime.now;
+      yield* projections.apply({
+        id: EventId.make("active-turn:run-without-provider-thread"),
+        type: "run.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: RunId.make("run:without-provider-thread"),
+          threadId,
+          ordinal: 1,
+          providerInstanceId: instanceId,
+          modelSelection,
+          providerThreadId: null,
+          userMessageId: MessageId.make("message:without-provider-thread"),
+          rootNodeId: null,
+          activeAttemptId: null,
+          status,
+          requestedAt: now,
+          startedAt: null,
+          completedAt: null,
+          checkpointId: null,
+          contextHandoffId: null,
+        },
+      });
+      const commandId = CommandId.make("set-runtime-mode-early-run");
+      yield* assertRefusedUnchanged(
+        threadId,
+        commandId,
+        yield* setRuntimeMode(threadId, commandId),
+        "changing its permission mode would end it",
+      );
+    }).pipe(Effect.provide(layerFor(false))),
+);
+
 /** The seeded turn completes, as its provider would report it. */
 const completeSeededTurn = (threadId: ThreadId, runId: RunId) =>
   Effect.gen(function* () {
