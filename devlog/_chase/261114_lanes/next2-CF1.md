@@ -152,3 +152,32 @@ Proposed rule 3 wording, for the coordinator to accept or change: "rule 3, CF1: 
 ## Phone captures (owed, assigned by the coordinator)
 
 N15b takes these on its own simulator and emulator once CF1 is merged into chase/t3-261114-next2 and N15b has merged that head; they are uploaded to #3660 and listed here when they exist: goat#3658 the banner (outside GOAT's folder before and after; inside unchanged), goat#3652 Usage dimming (cold open before and after), goat#3557 the refusal with no new folder, goat#3654 the failure inside the Git sheet past 5 seconds and Dismiss.
+
+## Coordinator answers, rule 3 (verbatim)
+
+> B. CF1, RULE 3 for the four existing test files: AUTHORISED for 1, 2 and 3 as listed in next2-CF1.md "Existing test files changed" (two vi.mock factories gain a GitActionFailure stub the new import requires; the hoisted state gains runtime: null and the mock gains dismissGitActionResult, both defaulted to the old behaviour). File 4, ThreadWorkspaceService.test.ts (HarnessOptions gains snapshot; latestForThread returns a snapshot only when asked; ServerSettings layerTest() becomes layerTest({ worktreesDirectory: NodePath.join(root, "managed") }) for EVERY case): AUTHORISED ON ONE CONDITION that CF1 proves in its record now and the running review checks: for each of the ten pre-existing cases in that file, the path it uses and why its outcome cannot depend on worktreesDirectory (none lies under <root>/managed and none read the default root before), with the file's ten titles passing on the base harness and on the new one. "Coordinator authorisation, 2026-11-17, rule 3, CF1: the four harness changes listed in next2-CF1.md under 'Existing test files changed' may stand; no expectation changes; file 4's settings change stands only with the per-case proof."
+
+## File 4: per-case proof (ThreadWorkspaceService.test.ts)
+
+Where worktreesDirectory is read. Under this test's layers the only reader of the setting is `isManagedWorktreePath`, which reads it on each call (apps/server/src/worktreesDirectory.ts:189-215, `getSettings` at :197). Building the checker at ThreadWorkspaceService.ts:55 reads no setting. Every other service the layer needs is a harness fake (ProjectionStore, ProjectService, GitWorkflowService, ThreadManagement, WorktreeSnapshotStore, ProjectSetupScriptRunner), or GitVcsDriver on its own ServerConfig layer, which has no ServerSettings use (`rg -n 'ServerSettings|getSettings' apps/server/src/vcs/GitVcsDriver.ts apps/server/src/workspace/workspaceLease.ts` finds nothing). At the head, ThreadWorkspaceService.ts calls the checker at exactly two places: `:123`, the new `recreatable` on the missing/cleaned return of `status` (:115-124), and `:137`, Restore with mode "restore" (`restoreInPlace`). At ed4268897e only the second existed, and no pre-existing case uses mode "restore". So at base, no case read the settings or the default root. At the head, only case 5 reaches a read, for a field it does not assert.
+
+Paths. root is the fixture's mkdtemp folder; the new harness's managed folder is <root>/managed. A managed location is exactly <managed root>/<repository>/<name> (worktreesDirectory.ts:219-228).
+
+| # | case (title) | thread worktreePath / folders it touches | code path | why the outcome cannot depend on worktreesDirectory |
+| --- | --- | --- | --- | --- |
+| 1 | starts a fresh worktree from the thread's branch, keeping its commits | `/worktrees/feature` (`idle`, :171); new worktree <root>/fresh (createWorktree fake, :53, :87) | restore mode "fresh": `startFresh` :170-185, `replace` :187-310 | neither function calls the checker; asserts headSha and startedFrom |
+| 2 | starts a fresh worktree from the project base when the branch is gone | same | same | same; asserts headSha and startedFrom |
+| 3 | reports a restore stopped … (untouched since) | <root>/restored | `status`: folder present and verified, returns at :106-114 | returns before :123; asserts state "present", setupIncomplete true |
+| 4 | reports a restore stopped … (with a commit made since) | <root>/restored | same | same |
+| 5 | reports a restore stopped … (on another history) | <root>/restored | `status`: verification fails, falls to :115-124 | state ("missing") and the absent setupIncomplete are fixed at :115-118 before the checker runs at :123. The checker answers false on both harnesses (<root>/restored is one level under root, never <managed root>/<repo>/<name>), and the case asserts neither `recreatable` nor anything derived from it |
+| 6 | will not replace the worktree of a thread that is running | `/worktrees/feature` | mode "fresh": `replace` refuses at :197-207 before createWorktree | no checker call; asserts reason "busy" and nothing created |
+| 7 | rebinds only if the thread still uses the worktree it replaced | `/worktrees/feature`; <root>/fresh | mode "fresh" | no checker call; asserts the rebind command |
+| 8 | removes the new worktree when another change won the rebinding | same | mode "fresh", dispatch fails | no checker call; asserts reason and removal of <root>/fresh |
+| 9 | keeps the new worktree leased through setup, and a failed setup never rebinds | same | mode "fresh", setup exits 1 | no checker call; asserts reason, lease, no rebind, removal |
+| 10 | refuses a fresh worktree that setup moved off its branch | same | mode "fresh", verify fails | no checker call; asserts reason, no rebind, removal |
+
+None of these paths lies under <root>/managed: `/worktrees/feature` is outside root, and <root>/fresh and <root>/restored are siblings of <root>/managed.
+
+Runs at fdfda95783 (pen-macmini), against the head code:
+- New harness: `cd apps/server && vp test run --reporter verbose src/orchestration-v2/goat/ThreadWorkspaceService.test.ts`: 15 passed, the ten titles above among them.
+- Base harness: ed4268897e's ThreadWorkspaceService.test.ts copied beside it as an untracked ThreadWorkspaceService.baseharness.test.ts, run the same way: 10 passed, the same ten titles. The copy was then deleted; `git status --short` was empty before and after.
