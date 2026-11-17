@@ -235,6 +235,8 @@ export const make = Effect.gen(function* () {
       /** The shell echoes typed input; lines ending with these are the wrapper, not output. */
       readonly echoedWrapperLines: ReadonlyArray<string>;
       readonly onOutputLine: ((line: string) => Effect.Effect<void>) | undefined;
+      /** Whether a fresh-shell run has superseded this one. */
+      readonly superseded: () => boolean;
     }) {
       const startedAtMs = yield* Clock.currentTimeMillis;
       const done = yield* Deferred.make<ProjectSetupScriptCompletion>();
@@ -300,8 +302,9 @@ export const make = Effect.gen(function* () {
             ),
           );
         }
-        // A restart ends a run whose command was already typed; the new shell's output is not its.
-        if (event.type === "restarted" && written) replaced = true;
+        // A restart ends a run whose command was already typed, or one a fresh-shell run superseded;
+        // the new shell's output is not its.
+        if (event.type === "restarted" && (written || input.superseded())) replaced = true;
         if (event.type === "exited" || event.type === "closed" || replaced) {
           return settle(null).pipe(Effect.andThen(Deferred.succeed(promptReturned, undefined)));
         }
@@ -518,6 +521,16 @@ export const make = Effect.gen(function* () {
         );
     const observe = input.observeCompletion;
     const completionToken = observe ? (yield* random.uuidV4()).replaceAll("-", "") : null;
+    // Registered before the open: an open that waits for a folder a restore holds comes back with the
+    // restore's shell, and a fresh run's restart must supersede it too.
+    const pending = pendingRuns.get(runKey) ?? { generation: 0, alive: 0 };
+    pendingRuns.set(runKey, pending);
+    pending.alive += 1;
+    const generation = pending.generation;
+    const release = Effect.sync(() => {
+      pending.alive -= 1;
+      if (pending.alive === 0) pendingRuns.delete(runKey);
+    });
     const echoedWrapperLines: string[] = [];
     // Subscribe before the open (after a fresh shell's restart) so neither the shell's startup
     // activity nor the sentinel can race the listeners.
@@ -530,6 +543,7 @@ export const make = Effect.gen(function* () {
             sentinelPattern: completionSentinelPattern(completionToken),
             echoedWrapperLines,
             onOutputLine: observe.onOutputLine,
+            superseded: () => pending.generation !== generation,
           })
         : undefined;
     const readiness = yield* watchShellReadiness({
@@ -586,20 +600,12 @@ export const make = Effect.gen(function* () {
         Effect.sync(() => {
           observed?.unsubscribe();
           readiness.unsubscribe();
-        }),
+        }).pipe(Effect.andThen(release)),
       ),
     );
 
     // Return once the terminal exists so callers can show it while a startup prompt waits.
     // PowerShell and cmd have no line-editor signal.
-    const pending = pendingRuns.get(runKey) ?? { generation: 0, alive: 0 };
-    pendingRuns.set(runKey, pending);
-    pending.alive += 1;
-    const generation = pending.generation;
-    const release = Effect.sync(() => {
-      pending.alive -= 1;
-      if (pending.alive === 0) pendingRuns.delete(runKey);
-    });
     yield* (
       completionShell === "powershell" || completionShell === null
         ? Effect.succeed("ready" as const)
