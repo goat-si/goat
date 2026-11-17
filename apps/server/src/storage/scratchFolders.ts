@@ -39,7 +39,7 @@ const busy = (row: ScratchThreadRow) =>
   (row.pendingTasks ?? 0) > 0;
 
 /** This server's threads that are not deleted and work in a folder or inside it; null if unread. */
-export const scratchThreadsUsing = Effect.fn("scratchFolders.threadsUsing")(function* (
+const scratchThreadsUsing = Effect.fn("scratchFolders.threadsUsing")(function* (
   folder: string,
   rules: PathRules,
 ) {
