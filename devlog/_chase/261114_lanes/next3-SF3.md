@@ -171,3 +171,24 @@ Issue draft (not this lane's code), title "Provider adapters hold their event qu
 ### D6
 
 6be1bd6472 is ported verbatim in row 3a; the fork delta record (devlog/_chase/010_fork_delta.md on the lane branch) gets "6be1bd6472 taken early by SF3: next cycle checks, does not port", as K4 wrote for 0813f4978e.
+
+## Coordinator ruling on D5 and D4 (relayed verbatim by the lane coordinator)
+
+> Coordinator to lane coordinator, 2026-11-17 23:58 UTC, relayed verbatim:
+>
+> III. SF3, D5: the proposed form is ACCEPTED (domain events stay on the unbounded queue; only command_output.delta is bounded, in characters). Conditions: (1) the gate is one small GOAT-owned module, not inline in adapter.ts; (2) the count cannot leak: released on take, on Stop, on interrupt and on close; a case that after a flood and a drain the count is back at zero; (3) a case that Stop ends the turn while the gate is full and the reader is stalled (your finding, pinned); (4) ORDER: a delta that waited must never reach the reader after its item's completed event; completing the item drops what still waits for it (a case); (5) the record states the per-session ceiling (your 9.5 MiB) and the worst case for 20 Cursor sessions at once; (6) if the gate passes about 80 lines of code or needs another question, B ships instead with the Limit written. The other answers are accepted: D2 through a Context.Reference with one line per caller (one case with the reference set and one without); D3 as shown; row 1 as answered; eight adapters in the issue draft. D4: the failure text must be true on every client, and mobile has no "Restart agent session" action, so the sentence may not name a control: "Send again to keep waiting, or restart the agent session." Code still waits for K5's review.
+>
+> Lane coordinator, for SF3: quote it in next3-SF3.md. Code still waits for K5's review to report; I will tell you.
+
+## Plan after the D5 ruling
+
+Row 2 message, final (this replaces the text in "Plan after the ruling", Row 2, and the mobile Limit there no longer applies, because the sentence names no control): "Pi has not confirmed your previous message after 2 minutes, so this one was not sent. A Pi extension may still be handling it. Send again to keep waiting, or restart the agent session."
+
+Row 1 D2 tests: one case with TextGenerationProject set to a project that disables the first candidate (the fallback skips it), and one without the reference (machine-level enablement, the same candidate is taken).
+
+Row 3b gate, by condition:
+1. Module: new packages/provider-cursor/src/server/commandOutputGate.ts, GOAT-owned. adapter.ts only creates it, calls it at the shell-delta emit, at take (the events stream maps each taken delta through the gate's release), at Stop and interrupt, at item completion and at session close. Lines of the module are counted in the commit. Past about 80 lines of code, or if it needs another question, B ships instead with the Limit: "with an unbounded queue the dispatch settles at once, so hook coalescing alone does not bound memory under a paused consumer".
+2. No leak: the count goes down on take, and every waiting or queued delta of a turn is released on Stop, on interrupt and on close. Case: a flood, then the reader drains everything; the gate's count reads 0.
+3. Case (pinned finding): the reader is stalled and the gate is full; Stop ends the turn (the interrupt's finalizeTurn emits a domain event, which never waits), and the suspended producer is released.
+4. Order: the gate keys waiting deltas by item. Completing a command item (adapter.ts:631, the completed turn_item.updated) first drops the deltas still waiting for that item and releases their count, then emits the completion, so no waiting delta reaches the reader after its item's completed event. A delta already offered before the completion precedes it in the queue and stays in order. Case: a delta waits at the cap, the item completes, the reader then sees the completion and no later delta for that item.
+5. Ceiling: per session at most 4 Mi characters of queued deltas (8 MiB at 2 bytes per character), plus the SDK hook's coalesced buffer of 256 Ki characters (512 KiB), plus the adapter's kept tail of up to 2 x 256 Ki characters (1 MiB) for each running shell: about 9.5 MiB for one session with one running shell. The kept tail is per running shell; Cursor runs a turn's shell commands one at a time in what we have seen, and each further shell running at the same time adds up to 1 MiB. Worst case for 20 Cursor sessions at once, one running shell each: 20 x 9.5 MiB = 190 MiB. The 8 MiB queue cap is per session, so the total grows with the number of sessions. Today the same 20 sessions have no ceiling at all.
