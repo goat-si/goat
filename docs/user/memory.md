@@ -20,7 +20,7 @@ Choose **Remember something**, enter what you want to keep, and choose its scope
 
 For project memories, use a shared project binding to share an identity across projects, or return to the repository binding. Changing the binding affects future memories; existing memories keep their scope. Preview an import again after changing its scope or binding.
 
-Search for a memory, open it to read its history, or use **Edit** to change it. Editing keeps it where it was saved.
+Search for a memory, open it to read its history, or use **Edit** to change it. Editing keeps it where it was saved. Memory text hides after a minute on screen; choose **Show again** to read it. An edit you have changed keeps your text.
 
 If search coverage is incomplete or unavailable, an empty result does not prove a memory is missing. Clear the search to browse saved memories instead.
 
