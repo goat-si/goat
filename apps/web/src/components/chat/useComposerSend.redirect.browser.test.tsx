@@ -8,7 +8,12 @@ import { expect, it, vi } from "vite-plus/test";
  */
 async function redirectSend(
   fixture: Awaited<ReturnType<typeof setupSshComposer>>,
-  options: { readonly composerMode: "full-access" | "approval-required"; readonly refuse: boolean },
+  options: {
+    readonly composerMode: "full-access" | "approval-required";
+    readonly refuse: boolean;
+    readonly input?: Record<string, unknown>;
+    readonly sendContext?: Record<string, unknown>;
+  },
 ) {
   const { EnvironmentId, ProjectId, RuntimeRequestId, ThreadId, ProviderInstanceId } =
     await import("@goat/contracts");
@@ -65,6 +70,7 @@ async function redirectSend(
         interactionModeEnabled: false,
         shownPendingApprovalIds: [requestId],
         answeringPendingUserInput: false,
+        ...options.sendContext,
       }),
       validateProviderInput: () => true,
       hasPendingAttachments: () => false,
@@ -142,6 +148,7 @@ async function redirectSend(
       activeThreadBranch: null,
       activeMessageCount: 1,
       isGitRepo: false,
+      ...options.input,
     } as unknown as Parameters<typeof useComposerSend>[0];
     const currentSend = useComposerSend(input).onSend;
     useLayoutEffect(() => {
@@ -258,4 +265,54 @@ it("a draft reply whose holding thread the client holds starts the turn", async 
 
   expect(redirect.calls).toEqual(["approval:decline", "settings:full-access", "startTurn"]);
   expect(state.toast).not.toHaveBeenCalled();
+});
+
+it("a queued-message edit whose reply names a thread the client does not hold is refused, and the edit stays open", async () => {
+  await using fixture = await setupSshComposer();
+  const { DraftId, useComposerDraftStore } = await import("~/composerDraftStore");
+  const editDraft = DraftId.make("queued-edit:redirect-env:redirect-thread:run-1");
+  const saveEdit = vi.fn(async () => {});
+  const redirect = await redirectSend(fixture, {
+    composerMode: "full-access",
+    refuse: false,
+    input: { queuedRunEdit: { isEditing: true, saveEdit }, composerDraftTarget: editDraft },
+  });
+  const environmentId = await draftReply("holder-thread");
+  const store = useComposerDraftStore.getState();
+  const threadDraft = { environmentId, threadId: "redirect-thread" } as never;
+  store.setReplyTo(editDraft, store.getComposerDraft(threadDraft)!.replyTo);
+  store.setReplyTo(threadDraft, null);
+  using _server = await serverTakesReplies(environmentId);
+
+  await redirect.send();
+
+  expect(saveEdit).not.toHaveBeenCalled();
+  expect(state.toast).toHaveBeenCalledWith(
+    expect.objectContaining({ title: "Can't find the response this replies to" }),
+  );
+  expect(store.getComposerDraft(editDraft)?.replyTo?.contextId).toBe("response_m9");
+});
+
+it("a reply sent as a plan follow-up carries its response record", async () => {
+  await using fixture = await setupSshComposer();
+  const redirect = await redirectSend(fixture, {
+    composerMode: "full-access",
+    refuse: false,
+    input: {
+      showPlanFollowUpPrompt: true,
+      activeProposedPlan: { id: "plan-1", planMarkdown: "# Plan\n\n1. Do it" },
+    },
+    sendContext: { interactionModeEnabled: true },
+  });
+  using _server = await serverTakesReplies(await draftReply("redirect-thread"));
+
+  await redirect.send();
+
+  expect(redirect.calls).toEqual(["settings:full-access", "startTurn"]);
+  const [{ input }] = state.normal.mock.calls[0] as [
+    { input: { message: { context?: { records: ReadonlyArray<{ kind: string }> } } } },
+  ];
+  expect(input.message.context?.records ?? []).toContainEqual(
+    expect.objectContaining({ kind: "response", contextId: "response_m9" }),
+  );
 });
