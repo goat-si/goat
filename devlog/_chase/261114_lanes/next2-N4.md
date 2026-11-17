@@ -630,3 +630,9 @@ What was done: the branch fix/setupshell-test-busy-fixture was cut from origin/d
 - **Checks at 55edbbbe81:** vp test run on the setupShell file: 9 of 9 passed. vp run check:changed origin/dev: exit 0; format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget, typecheck (2 packages) and test (1 file, 9 tests) all pass.
 
 NOT RUN: Linux and Windows. A real shell (the case uses the fake PTY on purpose). The CI suites (the coordinator dispatches lane=quick).
+
+Coordinator to lane coordinator (20:4x UTC), verbatim:
+N4e IS ON DEV.
+- #3698 merged at 20:41:36 UTC with scripts/merge-pr.ts at head 55edbbbe817746cfd98e8daa70289a4eefa3c38f (pull request run 44170894855: goat-ci-result success, goat-test-changed, goat-check and goat-typecheck success). dev = f3d0eef8f96f8f41a39e5776daf43e30a75779ae. Verified by me: 42bf8633ce..f3d0eef8f9 is that one commit, one file (ThreadWorkspaceService.setupShell.test.ts, +35/-9). I read the diff (fixture only); I did not run the test. The watch on #3698 is removed. N4's lane is done; record it.
+
+LANE N4 IS DONE. N4, N4b, N4c and N4d reached dev through #3660 (merged at 20:27:10 UTC, dev 42bf8633ce). N4e reached dev as #3698 (dev f3d0eef8f9).
