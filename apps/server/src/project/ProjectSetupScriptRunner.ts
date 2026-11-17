@@ -19,6 +19,7 @@ import * as Schema from "effect/Schema";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
+import { withoutBindingCheck } from "../terminal/TerminalThreadWorktree.ts";
 import * as ProjectService from "./ProjectService.ts";
 import * as GoatProjectFileLoader from "./GoatProjectFileLoader.ts";
 import { makeSetupScriptResolver } from "./projectSetupScripts.ts";
@@ -484,30 +485,31 @@ export const make = Effect.gen(function* () {
       onStartupPrompt: observed?.flushPartialLine ?? Effect.void,
     });
     const { completionShell, commandLine } = yield* Effect.gen(function* () {
-      const shell = yield* terminalManager
-        .open({
+      // Setup may open before its thread is bound to this worktree, as a pull request's does.
+      const shell = yield* withoutBindingCheck(
+        terminalManager.open({
           threadId: input.threadId,
           terminalId,
           stopOnSettle: script.stopOnSettle ?? false,
           cwd,
           worktreePath: threadWorktreePath,
           env: { ...env, NO_COLOR: "1", FORCE_COLOR: "0" },
-        })
-        .pipe(
-          Effect.andThen(() =>
-            terminalManager
-              .getShell({ threadId: input.threadId, terminalId })
-              .pipe(Effect.catchTags({ TerminalNotRunningError: () => Effect.succeed(null) })),
-          ),
-          Effect.mapError(
-            (cause) =>
-              new ProjectSetupScriptOperationError({
-                ...errorContext,
-                operation: "openTerminal",
-                cause,
-              }),
-          ),
-        );
+        }),
+      ).pipe(
+        Effect.andThen(() =>
+          terminalManager
+            .getShell({ threadId: input.threadId, terminalId })
+            .pipe(Effect.catchTags({ TerminalNotRunningError: () => Effect.succeed(null) })),
+        ),
+        Effect.mapError(
+          (cause) =>
+            new ProjectSetupScriptOperationError({
+              ...errorContext,
+              operation: "openTerminal",
+              cause,
+            }),
+        ),
+      );
       if (shell === null) {
         yield* observed?.abandon ?? Effect.void;
         return { completionShell: null, commandLine: null };
