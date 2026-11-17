@@ -556,3 +556,100 @@ GOAT's copy, the same assertion changed the same way (GOAT's file differs from u
 
 No other existing expectation changes. The mobile and assets.test.ts additions are new cases.
 
+
+
+## Row 4 move and commit (option A)
+
+- f057ee1027 move (IV (vi), conditions a-d): server.test.ts:228-382 at c995c5427a -> server.updateResume.test.ts:67-221. `diff <(git show c995c5427a:...server.test.ts | sed -n 228,382p) <(new file from the describe)` is empty. Copies, byte for byte (compared): CONFIG (server.test.ts:69-78 -> 37-46), TARGET (:86-91 -> 48-53), session (:93-103 -> 55-65). Lines outside the block: 1-35 imports, plus blanks at 36, 47, 54 and 66. Imports removed from server.test.ts: ServerSelfUpdateError, AsyncResult, RpcPermissionGuard, serverUpdateStateAtom. Counts: server.test.ts ran 33 before the move; after the move it runs 26 and server.updateResume.test.ts runs 7 (the describe's seven rows, same titles; the five boot-service rows plus respawn and desktop-managed). That is 33, all passing. server.test.ts 1411 -> 1252; entry lowered; not in TEST_TITLES.
+- Row 4 commit (being committed after this record): the production files are as described above (rpc/client.ts requestInSession/runStreamInSession; serverUpdate.ts acceptedAt, foreign outcome, readAcceptingReady; server.ts 1527 -> 1564). In server.updateResume.test.ts: (1) the moved describe becomes upstream's block at a74ee4cc7c under IV (i) (its @@ -254 and @@ -363 hunks, quoted above under "Rule 3, IV(i) mirrored" with records 1e3a146585; GOAT's hunk in the new file follows); (2) upstream's describe("launcher update resume") is added verbatim from a74ee4cc7c, apart from two lines GOAT's EnvironmentCacheStore needs in the cache stub (loadShellMeta, saveShellMeta); (3) a GOAT describe "launcher update outcome validation" holds upstream's foreign-rollback check as its own case (upstream put it inside "server state projection" in server.test.ts). Fail-first: with the row 4 production files held aside, the two "fails promptly" cases and the foreign-rollback case fail and the other 9 pass. With them: 38 tests across the two files pass, and the whole client-runtime suite passes (315 files, 4022 tests, exit 0).
+- Fork delta line (f): in GOAT, upstream's server update cases of state/server.test.ts ("accepted server update recovery", "launcher update resume") live in server.updateResume.test.ts beside serverUpdate.ts. Taken into devlog/_chase/010_fork_delta.md at READY, or by the coordinator if the fork delta belongs to the integration PR.
+
+GOAT's mirrored hunk in server.updateResume.test.ts (the same change as upstream's @@ -254 and @@ -363 hunks):
+
+```diff
+@@ -2,19 +2,25 @@ import {
+   EnvironmentId,
+   ServerSelfUpdateError,
+   type ServerConfig,
++  type ServerLifecycleStreamEvent,
++  type ServerSelfUpdateOutcome,
+   WS_METHODS,
+ } from "@goat/contracts";
+ import { describe, expect, it } from "@effect/vitest";
+ import * as Cause from "effect/Cause";
++import * as Clock from "effect/Clock";
+ import * as Deferred from "effect/Deferred";
++import type * as Duration from "effect/Duration";
+ import * as Effect from "effect/Effect";
+ import * as Fiber from "effect/Fiber";
+ import * as Layer from "effect/Layer";
+ import * as Option from "effect/Option";
+ import * as Queue from "effect/Queue";
++import * as Scheduler from "effect/Scheduler";
+ import * as Stream from "effect/Stream";
+ import * as SubscriptionRef from "effect/SubscriptionRef";
+ import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
++import * as TestClock from "effect/testing/TestClock";
+ import { RpcClientError } from "effect/rpc";
+ import * as Socket from "effect/socket/Socket";
+ import {
+@@ -32,6 +38,7 @@ import {
+   createServerEnvironmentAtoms,
+   serverUpdateStateAtom,
+   matchesServerUpdateReadyEvent,
++  validateServerUpdateReadyEvent,
+ } from "./server.ts";
+ 
+ const CONFIG = {
+@@ -90,22 +97,37 @@ describe("accepted server update recovery", () => {
+           capabilities: { serverSelfUpdate: method, serverSelfUpdateProgress: true },
+         },
+       } as ServerConfig;
++      const ready = (serverVersion: string) =>
++        ({
++          version: 1,
++          sequence: 1,
++          type: "ready",
++          payload: { at: "2026-09-01T00:00:00.000Z", environment: { serverVersion } },
++        }) as Parameters<typeof matchesServerUpdateReadyEvent>[1];
++      let requested = false;
+       const client = {
+         [WS_METHODS.subscribeServerConfig]: () => Stream.never,
++        // Before the request, a boot-service update reads the accepting server's ready.
+         [WS_METHODS.subscribeServerLifecycle]: () =>
+-          Stream.fromEffect(Deferred.succeed(observing, undefined)).pipe(
+-            Stream.drain,
+-            Stream.concat(Stream.fromQueue(readyEvents)),
+-            Stream.tap((event) =>
+-              event.payload.environment.serverVersion === "0.0.30"
+-                ? Deferred.succeed(oldReadyObserved, undefined)
+-                : Effect.void,
+-            ),
+-          ),
++          requested
++            ? Stream.fromEffect(Deferred.succeed(observing, undefined)).pipe(
++                Stream.drain,
++                Stream.concat(Stream.fromQueue(readyEvents)),
++                Stream.tap((event) =>
++                  event.payload.environment.serverVersion === "0.0.30"
++                    ? Deferred.succeed(oldReadyObserved, undefined)
++                    : Effect.void,
++                ),
++              )
++            : Stream.make(ready("0.0.30")).pipe(Stream.concat(Stream.never)),
+         [WS_METHODS.serverUpdateServerWithProgress]: () =>
+-          (loss === "no_progress"
+-            ? Stream.empty
+-            : Stream.make({ type: "progress" as const, stage: "downloading" as const })
++          Stream.unwrap(
++            Effect.sync(() => {
++              requested = true;
++              return loss === "no_progress"
++                ? Stream.empty
++                : Stream.make({ type: "progress" as const, stage: "downloading" as const });
++            }),
+           ).pipe(
+             Stream.concat(
+               Stream.fromEffect(
+```
+
