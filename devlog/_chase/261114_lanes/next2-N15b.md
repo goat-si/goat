@@ -280,3 +280,7 @@ NOT RUN: a goat-ci run on the merge commit daf4b9bb3b; the 385-file check:change
 - Ran locally: format on the 9 changed files (exit 0), lint on the 8 changed code files (exit 0, no warnings), and the 9 test files check:changed selects (useComposerStopGuard, ServerEnvironment, PublishRepositoryDialog.browser, GitActionsControl.browser and .logic, both reactCompilerCoverage, thread-settings-sheet-state, ThreadDetailsPanel.history.browser): 9 files, 3380 tests passed.
 - Runs on goat-ci: typecheck, knip and the rest of the selection, in ONE run (workflow_dispatch, lane all): https://github.com/goat-si/goat/actions/runs/44109073502 (queued when recorded).
 - NOT RUN locally: the typecheck of the affected packages (heavy; goat-ci carries it).
+
+## Coordinator, 14:58:58 UTC (verbatim, the part for N15b)
+
+> "1. N15b follow-ups: your route is accepted (the 9 test files plus format and lint on its changed files locally, push, ONE goat-ci run on chase/t3-261114-next2-n15bb-followups carrying typecheck and the rest, recorded as such). These are P3 follow-ups, so no fresh review task: I read the diff against e04442e66c myself and merge it into the integration branch when its run is green. Send the head and the run URL. P3-2 changes behaviour (the guard also clears on another thread): P1 mobile adds one line for it only if it still has time before its stop; otherwise it joins the re-walk with N4c."
