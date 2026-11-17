@@ -1,10 +1,12 @@
 import * as Mime from "effect/http/Mime";
 import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { HttpServerResponse } from "effect/http";
 
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as BuiltInDrivers from "../sourceControl/builtInDrivers.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 
@@ -22,6 +24,7 @@ const SVG_CONTENT_TYPE = "image/svg+xml";
 // An SVG is a document: same policy the asset route gives a workspace SVG, so one embedded in a
 // body cannot run script against this origin.
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+const PROJECT_LOOKUP_TIMEOUT = Duration.seconds(10);
 
 export const sourceControlMediaResponse = Effect.fn(
   "SourceControlMediaResponse.sourceControlMediaResponse",
@@ -53,14 +56,29 @@ export const sourceControlMediaResponse = Effect.fn(
     if (value !== undefined) forwarded[name] = value;
   }
   // Clients that predate `repository` fall back to the repository checked out at `cwd`.
-  let repository = asset.repository;
-  if (repository === undefined) {
+  let named = asset.repository;
+  if (named === undefined) {
     const identities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
     const identity = yield* identities.resolve(asset.cwd);
     if (identity?.provider === media.definition.kind && identity.owner && identity.name) {
-      repository = `${identity.owner}/${identity.name}`;
+      named = `${identity.owner}/${identity.name}`;
     }
   }
+  // The claims only name a repository; the server's project list at this moment decides whether
+  // the host credential may go with it. A lookup that fails or stalls sends none.
+  const host = media.definition.publicHost;
+  const pullRequests = yield* PullRequestService.PullRequestService;
+  const repository =
+    named === undefined || host === null
+      ? undefined
+      : yield* pullRequests.hasProjectRepository({ host, repository: named }).pipe(
+          Effect.timeout(PROJECT_LOOKUP_TIMEOUT),
+          Effect.map((used) => (used ? named : undefined)),
+          Effect.tapError((cause) =>
+            Effect.logWarning("Could not read the projects for a media credential.", { cause }),
+          ),
+          Effect.orElseSucceed(() => undefined),
+        );
   const response = yield* fetchMedia({
     url: asset.url,
     headers: forwarded,

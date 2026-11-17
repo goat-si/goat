@@ -1019,7 +1019,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerHttp.layerRuntimeDrainRoute,
     RuntimeSessionRoute.layer,
     ServerHttp.layerOtlpTracesProxyRoute,
-    ServerHttp.layerAssetRoute,
+    ServerHttp.layerAssetRoute.pipe(HttpRouter.provideRequest(layerPullRequestService)),
     ServerHttp.layerAttachmentUploadRoute,
     GuestHttp.layer,
     DeviceHubProxy.layer,
