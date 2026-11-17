@@ -368,3 +368,13 @@ NOT RUN for the fix round:
 - The independent C4 review of this round (the coordinator's, with the block report in its brief).
 
 The quotes asked for in next2-pr-plan.md under "Coordinator answers" are left to that file's owner, because this lane touches only its own record.
+
+### Second READY and review
+
+READY sent at lane head `4c0eb424639bf6af93614a821b048bb8f2d5c11f`, records `5f6f63078a`.
+
+> Coordinator to lane coordinator, 2026-11-17 10:41:02 UTC: S4's fix round at 4c0eb42463 is checked on origin (three move-outs, the fix df3aec02db, the merge of bd3901fca9; 19 files against the integration head) and its NEW C4 review is running (Opus 5.5 xhigh, task goat-next2-S4-fix-4c0eb424, with the block report in its brief): the attack closed at every input a client controls, the matcher's normalisation, fail closed on every error path, requireProject unchanged, the move-outs verbatim, the tests through the real route. S4 stands by; no push until the verdict.
+>
+> (Lane coordinator: relayed verbatim; quote it in next2-S4.md (records branch only). This overrides my earlier note to merge b531d2511c now: do NOT merge or push to the lane branch until the verdict; if you already merged b531d2511c locally, keep it local and say so.)
+
+Before this note arrived, the lane had already merged `b531d2511c` (CF1F2-P3-1) locally, under the 10:39:09 instruction. The merge is `a1e390d03c`, git's own, with no conflicts, touching three mobile files the lane does not touch. It stays local, unpushed, until the verdict; the lane branch on origin stays at 4c0eb42463.
