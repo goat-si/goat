@@ -749,3 +749,36 @@ Server tests: c2184c2203 in ThreadFamilyLookup.test.ts: a fork's family read ret
 ### Push
 
 868116db00 (the older-server test) is the commit (a) showed was missing; it goes in before the push, so the pushed head is 868116db00, not 584eb2ccbf. Typecheck 42/42 on it (19:57 UTC).
+
+### Coordinator, 20:02 UTC (relayed by the lane coordinator; verbatim)
+
+Coordinator to lane coordinator (20:02 UTC): N14b at 868116db00 read. (a) is closed as a contract question; on (b): RELAX.
+
+READ BY ME: origin's head 868116db00b2c0236ae9af11ba15b139efb5fd3f, df1a69dfd2 its ancestor, 12 commits, 12 files, +508/-24; under apps/server and packages only three TEST files change (ResponseContextCheck.test.ts, ThreadFamilyLookup.test.ts, threadFamilies.test.ts). So my 19:55 "C4 because of (a)" reason is WITHDRAWN: there is no server or contract change. The review stays ONE fresh narrow review, and it reads the send gate with N14's care because the gate is the client half of a C4 feature. The consumer list and the older-server sentence in the record are what I asked for.
+
+(b) RULED: RELAX, the restore half only. My 17:54:55 rule now reads: a reply to a response another thread holds is OFFERED (the Reply action) and SENT (the send gate) only while the client holds a live shell for the holding thread; a stashed reply is RESTORED as it was stashed, at once, and the send gate judges it. Why: the gate already refuses with a true sentence and keeps the text and the banner; a silent drop at restore loses the reply without telling the person; and the timer goes away.
+Conditions for N14, before the review starts:
+- restoreStashedReply (composerReply.tsx:149) loses only its replyHolderIsHeld condition. The other two stay: the same environment, and showsHistoryOf (a reply returns only in a thread that shows its response), as does "a pending reply wins". The capability half is untouched.
+- stashedReplyCanBeJudged, its waitForAtomValue import, the "Still loading" toast and the call at useComposerStash.ts:184 are removed. No timer is left in production for this.
+- New commits on top and a plain push; no force push, no rewritten commit (the branch is on origin). A revert of e3da60bf13 and of 1be3b56057's cases is fine.
+- Tests: one case that a stashed reply whose holding thread has no shell comes back with its banner (it fails at 868116db00); the existing call-site case already shows the send refused with the text and banner kept, so name it in the record instead of adding another. RULE 3 AUTHORISED for the existing cases that assert the drop at restore for a missing holder (composerReply.test.ts and stashFailedSend.test.ts): each changed case is named in the record with its before and after expectation; cases about another environment, a thread that does not show the response, and a pending reply stay byte for byte.
+- docs/user/composer.md only if a sentence there becomes untrue.
+- The record states two limits in one sentence each, for the reviewer to judge, no code for them here: (1) showsHistoryOf walks held shells, so with an intermediate source not held (fork of a fork) a stashed reply to the older thread's response is still not restored; (2) useForkSourceMissing looks at the direct source only, so a grandparent outside the shell window is not read.
+- Then report the head as ls-remote shows it and the records commit. No pull request and no dispatch yet, as before.
+
+### The relaxed restore (new commits on 868116db00; no rewritten commit)
+
+The (b) statement above (the stash wait) is superseded: the wait is gone.
+
+- af1c81c04c test, under the rule 3 line of 20:02: stashFailedSend.test.ts, the only existing case that asserted the drop at restore for a missing holder (composerReply.test.ts had none outside the wait cases removed below). Before: title "leaves a reply out when the client no longer holds the thread that held its response", expectation `expect(useComposerDraftStore.getState().getComposerDraft(shells.sideChat)?.replyTo ?? null).toBeNull()`. After: title "puts a reply back at once when the client holds no shell for the thread that held it", expectation `expect(useComposerDraftStore.getState().getComposerDraft(shells.sideChat)?.replyTo).toEqual(shells.reply)` (the banner is drawn from that draft field, composerReply.tsx useReplyBannerItems). Same fixture, sideChatOfParent({ parentLive: false }). Fail-first at 868116db00 + this commit (20:02:00 UTC): `AssertionError: expected undefined to deeply equal { version: 1, kind: 'response', …(4) }`, 1 failed, 5 passed. The cases about the same thread and a side chat whose parent is held are byte for byte unchanged. No restore case for another environment or for a pending reply exists to change.
+- 48cece44bc revert: `git revert` of e3da60bf13 (stashedReplyCanBeJudged, its waitForAtomValue, threadFamilies and threadFamilyRead imports, the "Still loading" toast, and the call in useComposerStash.ts) plus 1be3b56057's three cases and their fixture in composerReply.test.ts. useComposerStash.ts now equals df1a69dfd2's (`git diff df1a69dfd2 -- apps/web/src/components/chat/useComposerStash.ts` is empty). composerReply.test.ts differs from df1a69dfd2 only by the reworded toast title. `rg 'stashedReplyCanBeJudged|Still loading the thread' apps/web/src`: no match, so no timer is left for this.
+- fb4550219b fix: restoreStashedReply drops only its replyHolderIsHeld condition. The same environment, showsHistoryOf and "a pending reply wins" stay. The capability half of the gate is untouched.
+- The send refused with the text and banner kept is shown by the existing call-site cases in useComposerSend.redirect.browser.test.tsx. "a draft reply whose holding thread the client does not hold starts no turn and says why" asserts no turn and the toast; the refusal returns at useComposerSend.ts:709, before any draft clear, so the text and the reply stay. The queued-edit case "a queued-message edit whose reply names a thread the client does not hold is refused, and the edit stays open" also asserts the reply is still in the draft after the refusal.
+- docs/user/composer.md: no sentence becomes untrue. The guide's Reply clause is about offering Reply, and its stash sentences (:213-220, :481) say nothing about replies.
+
+Limits, for the reviewer to judge (no code here):
+1. showsHistoryOf walks held shells, so in a fork of a fork whose middle thread is not held, a stashed reply to the oldest thread's response is still not restored.
+2. useForkSourceMissing looks at the direct source only, so a grandparent outside the shell window is not read, and Reply stays hidden on rows inherited from it.
+
+Checks on fb4550219b (date -u 20:02-20:03 UTC): vp run typecheck 42/42; vp run check:changed origin/chase/t3-261114-next2: format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget and typecheck (8 packages) pass, test 10 files 2037/2037; stashFailedSend, composerReply, useComposerSend.redirect, ComposerStashMenu and TimelineAssistantReply: 5 files, 21 tests, 0 failed.
+NOT RUN: as before (the real-client row runs after the review; CI; desktop build; mobile).
