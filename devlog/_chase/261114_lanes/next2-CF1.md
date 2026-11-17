@@ -64,7 +64,7 @@ Condition 2, "cleaned" outside the folder. Restore for "cleaned" and "missing" b
 
 Condition 4, agents. No agent tool or thread read returns ThreadWorkspaceStatus. `ThreadWorkspaceService` is used only by the WebSocket handlers (apps/server/src/storage/storageRpc.ts:35-37, `thread.getWorkspaceStatus` and `thread.restoreWorkspace`); `goat_worktree_status` (packages/contracts/src/agentSurface/entries/worktree.ts:126) reads the binding, not this status. Checked with `rg -n 'ThreadWorkspaceService|threadGetWorkspaceStatus' apps/server/src packages/contracts/src`. The agent surface audit passed inside check:changed; no description changed.
 
-Condition 6, docs. No user guide promises that a missing worktree is always recreated. docs/user/project-settings.md:342-347 says Restore and a send bring back a worktree cleanup removed, and cleanup only removes worktrees inside GOAT's folder (storageCleanup.ts:705-706), so it stays true. No docs change.
+Condition 6, docs. No user guide promises that a missing worktree is always recreated. docs/user/project-settings.md:342-347 says Restore and a send bring back a worktree cleanup removed, and cleanup only removes worktrees inside GOAT's folder (storageCleanup.ts:705-706), so it stays true. No docs change. (Wrong for the deeper-worktree case: corrected under "Second fix round" below.)
 
 Tests, fail-first on ed42688:
 - ThreadWorkspaceService.test.ts "says a $state worktree in $place is recreatable only where restoring it would not be refused" (missing/cleaned × GOAT's worktrees folder/another folder): all four failed with `expected { threadId: 'thread-1', …(4) } to have deep property 'recreatable'`. The two outside cases also assert that `restore` with mode "restore" is refused with the server's detail.
@@ -253,3 +253,41 @@ NOT RUN (fix round): the phone captures above; goat#3513 on a throttled link; fu
 > F. goat#3665 (a notice when a font face fails; the double wait): noted, goes into the plan's CF1 follow-ups.
 
 CF1 stands by at 43f14b9a9cbb3bf62aa07e59725866b4852bff27 for the new review's verdict; nothing pushed to the lane branch since.
+
+## Coordinator answers, 10:18 (verbatim)
+
+> Coordinator to lane coordinator, 2026-11-17 10:18:15 UTC (quote each part verbatim in the lane's record and in next2-pr-plan.md under "Coordinator answers").
+>
+> A. CF1: THE FIX-ROUND REVIEW at 43f14b9a9cbb3bf62aa07e59725866b4852bff27 IS A BLOCK for ONE P2 that the round introduced (Opus 5.5 xhigh). Report /Users/jun/handoff-in/chase/next2-CF1-fix-review-43f14b9a.md: relay it in full. Everything else holds: the font fix (the open waits are a Set and cannot go wrong; every wait has its own bound; timers are clean), the review screen, the banner wording, the per-thread filter in every reader, and the per-case proof for ThreadWorkspaceService.test.ts (the reviewer read the ten cases).
+> CF1F-P2-1 (goat#3654): the failure banner on the THREAD SCREEN can no longer be dismissed. dismissGitActionResult(thread?) (use-vcs-action-state.ts:64-66) treats any first argument as a thread filter; ThreadRouteScreen.tsx:969 passes the function itself as onDismiss, so React Native calls it with the event object, the "thread" check fails and nothing is cleared. The banner's only dismiss was that escape handler (GitActionProgressOverlay.tsx:68); its Toast gets no onDismiss (:70-83), so there is no close button either, and since failures stopped clearing themselves the red banner stays until a Git sheet's Dismiss, another action on that thread, or another thread's result.
+> SECOND FIX ROUND, small, test first, one commit:
+> (1) dismissGitActionResult() takes NO argument again and clears the shown result; the per-thread clear used at use-selected-thread-git-actions.ts:217 gets its own name. ThreadRouteScreen.tsx stays untouched (it is at its budget entry).
+> (2) GitActionProgressOverlay passes onDismiss to its Toast when the phase is "error", so the banner shows the close button it already has.
+> (3) One test in use-vcs-action-state.test.ts that fails on 43f14b9a9c: dismiss called the way an event handler is called (with an event argument) clears the result.
+> (4) The record: correct the "Condition 6, docs" line (project-settings.md:342-347 does not "stay true" for the deeper-worktree case; goat#3664 and N4's row own it), and add the residual the reviewer names for the font fix (a worker that stops without an error event while a wait is open leaves the preview loading; the same as before this lane) and that "a queued call expires 30 s after the wait ends" is read from the code, not tested; add that test if it is a few lines.
+> (5) THE PHONE CAPTURE LIST now includes: the banner with its close button on the thread screen, and the review screen's failure card on iPhone and Android.
+> Then check:changed and READY; a new reviewer reads this one commit with both reports in its brief.
+>
+> One consistency point between the two lanes: CF1's banner says "GOAT can't recreate it here." and N4's refusal says "GOAT only recreates worktrees at <worktrees folder>/<repository>/<name>." Both are true; when the two lanes meet in the integration branch, whoever merges second reads the banner and the refusal side by side in the client and says in its record whether they read as one message (the banner is the short form).
+
+The fix-round review report is /Users/jun/handoff-in/chase/next2-CF1-fix-review-43f14b9a.md (relayed in full to this lane).
+
+## Second fix round (head bd3901fca9dc8ab57dd560874b06e37fa40a2050, on 43f14b9a9c)
+
+One commit, `bd3901fca9dc8ab57dd560874b06e37fa40a2050`, CF1F-P2-1 (goat#3654):
+- `dismissGitActionResult()` takes no argument again and clears the shown result, so the thread screen's banner can pass it as a handler (ThreadRouteScreen.tsx:969, untouched, still at its 1124-line entry). The per-thread clear at the start of an action is `dismissThreadGitActionResult(thread)` (use-vcs-action-state.ts; called in use-selected-thread-git-actions.ts `runSelectedThreadGitMutation`).
+- GitActionProgressOverlay.tsx gives its Toast `onDismiss` when the phase is "error", so the banner shows Toast's existing close button (Toast.tsx:97-98). The escape gesture works again too.
+- Test, use-vcs-action-state.test.ts (this lane's own file), "clears a failure when its banner's dismiss is called as an event handler, with the event": failed on 43f14b9a9c with `expected 'error' to be null`; passes after. The cross-thread case now calls `dismissThreadGitActionResult`.
+- Test, worker-rpc.test.ts (this lane's own file), "times out a call queued behind a font download 30 seconds after the download ends": covers what the earlier round only read from the code; it passes on 43f14b9a9c and after.
+
+Rule 3, one more harness line in dev's use-selected-thread-git-actions.test.ts (the renamed function the coordinator asked for; it needs a rule 3 line): :65, before `dismissGitActionResult: () => {},` (authorised at 09:26 as file 3's mock entry), after `dismissThreadGitActionResult: () => {},`. The mock still does nothing, as before; no expectation changed.
+
+Checks on bd3901fca9: `vp run check:changed origin/chase/t3-261114-next2` exit 0, all pass (format, lint, knip 1/2, knip 2/2, graphql (apps/server), agent surface audit, agent context budget, typecheck (38 packages), test (22 files)); apps/mobile `vp test run src/state src/features/threads src/features/review src/features/keyboard`: 128 files, 925 tests passed; mobile typecheck exit 0; apps/web office tests 11 files, 43 passed.
+
+Condition 6, docs, corrected (CF1F review P3-1): docs/user/project-settings.md:342-347 does not stay true for a worktree inside GOAT's folder at another depth that cleanup removed; Restore refuses that case (ThreadWorkspaceService.ts:137-141). goat#3664 and N4's row own it, together with the send refusal's wording at WorktreeSendCheck.ts:38. The paragraph "Condition 6, docs" above is superseded by this one.
+
+Residuals for goat#3513, added (CF1F review): a worker that stops without an `error` event while a font wait is open leaves the preview loading, as it did before this lane for a single call; a worker that dies with an `error` event still fails every call and clears its timers. The queued-call expiry is now tested (above).
+
+Phone captures owed (N15b after the merge), updated: everything listed in the fix round, plus the thread screen's failure banner with its close button (and that it clears), and the review screen's failure card on iPhone and Android.
+
+NOT RUN (second fix round): the phone captures; the VoiceOver escape on a device; ci:full; the new review.
