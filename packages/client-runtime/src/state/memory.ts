@@ -2,6 +2,8 @@ import {
   type EnvironmentId,
   type MemoryChangeSignal,
   type MemoryId,
+  type MemoryItem,
+  type MemoryRevisionId,
   type MemorySpaceId,
   WS_METHODS,
   supportsMemoryProtocol,
@@ -116,6 +118,32 @@ export function memoryBodyGap(
   )
     return "changed";
   return "unchanged";
+}
+
+/**
+ * What a reread after a change signal shows of the revision an edit started from: still visible
+ * ("same"), held only while this device re-scans that revision ("rescanning", how the hub's
+ * confirmation of this device's own save lands), or anything else ("other").
+ */
+function rereadOfRevision(
+  value: MemoryItem,
+  revisionId: MemoryRevisionId,
+): "same" | "rescanning" | "other" {
+  if (value.status === "active")
+    return value.localAvailability.exposure === "visible" &&
+      value.revision.revisionId === revisionId
+      ? "same"
+      : "other";
+  const { reasons, deferred } = value.localAvailability;
+  return value.status === "blocked" &&
+    reasons.length === 1 &&
+    reasons[0] === "scanner_pending" &&
+    deferred.some((d) => d.kind === "scanner") &&
+    deferred.every(
+      (d) => (d.kind === "scanner" || d.kind === "index") && d.revisionId === revisionId,
+    )
+    ? "rescanning"
+    : "other";
 }
 
 function containsForgottenMemory(value: unknown, forgotten: ReadonlySet<MemoryId>): boolean {
@@ -351,6 +379,7 @@ export function createMemoryEnvironmentAtoms<R, E>(
             return Stream.succeed({
               before,
               forgetGeneration,
+              settled: true,
               value: Option.none<EnvironmentRpcSuccess<T>>(),
             });
           }
@@ -373,25 +402,31 @@ export function createMemoryEnvironmentAtoms<R, E>(
               Effect.timeoutOption(BODY_TTL),
             ),
           ).pipe(
-            Stream.map((value) => ({ before, forgetGeneration, value })),
+            Stream.map((value) => ({ before, forgetGeneration, settled: true, value })),
             (stream) =>
               Stream.concat(
                 Stream.succeed({
                   before,
                   forgetGeneration,
+                  settled: false,
                   value: Option.none<EnvironmentRpcSuccess<T>>(),
                 }),
                 stream,
               ),
             Stream.concat(
               Stream.fromEffect(Effect.sleep(BODY_TTL)).pipe(
-                Stream.map(() => ({ before, forgetGeneration, value: Option.none() })),
+                Stream.map(() => ({
+                  before,
+                  forgetGeneration,
+                  settled: true,
+                  value: Option.none(),
+                })),
               ),
             ),
           );
         })
         .pipe(Atom.setIdleTTL(0));
-      return Atom.readable(
+      const readable = Atom.readable(
         (get) => {
           const current = get(relevantState);
           // Admission observes all space changes independently of the stable direct-ID
@@ -440,12 +475,26 @@ export function createMemoryEnvironmentAtoms<R, E>(
         },
         (refresh) => refresh(raw),
       ).pipe(Atom.setIdleTTL(0));
+      // The admitted reply of the request for the current exposure, or null while it is pending.
+      const reply = Atom.make((get) => {
+        const value = get(readable);
+        const result = get(raw);
+        if (value._tag === "Failure") return Option.none<EnvironmentRpcSuccess<T>>();
+        return value._tag === "Success" &&
+          result._tag === "Success" &&
+          result.value.before === get(relevantState) &&
+          result.value.settled
+          ? value.value
+          : null;
+      }).pipe(Atom.setIdleTTL(0));
+      return { readable, reply };
     });
-    return (target: {
-      readonly environmentId: EnvironmentId;
-      readonly input: EnvironmentRpcInput<T>;
-    }) => family(environmentRpcKey(target));
+    type Target = { readonly environmentId: EnvironmentId; readonly input: EnvironmentRpcInput<T> };
+    return Object.assign((target: Target) => family(environmentRpcKey(target)).readable, {
+      reply: (target: Target) => family(environmentRpcKey(target)).reply,
+    });
   }
+  const read = bodyQuery(WS_METHODS.memoryRead);
 
   const drafts = Atom.family((key: string) => {
     const [environmentId, input, draftId] = JSON.parse(key) as [
@@ -457,34 +506,68 @@ export function createMemoryEnvironmentAtoms<R, E>(
     const stored = Atom.make<{
       readonly text: string;
       readonly memoryIds: ReadonlyArray<MemoryId>;
+      /** Exposure, revision and text the edit started from; typing keeps them. */
       readonly exposure: MemoryExposure;
+      readonly start: { readonly revisionId: MemoryRevisionId; readonly text: string } | null;
     } | null>(null).pipe(Atom.setIdleTTL(0));
     return Atom.writable(
       (get) => {
         const draft = get(stored);
         if (draft === null || draft.memoryIds.length === 0) return draft?.text ?? null;
         const current = get(state);
+        const gaps = draft.memoryIds.map((id) => memoryBodyGap(draft.exposure, current, id));
+        if (gaps.every((gap) => gap === "unchanged")) return draft.text;
+        const memoryId = draft.memoryIds[0];
         // No current contract field proves independence from earlier summaries, so existing-memory
-        // edits close on every same-space forget. Expiry ("unchanged") is the only gap a draft keeps.
-        if (
-          draft.memoryIds.some((id) => memoryBodyGap(draft.exposure, current, id) !== "unchanged")
-        ) {
-          // Purge the retained text, rather than only hiding it from the view.
-          get.set(stored, null);
-          return null;
+        // edits close on every same-space forget, reset and disconnect. A version change is decided
+        // by its reread: only the revision the edit started from keeps the draft.
+        if (draft.start && memoryId && gaps.length === 1 && gaps[0] === "changed") {
+          const reply = get(read.reply({ environmentId, input: { ...input, memoryId } }));
+          if (reply === null) return draft.text;
+          const seen = Option.isSome(reply)
+            ? rereadOfRevision(reply.value, draft.start.revisionId)
+            : "other";
+          if (seen === "same") {
+            get.set(stored, { ...draft, exposure: current });
+            return draft.text;
+          }
+          // An edited draft is the person's text: it stays while this device re-scans the same
+          // revision. An untouched one is the body, hidden like the read-only view.
+          if (seen === "rescanning" && draft.text !== draft.start.text) return draft.text;
         }
-        return draft.text;
+        // Purge the retained text, rather than only hiding it from the view.
+        get.set(stored, null);
+        return null;
       },
       (
         ctx,
         draft: {
           readonly text: string;
           readonly memoryIds: ReadonlyArray<MemoryId>;
+          /** The revision the edit starts from; set when seeding, omitted while typing. */
+          readonly expectedHeads?: ReadonlyArray<MemoryRevisionId>;
           /** Legacy caller hint; never used as proof of independence. */
           readonly hasRevisionDependencies?: boolean;
         } | null,
       ) => {
-        ctx.set(stored, draft === null ? null : { ...draft, exposure: ctx.get(state) });
+        if (draft === null) return ctx.set(stored, null);
+        const previous = ctx.get(stored);
+        const head = draft.expectedHeads?.length === 1 ? draft.expectedHeads[0] : undefined;
+        const typing =
+          head === undefined &&
+          previous !== null &&
+          previous.memoryIds.length === draft.memoryIds.length &&
+          previous.memoryIds.every((id, index) => id === draft.memoryIds[index]);
+        ctx.set(stored, {
+          text: draft.text,
+          memoryIds: draft.memoryIds,
+          exposure: typing ? previous.exposure : ctx.get(state),
+          start: typing
+            ? previous.start
+            : head === undefined
+              ? null
+              : { revisionId: head, text: draft.text },
+        });
       },
     ).pipe(Atom.withLabel(`memory-draft:${draftId}`), Atom.setIdleTTL(0));
   });
@@ -504,7 +587,7 @@ export function createMemoryEnvironmentAtoms<R, E>(
     siteNotesRestoreSeed: command(WS_METHODS.siteNotesRestoreSeed),
     list: bodyQuery(WS_METHODS.memoryList),
     search: bodyQuery(WS_METHODS.memorySearch),
-    read: bodyQuery(WS_METHODS.memoryRead),
+    read,
     history: bodyQuery(WS_METHODS.memoryHistory),
     resetReportAttempts: command(WS_METHODS.memoryResetReportAttempts),
     hubDiagnostics: command(WS_METHODS.memoryHubDiagnostics),
