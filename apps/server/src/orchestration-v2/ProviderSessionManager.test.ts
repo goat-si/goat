@@ -1,4 +1,5 @@
 import { registerCodexLoadKeyCheck } from "./ProviderSessionLoadKey.testkit.ts";
+import { makeBrowserAccessProject } from "./test/ProviderSessionManagerBrowserAccess.testkit.ts";
 import {
   makeThreadCreatedEvent,
   makeMemoryReadHold,
@@ -74,7 +75,6 @@ import {
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderThread,
-  type Project,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -232,23 +232,6 @@ const makeNativeChildFixture = Effect.fnUntraced(function* () {
   });
   return { manager, parent, resumeChild };
 });
-function makeBrowserAccessProject(projectId: ProjectId): Project {
-  return {
-    id: projectId,
-    title: "Browser access project",
-    workspaceRoot: process.cwd(),
-    repositoryIdentity: null,
-    faviconPath: null,
-    projectIcon: null,
-    defaultModelSelection: null,
-    defaultThreadEnvMode: null,
-    autoPull: false,
-    scripts: [],
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-    deletedAt: null,
-  };
-}
 function runBrowserAccessScenario(input: {
   readonly enableAgentBrowserAccess: boolean;
   readonly projectOverride: boolean;
