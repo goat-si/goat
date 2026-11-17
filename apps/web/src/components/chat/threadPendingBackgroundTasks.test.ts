@@ -92,6 +92,27 @@ describe("deriveThreadPendingBackgroundTasks", () => {
     ).toEqual([{ taskId: "b1htjkjev", kind: "monitor" }]);
   });
 
+  it("does not list a command the live Claude run sent to the background as background", () => {
+    // Claude's roster names its own task id; nativeItemId is the live run's tool call.
+    expect(
+      deriveThreadPendingBackgroundTasks(
+        projection({
+          runs: [run(1, "completed"), run(2, "running")],
+          providerThreads: [
+            {
+              id: "provider-thread-1",
+              providerInstanceId: base.thread.providerInstanceId,
+              pendingBackgroundTasks: [
+                { taskId: "b9x2k", kind: "command", nativeItemId: "toolu_build" },
+              ],
+            },
+          ],
+          turnItems: [item(2, "command_execution", "toolu_build", "npm run build")],
+        }),
+      ),
+    ).toEqual([]);
+  });
+
   it("keeps the provider roster while a follow-up run only waits in the queue", () => {
     expect(
       deriveThreadPendingBackgroundTasks(

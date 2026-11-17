@@ -313,6 +313,17 @@ it.effect.each([
   ),
 );
 
+// goat_background_wait is declared actsAsCaller (toolkits/orchestrator/handlers.ts), so no
+// outside client reaches it, whatever access it was approved for.
+it.effect.each([readOnlyClient, supervisedClient, fullAccessClient])(
+  "refuses a tool that acts as its calling thread to an outside client %#",
+  (scope) =>
+    call("acts_as_caller", scope).pipe(
+      Effect.map((outcome) => expect(outcome).toBe("thread_credential_required")),
+      Effect.provide(probeServer(Layer.mock(ThreadManagement.ThreadManagementService)({}))),
+    ),
+);
+
 it("refuses a declaration or handlers layer that only wears another's fields", () => {
   const copiedDeclaration = Object.assign(
     unchecked,
