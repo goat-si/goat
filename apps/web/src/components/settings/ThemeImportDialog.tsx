@@ -1,7 +1,7 @@
 import { DownloadIcon, PlusIcon } from "~/components/solar";
 import type { ChangeEvent, DragEvent, UIEvent } from "react";
 import { settlePromise } from "@goat/client-runtime/state/runtime";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatBytes } from "../../lib/formatBytes";
 import { cn } from "../../lib/utils";
 import {
@@ -161,6 +161,18 @@ export function ThemeImportDialog({
     session.controller.abort();
     onOpenChange(false);
   };
+  const { controller } = session;
+  const mountedController = useRef<AbortController | null>(null);
+  // oxlint-disable-next-line goat/react-effect-budget -- abort installs when the page unmounts
+  useEffect(() => {
+    mountedController.current = controller;
+    return () => {
+      mountedController.current = null;
+      queueMicrotask(() => {
+        if (mountedController.current !== controller) controller.abort();
+      });
+    };
+  }, [controller]);
 
   return (
     <Dialog
