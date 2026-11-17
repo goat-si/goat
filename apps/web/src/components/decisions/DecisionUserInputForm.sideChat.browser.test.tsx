@@ -5,6 +5,8 @@ import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
 import { render } from "../../../test/render";
+import { useComposerDraftStore } from "../../composerDraftStore";
+import { questionAttachmentDraftId } from "../../questionAttachments";
 import { DecisionUserInputForm } from "./DecisionUserInputForm";
 
 const item: Extract<DecisionItem, { kind: "user_input" }> = {
@@ -61,4 +63,37 @@ it('"/side ..." typed in the inbox opens the side chat and is not sent as an ans
   expect(onSideChat).toHaveBeenCalledExactlyOnceWith("what changed?");
   expect(onSubmit).not.toHaveBeenCalled();
   await expect.element(screen.getByRole("textbox", { name: "Your answer" })).toHaveValue("");
+});
+
+it('"/side ..." stays an answer when the question already holds attachments, as in the composer', async () => {
+  const attachments = questionAttachmentDraftId(
+    item.ref.environmentId,
+    item.ref.threadId,
+    item.request.requestId,
+    "approach",
+  );
+  useComposerDraftStore.getState().addFiles(attachments, [
+    {
+      type: "file",
+      id: "log",
+      name: "log.txt",
+      mimeType: "text/plain",
+      sizeBytes: 3,
+      file: new File(["log"], "log.txt", { type: "text/plain" }),
+    },
+  ]);
+  using _cleanup = {
+    [Symbol.dispose]: () => useComposerDraftStore.getState().clearComposerContent(attachments),
+  };
+  const onSubmit = vi.fn(async () => undefined);
+  const onSideChat = vi.fn();
+  // The form renders no links; the inbox around it navigates.
+  await using screen = await render(<Form onSubmit={onSubmit} onSideChat={onSideChat} />, {
+    router: false,
+  });
+  await userEvent.type(screen.getByRole("textbox", { name: "Your answer" }), "/side what changed?");
+  await userEvent.click(screen.getByRole("button", { name: "Submit answer" }));
+
+  expect(onSideChat).not.toHaveBeenCalled();
+  expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ approach: "/side what changed?" });
 });
