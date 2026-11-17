@@ -1178,7 +1178,7 @@ const make = Effect.gen(function* () {
     ),
     Effect.forkScoped,
   );
-  return RemoteDispatchCoordinator.of({
+  const service = RemoteDispatchCoordinator.of({
     launch,
     cancel,
     resume,
@@ -1187,11 +1187,6 @@ const make = Effect.gen(function* () {
     claimDelete,
     clearDelete,
     resolveLostLaunches,
-    heldAfterDrains: FiberMap.awaitEmpty(drains).pipe(
-      Effect.ignore,
-      Effect.andThen(locks.activeKeys),
-      Effect.map((held) => ({ owners: owners.size, locks: held.length })),
-    ),
     taskOrigin,
     isTaskThread: (host, threadId) =>
       db(
@@ -1222,5 +1217,22 @@ const make = Effect.gen(function* () {
       ),
     ),
   });
+  heldProbes.set(
+    service,
+    FiberMap.awaitEmpty(drains).pipe(
+      Effect.ignore,
+      Effect.andThen(locks.activeKeys),
+      Effect.map((held) => ({ owners: owners.size, locks: held.length })),
+    ),
+  );
+  return service;
 });
 export const layer = Layer.effect(RemoteDispatchCoordinator, make);
+
+/** Each coordinator's own read of what it still holds, for its testkit; off the service shape. */
+const heldProbes = new WeakMap<
+  RemoteDispatchCoordinatorShape,
+  Effect.Effect<{ readonly owners: number; readonly locks: number }>
+>();
+export const heldAfterDrains = (coordinator: RemoteDispatchCoordinatorShape) =>
+  heldProbes.get(coordinator) ?? Effect.die(new Error("Not a RemoteDispatchCoordinator."));

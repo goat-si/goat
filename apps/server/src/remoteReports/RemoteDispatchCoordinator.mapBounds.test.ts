@@ -8,6 +8,7 @@ import {
   answer,
   database,
   fixture,
+  heldAfterDrains,
   origin,
   remote,
   report,
@@ -19,7 +20,7 @@ it.effect("regression goat#3569: settled dispatches leave no drain owner or row 
     const f = yield* fixture;
     yield* Effect.gen(function* () {
       const c = yield* Coordinator.RemoteDispatchCoordinator;
-      assert.deepEqual(yield* c.heldAfterDrains, { owners: 0, locks: 0 });
+      assert.deepEqual(yield* heldAfterDrains(c), { owners: 0, locks: 0 });
       for (const _ of [1, 2, 3]) {
         const launched = yield* f.launch(c, "next_turn");
         yield* Queue.take(f.calls);
@@ -28,7 +29,7 @@ it.effect("regression goat#3569: settled dispatches leave no drain owner or row 
         assert.equal((yield* c.get(launched.correlationId))?.state, "settled");
         yield* f.sql`UPDATE remote_dispatches SET remote_thread_id = ${launched.correlationId}`;
       }
-      assert.deepEqual(yield* c.heldAfterDrains, { owners: 0, locks: 0 });
+      assert.deepEqual(yield* heldAfterDrains(c), { owners: 0, locks: 0 });
     }).pipe(Effect.provide(f.layer));
   }).pipe(Effect.provide(database)),
 );
@@ -73,7 +74,30 @@ it.effect("a drain replaced while its row runs leaves the row to the new drain",
       yield* Queue.offer(read.reply, Effect.succeed(answer([], "interrupted")));
       yield* Queue.take(f.commits);
       assert.notEqual((yield* c.get(task.correlationId))?.state, "running");
-      assert.deepEqual(yield* c.heldAfterDrains, { owners: 0, locks: 0 });
+      assert.deepEqual(yield* heldAfterDrains(c), { owners: 0, locks: 0 });
+    }).pipe(Effect.provide(f.layer));
+  }).pipe(Effect.provide(database)),
+);
+
+it.effect("a row still running after a pass keeps its owner, and the same drain reads on", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    yield* Effect.gen(function* () {
+      const c = yield* Coordinator.RemoteDispatchCoordinator;
+      const launched = yield* f.launch(c, "next_turn");
+      yield* Queue.take(f.calls);
+      yield* f.replyLatest(Effect.succeed(answer([report(1)], "running")));
+      yield* Queue.take(f.commits);
+      assert.equal((yield* c.get(launched.correlationId))?.reportCursor, 1);
+      // The next read comes from the same drain: one read waits, none from a second drain.
+      yield* Queue.take(f.calls);
+      assert.equal(yield* Queue.size(f.calls), 0);
+      yield* f.replyLatest(Effect.succeed(answer([report(1), report(2)], "completed")));
+      yield* Queue.take(f.commits);
+      const row = (yield* c.get(launched.correlationId))!;
+      assert.equal(row.reportCursor, 2);
+      assert.equal(row.state, "settled");
+      assert.deepEqual(yield* heldAfterDrains(c), { owners: 0, locks: 0 });
     }).pipe(Effect.provide(f.layer));
   }).pipe(Effect.provide(database)),
 );
