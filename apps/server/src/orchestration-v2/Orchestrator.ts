@@ -265,12 +265,18 @@ import {
 } from "./runTerminationCause.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
-import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
+import {
+  isAutomaticCompletionRun,
+  nextQueuedRun,
+  nextRunOrdinal,
+  queuedRunsInDeliveryOrder,
+} from "./QueuedRunOrder.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import { makeHumanHandoffs } from "./goat/HumanHandoffs.ts";
 import { makeThreadRecordDispatches } from "./goat/ThreadRecordDispatches.ts";
 import { makeStaleQuestionWakes } from "./goat/StaleQuestionWake.ts";
-import { activeTurnRefusal } from "./goat/ActiveTurnRefusals.ts";
+import { releaseStopHolds } from "./goat/StopHoldRelease.ts";
+import { activeTurnRefusal, endsTurn, isActiveTurnRefusal } from "./goat/ActiveTurnRefusals.ts";
 import {
   makeEndNativeSubagentTrees,
   nativeSubagentRef,
@@ -314,6 +320,7 @@ export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDi
     commandId: CommandId,
     commandType: Schema.String,
     cause: Schema.optional(Schema.Defect()),
+    refusal: Schema.optional(Schema.Literal("active_turn")),
   },
 ) {
   override get message(): string {
@@ -580,23 +587,12 @@ export class OrchestratorV2 extends Context.Service<OrchestratorV2, Orchestrator
   "goat/orchestration-v2/Orchestrator/OrchestratorV2",
 ) {}
 
-/** Run ordinals can skip values: a queued run moves past newer runs when it starts. */
-function nextRunOrdinal(projection: Pick<OrchestrationV2ThreadProjection, "runs">): number {
-  return projection.runs.reduce((max, run) => Math.max(max, run.ordinal), 0) + 1;
-}
-
 export { isSeparateTurnCommand } from "./SeparateTurnCommand.ts";
 
 const threadPullRequestLinksEqual = Schema.toEquivalence(Schema.NullOr(ThreadLinkedPullRequest));
 
 const RUNTIME_REQUEST_DELIVERY_FAILED_MESSAGE =
   "GOAT could not confirm that your answer reached the agent. If the run stays stuck, stop it and try again.";
-
-function nextQueuedRun(
-  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages">,
-): OrchestrationV2Run | undefined {
-  return queuedRunsInDeliveryOrder(projection).find((run) => run.queueHeld !== true);
-}
 
 const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(function* () {
   const admission = yield* RuntimeAdmission.RuntimeAdmission;
@@ -3082,11 +3078,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
           ),
         );
-      if (runs.some(isBlockingRun))
+      if (endsTurn(command.type, runs, liveSessions, providerContext))
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
-          cause: turnRefusal,
+          ...turnRefusal,
         });
     }
     if (
@@ -12624,6 +12620,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       default:
         return yield* dispatchUnsupported(command);
     }
+    yield* releaseStopHolds({ projectionStore, command, events, emit: emit(events, command) }).pipe(
+      mapDispatchError(command),
+    );
     return {
       events: yield* Ref.get(events),
       effects: yield* Ref.get(effects),
@@ -12740,7 +12739,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
       Effect.catch((cause) =>
         Effect.gen(function* () {
-          if (cause._tag === "OrchestratorThreadAboveModeLimitError") return yield* cause;
+          if (cause._tag === "OrchestratorThreadAboveModeLimitError" || isActiveTurnRefusal(cause))
+            return yield* cause;
           const rejectedAt = yield* DateTime.now;
           const receipt = yield* eventSink
             .commitRejectedCommand({
