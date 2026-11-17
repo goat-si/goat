@@ -3,11 +3,13 @@ import { CommandId, GitCommandError } from "@goat/contracts";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 
 import { makeClaimProbe, makeLaunchHold } from "./goat/PreparationClaims.testkit.ts";
 import { orphanRun, released, runStatus } from "./goat/PreparationOrphans.testkit.ts";
+import { STRETCH_CHANGED, refusalReason } from "./goat/PreparationStretch.ts";
 import { preparationSettled } from "./testkit/preparationSettled.ts";
 import { makeHarness, project } from "./testkit/ThreadLaunchHarness.ts";
 import { launchInput } from "./testkit/threadLaunchInput.ts";
@@ -185,6 +187,116 @@ it.effect(
         yield* Ref.set(failMessages, false);
         yield* Deferred.succeed(allow, undefined);
         yield* released(launched.threadId, "command:held-preparation");
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
+
+it.effect(
+  "a replayed preparation whose scheduling fails after the run was failed and retried leaves the Retry's stretch to the Retry",
+  () =>
+    Effect.gen(function* () {
+      const claims = yield* makeClaimProbe;
+      const entered = yield* Deferred.make<void>();
+      const failFirst = yield* Deferred.make<void>();
+      const armed = yield* Ref.make(false);
+      const readHeld = yield* Deferred.make<void>();
+      const failRead = yield* Deferred.make<void>();
+      const replayFail = yield* Deferred.make<Exit.Exit<unknown, unknown>>();
+      let worktrees = 0;
+      const harness = makeHarness({
+        claims: claims.layer,
+        createWorktree: (request) =>
+          worktrees++ === 0
+            ? Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(failFirst)),
+                Effect.andThen(
+                  Effect.fail(
+                    new GitCommandError({
+                      operation: "GitVcsDriver.createWorktree",
+                      command: "git worktree add",
+                      cwd: project.workspaceRoot,
+                      detail: "The branch is checked out elsewhere.",
+                    }),
+                  ),
+                ),
+              )
+            : Effect.succeed({
+                worktree: {
+                  path: "/repo-worktrees/x",
+                  refName: request.newRefName,
+                  headSha: "abc",
+                },
+              } as never),
+        launchThreads: (threads) => ({
+          ...threads,
+          // The replay's read of the run's message is held, then fails, so its scheduling fails.
+          getThreadRecords: (threadId, fields, filter) =>
+            Effect.gen(function* () {
+              if (
+                !(fields as ReadonlyArray<string>).includes("messages") ||
+                !(yield* Ref.getAndSet(armed, false))
+              )
+                return yield* threads.getThreadRecords(threadId, fields, filter);
+              yield* Deferred.succeed(readHeld, undefined);
+              yield* Deferred.await(failRead);
+              return yield* new OrchestratorProjectionError({ threadId, cause: "unreadable" });
+            }),
+          dispatch: (command) =>
+            command.commandId === CommandId.make("command:replay-a:fail")
+              ? threads
+                  .dispatch(command)
+                  .pipe(Effect.onExit((exit) => Deferred.succeed(replayFail, exit)))
+              : threads.dispatch(command),
+        }),
+      });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        // B: the launch's own preparation, holding the claim on its worktree step.
+        const launched = yield* launches.launch(
+          launchInput({
+            command: "command:replay-b",
+            thread: "thread:replay-stretch",
+            message: "Prepare the right stretch",
+            workspace: { type: "worktree", baseRef: "main" },
+          }),
+        );
+        const { threadId } = launched;
+        const runId = launched.projection.runs[0]!.id;
+        yield* Deferred.await(entered);
+
+        // A: a replayed delegation reaches prepareRun with its own command id and finds stretch k.
+        yield* Ref.set(armed, true);
+        const replay = yield* launches
+          .prepareRun({ commandId: CommandId.make("command:replay-a"), threadId, runId })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(readHeld);
+
+        // B fails stretch k and lets go of the claim.
+        yield* Deferred.succeed(failFirst, undefined);
+        assert.deepEqual(yield* claims.outcome, { runId, ran: true });
+        assert.equal(yield* runStatus(threadId, runId), "failed");
+
+        // X: a Retry starts stretch k+1 and holds only its mark, short of the claim line.
+        const atLine = yield* claims.holdNextAtLine;
+        const retry = yield* launches
+          .retryPreparation({ commandId: CommandId.make("command:replay-x"), threadId, runId })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* atLine.held;
+        assert.equal(yield* runStatus(threadId, runId), "preparing");
+
+        // A's scheduling fails; the claim is free, but its fail belongs to stretch k.
+        yield* Deferred.succeed(failRead, undefined);
+        yield* Fiber.join(replay);
+        const exit = yield* Deferred.await(replayFail);
+        assert.equal(
+          Exit.isFailure(exit) ? refusalReason(exit.cause) : "committed",
+          STRETCH_CHANGED,
+        );
+        assert.equal(yield* runStatus(threadId, runId), "preparing");
+
+        yield* atLine.release;
+        yield* Fiber.join(retry);
+        yield* released(threadId, "command:replay-x");
       }).pipe(Effect.provide(harness.layer));
     }),
 );
