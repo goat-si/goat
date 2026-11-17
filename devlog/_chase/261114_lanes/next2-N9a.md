@@ -1,6 +1,6 @@
 # N9a Claude adapter (lane record)
 
-Lane branch: `chase/t3-261114-next2-n9a-claude`, head `bd106c6a528ef16a0488e8e46c847fc5b4f6de53` (verified with git ls-remote), cut from the integration branch `chase/t3-261114-next2` at `e9e20d52bec41be15682d29ad6069242a4cc7f3f` (draft PR #3660); the integration head has not moved since, so no merge. Host pen-macbookpro2. Rows: C14 (L148 b9381c257d), C15 (L177 e77384bf00), L181 1a5d3737b7 rest, L179 d4b77d2448 (C4). Plain pushes, no force. Reviewers read C14 and L179 as C4 (coordinator 11:47:25, A.2; 11:35:21).
+Lane branch: `chase/t3-261114-next2-n9a-claude`, head `27f57b9b3d9631615b96260dc75c720fa3e28549` (verified with git ls-remote; READY first reported at bd106c6a52, then the budget entries were lowered), cut from the integration branch `chase/t3-261114-next2` at `e9e20d52bec41be15682d29ad6069242a4cc7f3f` (draft PR #3660); the integration head has not moved since, so no merge. Host pen-macbookpro2. Rows: C14 (L148 b9381c257d), C15 (L177 e77384bf00), L181 1a5d3737b7 rest, L179 d4b77d2448 (C4). Plain pushes, no force. Reviewers read C14 and L179 as C4 (coordinator 11:47:25, A.2; 11:35:21).
 
 Placement: host.status with placement, run by the lane at 11:32 UTC: one candidate, this machine, eligible, score 55, pressure ok, load 0.2 per core, 1 thread running (this lane). The lane coordinator's run at 11:28 ranked the pen-cc cloud machines first (excluded by the plan), then macbookpro2 (18) and pen-macbookpro2 (26).
 
@@ -13,6 +13,7 @@ Placement: host.status with placement, run by the lane at 11:32 UTC: one candida
 | L181 1a5d3737b7 rest | `19c1b97e04` fix, `06fc9eb4f0` tests | A long reply line streams every 50 ms (Effect clock, judged on each text delta) before it ends. |
 | L179 d4b77d2448 (C4) | `ff1c02dca7` contracts move-out, `29ea1e4228` fix, `d4b9feea14` rule 3 expectations and test move, `430abf7286` web live-run filter | `PendingBackgroundTask.nativeItemId` (optional), filled by the Claude adapter with `command` and `startedAt` from the remembered tool call. Issue goat#3675 for the shared dedupe site. |
 | fork delta | `655e019e76` | new area `claude-adapter` (C15 condition (ii)) |
+| budgets | `27f57b9b3d` | update-code-budgets.ts lowers the three entries this lane shrank: ClaudeAdapterV2.ts 10941 to 10933, ClaudeAdapterV2.test.ts 16510 to 16500, orchestrationV2.ts 4463 to 4438; no other entry moves |
 
 ## What a person sees, and the surfaces
 
