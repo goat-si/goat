@@ -29,7 +29,7 @@ export class ThreadLaunchError extends Schema.TaggedError<ThreadLaunchError>()(
   }
 }
 
-export const isThreadLaunchError = Schema.is(ThreadLaunchError);
+const isThreadLaunchError = Schema.is(ThreadLaunchError);
 
 export function failureDetail(error: unknown): string {
   if (isThreadLaunchError(error)) {
