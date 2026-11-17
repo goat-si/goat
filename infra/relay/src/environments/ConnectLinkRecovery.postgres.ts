@@ -3,7 +3,8 @@ import { expect, it } from "@effect/vitest";
 import * as NodeCrypto from "node:crypto";
 import { RELAY_LINK_PROOF_TYP } from "@goat/shared/relayJwt";
 import * as DateTime from "effect/DateTime";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -128,13 +129,14 @@ for (const reuseReadyTunnel of [false, true]) {
 
 const abandoned = Effect.gen(function* () {
   const { request, payload } = yield* setup;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
+  const crypto = yield* Digest.Digest;
   const reservation = {
     userId: "user_123",
     environmentId: intent.environmentId,
     challengeId: "challenge-jti",
-    proof: Hex.encode(yield* crypto.digest("SHA-256", new TextEncoder().encode(request.proof))),
-    attemptId: yield* crypto.randomUUIDv4(),
+    proof: Hex.encode(yield* crypto.digest(Digest.sha256, new TextEncoder().encode(request.proof))),
+    attemptId: yield* random.uuidV4(),
     assurance: makeAssurance(1800000000),
     managedTunnelsEnabled: true,
   };
@@ -397,11 +399,11 @@ it.effect(
       ).toBe("recovering");
       expect(yield* db.$client`SELECT * FROM relay_environment_links`).toHaveLength(0);
       expect(yield* db.$client`SELECT * FROM relay_environment_credentials`).toHaveLength(0);
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
       expect(
         (yield* reservations
           .reserve(
-            { ...reservation, attemptId: yield* crypto.randomUUIDv4() },
+            { ...reservation, attemptId: yield* random.uuidV4() },
             Effect.die("reconsumed proof"),
           )
           .pipe(Effect.result))._tag,

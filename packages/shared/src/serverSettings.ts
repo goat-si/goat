@@ -13,6 +13,7 @@ import {
   resolveProjectProviderInstanceEnabled,
   resolveProviderInstanceEnabled,
   isProviderTextGenerationCapable,
+  isModelTextGenerationCapable,
   type ModelSelection,
   patchDisposableMachines,
   type ProjectId,
@@ -145,6 +146,21 @@ export function fallbackTextGenerationModelSelection(
   };
 }
 
+/**
+ * The model text generation runs on an instance when its saved model cannot be used, as the
+ * Settings picker resolves it: the driver's text generation default, else the status's default
+ * or first model that can generate text (Pi and OmO list "default" first).
+ */
+export function textGenerationDefaultModel(snapshot: ServerProvider): string {
+  const capable = snapshot.models.filter((model) => model.supportsTextGeneration !== false);
+  return (
+    DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[snapshot.driver] ??
+    (capable.find((model) => model.isDefault === true) ?? capable[0])?.slug ??
+    DEFAULT_MODEL_BY_PROVIDER[snapshot.driver] ??
+    DEFAULT_TEXT_GENERATION_MODEL
+  );
+}
+
 export function resolveSourceControlWriterModelSelection(
   settings: ServerSettings,
   providers: ReadonlyArray<ServerProvider> | undefined,
@@ -169,7 +185,8 @@ export function resolveSourceControlWriterModelSelection(
   const provider = providers.find((candidate) => candidate.instanceId === selection.instanceId);
   return provider?.enabled === true &&
     isProviderAvailable(provider) &&
-    isProviderTextGenerationCapable(provider)
+    isProviderTextGenerationCapable(provider) &&
+    isModelTextGenerationCapable(provider, selection.model)
     ? selection
     : settings.textGenerationModelSelection;
 }
@@ -232,7 +249,8 @@ export function resolveReviewGuideModelSelection(
       providers === undefined ||
       (provider?.enabled === true &&
         isProviderAvailable(provider) &&
-        isProviderTextGenerationCapable(provider))
+        isProviderTextGenerationCapable(provider) &&
+        isModelTextGenerationCapable(provider, selection.model))
     ) {
       return selection;
     }

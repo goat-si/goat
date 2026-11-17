@@ -38,3 +38,8 @@ export const prepareCheckpointWriter = (writer: NodeSqlite.DatabaseSync) => {
     sizeLimit: writer.prepare("PRAGMA journal_size_limit"),
   };
 };
+
+export const readSafeSqliteInteger = (value: unknown) => {
+  const number = typeof value === "bigint" ? Number(value) : value;
+  return typeof number === "number" && Number.isSafeInteger(number) ? number : undefined;
+};

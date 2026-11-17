@@ -11,7 +11,7 @@ import {
   SourceControlProviderKind,
 } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -29,10 +29,7 @@ import type { PullRequestTarget } from "./pullRequestTarget.ts";
 
 const PROJECT_ID = ProjectId.make("project-1");
 const THREAD_ID = ThreadId.make("thread-1");
-const testCrypto = Crypto.make({
-  randomBytes: (size) => new Uint8Array(size).fill(7),
-  digest: (_algorithm, data) => Effect.succeed(data),
-});
+const testCrypto = SecureRandom.make((size) => new Uint8Array(size).fill(7));
 
 function makeProject(
   repositoryIdentity: OrchestrationProjectShell["repositoryIdentity"] = {
@@ -152,7 +149,7 @@ const makeHarness = Effect.fn("makePullRequestWatchHarness")(function* (
               updatedAt: "2026-08-20T00:00:00.000Z",
             }),
     }),
-    Layer.succeed(Crypto.Crypto, testCrypto),
+    Layer.succeed(SecureRandom.SecureRandom, testCrypto),
   );
   const service = yield* PullRequestWatchService.PullRequestWatchService.pipe(
     Effect.provide(PullRequestWatchService.layer.pipe(Layer.provide(dependencies))),

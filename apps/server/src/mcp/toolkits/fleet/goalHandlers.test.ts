@@ -36,7 +36,7 @@ const served = Layer.mergeAll(
   McpHttpServer.catalogRegistrations.fleet,
   McpHttpServer.catalogRegistrations.agentSurface,
 ).pipe(
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   Layer.provide(
     GoalService.layer.pipe(
       Layer.provide(

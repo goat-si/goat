@@ -1,6 +1,6 @@
 import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import { settlementCase } from "./ManagerSettlement.testkit.ts";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { assert, it } from "@effect/vitest";
 import {
   DEFAULT_TERMINAL_ID,
@@ -9,13 +9,18 @@ import {
   ProjectId,
   TerminalProviderInstanceNotFoundError,
   type TerminalAttachStreamEvent,
-  type TerminalEvent,
-  type TerminalOpenInput,
   type TerminalRestartInput,
 } from "@goat/contracts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
-import { FakePtyAdapter, FakePtyProcess } from "./Manager.testkit.ts";
+import {
+  createManager,
+  FakePtyAdapter,
+  FakePtyProcess,
+  historyLogPath,
+  layerWithHostPlatform,
+  openInput,
+} from "./Manager.testkit.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as PtyAdapter from "@goat/shared/PtyAdapter";
 import * as Clock from "effect/Clock";
@@ -33,7 +38,6 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as TestClock from "effect/testing/TestClock";
@@ -97,17 +101,6 @@ class GatedPtyAdapter extends FakePtyAdapter {
   }
 }
 
-export function openInput(overrides: Partial<TerminalOpenInput> = {}): TerminalOpenInput {
-  return {
-    threadId: "thread-1",
-    terminalId: DEFAULT_TERMINAL_ID,
-    cwd: process.cwd(),
-    cols: 100,
-    rows: 24,
-    ...overrides,
-  };
-}
-
 function restartInput(overrides: Partial<TerminalRestartInput> = {}): TerminalRestartInput {
   return {
     threadId: "thread-1",
@@ -118,203 +111,6 @@ function restartInput(overrides: Partial<TerminalRestartInput> = {}): TerminalRe
     ...overrides,
   };
 }
-
-const historyLogPath = (logsDir: string, threadId = "thread-1") =>
-  Effect.service(Path.Path).pipe(
-    Effect.map(({ join }) => join(logsDir, `terminal_${Base64Url.encode(threadId)}.log`)),
-  );
-
-interface CreateManagerOptions {
-  shellResolver?: () => string;
-  env?: NodeJS.ProcessEnv;
-  subprocessInspector?: (terminalPid: number) => Effect.Effect<{
-    readonly hasRunningSubprocess: boolean;
-    readonly childCommand: string | null;
-    readonly processIds: ReadonlyArray<number>;
-  }>;
-  processTable?: Effect.Effect<
-    ReadonlyArray<{ readonly pid: number; readonly ppid: number; readonly name: string }>,
-    never
-  >;
-  subprocessPollIntervalMs?: number;
-  processKillGraceMs?: number;
-  registerTerminalProcesses?: Parameters<
-    typeof TerminalManager.makeWithOptions
-  >[0]["registerTerminalProcesses"];
-  maxRetainedInactiveSessions?: number;
-  historyByteLimit?: number;
-  ptyAdapter?: FakePtyAdapter;
-  resolveProviderInstanceEnvironment?: Parameters<
-    typeof TerminalManager.makeWithOptions
-  >[0]["resolveProviderInstanceEnvironment"];
-  managedBinaryCacheDir?: string;
-  managedBinaryToolsDir?: string;
-}
-
-interface ManagerFixture {
-  readonly baseDir: string;
-  readonly logsDir: string;
-  readonly ptyAdapter: FakePtyAdapter;
-  readonly manager: TerminalManager.TerminalManager["Service"];
-  readonly getEvents: Effect.Effect<ReadonlyArray<TerminalEvent>>;
-}
-
-export const createManager = (
-  historyLineLimit = 5,
-  options: CreateManagerOptions = {},
-): Effect.Effect<
-  ManagerFixture,
-  PlatformError.PlatformError,
-  | FileSystem.FileSystem
-  | Path.Path
-  | Scope.Scope
-  | ProcessRunner.ProcessRunner
-  | McpProviderSessions.McpProviderSessions
-> =>
-  Effect.flatMap(Effect.service(FileSystem.FileSystem), (fs) =>
-    Effect.gen(function* () {
-      const { join } = yield* Path.Path;
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-terminal-" });
-      const logsDir = join(baseDir, "userdata", "logs", "terminals");
-      const ptyAdapter = options.ptyAdapter ?? new FakePtyAdapter();
-
-      const manager = yield* TerminalManager.makeWithOptions({
-        logsDir,
-        historyLineLimit,
-        ptyAdapter,
-        ...(options.historyByteLimit !== undefined
-          ? { historyByteLimit: options.historyByteLimit }
-          : {}),
-        ...(options.shellResolver !== undefined ? { shellResolver: options.shellResolver } : {}),
-        ...(options.env !== undefined ? { env: options.env } : {}),
-        ...(options.subprocessInspector !== undefined
-          ? { subprocessInspector: options.subprocessInspector }
-          : {}),
-        ...(options.processTable !== undefined ? { processTable: options.processTable } : {}),
-        ...(options.subprocessPollIntervalMs !== undefined
-          ? { subprocessPollIntervalMs: options.subprocessPollIntervalMs }
-          : {}),
-        processKillGraceMs: options.processKillGraceMs ?? 1,
-        ...(options.registerTerminalProcesses !== undefined
-          ? { registerTerminalProcesses: options.registerTerminalProcesses }
-          : {}),
-        ...(options.maxRetainedInactiveSessions !== undefined
-          ? { maxRetainedInactiveSessions: options.maxRetainedInactiveSessions }
-          : {}),
-        ...(options.resolveProviderInstanceEnvironment !== undefined
-          ? { resolveProviderInstanceEnvironment: options.resolveProviderInstanceEnvironment }
-          : {}),
-        ...(options.managedBinaryCacheDir === undefined
-          ? {}
-          : {
-              managedBinaryCacheDir: options.managedBinaryCacheDir,
-              managedBinaryToolsDir: options.managedBinaryToolsDir,
-            }),
-      });
-      const eventsRef = yield* Ref.make<ReadonlyArray<TerminalEvent>>([]);
-      const unsubscribe = yield* manager.subscribe((event) =>
-        Ref.update(eventsRef, (events) => [...events, event]),
-      );
-      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
-
-      return {
-        baseDir,
-        logsDir,
-        join,
-        ptyAdapter,
-        manager,
-        getEvents: Ref.get(eventsRef),
-      };
-    }),
-  );
-
-export const layerWithHostPlatform = (platform: NodeJS.Platform) =>
-  Layer.succeed(HostProcess.Platform, platform);
-
-function retainedHistory(text: string, maxLines: number, maxBytes = Infinity): string {
-  const terminated = text.endsWith("\n");
-  const lines = text.split("\n");
-  if (terminated) lines.pop();
-  const retained = lines.slice(Math.max(0, lines.length - maxLines)).join("\n");
-  const capped = terminated ? `${retained}\n` : retained;
-  if (Buffer.byteLength(capped) <= maxBytes) return capped;
-  const points = Array.from(capped);
-  let start = points.length;
-  let bytes = 0;
-  while (start > 0) {
-    const next = Buffer.byteLength(points[start - 1]!);
-    if (bytes + next > maxBytes) break;
-    bytes += next;
-    start -= 1;
-  }
-  return points.slice(start).join("");
-}
-
-it("preserves line and byte limits across arbitrary chunks, Unicode, ANSI sequences, and clear", () => {
-  let randomSeed = 0x20260904;
-  const fragments = [
-    "",
-    "a",
-    "\n",
-    "\n\n",
-    "\r",
-    "\r\n",
-    "café",
-    "名",
-    "🚀",
-    "\u001b[31m",
-    "\u001b[0m",
-    "\u001b]8;;url\u0007",
-    "\ud83d",
-    "\ude80",
-  ];
-  const nextFragment = () => {
-    randomSeed = (Math.imul(randomSeed, 1_664_525) + 1_013_904_223) >>> 0;
-    return fragments[randomSeed % fragments.length]!;
-  };
-
-  for (const maxBytes of [0, 3, 8, 64, Infinity]) {
-    for (const maxLines of [0, 1, 3, 5, 5_000]) {
-      let expected = retainedHistory("before\ninitial\n", maxLines, maxBytes);
-      const history = new TerminalManager.BoundedTerminalHistory(
-        maxLines,
-        "before\ninitial\n",
-        maxBytes,
-      );
-      expect(history.value()).toBe(expected);
-
-      for (let step = 0; step < 300; step += 1) {
-        if (step % 73 === 0) {
-          history.clear();
-          expected = "";
-          expect(history.value()).toBe(expected);
-        }
-        const chunk = nextFragment() + nextFragment();
-        history.append(chunk);
-        expected = retainedHistory(expected + chunk, maxLines, maxBytes);
-        expect(history.value()).toBe(expected);
-      }
-    }
-  }
-});
-
-it("bounds long partial lines and joins surrogate pairs across chunk boundaries", () => {
-  const maxBytes = 65_539;
-  let expected = "";
-  const history = new TerminalManager.BoundedTerminalHistory(5_000, "", maxBytes);
-  const writes = [
-    "a".repeat(16_383) + "😀" + "b".repeat(70_000),
-    "\r" + "c".repeat(70_000) + "\ud83d",
-    "\ude80" + "d".repeat(100),
-    "\uFEFF" + "名".repeat(30_000),
-  ];
-  for (const text of writes) {
-    history.append(text);
-    expected = retainedHistory(expected + text, 5_000, maxBytes);
-    expect(history.value()).toBe(expected);
-    expect(Buffer.byteLength(history.value())).toBeLessThanOrEqual(maxBytes);
-  }
-});
 
 it.layer(
   Layer.mergeAll(

@@ -80,11 +80,11 @@ const admit = (prompt: string, key: string, threadId: ThreadId = botThreadId) =>
       runCount: 0,
     };
     yield* sql`INSERT INTO scheduled_tasks (task_id, title, prompt, enabled, notification_policy,
-      schedule_json, project_id, thread_id, workspace_strategy_json, model_selection_json,
+      schedule_json, project_id, thread_id, thread_mode, workspace_strategy_json, model_selection_json,
       memory_grant_ceiling, runtime_mode, interaction_mode, created_by, creation_source, created_at,
       updated_at, next_run_at, last_run_at, last_run_status, last_run_error, run_count)
       VALUES (${task.id}, ${task.title}, ${prompt}, 1, 'important_updates',
-      ${JSON.stringify(task.schedule)}, ${task.projectId}, ${threadId}, ${JSON.stringify(task.workspaceStrategy)},
+      ${JSON.stringify(task.schedule)}, ${task.projectId}, ${threadId}, 'continue', ${JSON.stringify(task.workspaceStrategy)},
       ${JSON.stringify(modelSelection)}, 'none', 'approval-required', 'default', 'user', 'web',
       ${AT}, ${AT}, NULL, NULL, 'never', NULL, 0)`;
     const firingId = CommandId.make("scheduled-task:" + key);

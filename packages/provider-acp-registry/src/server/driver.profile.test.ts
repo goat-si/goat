@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it, vi } from "@effect/vitest";
 import {
@@ -178,13 +179,14 @@ it.live(
           IdAllocator.layer,
           McpProviderSessions.layer,
           TestProviderHost.layer({ runBackgroundWork: false }).pipe(
-            Layer.provide(NodeServices.layer),
+            Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
           Layer.succeed(
             ProviderEventLoggers.ProviderEventLoggers,
             ProviderEventLoggers.NoOpProviderEventLoggers,
           ),
           NodeServices.layer,
+          NodeCrypto.layer,
         ),
       ),
     ),

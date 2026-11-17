@@ -1,6 +1,6 @@
 import * as DateTime from "effect/DateTime";
 import * as Schedule from "effect/Schedule";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as HttpClient from "effect/http/HttpClient";
 import { CLOUD_WITHDRAWAL_FENCE } from "./config.ts";
 import * as Effect from "effect/Effect";
@@ -55,7 +55,7 @@ const TRUST_KEYS = [
 
 export const make = Effect.gen(function* () {
   const client = yield* HttpClient.HttpClient;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const auth = yield* EnvironmentAuth.EnvironmentAuth;
   const environment = yield* ServerEnvironment.ServerEnvironment;
@@ -66,7 +66,7 @@ export const make = Effect.gen(function* () {
       return yield* new Client.CloudLinkRevocationError({ phase: "transport" });
     return yield* Client.request(target).pipe(
       Effect.provideService(HttpClient.HttpClient, client),
-      Effect.provideService(Crypto.Crypto, crypto),
+      Effect.provideService(SecureRandom.SecureRandom, random),
       Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
       Effect.tapError((error) =>
         Effect.sync(() => {

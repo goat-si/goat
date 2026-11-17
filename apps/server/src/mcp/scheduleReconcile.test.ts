@@ -92,6 +92,7 @@ it.effect("schedule.list distinguishes another successful manual run of a disabl
           Layer.provide(
             Layer.mergeAll(
               NodeServices.layer,
+              NodeCrypto.layer,
               ServerSettings.layerTest(),
               Layer.mock(Threads.ThreadManagementService)({}),
               Layer.mock(Projects.ProjectService)({}),
@@ -185,6 +186,7 @@ const updateFixture = () => {
   const stored: { task: ScheduledTask; failNext?: boolean } = { task: webhookTask };
   const services = Layer.mergeAll(
     NodeServices.layer,
+    NodeCrypto.layer,
     ServerSettings.layerTest(),
     Layer.mock(Threads.ThreadManagementService)({
       getThreadShell: (id) =>
@@ -219,6 +221,8 @@ const updateFixture = () => {
           const signature = input.schedule.type === "webhook" ? input.schedule.signature : null;
           stored.task = {
             ...stored.task,
+            threadId: input.threadId ?? null,
+            ...(input.threadMode === undefined ? {} : { threadMode: input.threadMode }),
             title: input.title,
             schedule:
               input.schedule.type === "webhook"
@@ -238,7 +242,7 @@ const updateFixture = () => {
     OrchestratorToolkit,
     OrchestratorHandlers.layer,
   ).pipe(
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provide(
       Layer.mergeAll(
         layerPermissionProfilesOff,
@@ -263,6 +267,57 @@ const updateFixture = () => {
   );
   return { upserts, parked, stored, served };
 };
+
+const intervalTask: ScheduledTask = {
+  ...disabledTask,
+  id: ScheduledTaskId.make("interval-schedule"),
+  projectId: liveThreadShell(updateCaller).projectId,
+  enabled: true,
+  runtimeMode: "approval-required",
+};
+
+it.effect("keeps one thread when fresh sessions are turned off before the first run", () => {
+  const { upserts, stored, served } = updateFixture();
+  stored.task = { ...intervalTask, threadMode: "fresh_session" };
+  return Effect.gen(function* () {
+    const id = intervalTask.id;
+    yield* callTool("goat_schedule_update", { scheduledTaskId: id, freshSession: false });
+    yield* callTool("goat_schedule_update", { scheduledTaskId: id, bindToCurrentThread: false });
+    expect(upserts.map((input) => input.threadMode)).toEqual(["continue", "new_thread"]);
+  }).pipe(Effect.provide(served));
+});
+
+it.effect("refuses unbinding into fresh sessions in one call, which would keep the thread", () => {
+  const { upserts, stored, served } = updateFixture();
+  stored.task = {
+    ...intervalTask,
+    threadId: ThreadId.make("thread:scheduled-base"),
+    threadMode: "continue",
+  };
+  return Effect.gen(function* () {
+    const refused = yield* callTool("goat_schedule_update", {
+      scheduledTaskId: intervalTask.id,
+      bindToCurrentThread: false,
+      freshSession: true,
+    });
+    expect(refused.content).toEqual([
+      expect.objectContaining({ text: expect.stringContaining("first unbind it") }),
+    ]);
+    expect(upserts).toEqual([]);
+  }).pipe(Effect.provide(served));
+});
+
+it.effect("goat_schedule_update applies freshSession", () => {
+  const { stored, served } = updateFixture();
+  stored.task = intervalTask;
+  return Effect.gen(function* () {
+    const fresh = yield* callTool("goat_schedule_update", {
+      scheduledTaskId: intervalTask.id,
+      freshSession: true,
+    });
+    expect(fresh.structuredContent).toMatchObject({ freshSession: true });
+  }).pipe(Effect.provide(served));
+});
 
 const rotation = {
   scheduledTaskId: webhookTask.id,

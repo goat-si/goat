@@ -1,3 +1,4 @@
+import { requestUrl } from "../requestUrl.ts";
 import {
   SOCKET_FRAME_PARTS_QUERY_PARAM,
   splitLargeSocketFrames,
@@ -11,7 +12,7 @@ export function withSocketFrameParts<A, E, R>(
   request: HttpServerRequest.HttpServerRequest,
   program: Effect.Effect<A, E, R>,
 ) {
-  const url = HttpServerRequest.toURL(request);
+  const url = requestUrl(request);
   if (url._tag === "None" || !url.value.searchParams.has(SOCKET_FRAME_PARTS_QUERY_PARAM))
     return program;
   return program.pipe(

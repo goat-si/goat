@@ -1,6 +1,7 @@
 import * as Context from "effect/Context";
 import * as FileSystem from "effect/FileSystem";
 import * as Stream from "effect/Stream";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -41,7 +42,7 @@ export const notesLayer = (
     Layer.provideMerge(
       Layer.effectContext(
         Effect.gen(function* () {
-          const context = yield* Layer.build(NodeServices.layer);
+          const context = yield* Layer.build(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer));
           return Context.add(
             context,
             FileSystem.FileSystem,

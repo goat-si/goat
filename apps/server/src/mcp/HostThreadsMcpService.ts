@@ -1,5 +1,6 @@
 import * as FleetSync from "../goatclaw/FleetSync.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
+import { followUpRemoteTask } from "../remoteReports/remoteTaskFollowUp.ts";
 import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
 import {
   OrchestratorMcpFailure,
@@ -23,7 +24,6 @@ import {
   type OrchestratorMcpThreadRetryInput,
   OrchestratorMcpThreadRetryResult,
   type OrchestratorMcpThreadListInput,
-  type OrchestratorMcpThreadListItem,
   type OrchestratorMcpThreadReadInput,
   type OrchestratorMcpThreadSendInput,
   type OrchestratorMcpThreadSendRelayed,
@@ -42,6 +42,7 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { hostFailure } from "./hostFailure.ts";
 import * as View from "./threadListView.ts";
+import { mergeHostThreadLists } from "./hostThreadLists.ts";
 import { withHostFanOutDeadline } from "./hostFanOutDeadline.ts";
 import { replicaStatus } from "./launchWatch.ts";
 import * as ThreadReplicaService from "./ThreadReplicaService.ts";
@@ -71,6 +72,7 @@ import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
 import * as HostToolAuthorization from "./HostToolAuthorization.ts";
 import { remoteSenderFor } from "./remoteSender.ts";
 import { unwatchLaunch } from "./unwatchLaunch.ts";
+import { tailCutsResult } from "./tailReadResult.ts";
 import {
   assertLiveCaller,
   readCaller,
@@ -97,30 +99,7 @@ const MAX_WAIT_MS = 60 * 60 * 1_000;
 /** Extra time a remote wait gets to answer after its own timeout. */
 const WAIT_ANSWER_MARGIN_MS = 60_000;
 
-type ListItem = OrchestratorMcpThreadListItem;
-
-/** Newest first, as each environment lists its own; the host breaks the last tie. */
-const newestFirst = (left: ListItem, right: ListItem) =>
-  Date.parse(right.updatedAt) - Date.parse(left.updatedAt) ||
-  right.threadId.localeCompare(left.threadId) ||
-  (left.host ?? "").localeCompare(right.host ?? "");
-
-/**
- * Merges the first `limit` threads of each environment into the first
- * `limit` overall. Each list must hold its own newest threads in the order
- * `newestFirst` uses, which makes the merged page exact.
- */
-export function mergeHostThreadLists(
-  lists: ReadonlyArray<{ readonly threads: ReadonlyArray<ListItem>; readonly total: number }>,
-  limit: number,
-): { readonly threads: Array<ListItem>; readonly total: number; readonly truncated: boolean } {
-  const threads = lists
-    .flatMap((list) => list.threads)
-    .toSorted(newestFirst)
-    .slice(0, limit);
-  const total = lists.reduce((sum, list) => sum + list.total, 0);
-  return { threads, total, truncated: total > threads.length };
-}
+export { mergeHostThreadLists };
 
 export interface HostThreadsMcpServiceShape {
   readonly reconcileCheckpoint: (
@@ -548,7 +527,7 @@ const make = Effect.gen(function* () {
             );
       const result: OrchestratorMcpThreadReadResult = yield* read;
       // Only after every read above: acknowledging cancels the child's completion wake.
-      if (input.view === "summary" || input.tail !== undefined)
+      if (input.view === "summary" || (input.tail !== undefined && !tailCutsResult(result)))
         yield* local.acknowledgeChildRead(scope, input, result.thread);
       return watch === null ? result : { ...result, replicaStatus: replicaStatus(watch) };
     });
@@ -751,7 +730,7 @@ const make = Effect.gen(function* () {
       if (input.host === undefined) return local.waitForThread(scope, input);
       const host = input.host;
       const timeoutMs = Math.min(MAX_WAIT_MS, Math.max(1, input.timeoutMs ?? DEFAULT_WAIT_MS));
-      const { ignoreRequestIds, ...args } = withoutHost(input);
+      const { ignoreRequestIds, untilDelegatedWorkSettled, ...args } = withoutHost(input);
       return Effect.gen(function* () {
         const watch = yield* launchWatches
           .find(
@@ -772,6 +751,10 @@ const make = Effect.gen(function* () {
               timeoutMs,
               ...(ignoreRequestIds === undefined ? {} : { ignoreRequestIds }),
             },
+            // Sent only to a host that declares it; an older host's answer then lacks delegatedWorkSettled.
+            ...(untilDelegatedWorkSettled === undefined
+              ? {}
+              : { optionalArguments: { untilDelegatedWorkSettled } }),
             writes: false,
             // A remote that times out answers timedOut:true; only silence past that is unavailability.
             timeoutMs: timeoutMs + WAIT_ANSWER_MARGIN_MS,
@@ -914,6 +897,7 @@ const make = Effect.gen(function* () {
                     ),
                   ),
           ),
+          Effect.flatMap((sent) => followUpRemoteTask(coordinator, scope, host, input, sent)),
         );
         const result =
           ceilingAdvice === undefined || sent.delivery === "relayed"

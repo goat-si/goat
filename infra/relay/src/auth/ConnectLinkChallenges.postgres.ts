@@ -1,6 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -60,10 +60,10 @@ it.effect(
     Effect.gen(function* () {
       yield* TestClock.setTime(1800000000000);
       yield* allowAccount("user_123");
-      const crypto = yield* Crypto.Crypto;
+      const crypto = yield* Digest.Digest;
       const verifier = "v".repeat(64);
       const approvalChallenge = Base64Url.encode(
-        yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier)),
+        yield* crypto.digest(Digest.sha256, new TextEncoder().encode(verifier)),
       );
       const approvals = yield* Approvals.CliLinkApprovals;
       const signed = yield* approvals.issue(

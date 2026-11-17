@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -13,6 +14,7 @@ export const layerClaudeAdapterTest = Layer.mergeAll(
   IdAllocator.layer,
   McpProviderSessions.layer,
   NodeServices.layer,
+  NodeCrypto.layer,
   Layer.effectContext(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -21,5 +23,5 @@ export const layerClaudeAdapterTest = Layer.mergeAll(
         Context.add(HostProcess.Environment, { HOME: home, PATH: "/usr/bin:/bin" }),
       );
     }),
-  ).pipe(Layer.provide(NodeServices.layer)),
+  ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

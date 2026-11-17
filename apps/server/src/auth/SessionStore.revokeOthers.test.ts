@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId } from "@goat/contracts";
@@ -23,7 +24,7 @@ const layerSessionStore = SessionStore.layer.pipe(
     }),
   ),
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-revoke-others-test-" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   Layer.merge(TestClock.layer()),
 );
 

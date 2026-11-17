@@ -10,7 +10,7 @@ import {
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexReplay from "effect-codex-app-server/replay";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Context from "effect/Context";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as DateTime from "effect/DateTime";
@@ -440,7 +440,7 @@ const runScenario = (
             ),
           ),
       },
-      crypto: yield* Crypto.Crypto,
+      digest: yield* Digest.Digest,
       fileSystem: yield* FileSystem.FileSystem,
       idAllocator: yield* IdAllocator.IdAllocatorV2,
       serverConfig: yield* makeReplayServerConfig(scenario).pipe(Effect.orDie),

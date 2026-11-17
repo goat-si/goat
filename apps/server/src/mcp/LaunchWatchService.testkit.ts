@@ -350,7 +350,9 @@ const layerFor = (world: World, baseDir: string) =>
               return world.webhookRelease ?? Effect.void;
             }),
         }),
-        ServerConfig.layerTest(process.cwd(), baseDir).pipe(Layer.provide(NodeServices.layer)),
+        ServerConfig.layerTest(process.cwd(), baseDir).pipe(
+          Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        ),
         NodeCrypto.layer,
         Layer.effect(
           FileSystem.FileSystem,
@@ -380,7 +382,7 @@ const layerFor = (world: World, baseDir: string) =>
                   ),
             };
           }),
-        ).pipe(Layer.provideMerge(NodeServices.layer)),
+        ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
       ),
     ),
   );
@@ -399,7 +401,7 @@ export const withService = <A, E>(
 export const tempDir = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.makeTempDirectoryScoped({ prefix: "goat-launch-watch-" });
-}).pipe(Effect.provide(NodeServices.layer));
+}).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 /**
  * Advances the test clock until milestone arrives, for followers sleeping

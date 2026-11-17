@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -13,7 +14,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -29,14 +29,18 @@ import {
   makeMockRuntime,
   rawProtocolMethod,
   rawProtocolPromptTextBlocks,
+  bundledMockAgentPath,
 } from "./AcpMockRuntime.testkit.ts";
 
 const layerTest = Layer.mergeAll(
-  DocumentText.layer.pipe(Layer.provide(NodeServices.layer)),
+  DocumentText.layer.pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   NodeServices.layer,
+  NodeCrypto.layer,
   IdAllocator.layer,
   McpProviderSessions.layer,
-  TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
+  TestProviderHost.layer().pipe(
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+  ),
 );
 const ACP_TEST_DRIVER = ProviderDriverKind.make("acp-test");
 
@@ -44,11 +48,8 @@ const makeAdvertisedCompactionHarness = Effect.fnUntraced(function* (
   environment: Readonly<Record<string, string>>,
 ) {
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const path = yield* Path.Path;
   const selfInvocation = yield* resolveSelfInvocation();
-  const mockAgentPath = yield* path.fromFileUrl(
-    new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-  );
+  const mockAgentPath = yield* bundledMockAgentPath;
   const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
   // Resolves after the adapter records what the agent advertised, so the refusal is deterministic.
   const commandsPublished = yield* Deferred.make<void>();

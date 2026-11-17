@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterEach, assert, describe, it, vi } from "@effect/vitest";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
@@ -14,8 +15,9 @@ import {
   runtimeManifestAssetName,
 } from "@goat/shared/runtimeManifest";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Hex from "effect/encoding/Hex";
 import * as Result from "effect/Result";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -106,8 +108,8 @@ const prepare = (input: {
     );
     assert.equal(Number(yield* packed.exitCode), 0);
     const archive = new Uint8Array(yield* f.fs.readFile(`${f.home}/${asset}`));
-    const crypto = yield* Crypto.Crypto;
-    const sha = Hex.encode(yield* crypto.digest("SHA-256", archive));
+    const digest = yield* Digest.Digest;
+    const sha = Hex.encode(yield* digest.digest(Digest.sha256, archive));
     const manifestName = runtimeManifestAssetName(PUBLISHED);
     const own = ownRuntimeManifest({ version: PUBLISHED, commitTime: 1_000 });
     const manifest = JSON.stringify(
@@ -119,7 +121,7 @@ const prepare = (input: {
       ),
     );
     const manifestSha = Hex.encode(
-      yield* crypto.digest("SHA-256", new TextEncoder().encode(manifest)),
+      yield* digest.digest(Digest.sha256, new TextEncoder().encode(manifest)),
     );
     const withManifest = input.release !== "pre-manifest";
     const sums =
@@ -248,7 +250,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             selected.upgradeFailure?.fix.instruction ?? "",
             `Using published GOAT ${PUBLISHED}.`,
           );
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("does not defer an upgrade when the published runtime is newer than this app", () =>
@@ -259,7 +264,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.equal(result.success.version, PUBLISHED);
           assert.isUndefined(result.success.upgradeFailure);
         }
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("refuses a manifest that SHA256SUMS does not cover, before downloading", () =>
@@ -269,7 +274,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.isFalse(installed);
         assert.notInclude(requests, `${base}/${asset}`);
         assert.equal(failure.reason, "archive-unavailable");
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("asks for an app update when published runtimes only speak newer protocols", () =>
@@ -282,7 +287,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           failure.message,
           `No GOAT runtime for ${platformKey} that works with this app (GOAT ${ARCHIVE.archiveVersion}) could be installed on devbox. Update this app, then reconnect.`,
         );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each([
@@ -300,7 +305,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const second = yield* first.again;
           failureOf(second.result);
           assert.notInclude(second.requests, `${base}/${asset}`);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("a setup that loses a race never rejects the runtime the other client started", () =>
@@ -317,7 +325,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const second = yield* first.again;
         assert.isTrue(Result.isSuccess(second.result));
         if (Result.isSuccess(second.result)) assert.equal(second.result.success.version, PUBLISHED);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("does not take scope help from a failing command as evidence of a capability", () =>
@@ -331,7 +339,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           (yield* f.fs.readFileString(`${f.home}/.goat/runtime/goat/held/${PUBLISHED}`)).trim(),
           "rejected",
         );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("a torn hold marker still holds a refused runtime", () =>
@@ -344,7 +352,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const second = yield* first.again;
         failureOf(second.result);
         assert.isTrue(second.installed);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("never puts another build on a host that has GOAT data", () =>
@@ -356,7 +364,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         failureOf(result);
         assert.isFalse(installed);
         assert.isFalse(requests.some((url) => url.startsWith("https://api.github.com")));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("names the network when the release index is unreachable, and reads it once", () =>
@@ -369,7 +377,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const second = yield* prepare({ release: "manifest", index: "down" });
         failureOf(second.result);
         assert.isFalse(second.requests.some((url) => url.startsWith("https://api.github.com")));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("launches the published runtime it installed", () =>
@@ -377,7 +385,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const { result } = yield* prepare({ release: "manifest", launch: true });
         assert.isTrue(Result.isSuccess(result));
         if (Result.isSuccess(result)) assert.equal(result.success.version, PUBLISHED);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("refuses to start it when GOAT data appeared during setup, then and later", () =>
@@ -393,7 +401,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         // The next connection must not start it through installed-runtime recovery either.
         const next = yield* again;
         assert.isTrue(Result.isFailure(next.result));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each(["no data", "data"] as const)(
@@ -421,7 +429,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             if (Result.isSuccess(second.result))
               assert.equal(second.result.success.version, PUBLISHED);
           }
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("leaves acquisition alone unless the runner opts in", () =>
@@ -432,7 +443,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         });
         failureOf(result);
         assert.isFalse(requests.some((url) => url.startsWith("https://api.github.com")));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
   },
 );

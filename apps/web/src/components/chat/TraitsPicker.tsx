@@ -924,7 +924,7 @@ function ComposerTraitsPicker({
                     <ToggleGroupItem
                       key={option.id}
                       value={option.id}
-                      className="flex-1"
+                      className="flex-auto"
                       {...(option.description ? { title: option.description } : {})}
                     >
                       {option.label}

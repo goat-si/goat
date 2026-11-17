@@ -17,7 +17,7 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
@@ -151,7 +151,7 @@ it.effect.each(deliveries)(
           attachmentsDir: cwd,
           fileSystem: yield* FileSystem.FileSystem,
           path: yield* Path.Path,
-          crypto: yield* Crypto.Crypto,
+          random: yield* SecureRandom.SecureRandom,
           idAllocator: yield* IdAllocator.IdAllocatorV2,
           queryRunner: {
             allocateSessionId: Effect.succeed(sessionId),
@@ -486,6 +486,7 @@ it.effect.each(deliveries)(
             IdAllocator.layer,
             McpProviderSessions.layer,
             NodeServices.layer,
+            NodeCrypto.layer,
           ),
         ),
       ),
@@ -550,7 +551,7 @@ it.effect("offers a continuation for a later wake after a queued continuation is
       });
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const continuations: ProviderContinuationRequests.ProviderContinuationRequest[] = [];
       const services =
@@ -567,7 +568,7 @@ it.effect("offers a continuation for a later wake after a queued continuation is
             attachmentsDir: cwd,
             fileSystem,
             path,
-            crypto,
+            random,
             idAllocator,
             continuationRequests: {
               offer: (request) =>

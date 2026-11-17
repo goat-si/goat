@@ -216,7 +216,7 @@ export const makeCliHarness = Effect.fnUntraced(function* (
           if (!ChildProcess.isStandardCommand(command)) throw new Error("Unexpected pipeline.");
           commands.push(command);
           Deferred.doneUnsafe(commandSpawned, Effect.void);
-          const response = reply(command.args);
+          const response = reply(command.args.map(String));
           return ChildProcessSpawner.makeHandle({
             pid: ChildProcessSpawner.ProcessId(90002),
             exitCode:

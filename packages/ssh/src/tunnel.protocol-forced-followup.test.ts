@@ -1,9 +1,11 @@
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import { replaceTargetOf } from "./forcedReplacementScripts.ts";
 import { ARCHIVE } from "./tunnel.fixture.ts";
@@ -71,7 +73,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.isTrue(isAlive(f.pid));
           assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
           yield* loggedRefusal(f, "its command is not GOAT's recorded launch");
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("a runtime from before launches recorded their start takes the manual path", () =>
@@ -89,7 +94,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.isTrue(isAlive(f.pid));
         assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
         yield* loggedRefusal(f, "no start time was recorded at its launch");
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("a launch records the start time of the runtime it started", () =>
@@ -103,7 +108,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           yield* startOf(f, pid),
         );
         assert.isTrue(yield* f.fs.exists(`${f.state}/started.ticks`));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each([
@@ -122,7 +127,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             replaceTargetOf(yield* statusProbe(f)),
             started && command ? { replaceTarget: target } : {},
           );
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
   },
 );
@@ -160,7 +168,10 @@ exec /bin/sleep "$@"
           if (Result.isSuccess(result))
             assert.equal(result.success.version, ARCHIVE.archiveVersion);
           assert.isFalse(isAlive(f.pid));
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live(
@@ -181,7 +192,10 @@ exec /bin/sleep "$@"
               `after the approved forced stop of PID ${f.pid}, the detached supervisor reported a failure`,
             );
           assert.isFalse(isAlive(f.pid));
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live(
@@ -206,7 +220,10 @@ exec /bin/sleep "$@"
             yield* f.fs.readFileString(`${f.state}/server.log`),
             `child process ${child}`,
           );
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
   },
 );
@@ -227,7 +244,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.isTrue(Result.isFailure(result));
         assert.isTrue(isAlive(f.pid));
         assert.deepEqual(replaceTargetOf(yield* statusProbe(f)), {});
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each([
@@ -274,7 +291,10 @@ exec /bin/ls "$@"
           assert.isTrue(isAlive(f.pid));
           assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
           assert.deepEqual(replaceTargetOf(yield* statusProbe(f)), {});
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("a launch replaces a started symlink instead of writing through it", () =>
@@ -287,7 +307,7 @@ exec /bin/ls "$@"
         assert.isTrue(Result.isSuccess(result), String(Result.isFailure(result) && result.failure));
         assert.equal(yield* f.fs.readFileString(victim), "keep\n");
         assert.equal((yield* f.fs.stat(`${f.state}/started`)).type, "File");
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
   },
 );
@@ -318,7 +338,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         if (Result.isFailure(result))
           assert.include(String(result.failure), `GOAT ${OLDER} was started again`);
         else assert.equal(result.success.version, OLDER);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("a child that ignores SIGTERM is left running and named once its runtime is gone", () =>
@@ -340,7 +360,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           yield* f.fs.readFileString(`${f.state}/server.log`),
           `child process ${child}`,
         );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
   },
 );
@@ -373,7 +393,7 @@ exec /bin/mv "$@"
         assert.isTrue(Result.isFailure(result));
         assert.isTrue(isAlive(f.pid));
         assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("a host that cannot run the detached supervisor stops nothing", () =>
@@ -390,7 +410,7 @@ exec /bin/mv "$@"
         assert.isTrue(isAlive(f.pid));
         assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
         yield* loggedRefusal(f, "the detached supervisor that starts the new runtime cannot run");
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("a supervisor that left no result after the stop is reported as unknown", () =>
@@ -408,7 +428,7 @@ exec /bin/mv "$@"
             String(result.failure),
             "the detached supervisor left no result, so GOAT cannot tell whether a runtime is running there now",
           );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live(
@@ -437,7 +457,10 @@ exec /bin/mv "$@"
               String(result.failure),
               "the detached supervisor left no result, so GOAT cannot tell whether a runtime is running there now",
             );
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
   },
 );
@@ -475,7 +498,10 @@ if [ "$2" = '${f.state}/run-t3.sh' ] && [ ! -e "$HOME/.test/hup-sent" ]; then : 
           if (Result.isSuccess(result))
             assert.equal(result.success.version, ARCHIVE.archiveVersion);
           assert.isFalse(isAlive(f.pid));
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
   },
 );

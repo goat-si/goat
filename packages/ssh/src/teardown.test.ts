@@ -1,6 +1,7 @@
 import * as NodeNet from "node:net";
 import * as Path from "effect/Path";
 import { afterEach, assert, beforeEach, describe, it, vi } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NetService from "@goat/shared/Net";
@@ -72,7 +73,7 @@ const makeChildFixture = Effect.gen(function* () {
       yield* Deferred.succeed(ready, {
         child,
         port: Number(port[0]),
-        askpassDirectory: path.dirname(path.dirname(askpass!)),
+        askpassDirectory: path.dirname(path.dirname(String(askpass))),
       });
       // Do not return the handle: interruption must use the spawn scope's own finalizer.
       return yield* Effect.never;
@@ -147,7 +148,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH scoped tea
           Effect.andThen(assertReleased(child)),
           Effect.ensuring(child.child.kill({ killSignal: "SIGKILL" }).pipe(Effect.ignore)),
         );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
   it.live("manager shutdown reaps a tunnel still being established", () =>
     Effect.gen(function* () {
@@ -181,6 +182,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH scoped tea
         Effect.ensuring(child.child.kill({ killSignal: "SIGKILL" }).pipe(Effect.ignore)),
         Effect.ensuring(Fiber.interrupt(fiber)),
       );
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 });

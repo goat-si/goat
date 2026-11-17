@@ -5,6 +5,7 @@ import { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
 // @effect-diagnostics nodeBuiltinImport:off - one-time dummy passwords come from node:crypto.
 import * as NodeCrypto from "node:crypto";
 
+import * as PlatformNodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import {
@@ -143,7 +144,7 @@ const layerFor = (secrets: ReturnType<typeof makeSecrets>, keepTypedText = false
         PreviewAgentActivity.layer,
       ).pipe(
         Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-secret-fill-" })),
-        Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer)),
       ),
     ),
   );

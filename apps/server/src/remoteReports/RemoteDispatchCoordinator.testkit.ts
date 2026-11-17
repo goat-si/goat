@@ -5,6 +5,7 @@ import {
   NodeId,
   RunId,
   type OrchestrationV2ServerCommand,
+  type OrchestrationV2Run,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadShell,
   type RemoteReport,
@@ -89,6 +90,7 @@ export const fixture = Effect.gen(function* () {
   const deleteKept = yield* Queue.unbounded<void>();
   const attemptedCommands: OrchestrationV2ServerCommand[] = [];
   const recordedTasks: OrchestrationV2Subagent[] = [];
+  const recordedRuns: OrchestrationV2Run[] = [];
   const unavailableProjections = new Set<ThreadId>();
   const refusedTasks = new Set<NodeId>();
   const refusedCommandTypes = new Set<OrchestrationV2ServerCommand["type"]>();
@@ -222,6 +224,7 @@ export const fixture = Effect.gen(function* () {
           ? Effect.fail(new Orchestrator.OrchestratorProjectionError({ threadId: id }))
           : Effect.succeed({
               ...idleThreadProjection(liveThreadShell(id)),
+              runs: recordedRuns,
               subagents: recordedTasks,
             }),
       getThreadShell: () => Effect.succeed(shell),
@@ -286,6 +289,7 @@ export const fixture = Effect.gen(function* () {
     attemptedCommands,
     refusedReviews,
     recordedTasks,
+    recordedRuns,
     unavailableProjections,
     refusedTasks,
     refusedCommandTypes,

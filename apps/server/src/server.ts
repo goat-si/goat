@@ -17,8 +17,7 @@ import * as CloudProviderAutoSetup from "./provider/CloudProviderAutoSetup.ts";
 import * as ProviderPathRefresh from "./provider/ProviderPathRefresh.ts";
 import * as ProviderSettings from "./provider/ProviderSettings.ts";
 import * as SshDeviceAdd from "./sshRemote/SshDeviceAdd.ts";
-import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
-import type * as Crypto from "effect/Crypto";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import type * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -67,6 +66,7 @@ import * as SiteNotes from "./preview/SiteNotes.ts";
 
 import { heartbeat, HeartbeatWebSocket } from "./wsHeartbeat.ts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentHttpApi, type RepositoryIdentity } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
@@ -176,6 +176,7 @@ import * as SshRuntimeAutoUpdate from "./cloud/sshRuntimeAutoUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import { layerCommandReadiness } from "./commandReadiness.ts";
 import * as PendingAttachmentSweep from "./assets/PendingAttachmentSweep.ts";
+import * as NonBlockingSpawner from "./process/NonBlockingSpawner.ts";
 import * as ServerConfig from "./config.ts";
 import * as CuaDriver from "./cua/CuaDriver.ts";
 import * as LinuxFrameSource from "./cua/linuxFrames/LinuxFrameSource.ts";
@@ -246,7 +247,7 @@ import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as CodexManagedTokenBroker from "./provider/CodexManagedTokenBroker.ts";
 import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
 import { MuseUsageHome } from "@goat/provider-muse/server";
-import * as EventNdjsonLogger from "./provider/EventNdjsonLogger.ts";
+import { layerProviderEventLoggers } from "./provider/ProviderEventLoggersLayer.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
 import * as ProviderDiagnosisService from "./provider/ProviderDiagnosisService.ts";
 import * as ResetCreditCoordinator from "./provider/resetCreditCoordinator.ts";
@@ -297,27 +298,6 @@ const layerApplicationObservability = EventLoopMonitor.layer.pipe(
   Layer.provideMerge(layerResourceAttribution),
 );
 
-// Share rotation state so driver loggers cannot race.
-const layerProviderEventLoggers = Layer.effect(
-  ProviderEventLoggers.ProviderEventLoggers,
-  Effect.gen(function* () {
-    const { providerEventLogPath } = yield* ServerConfig.ServerConfig;
-    const attribution = yield* ResourceAttribution.ResourceAttribution;
-    const store = yield* EventNdjsonLogger.makeEventNdjsonLogStore(providerEventLogPath, {
-      attribution,
-    }).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning(error.message, { error }).pipe(
-          Effect.annotateLogs({ scope: "provider-observability" }),
-          Effect.as(undefined),
-        ),
-      ),
-    );
-    if (!store) return ProviderEventLoggers.NoOpProviderEventLoggers;
-    yield* Effect.addFinalizer(() => store.close());
-    return { native: store.logger("native"), canonical: store.logger("canonical") };
-  }),
-);
 const layerPtyAdapter = NodePtyAdapter.layer;
 
 export const layerServerSettings = ServerSettings.layer.pipe(
@@ -416,8 +396,14 @@ export const layerHttpServer = Layer.unwrap(
       },
     );
   }),
+).pipe(
+  // NodeHttpServer.layer also outputs NodeServices, whose spawner would shadow the wrapped one.
+  (layer) => NonBlockingSpawner.layer.pipe(Layer.provideMerge(layer)),
 );
-const layerPlatformServices = DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer));
+const layerPlatformServices = DocumentText.layer.pipe(
+  Layer.provideMerge(NonBlockingSpawner.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+);
 export const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
 const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer));
 const layerSourceControlProviderRegistry = SourceControlProviderRegistry.layer.pipe(
@@ -683,6 +669,7 @@ const layerScheduledTaskWebhookOrigin = Layer.effect(
 
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   RuntimeLayer.provideHostPressure(HostPressureMonitor.layer),
+  Layer.provide(UsageLimitSources.layerResetFallback),
   Layer.provide(layerScheduledTaskWebhookOrigin),
   Layer.provide(ProviderEventIngestor.layerAnalytics),
   Layer.provide(layerCheckpointStore),
@@ -1043,20 +1030,26 @@ const layerMakeRoutes = Layer.mergeAll(
     PenServer.layer,
   ),
   Layer.mergeAll(
-    McpHttpServer.layer.pipe(Layer.provide(Layer.mergeAll(layerFleetHealth, layerFleetPressure))),
-    ComputerUseLeaseRoute.layer,
-    layerMemoryToolkits,
-    McpHttpServer.layerProviderToolkit.pipe(
-      Layer.provide(PermissionProfiles.layer),
-      Layer.provide(AcpSessionService.layer),
-    ),
-    HandoffExpiry.layer,
-    // Fleet goals act through the same launch, watch and dispatch services as these tools.
-    McpHttpServer.layerFleetToolkit.pipe(
-      Layer.provide(
-        GoalLayers.layer.pipe(Layer.provide(HubDown.layer), Layer.provideMerge(layerFleetHealth)),
+    McpHttpServer.layerWith(
+      Layer.mergeAll(
+        layerMemoryToolkits,
+        McpHttpServer.layerProviderToolkit.pipe(
+          Layer.provide(PermissionProfiles.layer),
+          Layer.provide(AcpSessionService.layer),
+        ),
+        // Fleet goals act through the same launch, watch and dispatch services as these tools.
+        McpHttpServer.layerFleetToolkit.pipe(
+          Layer.provide(
+            GoalLayers.layer.pipe(
+              Layer.provide(HubDown.layer),
+              Layer.provideMerge(layerFleetHealth),
+            ),
+          ),
+        ),
       ),
-    ),
+    ).pipe(Layer.provide(Layer.mergeAll(layerFleetHealth, layerFleetPressure))),
+    ComputerUseLeaseRoute.layer,
+    HandoffExpiry.layer,
   ).pipe(
     Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
     Layer.provide(McpOAuth.layerMcpClientAuthenticator),
@@ -1322,6 +1315,11 @@ export const runServer: Effect.Effect<
   | FileSystem.FileSystem
   | Path.Path
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   | ServerConfig.ServerConfig
-> = PersistenceRecoveryOwner.run(Layer.launch(layerMakeServer));
+> = PersistenceRecoveryOwner.run(
+  Layer.launch(
+    // For the layers above whose spawner requirement is met by the caller's runtime.
+    layerMakeServer.pipe(Layer.provide(NonBlockingSpawner.layer)),
+  ),
+);

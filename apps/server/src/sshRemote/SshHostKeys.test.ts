@@ -21,15 +21,16 @@ const negotiated = (offersEd25519: boolean) =>
     const spawner = lazyChildProcessSpawner((command) =>
       Effect.gen(function* () {
         if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
-        if (command.args.includes("-G"))
+        if (command.args.map(String).includes("-G"))
           return makeSuccessfulProcess("hostname box.example\nport 22\nproxycommand none\n");
-        if (command.args.includes("-lf"))
+        if (command.args.map(String).includes("-lf"))
           return makeSuccessfulProcess(
             `256 ${FINGERPRINT} box.example (${type === "ssh-ed25519" ? "ED25519" : "ECDSA"})\n`,
           );
-        const asked = command.args.includes("HostKeyAlgorithms=ssh-ed25519");
+        const asked = command.args.map(String).includes("HostKeyAlgorithms=ssh-ed25519");
         type = asked && offersEd25519 ? "ssh-ed25519" : "ecdsa-sha2-nistp256";
         const file = command.args
+          .map(String)
           .find((arg) => arg.startsWith("UserKnownHostsFile="))!
           .slice("UserKnownHostsFile=".length)
           .replace(/^"|"$/gu, "");

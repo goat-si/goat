@@ -1,14 +1,21 @@
 import { OrchestratorMcpThreadReadResult, type ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
 
 const decodeThreadRead = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
 
-/** A tracer that records the context-transfer and message projection queries a call makes. */
+/**
+ * A tracer that records the projection queries a call makes: context transfers, messages, runs,
+ * every projection table read, and the reads of a delegated task acknowledgement.
+ */
 export function projectionQueryTracer() {
   const transferReads: Array<string> = [];
   const messageReads: Array<string> = [];
+  const runReads: Array<string> = [];
+  const projectionTableReads: Array<string> = [];
+  const acknowledgementReads: Array<string> = [];
   const tracer = Tracer.make({
     span(options) {
       const span = new Tracer.NativeSpan(options);
@@ -17,6 +24,20 @@ export function projectionQueryTracer() {
         end(endTime, exit);
         const query = span.attributes.get("db.query.text");
         if (typeof query !== "string") return;
+        let parent = Option.getOrUndefined(span.parent);
+        while (parent?._tag === "Span") {
+          if (parent.name === "Orchestrator.dispatchDelegatedTaskCompletionDeliveryResolution") {
+            acknowledgementReads.push(query);
+            break;
+          }
+          parent = Option.getOrUndefined(parent.parent);
+        }
+        for (const [, table] of query.matchAll(/FROM orchestration_v2_projection_(\w+)/gi)) {
+          if (table !== undefined) projectionTableReads.push(table);
+        }
+        if (/SELECT\s+payload_json\s+FROM orchestration_v2_projection_runs/i.test(query)) {
+          runReads.push(query);
+        }
         if (/SELECT[\s\S]*FROM orchestration_v2_projection_context_transfers/i.test(query)) {
           transferReads.push(query);
         }
@@ -27,7 +48,14 @@ export function projectionQueryTracer() {
       return span;
     },
   });
-  return { tracer, transferReads, messageReads };
+  return {
+    tracer,
+    transferReads,
+    messageReads,
+    runReads,
+    projectionTableReads,
+    acknowledgementReads,
+  };
 }
 
 /**

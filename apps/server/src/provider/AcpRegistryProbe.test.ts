@@ -15,6 +15,7 @@ import * as Sqlite from "../persistence/Sqlite.ts";
 import * as AcpSessionService from "./AcpSessionService.ts";
 import { catalog as mcpCatalog, client, dependencies } from "../mcp/agentSurface.testkit.ts";
 import { McpInvocationContext } from "../mcp/McpInvocationContext.ts";
+import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import * as Schema from "effect/Schema";
 import * as EffectAcpErrors from "effect-acp/errors";
 
@@ -429,7 +430,7 @@ describe("ACP Registry probe", () => {
       yield* logoutAcpRegistry(input);
     }).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       Effect.scoped,
     );
   });
@@ -449,7 +450,7 @@ describe("ACP Registry probe", () => {
       expect(listed.cursorDropped).toBe(false);
     }).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, sessionListCatalog(257)),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       Effect.scoped,
     );
   });
@@ -473,7 +474,7 @@ describe("ACP Registry probe", () => {
           AcpRegistrySupport.AcpRegistryCatalog,
           sessionListCatalog(2, scenario),
         ),
-        Effect.provide(NodeServices.layer),
+        Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         Effect.scoped,
       );
     },
@@ -501,7 +502,7 @@ describe("ACP Registry probe", () => {
           AcpRegistrySupport.AcpRegistryCatalog,
           sessionListCatalog(1, scenario),
         ),
-        Effect.provide(NodeServices.layer),
+        Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         Effect.scoped,
       );
     },
@@ -531,7 +532,7 @@ describe("ACP Registry probe", () => {
           AcpRegistrySupport.AcpRegistryCatalog,
           sessionListCatalog(1, scenario),
         ),
-        Effect.provide(NodeServices.layer),
+        Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         Effect.scoped,
       );
     },
@@ -554,7 +555,7 @@ describe("ACP Registry probe", () => {
         AcpRegistrySupport.AcpRegistryCatalog,
         sessionListCatalog(2, "dropped-keeps-cursor"),
       ),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       Effect.scoped,
     );
   });
@@ -577,7 +578,7 @@ describe("ACP Registry probe", () => {
         AcpRegistrySupport.AcpRegistryCatalog,
         sessionListCatalog(1, "cursor-unchanged"),
       ),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       Effect.scoped,
     );
   });
@@ -610,7 +611,7 @@ describe("ACP Registry probe", () => {
           ),
         ),
         Layer.provideMerge(Sqlite.layerMemory),
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
       );
       const result = yield* McpServer.McpServer.pipe(
         Effect.flatMap((server) =>
@@ -645,7 +646,7 @@ describe("ACP Registry probe", () => {
         AcpRegistrySupport.AcpRegistryCatalog,
         sessionListCatalog(2, "id-whitespace"),
       ),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       Effect.scoped,
     );
   });

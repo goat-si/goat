@@ -3,6 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodeChildProcess from "node:child_process";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
@@ -15,6 +16,7 @@ import * as SshTunnel from "./tunnel.ts";
 import { ARCHIVE, uploadTarget, installArchivePsDouble } from "./tunnel.fixture.ts";
 import { protocolExecutable } from "./tunnel.protocol.fixture.ts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 const current = {
@@ -118,7 +120,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           for (const type of ["stop", "drain", "self-stop", "supervise"])
             assert.notInclude(events, `"type":"${type}"`);
           yield* Effect.sync(() => process.kill(f.pid, 0));
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each(
@@ -171,7 +176,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         for (const type of ["stop", "drain", "self-stop", "supervise"])
           assert.notInclude(events, `"type":"${type}"`);
         yield* Effect.sync(() => process.kill(f.pid, 0));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each(["deferred", "replaced", "cold"])(
@@ -261,7 +266,10 @@ read -r release < "$HOME/.test/wait-release"
           assert.deepEqual(attached.pending, replace ? undefined : baseline.pending);
           assert.equal(f.remoteCommands.length - before, commands);
           assert.isString(attached.selectedRuntime.reconnectProbe);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("cancelled legacy drain rolls back identity while holding the replacement lock", () =>
@@ -301,7 +309,7 @@ exec /bin/rm "$@"
         for (const type of ["stop", "self-stop", "supervise"])
           assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), `"type":"${type}"`);
         yield* Effect.sync(() => process.kill(f.pid, 0));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each([
@@ -349,7 +357,7 @@ exec "$HOME/.test/identity-bin/ps" "$@"
             .split("\n")
             .every((line) => line === "C UTC"),
         );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each(["launch", "pairing", "mcp"] as const)(
@@ -383,7 +391,10 @@ exec "$HOME/.test/identity-bin/ps" "$@"
           if (entry === "launch") assert.equal(result.success.pending?.reason, "contended");
           else assert.equal(result.success.version, "1.2.2");
           assert.deepEqual(yield* f.snapshot, before);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each(["live", "ownerless", "foreign", "recovery"] as const)(
@@ -419,7 +430,10 @@ exec "$HOME/.test/identity-bin/ps" "$@"
           assert.deepEqual(yield* f.snapshot, before);
           if (mode !== "ownerless") assert.equal(yield* f.fs.readLink(lock), owner);
           if (mode === "recovery") assert.equal(yield* f.fs.readLink(recovery), deadOwner());
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each(["absent", "reused-pid"] as const)(
@@ -458,7 +472,10 @@ exec "$HOME/.test/identity-bin/ps" "$@"
             "replacement.recovery",
           );
           assert.isFalse(yield* f.fs.exists(recovery));
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("cleanup preserves a successor link installed by another actor", () =>
@@ -495,7 +512,7 @@ case "$3" in */replacement.lock)
           yield* f.fs.readLink(`${f.home}/.goat/ssh-launch/replacement.lock`),
           "successor-owner",
         );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
     it.live("different aliases serialize replacement while the first owner is paused", () =>
       Effect.gen(function* () {
@@ -532,7 +549,7 @@ case "$3" in */replacement.lock)
           (yield* f.fs.readFileString(`${f.test}/events`)).split('"type":"self-stop"').length - 1,
           1,
         );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("concurrent recovery leaves the first recoverer's links intact", () =>
@@ -575,7 +592,7 @@ case "$3" in */replacement.lock)
           yield* f.fs.readDirectory(`${f.home}/.goat/ssh-launch`),
           "replacement.recovery",
         );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("a newer compatible runtime appearing under the lock is reused without downgrade", () =>
@@ -644,7 +661,7 @@ case "$3" in */replacement.lock)
           1,
         );
         yield* Effect.sync(() => process.kill(ready.pid, 0));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
   },
 );

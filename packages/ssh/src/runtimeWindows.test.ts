@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -8,6 +9,7 @@ import {
   type RuntimeSessionRequest,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import { cliArchiveFileName } from "@goat/shared/cliRelease";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
@@ -119,7 +121,7 @@ it.effect.each([
     expect(yield* detectNativeWindows(target, {})).toBe(answer);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.remoteCommandArgs?.[0]).toBe("powershell.exe");
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("a dropped connection or a constrained PowerShell is never a platform answer", () =>
@@ -130,7 +132,7 @@ it.effect("a dropped connection or a constrained PowerShell is never a platform 
     expect((yield* detectNativeWindows(target, {}).pipe(Effect.flip)).message).toContain(
       "Constrained Language Mode",
     );
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("a POSIX command that cannot start takes the native path only on native Windows", () =>
@@ -155,7 +157,7 @@ it.effect("a POSIX command that cannot start takes the native path only on nativ
     });
     expect(yield* nativeWindowsAfter(target, {})(dropped).pipe(Effect.flip)).toBe(dropped);
     expect(calls).toEqual([]);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 const sessionRequest: RuntimeSessionRequest = {
@@ -186,7 +188,7 @@ it.effect.each([
     setup([{ stdout: JSON.stringify(reply) }]);
     const refused = yield* issueWindowsCredential(target, {}, selection, request).pipe(Effect.flip);
     expect(refused._tag).toBe("SshLaunchError");
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("returns the native issuer session id to Home for later revocation", () =>
@@ -196,7 +198,7 @@ it.effect("returns the native issuer session id to Home for later revocation", (
     const body = yield* issueWindowsCredential(target, {}, selection, sessionRequest);
     expect(JSON.parse(body)).toEqual(issued);
     expect(framed(calls[0]?.stdin)).toEqual({ op: "session", selection, request: sessionRequest });
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each([true, false])(
@@ -228,7 +230,7 @@ it.effect.each([true, false])(
         selection,
         request: { kind: "revoke", sessionId },
       });
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("a native credential for a changed environment is refused before issuing", () =>
@@ -248,7 +250,7 @@ it.effect("a native credential for a changed environment is refused before issui
     ).pipe(Effect.flip);
     expect(refused._tag).toBe("SshPairingError");
     expect(calls).toHaveLength(3);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each([
@@ -275,7 +277,7 @@ it.effect.each([
     expect(launched.status).toBe("ready");
     if (detail) expect(launched.selectedRuntime.updateBlocked).toContain(detail);
     else expect(launched.selectedRuntime.updateBlocked).toBeUndefined();
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("a native install still locked after its retries tells the user what to exclude", () =>
@@ -301,5 +303,5 @@ it.effect("a native install still locked after its retries tells the user what t
     expect(error.message).toContain("antivirus/real-time scan");
     expect(error.message).toContain("%USERPROFILE%\\.goat\\runtime");
     expect(framed(ssh.calls[1]?.stdin).op).toBe("install");
-  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
 );

@@ -1,4 +1,5 @@
 /** The replayed Codex thread the attachment, reload and subagent tests drive. */
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as M from "@goat/contracts";
 import { CodexSettings, ProviderSessionId, RunAttemptId, ThreadId } from "@goat/contracts";
@@ -9,7 +10,7 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as CodexClient from "effect-codex-app-server/client";
 import type * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexReplay from "effect-codex-app-server/replay";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -40,6 +41,7 @@ export const layerAdapterTest = Layer.mergeAll(
   IdAllocator.layer,
   McpProviderSessions.layer,
   NodeServices.layer,
+  NodeCrypto.layer,
 );
 const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
 // Every memory tool by the name /mcp lists, which is what Codex disables.
@@ -216,7 +218,7 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
           ),
         ),
     },
-    crypto: yield* Crypto.Crypto,
+    digest: yield* Digest.Digest,
     fileSystem: yield* FileSystem.FileSystem,
     idAllocator: yield* IdAllocator.IdAllocatorV2,
     serverConfig: yield* makeReplayServerConfig(transcript.scenario).pipe(Effect.orDie),

@@ -1,6 +1,7 @@
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
-import { NodeWS } from "@effect/platform-node/NodeSocket";
+import * as NodeWS from "@effect/platform-node/NodeWS";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -27,7 +28,7 @@ const layer = Auth.layer.pipe(
   Layer.provide(Secrets.layer),
   Layer.provide(Environment.layerIdentity),
   Layer.provide(Config.layerTest(process.cwd(), { prefix: "goat-connect-socket-" })),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 it.effect.each([false, true])(
@@ -198,7 +199,7 @@ it.effect(
           (yield* sessions.verifyWebSocketToken(late.token, MAIN_LISTENER).pipe(Effect.flip))._tag,
         ).toBe("WebSocketSessionRevokedError");
       }).pipe(Effect.provide(Layer.merge(running, layerHubAccess)), Effect.scoped);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(

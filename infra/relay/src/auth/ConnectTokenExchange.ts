@@ -9,7 +9,7 @@ import {
 import { encodeOAuthScope } from "@goat/shared/oauthScope";
 import { normalizeRelayIssuer } from "@goat/shared/relayJwt";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -41,7 +41,7 @@ export class ConnectTokenExchange extends Context.Service<
 
 const make = Effect.gen(function* () {
   const config = yield* RelayConfiguration.RelayConfiguration;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const tokens = yield* RelayTokens.RelayTokens;
   const auth = yield* ConnectAuthentication.ConnectAuthentication;
   const keys = yield* ClientKeys.ClientKeys;
@@ -98,7 +98,7 @@ const make = Effect.gen(function* () {
         proofKeyThumbprint,
         clientId: request.client_id,
         scopes,
-        jti: yield* crypto.randomUUIDv4().pipe(Effect.mapError(unavailable)),
+        jti: yield* random.uuidV4().pipe(Effect.mapError(unavailable)),
         issuedAtEpochSeconds,
         expiresAtEpochSeconds: Math.floor(expires.epochMilliseconds / 1000),
       })

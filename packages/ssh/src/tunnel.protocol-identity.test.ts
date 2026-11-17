@@ -3,6 +3,7 @@ import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import * as NodeHttp from "node:http";
 import { EnvironmentId, ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@goat/shared/Net";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -63,8 +64,10 @@ const recordForwards = (
   forwards: Map<number, number>,
 ) =>
   ChildProcessSpawner.make((command) => {
-    if (command._tag === "StandardCommand" && command.args.includes("-N")) {
-      const [local, , remote] = (command.args[command.args.indexOf("-L") + 1] ?? "").split(":");
+    if (command._tag === "StandardCommand" && command.args.map(String).includes("-N")) {
+      const [local, , remote] = (
+        command.args.map(String)[command.args.map(String).indexOf("-L") + 1] ?? ""
+      ).split(":");
       forwards.set(Number(local), Number(remote));
     }
     return transport.spawn(command);
@@ -137,6 +140,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const forwardPorts = new Map<number, number>();
         const layer = Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           Layer.succeed(
             ChildProcessSpawner.ChildProcessSpawner,
             recordForwards(fixture.transport, forwardPorts),
@@ -194,7 +198,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             '"type":"stop"',
           );
         }).pipe(Effect.provide(layer), Effect.scoped);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
     it.live(
       "opens a passive forward for the nonprimary environment without replacing the primary",
@@ -230,8 +234,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const transport = ChildProcessSpawner.make((command) =>
             Effect.gen(function* () {
               if (command._tag !== "StandardCommand") return yield* real.spawn(command);
-              if (command.args.includes("-N")) {
-                const forward = command.args[command.args.indexOf("-L") + 1] ?? "";
+              if (command.args.map(String).includes("-N")) {
+                const forward =
+                  command.args.map(String)[command.args.map(String).indexOf("-L") + 1] ?? "";
                 const remotePort = Number(forward.split(":").at(-1));
                 const observed = { remotePort, killed: false };
                 forwards.push(observed);
@@ -240,7 +245,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
                 });
               }
               if (!command.command.endsWith("ssh")) return yield* real.spawn(command);
-              if (command.args.includes("-G"))
+              if (command.args.map(String).includes("-G"))
                 return makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n");
               const stdin = command.options.stdin;
               if (
@@ -273,6 +278,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const forwardPorts = new Map<number, number>();
           const layer = Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             Layer.succeed(
               ChildProcessSpawner.ChildProcessSpawner,
               recordForwards(transport, forwardPorts),
@@ -326,7 +332,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             assert.isFalse(forwards[0]?.killed);
             assert.isFalse(scripts.some((script) => script.includes("STOP_WAIT_ATTEMPTS")));
           }).pipe(Effect.provide(layer), Effect.scoped);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
     it.live.each([false, true])(
       "checks an old Node entry before publishing an upgrade; missing identity=%s",
@@ -362,6 +371,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const layer = (nodeScriptPath: string, leaveRemoteServerRunning: boolean) =>
             Layer.mergeAll(
               NodeServices.layer,
+              NodeCrypto.layer,
               Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, f.transport),
               Layer.succeed(FileSystem.FileSystem, f.observedFs),
               Layer.succeed(HttpClient.HttpClient, testHttpClient),
@@ -461,7 +471,10 @@ process.stdout.write(cp.execFileSync('/bin/ps', args));
           assert.include(events.filter((event) => event.type === "start")[1].runner, nextEntry);
           for (const file of ["pid", "port", "managed", "identity"])
             assert.isFalse(yield* f.fs.exists(`${f.state}/${file}`));
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each((["launch", "pairing", "mcp"] as const).map((entry) => ({ entry })))(
@@ -479,7 +492,10 @@ process.stdout.write(cp.execFileSync('/bin/ps', args));
           assert.deepEqual(yield* f.snapshot, before);
           assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
           assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
     it.live.each(
       (["launch", "pairing", "mcp"] as const).flatMap((entry) =>
@@ -516,7 +532,7 @@ process.stdout.write(cp.execFileSync('/bin/ps', args));
         assert.notInclude(events, '"type":"stop"');
         assert.notInclude(events, '"type":"auth"');
         yield* Effect.sync(() => process.kill(f.pid, 0));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each((["launch", "pairing", "mcp"] as const).map((entry) => ({ entry })))(
@@ -600,7 +616,10 @@ process.stdout.write(cp.execFileSync('/bin/ps', args));
             assert.equal(auth.version, "1.2.3");
             assert.equal(auth.args[auth.args.indexOf("--base-dir") + 1], `${f.home}/.goat`);
           }
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
   },
 );

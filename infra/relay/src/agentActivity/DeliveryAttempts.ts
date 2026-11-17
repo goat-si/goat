@@ -6,7 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { and, eq, isNull } from "drizzle-orm";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Schema from "effect/Schema";
 
 import * as RelayDb from "../db.ts";
@@ -99,7 +99,7 @@ export const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;
   const transactions = yield* AccountTransactions;
   const access = yield* AccountAccess;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
 
   const isExpiredClaim = (claimedAt: string | null, now: DateTime.DateTime) => {
     if (claimedAt === null) {
@@ -133,7 +133,7 @@ export const make = Effect.gen(function* () {
               return yield* eligible.failure;
             }
             if (eligible.success.accountEpoch !== input.accountEpoch) return;
-            const id = yield* crypto.randomUUIDv4();
+            const id = yield* random.uuidV4();
             const createdAt = DateTime.formatIso(yield* DateTime.now);
             yield* db.insert(relayDeliveryAttempts).values(insertValues(input, id, createdAt));
           }),
@@ -174,7 +174,7 @@ export const make = Effect.gen(function* () {
               return yield* eligible.failure;
             }
             if (eligible.success.accountEpoch !== input.accountEpoch) return "completed" as const;
-            const id = yield* crypto.randomUUIDv4();
+            const id = yield* random.uuidV4();
             const now = yield* DateTime.now;
             const createdAt = DateTime.formatIso(now);
             const inserted = yield* db

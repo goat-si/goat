@@ -169,7 +169,7 @@ const served = (defaultProfile: string, enabled = true) =>
       }),
     ),
     Layer.provideMerge(Profiles.layer),
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provideMerge(threadsLayer),
     // goat_describe reaches other hosts through it; these tests never pass host.
     Layer.provideMerge(Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({})),
@@ -944,7 +944,7 @@ it.effect.each([
   }).pipe(
     Effect.provide(
       catalog.pipe(
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(overrides),
         Layer.provideMerge(Sqlite.layerMemory),
       ),

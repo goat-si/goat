@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
@@ -54,6 +55,7 @@ import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as CommandOutputHub from "./CommandOutputHub.ts";
 import * as ProviderRuntimeRecoveryService from "./ProviderRuntimeRecoveryService.ts";
 import * as ProviderSwitchService from "./ProviderSwitchService.ts";
+import * as WorktreeSendCheckLive from "./goat/WorktreeSendCheckLive.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
 import * as ProviderTurnStartService from "./ProviderTurnStartService.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
@@ -305,6 +307,9 @@ const layerThreadManagementProvided = ThreadManagementService.layerWithLegacyImp
       layerLegacyV1ThreadImporterProvided,
       layerCommandReceiptStoreProvided,
       layerProviderSessionManagerProvided,
+      WorktreeSendCheckLive.layer.pipe(
+        Layer.provide(Layer.merge(ProjectStore.layer, layerProviderAdapterRegistryProvided)),
+      ),
     ),
   ),
 );
@@ -385,7 +390,7 @@ const layerThreadTitleRegenerationProvided = ThreadTitleRegenerationService.laye
       layerThreadManagementProvided,
       ProjectStore.layer,
       TextGeneration.layer.pipe(Layer.provide(ProviderInstallationGate.layer)),
-    ).pipe(Layer.provideMerge(NodeServices.layer)),
+    ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   ),
 );
 const layerEffectExecutorProvided = EffectWorker.layerExecutor.pipe(

@@ -20,6 +20,7 @@ import * as NodeOS from "node:os";
 // @effect-diagnostics nodeBuiltinImport:off - see above.
 import * as NodePath from "node:path";
 
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { type ChannelReceptionInput, type ChannelTask, ProjectId } from "@goat/contracts";
@@ -80,11 +81,11 @@ const harnessFor = () => {
     sshRemote: SshRemoteDispatch.layer.pipe(
       Layer.provide(PermissionSettings.layerTest()),
       Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-remote-live-" })),
-      Layer.provide(Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer)),
+      Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, FetchHttpClient.layer)),
       Layer.orDie,
     ),
     databaseLayer: SqlitePersistence.layerFromPath(DATABASE).pipe(
-      Layer.provide(NodeServices.layer),
+      Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     ) as never,
   });
   harness.script.current = script;

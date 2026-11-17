@@ -89,6 +89,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   modelCatalogRefresh: Schema.optionalKey(Schema.Boolean),
   textGenerators: Schema.optionalKey(Schema.Boolean),
   freshContext: Schema.optionalKey(Schema.Boolean),
+  /** Server saves and runs scheduled task threadMode; older servers ignore it. */
+  scheduledTaskThreadModes: Schema.optionalKey(Schema.Boolean),
   memoryHubProtocolVersion: Schema.optionalKey(Schema.Int),
   memory: Schema.optionalKey(
     Schema.Struct({

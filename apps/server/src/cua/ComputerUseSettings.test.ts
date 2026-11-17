@@ -1,4 +1,5 @@
 import { expect, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -14,7 +15,7 @@ import * as ComputerUseSettings from "./ComputerUseSettings.ts";
 
 const base = Layer.mergeAll(
   ServerConfig.layerTest("/tmp/computer-use-settings", "/tmp/computer-use-settings").pipe(
-    Layer.provide(NodeServices.layer),
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   ),
   ServerSettings.layerTest(),
   Layer.mock(Handoffs.Handoffs)({ withComputerUseSettings: (_patch, update) => update }),
@@ -68,7 +69,7 @@ it.effect("turns computer use off even when session cleanup is unavailable", () 
     Effect.provide(
       Layer.mergeAll(
         ServerConfig.layerTest("/tmp/computer-use-settings", "/tmp/computer-use-settings").pipe(
-          Layer.provide(NodeServices.layer),
+          Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
         ServerSettings.layerTest({ enableCua: true }),
       ),
@@ -120,7 +121,13 @@ it.effect("loads an organization deny list from settings.json", () =>
     const settings = yield* ServerSettings.ServerSettingsService;
     yield* settings.start;
     expect((yield* settings.getSettings).cuaDeniedApps).toEqual(["com.example.Blocked"]);
-  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.provide(
+      layerServerSettings().pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
 );
 
 it.effect("strict input guards reject protected allowed apps without changing the file", () =>
@@ -136,7 +143,13 @@ it.effect("strict input guards reject protected allowed apps without changing th
     );
     expect(result._tag).toBe("Failure");
     expect((yield* settings.getSettings).cuaAllowedApps).toEqual(["com.example.Editor"]);
-  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.provide(
+      layerServerSettings().pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
 );
 
 it.effect(
@@ -155,7 +168,13 @@ it.effect(
       const settings = yield* ServerSettings.ServerSettingsService;
       yield* settings.start;
       expect((yield* settings.getSettings).cuaAllowedApps).toEqual(["com.example.Editor"]);
-    }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+    }).pipe(
+      Effect.provide(
+        layerServerSettings().pipe(
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        ),
+      ),
+    ),
 );
 
 it.effect("without strict input guards a protected allowed app is kept as the person set it", () =>
@@ -185,5 +204,11 @@ it.effect("without strict input guards a protected allowed app is kept as the pe
     // Turning strict on later is not refused for apps that were already stored.
     yield* settings.updateSettings({ cuaStrictInputGuards: true });
     expect((yield* settings.getSettings).cuaStrictInputGuards).toBe(true);
-  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.provide(
+      layerServerSettings().pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
 );

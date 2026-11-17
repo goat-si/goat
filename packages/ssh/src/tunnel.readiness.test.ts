@@ -169,6 +169,7 @@ describe("SSH forward readiness", () => {
       );
       const layer = Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         Layer.succeed(FileSystem.FileSystem, askpassFileSystem),
         Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Layer.succeed(HttpClient.HttpClient, slowClient(1_300)),
@@ -364,6 +365,7 @@ describe("SSH stale forwards", () => {
       );
       const layer = Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         Layer.succeed(FileSystem.FileSystem, askpassFileSystem),
         Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Layer.succeed(HttpClient.HttpClient, httpClient),
@@ -419,6 +421,7 @@ describe("SSH stale forwards", () => {
       );
       const layer = Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         Layer.succeed(FileSystem.FileSystem, askpassFileSystem),
         Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Layer.succeed(

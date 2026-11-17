@@ -1,6 +1,6 @@
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
@@ -54,11 +54,11 @@ export const releaseAsset = Effect.fn("test.antigravityReleaseAsset")(function* 
   archive: Uint8Array = completeArchive,
   platform: NodeJS.Platform = hostPlatform,
 ) {
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   return {
     version: "fixture-new",
     url: "https://dl.google.com/antigravity-test.zip",
-    sha256: Hex.encode(yield* crypto.digest("SHA-256", archive).pipe(Effect.orDie)),
+    sha256: Hex.encode(yield* digest.digest(Digest.sha256, archive).pipe(Effect.orDie)),
     archiveBytes: archive.byteLength,
     executable: {
       name: platform === "win32" ? "agy_acp_server.exe" : "agy_acp_server.par",
@@ -152,7 +152,7 @@ export const makeHarness = Effect.fn("test.makeAntigravityInstallation")(functio
   }
   const stagingReleased = yield* Deferred.make<void>();
   const nativeSha512 = Hex.encode(
-    yield* (yield* Crypto.Crypto).digest("SHA-512", archive).pipe(Effect.orDie),
+    yield* (yield* Digest.Digest).digest(Digest.sha512, archive).pipe(Effect.orDie),
   );
   const requests: string[] = [];
   const validations: Array<{

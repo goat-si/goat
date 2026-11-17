@@ -1,4 +1,5 @@
 import * as ServerSettings from "../serverSettings.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProviderInstanceId } from "@goat/contracts";
 import { describe, expect, it, vi } from "@effect/vitest";
@@ -112,7 +113,7 @@ describe("SSH dispatch pending runtime", () => {
                 Layer.provide(ServerSettings.layerTest()),
                 Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-pending-test-" })),
                 Layer.provide(FetchHttpClient.layer),
-                Layer.provide(NodeServices.layer),
+                Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
               ),
             ),
           );
@@ -201,7 +202,7 @@ describe("SSH dispatch memory session refusal", () => {
               Layer.provide(ServerSettings.layerTest()),
               Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-memory-test-" })),
               Layer.provide(FetchHttpClient.layer),
-              Layer.provide(NodeServices.layer),
+              Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
             ),
           ),
         );

@@ -1,9 +1,10 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as PlatformError from "effect/PlatformError";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { ConnectionCatalogDocument } from "@goat/client-runtime/platform";
 import { EnvironmentId, type PersistedSavedEnvironmentRecord } from "@goat/contracts";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -114,6 +115,7 @@ function layerFor(
     layerSafeStorage,
     layerSiblingKeysFor(siblingCalls, whileDecrypting),
     NodeServices.layer,
+    NodeCrypto.layer,
     fileSystemLayer,
   );
   const layerSavedEnvironments = DesktopSavedEnvironments.layer.pipe(
@@ -155,8 +157,8 @@ const writeSiblingCatalog = Effect.fn(function* (plaintext: string) {
 
 const unreadableBackupPath = Effect.fn(function* (stateDir: string, raw: string) {
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
-  const digest = yield* crypto.digest("SHA-256", textEncoder.encode(raw));
+  const digester = yield* Digest.Digest;
+  const digest = yield* digester.digest(Digest.sha256, textEncoder.encode(raw));
   return path.join(
     stateDir,
     `connection-catalog.unreadable-${Hex.encode(digest).slice(0, 16)}.backup.json`,
@@ -824,14 +826,14 @@ describe("DesktopConnectionCatalogStore", () => {
         const path = yield* Path.Path;
         const environment = yield* DesktopEnvironment.DesktopEnvironment;
         const fileSystem = yield* FileSystem.FileSystem;
-        const crypto = yield* Crypto.Crypto;
+        const digester = yield* Digest.Digest;
         const store = yield* DesktopConnectionCatalogStore.DesktopConnectionCatalogStore;
         const catalogPath = path.join(environment.stateDir, "connection-catalog.json");
         // A BOM, then bytes that are not UTF-8: a text round trip would change both.
         const raw = new Uint8Array([0xef, 0xbb, 0xbf, 0x7b, 0xff, 0xfe, 0x7d]);
         yield* fileSystem.makeDirectory(environment.stateDir, { recursive: true });
         yield* fileSystem.writeFile(catalogPath, raw);
-        const digest = yield* crypto.digest("SHA-256", raw);
+        const digest = yield* digester.digest(Digest.sha256, raw);
         const backupPath = path.join(
           environment.stateDir,
           `connection-catalog.unreadable-${Hex.encode(digest).slice(0, 16)}.backup.json`,

@@ -78,7 +78,7 @@ it.effect.each([
               },
             ],
           });
-          yield* sql`UPDATE scheduled_tasks SET notification_policy=${policy},thread_id=${run.threadId} WHERE task_id=${task.id}`;
+          yield* sql`UPDATE scheduled_tasks SET notification_policy=${policy},thread_id=${run.threadId},thread_mode='continue' WHERE task_id=${task.id}`;
           if (outcome !== null)
             yield* sql`INSERT INTO thread_run_results(thread_id,run_id,report_json,reported_at) VALUES (${run.threadId},${run.id},${JSON.stringify({ runId: run.id, expectedAttemptId: attempt, outcome, notificationRelevance: relevance })},'2026-10-15')`;
           yield* sink.write({

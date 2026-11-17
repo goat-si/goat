@@ -7,6 +7,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ServerSettingsModule from "./serverSettings.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
@@ -82,7 +83,7 @@ effectIt.effect("keeps API keys out of settings files and client snapshots", () 
         Layer.provideMerge(
           Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "goat-textgen-secrets-" })),
         ),
-        Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       ),
     ),
   ),
@@ -131,7 +132,7 @@ effectIt.effect("does not log API keys when settings contain an invalid generato
         Layer.provideMerge(
           Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "goat-textgen-logs-" })),
         ),
-        Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       ),
     ),
   ),

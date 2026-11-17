@@ -252,6 +252,7 @@ export class ThreadLaunchService extends Context.Service<
       Orchestrator.OrchestratorV2DispatchResult,
       | Orchestrator.OrchestratorV2Error
       | ThreadManagement.ThreadManagementProviderInstanceDisabledError
+      | ThreadManagement.ThreadManagementWorktreeUnrestorableError
     >;
     readonly prepareRun: (input: ThreadLaunchPreparationInput) => Effect.Effect<void>;
   }

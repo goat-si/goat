@@ -9,6 +9,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
   type OrchestratorMcpThreadListItem,
+  type OrchestratorMcpThreadRun,
   type OrchestratorMcpThreadStatus,
   type OrchestratorMcpThreadTimelineItem,
 } from "@goat/contracts";
@@ -37,7 +38,17 @@ import { generatedVerbsNote } from "./agentSurfaceCommand.ts";
  * soon, since `goat_thread_wait` only returns on a terminal run.
  */
 const WAIT_SLICE_MS = 15_000;
+const WAKE_GRACE_MS = 10_000;
+const WAKE_POLL_MS = 500;
+const TERMINAL_RUN_STATUSES = new Set<OrchestratorMcpThreadRun["status"]>([
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+  "rolled_back",
+]);
 const READ_PAGE_LIMIT = 100;
+const READ_ITEM_MAX_CHARS = 20_000;
 const TITLE_MAX_CHARS = 80;
 
 export class ThreadServerUnreachableError extends Schema.TaggedError<ThreadServerUnreachableError>()(
@@ -347,6 +358,7 @@ const readTimeline = Effect.fn("cli.thread.readTimeline")(function* (
         threadId,
         view,
         limit: READ_PAGE_LIMIT,
+        maxCharsPerItem: READ_ITEM_MAX_CHARS,
         runLimit: 1,
         ...(afterPosition === undefined ? {} : { afterPosition }),
       },
@@ -392,6 +404,7 @@ export const readLatestMessages = Effect.fn("cli.thread.readLatestMessages")(fun
           threadId,
           view: "messages",
           limit: READ_PAGE_LIMIT,
+          maxCharsPerItem: READ_ITEM_MAX_CHARS,
           runLimit: 1,
           ...(afterPosition < 0 ? {} : { afterPosition }),
         },
@@ -426,7 +439,13 @@ const readFullText = Effect.fn("cli.thread.readFullText")(function* (
   while (nextTextOffset !== null) {
     const page = yield* tools.call(
       "goat_thread_read",
-      { threadId, itemId: item.itemId, textOffset: nextTextOffset, runLimit: 1 },
+      {
+        threadId,
+        itemId: item.itemId,
+        textOffset: nextTextOffset,
+        runLimit: 1,
+        maxCharsPerItem: READ_ITEM_MAX_CHARS,
+      },
       OrchestratorMcpThreadReadResult,
     );
     const chunk = page.items.find((candidate) => candidate.itemId === item.itemId);
@@ -462,34 +481,145 @@ type WaitOutcome =
   | { readonly type: "needs_input" };
 
 /**
+ * A wait for delegated work, or null from a server that cannot: one that refuses the argument, or
+ * one that ignores it and so leaves out delegatedWorkSettled.
+ */
+const waitForDelegatedWork = (
+  tools: ThreadTools,
+  args: { readonly threadId: ThreadId; readonly runId?: RunId; readonly timeoutMs: number },
+) =>
+  tools
+    .call(
+      "goat_thread_wait",
+      { ...args, untilDelegatedWorkSettled: true },
+      OrchestratorMcpThreadWaitResult,
+    )
+    .pipe(
+      Effect.map((waited) => (waited.delegatedWorkSettled === undefined ? null : waited)),
+      Effect.catchIf(
+        (error) =>
+          error._tag === "ThreadToolFailedError" &&
+          error.detail.includes("untilDelegatedWorkSettled"),
+        () => Effect.succeed(null),
+      ),
+    );
+
+/**
+ * Whether the thread has nothing left to do: no active run and no delegated or background work.
+ * Only then is the work a later wait settles on this send's own.
+ */
+const threadIsIdle = Effect.fn("cli.thread.threadIsIdle")(function* (
+  tools: ThreadTools,
+  threadId: ThreadId,
+) {
+  const waited = yield* waitForDelegatedWork(tools, { threadId, timeoutMs: 1 });
+  return waited !== null && !waited.timedOut;
+});
+
+/**
+ * The runs after `runId`, and whether one holds a message someone sent. Background work wakes a
+ * run with a notification, never a user message, so such a run is another request.
+ */
+const runsAfter = Effect.fn("cli.thread.runsAfter")(function* (
+  tools: ThreadTools,
+  threadId: ThreadId,
+  runId: RunId,
+) {
+  const { recentRuns } = yield* tools.call(
+    "goat_thread_read",
+    { threadId, limit: 1, runLimit: 50 },
+    OrchestratorMcpThreadReadResult,
+  );
+  const own = recentRuns.find((run) => run.runId === runId);
+  if (own === undefined) return { later: [], sent: true };
+  const later = recentRuns.filter((run) => run.ordinal > own.ordinal);
+  if (later.length === 0) return { later, sent: false };
+  const { items } = yield* readTimeline(tools, threadId, "messages");
+  const sent = items.some(
+    (item) => item.type === "user_message" && later.some((run) => run.runId === item.runId),
+  );
+  return { later, sent };
+});
+
+/**
  * Waits for this exact run, following a restart to its continuation, so a
  * message another client sends meanwhile cannot stand in for its result.
+ * With `followWakes`, a completed run is followed further to the runs its
+ * background work wakes, as long as no one else sends to the thread.
  */
 export const waitForRun = Effect.fn("cli.thread.waitForRun")(function* (
   tools: ThreadTools,
   threadId: ThreadId,
   runId: RunId,
+  followWakes = false,
 ) {
   const waitSlice = (timeoutMs: number) =>
     tools.call("goat_thread_wait", { threadId, runId, timeoutMs }, OrchestratorMcpThreadWaitResult);
   const ended = (waited: OrchestratorMcpThreadWaitResult) =>
     ({ type: "ended", runId: waited.runId, status: waited.status }) satisfies WaitOutcome;
+  const ownRun = Effect.gen(function* () {
+    while (true) {
+      const waited = yield* waitSlice(WAIT_SLICE_MS);
+      if (!waited.timedOut) return ended(waited);
+      // A pending request on this run, or on an earlier run this one is queued
+      // behind, blocks it until someone answers.
+      const { thread } = yield* tools.call(
+        "goat_thread_read",
+        { threadId, limit: 1, runLimit: 1 },
+        OrchestratorMcpThreadReadResult,
+      );
+      if (thread.pendingRequestCount > 0) {
+        // The count is thread-wide: if this run ended since the slice, the
+        // request belongs to a later run.
+        const recheck = yield* waitSlice(1);
+        return recheck.timedOut ? ({ type: "needs_input" } satisfies WaitOutcome) : ended(recheck);
+      }
+    }
+  });
+  const outcome = yield* ownRun;
+  if (!followWakes || outcome.type !== "ended" || outcome.status !== "completed") return outcome;
+  const finalRunId = outcome.runId ?? runId;
+  // A provider records the run that background work wakes only after that
+  // work has ended, so the thread briefly looks settled in between.
+  const wakeRunRecorded = Effect.gen(function* () {
+    for (let waited = 0; waited < WAKE_GRACE_MS; waited += WAKE_POLL_MS) {
+      yield* Effect.sleep(WAKE_POLL_MS);
+      const after = yield* runsAfter(tools, threadId, finalRunId);
+      if (after.sent) return false;
+      if (after.later.length > 0) return true;
+    }
+    return false;
+  });
+  let workOutlivedRun = false;
   while (true) {
-    const waited = yield* waitSlice(WAIT_SLICE_MS);
-    if (!waited.timedOut) return ended(waited);
-    // A pending request on this run, or on an earlier run this one is queued
-    // behind, blocks it until someone answers.
+    const waited = yield* waitForDelegatedWork(tools, {
+      threadId,
+      runId,
+      timeoutMs: WAIT_SLICE_MS,
+    });
+    // A server without the option: the run's own end is all it can tell.
+    if (waited === null) return outcome;
+    // `resultRun` is the thread's latest finished run, whoever sent it.
+    const result = waited.timedOut ? undefined : waited.resultRun;
+    const after = yield* runsAfter(tools, threadId, finalRunId);
+    if (after.sent) return outcome;
+    if (!waited.timedOut) {
+      if (result !== undefined && after.later.some((run) => run.runId === result.runId)) {
+        return { type: "ended", runId: result.runId, status: result.status } satisfies WaitOutcome;
+      }
+      if (!workOutlivedRun) return outcome;
+      if (after.later.some((run) => !TERMINAL_RUN_STATUSES.has(run.status))) continue;
+      if (after.later.length === 0 && (yield* wakeRunRecorded)) continue;
+      return outcome;
+    }
+    workOutlivedRun = true;
     const { thread } = yield* tools.call(
       "goat_thread_read",
       { threadId, limit: 1, runLimit: 1 },
       OrchestratorMcpThreadReadResult,
     );
-    if (thread.pendingRequestCount > 0) {
-      // The count is thread-wide: if this run ended since the slice, the
-      // request belongs to a later run.
-      const recheck = yield* waitSlice(1);
-      return recheck.timedOut ? ({ type: "needs_input" } satisfies WaitOutcome) : ended(recheck);
-    }
+    // Earlier runs have ended, so the request is on a run this one's work woke.
+    if (thread.pendingRequestCount > 0) return { type: "needs_input" } satisfies WaitOutcome;
   }
 });
 
@@ -503,9 +633,10 @@ const finishRun = Effect.fn("cli.thread.finishRun")(function* (
     readonly threadId: ThreadId;
     readonly runId: RunId;
     readonly json: boolean;
+    readonly followWakes: boolean;
   },
 ) {
-  const outcome = yield* waitForRun(tools, input.threadId, input.runId);
+  const outcome = yield* waitForRun(tools, input.threadId, input.runId, input.followWakes);
   const runId = outcome.type === "ended" ? (outcome.runId ?? input.runId) : input.runId;
   const status = outcome.type === "ended" ? outcome.status : "waiting";
   const reply =
@@ -688,6 +819,7 @@ const threadStartCommand = Command.make("start", {
               threadId: launched.threadId,
               runId: launched.runId,
               json: flags.json,
+              followWakes: true,
             });
           }
           yield* flags.json ? printJson(launched) : Console.log(launched.threadId);
@@ -714,6 +846,8 @@ const threadSendCommand = Command.make("send", {
       yield* withThreadTools(
         flags,
         Effect.fn("cli.thread.send")(function* (tools) {
+          // Work already running when this is sent is not this message's to wait for.
+          const followWakes = flags.wait ? yield* threadIsIdle(tools, threadId) : false;
           const sent = yield* tools.call(
             "goat_thread_send",
             { threadId, message, mode: "queue" },
@@ -721,7 +855,12 @@ const threadSendCommand = Command.make("send", {
           );
           // A relayed send (another host) has no local run to wait on; the CLI sends locally.
           if (flags.wait && "runId" in sent) {
-            return yield* finishRun(tools, { threadId, runId: sent.runId, json: flags.json });
+            return yield* finishRun(tools, {
+              threadId,
+              runId: sent.runId,
+              json: flags.json,
+              followWakes,
+            });
           }
           yield* flags.json
             ? printJson(sent)

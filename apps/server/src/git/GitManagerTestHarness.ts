@@ -1,14 +1,16 @@
 // @effect-diagnostics effectFnOpportunity:off - test fixture factories and mock services.
 import { makeTempDir } from "./testkit/fileFixtures.ts";
-import { runGit } from "./testkit/gitRepository.ts";
+import { GitFixtureTemplates, layerGitFixtureTemplates, runGit } from "./testkit/gitRepository.ts";
 import { SourceControlProviderKind } from "@goat/contracts";
 import { isolatedGitEnv } from "@goat/shared/testing/gitEnv";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
 
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type { ChangeRequest, GitPreparePullRequestThreadInput } from "@goat/contracts";
@@ -121,8 +123,10 @@ function runGitSyncForFakeCheckout(cwd: string, args: readonly string[]): void {
 }
 
 export const createBareRemote = Effect.fn("GitManagerTest.createBareRemote")(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const templates = yield* GitFixtureTemplates;
   const remoteDir = yield* makeTempDir("goat-git-remote-");
-  yield* runGit(remoteDir, ["init", "--bare"]);
+  yield* fs.copy(templates.bareRemote, remoteDir, { overwrite: true });
   return remoteDir;
 });
 
@@ -527,7 +531,7 @@ export function makeManager(input?: {
   const layerVcsDriver = (watchesGitSpawns ? Layer.fresh(gitVcsDriver) : gitVcsDriver).pipe(
     Layer.provide(layerGitDriverSpawner),
     Layer.provideMerge(VcsProcess.layer),
-    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     Layer.provideMerge(layerServerConfig),
   );
   const layerSourceControlRegistry = Layer.effect(
@@ -569,7 +573,7 @@ export function makeManager(input?: {
   ).pipe(
     Layer.provideMerge(layerSourceControlRegistry),
     Layer.provideMerge(layerVcsDriver),
-    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
   const layerStores = Layer.merge(ProjectionStore.layer, ProjectStore.layer).pipe(
     Layer.provideMerge(SqlitePersistence.layerMemory),
@@ -590,8 +594,9 @@ export function makeManager(input?: {
 
 export const asThreadId = (threadId: string) => threadId as ThreadId;
 
-export const layerGitManagerTest = GitVcsDriver.layer.pipe(
+export const layerGitManagerTest = layerGitFixtureTemplates.pipe(
+  Layer.provideMerge(GitVcsDriver.layer),
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-git-manager-test-" })),
   Layer.provideMerge(VcsProcess.layer),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );

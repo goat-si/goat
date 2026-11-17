@@ -511,6 +511,7 @@ function TaskForm({
     )
     .sort((left, right) => Number(right.pinnedAt != null) - Number(left.pinnedAt != null));
   const config = useEnvironmentServerConfig(environmentId);
+  const threadModes = config?.environment?.capabilities?.scheduledTaskThreadModes === true;
   const canOperate = useAtomValue(
     serverEnvironment.upsertScheduledTask.permissionAtom(environmentId),
   );
@@ -604,6 +605,7 @@ function TaskForm({
         ? { notificationPolicy: draft.notificationPolicy }
         : {}),
       threadId: draft.task?.threadId ?? null,
+      ...(threadModes ? { threadMode: draft.threadMode } : {}),
       workspaceStrategy: context.workspaceStrategy,
       runtimeMode: draft.runtimeMode,
       interactionMode: draft.task?.interactionMode ?? "default",
@@ -895,8 +897,9 @@ function TaskForm({
           )}
           <ScheduledTaskNotificationPolicySection
             draft={draft}
+            threadModes={threadModes}
             disabled={saving}
-            onChange={(notificationPolicy) => setDraft({ ...draft, notificationPolicy })}
+            onChange={setDraft}
           />
           <View className="min-h-14 flex-row items-center gap-3 border-t border-border-subtle px-4 py-3">
             <Text className="min-w-0 flex-1 text-lg text-foreground">Enabled</Text>

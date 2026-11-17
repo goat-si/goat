@@ -1,5 +1,4 @@
 import { guardedToolRegistration } from "./McpSessionCut.ts";
-import { normalizeMcpHttpResponse } from "./normalizeMcpHttpResponse.ts";
 import {
   boundSnapshotMetadata,
   cutText,
@@ -9,7 +8,7 @@ import {
   type SnapshotMetadata,
   withDeliveredBaseline,
 } from "./toolkits/preview/snapshotTransport.ts";
-import { listingChanges, listingSetting, withCallerListing } from "./toolListing.ts";
+import { listingChanges } from "./toolListing.ts";
 import * as Settings from "../serverSettings.ts";
 import { forwardedContentRegistration } from "./toolkits/agentSurface/forwardedContent.ts";
 import { surfaceArgumentAliases } from "./toolkits/agentSurface/argumentAliases.ts";
@@ -24,10 +23,10 @@ import * as AgentTerminal from "./AgentTerminalMcpService.ts";
 import { TerminalToolkit } from "./toolkits/terminal/tools.ts";
 import * as TerminalHandlers from "./toolkits/terminal/handlers.ts";
 import {
+  dispatchError,
   listedRegistration,
   registeredToolName,
   ToolDispatch,
-  withServedToolNames,
 } from "./ToolDispatch.ts";
 import {
   argumentKeys,
@@ -48,7 +47,7 @@ import {
 import { llmsTxtCaller, llmsTxtResponse } from "./llmsTxtResponse.ts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -57,9 +56,8 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import type * as Types from "effect/Types";
 import { AiError, McpProtocol, McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
+import { HttpRouter, HttpServerRequest } from "effect/http";
 import * as ConnectionHandlers from "./toolkits/connection/handlers.ts";
 import { ConnectionToolkit } from "./toolkits/connection/tools.ts";
 import * as MemoryHandlers from "./toolkits/memory/handlers.ts";
@@ -72,8 +70,6 @@ import { ComputerUseToolkit } from "./toolkits/computerUse/tools.ts";
 import { NoteToolkit } from "./toolkits/note/tools.ts";
 
 import packageJson from "../../package.json" with { type: "json" };
-import { connectionOf } from "../auth/connectionContext.ts";
-import { parseBearerToken } from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as HtmlRender from "../htmlRender/HtmlRender.ts";
@@ -127,7 +123,8 @@ import { imageToolFailure, imageToolSuccess, previewSnapshotFailure } from "./im
 import { decodeAsAdvertised } from "./decodeAsAdvertised.ts";
 import { advertisedJsonSchema, advertisedRegistration } from "./advertisedJsonSchema.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
-import * as McpSessionRegistry from "./McpSessionRegistry.ts";
+import { captureRegistrationContext, withRegistrationContext } from "./registrationContext.ts";
+import { layerMcpAuthMiddleware, makeMcpAuthMiddleware } from "./McpAuthMiddleware.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import * as ToolAdmission from "./ToolAdmission.ts";
 import * as ChannelSessionReceiptGate from "./ChannelSessionReceiptGate.ts";
@@ -174,8 +171,9 @@ import { BrowserClaimToolkit } from "./toolkits/preview/browserClaims/tools.ts";
 import * as BrowserClaimHandlers from "./toolkits/preview/browserClaims/handlers.ts";
 import * as ScreenHandlers from "./toolkits/screen/handlers.ts";
 import { screenRunTool } from "./toolkits/screen/mcpTool.ts";
-import { credentialRefusalMessage, GENERIC_REFUSAL, refusedToolCallId } from "./mcpAuthResponse.ts";
+import { refusedToolCallId } from "./mcpAuthResponse.ts";
 export { credentialRefusalMessage } from "./mcpAuthResponse.ts";
+export { McpClientAuthenticator } from "./McpAuthMiddleware.ts";
 import {
   PreviewSnapshotTool,
   PreviewSnapshotToolkit,
@@ -205,153 +203,6 @@ import {
   hidePlacementArgument,
   PlacementAdmissionEnabled,
 } from "../fleet/admission/PlacementKey.ts";
-
-const mcpResourceMetadataUrl = (request: HttpServerRequest.HttpServerRequest) =>
-  HttpServerRequest.toURL(request).pipe(
-    Option.map((url) => `${url.origin}/.well-known/oauth-protected-resource/mcp`),
-  );
-
-/** Launched agents cannot open OAuth browsers; OAuth would mint credentials outliving their session. */
-const unauthorized = (input: {
-  readonly request: HttpServerRequest.HttpServerRequest;
-  readonly presentedToken: boolean;
-  readonly offerOAuth: boolean;
-  readonly message?: string;
-}) => {
-  const metadataUrl = input.offerOAuth
-    ? Option.getOrUndefined(mcpResourceMetadataUrl(input.request))
-    : undefined;
-  const challenge = [
-    "Bearer",
-    [
-      ...(metadataUrl === undefined ? [] : [`resource_metadata="${metadataUrl}"`]),
-      ...(input.presentedToken ? ['error="invalid_token"'] : []),
-    ].join(", "),
-  ]
-    .filter((part) => part.length > 0)
-    .join(" ");
-  return HttpServerResponse.jsonUnsafe(
-    {
-      error: "invalid_mcp_credential",
-      message: input.message ?? GENERIC_REFUSAL,
-    },
-    {
-      status: 401,
-      headers: {
-        "cache-control": "no-store",
-        "www-authenticate": challenge,
-      },
-    },
-  );
-};
-
-export class McpClientAuthenticator extends Context.Service<
-  McpClientAuthenticator,
-  {
-    readonly authenticate: (
-      request: HttpServerRequest.HttpServerRequest,
-    ) => Effect.Effect<McpInvocationContext.McpInvocationScope | undefined>;
-  }
->()("goat/mcp/McpHttpServer/McpClientAuthenticator") {}
-
-type AuthenticatedHttpEffect = Effect.Effect<
-  HttpServerResponse.HttpServerResponse,
-  Types.unhandled,
-  McpInvocationContext.McpInvocationContext
->;
-
-type McpAuthMiddleware = (
-  httpEffect: AuthenticatedHttpEffect,
-) => Effect.Effect<
-  HttpServerResponse.HttpServerResponse,
-  Types.unhandled,
-  HttpServerRequest.HttpServerRequest
->;
-
-// Session tokens are `<payload>.<signature>`; registry tokens are a bare base64url secret.
-const looksLikeProviderToken = (token: string) => token.length > 0 && !token.includes(".");
-
-const makeMcpAuthMiddleware = Effect.gen(function* () {
-  const registry = yield* McpSessionRegistry.McpSessionRegistry;
-  const clients = yield* Effect.serviceOption(McpClientAuthenticator);
-  const listing = listingSetting(yield* Effect.serviceOption(Settings.ServerSettingsService));
-  const permissions = yield* Effect.serviceOption(Profiles.PermissionProfiles);
-  const authenticateRequest = Effect.fn("McpHttpServer.authenticateRequest")(function* (
-    request: HttpServerRequest.HttpServerRequest,
-  ) {
-    const token = parseBearerToken(request) ?? "";
-    // A thread credential is not a stored session; it never resolves on a Pen connection (§6).
-    const onPen = connectionOf(request)?.kind === "pen";
-    const invocation =
-      (onPen ? undefined : yield* registry.resolve(token)) ??
-      (Option.isSome(clients) && token.length > 0
-        ? yield* clients.value.authenticate(request)
-        : undefined);
-    if (!invocation) {
-      const refusal: McpSessionRegistry.McpCredentialRefusal = registry.explainRefusal
-        ? yield* registry.explainRefusal(token)
-        : { reason: token.length === 0 ? "missing" : "unknown" };
-      const registryToken = registry.isRegistryToken?.(token) === true;
-      const toolCallId = registryToken ? yield* refusedToolCallId(request) : undefined;
-      const details = {
-        reason: refusal.reason,
-        ...(refusal.threadId === undefined ? {} : { threadId: refusal.threadId }),
-        ...(refusal.providerSessionId === undefined
-          ? {}
-          : { providerSessionId: refusal.providerSessionId }),
-        ...(refusal.providerInstanceId === undefined
-          ? {}
-          : { providerInstanceId: refusal.providerInstanceId }),
-        ...(refusal.endedAt === undefined ? {} : { endedAt: refusal.endedAt }),
-        registryToken,
-        toolCall: toolCallId !== undefined,
-      };
-      yield* Effect.logWarning(
-        "refused an MCP request whose credential does not resolve",
-        details,
-      ).pipe(
-        Effect.withSpan("McpHttpServer.refuseCredential", {
-          attributes: Object.fromEntries(
-            Object.entries(details).map(([key, value]) => [`mcp.credential.${key}`, value]),
-          ),
-        }),
-      );
-      const message = credentialRefusalMessage(refusal.reason);
-      if (toolCallId !== undefined)
-        return HttpServerResponse.jsonUnsafe(
-          {
-            jsonrpc: "2.0",
-            id: toolCallId,
-            result: { content: [{ type: "text", text: message }], isError: true },
-          },
-          { status: 200, headers: { "cache-control": "no-store" } },
-        );
-      return unauthorized({
-        request,
-        presentedToken: token.length > 0,
-        offerOAuth: Option.isSome(clients) && !looksLikeProviderToken(token),
-        message,
-      });
-    }
-    return invocation;
-  });
-  // The HTTP span covers the downstream tool call.
-  return Effect.fnUntraced(function* (httpEffect) {
-    const invocation = yield* authenticateRequest(yield* HttpServerRequest.HttpServerRequest);
-    if (HttpServerResponse.isHttpServerResponse(invocation)) return invocation;
-    return yield* withCallerListing(
-      listing,
-      permissions,
-    )(withServedToolNames(httpEffect)).pipe(
-      Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-      Effect.map(normalizeMcpHttpResponse),
-    );
-  }) satisfies McpAuthMiddleware;
-}).pipe(Effect.withSpan("McpHttpServer.makeAuthMiddleware"));
-
-const layerMcpAuthMiddleware = HttpRouter.middleware<{
-  provides: McpInvocationContext.McpInvocationContext;
-}>()(makeMcpAuthMiddleware).layer;
 
 /**
  * The registry index for agents. Without a credential it lists every path; a
@@ -387,7 +238,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const saveServices = yield* Effect.context<
-    ServerConfig.ServerConfig | FileSystem.FileSystem | Path.Path | Crypto.Crypto
+    ServerConfig.ServerConfig | FileSystem.FileSystem | Path.Path | SecureRandom.SecureRandom
   >();
   const built = yield* decodeAsAdvertised(PreviewSnapshotToolkit);
   const tool = PreviewSnapshotTool;
@@ -524,7 +375,7 @@ const registerImageTool = Effect.fn("McpHttpServer.registerImageTool")(function*
   R,
 >(
   tool: T,
-  handle: (payload: Tool.Parameters<T>) => Effect.Effect<{ readonly encodedResult: unknown }, E, R>,
+  handle: (payload: Schema.Json) => Effect.Effect<{ readonly encodedResult: unknown }, E, R>,
   provide: (
     effect: Effect.Effect<{ readonly encodedResult: unknown }, E, R>,
   ) => Effect.Effect<
@@ -559,7 +410,7 @@ const registerImageTool = Effect.fn("McpHttpServer.registerImageTool")(function*
           fiber.context,
           McpInvocationContext.McpInvocationContext,
         );
-        return provide(handle(payload as Tool.Parameters<T>)).pipe(
+        return provide(handle(payload)).pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
           Effect.matchCauseEffect({
             onFailure: imageToolFailure(tool.name, operation, failureText),
@@ -626,6 +477,7 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
     const server = yield* McpServer.McpServer;
     const effects = yield* McpToolAccess.ToolEffects;
     const admit = yield* ToolAdmission.make();
+    const registrationContext = yield* captureRegistrationContext;
     const placementDeclared = yield* PlacementAdmissionEnabled;
     return yield* register.pipe(
       Effect.provideService(
@@ -655,7 +507,9 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
               ),
             };
             // Every call reaches the handler through the admission gate, direct or through goat_call.
-            const handle = keepingRefusalCode(registration.handle);
+            const handle = keepingRefusalCode(
+              withRegistrationContext(registrationContext, registration.handle),
+            );
             const gated = (payload: unknown) =>
               admit(registration.tool.name, effect, payload, handle);
             const inputSchema = hidePlacementArgument(
@@ -756,21 +610,16 @@ const withToolAnalytics =
     const scheduledRunOf = (threadId: string, runId: RunId | null) =>
       Option.isNone(threads) || runId === null
         ? Effect.succeed(false)
-        : threads.value
-            .getThreadRecords(ThreadId.make(threadId), ["runs", "messages"], {
+        : Effect.gen(function* () {
+            const id = ThreadId.make(threadId);
+            const { runs } = yield* threads.value.getThreadRecords(id, ["runs"], {
               runIds: [runId],
-              messageRoles: ["user"],
-            })
-            .pipe(
-              Effect.map((records) => {
-                const run = records.runs.find((candidate) => candidate.id === runId);
-                return records.messages.some(
-                  (message) =>
-                    message.id === run?.userMessageId && message.scheduledTaskId !== undefined,
-                );
-              }),
-              Effect.orElseSucceed(() => false),
-            );
+            });
+            const run = runs.find((candidate) => candidate.id === runId);
+            if (run === undefined) return false;
+            const messages = yield* threads.value.getMessagesById(id, [run.userMessageId]);
+            return messages.get(run.userMessageId)?.scheduledTaskId !== undefined;
+          }).pipe(Effect.orElseSucceed(() => false));
     const record =
       /* Request instrumentation already owns the span; keep this helper in that context. */
       Effect.fnUntraced(
@@ -883,30 +732,44 @@ const withListedNames = <A, E, R>(
     }),
   );
 
+/** Hands each call the services its registration was built with; the request's own still win. */
+const provideRegistrationServices = <Services>() =>
+  McpServer.middleware<{ provides: Services }>()(
+    Effect.map(
+      Effect.context<Services>(),
+      (services) => (effect) =>
+        Effect.updateContext(effect, (request: Context.Context<never>) =>
+          Context.merge(services, request),
+        ),
+    ),
+  );
+
 /**
- * `McpServer.toolkit` asks for every service its tools declare when it
- * registers them, but the auth middleware provides `McpInvocationContext` to
- * each request instead. Registration must not get one: the services it
- * captures would replace the request's.
+ * Tools declare their handler services as request-level dependencies. Those
+ * built with the server are provided here; `McpInvocationContext` and `McpServerClient`
+ * are left to the transport, which resolves them per request.
  */
 export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, RX>(
   toolkit: Toolkit.Toolkit<Tools>,
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
-) => {
-  const registration = Layer.effectDiscard(
+) =>
+  Layer.effectDiscard(
     withListedNames(
       withToolAnalytics(applyToolContracts(McpServer.registerToolkit(decodeAsAdvertised(toolkit)))),
       toolkit.tools,
     ),
-  ).pipe(Layer.provide(McpServer.McpServer.layer));
-  // @effect-diagnostics-next-line unsafeEffectTypeAssertion:off - the auth middleware provides it per request.
-  const registered = registration as Layer.Layer<
-    never,
-    never,
-    Exclude<Layer.Services<typeof registration>, McpInvocationContext.McpInvocationContext>
-  >;
-  return registered.pipe(Layer.provide(McpToolAccess.HandlersLayer.layer(handlers)));
-};
+  ).pipe(
+    Layer.provide(
+      provideRegistrationServices<
+        Exclude<
+          Tool.Requirements<Tools[keyof Tools]>,
+          McpInvocationContext.McpInvocationContext | McpSchema.McpServerClient
+        >
+      >().layer,
+    ),
+    Layer.provide(McpServer.McpServer.layer),
+    Layer.provide(McpToolAccess.HandlersLayer.layer(handlers)),
+  );
 
 /**
  * goat_call and goat_eval run tools through the server they are registered on,
@@ -918,7 +781,10 @@ const layerToolDispatch = Layer.effect(
     const server = yield* McpServer.McpServer;
     return ToolDispatch.of({
       // Callers may name a tool as it shipped; the server registers it under its listed name.
-      call: (name, args) => server.callTool({ name: registeredToolName(name), arguments: args }),
+      call: (name, args) =>
+        server
+          .callTool({ name: registeredToolName(name), arguments: args })
+          .pipe(Effect.mapError(dispatchError)),
       served: (name) =>
         server.tools.find(({ tool }) => tool.name === registeredToolName(name))?.tool,
     });
@@ -1156,15 +1022,47 @@ const layerListingChanges = Layer.effectDiscard(
   }),
 );
 
-export const layerMcpTransport = McpServer.layerHttp({
-  name: "GOAT",
-  version: packageJson.version,
-  path: "/mcp",
-  protocols: [McpProtocol.v2025_06_18, McpProtocol.v2026_07_28],
-  allowSessionTermination: true,
-}).pipe(Layer.provide(layerMcpAuthMiddleware));
+/**
+ * `McpServer` for in-process calls. Callers provide `McpInvocationContext` and `McpServerClient`
+ * around `callTool` as the transport does for each /mcp request; a tool that reads one its caller
+ * left out dies on use, as under Effect 4.0.
+ */
+export const layerInProcessMcpServer = McpServer.middleware<{
+  provides: McpInvocationContext.McpInvocationContext | McpSchema.McpServerClient;
+}>()(
+  (effect) =>
+    Effect.updateContext(
+      effect,
+      (context: Context.Context<never>) =>
+        context as Context.Context<
+          McpInvocationContext.McpInvocationContext | McpSchema.McpServerClient
+        >,
+    ),
+  { global: true },
+).pipe(Layer.provideMerge(McpServer.McpServer.layer));
 
-export const layer = Layer.mergeAll(
+export const layerMcpTransport = <RA, RE, RR>(registrations: Layer.Layer<RA, RE, RR>) => {
+  const transport = McpServer.layerHttp({
+    name: "GOAT",
+    version: packageJson.version,
+    path: "/mcp",
+    protocols: [McpProtocol.v2025_06_18, McpProtocol.v2026_07_28],
+    allowSessionTermination: true,
+    registrations,
+  }).pipe(Layer.provide(layerMcpAuthMiddleware));
+  // Effect gives stateful-protocol calls their McpServerClient; 2026-07-28 calls get none, as under 4.0.
+  // @effect-diagnostics-next-line unsafeEffectTypeAssertion:off - 4.0 typed the transport as providing it.
+  return transport as Layer.Layer<
+    Layer.Success<typeof transport>,
+    Layer.Error<typeof transport>,
+    Exclude<
+      Layer.Services<typeof transport>,
+      HttpRouter.Request<"Requires", McpSchema.McpServerClient>
+    >
+  >;
+};
+
+const layerRegistrations = Layer.mergeAll(
   catalogRegistrations.agentSurface,
   catalogRegistrations.decision,
   catalogRegistrations.workspace.pipe(
@@ -1211,9 +1109,14 @@ export const layer = Layer.mergeAll(
   Layer.provide(ThreadResultService.layer),
   // Every registration's goatclaw and session receipt gates, and the handlers that check profiles.
   provideAdmission,
-  // tools/list leaves out what a thread's profile refuses, so the transport reads profiles too.
-  Layer.provideMerge(layerMcpTransport.pipe(Layer.provide(Profiles.layer))),
 );
+
+/** The /mcp server with every built-in registration and the server's own `extra` ones. */
+export const layerWith = <RA, RE, RR>(extra: Layer.Layer<RA, RE, RR>) =>
+  layerMcpTransport(Layer.mergeAll(layerRegistrations, extra)).pipe(
+    // tools/list leaves out what a thread's profile refuses, so the transport reads profiles too.
+    Layer.provide(Profiles.layer),
+  );
 
 // L5 composes these after the domain and committed policy producers are ready.
 export const layerMemoryToolkit = catalogRegistrations.memory;

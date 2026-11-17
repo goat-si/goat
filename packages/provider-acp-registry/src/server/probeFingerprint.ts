@@ -1,4 +1,4 @@
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as Schema from "effect/Schema";
@@ -10,12 +10,12 @@ export const probeFingerprint = Effect.fn("AcpRegistry.probeFingerprint")(functi
   environment: NodeJS.ProcessEnv,
   spawn: AcpSessionRuntime.AcpSpawnInput,
 ) {
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   const json = yield* encode({
     environment: Object.entries(environment).toSorted(([a], [b]) => a.localeCompare(b)),
     spawn,
   }).pipe(Effect.orDie);
   return Hex.encode(
-    yield* crypto.digest("SHA-256", new TextEncoder().encode(json)).pipe(Effect.orDie),
+    yield* digest.digest(Digest.sha256, new TextEncoder().encode(json)).pipe(Effect.orDie),
   );
 });

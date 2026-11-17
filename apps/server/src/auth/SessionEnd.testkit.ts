@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
@@ -25,7 +26,7 @@ export const layerSessionStore = SessionStore.layer.pipe(
     }),
   ),
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-session-end-" })),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 /** A fresh MCP client session admitted as /mcp admits one request; `revoke` ends it as Settings does. */

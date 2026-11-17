@@ -3,7 +3,8 @@ import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
 import * as NodePlatformCrypto from "@effect/platform-node/NodeCrypto";
 import { SecretRequestError, type ScheduledTaskWebhookUrlUnavailableReason } from "@goat/contracts";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
@@ -230,24 +231,34 @@ export const withWebhookService = <A, E>(
       options.frameGate === undefined && options.onFrame === undefined
         ? NodePlatformCrypto.layer
         : Layer.effect(
-            Crypto.Crypto,
+            SecureRandom.SecureRandom,
             Effect.gen(function* () {
-              const crypto = yield* Crypto.Crypto;
+              const random = yield* SecureRandom.SecureRandom;
               return {
-                ...crypto,
+                ...random,
                 randomBytes: (size: number) =>
                   Effect.suspend(() => {
                     if (size === 6) options.onFrame?.();
                     return size === 6 && options.frameGate !== undefined
                       ? Deferred.succeed(options.frameGate.started, undefined).pipe(
                           Effect.andThen(Deferred.await(options.frameGate.release)),
-                          Effect.andThen(crypto.randomBytes(size)),
+                          Effect.andThen(random.randomBytes(size)),
                         )
-                      : crypto.randomBytes(size);
+                      : random.randomBytes(size);
                   }),
               };
             }),
-          ).pipe(Layer.provide(NodePlatformCrypto.layer)),
+          ).pipe(
+            Layer.merge(
+              Layer.effect(
+                Digest.Digest,
+                Effect.gen(function* () {
+                  return yield* Digest.Digest;
+                }),
+              ),
+            ),
+            Layer.provide(NodePlatformCrypto.layer),
+          ),
       options.workers === undefined
         ? Scheduler.layer
         : Layer.succeed(Scheduler.Scheduler, {

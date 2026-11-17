@@ -226,7 +226,7 @@ const served = Layer.mergeAll(
     }),
   ),
   Layer.provideMerge(Profiles.layer),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   Layer.provideMerge(Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({})),
   Layer.provideMerge(Sqlite.layerMemory),
   Layer.provideMerge(

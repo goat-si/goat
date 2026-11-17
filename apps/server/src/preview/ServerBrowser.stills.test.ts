@@ -1,6 +1,7 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off - static JPEG test fixtures are read outside the Effect runtime.
 import * as NodeFS from "node:fs";
 import * as NodeEvents from "node:events";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { EnvironmentId, ThreadId, type PreviewAutomationStatus } from "@goat/contracts";
@@ -144,7 +145,7 @@ const dependencies = Layer.mergeAll(
   Layer.mock(SecretRequests.SecretRequests)({}),
 ).pipe(
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-server-browser-" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 const layer = ServerBrowser.layer.pipe(Layer.provideMerge(dependencies));
 const ready = Effect.gen(function* () {

@@ -1,4 +1,5 @@
 import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { CommandId, EnvironmentId, ProviderInstanceId, type ThreadId } from "@goat/contracts";
@@ -54,6 +55,7 @@ const withService = <A, E, R>(
       Layer.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           ServerSettings.layerTest(),
           Layer.succeed(ThreadManagementService.ThreadManagementService, threads),
           Layer.mock(ProviderRegistry.ProviderRegistry)({}),

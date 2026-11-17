@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./forkInScope": {
+      "types": "./src/forkInScope.ts",
+      "import": "./src/forkInScope.ts"
+    },
     "./sshRuntimeProtocolComparison": {
       "types": "./src/sshRuntimeProtocolComparison.ts",
       "import": "./src/sshRuntimeProtocolComparison.ts"
@@ -506,6 +510,10 @@
     "./testing/loopbackHttpServer": {
       "types": "./src/testing/loopbackHttpServer.ts",
       "import": "./src/testing/loopbackHttpServer.ts"
+    },
+    "./testing/nodeServicesWithCrypto": {
+      "types": "./src/testing/nodeServicesWithCrypto.ts",
+      "import": "./src/testing/nodeServicesWithCrypto.ts"
     },
     "./testing/symlinks": {
       "types": "./src/testing/symlinks.ts",

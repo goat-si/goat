@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { CodexSettings, ProviderSessionId, RunAttemptId, ThreadId } from "@goat/contracts";
@@ -7,7 +8,7 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexReplay from "effect-codex-app-server/replay";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -36,6 +37,7 @@ const layer = Layer.mergeAll(
   IdAllocator.layer,
   McpProviderSessions.layer,
   NodeServices.layer,
+  NodeCrypto.layer,
 );
 /** A Home route with OpenAI authentication names the built-in provider on every new thread. */
 const withHomeOpenAiProvider = (
@@ -197,7 +199,7 @@ describe("OpenCodex Home provider on native threads", () => {
                 ),
               ),
           },
-          crypto: yield* Crypto.Crypto,
+          digest: yield* Digest.Digest,
           fileSystem: yield* FileSystem.FileSystem,
           idAllocator: yield* IdAllocator.IdAllocatorV2,
           serverConfig: yield* makeReplayServerConfig("home-provider").pipe(Effect.orDie),
@@ -387,7 +389,7 @@ describe("OpenCodex Home routing", () => {
                 ),
               ),
           },
-          crypto: yield* Crypto.Crypto,
+          digest: yield* Digest.Digest,
           fileSystem: yield* FileSystem.FileSystem,
           idAllocator: yield* IdAllocator.IdAllocatorV2,
           serverConfig: yield* makeReplayServerConfig("actual-home-config").pipe(Effect.orDie),

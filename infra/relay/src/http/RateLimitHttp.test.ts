@@ -13,6 +13,7 @@ import {
 import { RelayRateLimitExceededError } from "@goat/contracts/relayErrors";
 import * as RelayJwt from "@goat/shared/relayJwt";
 import * as DateTime from "effect/DateTime";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -252,6 +253,7 @@ const assertHttpBudgetsDeny = (rates: RelayRateLimits["Service"]) =>
             },
             body: body instanceof URLSearchParams ? body.toString() : JSON.stringify(body),
           }),
+          Context.empty(),
         ),
       );
     const assertLimited = Effect.fn("fixture.assertHttpLimited")(function* (

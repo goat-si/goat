@@ -1,7 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import type { ProviderInstanceId } from "@goat/contracts";
+import type { ModelSelection, ProviderInstanceId } from "@goat/contracts";
 import type { ProviderTextGeneration } from "@goat/provider-core/server/textGeneration";
 import { TextGenerationError } from "@goat/contracts";
 
@@ -12,6 +12,7 @@ import * as SourceControlProviderRegistry from "../sourceControl/SourceControlPr
 import * as ThreadTitleLinks from "./ThreadTitleLinks.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { apiTextGeneration } from "./TextGeneratorApi.ts";
+import { resolveTextGenerationCapableSelection } from "./textGenerationCapability.ts";
 
 export type {
   BranchNameGenerationInput,
@@ -75,6 +76,17 @@ export const make = Effect.gen(function* () {
   const sourceControl = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const installationGate = yield* ProviderInstallationGate.current;
+  const capable = <I extends { readonly modelSelection: ModelSelection }>(input: I) =>
+    settingsService.getSettings.pipe(
+      Effect.flatMap((settings) =>
+        resolveTextGenerationCapableSelection(registry, settings, input.modelSelection),
+      ),
+      // resolveText reports an unreadable settings file.
+      Effect.orElseSucceed(() => input.modelSelection),
+      Effect.map((modelSelection) =>
+        modelSelection === input.modelSelection ? input : { ...input, modelSelection },
+      ),
+    );
   const resolveText = Effect.fn("TextGeneration.resolveText")(
     (operation: TextGenerationOp, instanceId: ProviderInstanceId) =>
       settingsService.getSettings.pipe(
@@ -220,12 +232,16 @@ export const make = Effect.gen(function* () {
   return TextGeneration.of({
     resolveMemoryConflict: gated(ungated.resolveMemoryConflict),
     generateMemorySummary: gated(ungated.generateMemorySummary),
-    generateCommitMessage: gated(ungated.generateCommitMessage),
-    generatePrContent: gated(ungated.generatePrContent),
-    generateBranchName: gated(ungated.generateBranchName),
+    generateCommitMessage: (input) =>
+      capable(input).pipe(Effect.flatMap(gated(ungated.generateCommitMessage))),
+    generatePrContent: (input) =>
+      capable(input).pipe(Effect.flatMap(gated(ungated.generatePrContent))),
+    generateBranchName: (input) =>
+      capable(input).pipe(Effect.flatMap(gated(ungated.generateBranchName))),
     generateChannelReception: gated(ungated.generateChannelReception),
     generateReviewGuide: gated(ungated.generateReviewGuide),
-    generateThreadTitle: gated(ungated.generateThreadTitle),
+    generateThreadTitle: (input) =>
+      capable(input).pipe(Effect.flatMap(gated(ungated.generateThreadTitle))),
   });
 });
 

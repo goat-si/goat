@@ -1,10 +1,11 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { ClaudeSettings, ProviderSessionId, RunAttemptId, ThreadId } from "@goat/contracts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -35,7 +36,7 @@ it.effect("opens each turn's Claude process inside the installation gate", () =>
         attachmentsDir: yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-claude-gate-" }),
         fileSystem,
         path: yield* Path.Path,
-        crypto: yield* Crypto.Crypto,
+        random: yield* SecureRandom.SecureRandom,
         idAllocator: yield* IdAllocator.IdAllocatorV2,
         installationGate: ProviderInstallationGate.ProviderInstallationGate.of({
           execute: (gatedInstanceId, effect) =>
@@ -106,6 +107,7 @@ it.effect("opens each turn's Claude process inside the installation gate", () =>
           McpProviderSessions.layer,
           MemoryDerivedCache.layer,
           NodeServices.layer,
+          NodeCrypto.layer,
         ),
       ),
     ),

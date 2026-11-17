@@ -1,7 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@goat/shared/Net";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/http";
@@ -19,6 +21,9 @@ import {
   NODE_SCRIPT,
   isRemoteLaunch,
 } from "./tunnel.fixture.ts";
+
+const plainEnvValue = (value: string | Redacted.Redacted<string> | undefined) =>
+  Redacted.isRedacted(value) ? Redacted.value(value) : value;
 
 describe.each([
   [false, false, true],
@@ -41,8 +46,8 @@ describe.each([
         if (phase === "key-only" && command._tag === "StandardCommand")
           keyCalls.push({
             batch: args.find((arg) => arg.startsWith("BatchMode=")),
-            secret: command.options.env?.T3_SSH_AUTH_SECRET,
-            askpass: command.options.env?.SSH_ASKPASS_REQUIRE,
+            secret: plainEnvValue(command.options.env?.T3_SSH_AUTH_SECRET),
+            askpass: plainEnvValue(command.options.env?.SSH_ASKPASS_REQUIRE),
           });
         if (
           (phase === "key-only" && authFails) ||
@@ -94,6 +99,7 @@ describe.each([
       Effect.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Layer.succeed(HttpClient.HttpClient, testHttpClient),
           Layer.succeed(NetService.NetService, testNetService),
@@ -150,6 +156,7 @@ it.effect.each([
       Effect.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Layer.succeed(HttpClient.HttpClient, testHttpClient),
           Layer.succeed(NetService.NetService, testNetService),
@@ -180,7 +187,7 @@ it.effect("clears a cached password after an SSH agent signing failure", () => {
       if (commandArgs(command).includes("-G"))
         return makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n");
       if (command._tag !== "StandardCommand") return makeSuccessfulProcess("");
-      secrets.push(command.options.env?.T3_SSH_AUTH_SECRET);
+      secrets.push(plainEnvValue(command.options.env?.T3_SSH_AUTH_SECRET));
       const stderr =
         secrets.length === 1
           ? "Permission denied (publickey,password)."
@@ -204,6 +211,7 @@ it.effect("clears a cached password after an SSH agent signing failure", () => {
     Effect.provide(
       Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Layer.succeed(HttpClient.HttpClient, testHttpClient),
         Layer.succeed(NetService.NetService, testNetService),

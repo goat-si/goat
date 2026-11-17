@@ -18,6 +18,7 @@ it.effect("takes the installation gate only for a registered provider instance",
     const gated: Array<string> = [];
     const instance = {
       instanceId: KNOWN,
+      snapshot: { isAwaitingFirstCheck: Effect.succeed(true) },
       textGeneration: {
         generateBranchName: () => Effect.succeed({ branch: "feature/gate" }),
       },

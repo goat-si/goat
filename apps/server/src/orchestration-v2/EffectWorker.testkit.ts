@@ -1,4 +1,5 @@
 import { assert } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
@@ -99,6 +100,7 @@ const heldTitleLayer = Effect.fn("EffectWorker.test.heldTitleLayer")(function* (
         }),
         ServerSettings.layerTest(),
         NodeServices.layer,
+        NodeCrypto.layer,
         Layer.mock(TextGeneration.TextGeneration)({
           generateThreadTitle: () =>
             Effect.acquireUseRelease(
@@ -622,6 +624,7 @@ export const mockExecution = () => ({
   admissions: Effect.succeed([]),
   begin: (claim: EffectOutbox.OrchestrationEffectV2) => Effect.succeedSome(claim),
   warnSlowCleanup: () => Effect.void,
+  detach: () => Effect.succeed(false),
   retireJoined: () => Effect.void,
   retireAdmission: () => Effect.void,
   admitClaim: () => Effect.void,

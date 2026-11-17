@@ -12,7 +12,7 @@ import {
 } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - the fork fixture places a real Claude transcript.
 import * as NodePath from "node:path";
 import * as Effect from "effect/Effect";
@@ -89,7 +89,7 @@ describe("ClaudeAdapterV2 native fork", () => {
           attachmentsDir,
           fileSystem,
           path: yield* Path.Path,
-          crypto: yield* Crypto.Crypto,
+          random: yield* SecureRandom.SecureRandom,
           idAllocator,
           queryRunner: {
             allocateSessionId: Effect.succeed(sourceSessionId),

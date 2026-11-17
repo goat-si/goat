@@ -29,7 +29,7 @@ import {
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -330,7 +330,7 @@ const make = Effect.gen(function* () {
   const launches = yield* ThreadLaunchMcp.ThreadLaunchMcpService;
   const projects = yield* Project.ProjectService;
   const threads = yield* ThreadManagement.ThreadManagementService;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const cache = yield* Ref.make(
     new Map<string, { readonly at: number; readonly holders: ReadonlyArray<CloudHolder> }>(),
   );
@@ -839,9 +839,7 @@ const make = Effect.gen(function* () {
             updatedAt: now,
             attach: "registered",
           };
-          const threadId = ThreadId.make(
-            `cloud-run:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`,
-          );
+          const threadId = ThreadId.make(`cloud-run:${yield* random.uuidV4().pipe(Effect.orDie)}`);
           const started = yield* modes;
           yield* launches.launch(
             scope,
@@ -917,7 +915,9 @@ const make = Effect.gen(function* () {
       yield* threads
         .dispatch({
           type: "thread.delete",
-          commandId: yield* newCommandId().pipe(Effect.provideService(Crypto.Crypto, crypto)),
+          commandId: yield* newCommandId().pipe(
+            Effect.provideService(SecureRandom.SecureRandom, random),
+          ),
           threadId: input.threadId,
         })
         .pipe(Effect.mapError(() => failure("orchestration_error", "Could not forget this run.")));

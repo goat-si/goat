@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -324,7 +325,7 @@ it.effect.each([
     }),
 );
 
-it.layer(NodeServices.layer)("server self update", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server self update", (it) => {
   it.effect.each([
     { asset: "checksums", status: 504 },
     { asset: "archive", status: 503 },

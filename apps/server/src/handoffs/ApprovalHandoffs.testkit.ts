@@ -4,6 +4,7 @@
  *
  * @module ApprovalHandoffs.testkit
  */
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   AuthSessionId,
@@ -161,4 +162,4 @@ export const withApprovals = <A, E, R>(
         ).pipe(Layer.provideMerge(databaseLayer)),
       ),
     );
-  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped);
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped);

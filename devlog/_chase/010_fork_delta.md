@@ -55,6 +55,7 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 커밋: #812
 - 경로: `oxlint-plugin-goat/{codeBudget.ts,code-budgets.json,update-code-budgets.ts,index.ts}`, `oxlint-plugin-goat/rules/code-budget.ts`, `vite.config.ts`, `docs/operations/{testing,code-quality}.md`, `AGENTS.md`
 - 정책: GOAT 전용. `goat/code-budget`은 1000줄 넘는 파일, baseline보다 커진 파일, 테스트 밖의 새 non-null 단언, 새 `any` 캐스트를 막는다. upstream의 플러그인 index와 lint 설정 변경은 받고 규칙 등록 한 줄씩을 다시 얹는다. upstream 머지가 baseline 파일을 키우면 `node oxlint-plugin-goat/update-code-budgets.ts`는 1로 끝난다. 머지 커밋에서 `--init`으로 baseline을 다시 쓰고, 올라간 항목이 upstream 줄에서 온 것인지 확인한다. GOAT 변경으로는 올리지 않는다.
+- Effect 4.1 (261114 N3): upstream 57cd05904d는 `Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)`를 줄마다 인라인으로 쓴다. 그 줄 때문에 budget을 넘는 GOAT 파일 32개는 대신 GOAT 공유 레이어 `@goat/shared/testing/nodeServicesWithCrypto`(`packages/shared/src/testing/nodeServicesWithCrypto.ts`)를 import한다(목록: `devlog/_chase/261114_lanes/next-N3.md`). 이 파일들의 upstream 변경을 받을 때 그 import를 유지한다.
 
 ### `composer-footer` 컴포저 푸터
 
@@ -103,6 +104,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `devlog/`, `.gitignore`의 `!/devlog/`
 - 정책: GOAT 전용, 충돌 없음. `.gitignore` 충돌에서는 `!/devlog/` 줄을 남긴다.
 
+### `fork-in-scope` 닫힌 scope에 fork해도 실행 (Effect 4.1)
+
+- 커밋: #3519 (사이클 261114 다음 PR, lane N3)
+- 경로: `packages/shared/src/forkInScope.ts`, `packages/provider-acp/src/server/adapter.ts`, `apps/server/src/orchestration-v2/Adapters/CodexSurvivorContinuation.ts`
+- 정책: `forkInScope.ts`는 GOAT 모듈이다. Effect 4.1(4.1.2부터)은 이미 닫힌 scope에 `startImmediately`나 `uninterruptible`로 fork한 fiber를 시작하지 않고 interrupt한다. 4.0.5는 실행했다. `forkInScope`는 4.0.5의 forkIn 동작을 되살리고, interruptor id만 잃는다. upstream 파일인 provider-acp `adapter.ts`에서는 import 한 줄과 ACP interruptTurn의 Stop fork 한 줄(:8251, `forkInScope(sessionScope, { startImmediately: true, uninterruptible: true })`)만 GOAT 차이다. upstream이 이 파일을 바꾸면 받은 뒤 그 줄을 다시 얹는다. `Effect.forkIn`으로 돌아가면 세션 scope가 닫힌 뒤의 Stop이 실행되지 않는다. 다른 호출부 `CodexSurvivorContinuation.ts`(:477)와, 같은 종류를 닫힌 scope 검사로 고친 provider-core `finiteProviderRequest.ts`는 GOAT 파일이다.
+
 ### `global-agent` 글로벌 에이전트
 
 - 커밋: `f391710d2` `0dc31be25` `83d1ebbd0` `6bebb0699`
@@ -139,6 +146,18 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/server/src/mcp/toolkits/*/tools.ts`, `orchestration-v2`, `packages/provider-*/src/server`, `t3McpToolPresentation.ts`
 - 정책: upstream 로직을 받고 도구 이름은 `goat_*`, 서버 이름은 GOAT로 다시 쓴다. 새 `t3_*` 도구는 이름을 바꾸고 표시용 legacy alias를 둔다. 텔레메트리(`telemetry/ProviderDimensions.ts`, `McpHttpServer`의 HANDOFF_TOOLS)도 `goat_*` 이름으로 세고, 들어온 `t3_*`는 `goat_*`로 정규화한다 (사이클 261020). 새 Prometheus 메트릭도 `goat_*`(`goat_process_group_*`, 사이클 261021). 도구 설명은 toolkit 파일이 아니라 `packages/contracts/src/agentSurface/registry.ts`에 있으므로 upstream 설명 변경은 거기로 옮긴다.
 
+### `mcp-registration-context` MCP 도구는 서버가 만든 서비스로 돈다 (Effect 4.1)
+
+- 커밋: #3519 (사이클 261114 다음 PR, lane N3)
+- 경로: `apps/server/src/mcp/McpHttpServer.ts`, `apps/server/src/mcp/registrationContext.ts`
+- 정책: 권한 가드다. Effect 4.1의 `McpServer`는 호출의 서비스를 도구가 등록 때 잡은 서비스 위에 합친다. 4.0.5에서는 반대로 등록 때 값이 이겼다. 그대로 두면 호출자가 넣은 서비스가 서버가 만든 identity, scope, 권한 한도를 덮을 수 있다. GOAT 파일 `registrationContext.ts`가 등록 때 서버의 서비스를 잡고(`captureRegistrationContext`, 호출마다 달라지는 Effect의 `callKeys`는 뺀다) 각 호출에서 그 값이 이기게 한다(`withRegistrationContext`). upstream 파일 `McpHttpServer.ts`에서는 import 한 줄(:131), :485의 capture, :516의 wrap만 GOAT 차이다. upstream이 이 파일을 바꾸면 받은 뒤 그 세 줄을 다시 얹는다. 빠뜨리면 테스트(`mcp/toolkits/retryKeys.test.ts`, `toolkits/project/handlers.goatclaw.test.ts`)만 잡는다. dev #3612의 `guardedToolRegistration`(:729, `withListedNames`)은 가장 바깥 wrapper로 남아야 한다. 그래야 `withRegistrationContext`가 등록 때 서비스를 덮기 전에 이 호출의 `McpInvocationContext`와 세션 끝을 읽는다.
+
+### `memory-access-evidence` 메모리 접근 증거는 내용 키로 비교 (Effect 4.1)
+
+- 커밋: #3519 (사이클 261114 다음 PR, lane N3, goat#3639)
+- 경로: `apps/server/src/orchestration-v2/ProviderSessionManager.ts`, `apps/server/src/orchestration-v2/MemoryProviderAuthority.ts`
+- 정책: upstream 파일 `ProviderSessionManager.ts`의 `memoryAccessInputs`(:2441-2463)는 GOAT 코드다. 준비된 항목을 잡고 두 번 기다린 뒤, 객체 identity가 아니라 GOAT 파일 `MemoryProviderAuthority.ts`의 `prepareEvidence`(:26) 키로 최신 항목과 비교한다(:2452, :2463). 키는 `prepareAuthority`의 필드에 runId와 delegatedTaskId를 더해 만든다. Effect 4.1에서는 그 사이에 정책 rotation이 내용이 같은 새 객체를 써 넣을 수 있어, identity 비교는 run 행에서 현재 메모리 접근을 지운다. upstream이 이 파일을 바꾸면 받은 뒤 import(:9)와 키 비교 두 줄을 다시 얹는다. 같은 파일의 다른 쓰기 지점(`prepareMcpSession`)은 계속 새 객체를 쓴다.
+
 ### `memory-app-layers` 메모리 애플리케이션 조립
 
 - 커밋: #888
@@ -155,13 +174,21 @@ G13 `goat-copy`, G14 `launch-watch`.
 
 - 커밋: #1587
 - 경로: `package.json`, `apps/server/package.json`, `packages/shared/src/nodeSqliteClient.ts`, `apps/server/vite.config.ts`, `scripts/dev-runtime-archive.ts`, `.github/workflows/{release-desktop,goat-nightly}.yml`
-- 정책: 루트 `engines.node`(정확한 `26.12.1`)가 개발·CI·SEA Node의 정본이다. upstream도 정확한 값을 쓰므로 버전 충돌은 GOAT가 정한 값을 둔다. 서버 `engines.node`와 `NODE_SQLITE_RUNTIME_RANGE`는 `^24.16.0 || >=26.1.0`으로 upstream `^22.16 || ^23.11 || >=24.10`과 다르다 (#1015, 데스크톱이 Electron 44의 Node 24.22.1에서 서버를 돌린다). upstream이 `nodeSqliteClient.ts`를 바꾸면 받고 이 범위 검사만 다시 얹는다. upstream의 네이티브 SEA 빌드 guard는 받지 않는다 (`dev-runtime-archive`가 다른 SEA Node를 고른다). 고정 이전 커밋을 빌드하는 실행 파일 단계의 workflow revision fallback은 유지한다 ([10.011](./_fin/10/10.011_t3_chase_node_pin.md)).
+- 정책: 루트 `engines.node`(정확한 `26.12.1`)가 개발·CI·SEA Node의 정본이다. upstream도 정확한 값을 쓰므로 버전 충돌은 GOAT가 정한 값을 둔다. 서버 `engines.node`와 `NODE_SQLITE_RUNTIME_RANGE`는 `^24.16.0 || >=26.1.0`으로 upstream `^22.16 || ^23.11 || >=24.10`과 다르다 (#1015, 데스크톱이 Electron 44의 Node 24.22.1에서 서버를 돌린다). upstream이 `nodeSqliteClient.ts`를 바꾸면 받고 이 범위 검사와 아래 rollback 훅만 다시 얹는다. upstream의 네이티브 SEA 빌드 guard는 받지 않는다 (`dev-runtime-archive`가 다른 SEA Node를 고른다). 고정 이전 커밋을 빌드하는 실행 파일 단계의 workflow revision fallback은 유지한다 ([10.011](./_fin/10/10.011_t3_chase_node_pin.md)).
+- Effect 4.1 (261114 N3, #3519): `nodeSqliteClient.ts`의 `transactionAcquirer: Effect.map(transactionAcquirer, toleratingFinishedRollback)` 한 줄(:1260)과 그 import도 GOAT 차이다. 헬퍼는 GOAT 파일 `nodeSqliteErrors.ts`에 있다. SQLite가 이미 transaction 전체를 rollback한 뒤 보낸 ROLLBACK의 "no transaction is active"만 무시해서, 쓰기의 원래 SqlError가 호출자에게 간다. Effect 4.1은 실패와 defect가 섞인 cause를 `catch`로 복구하지 않으므로, 이 훅이 없으면 그 쓰기가 defect로 끝나고 채널 전송이 두 번 갈 수 있다.
+
+### `office-archive-split` Office 미리보기의 upstream 코드 옮김
+
+- 커밋: 사이클 261114 다음 PR의 lane N13a (PR 번호는 draft PR이 열리면 적는다)
+- 경로: `apps/web/src/components/files/officeArchiveWorkbook.ts`, `apps/web/src/components/files/officeArchiveXml.ts`, `apps/web/src/components/files/AttachmentFilePreview.spreadsheet.browser.test.tsx`
+- 정책: upstream 코드를 그대로 옮긴 GOAT 파일이다. `officeArchive.ts`가 1211줄 예산에 닿아 `boundedWorksheet`·`boundWorkbook`(upstream c8e8b58ee6 이후 `engineStyles` 포함)은 `officeArchiveWorkbook.ts`로, 두 파일이 같이 쓰는 `xmlParser`·`officeXmlDecoder`·`officeXml`은 `officeArchiveXml.ts`로 옮겼다. 스프레드시트 미리보기 테스트 다섯 묶음은 `AttachmentFilePreview.spreadsheet.browser.test.tsx`에 있다. upstream이 `officeArchive.ts`의 스프레드시트 부분이나 XML 도우미를 바꾸면 그 hunk를 이 파일들에 옮겨 적용한다. Word 부분은 `officeArchive.ts`에 남아 그대로 머지된다. upstream `fcc25c8bb2`는 Office 테스트 전부를 `AttachmentFilePreview.office.browser.test.tsx`로 나눴지만 GOAT는 받지 않았다(#3176). 그 파일에 들어가는 스프레드시트 테스트 hunk는 GOAT의 spreadsheet 파일로, 나머지 Office 테스트 hunk는 `AttachmentFilePreview.browser.test.tsx`로 옮긴다.
 
 ### `orchestrator-goat-modules` Orchestrator의 GOAT 명령 모듈
 
 - 커밋: #808 #809 #811 #813 #814 #815 #870 #874 #892
 - 경로: `apps/server/src/orchestration-v2/goat/`, `apps/server/src/orchestration-v2/Orchestrator.ts`
 - 정책: GOAT 전용 명령 처리는 `orchestration-v2/goat/`의 factory 모듈에 둔다: 원격 위임 작업, thread notice와 GOAT 봇 timeline 기록, 스레드 승격, human handoff, review ledger, 리뷰 이어가기(`delegated_task.review-continue`, 부모 락 안에 자식 락을 잡는 hook 포함), 게스트 공유 명령, 서버 drain admission, PR 자동 watch, fleet fallback 전제 조건(`FallbackSelectionSource` 포함), 질문 이미 답함 오류(`goat/QuestionAnswers.ts`, Orchestrator가 다시 export한다). `Orchestrator.ts`에는 `makeOrchestrator` 안의 factory 호출, switch case, 오류 union 항목, import만 남긴다. upstream이 Orchestrator를 바꾸면 upstream을 받고 이 hook만 다시 얹는다. 새 GOAT 명령도 이 폴더에 둔다. 모듈은 `Orchestrator.ts`를 type으로만 import하고 오류 class와 closure를 인자로 받는다. 런타임 import 순환을 피하기 위해서다. `makeOrchestrator`에서 뒤에 선언되는 closure(`stopReachedRun`, `planDelegatedCompletionDelivery`)는 화살표 함수로 감싸 넘긴다. 바로 넘기면 TDZ에 걸린다. 사이클 261023에 `f054d1b` 대비 Orchestrator 차이가 +2114/−225에서 +959/−230으로 줄었다.
+- 사이클 261114 다음 PR(#3519): upstream 변경을 GOAT 모듈로 받은 hook과 GOAT 줄. `goat/ActiveTurnRefusals.ts`(upstream `94f54a5710`, 돌고 있는 turn을 끝낼 provider 변경을 거부)는 import(:273)와 `activeTurnRefusal` 호출(:3072). `goat/StaleQuestionWake.ts`(upstream `86c379d07a`, 닫힌 질문의 대기 wake를 시작 전에 버림)는 import(:272), `makeStaleQuestionWakes`(:1155), 호출(:1181). `goat/DelegatedTaskWakePolicy.ts`(GOAT 위임 wake 정책을 그대로 옮긴 모듈)는 import(:182), factory(:8087), `dispatchWakePolicy` 호출(:12595). 거절된 steer의 follow-up 보류(lane N9b part 2)는 모듈이 아니라 Orchestrator 안의 GOAT 줄이다: contracts `orchestrationV2.ts`의 선택 필드 `holdsQueue`(:1717, :2591), run.interrupt의 기록(:10535-10558), `stopReachedRun`의 읽기와 `markStoppedRun`의 기록(:9856-9912), dispatchMessage의 `stopReachedRun(..., true)`(:5116). upstream이 Orchestrator를 바꾸면 받은 뒤 이 import, factory, 호출부, `holdsQueue` 줄을 다시 얹는다. 빠뜨리면 provider 변경이 돌던 turn을 끝내고, 닫힌 질문의 wake가 시작되고, 멈춘 스레드에서 보류해야 할 follow-up이 turn을 시작한다.
 
 ### `owner-security` 패키지 소유자, 보안 신고, 기여 정책
 
@@ -179,6 +206,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 
 - 경로: upstream `apps/server/src/peer`, `packages/contracts/src/peerLink.ts`, `apps/server/src/persistence/Migrations/070_PeerLinks.ts`, `071_PeerLinkFence.ts`, `072_WaitingLinkRequestIndex.ts`
 - 정책: upstream의 peer link store, `environmentId` 라우팅, `delegated_task.remote.*` 이벤트 모델은 받지 않는다. GOAT fleet는 `LinkedHosts`, `HubNodes`, `SshRemoteDispatch`의 `host` 라우팅, `RemoteDelegatedTasks`가 정본이다. upstream 070-072(PeerLinks, PeerLinkFence, WaitingLinkRequestIndex)는 GOAT도 같은 이름과 id로 등록해 스키마만 둔다. 071·072는 upstream처럼 다시 실행해도 안전하다 (사이클 261114). 모델 검색, reconnect/history, @ picker, Copy thread 같은 독립 개선은 GOAT 코드에 adapt한다.
+
+### `pr-event-feeds` 감시 PR의 GitHub 이벤트 피드
+
+- 커밋: #3519 (사이클 261114 다음 PR, lane N16)
+- 경로: `packages/source-control-github/src/server/gitHubPullRequestEvents.ts`, `apps/server/src/orchestration-v2/PullRequestWatchReactor.ts`, `apps/server/src/orchestration-v2/goat/PullRequestEventFeeds.ts`, `apps/server/src/pullRequest/PullRequestService.ts`
+- 정책: upstream `4e1be34436`·`e0d6aadb88`을 GitHub 앱 로그인(`0c80751701`, 받지 않음) 대신 GOAT 호스트 자격 증명으로 받았다. upstream이 `gitHubPullRequestEvents.ts`나 `PullRequestWatchReactor.ts`를 바꾸면 그 변경을 받은 뒤 다음을 다시 얹는다. 일시 정지는 자격 증명 지문(토큰의 해시)으로 묶는다. 구독 응답 표: 401·403·그 밖의 4xx는 그 자격 증명 1시간, 404는 그 PR 1시간, 422는 10분, 429와 5xx는 기존 경로. 스트림이 429가 아닌 4xx로 답하면 피드를 멈추고 그 PR을 1시간 정지한다. 정지 확인과 구독 POST는 한 permit 세마포어 안에서 돈다. `events_url`이 `https://api.github.com` 밖이거나 본문이 풀리지 않으면 id로 DELETE하고 정지한다. SSE는 `Sse.makeParser`로 읽어 `retry:`를 무시하고 10 MiB 상한을 지킨다. DELETE는 5초, 스트림 헤더는 45초 기한이다. 피드 상한 64, 20초 settle(`Stream.debounce`), 상한 선택은 GOAT 모듈 `goat/PullRequestEventFeeds.ts`에 있고 reactor에는 import 한 줄과 `follow`가 남는다. 상한은 이벤트 피드가 있는 공급자의 PR만 센다(`PullRequestService.followsChanges`, upstream `changes` 옆의 GOAT 메서드). 이유와 시험은 lane 기록 `devlog/_chase/261114_lanes/next-N16.md`에 있다.
 
 ### `remote-reports` 원격 보고와 원격 위임
 

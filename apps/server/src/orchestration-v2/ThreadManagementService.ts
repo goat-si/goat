@@ -1,6 +1,7 @@
 import * as Semaphore from "effect/Semaphore";
 import { deliveryForDispatch, readRestartReceipt } from "./restartedDelivery.ts";
 import * as ThreadSettlementAfterRun from "./ThreadSettlementAfterRun.ts";
+import { laterRunQuestions } from "./threadWaitLaterQuestions.ts";
 import type {
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
@@ -41,6 +42,7 @@ import {
   ThreadId,
   type TurnItemId,
 } from "@goat/contracts";
+import { delegatedTaskProgress } from "@goat/provider-core/server/subagentProjection";
 import { threadTranscriptHeader } from "@goat/shared/threadTranscript";
 import { AgentScope } from "@goat/shared/AgentScope";
 import * as Clock from "effect/Clock";
@@ -60,6 +62,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { projectedRowEncodedBytes } from "./threadHistoryPaging.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import * as WorktreeSendCheck from "./goat/WorktreeSendCheck.ts";
 import { runsInCloud, tearDownForceStoppedRun } from "./ForceStopTeardown.ts";
 import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
 import { projectTranscriptRowForClient, projectTurnItemForDetail } from "./WireProjection.ts";
@@ -82,6 +85,7 @@ import {
   ThreadManagementProjectThreadsListError,
   ThreadManagementDurableRunProjectionError,
   ThreadManagementProviderInstanceDisabledError,
+  ThreadManagementWorktreeUnrestorableError,
   ThreadManagementError,
 } from "./ThreadManagementErrors.ts";
 import { ThreadManagementBackgroundWaitError } from "./threadManagementBackgroundWait.ts";
@@ -98,6 +102,11 @@ export { ThreadManagementBackgroundWaitError };
  * "steer_when_ready" is how another thread's agent talks to a thread: like steering, whatever
  * mode it asked for. It is server-internal and never crosses the wire.
  */
+type OrchestrationV2DispatchModeType = Extract<
+  OrchestrationV2Command,
+  { readonly type: "message.dispatch" }
+>["dispatchMode"]["type"];
+
 export type ThreadManagementSendMode = "auto" | "queue" | "steer" | "restart" | "steer_when_ready";
 
 /**
@@ -214,13 +223,22 @@ export interface ThreadManagementServiceShape {
   ) => Effect.Effect<void, LegacyV1ThreadImporter.LegacyV1ThreadImportError>;
   readonly dispatch: (
     command: OrchestrationV2ServerCommand,
+    /**
+     * Set by the entry points of a person or an agent: refuse a message to a thread whose missing
+     * worktree GOAT cannot restore. Server-originated sends omit it: they are stored and their
+     * turn fails where a person sees it. Not part of the command, so no client can set it.
+     */
+    options?: { readonly refuseUnrestorableWorktree?: boolean },
   ) => Effect.Effect<
     Orchestrator.OrchestratorV2DispatchResult,
-    Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
+    | Orchestrator.OrchestratorV2Error
+    | ThreadManagementProviderInstanceDisabledError
+    | ThreadManagementWorktreeUnrestorableError
   >;
   readonly getThreadHistoryPage: Orchestrator.OrchestratorV2["Service"]["getThreadHistoryPage"];
   readonly getTimelinePage: Orchestrator.OrchestratorV2["Service"]["getTimelinePage"];
   readonly getMessageCount: Orchestrator.OrchestratorV2["Service"]["getMessageCount"];
+  readonly getMessagesById: Orchestrator.OrchestratorV2["Service"]["getMessagesById"];
   readonly getTurnItem: (input: {
     readonly threadId: ThreadId;
     readonly itemId: TurnItemId;
@@ -315,7 +333,9 @@ export interface ThreadManagementServiceShape {
     readonly byOwnAgent: boolean;
   }) => Effect.Effect<
     { readonly sequence: number } | { readonly settlesWhenTurnEnds: true },
-    Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
+    | Orchestrator.OrchestratorV2Error
+    | ThreadManagementProviderInstanceDisabledError
+    | ThreadManagementWorktreeUnrestorableError
   >;
   readonly interruptThread: (
     input: ThreadManagementInterruptInput,
@@ -376,7 +396,9 @@ export interface ThreadManagementServiceShape {
     readonly stopCascadeFrom?: ThreadId | undefined;
   }) => Effect.Effect<
     void,
-    Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
+    | Orchestrator.OrchestratorV2Error
+    | ThreadManagementProviderInstanceDisabledError
+    | ThreadManagementWorktreeUnrestorableError
   >;
   readonly getThreadEventSequence: Orchestrator.OrchestratorV2["Service"]["getThreadEventSequence"];
   readonly recoverDelegatedTask: Orchestrator.OrchestratorV2["Service"]["recoverDelegatedTask"];
@@ -391,13 +413,15 @@ export class ThreadManagementService extends Context.Service<
   ThreadManagementServiceShape
 >()("goat/orchestration-v2/ThreadManagementService") {}
 
+export const ACTIVE_RUN_STATUSES = [
+  "preparing",
+  "starting",
+  "running",
+  "waiting",
+] as const satisfies ReadonlyArray<OrchestrationV2Run["status"]>;
+
 export function isActiveRun(run: OrchestrationV2Run): boolean {
-  return (
-    run.status === "preparing" ||
-    run.status === "starting" ||
-    run.status === "running" ||
-    run.status === "waiting"
-  );
+  return (ACTIVE_RUN_STATUSES as ReadonlyArray<OrchestrationV2Run["status"]>).includes(run.status);
 }
 
 /** Joins question items to their runs without loading execution nodes or transcripts. */
@@ -468,7 +492,9 @@ export function makeStopDelegatedTasks(deps: {
   )(function* (input) {
     const { subagents } = yield* deps.getThreadRecords(input.threadId, ["subagents"]);
     const failures: Array<
-      Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
+      | Orchestrator.OrchestratorV2Error
+      | ThreadManagementProviderInstanceDisabledError
+      | ThreadManagementWorktreeUnrestorableError
     > = [];
     const stopCascadeFrom = input.stopCascadeFrom ?? input.threadId;
     for (const task of subagents) {
@@ -540,6 +566,8 @@ const make = Effect.gen(function* () {
   const legacyImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+  // Optional: harnesses without a view of projects skip the check, as servers before it did.
+  const worktreeSendCheck = yield* Effect.serviceOption(WorktreeSendCheck.WorktreeSendCheck);
   const memoryPolicy = yield* Effect.serviceOption(ServerSettings.MemoryProviderCommittedPolicy);
   const readMemoryPolicy = Option.isSome(memoryPolicy)
     ? memoryPolicy.value.read
@@ -698,6 +726,35 @@ const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => Option.none()),
       Effect.map(Option.isSome),
     );
+
+  // Turn start would fail after the send reported success; a replay keeps its first answer.
+  const assertSendWorkspace = Effect.fn("ThreadManagementService.assertSendWorkspace")(
+    function* (input: {
+      readonly threadId: ThreadId;
+      readonly commandId: CommandId;
+      readonly dispatchMode: OrchestrationV2DispatchModeType;
+      readonly instanceId: ProviderInstanceId | undefined;
+    }) {
+      // A live steer starts no turn, so it needs no workspace.
+      if (Option.isNone(worktreeSendCheck) || input.dispatchMode === "steer_active") return;
+      const { thread } = yield* orchestrator.getThreadRecords(input.threadId, []);
+      yield* assertWorktreeRestorable(input.commandId, {
+        ...thread,
+        instanceId: input.instanceId ?? thread.modelSelection.instanceId,
+      });
+    },
+  );
+  const assertWorktreeRestorable = Effect.fn("ThreadManagementService.assertWorktreeRestorable")(
+    function* (commandId: CommandId, thread: WorktreeSendCheck.SendTarget) {
+      if (Option.isNone(worktreeSendCheck)) return;
+      const refusal = yield* worktreeSendCheck.value.refusal(thread);
+      if (refusal === undefined || (yield* hasReceipt(commandId))) return;
+      return yield* new ThreadManagementWorktreeUnrestorableError({
+        threadId: thread.id,
+        detail: refusal,
+      });
+    },
+  );
 
   const receiptStatus: ThreadManagementServiceShape["receiptStatus"] = (commandId) =>
     receipts.getByCommandId(commandId).pipe(
@@ -872,9 +929,19 @@ const make = Effect.gen(function* () {
     }
   };
 
-  const dispatch: ThreadManagementServiceShape["dispatch"] = (command) =>
+  const dispatch: ThreadManagementServiceShape["dispatch"] = (command, options) =>
     ensureCommandTranscripts(command).pipe(
       Effect.andThen(assertDispatchTargetEnabled(command)),
+      Effect.andThen(
+        options?.refuseUnrestorableWorktree === true && command.type === "message.dispatch"
+          ? assertSendWorkspace({
+              threadId: command.threadId,
+              commandId: command.commandId,
+              dispatchMode: command.dispatchMode.type,
+              instanceId: command.modelSelection?.instanceId,
+            })
+          : Effect.void,
+      ),
       Effect.andThen(orchestrator.dispatch(command)),
     );
 
@@ -1051,23 +1118,29 @@ const make = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       const dispatchMode = yield* unattendedSteeringMode(input, requestedMode);
-      const dispatched = yield* dispatch({
-        type: "message.dispatch",
-        memoryGrantCeiling: input.memoryGrantCeiling ?? "none",
-        commandId,
-        threadId: input.threadId,
-        messageId: input.messageId,
-        ...(input.scheduledTaskId === undefined ? {} : { scheduledTaskId: input.scheduledTaskId }),
-        ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
-        text: input.text,
-        ...(input.context === undefined ? {} : { context: input.context }),
-        attachments: input.attachments,
-        ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
-        dispatchMode,
-        ...(input.mode === "auto" ? { deliveryIntent: "auto" } : {}),
-        createdBy: input.createdBy,
-        creationSource: input.creationSource,
-      });
+      const dispatched = yield* dispatch(
+        {
+          type: "message.dispatch",
+          memoryGrantCeiling: input.memoryGrantCeiling ?? "none",
+          commandId,
+          threadId: input.threadId,
+          messageId: input.messageId,
+          ...(input.scheduledTaskId === undefined
+            ? {}
+            : { scheduledTaskId: input.scheduledTaskId }),
+          ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
+          text: input.text,
+          ...(input.context === undefined ? {} : { context: input.context }),
+          attachments: input.attachments,
+          ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+          ...(input.freshContext ? { freshContext: true } : {}),
+          dispatchMode,
+          ...(input.mode === "auto" ? { deliveryIntent: "auto" } : {}),
+          createdBy: input.createdBy,
+          creationSource: input.creationSource,
+        },
+        { refuseUnrestorableWorktree: input.refuseUnrestorableWorktree === true },
+      );
       return yield* readDelivery(
         input,
         dispatched,
@@ -1467,6 +1540,27 @@ const make = Effect.gen(function* () {
       if (selectedRun === undefined)
         return { threadId: input.threadId, run: null, timedOut: false };
       const ignoredRequestIds = new Set(input.ignoreRequestIds ?? []);
+      const untilSettled = input.untilDelegatedWorkSettled === true;
+      // The run with the thread's answer once its delegated and background work settled.
+      const delegatedWorkResult = Effect.gen(function* () {
+        const records = yield* getProjectThreadRecords(
+          input,
+          ["runs", "messages", "subagents", "providerThreads"],
+          { messageRoles: ["user"] },
+        );
+        const progress = delegatedTaskProgress(records);
+        // A thread rolled back past all its work, with nothing left running, has no answer to wait for.
+        if (
+          progress.resultRun === undefined &&
+          records.runs.every((run) => isTerminalRunStatus(run.status))
+        )
+          return latestRun(records);
+        if (progress.state !== "result_available") return undefined;
+        const pending = yield* orchestrator
+          .delegatedTaskResultPending(input.threadId)
+          .pipe(Effect.mapError(loadError));
+        return pending ? undefined : progress.resultRun;
+      });
       const state = (runs: ReadonlyArray<OrchestrationV2Run>) =>
         Effect.gen(function* () {
           const selected = runs.find((candidate) => candidate.id === selectedRun.id);
@@ -1502,11 +1596,30 @@ const make = Effect.gen(function* () {
               ).filter((requestId) => !ignoredRequestIds.has(requestId));
             }
           }
+          const ended = isTerminalRunStatus(run.status) && !pending;
+          // A run the ended run's work woke may ask a question; it releases this wait too.
+          if (
+            untilSettled &&
+            ended &&
+            pendingRequestIds.length === 0 &&
+            input.releaseOnPendingQuestion !== false
+          )
+            pendingRequestIds = yield* laterRunQuestions(getProjectThreadRecords, input, {
+              runs,
+              run,
+              ignored: ignoredRequestIds,
+            });
+          const resultRun =
+            untilSettled && ended && pendingRequestIds.length === 0
+              ? yield* delegatedWorkResult
+              : undefined;
           return {
             run,
             pending,
             pendingRequestIds,
-            ready: (isTerminalRunStatus(run.status) && !pending) || pendingRequestIds.length > 0,
+            resultRun,
+            ready:
+              (ended && (!untilSettled || resultRun !== undefined)) || pendingRequestIds.length > 0,
           };
         });
       const result = (
@@ -1519,6 +1632,7 @@ const make = Effect.gen(function* () {
         ...(current.pendingRequestIds.length === 0
           ? {}
           : { pendingRequestIds: current.pendingRequestIds }),
+        ...(current.resultRun === undefined ? {} : { resultRun: current.resultRun }),
       });
       const initial = yield* state(target.runs);
       if (initial.ready) return result(initial, false);
@@ -1530,7 +1644,15 @@ const make = Effect.gen(function* () {
       // A declined continuation has no event, so its effect settling also wakes the wait.
       const updates = Stream.mergeAll(
         (
-          ["run.updated", "thread.deleted", "runtime-request.updated", "turn-item.updated"] as const
+          [
+            "run.updated",
+            "thread.deleted",
+            "runtime-request.updated",
+            "turn-item.updated",
+            // What delegated work reads besides runs: tasks and their deliveries, and a provider
+            // thread's background tasks.
+            ...(untilSettled ? (["subagent.updated", "provider-thread.updated"] as const) : []),
+          ] as const
         ).map((eventType) =>
           orchestrator.streamStoredEventsFrom({
             threadId: input.threadId,
@@ -1543,6 +1665,7 @@ const make = Effect.gen(function* () {
         Stream.mapError(loadError),
         Stream.filter(
           (stored) =>
+            untilSettled ||
             stored.event.type !== "run.updated" ||
             stored.event.payload.id === selectedRun.id ||
             stored.event.payload.restartContinuationOfRunId !== undefined,
@@ -1955,6 +2078,13 @@ const make = Effect.gen(function* () {
         Effect.andThen(orchestrator.getMessageCount(threadId)),
       );
     }),
+    getMessagesById: Effect.fn("ThreadManagementService.getMessagesById")(
+      function (threadId, messageIds) {
+        return ensureProjectionTranscript(threadId).pipe(
+          Effect.andThen(orchestrator.getMessagesById(threadId, messageIds)),
+        );
+      },
+    ),
     getTurnItem: Effect.fn("ThreadManagementService.getTurnItem")(function (input) {
       return ensureProjectionTranscript(input.threadId).pipe(
         Effect.andThen(orchestrator.getTurnItem(input)),

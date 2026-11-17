@@ -1,4 +1,5 @@
 /** The asking thread mid-turn on the real orchestrator, with handoffs and the wake reactor. */
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   AuthSessionId,
@@ -251,7 +252,7 @@ export const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
         }).pipe(Layer.provideMerge(databaseLayer)),
       ),
     );
-  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped);
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped);
 
 export const startEpoch = (world: World) =>
   Effect.gen(function* () {

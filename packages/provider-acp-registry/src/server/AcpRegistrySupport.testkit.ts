@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -47,7 +48,10 @@ export function layerResolver(
 ) {
   return Layer.mergeAll(
     NodeServices.layer,
-    TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
+    NodeCrypto.layer,
+    TestProviderHost.layer().pipe(
+      Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+    ),
     Layer.succeed(HostProcess.Platform, "linux"),
     Layer.succeed(HostProcess.Architecture, "x64"),
     Layer.succeed(HostProcess.Environment, environment),

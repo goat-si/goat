@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -86,7 +87,12 @@ describe("SSH operation deadlines", () => {
               : "GOAT pairing",
         );
         assert.equal(sshPreparationFailure(error).reason, "remote-unavailable");
-      }).pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, TestClock.layer()))),
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.merge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer), TestClock.layer()),
+        ),
+      ),
   );
 });
 
@@ -101,6 +107,7 @@ it.effect("retains a stopped local Tailscale proxy in tunnel diagnostics", () =>
     Effect.provide(
       Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         Layer.succeed(NetService.NetService, testNetService),
         Layer.succeed(HttpClient.HttpClient, hangingHttpClient),
         SshAuth.SshPasswordPrompt.disabledLayer,
@@ -199,5 +206,10 @@ it.effect.each(["authentication", "connection", "runtime-launch"] as const)(
           ),
         ),
       );
-    }).pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, TestClock.layer()))),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.merge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer), TestClock.layer()),
+      ),
+    ),
 );

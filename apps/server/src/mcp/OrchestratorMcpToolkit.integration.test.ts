@@ -4,6 +4,7 @@ import {
   readRestOfItem,
 } from "./OrchestratorMcpToolkit.threadRead.testkit.ts";
 import * as ThreadReplicaService from "./ThreadReplicaService.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -13,21 +14,14 @@ import {
   MessageId,
   type ModelSelection,
   NodeId,
-  type OrchestrationV2ProviderCapabilities,
-  type OrchestrationV2ProviderSession,
-  type OrchestrationV2ProviderThread,
   OrchestratorMcpDelegateTaskResult,
   OrchestratorMcpThreadSendDelivered,
   OrchestratorMcpThreadWaitResult,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
-  type ProviderOptionDescriptor,
-  ProviderThreadId,
-  ProviderTurnId,
   type ProviderUserInputAnswers,
   RuntimeRequestId,
-  type ServerProvider,
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
@@ -46,12 +40,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Option from "effect/Option";
-import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { McpSchema, McpServer } from "effect/ai";
-import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { layerMemorySecretStore } from "./OrchestratorMcpToolkit.integration.testkit.ts";
 import { CodexOrchestratorReplayHarness } from "../orchestration-v2/Adapters/CodexAdapterV2.testkit.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
@@ -76,14 +69,11 @@ import * as LaunchWatchService from "./LaunchWatchService.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import { layerPermissionProfilesOff } from "./McpToolAccess.testkit.ts";
-interface CapturedTurn {
-  readonly instanceId: ProviderInstanceId;
-  readonly threadId: ThreadId;
-  readonly text: string;
-}
-function unsupported(driver: ProviderDriverKind, detail: string) {
-  return Effect.fail(new ProviderAdapter.ProviderAdapterProtocolError({ driver, detail }));
-}
+import {
+  type CapturedTurn,
+  makeDeterministicAdapter,
+  makeProviderSnapshot,
+} from "./OrchestratorMcpToolkit.adapter.testkit.ts";
 
 const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
   Layer.provide(layerPermissionProfilesOff),
@@ -123,297 +113,17 @@ const delegatedTaskStatusTranscriptFile = new URL(
   import.meta.url,
 );
 
-const readDelegatedTaskStatusTranscript = Effect.fn("readDelegatedTaskStatusTranscript")(function* (
-  followupResult: string,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const text = yield* fs.readFileString(yield* path.fromFileUrl(delegatedTaskStatusTranscriptFile));
-  return yield* decodeProviderReplayNdjson(text.replaceAll(queuedFollowupResult, followupResult));
-}, Effect.provide(NodeServices.layer));
-
-function makeProviderSnapshot(input: {
-  readonly instanceId: ProviderInstanceId;
-  readonly driver: ProviderDriverKind;
-  readonly model: string;
-  readonly optionDescriptors?: ReadonlyArray<ProviderOptionDescriptor>;
-}): ServerProvider {
-  return {
-    instanceId: input.instanceId,
-    driver: input.driver,
-    enabled: true,
-    installed: true,
-    version: "test",
-    status: "ready",
-    auth: { status: "authenticated" },
-    checkedAt: "2026-06-17T00:00:00.000Z",
-    models: [
-      {
-        slug: input.model,
-        name: input.model,
-        isCustom: false,
-        capabilities:
-          input.optionDescriptors === undefined
-            ? null
-            : { optionDescriptors: input.optionDescriptors },
-      },
-    ],
-    slashCommands: [],
-    skills: [],
-  };
-}
-
-function makeDeterministicAdapter(input: {
-  readonly instanceId: ProviderInstanceId;
-  readonly driver: ProviderDriverKind;
-  readonly capabilities: OrchestrationV2ProviderCapabilities;
-  readonly capturedTurns: Ref.Ref<ReadonlyArray<CapturedTurn>>;
-  readonly shouldComplete: (turn: ProviderAdapter.ProviderAdapterV2TurnInput) => boolean;
-  readonly terminalGate?: (
-    turn: ProviderAdapter.ProviderAdapterV2TurnInput,
-  ) => Deferred.Deferred<void> | undefined;
-  readonly detachedCompletion?: boolean;
-  readonly startEvents?: (
-    turn: ProviderAdapter.ProviderAdapterV2TurnInput,
-    providerTurnId: ProviderTurnId,
-  ) => Effect.Effect<ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>>;
-  readonly onRespond?: (
-    response: ProviderAdapter.ProviderAdapterV2RuntimeRequestResponseInput,
-  ) => Effect.Effect<void>;
-  readonly response: (turn: ProviderAdapter.ProviderAdapterV2TurnInput) => string;
-  readonly steerReceived?: (
-    steer: ProviderAdapter.ProviderAdapterV2SteerInput,
-  ) => Deferred.Deferred<void> | undefined;
-}): ProviderAdapter.ProviderAdapterV2["Service"] {
-  return {
-    instanceId: input.instanceId,
-    driver: input.driver,
-    getCapabilities: () => Effect.succeed(input.capabilities),
-    planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
-    openSession: (sessionInput) =>
-      Effect.gen(function* () {
-        const sessionScope = yield* Effect.scope;
-        const events = yield* PubSub.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
-        const now = yield* DateTime.now;
-        const providerSession: OrchestrationV2ProviderSession = {
-          id: sessionInput.providerSessionId,
-          driver: input.driver,
-          providerInstanceId: input.instanceId,
-          status: "ready",
-          cwd: sessionInput.runtimePolicy.cwd ?? process.cwd(),
-          model: sessionInput.modelSelection.model,
-          capabilities: input.capabilities,
-          createdAt: now,
-          updatedAt: now,
-          lastError: null,
-        };
-
-        const publish = (providerEvents: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>) =>
-          Effect.forEach(providerEvents, (event) => PubSub.publish(events, event), {
-            discard: true,
-          });
-        const runOrdinals = new Map<ProviderTurnId, number>();
-        const turnInputs = new Map<ProviderTurnId, ProviderAdapter.ProviderAdapterV2TurnInput>();
-
-        return {
-          instanceId: input.instanceId,
-          driver: input.driver,
-          providerSessionId: sessionInput.providerSessionId,
-          providerSession,
-          events: Stream.fromPubSub(events),
-          ensureThread: (threadInput) =>
-            Effect.gen(function* () {
-              const createdAt = yield* DateTime.now;
-              const nativeThreadId = `${input.driver}:${threadInput.threadId}`;
-              return {
-                id: ProviderThreadId.make(`provider-thread:${nativeThreadId}`),
-                driver: input.driver,
-                providerInstanceId: input.instanceId,
-                providerSessionId: sessionInput.providerSessionId,
-                appThreadId: threadInput.threadId,
-                ownerNodeId: null,
-                nativeThreadRef: {
-                  driver: input.driver,
-                  nativeId: nativeThreadId,
-                  strength: "strong",
-                },
-                nativeConversationHeadRef: null,
-                status: "idle",
-                firstRunOrdinal: null,
-                lastRunOrdinal: null,
-                handoffIds: [],
-                forkedFrom: null,
-                createdAt,
-                updatedAt: createdAt,
-              } satisfies OrchestrationV2ProviderThread;
-            }),
-          resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
-          startTurn: (turnInput) =>
-            Effect.gen(function* () {
-              yield* Ref.update(input.capturedTurns, (turns) => [
-                ...turns,
-                {
-                  instanceId: input.instanceId,
-                  threadId: turnInput.threadId,
-                  text: turnInput.message.text,
-                },
-              ]);
-              const eventTime = yield* DateTime.now;
-              const providerTurnId = ProviderTurnId.make(
-                `provider-turn:${input.instanceId}:${turnInput.threadId}:${turnInput.runOrdinal}`,
-              );
-              runOrdinals.set(providerTurnId, turnInput.runOrdinal);
-              turnInputs.set(providerTurnId, turnInput);
-              yield* publish([
-                {
-                  type: "provider_turn.updated",
-                  driver: input.driver,
-                  providerTurn: {
-                    id: providerTurnId,
-                    providerThreadId: turnInput.providerThread.id,
-                    nodeId: turnInput.rootNodeId,
-                    runAttemptId: turnInput.attemptId,
-                    nativeTurnRef: {
-                      driver: input.driver,
-                      nativeId: `native-turn:${turnInput.threadId}:${turnInput.runOrdinal}`,
-                      strength: "strong",
-                    },
-                    ordinal: turnInput.providerTurnOrdinal,
-                    status: "running",
-                    startedAt: eventTime,
-                    completedAt: null,
-                  },
-                },
-              ]);
-              if (input.startEvents !== undefined)
-                yield* publish(yield* input.startEvents(turnInput, providerTurnId));
-              const complete = Effect.gen(function* () {
-                const terminalGate = input.terminalGate?.(turnInput);
-                if (terminalGate !== undefined) {
-                  yield* Deferred.await(terminalGate);
-                } else if (!input.shouldComplete(turnInput)) {
-                  return;
-                }
-                const response = input.response(turnInput);
-                yield* publish([
-                  {
-                    type: "provider_turn.updated",
-                    driver: input.driver,
-                    providerTurn: {
-                      id: providerTurnId,
-                      providerThreadId: turnInput.providerThread.id,
-                      nodeId: turnInput.rootNodeId,
-                      runAttemptId: turnInput.attemptId,
-                      nativeTurnRef: {
-                        driver: input.driver,
-                        nativeId: `native-turn:${turnInput.threadId}:${turnInput.runOrdinal}`,
-                        strength: "strong",
-                      },
-                      ordinal: turnInput.providerTurnOrdinal,
-                      status: "completed",
-                      startedAt: eventTime,
-                      completedAt: eventTime,
-                    },
-                  },
-                  {
-                    type: "turn_item.updated",
-                    driver: input.driver,
-                    turnItem: {
-                      id: TurnItemId.make(
-                        `turn-item:${input.instanceId}:${turnInput.threadId}:${turnInput.runOrdinal}:assistant`,
-                      ),
-                      threadId: turnInput.threadId,
-                      runId: turnInput.runId,
-                      nodeId: turnInput.rootNodeId,
-                      providerThreadId: turnInput.providerThread.id,
-                      providerTurnId,
-                      nativeItemRef: null,
-                      parentItemId: null,
-                      ordinal: turnInput.runOrdinal * 100 + 1,
-                      status: "completed",
-                      title: null,
-                      startedAt: eventTime,
-                      completedAt: eventTime,
-                      updatedAt: eventTime,
-                      type: "assistant_message",
-                      messageId: MessageId.make(
-                        `message:${input.instanceId}:${turnInput.threadId}:${turnInput.runOrdinal}:assistant`,
-                      ),
-                      text: response,
-                      streaming: false,
-                    },
-                  },
-                  {
-                    type: "turn.terminal",
-                    driver: input.driver,
-                    providerThreadId: turnInput.providerThread.id,
-                    providerTurnId,
-                    runOrdinal: turnInput.runOrdinal,
-                    status: "completed",
-                    failure: null,
-                    threadDisposition: "reusable",
-                  },
-                ]);
-              });
-              if (input.detachedCompletion === true)
-                yield* complete.pipe(Effect.forkIn(sessionScope));
-              else yield* complete;
-            }),
-          steerTurn: (steer) => {
-            const received = input.steerReceived?.(steer);
-            return received === undefined
-              ? Effect.void
-              : Deferred.succeed(received, undefined).pipe(Effect.asVoid);
-          },
-          interruptTurn: ({ providerThread, providerTurnId }) =>
-            Effect.gen(function* () {
-              const turnInput = turnInputs.get(providerTurnId);
-              const completedAt = yield* DateTime.now;
-              if (turnInput !== undefined) {
-                yield* publish([
-                  {
-                    type: "provider_turn.updated",
-                    driver: input.driver,
-                    providerTurn: {
-                      id: providerTurnId,
-                      providerThreadId: providerThread.id,
-                      nodeId: turnInput.rootNodeId,
-                      runAttemptId: turnInput.attemptId,
-                      nativeTurnRef: {
-                        driver: input.driver,
-                        nativeId: `native-turn:${turnInput.threadId}:${turnInput.runOrdinal}`,
-                        strength: "strong",
-                      },
-                      ordinal: turnInput.providerTurnOrdinal,
-                      status: "interrupted",
-                      startedAt: completedAt,
-                      completedAt,
-                    },
-                  },
-                ]);
-              }
-              yield* publish([
-                {
-                  type: "turn.terminal",
-                  driver: input.driver,
-                  providerThreadId: providerThread.id,
-                  providerTurnId,
-                  runOrdinal: runOrdinals.get(providerTurnId) ?? 1,
-                  status: "interrupted",
-                  failure: null,
-                  threadDisposition: "reusable",
-                },
-              ]);
-            }),
-          respondToRuntimeRequest: (response) => input.onRespond?.(response) ?? Effect.void,
-          readThreadSnapshot: () =>
-            unsupported(input.driver, "readThreadSnapshot is unused in this test"),
-          rollbackThread: () => unsupported(input.driver, "rollbackThread is unused in this test"),
-          forkThread: () => unsupported(input.driver, "forkThread is unused in this test"),
-        };
-      }),
-  };
-}
+const readDelegatedTaskStatusTranscript = Effect.fn("readDelegatedTaskStatusTranscript")(
+  function* (followupResult: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const text = yield* fs.readFileString(
+      yield* path.fromFileUrl(delegatedTaskStatusTranscriptFile),
+    );
+    return yield* decodeProviderReplayNdjson(text.replaceAll(queuedFollowupResult, followupResult));
+  },
+  Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+);
 
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
@@ -426,24 +136,6 @@ const client = McpSchema.McpServerClient.of({
     clientInfo: { name: "orchestrator-mcp-test", version: "1.0.0" },
   },
   getClient: Effect.die("unused"),
-});
-
-const layerMemorySecretStore = Layer.sync(ServerSecretStore.ServerSecretStore, () => {
-  const stored = new Map<string, Uint8Array>();
-  return ServerSecretStore.ServerSecretStore.of({
-    get: (name) => Effect.succeed(Option.fromNullishOr(stored.get(name))),
-    set: (name, value) => Effect.sync(() => void stored.set(name, value)),
-    create: (name, value) => Effect.sync(() => void stored.set(name, value)),
-    getOrCreateRandom: (name, bytes) =>
-      Effect.sync(() => {
-        const existing = stored.get(name);
-        if (existing) return existing;
-        const value = new Uint8Array(bytes).fill(7);
-        stored.set(name, value);
-        return value;
-      }),
-    remove: (name) => Effect.sync(() => void stored.delete(name)),
-  });
 });
 
 const layerUnusedScheduledTaskStub = Layer.succeed(
@@ -487,13 +179,34 @@ describe("orchestrator MCP toolkit", () => {
           },
           CodexOrchestratorReplayHarness,
         );
+        // SQL spans carry no bound parameters, so this records which thread each tool read.
+        const threadRecordReads: Array<{
+          readonly threadId: ThreadId;
+          readonly fields: ReadonlyArray<string>;
+        }> = [];
         const layerOrchestration = Layer.merge(
           layerOrchestrator,
-          ThreadManagementService.layer.pipe(
-            Layer.provide(layerOrchestrator),
-            Layer.provide(ServerSettings.layerTest()),
+          Layer.effect(
+            ThreadManagementService.ThreadManagementService,
+            Effect.gen(function* () {
+              const service = yield* ThreadManagementService.ThreadManagementService;
+              return ThreadManagementService.ThreadManagementService.of({
+                ...service,
+                getThreadRecords: (threadId, fields, filter) =>
+                  Effect.sync(() => threadRecordReads.push({ threadId, fields })).pipe(
+                    Effect.andThen(service.getThreadRecords(threadId, fields, filter)),
+                  ),
+              });
+            }),
+          ).pipe(
             Layer.provide(
-              CommandReceiptStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
+              ThreadManagementService.layer.pipe(
+                Layer.provide(layerOrchestrator),
+                Layer.provide(ServerSettings.layerTest()),
+                Layer.provide(
+                  CommandReceiptStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
+                ),
+              ),
             ),
           ),
         );
@@ -516,7 +229,7 @@ describe("orchestrator MCP toolkit", () => {
             }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
           ),
           Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
-          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
           Layer.provideMerge(layerOrchestration),
           Layer.provide(
             CodexOrchestratorReplayHarness.makeProviderAdapterRegistryLayer(transcript).pipe(
@@ -534,7 +247,7 @@ describe("orchestrator MCP toolkit", () => {
               Layer.provide(layerOrchestration),
             ),
           ),
-          Layer.provide(NodeServices.layer),
+          Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         );
 
         yield* Effect.gen(function* () {
@@ -852,7 +565,14 @@ describe("orchestrator MCP toolkit", () => {
           expect(finalStatus.latestTerminalResultContextTransferId).not.toBe(
             delegated.resultContextTransferId,
           );
-          const { tracer, transferReads, messageReads } = projectionQueryTracer();
+          const {
+            tracer,
+            transferReads,
+            messageReads,
+            runReads,
+            projectionTableReads,
+            acknowledgementReads,
+          } = projectionQueryTracer();
           const followupDelivery = orchestrator
             .getThreadProjection(parentThreadId)
             .pipe(
@@ -888,7 +608,7 @@ describe("orchestrator MCP toolkit", () => {
             const text = yield* readRestOfItem({
               page: read.structuredContent,
               threadId: delegated.childThreadId,
-              read: (args) => invoke("goat_thread_read", args),
+              read: (args) => invoke("goat_thread_read", args).pipe(Effect.withTracer(tracer)),
               beforePage: followupDelivery.pipe(
                 Effect.map((state) => expect(state).toBe("claimed")),
               ),
@@ -896,6 +616,18 @@ describe("orchestrator MCP toolkit", () => {
             expect(text).toBe(result);
           }
           expect(yield* followupDelivery).toBe("acknowledged");
+          // The acknowledgement reads the task and its spawning run by id, not the parent's history.
+          expect(acknowledgementReads.length).toBeGreaterThan(0);
+          expect(
+            acknowledgementReads.filter(
+              (query) =>
+                /FROM orchestration_v2_projection_(nodes|run_attempts)\b/.test(query) ||
+                (/FROM orchestration_v2_projection_runs\b/.test(query) &&
+                  !query.includes("AND run_id IN")) ||
+                (/FROM orchestration_v2_projection_subagents\b/.test(query) &&
+                  !query.includes("AND subagent_id IN")),
+            ),
+          ).toEqual([]);
 
           const messageReadsBeforeCapabilities = messageReads.length;
           const capabilities = yield* invoke("goat_schedule_list", {}).pipe(
@@ -903,6 +635,31 @@ describe("orchestrator MCP toolkit", () => {
           );
           expect(capabilities.isError).not.toBe(true);
           expect(messageReads).toHaveLength(messageReadsBeforeCapabilities);
+          const tableReadsBeforeCapabilities = projectionTableReads.length;
+          const providers = yield* invoke("goat_provider_list", {}).pipe(Effect.withTracer(tracer));
+          expect(providers.isError).not.toBe(true);
+          // The caller check reads only the thread row, never its history.
+          expect(new Set(projectionTableReads.slice(tableReadsBeforeCapabilities))).toEqual(
+            new Set(["threads"]),
+          );
+          const runReadsBeforeStatus = runReads.length;
+          const transferReadsBeforeStatus = transferReads.length;
+          const threadRecordReadsBeforeStatus = threadRecordReads.length;
+          const statusAgain = yield* invoke("goat_task_read", { taskId: delegated.taskId }).pipe(
+            Effect.withTracer(tracer),
+          );
+          expect(statusAgain.isError).not.toBe(true);
+          // A task wait reads result transfers and runs from the child; the parent's stay unread.
+          expect(runReads).toHaveLength(runReadsBeforeStatus + 1);
+          expect(transferReads).toHaveLength(transferReadsBeforeStatus + 1);
+          expect(
+            threadRecordReads
+              .slice(threadRecordReadsBeforeStatus)
+              .filter(
+                ({ fields }) => fields.includes("runs") || fields.includes("contextTransfers"),
+              )
+              .map(({ threadId }) => threadId),
+          ).toEqual([delegated.childThreadId]);
         }).pipe(Effect.provide(layerTest));
       }),
     ),
@@ -1056,7 +813,7 @@ it.live("delegate_task wait returns before a child question is answered", () =>
         Layer.provide(layerThreadStartMocks),
         Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
         Layer.provide(ThreadResultService.layer.pipe(Layer.provide(SqlitePersistence.layerMemory))),
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provideMerge(orchestration),
         Layer.provide(ServerSettings.layerTest()),
         Layer.provide(registry),
@@ -1079,7 +836,7 @@ it.live("delegate_task wait returns before a child question is answered", () =>
         Layer.provide(
           Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({ connectedHosts: Effect.succeed([]) }),
         ),
-        Layer.provide(NodeServices.layer),
+        Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       );
       yield* Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -1259,13 +1016,13 @@ it.effect("goat_thread_wait host result retains pendingRequestIds through MCP re
     const layer = layerOrchestratorToolkit.pipe(
       Layer.provide(ServerSettings.layerTest()),
       Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),
-      Layer.provideMerge(McpServer.McpServer.layer),
+      Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
       Layer.provide(
         Layer.mock(LaunchWatchService.LaunchWatchService)({
           find: () => Effect.succeed(null),
         }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
       ),
-      Layer.provide(NodeServices.layer),
+      Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       Layer.provide(Layer.mock(ThreadManagementService.ThreadManagementService)({})),
       Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),
       Layer.provide(ProviderRegistryMock.layer([])),

@@ -1,9 +1,11 @@
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import { ARCHIVE } from "./tunnel.fixture.ts";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
@@ -65,7 +67,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH runtime bu
           assert.include(events, `"type":"${type}"`);
         assert.notInclude(events, '"type":"stop"');
         assert.notEqual((yield* f.snapshot).pid, before.pid);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live("leaves an older runtime that is busy running and attaches to it", () =>
@@ -87,7 +89,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH runtime bu
       for (const type of ["self-stop", "supervise", "stop"])
         assert.notInclude(events, `"type":"${type}"`);
       yield* Effect.sync(() => process.kill(f.pid, 0));
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live.each([
@@ -120,7 +122,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH runtime bu
       assert.deepEqual(yield* f.snapshot, before);
       assert.isFalse(yield* f.fs.exists(`${f.test}/activity-requests`));
       assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live("an unstamped client never refreshes a stamped older runtime", () =>
@@ -136,7 +138,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH runtime bu
       assert.equal(result.success.version, SHA_BUILD);
       assert.deepEqual(yield* f.snapshot, before);
       assert.isFalse(yield* f.fs.exists(`${f.test}/activity-requests`));
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live("the remote guard refuses a refresh its own unstamped candidate cannot order", () =>
@@ -154,7 +156,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH runtime bu
       for (const type of ["drain", "self-stop", "supervise", "stop"])
         assert.notInclude(events, `"type":"${type}"`);
       yield* Effect.sync(() => process.kill(f.pid, 0));
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live.each([
@@ -173,7 +175,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH runtime bu
       if (Result.isFailure(result)) throw result.failure;
       assert.equal(result.success.version, ARCHIVE.archiveVersion);
       assert.equal(f.counters().uploads, 1);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live.each([
@@ -195,6 +197,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH runtime bu
       if (Result.isFailure(result)) throw result.failure;
       assert.equal(result.success.version, OTHER_TRAIN);
       assert.equal(f.counters().uploads, 0);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 });

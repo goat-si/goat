@@ -13,6 +13,7 @@ import {
   ProviderInstanceId,
   ProviderDriverKind,
 } from "@goat/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -48,6 +49,7 @@ import * as SettingsRpc from "../auth/SettingsRpc.ts";
 import * as Routes from "../provider/CodexRouteService.ts";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 import { MAIN_LISTENER } from "../auth/connectionContext.testkit.ts";
+import * as McpHttpServer from "./McpHttpServer.ts";
 const decodePersistedSettings = Schema.decodeUnknownEffect(ServerSettings);
 const decodeGoatclaw = Schema.decodeEffect(GoatclawSettings);
 const decodeListInput = Schema.decodeEffect(AgentWorkspaceListInput);
@@ -81,7 +83,7 @@ it.effect("#2059 keeps cursors reusable for long directory paths", () =>
     const next = yield* f.service.list(f.scope, nextInput);
     expect(next.entries[0]?.path).toBe(`${path}/b`);
     expect(next.nextCursor).toBeNull();
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("#2059 preserves valid audit JSON and correlation for escaped metadata", () =>
@@ -113,7 +115,7 @@ it.effect("#2059 preserves valid audit JSON and correlation for escaped metadata
   }).pipe(
     Effect.provide(Audit.layer.pipe(Layer.provideMerge(Sqlite.layerMemory))),
     Effect.scoped,
-    Effect.provide(NodeServices.layer),
+    Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   ),
 );
 
@@ -133,7 +135,7 @@ it.effect("#2059 never resends an expired eval terminal write on resume", () =>
             Layer.succeed(Workspace.AgentWorkspaceMcpService, f.service),
           ),
         ),
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provideMerge(Sqlite.layerMemory),
       ),
     );
@@ -166,7 +168,7 @@ it.effect("#2059 never resends an expired eval terminal write on resume", () =>
       Effect.provideService(McpSchema.McpServerClient, client),
     );
     yield* f.manager.close({ threadId: f.threadId });
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("#2059 rechecks a running thread's narrowed profile mode before mutations", () =>
@@ -255,7 +257,7 @@ it.effect("#2059 rechecks a running thread's narrowed profile mode before mutati
       goatclaw: { ...settings.goatclaw, enabled: false },
     }));
     yield* access.authorize(scope, {}, "terminal:operate");
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("#2059 preserves a body U+FEFF at a nonzero page boundary", () =>
@@ -274,7 +276,7 @@ it.effect("#2059 preserves a body U+FEFF at a nonzero page boundary", () =>
       maxBytes: 4,
     });
     expect(first.contents + next.contents).toBe("a\ufeffb");
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 const feature = Workspace.layer.pipe(
@@ -317,7 +319,7 @@ it.effect("#2059 refuses live workspace reads without an explicit file grant", (
     Effect.provide(
       catalog.pipe(
         Layer.provide(Layer.merge(dependencies, feature)),
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
       ),
     ),
   ),
@@ -362,7 +364,7 @@ it.effect(
           .pipe(Effect.flip)).code,
       ).toBe("capability_denied");
       expect(JSON.stringify(f.events)).not.toContain("한글");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("#2059 confines files and path search to the selected workspace", () =>
@@ -393,7 +395,7 @@ it.effect("#2059 confines files and path search to the selected workspace", () =
     expect(result.truncated).toBe(true);
     const first = yield* f.service.list(f.scope, { projectId: f.projectId, limit: 1 });
     expect(first.entries[0]?.path).toBe("draft.txt");
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -501,7 +503,7 @@ it.effect("#2059 conditionally saves text and creates without clobbering", () =>
         .pipe(Effect.isFailure),
     ).toBe(true);
     expect(yield* f.fs.exists(`${f.root}/no-audit.txt`)).toBe(false);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("#2059 rejects omitted and null mutation keys through direct tools and goat_call", () =>
@@ -543,7 +545,7 @@ it.effect("#2059 rejects omitted and null mutation keys through direct tools and
     Effect.provide(
       catalog.pipe(
         Layer.provide(Layer.merge(dependencies, feature)),
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
       ),
     ),
   ),
@@ -610,7 +612,7 @@ it.effect(
       expect(closed.status).toBe("closed");
       expect(process.killed).toBe(true);
       expect(JSON.stringify(f.events)).not.toContain("owned\\n");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("#2059 cannot adopt human PTYs or retain authority after client rebinding", () =>
@@ -646,7 +648,7 @@ it.effect("#2059 cannot adopt human PTYs or retain authority after client rebind
     );
     expect(f.pty.processes.every((process) => !process.killed)).toBe(true);
     yield* f.manager.close({ threadId: f.threadId });
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -664,7 +666,7 @@ it.effect(
               Layer.succeed(Workspace.AgentWorkspaceMcpService, f.service),
             ),
           ),
-          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
           Layer.provideMerge(Sqlite.layerMemory),
         ),
       );
@@ -718,7 +720,7 @@ it.effect(
         Effect.provideService(McpInvocationContext, f.scope),
         Effect.provideService(McpSchema.McpServerClient, client),
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -905,7 +907,10 @@ it.effect("#2059 lists workspace and terminal tools only for explicitly granted 
       expect(withheld).not.toContain(`goat_${name}`);
       expect(offered).toContain(`goat_${name}`);
     }
-  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(layerTestLoopback, NodeServices.layer))),
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(Layer.mergeAll(layerTestLoopback, NodeServices.layer, NodeCrypto.layer)),
+  ),
 );
 
 it.effect("#2059 human input during idle inspection keeps the PTY alive without a lock cycle", () =>
@@ -934,7 +939,7 @@ it.effect("#2059 human input during idle inspection keeps the PTY alive without 
     expect(f.pty.processes[0]?.killed).toBe(false);
     for (const process of f.pty.processes)
       process.onKill = () => process.emitExit({ exitCode: 0, signal: null });
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("#2059 evicts an exited terminal under new-session pressure without reviving it", () =>
@@ -986,5 +991,5 @@ it.effect("#2059 evicts an exited terminal under new-session pressure without re
     expect(f.pty.spawnInputs).toHaveLength(2);
     for (const process of f.pty.processes)
       process.onKill = () => process.emitExit({ exitCode: 0, signal: null });
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

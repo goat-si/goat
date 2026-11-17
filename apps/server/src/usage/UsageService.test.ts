@@ -5,7 +5,10 @@ import { registerMusePendingTest } from "./usageMusePending.testkit.ts";
 import { registerCacheUpgradeTest } from "./usageCacheUpgrade.testkit.ts";
 import { registerCompressedRolloutTest } from "./usageCompressedRollout.testkit.ts";
 import { registerClaudeCopiesTests } from "./usageClaudeCopies.testkit.ts";
+import { registerProvisionalTests } from "./usageProvisional.testkit.ts";
+import { registerCodexTierReparseTest } from "./usageCodexTierReparse.testkit.ts";
 // @effect-diagnostics nodeBuiltinImport:off - the suite seeds and grows real transcript trees on disk, outside the service's Effect FileSystem
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { SpawnExecutableResolution } from "@goat/shared/shell";
@@ -176,7 +179,7 @@ export const layerService = (input: {
     Layer.provideMerge(
       ServerConfig.layerTest(process.cwd(), NodePath.join(input.home, input.prefix)),
     ),
-    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     Layer.provideMerge(Layer.succeed(HostProcess.Platform, input.platform ?? "linux")),
     Layer.provideMerge(Layer.succeed(HostProcess.Hostname, input.hostname ?? "usage-test-host")),
     Layer.provideMerge(ServerSettings.layerTest(input.settings)),
@@ -294,7 +297,7 @@ const writeCursorLogin = (home: string) =>
     await NodeFSP.writeFile(authPath, "{}");
   });
 
-const seedCodexHistory = (input: {
+export const seedCodexHistory = (input: {
   id: string;
   nativeTurnId?: string;
   sessionId?: string;
@@ -2449,6 +2452,8 @@ describe("UsageService", () => {
   );
 
   registerClaudeCopiesTests(setup, layerService, claudeLine);
+  registerProvisionalTests(setup, layerService, claudeLine);
+  registerCodexTierReparseTest(setup, layerService, seedCodexHistory);
   it.effect(
     "keeps large-record totals and costs exact through append, dedupe, restart and cleanup",
     () =>
@@ -2888,7 +2893,14 @@ describe("UsageService", () => {
             HttpClient.HttpClient,
             HttpClient.make((request) =>
               Deferred.await(releaseRates).pipe(
-                Effect.as(HttpClientResponse.fromWeb(request, Response.json({}))),
+                Effect.as(
+                  HttpClientResponse.fromWeb(
+                    request,
+                    Response.json({
+                      "example-model": { input_cost_per_token: 1e-6, output_cost_per_token: 1e-5 },
+                    }),
+                  ),
+                ),
               ),
             ),
           ),
@@ -2907,7 +2919,8 @@ describe("UsageService", () => {
 
         const original = yield* Fiber.join(first);
         const updated = yield* Fiber.join(second);
-        assert.strictEqual(original.buckets[0]?.costUsd, 0);
+        // Fetched rates price the first read, so scans must start while the fetch is pending.
+        assert.isAbove(original.buckets[0]?.costUsd ?? 0, 0);
         assert.closeTo(updated.buckets[0]?.costUsd ?? -1, 0.00006, 1e-12);
       }).pipe(
         Effect.provide(layerService({ prefix: "usage-service-price-race-test", home, settings })),

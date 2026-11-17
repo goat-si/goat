@@ -23,7 +23,7 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -161,6 +161,7 @@ interface PendingRow {
   runtime_request_id: string;
   kind: string;
   status: string;
+  decision: string | null;
   created_at: string;
   resolved_at: string | null;
   item_json: string | null;
@@ -177,7 +178,7 @@ const make = Effect.gen(function* () {
   const settings = yield* Settings.ServerSettingsService;
   const pending = yield* PendingQuestions.PendingQuestionsMcpService;
   const threads = yield* ThreadManagement.ThreadManagementService;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const deliveryPermit = yield* Semaphore.make(1);
   const routing = yield* makeDecisionRouting;
   const version = yield* SubscriptionRef.make(0);
@@ -364,7 +365,8 @@ const make = Effect.gen(function* () {
       status:
         row.status === "pending"
           ? "open"
-          : row.status === "resolved"
+          : // A closed question was never answered; a Cancel on an approval is a person's answer.
+            row.status === "resolved" && (row.kind !== "user_input" || row.decision !== "cancel")
             ? "answered"
             : row.status === "expired"
               ? "expired"
@@ -403,7 +405,7 @@ const make = Effect.gen(function* () {
             catch: () => invalid("The decision was not found."),
           });
     // Match the existing request index instead of hydrating every thread transcript.
-    return yield* sql<PendingRow>`SELECT r.thread_id, r.runtime_request_id, r.kind, r.status, r.created_at, r.resolved_at,
+    return yield* sql<PendingRow>`SELECT r.thread_id, r.runtime_request_id, r.kind, r.status, json_extract(r.payload_json, '$.decision') AS decision, r.created_at, r.resolved_at,
       t.title, t.runtime_mode, t.interaction_mode, t.archived_at,
       (SELECT i.payload_json FROM orchestration_v2_projection_turn_items i
        WHERE i.thread_id = r.thread_id AND i.type IN ('user_input_request', 'approval_request')
@@ -545,7 +547,7 @@ const make = Effect.gen(function* () {
       );
       yield* expire();
       const time = yield* now;
-      const id = idPrefix + (yield* crypto.randomUUIDv4().pipe(Effect.orDie));
+      const id = idPrefix + (yield* random.uuidV4().pipe(Effect.orDie));
       const raised = yield* sql
         .withTransaction(
           Effect.gen(function* () {
@@ -682,7 +684,7 @@ const make = Effect.gen(function* () {
           : DateTime.formatIso(DateTime.makeUnsafe(input.expiresAt));
       if (expiresAt !== null && expiresAt <= time)
         return yield* invalid("expiresAt must be in the future.");
-      const id = `decision:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`;
+      const id = `decision:${yield* random.uuidV4().pipe(Effect.orDie)}`;
       const sourceThreadId = scopeOf(caller).thread?.threadId ?? null;
       const routed = yield* sql
         .withTransaction(
@@ -752,7 +754,7 @@ const make = Effect.gen(function* () {
         if (input.optionId !== undefined)
           return yield* invalid("Answer projected questions with answers or decision.");
         const commandId = CommandId.make(
-          `decision-response:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`,
+          `decision-response:${yield* random.uuidV4().pipe(Effect.orDie)}`,
         );
         yield* sql
           .withTransaction(

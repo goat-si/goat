@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 
@@ -237,6 +238,8 @@ const program = Effect.gen(function* () {
 });
 
 program.pipe(
-  Effect.provide(Layer.provide(AcpAgent.layerStdio(), NodeServices.layer)),
+  Effect.provide(
+    Layer.provide(AcpAgent.layerStdio(), Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+  ),
   NodeRuntime.runMain,
 );

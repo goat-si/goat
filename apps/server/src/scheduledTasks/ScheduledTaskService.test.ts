@@ -451,10 +451,22 @@ it.effect("saves thread_mode by the same rule as migration 080 on create and eve
       );
       yield* service.upsert({ ...input, threadId: ThreadId.make("bound") });
       assert.deepEqual(yield* mode, ["continue"]);
-      yield* service.upsert({ ...input, threadId: null });
+      // The old call shape no longer unbinds: the stored thread and mode are kept.
+      const kept = yield* service.upsert({ ...input, threadId: null });
+      assert.deepEqual([kept.task.threadId, yield* mode], ["bound", ["continue"]]);
+      yield* service.upsert({ ...input, threadId: null, threadMode: "new_thread" });
       assert.deepEqual(yield* mode, ["new_thread"]);
       yield* service.upsert({ ...input, threadId: ThreadId.make("bound") });
       assert.deepEqual(yield* mode, ["continue"]);
+      // A create without a mode still follows the thread it names.
+      const unbound = yield* service.upsert({ ...input, id: undefined, threadId: null });
+      assert.equal(unbound.task.threadMode, "new_thread");
+      const bound = yield* service.upsert({
+        ...input,
+        id: undefined,
+        threadId: ThreadId.make("other"),
+      });
+      assert.equal(bound.task.threadMode, "continue");
     }),
   ),
 );

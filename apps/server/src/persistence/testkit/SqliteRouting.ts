@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -16,7 +17,7 @@ export const layerReaderDatabase = Layer.unwrap(
     const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-routing-" });
     return Sqlite.layerFromPath(path.join(directory, "state.sqlite"));
   }),
-).pipe(Layer.provide(NodeServices.layer));
+).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 export const traceSqlRouting = () => {
   const queries: Array<{ query: string; connection: unknown }> = [];

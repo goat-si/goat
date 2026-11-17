@@ -18,7 +18,8 @@ import {
 } from "@goat/contracts";
 import { resolveSshCommand, SSH_KEEPALIVE_ARGS } from "@goat/ssh/command";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Hex from "effect/encoding/Hex";
@@ -90,7 +91,8 @@ const make = Effect.gen(function* () {
   const git = yield* Git.GitVcsDriver;
   const snapshots = yield* Git.makeVcsDriverShape();
   const dispatch = yield* Dispatch.SshRemoteDispatch;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
+  const digest = yield* Digest.Digest;
   const path = yield* Path.Path;
   const fileSystem = yield* FileSystem.FileSystem;
 
@@ -133,10 +135,10 @@ const make = Effect.gen(function* () {
         .toLowerCase()
         .replace(/[^a-z0-9]+/gu, "-")
         .replace(/^-+|-+$/gu, "") || "repo";
-    const digest = yield* crypto
-      .digest("SHA-256", new TextEncoder().encode(workspaceRoot))
+    const digestBytes = yield* digest
+      .digest(Digest.sha256, new TextEncoder().encode(workspaceRoot))
       .pipe(Effect.orDie);
-    return `${slug}-${Hex.encode(digest).slice(0, 8)}`;
+    return `${slug}-${Hex.encode(digestBytes).slice(0, 8)}`;
   });
   const script = (
     target: DesktopSshEnvironmentTarget,
@@ -459,9 +461,7 @@ printf 'GOAT_REPO\\n%s\\n' "$repo"
         code: "environment_mismatch",
         host: target.alias,
       });
-    const operationId = (yield* crypto.randomUUIDv4().pipe(Effect.orDie))
-      .replaceAll("-", "")
-      .slice(0, 8);
+    const operationId = (yield* random.uuidV4().pipe(Effect.orDie)).replaceAll("-", "").slice(0, 8);
     if (handoff !== undefined) yield* handoff.beforeSnapshot;
     const { snapshotRef, snapshotOid, remoteRepoPath, pushedRef } = yield* transferWorkspace({
       target,

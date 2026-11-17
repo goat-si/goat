@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -122,7 +123,7 @@ const makeDiskSessionStoreLayer = Effect.fn("makeDiskSessionStoreLayer")(functio
   );
 });
 
-it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("SessionStore.layer", (it) => {
   it.effect.each(["revoke", "revokeAllExcept", "replace"] as const)(
     "invalidates every connection for a session on %s and leaves other sessions active",
     (operation) =>
@@ -766,7 +767,13 @@ it.effect("reads live scopes without a token and fences replacement, revocation 
     expect((yield* store.readActiveScopes(third.sessionId).pipe(Effect.flip))._tag).toBe(
       "UnknownSessionTokenError",
     );
-  }).pipe(Effect.provide(layerSessionStore().pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.provide(
+      layerSessionStore().pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
 );
 
 it.effect("serves live scopes for sessions another process issued after startup", () =>
@@ -829,7 +836,7 @@ it.effect("serves live scopes for sessions another process issued after startup"
         "UnknownSessionTokenError",
       );
     }).pipe(Effect.provide(running), Effect.scoped);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("a verify that read the row before a revocation cannot restore the grant", () =>
@@ -881,7 +888,7 @@ it.effect("a verify that read the row before a revocation cannot restore the gra
         "UnknownSessionTokenError",
       );
     }).pipe(Effect.provide(layerStore), Effect.scoped);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("next issuance prunes all expired live authority entries without reading them", () =>
@@ -910,5 +917,11 @@ it.effect("next issuance prunes all expired live authority entries without readi
       "UnknownSessionTokenError",
     );
     expect(yield* store.readActiveScopes(next.sessionId)).toEqual(["memory:read"]);
-  }).pipe(Effect.provide(layerSessionStore().pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.provide(
+      layerSessionStore().pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
 );

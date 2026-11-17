@@ -3080,6 +3080,7 @@ export default function ChatView(props: ChatViewProps) {
     respondingRequestIds,
     activePendingProgress,
     onAdvanceActivePendingUserInput,
+    onChangeActivePendingUserInputCustomAnswer,
     onRespondToApproval: onRespondToApprovalStable,
     beginLocalDispatch,
     resetLocalDispatch,

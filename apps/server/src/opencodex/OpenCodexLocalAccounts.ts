@@ -1,5 +1,5 @@
 import { TrimmedNonEmptyString } from "@goat/contracts";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as Option from "effect/Option";
@@ -64,9 +64,9 @@ const encodeAttestation = Schema.encodeSync(Schema.fromJsonString(LocalCredentia
 
 /** A digest of the nonsecret zero-count attestation; never of any credential value. */
 export const localAccountsDigest = Effect.fn("OpenCodexLocalAccounts.digest")(function* (
-  crypto: Crypto.Crypto,
+  digester: Digest.Digest["Service"],
   generation: string,
 ) {
   const bytes = new TextEncoder().encode(encodeAttestation({ count: 0, generation }));
-  return Hex.encode(yield* crypto.digest("SHA-256", bytes));
+  return Hex.encode(yield* digester.digest(Digest.sha256, bytes));
 });

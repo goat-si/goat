@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -176,7 +177,7 @@ const mcpRegistry = Layer.effect(
       getEnvironmentId: Effect.succeed(EnvironmentId.make("session-lifecycle-test")),
     }),
   ),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 const ingestor = ProviderEventIngestor.layer.pipe(
@@ -217,7 +218,7 @@ const layer = (fixture: Fixture, options: { readonly maxIdlePinMs?: number } = {
         ),
       ),
     ),
-  ).pipe(Layer.provide(NodeServices.layer));
+  ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 const openSession = Effect.gen(function* () {
   const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;

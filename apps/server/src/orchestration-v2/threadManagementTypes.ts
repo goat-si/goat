@@ -38,8 +38,12 @@ export interface ThreadManagementSendInput {
   readonly modelSelection?: ModelSelection;
   readonly mode: ThreadManagementSendMode;
   readonly targetRunId?: RunId;
+  /** Start a new provider session; the orchestrator queues it instead of steering. */
+  readonly freshContext?: boolean;
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
+  /** Set by the agent send tools: refuse a thread whose missing worktree cannot be restored. */
+  readonly refuseUnrestorableWorktree?: boolean;
 }
 
 export interface ThreadManagementSendResult {
@@ -62,6 +66,8 @@ export interface ThreadManagementWaitInput {
   readonly ignoreRequestIds?: ReadonlyArray<RuntimeRequestId>;
   /** Internal settling still waits for the run to finish. */
   readonly releaseOnPendingQuestion?: boolean;
+  /** Also wait for the thread's delegated and background work and the runs they wake. */
+  readonly untilDelegatedWorkSettled?: boolean;
 }
 
 export interface ThreadManagementWaitResult {
@@ -69,6 +75,8 @@ export interface ThreadManagementWaitResult {
   readonly run: OrchestrationV2Run | null;
   readonly timedOut: boolean;
   readonly pendingRequestIds?: ReadonlyArray<RuntimeRequestId>;
+  /** With `untilDelegatedWorkSettled`, once settled: the run whose reply is the thread's answer. */
+  readonly resultRun?: OrchestrationV2Run;
 }
 
 export interface ThreadManagementInterruptInput {

@@ -3,7 +3,7 @@ import {
   parseChecksums,
   type CliArchivePlatformKey,
 } from "@goat/shared/cliRelease";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
@@ -22,7 +22,7 @@ export const readLocalRuntimeArchive = Effect.fn("ssh.runtimeArchive.read")(func
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   const fileName = cliArchiveFileName(version, platformKey);
   const filePath = path.join(directory, fileName);
   if (!(yield* fs.exists(filePath))) return null;
@@ -44,7 +44,7 @@ export const readLocalRuntimeArchive = Effect.fn("ssh.runtimeArchive.read")(func
       stdout: "",
     });
   }
-  const sha256 = Hex.encode(yield* crypto.digest("SHA-256", bytes));
+  const sha256 = Hex.encode(yield* digest.digest(Digest.sha256, bytes));
   const sidecarPath = `${filePath}.sha256`;
   const hasSidecar = yield* fs.exists(sidecarPath);
   if (requireSidecar && !hasSidecar) {

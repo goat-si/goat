@@ -1,6 +1,6 @@
 import { deriveProviderInstanceConfigMap } from "./provider/ProviderInstanceRegistryHydration.ts";
 import { assertTerminalSecret, layerServerSettings } from "./serverSettingsLayers.testkit.ts";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { assert, it } from "@effect/vitest";
 import {
   BUILTIN_PERMISSION_PROFILES,

@@ -1,4 +1,5 @@
 import { expect, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -30,7 +31,7 @@ const fixture = () =>
     Layer.provideMerge(
       Layer.fresh(Config.layerTest(process.cwd(), { prefix: "goat-owner-policy-test-" })),
     ),
-    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
 const initializeWithPolicy = (storedPolicy = M.DEFAULT_MEMORY_OWNER_SOURCE_READ_POLICY) =>
   Effect.gen(function* () {
@@ -284,7 +285,7 @@ it.effect("a settings write failure cannot publish an enrollment or settle a rev
         ),
       ),
     );
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("restart preserves a pending reenrollment and its exact revocation pair", () =>
@@ -371,7 +372,7 @@ it.effect("the durable rename precedes committed policy publication", () =>
         ),
       ),
     );
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("acknowledged pairs do not exhaust future enrollment or revocation slots", () =>

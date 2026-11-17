@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
@@ -22,7 +23,10 @@ it.effect("forgets an activated preview on reset, so the next evaluation asks ag
     assert.notEqual(again.preview?.id, first.preview?.id);
   }).pipe(
     Effect.provide(
-      Layer.merge(NodeSqliteClient.layer({ filename: ":memory:" }), NodeServices.layer),
+      Layer.merge(
+        NodeSqliteClient.layer({ filename: ":memory:" }),
+        Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+      ),
     ),
   ),
 );
@@ -73,7 +77,10 @@ it.effect(
       );
     }).pipe(
       Effect.provide(
-        Layer.merge(NodeSqliteClient.layer({ filename: ":memory:" }), NodeServices.layer),
+        Layer.merge(
+          NodeSqliteClient.layer({ filename: ":memory:" }),
+          Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+        ),
       ),
     ),
 );
@@ -93,7 +100,10 @@ it.effect("an answer to a preview cannot approve a larger set found after it was
     assert.isFalse((yield* state.evaluate({ ...input, nowMs: 2, plannedCount: 4 })).apply);
   }).pipe(
     Effect.provide(
-      Layer.merge(NodeSqliteClient.layer({ filename: ":memory:" }), NodeServices.layer),
+      Layer.merge(
+        NodeSqliteClient.layer({ filename: ":memory:" }),
+        Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+      ),
     ),
   ),
 );

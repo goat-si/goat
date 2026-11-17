@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
@@ -29,7 +30,7 @@ const layer = Layer.mergeAll(Auth.layer, Settings.layer).pipe(
   Layer.provide(Secrets.layer),
   Layer.provideMerge(Environment.layerIdentity),
   Layer.provideMerge(Config.layerTest(process.cwd(), { prefix: "goat-connect-settings-mcp-" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 it.effect.each(["ended turn", "loss of full access"] as const)(

@@ -3,11 +3,12 @@ import { expect, it } from "@effect/vitest";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
@@ -23,8 +24,8 @@ import {
 const driver = (value: string) => ProviderDriverKind.make(value);
 const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 const makeTempDir = (name: string) =>
-  Crypto.Crypto.pipe(
-    Effect.flatMap((crypto) => crypto.randomUUIDv4()),
+  SecureRandom.SecureRandom.pipe(
+    Effect.flatMap((crypto) => crypto.uuidV4()),
     Effect.flatMap((id) =>
       Effect.acquireRelease(
         Effect.succeed(NodePath.join(NodeFS.realpathSync(NodeOS.tmpdir()), `${name}-${id}`)),
@@ -93,7 +94,9 @@ const bunOutdatedTable = (row: string) => [
   "Note: The * indicates that version isn't true latest due to minimum release age",
 ];
 it.layer(
-  NodeServices.layer.pipe(Layer.merge(Layer.succeed(HostProcess.Environment, { PATH: "" }))),
+  Layer.mergeAll(NodeServices.layer, NodeCrypto.layer).pipe(
+    Layer.merge(Layer.succeed(HostProcess.Environment, { PATH: "" })),
+  ),
 )("bun global updates", (it) => {
   it.effect.each([
     {

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it, vi } from "@effect/vitest";
 import { AuthSessionId, SSH_PREFLIGHT_STEP_ORDER, type SshPreflightReport } from "@goat/contracts";
@@ -120,7 +121,7 @@ const preflightOf = (
       return yield* setup.preflight({ host }, { kind: "client", sessionId: reviewer });
     }).pipe(Effect.ensuring(Effect.sync(() => discover.mockRestore())));
     return { report, probes, hostKey: report.steps.find((step) => step.id === "host_key") };
-  }).pipe(Effect.provide(NodeServices.layer));
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 it.effect(
   "preflight fails for Pen's own pen-<name> of a disposable machine with no pin yet, offline, with no key probe and no fingerprint",

@@ -1,6 +1,7 @@
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@goat/shared/Net";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -56,6 +57,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const before = yield* f.snapshot;
           const layer = Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, f.transport),
             Layer.succeed(FileSystem.FileSystem, f.observedFs),
             Layer.succeed(HttpClient.HttpClient, testHttpClient),
@@ -79,7 +81,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             assert.notExists((yield* f.snapshot).pid);
           } else assert.deepEqual(yield* f.snapshot, before);
           assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live(
@@ -96,6 +101,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           let current = { ...f.runner, archiveVersion: String(f.runner.archiveVersion) };
           const layer = Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, f.transport),
             Layer.succeed(FileSystem.FileSystem, f.observedFs),
             Layer.succeed(HttpClient.HttpClient, testHttpClient),
@@ -160,7 +166,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             );
           }).pipe(Effect.provide(layer), Effect.scoped);
           assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each(["goat", ".install-complete"] as const)(
@@ -205,6 +214,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           };
           const layer = Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, f.transport),
             Layer.succeed(FileSystem.FileSystem, f.observedFs),
             Layer.succeed(HttpClient.HttpClient, testHttpClient),
@@ -250,7 +260,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
             assert.isFalse(yield* f.fs.exists(`${f.home}/.goat/runtime/goat/versions/9.9.9`));
           }).pipe(Effect.provide(layer), Effect.scoped);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("disconnect reports the real stop deadline and preserves ownership until exit", () =>
@@ -265,6 +278,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         });
         const layer = Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, f.transport),
           Layer.succeed(FileSystem.FileSystem, f.observedFs),
           Layer.succeed(HttpClient.HttpClient, testHttpClient),
@@ -299,7 +313,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             assert.isFalse(yield* f.fs.exists(`${f.state}/${file}`));
         }).pipe(Effect.provide(layer), Effect.scoped);
         assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each(
@@ -345,6 +359,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           );
         const layer = Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, f.transport),
           Layer.succeed(FileSystem.FileSystem, f.observedFs),
           Layer.succeed(HttpClient.HttpClient, testHttpClient),
@@ -395,7 +410,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           yield* Effect.sync(() => process.kill(f.pid, 0));
         }
         assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each(
@@ -468,6 +483,7 @@ export PATH
           const layer = (nodeScriptPath: string, leaveRemoteServerRunning: boolean) =>
             Layer.mergeAll(
               NodeServices.layer,
+              NodeCrypto.layer,
               Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, f.transport),
               Layer.succeed(FileSystem.FileSystem, f.observedFs),
               Layer.succeed(HttpClient.HttpClient, testHttpClient),
@@ -520,7 +536,10 @@ export PATH
             assert.isFalse(yield* f.fs.exists(`${f.state}/${file}`));
           assert.include(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
           assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
   },
 );

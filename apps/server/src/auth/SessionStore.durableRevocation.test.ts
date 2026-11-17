@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { AuthStandardClientScopes } from "@goat/contracts";
@@ -5,6 +6,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
@@ -69,7 +71,7 @@ it.effect.each(["revoked", "deleted"] as const)(
           ),
         ).toBe("The MCP session is no longer active.");
       }).pipe(Effect.provide(running), Effect.scoped);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 const penPeer = {
@@ -125,7 +127,7 @@ it.effect.each([
         yield* Fiber.join(waiting);
         expect(yield* store.readActiveScopes(current.sessionId)).toEqual(AuthStandardClientScopes);
       }).pipe(Effect.provide(running), Effect.scoped);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 type Repository = Parameters<Parameters<typeof makeServerAndCli>[0] & {}>[0];
@@ -157,7 +159,7 @@ const makeLateAdmission = Effect.fn("makeLateAdmission")(function* (read: ReadMo
           );
           yield* store.verify(issued.token, MAIN_LISTENER);
           yield* Deferred.succeed(late, issued);
-        }).pipe(Effect.orDie, Effect.provide(NodeServices.layer)),
+        }).pipe(Effect.orDie, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
       );
       return late;
     });
@@ -188,7 +190,7 @@ it.effect.each(Object.keys(readModes) as ReadonlyArray<keyof typeof readModes>)(
         expect(yield* grantState(store, phone.sessionId)).toBe("UnknownSessionTokenError");
         expect(yield* grantState(store, (yield* Deferred.await(late)).sessionId)).toBe("live");
       }).pipe(Effect.provide(running), Effect.scoped);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -226,7 +228,7 @@ it.effect(
         yield* Fiber.join(press);
         expect(yield* grantState(store, (yield* Deferred.await(late)).sessionId)).toBe("live");
       }).pipe(Effect.provide(running), Effect.scoped);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each(["fail", "die"] as const)(
@@ -267,7 +269,7 @@ it.effect.each(["fail", "die"] as const)(
         );
         yield* Fiber.join(waiting);
       }).pipe(Effect.provide(running), Effect.scoped);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -308,5 +310,5 @@ it.effect(
         );
         expect(new Set(removedIds).size).toBe(ids.size);
       }).pipe(Effect.provide(running), Effect.scoped);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

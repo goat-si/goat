@@ -97,7 +97,7 @@ import {
 import type * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as Exit from "effect/Exit";
@@ -191,13 +191,13 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
   const fileSystem = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
   const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* Digest.Digest;
   const driver = OPENCODE_PROVIDER;
   let nativeGoalSupport: boolean | undefined;
   const mcpServerNameFor = (threadId: string) =>
-    goatMcpServerName(threadId).pipe(Effect.provideService(Crypto.Crypto, crypto));
+    goatMcpServerName(threadId).pipe(Effect.provideService(Digest.Digest, crypto));
   const cuaServerNameFor = (threadId: string) =>
-    cuaMcpServerName(threadId).pipe(Effect.provideService(Crypto.Crypto, crypto));
+    cuaMcpServerName(threadId).pipe(Effect.provideService(Digest.Digest, crypto));
 
   const openSession = Effect.fn("OpenCode2Adapter.openSession")(function* (
     input: Parameters<ProviderAdapter.ProviderAdapterV2["Service"]["openSession"]>[0],
@@ -3337,7 +3337,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         value,
       });
       state.memoryDigest = Hex.encode(
-        yield* crypto.digest("SHA-256", new TextEncoder().encode(value)),
+        yield* crypto.digest(Digest.sha256, new TextEncoder().encode(value)),
       );
     });
 

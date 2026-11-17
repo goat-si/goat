@@ -3,6 +3,7 @@ import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import * as Stream from "effect/Stream";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert } from "@effect/vitest";
 import {
@@ -169,6 +170,7 @@ export const fixtureWith = Effect.fnUntraced(function* (
   let hostCatalog = catalog;
   const dependencies = Layer.mergeAll(
     NodeServices.layer,
+    NodeCrypto.layer,
     ServerSettings.layerTest(
       fleetReach === undefined ? {} : { goatclaw: { enabled: true, defaultProfile: "owner" } },
     ),

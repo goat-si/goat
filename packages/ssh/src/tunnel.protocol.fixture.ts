@@ -4,7 +4,7 @@ import { assert } from "@effect/vitest";
 import { build } from "vite-plus";
 import * as NodeURL from "node:url";
 import * as NetService from "@goat/shared/Net";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Clock from "effect/Clock";
 import * as Hex from "effect/encoding/Hex";
 import * as Effect from "effect/Effect";
@@ -629,9 +629,9 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
     ChildProcess.make("tar", ["-czf", `${cache}/${stem}.tar.gz`, "-C", `${home}/stage`, stem]),
   );
   assert.equal(Number(yield* packed.exitCode), 0);
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   const sha = Hex.encode(
-    yield* crypto.digest("SHA-256", yield* fs.readFile(`${cache}/${stem}.tar.gz`)),
+    yield* digest.digest(Digest.sha256, yield* fs.readFile(`${cache}/${stem}.tar.gz`)),
   );
   yield* fs.writeFileString(`${cache}/${stem}.tar.gz.sha256`, `${sha}  ${stem}.tar.gz\n`);
   const runner = { ...ARCHIVE, archiveDirectory: cache };
@@ -646,7 +646,9 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
     source: "retained",
     requireInstalled: true,
     mayUpgradeOwnedServer: true,
-    retainedRunnerSha256: Hex.encode(yield* crypto.digest("SHA-256", encoder.encode(oldRunner))),
+    retainedRunnerSha256: Hex.encode(
+      yield* digest.digest(Digest.sha256, encoder.encode(oldRunner)),
+    ),
     refreshIfIdle: true,
     expectedLiveVersion: input.oldVersion,
   };

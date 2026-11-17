@@ -7,7 +7,7 @@ import {
   type RunId,
   type ThreadId,
 } from "@goat/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -72,7 +72,7 @@ export class ThreadLifecycleMcpService extends Context.Service<
 >()("goat/mcp/ThreadLifecycleMcpService") {}
 
 const make = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const receipts = yield* ToolAdmission.makeReceiptReader();
   const routed = yield* OriginRoutedDelete.OriginRoutedDelete;
@@ -138,7 +138,7 @@ const make = Effect.gen(function* () {
     const receiptId = Option.isNone(held) ? undefined : yield* held.value.held;
     const commandId =
       receiptId === undefined
-        ? yield* newCommandId().pipe(Effect.provideService(Crypto.Crypto, crypto))
+        ? yield* newCommandId().pipe(Effect.provideService(SecureRandom.SecureRandom, random))
         : CommandId.make(`mcp:lifecycle:${receiptId}`);
     const common = { threadId, commandId };
     const command =

@@ -4,6 +4,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as CodexManagedTokenBroker from "./CodexManagedTokenBroker.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { CodexSettings, EnvironmentId, ProviderInstanceId } from "@goat/contracts";
@@ -329,7 +330,7 @@ it.live.each(
       Effect.provide(
         ServerConfig.layerTest(process.cwd(), {
           prefix: "goat-managed-runtime-",
-        }).pipe(Layer.provideMerge(NodeServices.layer)),
+        }).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
       ),
     ),
 );
@@ -363,7 +364,7 @@ it.effect.each(["openai", "none"] as const)(
             HttpClient.HttpClient,
             HttpClient.make(() => Effect.die("No HTTP before managed route rejection")),
           ),
-        ).pipe(Layer.provideMerge(NodeServices.layer)),
+        ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
       ),
     ),
 );
@@ -457,7 +458,7 @@ it.effect.each(["codex", "codex-child"])(
       Effect.scoped,
       Effect.provide(
         ServerConfig.layerTest(process.cwd(), { prefix: "authless-runtime-config-" }).pipe(
-          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
       ),
     ),

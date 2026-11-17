@@ -7,6 +7,7 @@ import {
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -20,6 +21,9 @@ import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
 import { CodexDriver } from "./CodexDriver.ts";
 import { layerTest } from "./CodexDriver.testkit.ts";
 import { ObservedOperation, observing } from "./CodexObservedOperation.testkit.ts";
+
+const plainEnvValue = (value: string | Redacted.Redacted<string> | undefined) =>
+  Redacted.isRedacted(value) ? Redacted.value(value) : value;
 
 const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 
@@ -139,7 +143,10 @@ const launchedHomes = (root: string, form: InstanceForm) =>
       Effect.gen(function* () {
         if (ChildProcess.isStandardCommand(command)) {
           const operation = yield* ObservedOperation;
-          homes.set(operation, [...(homes.get(operation) ?? []), command.options.env?.CODEX_HOME]);
+          homes.set(operation, [
+            ...(homes.get(operation) ?? []),
+            plainEnvValue(command.options.env?.CODEX_HOME),
+          ]);
         }
         return yield* spawner.spawn(command);
       }),

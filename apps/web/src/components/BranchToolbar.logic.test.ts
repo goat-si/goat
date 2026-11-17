@@ -1,8 +1,9 @@
-import { type VcsRef } from "@goat/contracts";
+import { ProviderInstanceId, RunId, type VcsRef } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   dedupeRemoteBranchesWithLocalMatches,
   deriveLocalBranchNameFromRemoteRef,
+  isWorktreeChangeBlocked,
   resolveBranchSelectionTarget,
   shouldReuseSelectedWorktree,
   resolveDraftEnvModeAfterBranchChange,
@@ -254,6 +255,36 @@ describe("resolveBranchSelectionTarget", () => {
       staysInActiveCheckout: true,
     });
   });
+});
+
+describe("isWorktreeChangeBlocked", () => {
+  const runtime = (status: "preparing" | "running" | "queued" | "completed", hasRun = true) => ({
+    status,
+    activeRunId: status === "completed" || !hasRun ? null : RunId.make("run"),
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    providerName: null,
+    lastError: null,
+  });
+
+  it.each([
+    ["preparing", true, "/repo/wt-a", null, true],
+    ["running", true, "/repo/wt-a", "/repo/wt-b", true],
+    ["running", true, null, "/repo/wt-b", true],
+    ["running", true, "/repo/wt-a", "/repo/wt-a", false],
+    ["queued", false, "/repo/wt-a", null, false],
+    ["completed", false, "/repo/wt-a", null, false],
+  ] as const)(
+    "a %s turn (run attached: %s) moving %s -> %s is blocked: %s",
+    (status, hasRun, currentWorktreePath, nextWorktreePath, blocked) => {
+      expect(
+        isWorktreeChangeBlocked({
+          runtime: runtime(status, hasRun),
+          currentWorktreePath,
+          nextWorktreePath,
+        }),
+      ).toBe(blocked);
+    },
+  );
 });
 
 describe("shouldIncludeBranchPickerItem", () => {

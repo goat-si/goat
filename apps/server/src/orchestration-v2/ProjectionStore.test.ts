@@ -1,11 +1,7 @@
 import { PlanId } from "@goat/contracts";
 import * as NodeSqlite from "node:sqlite";
-
 import { assert, it, vi } from "@effect/vitest";
 import {
-  CheckpointId,
-  CheckpointRef,
-  CheckpointScopeId,
   EnvironmentId,
   EventId,
   CommandId,
@@ -31,11 +27,11 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
 import { projectThreadAwarenessV2 } from "@goat/shared/agentAwareness";
-
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -63,7 +59,9 @@ import {
   saveD10Item,
   traceSqlStatements,
   addRolledBackRecoveryCandidate,
+  queryPlanFor,
 } from "./ProjectionStore.testkit.ts";
+import { addOrphanedRecoveryCandidate } from "./ProjectionStore.orphanRecovery.testkit.ts";
 
 declare module "node:sqlite" {
   interface StatementSync {
@@ -71,79 +69,6 @@ declare module "node:sqlite" {
     stat(counter: "vmStep"): number;
   }
 }
-
-const addOrphanedRecoveryCandidate = Effect.fn("addOrphanedRecoveryCandidate")(function* (
-  suffix: string,
-) {
-  const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
-  const now = yield* DateTime.now;
-  const threadId = ThreadId.make(`thread:${suffix}:orphaned`);
-  const runId = RunId.make(`run:${suffix}:missing`);
-  const rootNodeId = NodeId.make(`node:${suffix}:orphaned`);
-
-  yield* projectionStore.apply({
-    id: EventId.make(`event:${suffix}:thread-created`),
-    type: "thread.created",
-    threadId,
-    occurredAt: now,
-    payload: {
-      createdBy: "user",
-      creationSource: "web",
-      id: threadId,
-      projectId: ProjectId.make(`project:${suffix}`),
-      title: "Orphaned recovery candidate",
-      providerInstanceId,
-      modelSelection,
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      branch: null,
-      worktreePath: null,
-      activeProviderThreadId: null,
-      lineage: {
-        parentThreadId: null,
-        relationshipToParent: null,
-        rootThreadId: threadId,
-      },
-      forkedFrom: null,
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: null,
-      settledOverride: null,
-      settledAt: null,
-      lastVisitedAt: null,
-      deletedAt: null,
-    },
-  });
-  yield* projectionStore.apply({
-    id: EventId.make(`event:${suffix}:item-running`),
-    type: "turn-item.updated",
-    threadId,
-    runId,
-    nodeId: rootNodeId,
-    driver,
-    occurredAt: now,
-    payload: {
-      id: TurnItemId.make(`item:${suffix}:orphaned`),
-      threadId,
-      runId,
-      nodeId: rootNodeId,
-      providerThreadId: null,
-      providerTurnId: null,
-      nativeItemRef: null,
-      parentItemId: null,
-      ordinal: 1,
-      status: "running",
-      title: "orphaned command",
-      startedAt: now,
-      completedAt: null,
-      updatedAt: now,
-      type: "command_execution",
-      input: "sleep 60",
-    },
-  });
-
-  return threadId;
-});
 
 const restartCancelledWorkSurvivesStaleRunUpdate = Effect.gen(function* () {
   const store = yield* ProjectionStore.ProjectionStoreV2;
@@ -233,284 +158,35 @@ const threadWorktreePathsIncludeArchivedOnRequest = Effect.gen(function* () {
   ]);
 });
 
-// The SQL store keeps only live work beside a window's rows; the replay store's window keeps every record.
-const commandReadsSkipSettledLeafNodes = Effect.fnUntraced(function* (
-  windowKeepsOnlyLiveWork: boolean,
-) {
-  const store = yield* ProjectionStore.ProjectionStoreV2;
-  const now = yield* DateTime.now;
-  const threadId = yield* addRolledBackRecoveryCandidate("settled-leaf-nodes");
-  const settledRun = (yield* store.getThreadProjection(threadId)).runs[0]!;
-  const activeRun = {
-    ...settledRun,
-    id: RunId.make("run:settled-leaf-nodes:active"),
-    ordinal: 2,
-    userMessageId: MessageId.make("message:settled-leaf-nodes:active"),
-    rootNodeId: NodeId.make("node:settled-leaf-nodes:active-root"),
-    status: "running" as const,
-    completedAt: null,
-  };
-  yield* store.apply({
-    id: EventId.make("event:settled-leaf-nodes:active-run"),
-    type: "run.created",
-    threadId,
-    runId: activeRun.id,
-    nodeId: activeRun.rootNodeId,
-    driver,
-    providerInstanceId,
-    occurredAt: now,
-    payload: activeRun,
-  });
-  const nodes = [
-    ["settled-root", settledRun, "root_turn", "completed"],
-    ["settled-tool", settledRun, "tool_call", "completed"],
-    ["settled-message", settledRun, "assistant_message", "failed"],
-    ["settled-reasoning", settledRun, "reasoning", "cancelled"],
-    ["settled-subagent", settledRun, "subagent", "completed"],
-    ["settled-run-live-tool", settledRun, "tool_call", "running"],
-    ["settled-run-todo", settledRun, "todo_list", "running"],
-    ["active-run-done-tool", activeRun, "tool_call", "completed"],
-    ["active-run-todo", activeRun, "todo_list", "running"],
-  ] as const;
-  for (const [name, run, kind, status] of nodes) {
-    const id = NodeId.make(`node:settled-leaf-nodes:${name}`);
-    yield* store.apply({
-      id: EventId.make(`event:settled-leaf-nodes:${name}`),
-      type: "node.updated",
-      threadId,
-      runId: run.id,
-      nodeId: id,
-      driver,
-      occurredAt: now,
-      payload: {
-        id,
-        threadId,
-        runId: run.id,
-        rootNodeId: kind === "root_turn" ? id : run.rootNodeId!,
-        parentNodeId: kind === "root_turn" ? null : run.rootNodeId,
-        kind,
-        status,
-        countsForRun: kind === "root_turn",
-        providerThreadId: null,
-        providerTurnId: null,
-        nativeItemRef: null,
-        runtimeRequestId: null,
-        checkpointScopeId: null,
-        startedAt: now,
-        completedAt: status === "running" ? null : now,
-      },
-    });
-    if (kind === "todo_list") {
-      yield* store.apply({
-        id: EventId.make(`event:settled-leaf-nodes:${name}:plan`),
-        type: "plan.updated",
-        threadId,
-        runId: run.id,
-        nodeId: id,
-        driver,
-        occurredAt: now,
-        payload: {
-          id: PlanId.make(`plan:settled-leaf-nodes:${name}`),
-          threadId,
-          runId: run.id,
-          nodeId: id,
-          status: "active",
-          kind: "todo_list",
-          steps: [],
-        },
-      });
+it.effect("the filters every command reads with seek the rows they keep", () =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const threadId = yield* addRolledBackRecoveryCandidate("command-filter-seeks");
+    const command = traceSqlStatements();
+    yield* store
+      .getThreadRecords(threadId, ["nodes", "subagents", "turnItems", "contextTransfers"], {
+        turnItemTypes: ["user_message", "error"],
+        omitSettledLeafNodes: true,
+        omitSettledSubagents: true,
+        contextTransferStatuses: ["pending"],
+      })
+      .pipe(Effect.withTracer(command.tracer));
+    for (const [table, seeks] of [
+      ["turn_items", ["turn_items_thread_type_idx (thread_id=? AND type=?)"]],
+      ["nodes", ["nodes_settled_leaf_idx (thread_id=? AND <expr>=?)"]],
+      ["subagents", ["USING COVERING INDEX orchestration_v2_projection_subagents_settled_idx"]],
+      [
+        "context_transfers",
+        [
+          "source_thread_status_idx (source_thread_id=? AND status=?)",
+          "target_thread_idx (target_thread_id=? AND status=?)",
+        ],
+      ],
+    ] as const) {
+      const plan = yield* queryPlanFor(command.statements, table);
+      for (const seek of seeks) assert.include(plan, seek);
     }
-  }
-  // No row or node of this run is in the window.
-  const settledCheckpointId = CheckpointId.make("checkpoint:settled-leaf-nodes:earlier-run");
-  yield* store.apply({
-    id: EventId.make("event:settled-leaf-nodes:earlier-run-checkpoint"),
-    type: "checkpoint.captured",
-    threadId,
-    occurredAt: now,
-    payload: {
-      id: settledCheckpointId,
-      threadId,
-      scopeId: CheckpointScopeId.make("scope:settled-leaf-nodes:root"),
-      runId: RunId.make("run:settled-leaf-nodes:earlier"),
-      nodeId: NodeId.make("node:settled-leaf-nodes:earlier-root"),
-      parentCheckpointId: null,
-      ordinalWithinScope: 1,
-      appRunOrdinal: 1,
-      ref: CheckpointRef.make("refs/t3/settled-leaf-nodes/1"),
-      status: "ready",
-      files: [],
-      capturedAt: now,
-    },
-  });
-  const nodeNames = (records: { readonly nodes: ReadonlyArray<{ readonly id: string }> }) =>
-    records.nodes
-      .map((node) => node.id.replace("node:settled-leaf-nodes:", ""))
-      .filter((name) => nodes.some(([candidate]) => candidate === name))
-      .toSorted();
-
-  assert.deepEqual(
-    nodeNames(yield* store.getThreadRecords(threadId, ["nodes"], { omitSettledLeafNodes: true })),
-    [
-      "active-run-done-tool",
-      "active-run-todo",
-      "settled-root",
-      "settled-run-live-tool",
-      "settled-run-todo",
-      "settled-subagent",
-    ],
-  );
-  assert.deepEqual(
-    nodeNames(yield* store.getThreadRecords(threadId, ["nodes"])),
-    nodes.map(([name]) => name).toSorted(),
-  );
-  if (windowKeepsOnlyLiveWork) {
-    // A todo list stays running after its run ends. Counted as live work, every old run of a
-    // long thread would ride along with each window, with its nodes and subagents.
-    const liveWindow = (yield* store.getThreadSnapshotWindow(threadId, { rowLimit: 1 })).projection;
-    assert.deepEqual(nodeNames(liveWindow), ["active-run-todo", "settled-run-live-tool"]);
-    assert.deepEqual(
-      liveWindow.plans.map((plan) => plan.id),
-      [PlanId.make("plan:settled-leaf-nodes:active-run-todo")],
-    );
-    // Clients show the diff of the last finished turn from this record.
-    assert.deepEqual(
-      liveWindow.checkpoints.map((checkpoint) => checkpoint.id),
-      [settledCheckpointId],
-    );
-  }
-
-  const subagents = [
-    ["delivered", settledRun, "completed", "delivered"],
-    ["acknowledged", settledRun, "failed", "acknowledged"],
-    ["disposed", settledRun, "cancelled", "disposed"],
-    ["pending-delivery", settledRun, "completed", "pending"],
-    ["claimed", settledRun, "completed", "claimed"],
-    ["no-delivery", settledRun, "interrupted", null],
-    ["running", settledRun, "running", null],
-    ["active-run-delivered", activeRun, "completed", "delivered"],
-  ] as const;
-  // A follow-up reuses its task's child thread.
-  const childThreadIds: Partial<Record<(typeof subagents)[number][0], ThreadId>> = {
-    delivered: ThreadId.make("thread:settled-subagents:child-a"),
-    running: ThreadId.make("thread:settled-subagents:child-a"),
-    "no-delivery": ThreadId.make("thread:settled-subagents:child-b"),
-    "active-run-delivered": ThreadId.make("thread:settled-subagents:promoted"),
-  };
-  for (const [index, [name, run, status, delivery]] of subagents.entries()) {
-    const id = NodeId.make(`node:settled-subagents:${name}`);
-    const childThreadId = childThreadIds[name] ?? null;
-    yield* store.apply({
-      id: EventId.make(`event:settled-subagents:item:${name}`),
-      type: "turn-item.updated",
-      threadId,
-      runId: run.id,
-      nodeId: id,
-      driver,
-      occurredAt: now,
-      payload: {
-        id: TurnItemId.make(`item:settled-subagents:${name}`),
-        type: "subagent",
-        threadId,
-        runId: run.id,
-        nodeId: id,
-        providerThreadId: null,
-        providerTurnId: null,
-        nativeItemRef: null,
-        parentItemId: null,
-        ordinal: 100 + index,
-        status: status === "running" ? "running" : "completed",
-        title: name,
-        startedAt: now,
-        completedAt: status === "running" ? null : now,
-        updatedAt: now,
-        subagentId: id,
-        origin: "app_owned",
-        driver,
-        providerInstanceId,
-        childThreadId,
-        prompt: "Do the work",
-        result: null,
-      },
-    });
-    yield* store.apply({
-      id: EventId.make(`event:settled-subagents:${name}`),
-      type: "subagent.updated",
-      threadId,
-      runId: run.id,
-      nodeId: id,
-      driver,
-      providerInstanceId,
-      occurredAt: now,
-      payload: {
-        id,
-        threadId,
-        runId: run.id,
-        parentNodeId: run.rootNodeId!,
-        origin: "app_owned",
-        createdBy: "agent",
-        driver,
-        providerInstanceId,
-        providerThreadId: null,
-        childThreadId,
-        nativeTaskRef: null,
-        ...(name === "active-run-delivered" ? { promotedAt: now } : {}),
-        prompt: "Do the work",
-        title: name,
-        model: null,
-        ...(delivery === null
-          ? {}
-          : { completionDelivery: { state: delivery, observedByRunId: null } }),
-        status,
-        result: null,
-        startedAt: now,
-        completedAt: status === "running" ? null : now,
-        updatedAt: now,
-      },
-    });
-  }
-  const subagentNames = (records: {
-    readonly subagents: ReadonlyArray<{ readonly title: string | null }>;
-  }) => records.subagents.map((subagent) => subagent.title ?? "").toSorted();
-  assert.deepEqual(
-    subagentNames(
-      yield* store.getThreadRecords(threadId, ["subagents"], { omitSettledSubagents: true }),
-    ),
-    ["active-run-delivered", "claimed", "no-delivery", "pending-delivery", "running"],
-  );
-  assert.deepEqual(
-    subagentNames(yield* store.getThreadRecords(threadId, ["subagents"])),
-    subagents.map(([name]) => name).toSorted(),
-  );
-  // A command about one settled task keeps it, and reads only its node and turn item.
-  const deliveredId = NodeId.make("node:settled-subagents:delivered");
-  const forTask = yield* store.getThreadRecords(threadId, ["subagents", "nodes", "turnItems"], {
-    omitSettledSubagents: { except: [deliveredId] },
-    nodeIds: [NodeId.make("node:settled-leaf-nodes:settled-tool")],
-    turnItemNodeIds: [deliveredId],
-  });
-  assert.deepEqual(subagentNames(forTask), [
-    "active-run-delivered",
-    "claimed",
-    "delivered",
-    "no-delivery",
-    "pending-delivery",
-    "running",
-  ]);
-  assert.deepEqual(nodeNames(forTask), ["settled-tool"]);
-  assert.deepEqual(
-    forTask.turnItems.map((item) => item.title),
-    ["delivered"],
-  );
-  assert.strictEqual(yield* store.getSubagentCount(threadId), subagents.length);
-  assert.deepEqual(
-    [...(yield* store.listAppOwnedChildThreadIds(threadId))],
-    [childThreadIds.delivered, childThreadIds["no-delivery"]],
-  );
-});
-
-it.effect("replay command reads retain the same live subagents as SQLite", () =>
-  commandReadsSkipSettledLeafNodes(false).pipe(Effect.provide(ProjectionStore.layerMemory)),
+  }).pipe(Effect.provide(layerTest)),
 );
 
 const backgroundThreadUpdatesKeepTimestamp = Effect.gen(function* () {
@@ -1170,9 +846,6 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       assert.deepEqual(recovery?.restartCancelledBackgroundWork, work);
     }),
   );
-  it.effect("command reads skip finished leaf nodes of finished runs", () =>
-    commandReadsSkipSettledLeafNodes(true),
-  );
 
   it.effect("preserves stored provider usage when a terminal update omits it", () =>
     Effect.gen(function* () {
@@ -1482,8 +1155,8 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       ];
       yield* sql.withTransaction(
         Effect.gen(function* () {
-          for (let offset = 0; offset < items.length; offset += 50) {
-            const rows = items.slice(offset, offset + 50).map((item) => ({
+          for (const chunk of Arr.chunksOf(items, 50)) {
+            const rows = Arr.map(chunk, (item) => ({
               turn_item_id: item.id,
               thread_id: item.threadId,
               run_id: item.runId,
@@ -1934,6 +1607,19 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         DELETE FROM orchestration_v2_projection_turn_items
         WHERE turn_item_id LIKE 'turn-item:bounded-sql-history:ordinal-%'
       `;
+      // With every user item loaded, the items give the order and the lookup does not run.
+      const withItems = traceSqlStatements();
+      const ordered = yield* projectionStore
+        .getThreadRecords(threadId, ["messages", "turnItems"], {
+          messageRoles: ["user"],
+          turnItemTypes: ["user_message"],
+        })
+        .pipe(Effect.withTracer(withItems.tracer));
+      assert.deepEqual(
+        ordered.messages.map((message) => message.id),
+        yield* readMessageIds({ messageRoles: ["user"] }),
+      );
+      assert.isFalse(withItems.statements.some((statement) => statement.includes("MIN(ordinal)")));
 
       yield* sql`
         UPDATE orchestration_v2_projection_turn_items

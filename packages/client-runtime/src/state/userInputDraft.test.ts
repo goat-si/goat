@@ -2,6 +2,7 @@ import type { UserInputQuestion } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import { seedUserInputDraftAnswers } from "./threadRequests.ts";
 import {
+  appendAnswerToDraft,
   buildPendingUserInputAnswers,
   isPendingUserInputOptionSelected,
   resolvePendingUserInputAnswer,
@@ -190,5 +191,18 @@ describe("shared option validation", () => {
     const draft = { selectedOptionValues: ["two"] };
     expect(setPendingUserInputCustomAnswer(draft, "Other", optionsOnly)).toBe(draft);
     expect(setPendingUserInputCustomAnswer(undefined, "Other", optionsOnly)).toEqual({});
+  });
+});
+
+describe("appendAnswerToDraft", () => {
+  // The case web and mobile both run when Stop returns typed answers to the thread draft.
+  it("keeps every answer after a blank line, even one equal to the draft's last paragraph", () => {
+    const joined = ["Yes", "Yes"].reduce(appendAnswerToDraft, "Draft\n\nYes\n");
+    expect(joined).toBe("Draft\n\nYes\n\nYes\n\nYes");
+  });
+
+  it("skips blank answers and starts an empty draft with the answer", () => {
+    expect(appendAnswerToDraft("Draft", "  ")).toBe("Draft");
+    expect(appendAnswerToDraft(" ", " Yes ")).toBe("Yes");
   });
 });

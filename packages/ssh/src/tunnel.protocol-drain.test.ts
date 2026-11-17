@@ -1,9 +1,11 @@
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import { ARCHIVE } from "./tunnel.fixture.ts";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
@@ -73,7 +75,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         );
         assert.equal((yield* events(f)).filter((e) => e.type === "drain").length, 1);
         assert.isTrue(isAlive(f.pid));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each([false, true])(
@@ -102,7 +104,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.isTrue(Result.isSuccess(recovered), describeFailure(recovered));
           if (Result.isSuccess(recovered)) assert.equal(recovered.success.refresh, "replaced");
           assert.isFalse(yield* f.fs.exists(`${f.state}/draining`));
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("a cancelled drain retry proves a resumed busy server safe to attach", () =>
@@ -129,7 +134,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         }
         assert.isFalse(yield* f.fs.exists(`${f.state}/draining`));
         assert.isTrue(isAlive(f.pid));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("an orphaned drain fence on a stopped host permits a fresh start", () =>
@@ -146,7 +151,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.isTrue(Result.isSuccess(recovered), describeFailure(recovered));
         if (Result.isSuccess(recovered)) assert.equal(recovered.success.status, "ready");
         assert.isFalse(yield* f.fs.exists(`${f.state}/draining`));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("an active drain remains fenced across owning retries despite HTTP readiness", () =>
@@ -169,7 +174,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.isTrue(yield* f.fs.exists(`${f.state}/draining`));
         assert.equal((yield* events(f)).filter((e) => e.type === "drain").length, 2);
         assert.isTrue(isAlive(f.pid));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each(
@@ -220,7 +225,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             assert.deepEqual(yield* f.snapshot, before);
             assert.isTrue(isAlive(f.pid));
           }
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each(["busy", "unknown"] as const)(
@@ -253,7 +261,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           );
           assert.deepEqual(yield* f.snapshot, before);
           assert.isTrue(isAlive(f.pid));
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each([
@@ -298,7 +309,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.isTrue(isAlive(f.pid));
         assert.equal((yield* f.snapshot).runtime, before.runtime);
         assert.equal((yield* f.snapshot)["run-t3.sh"], before["run-t3.sh"]);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("drains an idle server and replaces it through the supervisor", () =>
@@ -349,7 +360,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.equal(snapshot.pid?.trim(), String(runtime.pid));
         assert.equal(snapshot.managed, "managed\n");
         assert.include(snapshot["run-t3.sh"] ?? "", ARCHIVE.archiveVersion);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live(
@@ -392,7 +403,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.isTrue(isAlive(f.pid));
           assert.deepEqual(yield* f.snapshot, before);
           assert.isFalse(yield* f.fs.exists(`${f.state}/run-t3.previous`));
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("a confirmed replacement proceeds when work outlasts the window", () =>
@@ -426,7 +440,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         });
         // Draining replaces the idle-only probe: a busy server was never asked for activity.
         assert.isFalse(log.some((entry) => entry.type === "activity"));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each([false, true])(
@@ -483,7 +497,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             "before-replacement",
           );
           assert.isFalse(yield* f.fs.exists(`${f.state}/replacement-backup`));
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("drops the drain fence after rolling back an incompatible replacement", () =>
@@ -516,7 +533,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         ) as { serverVersion?: string; pid?: number };
         assert.equal(runtime.serverVersion, OLDER);
         assert.isTrue(isAlive(runtime.pid ?? 0));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each(["idle", "busy"] as const)(
@@ -555,7 +572,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           );
           assert.isTrue(isAlive(f.pid));
           assert.deepEqual(yield* f.snapshot, before);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each([
@@ -606,7 +626,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.equal(log.filter((entry) => entry.type === "activity").length, calls === 6 ? 1 : 0);
         assert.isTrue(isAlive(f.pid));
         assert.deepEqual(yield* f.snapshot, before);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("a later positive check clears a prior no-drain classification", () =>
@@ -630,7 +650,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           yield* f.fs.readFileString(`${f.test}/events`),
           '"response":"compatible 0 -"',
         );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each(["readiness", "ownership-loss", "version", "protocol"] as const)(
@@ -675,7 +695,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
               ["drain", "drain-request", "supervise", "stop", "activity"].includes(entry.type),
             ),
           );
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("a hash change at pending emission cannot produce an attachment", () =>
@@ -729,7 +752,7 @@ GOAT_PENDING_PROOF
             ["drain", "drain-request", "supervise", "stop", "activity"].includes(entry.type),
           ),
         );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each(["failure", "garbage", "unknown 0 -"])(
@@ -752,7 +775,10 @@ GOAT_PENDING_PROOF
           assert.include(describeFailure(result), "is incompatible; it was left running");
           assert.deepEqual(yield* f.snapshot, before);
           assert.isTrue(isAlive(f.pid));
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("never replaces an incompatible server that cannot drain", () =>
@@ -778,7 +804,7 @@ GOAT_PENDING_PROOF
         );
         assert.isTrue(isAlive(f.pid));
         assert.deepEqual(yield* f.snapshot, before);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
   },
 );

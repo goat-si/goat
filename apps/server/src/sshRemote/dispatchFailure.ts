@@ -1,6 +1,7 @@
 import type { SshDispatchFailureReason } from "@goat/contracts";
 import type * as NetService from "@goat/shared/Net";
-import type * as Crypto from "effect/Crypto";
+import type * as Digest from "effect/crypto/Digest";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
@@ -105,7 +106,8 @@ export const describe = (error: unknown): string => {
 /** The platform services every SSH operation runs with. */
 export type RuntimeServices =
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | Digest.Digest
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | Path.Path
   | HttpClient.HttpClient

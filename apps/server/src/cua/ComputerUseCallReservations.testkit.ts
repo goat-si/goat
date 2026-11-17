@@ -1,4 +1,5 @@
 /** The lease service on an in-memory database, for the call reservation tests. */
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId } from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
@@ -16,7 +17,7 @@ import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 
 export const database = NodeSqliteClient.layer({ filename: ":memory:" });
 export const serviceLayer = ComputerUseLeases.layer.pipe(
-  Layer.provide(Layer.merge(database, NodeServices.layer)),
+  Layer.provide(Layer.merge(database, Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 export const fixture = Effect.fn("reservations.fixture")(function* () {
   yield* runMigrations();

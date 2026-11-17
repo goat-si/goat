@@ -18,7 +18,8 @@ import {
   verifyRelayJwt,
 } from "@goat/shared/relayJwt";
 import { isConnectAssuranceFresh } from "@goat/contracts/connectAssurance";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Hex from "effect/encoding/Hex";
 import * as ConnectLinkReservations from "./ConnectLinkReservations.ts";
 import * as Context from "effect/Context";
@@ -161,7 +162,8 @@ const make = Effect.gen(function* () {
   const rates = yield* RelayRateLimits.RelayRateLimits;
   const links = yield* EnvironmentLinks.EnvironmentLinks;
   const reservations = yield* ConnectLinkReservations.ConnectLinkReservations;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
+  const crypto = yield* Digest.Digest;
   const credentials = yield* EnvironmentCredentials.EnvironmentCredentials;
   const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
   const proofReplay = yield* DpopProofs.DpopProofReplay;
@@ -319,7 +321,7 @@ const make = Effect.gen(function* () {
       const reservation = {
         userId: input.userId,
         challengeId: challenge.jti,
-        attemptId: yield* crypto.randomUUIDv4().pipe(
+        attemptId: yield* random.uuidV4().pipe(
           Effect.mapError(
             (cause) =>
               new EnvironmentLinkProofInvalid({
@@ -333,7 +335,7 @@ const make = Effect.gen(function* () {
         ),
         environmentId: verified.environmentId,
         proof: Hex.encode(
-          yield* crypto.digest("SHA-256", new TextEncoder().encode(input.request.proof)).pipe(
+          yield* crypto.digest(Digest.sha256, new TextEncoder().encode(input.request.proof)).pipe(
             Effect.mapError(
               () =>
                 new EnvironmentLinkProofInvalid({

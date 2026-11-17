@@ -6,7 +6,7 @@ import {
 } from "@goat/contracts/connectAssurance";
 import { RelayInternalError } from "@goat/contracts/relay";
 import { and, count, eq, isNull } from "drizzle-orm";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -64,7 +64,7 @@ export class ClientKeys extends Context.Service<
 
 const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const accounts = yield* ConnectAccounts.ConnectAccounts;
   const transactions = yield* AccountTransactions;
   const check = Effect.fn("ClientKeys.check")(function* (
@@ -126,7 +126,7 @@ const make = Effect.gen(function* () {
             .pipe(Effect.mapError(unavailable));
           if ((totals[0]?.total ?? MAX_CLIENT_KEYS) >= MAX_CLIENT_KEYS)
             return yield* strengthRequired("unsupported_authentication_flow");
-          const admissionId = yield* crypto.randomUUIDv4().pipe(Effect.mapError(unavailable));
+          const admissionId = yield* random.uuidV4().pipe(Effect.mapError(unavailable));
           yield* db
             .insert(relayClientKeys)
             .values({

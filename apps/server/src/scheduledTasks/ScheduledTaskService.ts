@@ -1,5 +1,6 @@
 import { hasQueuedOccurrence } from "./queuedOccurrence.ts";
 import type { ScheduledTaskRow } from "./ScheduledTaskRow.ts";
+import { decodeRow, decodeTaskId, listDueTasks } from "./scheduledTaskRowDecode.ts";
 import { dispatchFailureDetails, taskError } from "./scheduledTaskError.ts";
 import { prepareScheduledTaskNotificationPrompt } from "./scheduledTaskNotificationPrompt.ts";
 import { withRecentRuns } from "./scheduledTaskRecentRuns.ts";
@@ -11,7 +12,6 @@ import {
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type ProjectId,
   ScheduledTask,
-  ScheduledTaskRun,
   ScheduledTaskError,
   ScheduledTaskId,
   ScheduledTaskWebhookDeliveryId,
@@ -29,14 +29,16 @@ import {
   type ScheduledTaskRunNowInput,
   type ScheduledTaskRunNowResult,
   type ScheduledTaskSetEnabledInput,
+  type ScheduledTaskThreadMode,
   type ScheduledTaskUpsertInput,
   type ScheduledTaskWebhookDeliveryOutcome,
   type ScheduledTaskWebhookFilter,
   type ScheduledTaskWebhookUrlUnavailableReason,
+  scheduledTaskThreadMode,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -48,7 +50,6 @@ import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
-import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -76,17 +77,16 @@ import {
 import { describeFailedWebhookFilter, findFailedWebhookFilter } from "./webhookFilter.ts";
 import { redactHeaders, redactQuery, renderWebhookPrompt } from "./webhookTemplate.ts";
 import { constantTimeEquals, verifyWebhookSignature } from "./webhookVerification.ts";
-import { webhookEndpoint } from "./webhookEndpoint.ts";
 import {
   BOT_ROUTINE_NEEDS_OWNER,
   makeScheduledBotRoutines,
-  routineOwnerOf,
   ROUTINE_MESSAGE_PREFIX,
   type RoutineOwner,
 } from "./scheduledBotRoutines.ts";
 import { WebhookAutomationHeldError, rejectWebhookWhileHeld } from "./webhookAutomationHold.ts";
 
 export { WEBHOOK_ROUTE_PREFIX } from "./webhookEndpoint.ts";
+export { listDueTasks };
 
 const isScheduledTaskError = Schema.is(ScheduledTaskError);
 const PROMPT_TOO_LONG = "The filled-in prompt is too long.";
@@ -155,17 +155,6 @@ export type { WebhookDeliveryOutcome, WebhookTriggerRequest, WebhookTriggerResul
 const webhookFilters = (filters: ReadonlyArray<ScheduledTaskWebhookFilter> | undefined) =>
   filters?.length ? { filters } : {};
 
-const decodeTask = Schema.decodeUnknownEffect(ScheduledTask);
-const decodeTaskId = Schema.decodeUnknownOption(ScheduledTaskId);
-const decodeScheduleJson = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(ScheduledTask.fields.schedule),
-);
-const decodeWorkspaceStrategyJson = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(ScheduledTask.fields.workspaceStrategy),
-);
-const decodeModelSelectionJson = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(ScheduledTask.fields.modelSelection),
-);
 const HeadersJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
 const MissingFieldsJson = Schema.fromJsonString(Schema.Array(Schema.String));
 const decodeHeadersJson = Schema.decodeUnknownOption(HeadersJson);
@@ -222,7 +211,7 @@ export class ScheduledTaskService extends Context.Service<
       readonly threadIds: ReadonlyArray<ThreadId>;
       readonly projectId: ProjectId;
     }) => Effect.Effect<void, ScheduledTaskError>;
-    /** The dispatched thread, or null if dispatch failed; leaves the task's binding unchanged. */
+    /** The dispatched thread, or null if dispatch failed; a first run binds a one-thread task. */
     readonly runNow: (
       input: ScheduledTaskRunNowInput,
     ) => Effect.Effect<
@@ -249,101 +238,26 @@ export class ScheduledTaskService extends Context.Service<
   }
 >()("goat/scheduledTasks/ScheduledTaskService") {}
 
-const decodeLastRunJson = Schema.decodeUnknownEffect(Schema.fromJsonString(ScheduledTaskRun));
 const localNow = DateTime.withCurrentZoneLocal(DateTime.nowInCurrentZone);
 
-// Runs per task row; list and lookup operations already own the span.
-
-const decodeRow = Effect.fnUntraced(
-  function* (row: ScheduledTaskRow, origin: WebhookOrigin | null = null) {
-    const schedule = yield* decodeScheduleJson(row.schedule_json);
-    const webhook = schedule.type === "webhook" ? webhookEndpoint(row, origin) : undefined;
-    const workspaceStrategy = yield* decodeWorkspaceStrategyJson(row.workspace_strategy_json);
-    const modelSelection = yield* decodeModelSelectionJson(row.model_selection_json);
-    return yield* decodeTask({
-      id: row.task_id,
-      title: row.title,
-      prompt: row.prompt,
-      enabled: row.enabled === 1,
-      notificationPolicy: row.notification_policy,
-      schedule,
-      projectId: row.project_id,
-      threadId: row.thread_id,
-      workspaceStrategy,
-      modelSelection,
-      memoryGrantCeiling: row.memory_grant_ceiling ?? "none",
-      runtimeMode: row.runtime_mode,
-      interactionMode: row.interaction_mode,
-      createdBy: row.created_by,
-      creationSource: row.creation_source,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      nextRunAt: row.next_run_at,
-      lastRunAt: row.last_run_at,
-      lastRunStatus: row.last_run_status,
-      ...(row.last_run_json == null
-        ? {}
-        : { lastRun: yield* decodeLastRunJson(row.last_run_json) }),
-      lastRunError: row.last_run_error,
-      runCount: row.run_count,
-      ...(webhook === undefined ? {} : { webhook }),
-      ...(Option.isSome(routineOwnerOf(row.owner_json)) ? { goatBotRoutine: true } : {}),
-    });
-  },
-  (effect, row, _origin?) =>
-    effect.pipe(
-      Effect.mapError((cause) => {
-        const taskId = decodeTaskId(row.task_id);
-        return taskError("Could not decode schedule task row.", {
-          ...(Option.isSome(taskId) ? { taskId: taskId.value } : {}),
-          cause,
-        });
-      }),
-    ),
-);
-
-export const listDueTasks = Effect.fn("ScheduledTaskService.listDueTasks")(function* (
-  now: DateTime.DateTime,
-) {
-  const sql = yield* SqlClient.SqlClient;
-  const rows = yield* sql<ScheduledTaskRow>`
-    SELECT t.*,r.snapshot_json AS last_run_json FROM scheduled_tasks t
-    LEFT JOIN scheduled_task_runs r ON r.firing_id=t.last_firing_id AND r.task_id=t.task_id AND r.task_created_at=t.created_at
-    WHERE t.enabled = 1 AND t.next_run_at IS NOT NULL AND t.next_run_at <= ${iso(now)}
-      AND NOT EXISTS (SELECT 1 FROM scheduled_task_runs busy WHERE busy.task_id=t.task_id AND busy.task_created_at=t.created_at
-        AND (busy.dispatch_bookkept_at IS NULL OR busy.dispatch_status='dispatching'))
-    ORDER BY t.next_run_at ASC, t.task_id ASC
-  `.pipe(NodeSqliteClient.readOnly);
-  const tasks: ScheduledTask[] = [];
-  for (const row of rows) {
-    const decoded = yield* Effect.result(decodeRow(row));
-    if (Result.isSuccess(decoded)) {
-      const task = decoded.success;
-      // next_run_at is a freeform string at the schema level; a stored value
-      // that cannot parse as a DateTime would defect the poll below, so the
-      // row is skipped here like any other corrupt row.
-      if (task.nextRunAt === null || Option.isSome(DateTime.make(task.nextRunAt))) {
-        tasks.push(task);
-      } else {
-        yield* Effect.logWarning("Skipping schedule task row with invalid next_run_at", {
-          taskId: row.task_id,
-        });
-      }
-    } else {
-      yield* Effect.logWarning("Skipping undecodable schedule task row", {
-        taskId: row.task_id,
-        cause: decoded.failure,
-      });
-    }
-  }
-  return tasks;
-});
+/**
+ * Clients that predate thread modes send none, and may send a thread loaded before the first run
+ * bound one. An edit keeps the stored mode; binding a thread to a new-thread task continues it.
+ */
+function resolveThreadMode(
+  input: Pick<ScheduledTaskUpsertInput, "threadId" | "threadMode">,
+  existing: Pick<ScheduledTask, "threadId" | "threadMode"> | null,
+): ScheduledTaskThreadMode {
+  if (input.threadMode !== undefined) return input.threadMode;
+  const stored = existing === null ? "new_thread" : scheduledTaskThreadMode(existing);
+  return stored === "new_thread" && input.threadId != null ? "continue" : stored;
+}
 
 export const layer = Layer.effect(
   ScheduledTaskService,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const scheduledRuns = yield* ScheduledTaskRuns.ScheduledTaskRuns;
     const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
@@ -415,6 +329,7 @@ export const layer = Layer.effect(
         t.schedule_json,
         t.project_id,
         t.thread_id,
+        t.thread_mode,
         t.workspace_strategy_json,
         t.model_selection_json,
         t.memory_grant_ceiling,
@@ -456,6 +371,7 @@ export const layer = Layer.effect(
         t.schedule_json,
         t.project_id,
         t.thread_id,
+        t.thread_mode,
         t.workspace_strategy_json,
         t.model_selection_json,
         t.memory_grant_ceiling,
@@ -503,7 +419,7 @@ export const layer = Layer.effect(
         ),
       );
 
-    const newWebhookToken = crypto.randomBytes(32).pipe(
+    const newWebhookToken = random.randomBytes(32).pipe(
       Effect.map((bytes) => Buffer.from(bytes).toString("base64url")),
       Effect.mapError((cause) => taskError("Could not generate webhook token.", { cause })),
     );
@@ -567,7 +483,7 @@ export const layer = Layer.effect(
           ${JSON.stringify(task.schedule)},
           ${task.projectId},
           ${task.threadId},
-          ${task.threadId === null ? "new_thread" : "continue"},
+          ${scheduledTaskThreadMode(task)},
           ${JSON.stringify(task.workspaceStrategy)},
           ${JSON.stringify(task.modelSelection)},
           ${task.memoryGrantCeiling ?? "none"},
@@ -595,7 +511,13 @@ export const layer = Layer.effect(
           notification_policy = excluded.notification_policy,
           schedule_json = excluded.schedule_json,
           project_id = excluded.project_id,
-          thread_id = excluded.thread_id,
+          -- A first run may bind the thread while this save is in flight; only a
+          -- switch to new threads unbinds.
+          thread_id = CASE
+            WHEN excluded.thread_mode = 'new_thread' THEN NULL
+            WHEN excluded.project_id != scheduled_tasks.project_id THEN excluded.thread_id
+            ELSE COALESCE(excluded.thread_id, scheduled_tasks.thread_id)
+          END,
           thread_mode = excluded.thread_mode,
           workspace_strategy_json = excluded.workspace_strategy_json,
           model_selection_json = excluded.model_selection_json,
@@ -643,6 +565,25 @@ export const layer = Layer.effect(
             taskError("Could not delete schedule task.", { taskId: id, cause }),
           ),
         );
+
+    // The run already started the thread, so a failed write only costs the binding.
+    // A thread deleted before the binding landed already ran its task cleanup, so apply that
+    // cleanup here; a later deletion finds the binding. An unconfirmed lookup keeps the binding.
+    const bindThread = Effect.fn("ScheduledTaskService.bindThread")(
+      function* (task: ScheduledTask, threadId: ThreadId) {
+        yield* sql`
+          UPDATE scheduled_tasks SET thread_id = ${threadId}
+          WHERE task_id = ${task.id} AND created_at = ${task.createdAt}
+            AND project_id = ${task.projectId}
+            AND thread_id IS NULL AND thread_mode != 'new_thread'
+        `;
+        const shell = yield* threadManagement.getThreadShell(threadId);
+        if (shell === null || shell.deletedAt != null) yield* deleteForThread(threadId);
+      },
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Could not bind a scheduled task to its first thread.", cause),
+      ),
+    );
 
     const runTask = Effect.fn("ScheduledTaskService.runTask")(function* (
       task: ScheduledTask,
@@ -767,6 +708,7 @@ export const layer = Layer.effect(
               firing,
             };
           }
+          const threadMode = scheduledTaskThreadMode(active);
           // A bound thread can move to another project (No project to a project) while
           // this fires. Follow it; one move needs at most two retries. Same ids replay safely.
           const sendBound = (
@@ -786,6 +728,7 @@ export const layer = Layer.effect(
                 text: prompt,
                 attachments: [],
                 mode: "queue",
+                ...(threadMode === "fresh_session" ? { freshContext: true } : {}),
                 createdBy: active.createdBy,
                 creationSource: active.creationSource,
               })
@@ -829,6 +772,11 @@ export const layer = Layer.effect(
                     creationSource: active.creationSource,
                   })
                   .pipe(
+                    Effect.tap((launched) =>
+                      threadMode === "new_thread"
+                        ? Effect.void
+                        : bindThread(active, launched.threadId),
+                    ),
                     Effect.map((launched) => ({
                       threadId: launched.threadId,
                       run:
@@ -1070,8 +1018,8 @@ export const layer = Layer.effect(
       const now = yield* localNow;
       const uuid =
         input.commandId === undefined
-          ? yield* crypto
-              .randomUUIDv4()
+          ? yield* random
+              .uuidV4()
               .pipe(
                 Effect.mapError((cause) =>
                   taskError("Could not generate schedule task id.", { cause }),
@@ -1087,6 +1035,14 @@ export const layer = Layer.effect(
       // keep their run history, and so real load failures propagate instead
       // of silently resetting an existing row.
       const existingTask = yield* findTask(id);
+      const resolvedMode = resolveThreadMode(input, existingTask);
+      const keptThreadId = input.threadId ?? existingTask?.threadId ?? null;
+      // A bound thread belongs to its project, so moving the task leaves it for a new one.
+      const movedOffThread =
+        existingTask !== null &&
+        existingTask.projectId !== input.projectId &&
+        keptThreadId === existingTask.threadId;
+      const threadId = resolvedMode === "new_thread" || movedOffThread ? null : keptThreadId;
       // Keep the existing next_run_at when the schedule itself is untouched:
       // editing a title or prompt must not postpone (or resurrect) a due
       // run — only schedule/enabled changes restart the clock.
@@ -1170,10 +1126,13 @@ export const layer = Layer.effect(
         isSameSchedule(existingTask.schedule, schedule);
       const notificationPolicy =
         input.notificationPolicy ?? existingTask?.notificationPolicy ?? "all_runs";
-      if (notificationPolicy === "important_updates" && (input.threadId ?? null) === null)
+      if (
+        notificationPolicy === "important_updates" &&
+        ((input.threadId ?? null) === null || threadId === null)
+      )
         return yield* taskError("Important updates requires an existing thread.", { taskId: id });
       const owner = yield* botRoutines.checkUpsert(
-        { taskId: id, threadId: input.threadId ?? null, schedule },
+        { taskId: id, threadId, schedule },
         captured?.owner,
       );
       const task: ScheduledTask = {
@@ -1184,7 +1143,9 @@ export const layer = Layer.effect(
         enabled: input.enabled,
         schedule,
         projectId: input.projectId,
-        threadId: input.threadId ?? null,
+        threadId,
+        // GOAT Bot answers its routines in their conversation, so a routine always continues it.
+        threadMode: owner === null ? resolvedMode : "continue",
         workspaceStrategy,
         modelSelection: input.modelSelection,
         memoryGrantCeiling: captured?.memoryGrantCeiling ?? "none",
@@ -1845,8 +1806,8 @@ export const layer = Layer.effect(
         observeDelivery(request, outcome, receivedAt, now);
       const deliveryId = ScheduledTaskWebhookDeliveryId.make(
         request.relayDeliveryId === undefined
-          ? `delivery:${yield* crypto
-              .randomUUIDv4()
+          ? `delivery:${yield* random
+              .uuidV4()
               .pipe(
                 Effect.mapError((cause) => taskError("Could not generate delivery id.", { cause })),
               )}`
@@ -2076,7 +2037,7 @@ export const layer = Layer.effect(
             claimAcquired = false;
             return { _tag: "accepted", deliveryId, outcome } as const;
           }
-          const frameId = yield* crypto.randomBytes(6).pipe(
+          const frameId = yield* random.randomBytes(6).pipe(
             Effect.map((bytes) => Buffer.from(bytes).toString("hex")),
             Effect.mapError((cause) => taskError("Could not generate frame id.", { cause })),
           );
@@ -2231,7 +2192,7 @@ export const layer = Layer.effect(
                     ? { ...snapshot, prompt: current.prompt }
                     : snapshot;
                 const request = yield* decodePendingRequest(entry.request_json);
-                const frameId = Buffer.from(yield* crypto.randomBytes(6)).toString("hex");
+                const frameId = Buffer.from(yield* random.randomBytes(6)).toString("hex");
                 return {
                   task,
                   taskJson: task === snapshot ? null : yield* encodePendingTask(task),

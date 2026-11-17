@@ -1,4 +1,12 @@
 import { registerCodexLoadKeyCheck } from "./ProviderSessionLoadKey.testkit.ts";
+import { makeBrowserAccessProject } from "./test/ProviderSessionManagerBrowserAccess.testkit.ts";
+import {
+  makeThreadCreatedEvent,
+  makeMemoryReadHold,
+  openMemoryRun,
+  readPreparedRunDto,
+} from "./test/ProviderSessionManagerMemoryDto.testkit.ts";
+export { makeThreadCreatedEvent } from "./test/ProviderSessionManagerMemoryDto.testkit.ts";
 import {
   makeProviderThread,
   emptyState,
@@ -37,7 +45,6 @@ import { channelDispatcherIdleServices } from "../channels/testkit/channelDispat
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as ChannelBotProfiles from "../channels/ChannelBotProfiles.ts";
 import * as ChannelLedger from "../channels/ChannelLedger.ts";
-import * as Receipts from "./CommandReceiptStore.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -48,13 +55,13 @@ import * as ServerConfig from "../config.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as Path from "effect/Path";
 import * as MemoryToolkitFixture from "../mcp/toolkits/memory/handlers.testkit.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { AgentScope } from "@goat/shared/AgentScope";
 import {
   RunId,
   OrchestratorMcpFailure,
-  type OrchestrationV2Run,
   CommandId,
   MessageId,
   TurnItemId,
@@ -66,10 +73,8 @@ import {
   ScheduledTaskId,
   NodeId,
   type OrchestrationV2ThreadProjection,
-  type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderThread,
-  type Project,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -80,7 +85,6 @@ import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Statement from "effect/sql/Statement";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -133,58 +137,6 @@ import {
   unimplemented,
 } from "./test/ProviderSessionManagerHarness.testkit.ts";
 export { layerTest } from "./test/ProviderSessionManagerHarness.testkit.ts";
-export function makeThreadCreatedEvent(input: {
-  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
-  readonly threadId: ThreadId;
-  readonly now: DateTime.Utc;
-  readonly projectId?: ProjectId;
-  readonly delegatedBy?: ThreadId;
-}) {
-  return Effect.gen(function* () {
-    const projectId =
-      input.projectId ??
-      (yield* input.idAllocator.allocate.project({
-        fixtureName: "provider-session-manager",
-      }));
-    const thread: OrchestrationV2AppThread = {
-      createdBy: "user",
-      creationSource: "web",
-      id: input.threadId,
-      projectId,
-      title: "Provider session manager",
-      providerInstanceId: modelSelection.instanceId,
-      modelSelection,
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      branch: null,
-      worktreePath: null,
-      activeProviderThreadId: null,
-      lineage:
-        input.delegatedBy === undefined
-          ? { parentThreadId: null, relationshipToParent: null, rootThreadId: input.threadId }
-          : {
-              parentThreadId: input.delegatedBy,
-              relationshipToParent: "subagent",
-              rootThreadId: input.delegatedBy,
-            },
-      forkedFrom: null,
-      createdAt: input.now,
-      updatedAt: input.now,
-      archivedAt: null,
-      settledOverride: null,
-      settledAt: null,
-      lastVisitedAt: null,
-      deletedAt: null,
-    };
-    return {
-      id: yield* input.idAllocator.allocate.event({ threadId: input.threadId }),
-      type: "thread.created" as const,
-      threadId: input.threadId,
-      occurredAt: input.now,
-      payload: thread,
-    };
-  });
-}
 // A Codex native subagent's provider thread is owned by its child app thread
 // but reachable from the parent's projection through the subagent record.
 const makeNativeChildFixture = Effect.fnUntraced(function* () {
@@ -280,23 +232,6 @@ const makeNativeChildFixture = Effect.fnUntraced(function* () {
   });
   return { manager, parent, resumeChild };
 });
-function makeBrowserAccessProject(projectId: ProjectId): Project {
-  return {
-    id: projectId,
-    title: "Browser access project",
-    workspaceRoot: process.cwd(),
-    repositoryIdentity: null,
-    faviconPath: null,
-    projectIcon: null,
-    defaultModelSelection: null,
-    defaultThreadEnvMode: null,
-    autoPull: false,
-    scripts: [],
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-    deletedAt: null,
-  };
-}
 function runBrowserAccessScenario(input: {
   readonly enableAgentBrowserAccess: boolean;
   readonly projectOverride: boolean;
@@ -1881,84 +1816,6 @@ it.effect("ProviderSessionManagerV2 duplicate detach preserves replacement MCP c
     );
   }),
 );
-// Exercise the real DTO decorator with the manager under test and committed
-// destination state. Only the run fixture and unrelated transport ports are synthetic.
-const readPreparedRunDto = Effect.fnUntraced(function* (
-  threadId: ThreadId,
-  runId: RunId,
-  delegatedTaskId: NodeId,
-  pastRunCount = 0,
-) {
-  const store = yield* ProjectionStore.ProjectionStoreV2;
-  const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
-  const settings = yield* ServerSettings.ServerSettingsService;
-  const committed = yield* Effect.serviceOption(ServerSettings.MemoryProviderCommittedPolicy);
-  if (Option.isNone(committed)) return yield* Effect.die("test requires committed memory policy");
-  const projection = yield* store.getThreadProjection(threadId);
-  const run: OrchestrationV2Run = {
-    id: runId,
-    delegatedTaskId,
-    threadId,
-    ordinal: 1,
-    providerInstanceId: modelSelection.instanceId,
-    modelSelection,
-    providerThreadId: null,
-    userMessageId: MessageId.make("reattach-message"),
-    rootNodeId: null,
-    activeAttemptId: null,
-    status: "completed",
-    requestedAt: projection.thread.createdAt,
-    startedAt: null,
-    completedAt: null,
-    checkpointId: null,
-    contextHandoffId: null,
-    memoryGrantCeiling: "read_write",
-  };
-  const runs = [
-    ...Array.from({ length: pastRunCount }, (_, index) => ({
-      ...run,
-      id: RunId.make(`historical-run-${index}`),
-      ordinal: index + 2,
-    })),
-    run,
-  ];
-  let threadReads = 0;
-  const countThreadReads: Statement.Transformer = (statement) => {
-    const [query] = statement.compile();
-    if (query.includes("SELECT payload_json FROM orchestration_v2_projection_threads")) {
-      threadReads++;
-    }
-    return Effect.succeed(statement);
-  };
-  return yield* Effect.gen(function* () {
-    const threads = yield* ThreadManagement.ThreadManagementService;
-    const records = yield* threads.getThreadRecords(threadId, ["runs"]);
-    if (pastRunCount > 0) {
-      assert.equal(threadReads, 1);
-      for (const historical of records.runs.slice(0, -1)) {
-        assert.notProperty(historical, "currentMemoryAccess");
-      }
-    }
-    return records.runs.at(-1)!;
-  }).pipe(
-    Effect.provide(
-      ThreadManagement.layer.pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            Layer.succeed(ProviderSessionManager.ProviderSessionManagerV2, manager),
-            Layer.succeed(ServerSettings.ServerSettingsService, settings),
-            Layer.succeed(ServerSettings.MemoryProviderCommittedPolicy, committed.value),
-            Layer.mock(Receipts.CommandReceiptStoreV2)({}),
-            Layer.mock(Orchestrator.OrchestratorV2)({
-              getThreadRecords: () => Effect.succeed({ ...projection, runs }),
-            }),
-          ),
-        ),
-      ),
-    ),
-    Effect.provideService(Statement.CurrentTransformer, countThreadReads),
-  );
-});
 it.effect(
   "ProviderSessionManagerV2 keeps a thread's MCP credential stable across detach and re-attach on a shared session",
   () =>
@@ -2410,6 +2267,78 @@ it.effect("current memory DTO denies an archived destination before a deferred d
   }),
 );
 it.effect(
+  "a memory policy rotation during a run row read keeps the current memory access evidence",
+  () =>
+    Effect.gen(function* () {
+      const hold = yield* makeMemoryReadHold;
+      yield* Effect.gen(function* () {
+        const { threadId, runId, taskId } = yield* openMemoryRun("memory-rotation-during-read");
+        yield* hold.arm;
+        const read = yield* readPreparedRunDto(threadId, runId, taskId).pipe(Effect.forkChild);
+        yield* hold.entered;
+        // The rotation re-prepares the thread with equal content while the read is held.
+        yield* hold.rotate;
+        yield* hold.release;
+        assert.equal((yield* Fiber.join(read)).currentMemoryAccess?.access, "read_write");
+      }).pipe(Effect.provide(hold.layer));
+    }),
+);
+// A read-only prepare keeps the run and its grant but changes the evidence key, so only the
+// key check refuses it: returning the captured entry unchecked shows read_write.
+it.effect.each([
+  "another run",
+  "an archived destination",
+  "a read-only prepare in the same run",
+] as const)(
+  "a prepare during a run row read that changes its memory access evidence (%s) shows none",
+  (change) =>
+    Effect.gen(function* () {
+      const hold = yield* makeMemoryReadHold;
+      yield* Effect.gen(function* () {
+        const archived = change === "an archived destination";
+        const sameRun = change !== "another run";
+        const readOnly = change === "a read-only prepare in the same run";
+        const run = yield* openMemoryRun(
+          readOnly
+            ? "memory-evidence-read-only"
+            : archived
+              ? "memory-evidence-archive"
+              : "memory-evidence-run",
+        );
+        const { sink, ids, manager, threadId, now } = run;
+        const store = yield* ProjectionStore.ProjectionStoreV2;
+        yield* hold.arm;
+        const read = yield* readPreparedRunDto(threadId, run.runId, run.taskId).pipe(
+          Effect.forkChild,
+        );
+        yield* hold.entered;
+        const before = yield* store.getThreadProjection(threadId);
+        const archive = (archivedAt: DateTime.Utc | null) =>
+          Effect.gen(function* () {
+            const id = yield* ids.allocate.event({ threadId });
+            const payload = { ...before.thread, archivedAt };
+            const type = archivedAt === null ? "thread.unarchived" : "thread.archived";
+            yield* sink.write({ events: [{ id, type, threadId, occurredAt: now, payload }] });
+          });
+        if (archived) yield* archive(now);
+        yield* manager.prepareMcpSession!({
+          threadId,
+          providerInstanceId: modelSelection.instanceId,
+          runId: sameRun ? run.runId : RunId.make("memory-evidence-other-run"),
+          delegatedTaskId: sameRun ? run.taskId : NodeId.make("memory-evidence-other-task"),
+          memoryGrantCeiling: "read_write",
+          ...(readOnly ? { readOnly: true } : {}),
+        });
+        // Unarchived again. The credential prepared while archived carries grant none, so this row
+        // proves that such a credential shows no access after unarchive, with or without the key.
+        if (archived) yield* archive(null);
+        yield* hold.release;
+        assert.isUndefined((yield* Fiber.join(read)).currentMemoryAccess);
+      }).pipe(Effect.provide(hold.layer));
+    }),
+);
+
+it.effect(
   "scheduled task DTO stays unknown while read-only RuntimePolicyV2 actually prepares read",
   () =>
     Effect.gen(function* () {
@@ -2420,6 +2349,7 @@ it.effect(
           Layer.mergeAll(
             layerTestDatabase,
             NodeServices.layer,
+            NodeCrypto.layer,
             settingsLayer,
             Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
             Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
@@ -4029,7 +3959,7 @@ it.effect.each(["missing", "file"] as const)(
           [],
         );
       }).pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 60_000 })));
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -4079,7 +4009,7 @@ it.effect(
           before.providerSessions,
         );
       }).pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 60_000 })));
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -4686,7 +4616,7 @@ it.effect.each([
           ),
         ),
       );
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
 );
 
 it.effect.each([
@@ -4784,7 +4714,7 @@ it.effect.each([
           }),
         ),
       );
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
 );
 
 it.effect.each(["failure", "interrupt"] as const)(
@@ -5200,7 +5130,7 @@ it.effect.each(turnStartMemoryCases)(
                   Layer.succeed(ServerEnvironment.ServerEnvironment, fakeEnvironment),
                   settingsLayer,
                   ServerConfig.layerTest(process.cwd(), { prefix: "memory-channel-" }).pipe(
-                    Layer.provide(NodeServices.layer),
+                    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
                   ),
                   Path.layer,
                   FileSystem.layerNoop({}),
@@ -5338,7 +5268,7 @@ it.effect.each(turnStartMemoryCases)(
               }),
               Path.layer,
               ServerConfig.layerTest(process.cwd(), { prefix: "memory-start-" }).pipe(
-                Layer.provide(NodeServices.layer),
+                Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
               ),
               Layer.mock(RuntimePolicy.RuntimePolicyV2)({ resolve: () => Effect.succeed(policy) }),
               Layer.mock(MemorySnapshot.MemorySnapshot)({

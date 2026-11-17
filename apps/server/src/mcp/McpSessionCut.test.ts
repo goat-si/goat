@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -65,7 +66,7 @@ const layerAuth = EnvironmentAuth.layer.pipe(
   Layer.provideMerge(ServerSecretStore.layer),
   Layer.provideMerge(ServerEnvironment.layerIdentity),
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-cut-" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 const environmentId = EnvironmentId.make("environment");
 const mcpClient = McpSchema.McpServerClient.of({
@@ -127,7 +128,7 @@ const projectRegistrations = (probe: Probe) =>
     ),
   );
 const served = (probe: Probe) =>
-  projectRegistrations(probe).pipe(Layer.provideMerge(McpServer.McpServer.layer));
+  projectRegistrations(probe).pipe(Layer.provideMerge(McpHttpServer.layerInProcessMcpServer));
 
 /** The scope /mcp builds for a bearer token arriving on `connection`. */
 const authenticate = (
@@ -290,7 +291,7 @@ it.effect.each(["revoked by the command line", "Pen-bound and its row is deleted
         Effect.provide(served(probe).pipe(Layer.provideMerge(layerAuthOver(running)))),
         Effect.scoped,
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -366,7 +367,7 @@ it.effect(
         Effect.provide(served(probe).pipe(Layer.provideMerge(layerAuthOver(running)))),
         Effect.scoped,
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -448,7 +449,7 @@ it.effect(
         Effect.provide(served(probe).pipe(Layer.provideMerge(layerAuthOver(running)))),
         Effect.scoped,
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -692,7 +693,7 @@ it.effect("an image tool registration (goat_screen_run) is guarded like every to
 );
 
 const catalogServer = catalog.pipe(
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   Layer.provide(
     Layer.mergeAll(
       dependencies,
@@ -774,5 +775,5 @@ it.effect(
         yield* Scope.close(request, Exit.void);
         expect(yield* store.admissionsInFlight()).toBe(0);
       }).pipe(Effect.provide(layerAuthOver(gated)));
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

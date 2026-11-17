@@ -10,6 +10,7 @@ import {
   ServerSelfUpdateInput,
   ServerProvider,
   ServerProviders,
+  ServerProviderModel,
   ServerProviderWorkspaceSnapshot,
 } from "./server.ts";
 import { ServerSettings } from "./settings.ts";
@@ -116,6 +117,33 @@ describe("provider workspace snapshot models", () => {
       decodeServerProvider({
         ...baseProviderSnapshot,
         workspaceSnapshots: [{ ...snapshot, slashCommands: [], modelsPending: "yes" }],
+      }),
+    ).toThrow();
+  });
+});
+
+describe("provider model text generation flag", () => {
+  const model = { slug: "demo/demo-model", name: "Demo", isCustom: false, capabilities: null };
+
+  it("decodes both ways between peers with and without supportsTextGeneration", () => {
+    const fromOlderServer = decodeServerProvider({ ...baseProviderSnapshot, models: [model] });
+    expect(fromOlderServer.models[0]?.supportsTextGeneration).toBeUndefined();
+
+    const newer = { ...model, supportsTextGeneration: false };
+    expect(
+      decodeServerProvider({ ...baseProviderSnapshot, models: [newer] }).models[0]
+        ?.supportsTextGeneration,
+    ).toBe(false);
+    const { supportsTextGeneration: _flag, ...olderFields } = ServerProviderModel.fields;
+    const decodeOlderModel = Schema.decodeUnknownSync(Schema.Struct(olderFields));
+    expect(decodeOlderModel(newer)).toEqual(model);
+  });
+
+  it("rejects a model whose text generation flag is not a boolean", () => {
+    expect(() =>
+      decodeServerProvider({
+        ...baseProviderSnapshot,
+        models: [{ ...model, supportsTextGeneration: "no" }],
       }),
     ).toThrow();
   });

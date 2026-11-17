@@ -6,7 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Redacted from "effect/Redacted";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -23,8 +23,8 @@ const databaseFixture = Layer.effect(
     if (!url || new URL(url).pathname !== "/connect_test" || new URL(url).hostname !== "127.0.0.1")
       throw new Error("An isolated CONNECT_TEST_DATABASE_URL is required");
     const client = yield* PgClient.PgClient;
-    const crypto = yield* Crypto.Crypto;
-    const schema = `connect_${(yield* crypto.randomUUIDv4()).replaceAll("-", "")}`;
+    const random = yield* SecureRandom.SecureRandom;
+    const schema = `connect_${(yield* random.uuidV4()).replaceAll("-", "")}`;
     yield* client.unsafe(`CREATE SCHEMA "${schema}"`);
     yield* Effect.addFinalizer(() =>
       client.unsafe(`DROP SCHEMA "${schema}" CASCADE`).pipe(Effect.orDie),

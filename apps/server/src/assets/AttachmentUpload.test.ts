@@ -3,6 +3,7 @@ import * as DocumentText from "../provider/DocumentText.ts";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import { ATTACHMENT_UPLOAD_URL_TTL_MS, ChatAttachmentId } from "@goat/contracts";
@@ -42,7 +43,11 @@ import {
 const layerTest = Layer.merge(ServerSecretStore.layer, PendingAttachmentSweep.layer).pipe(
   Layer.provideMerge(AttachmentFileLeases.layer),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-attachment-upload-" })),
-  Layer.provideMerge(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
+  Layer.provideMerge(
+    DocumentText.layer.pipe(
+      Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+    ),
+  ),
 );
 
 const uploadInput = {

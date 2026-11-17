@@ -1,4 +1,5 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { RunAttemptId } from "@goat/contracts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -35,6 +36,7 @@ const layer = Layer.mergeAll(
   IdAllocator.layer,
   McpProviderSessions.layer,
   NodeServices.layer,
+  NodeCrypto.layer,
 );
 
 it.effect("preserves a background command and its start time across roster snapshots", () =>

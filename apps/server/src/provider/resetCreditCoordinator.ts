@@ -5,7 +5,7 @@ import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import type { ProviderConsumeResetCreditOutcome, ServerProvider } from "@goat/contracts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -116,7 +116,7 @@ export class ResetCreditCoordinator extends Context.Service<
 
 /** @public */
 export const make = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   // An entry lives while a redemption holds it or an uncertain outcome keeps its idempotency key.
@@ -153,7 +153,7 @@ export const make = Effect.gen(function* () {
       (state) =>
         state.lock.withPermits(1)(
           Effect.gen(function* () {
-            const idempotencyKey = state.pendingKey ?? (yield* crypto.randomUUIDv4());
+            const idempotencyKey = state.pendingKey ?? (yield* random.uuidV4());
             state.pendingKey = idempotencyKey;
             const outcome = yield* consume(idempotencyKey).pipe(
               Effect.tapError((error) =>
@@ -213,13 +213,10 @@ export const layerTest = Layer.effect(
     let counter = 0;
     return yield* make.pipe(
       Effect.provideService(
-        Crypto.Crypto,
-        Crypto.make({
-          randomBytes: (size) => {
-            counter += 1;
-            return new Uint8Array(size).fill(counter);
-          },
-          digest: (_algorithm, data) => Effect.succeed(data),
+        SecureRandom.SecureRandom,
+        SecureRandom.make((size) => {
+          counter += 1;
+          return new Uint8Array(size).fill(counter);
         }),
       ),
       Effect.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)),

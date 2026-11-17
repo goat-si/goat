@@ -6,6 +6,7 @@ import {
 } from "../ProviderSessionFixture.testkit.ts";
 import * as AdapterInfrastructure from "../../provider/ProviderOrchestrationAdapterInfrastructure.ts";
 import * as NetAddress from "effect/net/NetAddress";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
@@ -424,8 +425,11 @@ export function layerTest(input: {
   ).pipe(
     Layer.provide(
       input.fileSystem === undefined
-        ? NodeServices.layer
-        : Layer.merge(NodeServices.layer, Layer.succeed(FileSystem.FileSystem, input.fileSystem)),
+        ? Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)
+        : Layer.merge(
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+            Layer.succeed(FileSystem.FileSystem, input.fileSystem),
+          ),
     ),
   );
 }
@@ -444,7 +448,7 @@ const layerTestMcpRegistryWithOptions = (options: McpSessionRegistry.McpSessionR
   ).pipe(
     Layer.provide(Layer.succeed(HttpServer.HttpServer, fakeHttpServer)),
     Layer.provide(Layer.succeed(ServerEnvironment.ServerEnvironment, fakeEnvironment)),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
 const layerTestMcpRegistry = layerTestMcpRegistryWithOptions({});
 const layerPausingMcpRegistry = (pause: {

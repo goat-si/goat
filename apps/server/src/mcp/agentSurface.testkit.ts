@@ -392,9 +392,8 @@ export interface ListedTool {
   readonly _meta?: Readonly<Record<string, unknown>>;
 }
 
-const serveVia = <ET, RT>(
-  transport: Layer.Layer<Layer.Success<typeof McpHttpServer.layerMcpTransport>, ET, RT>,
-) =>
+/** `transportServices` are what the transport itself reads, such as goatclaw profiles. */
+const serveVia = <PA, PE, PR>(transportServices: Layer.Layer<PA, PE, PR>) =>
   Effect.fn("agentSurfaceTestkit.serveOverHttp")(function* <E, R>(
     scopes: Readonly<Record<string, McpInvocationScope>>,
     registrations: Layer.Layer<never, E, R>,
@@ -405,8 +404,8 @@ const serveVia = <ET, RT>(
       Object.entries(scopes).map(([caller, scope]) => [`Bearer ${caller}.token`, scope]),
     );
     yield* HttpRouter.serve(
-      registrations.pipe(
-        Layer.provideMerge(transport),
+      McpHttpServer.layerMcpTransport(registrations).pipe(
+        Layer.provide(transportServices),
         Layer.provide(
           Layer.mock(McpSessionRegistry.McpSessionRegistry)({
             resolve: () => Effect.succeed(undefined),
@@ -532,11 +531,9 @@ const serveVia = <ET, RT>(
     };
   });
 
-export const serveOverHttp = serveVia(McpHttpServer.layerMcpTransport);
+export const serveOverHttp = serveVia(Layer.empty);
 // tools/list follows the caller's goatclaw profile, so this transport reads profiles too.
-const serveOverHttpWithProfiles = serveVia(
-  McpHttpServer.layerMcpTransport.pipe(Layer.provide(Profiles.layer)),
-);
+const serveOverHttpWithProfiles = serveVia(Profiles.layer);
 
 // Settings come from the caller, so a test can change the goatclaw policy.
 const serveWith = <E, R>(

@@ -14,7 +14,6 @@ import * as Fiber from "effect/Fiber";
 import { identity } from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import * as Schedule from "effect/Schedule";
@@ -27,7 +26,7 @@ import * as Tracer from "effect/Tracer";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as Client from "effect/sql/SqlClient";
 import type { Borrower, Connection } from "effect/sql/SqlConnection";
-import { SqlError, classifySqliteError } from "effect/sql/SqlError";
+import { SqlError } from "effect/sql/SqlError";
 import * as Statement from "effect/sql/Statement";
 import { satisfiesSemverRange } from "./semver.ts";
 import { makeReaderPool, type ReaderSlot } from "./nodeSqliteReaderPool.ts";
@@ -35,13 +34,16 @@ import { connectionOwner, measureWriterSql, recordReaderSql } from "./slowSqlOpe
 export { recentSlowSql } from "./slowSqlOperations.ts";
 
 import { readerWorkerSource } from "./sqliteWorkerSources.ts";
+import * as RowBatches from "./sqliteRowBatches.ts";
 import {
   CHECKPOINT_BACKPRESSURE_FRAMES,
   CHECKPOINT_FRAMES,
   openCheckpointWorker,
   prepareCheckpointWriter,
+  readSafeSqliteInteger,
 } from "./sqliteCheckpointWorker.ts";
 
+import { classifyError, toleratingFinishedRollback } from "./nodeSqliteErrors.ts";
 import { makeWriter } from "./nodeSqliteWriter.ts";
 import { hasLargeBinding, sqliteParameters } from "./nodeSqliteParameters.ts";
 import { waitForWalRecovery } from "./nodeSqliteWalRecovery.ts";
@@ -151,18 +153,6 @@ const checkNodeSqliteCompat = Effect.fn("checkNodeSqliteCompat")(function () {
   return Effect.void;
 });
 
-// node:sqlite supplies errcode; classifySqliteError expects errno.
-const classifyError = (cause: unknown, message: string, operation: string) => {
-  if (
-    Predicate.hasProperty(cause, "errcode") &&
-    typeof cause.errcode === "number" &&
-    !Predicate.hasProperty(cause, "errno")
-  ) {
-    Object.assign(cause, { errno: cause.errcode });
-  }
-  return classifySqliteError(cause, { message, operation });
-};
-
 interface ReaderRequest {
   readonly sql: string;
   readonly params: ReadonlyArray<unknown>;
@@ -176,7 +166,7 @@ type ReaderStartup =
   | { readonly type: "unavailable"; readonly message: string; readonly errcode?: unknown };
 
 type ReaderReply = { readonly nativeMs?: number; readonly prepareMs?: number } & (
-  | { readonly id: number; readonly rows: ReadonlyArray<any> }
+  | { readonly id: number; readonly rows: ReadonlyArray<any>; readonly more?: boolean }
   | {
       readonly id: number;
       readonly error: {
@@ -270,6 +260,7 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (options: SqliteClie
       number,
       {
         readonly endsTransaction: boolean;
+        readonly batch: RowBatches.Batches;
         readonly owner: string;
         resume: (reply: ReaderReply) => void;
       }
@@ -314,11 +305,12 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (options: SqliteClie
       }
       const request = pending.get(reply.id);
       if (request === undefined) return;
+      if ("rows" in reply && reply.more) return RowBatches.acknowledge(request.batch, reply.rows);
       recordReaderSql(request.owner, reply);
       pending.delete(reply.id);
       if (pending.size === 0) worker.unref();
       if ("rows" in reply) retryMs = 250;
-      request.resume(reply);
+      request.resume(RowBatches.finish(request.batch, reply));
     });
     worker.on("exit", (code) => stop(`Database reader exited with code ${code}`));
 
@@ -338,8 +330,10 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (options: SqliteClie
         const safeIntegers = Boolean(Context.get(fiber.context, Client.SafeIntegers));
         return Effect.callback<ReadonlyArray<any>, SqlError>((resume) => {
           const id = nextRequestId++;
+          const batch = RowBatches.make();
           pending.set(id, {
             endsTransaction,
+            batch,
             owner: connectionOwner(fiber).name,
             resume: (reply) => {
               if ("rows" in reply) {
@@ -361,8 +355,9 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (options: SqliteClie
           if (pending.size === 1) worker.ref();
           const params = sqliteParameters(input.params);
           const cached = input.cached && !hasLargeBinding(params);
+          const { received } = batch;
           // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node workers do not accept a target origin.
-          worker.postMessage({ id, safeIntegers, ...input, params, cached });
+          worker.postMessage({ id, safeIntegers, ...input, params, cached, received });
           return Effect.suspend(() => {
             const pendingRequest = pending.get(id);
             if (pendingRequest === undefined) return Effect.void;
@@ -488,11 +483,6 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (options: SqliteClie
   return { acquire, state } satisfies ReaderSlot;
 });
 
-const readSafeSqliteInteger = (value: unknown) => {
-  const number = typeof value === "bigint" ? Number(value) : value;
-  return typeof number === "number" && Number.isSafeInteger(number) ? number : undefined;
-};
-
 const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
   filename: string,
   writer: NodeSqlite.DatabaseSync,
@@ -561,12 +551,7 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
   const gated = () =>
     walEnabled !== false &&
     !writer.isTransaction &&
-    (stopped ||
-      recovering ||
-      unknown ||
-      blocked ||
-      truncate !== undefined ||
-      log >= CHECKPOINT_BACKPRESSURE_FRAMES);
+    (stopped || recovering || unknown || blocked || truncate !== undefined);
   const wake = () => {
     if (!gated() && elected === undefined) {
       elected = waiters.shift();
@@ -622,6 +607,8 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
       log = nextLog;
       checkpointed = nextCheckpointed;
       unknown = false;
+      // Past the ceiling, hold writes until the worker judges this WAL; a reader can pin it there.
+      if (log >= CHECKPOINT_BACKPRESSURE_FRAMES) blocked = true;
     } catch {
       unknown = true;
     }
@@ -1266,10 +1253,11 @@ const make = Effect.fn("makeWithDatabase")(function* (
   );
 
   const client = yield* Client.make({
+    driver: "node:sqlite",
     acquirer: transactionAcquirer,
     borrower,
     compiler,
-    transactionAcquirer,
+    transactionAcquirer: Effect.map(transactionAcquirer, toleratingFinishedRollback),
     // BEGIN IMMEDIATE avoids read-then-write SQLITE_BUSY_SNAPSHOT, which busy_timeout cannot resolve.
     beginTransaction: options.readonly === true ? "BEGIN" : "BEGIN IMMEDIATE",
     spanAttributes: [
