@@ -55,6 +55,7 @@ import { forkParked } from "./serverActivation.ts";
 import * as Settings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "./worktreesDirectory.ts";
+import { isManagedWorktreeLocation } from "./worktreesDirectory.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import { removeLinkedWorktree } from "./vcs/worktreeRemoval.ts";
 import { makeSubmoduleRemoval } from "./storageCleanupSubmodules.ts";
@@ -696,6 +697,10 @@ const make = Effect.gen(function* () {
           return keep("worktree is a symbolic link");
         if (!roots.some((root) => inside(root, realPath)))
           return keep("outside the managed worktree folder");
+        if (!roots.some((root) => isManagedWorktreeLocation(root, realPath, path)))
+          return keep(
+            "GOAT can only restore worktrees at <worktrees folder>/<repository>/<name>, and this one is elsewhere",
+          );
         const otherHome = otherHomeReason(path, otherBindings, realPath);
         if (otherHome !== null) return keep(otherHome);
         if (yield* containsProjectRoot(worktreePaths, [project, ...snapshot.projects]))

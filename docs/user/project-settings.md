@@ -314,7 +314,8 @@ merging, or when they have no commits beyond the default branch and their thread
 archived. Set settled retention to 0 days
 to remove a worktree at the next cleanup after settlement. In repositories without remotes,
 unchanged-worktree cleanup compares against the branch checked out in the project workspace;
-if that checkout has a detached HEAD, the worktree is kept. Only GOAT-managed worktrees are eligible.
+if that checkout has a detached HEAD, the worktree is kept. Only worktrees in the layout GOAT
+creates, `<worktrees folder>/<repository>/<name>`, are eligible, because only those can be restored.
 No rule except deleting the thread removes a worktree whose branch has commits that are not in the
 remote default branch (in repositories without remotes, the project's branch) unless a merged pull
 request names them, even when its files are unchanged. The cleanup results show how many such
@@ -344,7 +345,9 @@ the worktree automatically, and the thread notes what came back and what did not
 files or changes that were never committed. **Start in a new worktree** continues on a new branch
 started from the thread's branch; the saved snapshot remains available for manual recovery. If a
 restore stops before its setup script finishes, the banner says so and offers **Run setup now**;
-the next turn also runs it.
+the next turn also runs it. An earlier GOAT version could clean up a worktree at another place in
+the worktrees folder, which GOAT cannot restore in place; its snapshot is in the project
+repository, and the steps below recover it.
 
 Snapshots live in the project repository under `refs/goat/snapshots/<thread>/<time>` and are kept
 for 30 days by default; change the retention period in **Settings → Storage**. Snapshots of

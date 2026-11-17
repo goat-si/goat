@@ -186,7 +186,7 @@ describe("automatic cleanup keeps unshipped commits", () => {
         // origin/main holds this head, but only as of the last fetch.
         yield* fixture.command(fixture.repo, ["push", "origin", "feature:main"]);
         yield* fixture.command(fixture.repo, ["fetch", "origin"]);
-        const second = fixture.path.join(fixture.config.worktreesDir, "second");
+        const second = fixture.path.join(fixture.config.worktreesDir, "repo", "second");
         yield* fixture.command(fixture.repo, [
           "worktree",
           "add",
