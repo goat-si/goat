@@ -25,10 +25,11 @@ concurrency at about 20 jobs, so a few full runs at once queue.
 
 When the box's network changes (its Wi-Fi link loses its address now and then), Chromium fails
 every pending request with `net::ERR_NETWORK_CHANGED`, loopback included (#3646). Off GitHub-hosted
-runners, the web browser tests (`test`, and the `apps/web` browser files of `test-changed`)
-therefore run in a loopback-only network namespace through `.github/scripts/loopback-netns.sh`,
-which needs bubblewrap and fails rather than falling back to the host network. Server tests stay on
-the host: their root-or-self ownership checks cannot pass inside an unprivileged user namespace.
+runners, the whole `@goat/web` suite of `test` (unit, browser and render tests) and the
+`apps/web` browser files of `test-changed` therefore run in a loopback-only network namespace
+through `.github/scripts/loopback-netns.sh`, which needs bubblewrap and fails rather than falling
+back to the host network. Server tests stay on the host: their root-or-self ownership checks cannot
+pass inside an unprivileged user namespace.
 
 Each `ci` matrix entry carries a `runner` pool from `.github/scripts/goat-ci-scope.cjs`: `windows`
 for `test-windows`, `hosted` for the short Node-only tasks in `HOSTED_TASKS` (`check`, `typecheck`
