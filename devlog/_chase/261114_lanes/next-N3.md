@@ -2195,6 +2195,55 @@ AssertionError: expected <div data-highlighted …(5)>…(4)</div> to be null
 - (ii) The file alone on pen-mac-studio: 30 of 30 passed on 24aa0d5f70 (Effect 4.1.3), and 30 of 30 passed on dev 229ae283d3 (Effect 4.0.5, in the baseline worktree detached to dev after vp i --frozen-lockfile). The file and the palette code are identical on both.
 - (iii) Class (c), per the 04:25 UTC decision: the failure is the known flake goat#3416 (open since 2026-11-15; three failures of this assertion on Effect 4.0.5 heads: #3413 run 43706805241, #3457 run 43764612094, #3471 run 43785599970), so the 30 plus 30 runs were waived after they had been run (both 30 of 30). This run's job, the counts and the code path are a comment on goat#3416 (https://github.com/goat-si/goat/issues/3416#issuecomment-6938321533); goat#3643, filed before #3416 was known, is closed as its duplicate. The rerun: gh run rerun 44009905527 --failed at 2026-11-17T04:17:55Z, attempt 2: completed failure: goat-test started at 04:36:45Z on runner lidge-goat-02 (attempt 1 ran on lidge-goat-03) and failed the same single test, CommandPalette.browser.test.tsx:83:76 (AssertionError: expected <div data-highlighted …(5)>…(4)</div> to be null; Test Files 1 failed | 982 passed (983); Tests 1 failed | 10943 passed (10944)), finished 04:45:17Z, goat-ci-result failure 04:47:36Z (job https://github.com/goat-si/goat/actions/runs/44009905527/job/133814621012). Both CI attempts on 24aa0d5f70 failed only this test, against 30 of 30 local passes on 24aa0d5f70 and on dev 229ae283d3; the evidence is a second comment on goat#3416 (https://github.com/goat-si/goat/issues/3416#issuecomment-6938904365), and #3519's own full run is the gate before dev (04:25 UTC decision).
 
+## The palette browser test is fixed inside #3519
+
+### Decision of 05:00 UTC, with the rule 3 authorisation (verbatim)
+
+> Coordinator decision, 2026-11-17 05:00 UTC, the palette browser test (goat#3416): FIX IT NOW, inside #3519, as its own test-only commit. Two CI attempts out of two on 24aa0d5f70 failed only apps/web/src/components/CommandPalette.browser.test.tsx:83 on two runners (lidge-goat-03, lidge-goat-02), while the file passes 30 of 30 locally on 24aa0d5f70 and on dev 229ae283d3, and goat#3416 has three earlier failures on Effect 4.0.5 heads. The path is plain React state (the reviewer and part 6 both traced it), and the assertion reads the DOM once, right after act(), which the repository's own rule for browser tests forbids. #3519 cannot merge while its own full run is likely to fail on it.
+> Rule 3 authorisation, quote verbatim: "Coordinator authorisation, 2026-11-17, rule 3, apps/web/src/components/CommandPalette.browser.test.tsx, 'CommandPalette open intents > drags a searched thread into the current composer without navigating': the one-shot expect(page.getByRole('option', { name: /Drag this thread/ }).query()).toBeNull() at :83 may become an awaited assertion through expect.element on the same locator that the row is not in the document (await expect.element(row).not.toBeInTheDocument(), or the idiom the file already uses for absence). The expectation is the same: after the drag starts, the palette row is gone. Nothing else in the case changes: the same pointer events, the same assertions on onDrop, its detail and the pathname. Conditions: (a) no per-test timeout, no vi.waitFor loop, no retry, no sleep, no frame wait; (b) the commit shows that the new assertion still pins the behaviour: on a scratch copy where the drag start no longer closes the palette (the flushSync(close) in apps/web/src/components/CommandPalette.drag.ts removed), the case FAILS, with its message quoted; (c) the commit says in one sentence WHY the row can still be there when act() returns (name the mechanism with path:line: for example the Base UI dialog keeping its popup mounted until its exit transition ends), and what a person sees meanwhile (the palette fading out while the drag has begun: say whether that is the designed behaviour); (d) evidence that it waits rather than masks under load: run the file with the machine loaded the way CI is (the web browser suite's worker count, or N copies of the file in parallel) 20 times with the OLD assertion and 20 with the new one, and report both counts; if the old assertion cannot be made to fail on pen-mac-studio, say so and rely on (b), (c) and the next CI run."
+> For N3 part 6 (or a fresh thread in that worktree): branch chase/t3-261114-n3d-palette-test cut from f848a4dcd2 (the integration head), ONE commit, that file only (if the file is at a budget entry, the usual rule). Checks: the file itself, typecheck web, lint, format, goat-rename --check. Plain push; report the head with (b), (c) and (d). I read it and merge it; if the integration head has moved by then (N7 part 2 lands first), merge origin/chase/t3-261114-next into the branch once when I ask (git's own merge). Add a comment on goat#3416 that the fix is in #3519 with the commit, and record the authorisation in next-N3.md (records branch). N7 part 2 and N9b part 2 do NOT merge this branch and do not wait for it.
+
+### The commit
+
+Branch chase/t3-261114-n3d-palette-test, cut from f848a4dcd2 (origin/chase/t3-261114-next, confirmed before cutting), one commit touching only apps/web/src/components/CommandPalette.browser.test.tsx (116 lines, not at a budget entry): ab59bbdacc95f4e12ab05bde02cfaa3e2fdb7ad4, "test(web): wait for the dragged palette row to unmount (goat#3416)", pushed with a plain push of the new branch and verified on origin with git ls-remote. The one-shot `expect(page.getByRole("option", { name: /Drag this thread/ }).query()).toBeNull()` at :83 became `await expect.element(row).not.toBeInTheDocument()` on the same locator; nothing else in the case changed. Condition (a): no per-test timeout, vi.waitFor loop, retry, sleep or frame wait. Checks on the commit: the file alone (Test Files 1 passed, Tests 3 passed), `vp run --filter @goat/web typecheck` (exit 0; only Effect language-service suggestions in other files), `vp lint` on the file (exit 0), `vp fmt --check` on the file (correct format), `node scripts/goat-rename.ts --check --limit 200` (0 lines with T3 residue); the pre-commit fmt and lint hooks passed. Comment on goat#3416: https://github.com/goat-si/goat/issues/3416#issuecomment-6939404579.
+
+### (b) The new assertion still pins the behaviour
+
+With `flushSync(close);` removed from apps/web/src/components/CommandPalette.drag.ts on a scratch copy (restored with git checkout before committing), the case fails:
+
+```text
+ FAIL  |browser (chromium)| src/components/CommandPalette.browser.test.tsx > CommandPalette open intents > drags a searched thread into the current composer without navigating
+Error: expect(element).not.toBeInTheDocument()
+expected document not to contain element, found <div
+  class="flex min-h-8 select-none items-center gap-2 rounded-sm px-2 ..."
+  data-active="true"
+  data-highlighted=""
+  data-slot="command-item"
+  id="base-ui-_r_3_-0"
+...
+Caused by: Error: Matcher did not succeed in time.
+      Tests  1 failed | 2 skipped (3)
+```
+
+### (c) Why the row can still be there when act() returns, and what a person sees
+
+flushSync(close) commits the close inside act(), but Base UI keeps the closed popup mounted and removes it in a later commit of its own: @base-ui/react 1.9.0 utils/popups/popupStoreUtils.js:441 uses useUnmountAfterClose, whose internals/useUnmountAfterClose.js:88 runs useOpenChangeComplete; its useEffect (internals/useOpenChangeComplete.js:25) waits on Promise.all over the popup's animations (internals/useAnimationsFinished.js:88) and then flushSyncs the unmount (:72), and on a loaded runner that commit can land after act() returns. In tests the durations are zero (apps/web/src/test/browserNoMotion.ts), so the wait is a promise turn, not a transition. A probe under the same load (24 copies, 6 runs, 144 cases) logged the popup whenever the row outlived act(): 9 times, each with the popup at data-closed and data-ending-style, no data-open, getAnimations() empty, transition-duration 0s, and each time the row was gone one animation frame later; in the other 135 the row was already absent.
+
+What a person sees: the palette fades and shrinks over its 200 ms exit transition (apps/web/src/components/ui/dialog-styles.ts:8, data-ending-style opacity-0 and scale-98) while the drag ghost follows the pointer. That is the designed behaviour, the shared dialog exit: the closing popup and backdrop ignore the pointer (ui/command.tsx:31, :70) and the composer's inert wrapper lifts with the close (CommandPalette.tsx:431), so the drop lands on the composer during the fade.
+
+### (d) Under load: 20 runs with the old assertion, 20 with the new
+
+pen-mac-studio has 16 cores, so the browser project runs 8 workers (vite.config.ts:172, the CI formula min(8, cores - 1)). Each run had 24 copies of the file beside it (72 tests, scratch copies deleted afterwards).
+
+| Assertion | Runs failed | Drag cases failed | Other tests failed |
+| --- | --- | --- | --- |
+| Old, `query()` then `toBeNull()` | 11 of 20 | 19 of 480 | 0 |
+| New, `await expect.element(row).not.toBeInTheDocument()` | 0 of 20 | 0 of 480 | 0 |
+
+Every old failure was this case with CI's message, "AssertionError: expected <div data-highlighted …(5)>…(4)</div> to be null". Per run, the old series failed 0, 2, 1, 0, 1, 0, 2, 0, 0, 1, 0, 0, 1, 3, 1, 5, 1, 0, 1, 0 cases.
+
+NOT RUN: `vp run check:changed` and the full CI run for ab59bbdacc; the next #3519 full run is the CI evidence.
+
 ## NOT RUN
 
 - NOT RUN: relay PostgreSQL fixture on pen-mac-studio (`node infra/relay/scripts/test-postgres.ts check`: "pg_ctl: could not start server"). It is proven by the full CI runs: "Connect auth PostgreSQL boundaries" and the relay tests.
