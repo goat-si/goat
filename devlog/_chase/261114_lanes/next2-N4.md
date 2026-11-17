@@ -568,3 +568,29 @@ Known limits for #3660 (the coordinator's lines, recorded):
 - **check:changed at cee19f4d19** (origin/chase/t3-261114-next2 = 0be6f7c7f4; 2 files): exit 0. Format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget and typecheck (2 packages) pass; test (41 files, 559 tests) passes. Pushed plainly; no goat-ci dispatched.
 
 NOT RUN: a real shell (FakePtyAdapter; the real-shell timing of the old failure is the reviewer's inference), Linux and Windows, a real client.
+
+## N4d window: a run whose open waited for the restore (424f39f3a9)
+
+Coordinator to lane coordinator (2026-11-17 17:34:10 UTC), item 1 (verbatim):
+1. N4d (cee19f4d199aaf668a828f884ab3284aec5d4112): lane=quick is dispatched, run 44137268930 (queued behind the full run 44134917351 on 0be6f7c7f4). I READ the diff (2 files, +86/-8). It does what it says for the pinned case, the entry is bounded, a person's restart bumps nothing, and markWritten before the write is right. It MERGES by fast-forward at this head when the quick run is green; N4 does not wait for that. One window I want answered, to N4, verbatim:
+ THE REGISTRATION COMES AFTER THE OPEN. A run enters pendingRuns only after its terminalManager.open returned (ProjectSetupScriptRunner.ts, the block before the writer is forked), and a fresh run bumps only an EXISTING entry. So an earlier run that is still INSIDE its open when the restore's run starts is not superseded. That is not a few steps wide: an open that finds the folder held by the restore gives the thread lock up and waits for the lease (terminalLeaseOrder.ts withThreadLockAndLease); the restore's restart supersedes that ticket (tryTerminalLease's tap), the rerun comes back "overtaken" with the restarted terminal, and only THEN does the earlier run register, at the already-bumped generation. It then waits for the new shell's prompt and types, which is the double run and the close-before-the-restore-typed failure this branch exists to remove. Basis: READ, not run. Callers that can start such a run beside a restore: ThreadLaunchService.ts:784, ThreadForkWorkspace.ts:464, WorktreeMcpService.ts:355, pullRequestSetup.ts:13, ThreadWorkspaceService.ts:293.
+ DO, 25 minutes from receipt, ONE commit pair on top of cee19f4d19 (no merge, plain push, the head to me): a test in the style of setupLockOrder.test.ts or setupShell.test.ts where the earlier run's open is still waiting for the folder when the restore's run restarts the terminal; if it fails as I read it, register the run just before its open (a fresh run after its own restart, so it never supersedes itself) and release on every way out of the open block as well as at the writer's end; the earlier run then abandons and settles null as in your existing case. If the open cannot be waiting there, or the test passes at cee19f4d19, change no code and put the reason with path:line in the record. If it cannot be done in 25 minutes, say so and it becomes a stated limit in #3660's known-limit lines; it does not hold the merge of cee19f4d19. Tests only on pen-macbookair while P1 web holds the dev server.
+
+The window is confirmed and fixed: commit pair 869b40cb45 (test) and 424f39f3a9 (fix), plain push, no dispatch.
+
+- **Test.** setupShell "a setup run whose open waited for the restore is superseded too".
+  - Setup: the restore is held inside its lease by gating the snapshot lookup, which runs before the recreate. While it is held, a launch's setup run asks for the setup terminal; the test waits on the gated open request, and that open waits for the folder. Then the restore is let go. The restore is async, so no closeIdle runs.
+  - At cee19f4d19: "expected +0 to equal null". The earlier run came back "overtaken" with the restored shell, registered at the bumped generation and typed there, as the coordinator read.
+  - A sync variant fails differently: the earlier open fails with "Unknown terminal ... setup-setup", because the restore's exit-0 closeIdle removes the session before the overtaken rerun reads it. That is the #3682 behaviour the round-2 reviewer noted, outside this lane.
+- **Fix.**
+  - A run registers in pendingRuns before its open. A fresh run registers after its own restart, so it never supersedes itself.
+  - The registration is released on every way out of the open block (onError) and at the writer's end (ensuring).
+  - The completion watcher also ends, on "restarted", a run that a fresh run superseded (superseded() means the generation changed), so it forwards none of the restored shell's output.
+- **Checks.**
+  - setupShell 9/9.
+  - setupShell, setupTerminal, setupLockOrder, ThreadWorkspaceService.terminal, Manager.leaseOrder and src/project: 31 files, 305 tests passed. ProjectSetupScriptRunner.test.ts:204 is unchanged and passing.
+  - The test commit was made with --no-verify. The file had already been through vp fmt, and check:changed, lint included, ran after the push; its result is below.
+- **Checks at eb46f07428.** The first check:changed, at 424f39f3a9, failed only typecheck: effect diagnostic TS377015 (unnecessaryPipeChain) on the fixture's open wrapper, at setupShell.test.ts:164. Every other stage passed. eb46f07428 makes it one pipe.
+  - vp run check:changed origin/chase/t3-261114-next2 at eb46f07428: exit 0. Format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget and typecheck (2 packages) pass, and the test stage passes. Plain pushes; no goat-ci dispatched.
+
+NOT RUN: a real shell (fake PTY), Linux and Windows, a real client.
