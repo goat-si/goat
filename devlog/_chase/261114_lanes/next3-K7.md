@@ -653,3 +653,26 @@ GOAT's mirrored hunk in server.updateResume.test.ts (the same change as upstream
                Stream.fromEffect(
 ```
 
+
+
+## Row 7 (6641231797): answers before code (condition (c))
+
+Persisted shells: none store the summary. A thread shell's pendingRuntimeRequest is rebuilt on every read from the stored request payload and the stored secret or handoff card (ProjectionStore.ts:6982-7002 and threadShellProjection.ts:318-349, both through ProjectionPendingRequest.ts:23 secretRequestAsPendingInput). userOnly is set there, so a card pending before the upgrade carries it on the first read after it, with no reprojection or migration. A client that cached a shell from before the upgrade (client-runtime shell cache) shows the old state until its next snapshot, which every reconnect brings.
+
+GOAT's starting point differs from upstream: GOAT's server awareness (packages/shared/src/agentAwareness.ts:37 subagentRequestAwareness) already reports any blocking child request, questions included, as the parent's waiting_for_input, where upstream's only reported approvals. The three gaps upstream fixed are the same on GOAT:
+- ShellStream.ts shouldPublishShellApplicationEvent drops every subagent turn-item.updated, so a child's secret or handoff card (a turn item) does not refresh any shell.
+- AgentAwarenessRelay.ts:130-131 publishes a turn-item.updated only when it can end background work, so the push does not fire when the card appears.
+- client-runtime state/threadShell.ts:84 rolls up only approvals, so no client marks the parent.
+GOAT's user-only cards are secret_request and human_handoff; GOAT has no link_request.
+
+What a parent shows, before and after, for a child (subagent) that is live:
+
+| surface | child asks an ordinary question | child shows a secret request | child shows a human handoff |
+|---|---|---|---|
+| web sidebar row (Sidebar.logic.ts:1446) | nothing (the coordinator answers) | before: nothing; after: Input needed | before: nothing; after: Input needed |
+| desktop (wraps web: same row, tray via desktopTray.ts, notification via ThreadNotificationCoordinator) | nothing | before: nothing; after: Input needed, tray count and a background "needs input" announcement | same as secret |
+| mobile thread list (threadListV2LaunchFold.ts:135, useThreadListActions.ts:366) | nothing | before: nothing; after: the "input" fold mark | same as secret |
+| phone push (AgentAwarenessRelay -> SubagentWaits) | waiting_for_input when blocking (GOAT's existing behavior, unchanged) | before: only after some later publishable event; after: waiting_for_input when the card appears, cleared when it is answered | same as secret |
+
+The child's own row also refreshes live once the turn-item filter keeps these updates. A coordinating agent gets nothing new: userOnly is a flag on the summary, and no wire field carries a secret value.
+
