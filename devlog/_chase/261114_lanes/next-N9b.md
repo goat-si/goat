@@ -11,7 +11,7 @@ Lane branch `chase/t3-261114-n9b-providers`, based on origin/dev `bcb2a18ac8`. C
 | L383 jsonc-parser into provider-cursor (C4 new dependency) | cc97303381 | 49bcd979ee8201d0bea79e0e4236b24f7e03de7a (move-out), 8550f8ea2f9fc22213ffa6d2632ff616001ace8f | ported; needs ci:full (not dispatched by the lane) |
 | L406 Pi prompt ACK tracking | f255158370 | 14edd1cc219bec2f2063190b1ec0032be2b6b5f6 (move-out), 886de17bba371fc08117d9965d4cc3a02af6b450, a868b9c9b236a646c96b29f4604369a4659e5634 | ported |
 | L408 supportsTextGeneration (C4 contract) | 817b92f13a | none | not started (context) |
-| O23 / L407 Cursor team usage (C4) | 497aac20f7 | 672400a7da (part 3, own branch chase/t3-261114-n9b2-o23) | code complete, live read owed; needs a live Cursor check (see Part 3) |
+| O23 / L407 Cursor team usage (C4) | 497aac20f7 | 672400a7da + 49c834520a (part 3, own branch chase/t3-261114-n9b2-o23) | held out of #3519 until a live Cursor read passes (goat#3632); needs a live Cursor check (see Part 3) |
 | a3cde98425 remainder, ACP mock agent bundled once per file | a3cde98425 | none | not started (context) |
 | goat#3491 Cursor declined steer after Stop | (2248ca8db9 gap) | none | not started (context) |
 
@@ -53,6 +53,8 @@ Conditions: (a) each carried table and hunk is upstream's text apart from GOAT's
 ### goat-prompt- prefix (coordinator decision, verbatim)
 
 Coordinator decision, 2026-11-16, lane N9b: (1) the goat-prompt- prefix for Pi prompt ACK ids (a868b9c9b2) is ACCEPTED as a GOAT difference from upstream f255158370, which writes t3-prompt-; with it item 5 of the L406 authorisation reads: ADAPTER_REQUEST_ID becomes /^(?:t3|goat-prompt)-\d+$/u in apps/server/src/orchestration-v2/Adapters/PiAdapterV2.testkit.ts. Conditions: the ids are generated and matched only by GOAT's own adapter (the record names every place in packages/provider-pi and apps/server that builds, matches or classifies a request id by prefix, with path:line, and says none still expects t3-prompt-); the existing t3-<n> ids of other requests are unchanged; recorded Pi fixtures still replay; the record cites the goat-rename rule that flagged the upstream prefix. (2) The lane's remaining four rows (L408 817b92f13a, C4; O23 L407 497aac20f7; the rest of a3cde98425; goat#3491) stay in lane N9b for #3519 and run as N9b part 2 in a fresh thread in the same worktree on a NEW branch chase/t3-261114-n9b2-providers cut from 7fe3d68aa5, so that part 1's head stays fixed for its review; part 2 merges the integration head when part 1 is merged. O23 keeps its condition: one live check by a person with a Cursor team account, or the row stays open as "needs a live Cursor check".
+
+Note (2026-11-17): O23 was later held out of #3519 by the coordinator decision quoted in Part 3 (goat#3632); #3519 does not contain it.
 
 Conditions, checked on 7fe3d68aa5db89e1ad0bd7f60c0a2e4aeec07456 (`rg` over packages/provider-pi and apps/server for `t3-`, `goat-prompt` and `prompt-` id spellings):
 
@@ -157,7 +159,7 @@ Conditions: (1) held means held: tests that after Stop the queued follow-up does
 | L408 supportsTextGeneration (C4 contract) | 817b92f13a | 0a3efad7250b4cbea8a11d2d9de16c32882129c4 | ported; rule 3 authorised, conditions 1-4 below |
 | goat#3491 Cursor steer declined after Stop | (2248ca8db9 gap) | 4430ca2aaad63396926fe7ab86ad011c5605dd83 (move-out), dfcea5f1aa37de3e98c4fcc7480dd61827be5641, 0ce90194c8101951e221695fc5c921743411d8e2, 780468c0eb0036b54f3547e89bbd74ed3ed6625c (missing import from the move-out) | fixed; rule 3 authorised (block C) |
 | a3cde98425 remainder, ACP mock agent bundled once per file | a3cde98425 | e9e859c8c7e17b669dbef7a5546916919598d82f | ported |
-| O23 / L407 Cursor team usage (C4) | 497aac20f7 | none in part 2 | ported in part 3 (672400a7da, own branch), see Part 3 |
+| O23 / L407 Cursor team usage (C4) | 497aac20f7 | none in part 2 | ported in part 3 (672400a7da, own branch), held out of #3519 (goat#3632), see Part 3 |
 
 Merges: 9bb7b171c5fa799574f41e9b31e540c719eb44c6 (integration head 5c798a3072, frozen; conflict only in code-budgets.json, Orchestrator.ts entry set to its real 13541), 4bd81da946cf9c67a744452cbbe66a2ebbc5da52 (origin/dev 1d41f2c97f, clean). d6aea844546eddddf07b4d512ed0501761e3a7fd sets AcpAdapterV2.test.ts 8987 -> 8448 and SettingsPanels.tsx 1713 -> 1574 (countLines). Nothing raised.
 
@@ -320,6 +322,8 @@ The three web pickers with a Pi whose models are extension-only (General text ge
 
 ## Part 3 (O23) (branch chase/t3-261114-n9b2-o23, cut from 780468c0eb)
 
+O23 is held out of #3519 (coordinator decision 2026-11-17 below; goat#3632): #3519 does not contain it, and until the O23 pull request merges, dev keeps the cursor.com dashboard read with the Keychain token and no team history.
+
 Row O23 only (L407, upstream 497aac20f7, owner decision A), on its own branch on top of part 2's head 780468c0eb0036b54f3547e89bbd74ed3ed6625c, which stays fixed. Integration head contained: 5c798a3072 (frozen), through 780468c0eb. No merge of origin/dev on this branch, so the O23 commit stays the only change on top of part 2.
 
 ### Coordinator text (verbatim)
@@ -336,7 +340,7 @@ No other expectation in an existing dev test may change in this lane without ask
 
 | Row | Upstream | Commit | State |
 | --- | --- | --- | --- |
-| O23 / L407 Cursor team usage (C4) | 497aac20f7 | 672400a7da33a75a8d2d28c64006ddf6d0df2d82 (port), 49c834520adcfd1e4992a78b1522287f6a5cf7ba (test, review P3-3) | code complete, live read owed (the lane's read sent nothing, see (4)); needs a live Cursor check |
+| O23 / L407 Cursor team usage (C4) | 497aac20f7 | 672400a7da33a75a8d2d28c64006ddf6d0df2d82 (port), 49c834520adcfd1e4992a78b1522287f6a5cf7ba (test, review P3-3) | held out of #3519 until a live Cursor read passes (goat#3632); code complete, live read owed (the lane's read sent nothing, see (4)); needs a live Cursor check |
 
 ### What the port does
 
@@ -411,7 +415,7 @@ Run on pen-macmini at 672400a7da33a75a8d2d28c64006ddf6d0df2d82 (part 2's head 78
 
 - The live personal read with a working login: owed by a person with the one command under "O23 live check for a person" (this session cannot read the login keychain; see (4)).
 - The team fan-out against a real Cursor team account (needs a person with one).
-- Full CI for this branch; the Usage page in a real client (web, desktop, mobile) with a Cursor login, owed to #3519's integrated pass.
+- Full CI for this branch; the Usage page in a real client (web, desktop, mobile) with a Cursor login: owed to the O23 pull request (goat#3632), not to #3519.
 
 
 ### O23 live check (coordinator text, verbatim)
@@ -433,9 +437,20 @@ N9b part 3 (O23) review at 672400a7da: APPROVE WITH NITS, P3 only; the verdict c
 
 Review report: /Users/jun/handoff-in/chase/next-N9b-O23-review-672400a7.md (APPROVE WITH NITS at 672400a7da, P3 only; the verdict covers the code).
 
+### O23 held out of #3519 (coordinator decision, verbatim; goat#3632)
+
+Coordinator decision, 2026-11-17 01:35 UTC, lane N9b part 3 (O23, upstream 497aac20f7): O23 DOES NOT JOIN #3519. The owner was asked on 2026-11-16 20:48 UTC to run the live check and answered on 2026-11-17 that the coordinator decides. No login exists that an agent session can read: the Keychain on every Mac needs a person ("User interaction is not allowed" on pen-macmini); ~/.cursor/auth.json on juns-MacBook-Pro holds a JWT that expired on 2026-11-06; ~/.config/cursor/auth.json on pen-clisu-oracle was written on 2026-08-24; the cloud VMs have no Cursor login (existence, dates and the exp claim only were read; no token was printed or sent). A code review is not a runtime check, and this port changes where a credential is sent (C4), so condition (4) of the O23 authorisation stands: it merges only after "personal read: PASS". It must not hold #3519 either. Therefore:
+1. chase/t3-261114-n9b2-o23 stays at 49c834520a. Item 4 of the O23 follow-ups (merge part 2's head) is CANCELLED for now: no merge into that branch until dev contains #3519.
+2. After #3519 merges into dev, a thread merges origin/dev into the branch (not a rebase), adapts it to Effect 4.1, runs the gate and opens its own DRAFT pull request to dev. It leaves draft only when a person's live read with "personal read: PASS" by the tightened rules is pasted into next-N9b.md. The narrow fresh review then covers the merge and adaptation.
+3. Tracking: goat#3632 (filed by the coordinator). Cite it in next-N9b.md Part 3 (with this decision verbatim), in the 10.026 card row, in next-pr-plan.md as a follow-on row, and in the #3176 L407 row, which now reads "ported in lane N9b part 3, 49c834520a, held out of #3519 until a live Cursor read passes (goat#3632); needs a live Cursor check", unticked.
+4. #3519's body and the N9b record must not list O23 among what the pull request contains. Until the O23 pull request merges, dev keeps today's Cursor account history (the cursor.com dashboard with the Keychain token, no team history).
+5. N9b part 2 (5f857339c8) is unaffected: item 7 after N3 as ruled.
+
+State of the branch: chase/t3-261114-n9b2-o23 stays at 49c834520adcfd1e4992a78b1522287f6a5cf7ba; no merge into it until dev contains #3519. Tracking: https://github.com/goat-si/goat/issues/3632.
+
 ### O23 live check for a person
 
-State: code complete, live read owed. The O23 commits merge only after a person's result line is below.
+State: code complete, live read owed; held out of #3519 (goat#3632). The O23 commits leave draft only after a person's result line with "personal read: PASS" is below.
 
 Script: /Users/junny/handoff-in/chase/o23-cursor-live-read.mjs on pen-macmini, outside the repository (sha256 a60dda56570619a271e2ed1b8e356005e81f5daf70f9946675b2c270757e6304, 181 lines, tightened for review P3-1; the first version was b8d495ea196a08c47468bfd7ba079784f018e6639caa38fa1c9fa57bdc34871e; full text below for other Macs). It runs the Usage page's path through the new code: CursorUsageAccounts.scan for the default Cursor instance with Keychain usage on, awaiting the refresh, with the real CursorAccountReader and CursorKeychain and a temporary state directory removed at exit. It prints only: the checkout's commit and whether it contains 672400a7da; which login was read (Keychain, auth file or API key); each request's host, method name, scope (personal, or team 1..n by order) and HTTP status; the number of requests; billed events per scope (rows with token usage, counted from each 200 page); the usage records after de-duplication; the number of teams; whether usage-cursor-account-cache-v2.json was written; the reader's fixed error text if any; and two verdicts.
 
