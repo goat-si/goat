@@ -60,6 +60,16 @@ const held = (reason: "scanner_pending" | "secret_detected") =>
       cleanupPending: false,
     },
   });
+const savedByThisPhone = decodeItem({
+  ...nativeItem,
+  revision: {
+    ...nativeItem.revision,
+    revisionId: "00000000-0000-4000-8000-0000000000c1",
+    operationId: "00000000-0000-4000-8000-0000000000c2",
+    payloadRef: "00000000-0000-4000-8000-0000000000c1",
+  },
+  payload: { ...nativeItem.payload, text: "Saved by this phone" },
+});
 const accept = (input: unknown) => ({
   memoryId: (input as MemoryUpsertInput).memoryId,
   operationId: (input as MemoryUpsertInput).operationId,
@@ -153,7 +163,17 @@ it("an untouched edit closes when the memory text expires, says it was hidden, a
   expect(field()).toBeNull();
   expect(text()).toContain("Memory text hidden after a minute.");
   expect(text()).not.toContain("Synthetic memory body");
+  // While the read Show again asked for is in flight, nothing new is shown.
+  const shown = h.deferred<MemoryItem>();
+  h.responses.set(WS_METHODS.memoryRead, () => shown.response);
   await view.click("Show again");
+  expect(text()).not.toContain("Memory text hidden after a minute.");
+  expect(text()).not.toContain("Memory details are unavailable");
+  expect(text()).not.toContain("Memory unavailable");
+  await act(async () => {
+    await shown.succeed(nativeItem);
+  });
+  await answered();
   expect(text()).toContain("Synthetic memory body");
   expect(text()).not.toContain("Memory text hidden after a minute.");
 });
@@ -234,13 +254,19 @@ it("a save whose own change signal arrives before its reply closes the editor wi
   h.responses.set(WS_METHODS.memoryUpsert, () => reply.response);
   await view.click("Save memory");
   const input = h.calls.find((call) => call.method === WS_METHODS.memoryUpsert)?.input;
-  await changeSignal();
+  // The save's own change signal and its reread land first and drop the draft.
+  const reread = await changeSignal();
+  await act(async () => {
+    await reread.succeed(savedByThisPhone);
+  });
+  await dropped();
   await act(async () => {
     await reply.succeed(accept(input));
   });
-  await dropped();
   expect(field()).toBeNull();
   expect(text()).not.toContain(CLOSED_LINE);
+  expect(text()).not.toContain("The draft is no longer available");
+  expect(text()).toContain("Saved by this phone");
 });
 
 it("typing is not replaced when the memory is read again (#3601)", async () => {
