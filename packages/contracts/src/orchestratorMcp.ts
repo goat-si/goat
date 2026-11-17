@@ -3,6 +3,7 @@ import {
   OrchestratorMcpScheduledTask,
 } from "./orchestratorMcpScheduledTask.ts";
 export { OrchestratorMcpScheduledTask } from "./orchestratorMcpScheduledTask.ts";
+import { clampedPositiveInt } from "./mcpClampedInt.ts";
 import * as Lineage from "./orchestratorMcpThreadLineage.ts";
 import {
   OrchestratorMcpThreadRun,
@@ -682,18 +683,6 @@ export const OrchestratorMcpThreadSearchResult = Schema.Struct({
   ),
 });
 export type OrchestratorMcpThreadSearchResult = typeof OrchestratorMcpThreadSearchResult.Type;
-// Codex hides `minimum` and `maximum` from the model, so a value above the maximum clamps on decode
-// (pagination returns the rest). Below 1 still fails: 0 asks for nothing, so one item would differ.
-const clampedPositiveInt = (maximum: number) =>
-  PositiveInt.pipe(
-    Schema.decodeTo(
-      PositiveInt.check(Schema.isLessThanOrEqualTo(maximum)),
-      SchemaTransformation.transform({
-        decode: (value) => Math.min(value, maximum),
-        encode: (value) => value,
-      }),
-    ),
-  );
 
 export const OrchestratorMcpThreadReadInput = Schema.Struct({
   threadId: ThreadId,
