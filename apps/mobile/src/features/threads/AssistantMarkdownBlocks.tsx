@@ -13,6 +13,7 @@ import { Button } from "../../components/ui/Button";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { splitMarkdownDetails } from "../../lib/markdownDetails";
+import { markdownWithAssistantInsights } from "../../lib/markdownAssistantInsights";
 import { markdownReferenceDefinitions, withReferenceDefinitions } from "../../lib/markdownDocument";
 import {
   SelectableMarkdownText,
@@ -151,8 +152,10 @@ export function AssistantMarkdownBlocks(props: {
       return (
         <SelectableMarkdownText
           key={`markdown:${offset}`}
-          markdown={renderCodexInlineDirectivesAsMarkdown(
-            withReferenceDefinitions(segment.markdown, definitions),
+          markdown={markdownWithAssistantInsights(
+            renderCodexInlineDirectivesAsMarkdown(
+              withReferenceDefinitions(segment.markdown, definitions),
+            ),
           )}
           skills={props.skills}
           textStyle={props.markdownStyles.nativeTextStyle}

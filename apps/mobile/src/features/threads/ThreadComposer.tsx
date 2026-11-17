@@ -28,16 +28,10 @@ import { collectProviderUsageLimits, hasProviderUsageLimits } from "@goat/shared
 import { StackActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { ReactNode } from "react";
 import { useModelMentionOptions } from "./useModelMentionOptions";
-import {
-  useEffect,
-  useEffectEvent,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type RefObject,
-} from "react";
-import { I18nManager, Keyboard, Platform, View, type ViewStyle } from "react-native";
-import { compactEditorInsets } from "./compactEditorInsets";
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { Keyboard, Platform, View, type ViewStyle } from "react-native";
+import { useCompactComposerEditor } from "./useCompactComposerEditor";
+import { useComposerStopGuard } from "./useComposerStopGuard";
 import { composerImageGallery } from "../../lib/composerImageGallery";
 import { filePreviewGallery } from "../../lib/filePreviewGallery";
 import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
@@ -51,7 +45,6 @@ import Animated, {
   FadeOut,
   type LayoutAnimationFunction,
   ReduceMotion,
-  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
@@ -95,8 +88,7 @@ import {
   isModelSelectionUnavailable,
   serverConfigForCwd,
 } from "../../lib/modelOptions";
-import { useScaledTextRole, type ScaledTextRole } from "../settings/appearance/useScaledTextRole";
-import { COLLAPSED_EDITOR_DEFAULT_INSET, collapsedEditorInset } from "./composer-editor-inset";
+import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import type { RemoteClientConnectionState } from "../../lib/connection";
 import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
 import type { ActiveTurnComposerAction } from "@goat/client-runtime/state/composer-dispatch";
@@ -131,121 +123,6 @@ import {
   type NavigationWithFinishTransitioning,
 } from "./use-thread-settings-sheet-presentation";
 export const COMPOSER_COLLAPSED_CHROME = 60;
-export function useCompactComposerEditor(text: ScaledTextRole, value: string) {
-  const [contentSize, setContentSize] = useState({ width: 0, height: 0 });
-  const [compactWidth, setCompactWidth] = useState(0);
-  const contentHeight = contentSize.height;
-  const rowWidth = useSharedValue(0);
-  const editorX = useSharedValue(0);
-  const editorWidth = useSharedValue(0);
-  const inset =
-    Platform.OS === "android" ? COLLAPSED_EDITOR_DEFAULT_INSET : collapsedEditorInset(text);
-  const minimum = Math.max(INLINE_EDITOR_HEIGHT, Math.ceil(text.lineHeight) + 2 * inset);
-  const height = Math.max(
-    minimum,
-    Math.min(text.lineHeight * 4 + 2 * inset, contentHeight + 2 * inset),
-  );
-  // A line that fits the expanded editor may still overflow its compact slot.
-  // Compare its measured width too so widening cannot trigger a collapse loop.
-  // iOS reports a ceiled width, so this can expand up to a point early; it never loops.
-  const isExpanded =
-    value.length > 0 &&
-    (contentHeight > text.lineHeight * 1.5 ||
-      (compactWidth > 0 && contentSize.width > compactWidth));
-  // The editor rises out of the toolbar row inside its compact slot; only once it has left the
-  // row does it widen and the model label expand, so text never draws over the row's controls.
-  // Collapsing narrows it first, then lowers it back into the slot.
-  const [hasRisen, setHasRisen] = useState(false);
-  if (!isExpanded && hasRisen) setHasRisen(false);
-  const isWide = isExpanded && (Platform.OS === "android" || hasRisen);
-  // Only the latest animation may finish the rise: a collapse and re-expand can leave an older
-  // completion queued.
-  const riseGeneration = useRef(0);
-  const finishRise = useEffectEvent((generation: number) => {
-    if (generation === riseGeneration.current) setHasRisen(true);
-  });
-  const compactRowHeight = Math.max(44, minimum);
-  const animatedHeight = useSharedValue(height);
-  const surfaceHeight = useSharedValue(compactRowHeight);
-  const targetSurfaceHeight = isExpanded ? height + 52 : compactRowHeight;
-  const expansion = useSharedValue(0);
-  useLayoutEffect(() => {
-    const config = { duration: 180, reduceMotion: ReduceMotion.System };
-    if (Platform.OS === "android") {
-      animatedHeight.set(height);
-      surfaceHeight.set(targetSurfaceHeight);
-      expansion.set(Number(isExpanded));
-      return;
-    }
-    // Resolve wrapping at the destination width before animating vertically.
-    // Intermediate widths otherwise produce taller measurements mid-transition.
-    riseGeneration.current += 1;
-    const generation = riseGeneration.current;
-    let nextFrame: number | undefined;
-    const frame = requestAnimationFrame(() => {
-      nextFrame = requestAnimationFrame(() => {
-        animatedHeight.set(withTiming(height, config));
-        surfaceHeight.set(withTiming(targetSurfaceHeight, config));
-        expansion.set(
-          withTiming(Number(isExpanded), config, (finished) => {
-            if (finished && isExpanded) runOnJS(finishRise)(generation);
-          }),
-        );
-      });
-    });
-    return () => {
-      cancelAnimationFrame(frame);
-      if (nextFrame !== undefined) cancelAnimationFrame(nextFrame);
-    };
-  }, [animatedHeight, expansion, height, isExpanded, surfaceHeight, targetSurfaceHeight]);
-  const containerStyle = useAnimatedStyle(() => ({
-    height: surfaceHeight.value,
-  }));
-  const isRTL = I18nManager.isRTL;
-  const editorStyle = useAnimatedStyle(() => ({
-    position: "absolute",
-    overflow: "hidden",
-    height: animatedHeight.value,
-    ...(isWide
-      ? { left: 14, right: 14 }
-      : compactEditorInsets({
-          slotX: editorX.value,
-          slotWidth: editorWidth.value,
-          rowWidth: rowWidth.value,
-          isRTL,
-        })),
-    bottom:
-      (compactRowHeight - minimum) / 2 + expansion.value * (52 - (compactRowHeight - minimum) / 2),
-  }));
-  return {
-    isExpanded,
-    /** The expanded toolbar layout: the editor spans the surface and the model label shows. */
-    isWide,
-    containerStyle,
-    editorStyle,
-    onRowLayout: (event: { nativeEvent: { layout: { width: number } } }) => {
-      rowWidth.set(event.nativeEvent.layout.width);
-    },
-    onEditorLayout: (event: { nativeEvent: { layout: { x: number; width: number } } }) => {
-      // The expanded toolbar gives this slot to the model control. Keep the
-      // compact geometry for the return transition, rather than recording zero.
-      if (!isWide) {
-        editorX.set(event.nativeEvent.layout.x);
-        editorWidth.set(event.nativeEvent.layout.width);
-        setCompactWidth(Math.max(0, event.nativeEvent.layout.width - 8));
-      }
-    },
-    editorProps: {
-      singleLineCentered: !isExpanded,
-      scrollEnabled: Platform.OS === "android" || contentHeight >= text.lineHeight * 4,
-      contentInsetVertical: inset,
-      onContentSizeChange: (size: { width: number; height: number }) => {
-        setContentSize(size);
-      },
-      style: { flex: 1 },
-    },
-  };
-}
 export interface ThreadComposerProps {
   readonly isDraft?: boolean;
   readonly canOperateThread: boolean;
@@ -326,7 +203,6 @@ export const COMPOSER_LAYOUT_TRANSITION =
   Platform.OS === "android" ? undefined : composerHeightTransition;
 // Share of the one-row composer the draft keeps; a long model name truncates first.
 const INLINE_EDITOR_MIN_WIDTH = "40%";
-const INLINE_EDITOR_HEIGHT = 36;
 
 const COMPOSER_ATTACHMENT_ENTERING =
   Platform.OS === "android"
@@ -435,7 +311,12 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     draftAttachments.length > 0 ||
     (queuedEdit?.existingAttachments.length ?? 0) > 0;
   const stripAttachments = composerStripAttachments(draftAttachments);
-  const showStopAction = !hasContent && props.canStopThread && queuedEdit === null;
+  const stop = useComposerStopGuard({
+    canStop: props.canStopThread,
+    canOperateThread: props.canOperateThread,
+    onStop: props.onStopThread,
+  });
+  const showStopAction = !hasContent && stop.showStop && queuedEdit === null;
   const onResumeQueue = props.onResumeQueue;
   const [resumingQueue, setResumingQueue] = useState(false);
   const showResumeAction =
@@ -1145,18 +1026,18 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                 {showStopAction ? (
                   <ComposerActionButton
                     size={hasSidebarTabBar ? "large" : "regular"}
-                    accessibilityLabel="Stop agent"
+                    accessibilityLabel={stop.stopLabel}
                     icon="stop.fill"
                     variant="danger"
-                    disabled={!props.canOperateThread}
-                    onPress={props.onStopThread}
+                    disabled={stop.stopDisabled}
+                    onPress={stop.stop}
                   />
                 ) : showResumeAction ? (
                   <ComposerActionButton
                     size={hasSidebarTabBar ? "large" : "regular"}
                     accessibilityLabel="Resume thread"
                     icon="play"
-                    disabled={!props.canOperateThread || resumingQueue}
+                    disabled={!props.canOperateThread || resumingQueue || stop.replacementBlocked}
                     onPress={() => void handleResumeQueue()}
                   />
                 ) : (
@@ -1228,17 +1109,17 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                   />
                   {showStopAction ? (
                     <ComposerActionButton
-                      accessibilityLabel="Stop agent"
+                      accessibilityLabel={stop.stopLabel}
                       icon="stop.fill"
                       variant="danger"
-                      disabled={!props.canOperateThread}
-                      onPress={props.onStopThread}
+                      disabled={stop.stopDisabled}
+                      onPress={stop.stop}
                     />
                   ) : showResumeAction && voicePresentation.showsSend ? (
                     <ComposerActionButton
                       accessibilityLabel="Resume thread"
                       icon="play"
-                      disabled={!props.canOperateThread || resumingQueue}
+                      disabled={!props.canOperateThread || resumingQueue || stop.replacementBlocked}
                       onPress={() => void handleResumeQueue()}
                     />
                   ) : voicePresentation.showsSend ? (
