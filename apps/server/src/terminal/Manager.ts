@@ -129,6 +129,7 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 import { withThreadMcpEnvironment } from "@goat/provider-core/server/mcpSession";
 import { ThreadId } from "@goat/contracts";
 import { terminalOutputStream } from "./OutputProtocol.ts";
+import { normalizeChildCommandName } from "./childCommandName.ts";
 
 export {
   TerminalCwdError,
@@ -404,23 +405,6 @@ interface TerminalManagerState {
 function truncateTerminalWireLabel(value: string): string {
   if (value.length <= MAX_TERMINAL_LABEL_LENGTH) return value;
   return value.slice(0, MAX_TERMINAL_LABEL_LENGTH);
-}
-
-function normalizeChildCommandName(raw: string, platform: NodeJS.Platform): string | null {
-  let trimmed = raw.trim();
-  if (trimmed.length === 0) return null;
-  if (
-    (trimmed.startsWith("[") && trimmed.endsWith("]")) ||
-    (trimmed.startsWith("(") && trimmed.endsWith(")"))
-  ) {
-    trimmed = trimmed.slice(1, -1).trim();
-  }
-  // Process names and macOS `comm` paths can contain spaces ("Google Chrome").
-  const separators = platform === "win32" ? /[\\/]/ : /\//;
-  const base = (trimmed.split(separators).at(-1) ?? trimmed).trim();
-  const withoutExe =
-    platform === "win32" && base.toLowerCase().endsWith(".exe") ? base.slice(0, -4) : base;
-  return withoutExe.length > 0 ? withoutExe : null;
 }
 
 function terminalWireLabel(session: TerminalSessionState): string {
