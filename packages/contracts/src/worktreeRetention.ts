@@ -36,7 +36,7 @@ export const ThreadWorkspaceStatus = Schema.Struct({
   /** The folder is back and checks out, but the setup of an interrupted restore has not finished. */
   setupIncomplete: Schema.optionalKey(Schema.Boolean),
   /**
-   * Sent on "missing" and "cleaned": false when the folder is outside GOAT's worktrees folder, so neither Restore,
+   * Sent on "missing" and "cleaned": false when the folder is not where GOAT creates worktrees, so neither Restore,
    * Recreate nor a send brings it back. Absent from older servers, which clients read as recreatable.
    */
   recreatable: Schema.optionalKey(Schema.Boolean),
@@ -58,8 +58,9 @@ export function describeThreadWorkspaceRecovery(
         ? "Put the folder back"
         : `Put the folder back at ${status.worktreePath}`;
     const verb = status.state === "cleaned" ? "restore" : "recreate";
+    // Cleanup can remove a worktree inside GOAT's folder at another depth, so the text names no location.
     return {
-      body: `GOAT can't ${verb} it: it is outside GOAT's worktrees folder. ${back}, or start in a new worktree.`,
+      body: `GOAT can't ${verb} it here. ${back}, or start in a new worktree.`,
       inPlace: false,
     };
   }

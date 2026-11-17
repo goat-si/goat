@@ -18,7 +18,7 @@ describe("describeThreadWorkspaceRecovery", () => {
     [
       "missing",
       false,
-      "GOAT can't recreate it: it is outside GOAT's worktrees folder. Put the folder back at /Users/me/src/feature, or start in a new worktree.",
+      "GOAT can't recreate it here. Put the folder back at /Users/me/src/feature, or start in a new worktree.",
       false,
     ],
     [
@@ -30,7 +30,7 @@ describe("describeThreadWorkspaceRecovery", () => {
     [
       "cleaned",
       false,
-      "GOAT can't restore it: it is outside GOAT's worktrees folder. Put the folder back at /Users/me/src/feature, or start in a new worktree.",
+      "GOAT can't restore it here. Put the folder back at /Users/me/src/feature, or start in a new worktree.",
       false,
     ],
   ] as const)(
