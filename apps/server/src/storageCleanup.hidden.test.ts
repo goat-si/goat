@@ -20,7 +20,7 @@ it.live.each(["--assume-unchanged", "--skip-worktree"] as const)(
     ),
 );
 
-it.live("removes worktrees whose flagged files are unchanged or outside a sparse checkout", () =>
+it.live("removes worktrees whose flagged files are unchanged or missing on disk", () =>
   runCleanupTest(
     Effect.gen(function* () {
       const { service, fs, worktree, command } = yield* cleanupFixture();
