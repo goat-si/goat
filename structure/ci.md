@@ -23,6 +23,14 @@ discarded after each job, so steps may install packages through sudo; the self-h
 `RUNNER_ENVIRONMENT` and expect the box to carry those packages. The free plan caps hosted
 concurrency at about 20 jobs, so a few full runs at once queue.
 
+When the box's network changes (its Wi-Fi link loses its address now and then), Chromium fails
+every pending request with `net::ERR_NETWORK_CHANGED`, loopback included (#3646). Off GitHub-hosted
+runners, the whole `@goat/web` suite of `test` (unit, browser and render tests) and the
+`apps/web` browser files of `test-changed` therefore run in a loopback-only network namespace
+through `.github/scripts/loopback-netns.sh`, which needs bubblewrap and fails rather than falling
+back to the host network. Server tests stay on the host: their root-or-self ownership checks cannot
+pass inside an unprivileged user namespace.
+
 Each `ci` matrix entry carries a `runner` pool from `.github/scripts/goat-ci-scope.cjs`: `windows`
 for `test-windows`, `hosted` for the short Node-only tasks in `HOSTED_TASKS` (`check`, `typecheck`
 and the small package suites), and `linux` for the heavy tasks (`test`, `test-packages`,
@@ -58,8 +66,9 @@ Documentation alone runs only `check`, and a change that selects no tests skips 
 selection whose file list passes 100 KB runs the full suite instead: `test-changed` receives the
 list in one environment string, which Linux caps at 128 KiB, and
 `packages/shared/src/testing/providerEnv.ts` alone selects every test file. `test-changed` then
-keeps the selected tests that no suite of the matrix runs: those under `scripts` and
-`.github/scripts`, and those of a package without a test script.
+holds, as in every full run (`ci:full` and a manual run of lane `all` too), the test files that no
+suite of the matrix runs: those under `scripts` and `.github/scripts`, and those of a package
+without a test script.
 The full suite otherwise runs on request: the `ci:full` label, or a manual run of the branch.
 `goat-scope` always runs `node scripts/goat-rename.ts --check` before task selection, so new upstream product names fail `goat-ci-result`.
 
