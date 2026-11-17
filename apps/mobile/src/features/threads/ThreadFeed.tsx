@@ -50,7 +50,6 @@ import {
 } from "@goat/client-runtime/user-message";
 import type { ThreadCheckpointSummary } from "@goat/client-runtime/state/thread-checkpoints";
 import { assistantReplyStatusBadge } from "@goat/client-runtime/state/thread-workflows";
-import { formatDiffCount } from "@goat/client-runtime/diff-count";
 import type { WorkflowOpening } from "@goat/client-runtime/state/subagentRuntime";
 import {
   AuthFilesystemReadScope,
@@ -95,6 +94,7 @@ import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@goat/
 import { imageMimeType } from "@goat/shared/image";
 import { videoMimeType } from "@goat/shared/video";
 import { SymbolView } from "../../components/ui/AppSymbol";
+import { TurnDiffStat } from "./TurnDiffStat";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { useNativeWorkspaceColumnsSupported } from "../../native/NativeWorkspaceColumns";
@@ -1712,32 +1712,6 @@ function AssistantStatusBadge(props: { readonly status: string }) {
     <View className="rounded-full border border-border px-1.5 py-0.5">
       <Text className="font-goat-medium text-2xs text-foreground-secondary">{props.status}</Text>
     </View>
-  );
-}
-
-function TurnDiffStat(props: {
-  readonly checkpoint: ThreadCheckpointSummary;
-  readonly onOpenTurnDiff: (checkpoint: ThreadCheckpointSummary) => void;
-}) {
-  const { files } = props.checkpoint;
-  const additions = files.reduce((total, file) => total + file.additions, 0);
-  const deletions = files.reduce((total, file) => total + file.deletions, 0);
-  const fileCountLabel = `${files.length} file${files.length === 1 ? "" : "s"} changed`;
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`Review ${fileCountLabel}, ${additions} additions, ${deletions} deletions`}
-      onPress={() => props.onOpenTurnDiff(props.checkpoint)}
-      className="min-h-11 shrink-0 flex-row items-center gap-2 px-2 active:bg-subtle"
-    >
-      <Text className="font-goat-medium text-xs tabular-nums text-adaptive-emerald-700-300">
-        +{formatDiffCount(additions)}
-      </Text>
-      <Text className="font-goat-medium text-xs tabular-nums text-adaptive-rose-700-300">
-        −{formatDiffCount(deletions)}
-      </Text>
-      <SymbolView name="chevron.right" size={12} tintColorClassName="accent-foreground-muted" />
-    </Pressable>
   );
 }
 
