@@ -345,3 +345,46 @@ Coordinator to lane coordinator, 2026-11-17 12:49:25 UTC, items 1 and 2 (verbati
 Lane coordinator, 11:48 UTC, the coordinator's rule of 11:34:08 item 4 (relayed verbatim): "PR bodies, issue bodies and comments go through a file and --body-file, never through a quoted argument."
 
 Lane coordinator to N4, 13:14 UTC (verbatim, the part that concerns the record): "THE RULE, for you and every sub-agent: nobody but the coordinator merges a pull request or pushes to dev or to chase/t3-261114-next2, and a lane's own review is never a merge gate. Nothing is reverted: the merged tree equals 545a88645a byte for byte. If it was N4's doing, one line in your record with the time and why." It was not N4's doing (see N4-P2-2 above).
+
+## N4b follow-ups after the APPROVE WITH NITS at 349e167a32 (branch chase/t3-261114-next2-n4b-followups, head c3fd17ba86)
+
+Lane N4 is merged into the integration branch: chase/t3-261114-next2 was fast-forwarded to 349e167a32. The follow-ups are on chase/t3-261114-next2-n4b-followups, cut from 349e167a32. Each is one commit, and each logic change failed first. Git 2.53.0 on pen-macbookair.
+
+| commit | finding | what |
+| --- | --- | --- |
+| 6b5d97be8c | N4F-P2-A (from 5c8f12ec1d) | restore clears skip-worktree on the deleted paths the index flags, so a deletion outside the sparse patterns restores as a deletion and verify passes |
+| 6ab51056c1 | N4F-P3-A (from 7dc17d0284) | a flagged name with a newline is looked up on disk first and skipped when absent; a U+FFFD name still counts as edited |
+| c3fd17ba86 | N4F-P3-C | storageCleanup.hidden.test.ts:23 is retitled "removes worktrees whose flagged files are unchanged or missing on disk" (the lane's own file; no rule 3 line) |
+
+**N4F-P2-A.** The change is in restoreSnapshot.ts applySnapshotToWorktree. After the snapshot's deletions are removed, the paths that `git ls-files -v` tags S are passed to `git update-index --no-skip-worktree -z --stdin`. That leaves the restored worktree showing " D" as it did before cleanup, and verify's `add -A --sparse` stages the deletion.
+
+The new case is storageCleanup.sparseSnapshot.test.ts "a sparse worktree's deletion outside its patterns is restored as a deletion": sparse worktree, file put back and unflagged by an index write, deleted, cleanup removes, restore must verify and show " D tracked.txt". Fail-first: "× a sparse worktree's deletion outside its patterns is restored as a deletion 1008ms", RestoreSnapshotError detail 'worktree-tree', "Tests 1 failed | 1 passed (2)". After the fix: sparseSnapshot, restoreSnapshot and restoreThreadWorkspace, 3 files, 11 tests pass.
+
+A snapshot already taken with 349e167a32's capture restores after the fix. The fix changes only how restore applies a snapshot; the snapshot's format and capture are unchanged. The new case captures with that same capture code, so it is exactly such a snapshot.
+
+**N4F-P3-A.** The new case is storageCleanup.hidden.test.ts "a flagged name with a newline outside a sparse checkout's patterns, %s, is %s": not on disk means removed, edited means kept. Fail-first: "× ... not on disk, is removed 332ms", actual outcome 'kept'. After the fix, storageCleanup.hidden and src/worktreeSnapshots pass except isSshProvisionedRuntime.test.ts "detects the SSH launch origin" (goat#3483: SSH_CONNECTION is set in this shell, a known host condition).
+
+**Cost note (the coordinator's, recorded; no change asked).** The hidden check now costs about 330 ms per check on a clone like GOAT's, against 27 ms before. It runs three times per removed worktree.
+
+**N4F-P3-B is the coordinator's.** The lane conflicts with dev 78387154 on the ThreadWorkspaceService.ts import line and on an add/add in ThreadWorkspaceService.setupTerminal.test.ts. No lane merges dev now.
+
+**Checks at c3fd17ba86.**
+
+- vp run check:changed origin/chase/t3-261114-next2 (349e167a32): exit 0. Format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget and typecheck (2 packages) all pass; test of 4 files, 18 tests, pass.
+- goat-ci dispatched on the branch (workflow_dispatch, lane all), as the 13:57:51 rule asks of lanes while #3660 conflicts with dev: https://github.com/goat-si/goat/actions/runs/44098384319.
+
+NOT RUN: Linux and Windows; Git older than 2.37; a real client. The restore path is server-only, and its user-visible effect (Restore, send and terminal no longer failing with verify-failed) is covered by the cleanup-level case.
+
+Coordinator to lane coordinator, 2026-11-17 13:53:53 UTC (verbatim):
+THE NEW C4 REVIEW of N4's fix round at 349e167a32e98bc43d3b3357fbf903fa794d751b IS "APPROVE WITH NITS" (Opus 5.5 xhigh). The P1 is closed by the reviewer's own run through GOAT's code (the parent's capture lost the hidden edit; the head refuses and keeps the worktree; a clean sparse worktree is still cleaned, on a sparse clone shaped like GOAT's own with 21,835 entries outside the patterns). Every earlier finding is closed; rule 3 clean; five fail-first claims reproduced by swapping in the parent's source; 84 files, 808 tests and tsc pass on its scratch copy.
+N4 IS MERGED INTO THE INTEGRATION BRANCH: chase/t3-261114-next2 fast-forwarded 308b3d11b8 -> 349e167a32 (a plain push; the lane head contained the integration head). #3660's head is 349e167a32 (S4, CF1, X1, N9a, N4 in).
+ONE NEW P2 AND TWO P3s: a follow-up branch chase/t3-261114-next2-n4b-followups cut from 349e167a32. P2-A MUST BE IN BEFORE #3660 GOES TO DEV (it is a regression of the goat#3671 fix; no byte is lost, but a thread can no longer be restored in place):
+- N4F-P2-A (from 5c8f12ec1d): with --sparse, capture now records a DELETION outside the sparse patterns (captureSnapshot.ts:118); restore removes the already absent path (restoreSnapshot.ts:104-125), then verify's add -A --sparse skips skip-worktree entries, the rebuilt tree still holds the file and :221 fails with worktree-tree; the restored checkout is discarded (restoreThreadWorkspace.ts:185). Trigger: Git 2.37+ default, a sparse worktree, a tracked file outside the patterns that was on disk and recorded as not skip-worktree by any index write, then deleted; cleanup snapshots and removes the worktree; after that Restore, a send and a terminal open fail with verify-failed every time. With the parent's code the same state restored. Fix as the reviewer says: in applySnapshotToWorktree, after deleting the paths, clear skip-worktree on those the index flags (git update-index --no-skip-worktree -z --stdin), so the restored worktree shows the deletion as it did before cleanup and verify stages it; ONE new case in storageCleanup.sparseSnapshot.test.ts, failing first (cleanup removes, restore must succeed and show " D"). Also say what happens to a snapshot ALREADY taken with the head's capture before this fix (it must restore after the fix: add that as a case or reason it).
+- N4F-P3-A (from 7dc17d0284): hiddenTrackedChange.ts:49-50 returns any flagged name holding a newline or U+FFFD before the missing-on-disk skip at :55-65; in a sparse checkout that keeps EVERY clean sparse worktree of a repository with such a name outside the patterns, with a reason naming a file nobody touched. Fix: lstat newline names first and skip absent ones like any other entry; keep counting U+FFFD names as edited. A test with a newline name outside the patterns (clean: cleaned; edited: kept).
+- N4F-P3-C: storageCleanup.hidden.test.ts:23's title claims sparse coverage it does not have (the lane's own file): rename.
+- N4F-P3-B is mine: the lane does not merge cleanly into dev 78387154 (the import line in ThreadWorkspaceService.ts:24-29; an add/add in ThreadWorkspaceService.setupTerminal.test.ts:251-272); taking the lane's side in both is exact. I plan the dev merge at the cut (T1's fix to dev will touch the same area), so nobody merges dev into a lane now.
+- Cost note for the record, no change asked: the hidden check now costs about 330 ms per check on a clone like ours (27 ms before), three times per removed worktree.
+Then check:changed against origin/chase/t3-261114-next2, a plain push, report the head. Because P2-A changes restore's write path, it gets a NARROW fresh review from me on that head before I merge it.
+THE OTHER LANES: the integration head is 349e167a32; N12 and N15b merge it at their READY points (N12 is under review: after its verdict). The light rule on pen-mac-studio is LIFTED (the stable run has no macOS job running): N14 runs its queued checks, one heavy job at a time.
+
+Lane coordinator relays to N4 (verbatim): 13:28 UTC "the coordinator found the #3678 trail: the PASS comment came through the Cursor app on the owner's account, so not N4 and not me; your answer is accepted and recorded." and the 13:27:11 rule "any pull request to dev is opened as a DRAFT and stays a draft (gh pr create --draft); the coordinator marks it ready at the moment it merges."; 13:58 UTC, from the coordinator's 13:57:51: "every lane that goes READY in the meantime brings its OWN goat-ci run on its lane branch (workflow_dispatch, lane all)".
