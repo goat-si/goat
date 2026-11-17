@@ -1902,7 +1902,7 @@ export default function GitActionsControl({
         environmentId={activeEnvironmentId}
         threadRef={activeThreadRef}
         gitCwd={gitCwd}
-        offeredProviders={serverConfig?.settings.offeredSourceControlProviders}
+        offeredProviders={serverConfig?.settings?.offeredSourceControlProviders}
       />
       <Dialog
         open={pendingDefaultBranchAction !== null}
