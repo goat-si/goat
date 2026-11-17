@@ -49,6 +49,7 @@ import { resolvePreviewViewport } from "@goat/shared/previewViewport";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import { constVoid } from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -152,6 +153,8 @@ const SCREENCAST_MOTION_WINDOW_MS = 300;
 const SCREENCAST_MOTION_QUALITY = 50;
 const HOST_RECONNECT_DELAY = "1 second";
 const DESKTOP_ATTACH_TIMEOUT = "10 seconds";
+// A viewer attaches once its opening still arrives or this passes; the capture keeps its lock.
+const VIEWER_STILL_WAIT = "2 seconds";
 const VIEWER_OUTPUT_LIMIT = 64;
 
 // Chromium allows three unacked frames, so 100 ms pacing caps viewers near 30 fps.
@@ -2412,7 +2415,10 @@ const make = Effect.gen(function* () {
     yield* Effect.promise(() => startScreencast(1));
     // An idle page does not repaint for a new screencast, so the viewer
     // starts from a still unless a live frame beat it.
-    if (!screencastStarted) yield* Effect.promise(pushStill);
+    if (!screencastStarted) {
+      const still = yield* Effect.forkScoped(Effect.promise(pushStill));
+      yield* Effect.timeoutOption(Fiber.await(still), VIEWER_STILL_WAIT);
+    }
     return {
       output,
       input: (raw: unknown) =>
