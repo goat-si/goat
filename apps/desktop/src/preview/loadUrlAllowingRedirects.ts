@@ -7,10 +7,18 @@ interface NavigationDetails {
 
 const ERR_ABORTED = -3;
 const loads = new WeakMap<Electron.WebContents, number>();
+const stopped = new WeakMap<Electron.WebContents, number>();
+
+/** Stops the current load; its ERR_ABORTED is then the person's Stop, not a failed navigation. */
+export function stopLoad(wc: Electron.WebContents) {
+  stopped.set(wc, loads.get(wc) ?? 0);
+  wc.stop();
+}
 
 /**
  * Loads a URL, settling as success when the page itself redirected the main frame away.
- * ERR_ABORTED also means a blocked unload or a newer navigate() replaced this load; both stay failures.
+ * ERR_ABORTED also means a blocked unload or a newer navigate() replaced this load; both stay
+ * failures. A load stopLoad() ended settles as success, as upstream's navigate does.
  */
 export function loadUrlAllowingRedirects(wc: Electron.WebContents, url: string): Promise<void> {
   const load = (loads.get(wc) ?? 0) + 1;
@@ -34,7 +42,8 @@ export function loadUrlAllowingRedirects(wc: Electron.WebContents, url: string):
   return wc.loadURL(url).then(detach, (error: unknown) => {
     detach();
     const aborted = Predicate.hasProperty(error, "errno") && error.errno === ERR_ABORTED;
-    if (aborted && redirected && !unloadPrevented && loads.get(wc) === load) return;
+    const settled = redirected || stopped.get(wc) === load;
+    if (aborted && settled && !unloadPrevented && loads.get(wc) === load) return;
     throw error;
   });
 }
