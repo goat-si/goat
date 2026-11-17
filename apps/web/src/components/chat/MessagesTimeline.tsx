@@ -41,7 +41,6 @@ const NOOP_USE_ARTIFACT_TEMPLATE = () => {};
 const NOOP_OPEN_ATTACHMENT = (_attachment: ChatFileAttachment) => {};
 
 import { resolveChatListAnchoredEndSpace } from "@goat/shared/chatList";
-import { observeVisibleAnimation } from "../../lib/visibleAnimation";
 import {
   memo,
   use,
@@ -63,12 +62,7 @@ import { type TimelineEntry } from "../../session-logic";
 import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates";
 import { type ChatFileAttachment, type TurnDiffSummary } from "../../types";
 import type { OpenTurnDiff } from "../../diffPanelStore";
-import {
-  ArrowRightIcon,
-  BotIcon,
-  CircleAlertIcon,
-  MinimizeIcon as Minimize2Icon,
-} from "~/components/solar";
+import { BotIcon } from "~/components/solar";
 import { ChevronDown, ChevronRight } from "~/components/solar/nodes";
 import { MorphIcon } from "~/components/MorphIcon";
 import { WorkHistorySkeleton } from "./WorkHistorySkeleton";
@@ -117,7 +111,8 @@ import {
   TimelineRowActivityCtx,
   type TimelineRow,
 } from "./timelineRowContext";
-import { TimelineRowTimestamp, ActivityShimmerOverlay } from "./TimelineRowParts";
+import { TimelineRowTimestamp } from "./TimelineRowParts";
+import { ContextCompactionTimelineRow } from "./ContextCompactionTimelineRow";
 import {
   WorkGroupSection,
   WorkingTimelineRow,
@@ -1488,58 +1483,6 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
     </div>
   );
 });
-
-function ContextCompactionTimelineRow({
-  row,
-}: {
-  row: Extract<TimelineRow, { kind: "context-compaction" }>;
-}) {
-  const label =
-    row.title && row.label.startsWith("Context compacted")
-      ? row.title + row.label.slice("Context compacted".length)
-      : row.label;
-  const content = (
-    <span className="flex min-w-0 items-center gap-1.5">
-      {row.failed ? (
-        <CircleAlertIcon aria-hidden="true" className="size-3 shrink-0" />
-      ) : (
-        <Minimize2Icon aria-hidden="true" className="size-3" />
-      )}
-      {row.tokenCounts ? (
-        <>
-          {row.title ?? "Context compacted"} {row.tokenCounts.before}
-          <ArrowRightIcon aria-hidden="true" className="size-3" />
-          {row.tokenCounts.after} tokens
-        </>
-      ) : (
-        label
-      )}
-      {row.failure ? (
-        <span className="min-w-0 truncate opacity-80">&middot; {row.failure}</span>
-      ) : null}
-    </span>
-  );
-  return (
-    <div
-      role="separator"
-      aria-label={row.failure ? `${label}: ${row.failure}` : label}
-      className={cn(
-        "mx-auto flex w-full max-w-(--chat-content-max-width) items-center gap-3 py-1 text-xs",
-        row.failed ? "text-destructive" : "text-muted-foreground",
-      )}
-    >
-      <span className={cn("h-px flex-1", row.failed ? "bg-destructive/30" : "bg-border/70")} />
-      <span
-        ref={row.active ? observeVisibleAnimation : undefined}
-        className="relative min-w-0 overflow-hidden"
-      >
-        {content}
-        {row.active ? <ActivityShimmerOverlay>{content}</ActivityShimmerOverlay> : null}
-      </span>
-      <span className={cn("h-px flex-1", row.failed ? "bg-destructive/30" : "bg-border/70")} />
-    </div>
-  );
-}
 
 function useDeferredWorkLoading(
   row: { expanded: boolean; deferredWorkItemIds?: ReadonlyArray<string> },
