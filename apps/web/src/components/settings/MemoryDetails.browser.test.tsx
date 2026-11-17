@@ -4,7 +4,7 @@ import { emptyMemoryExposure } from "@goat/client-runtime/state/memory";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { AtomRegistry } from "effect/reactivity";
-import { useSyncExternalStore, type ReactNode } from "react";
+import { useState, useSyncExternalStore, type ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { act, render, type Screen } from "../../../test/render";
 import { readyMemoryExposure, withMemorySignal } from "../../test/memoryExposureFixture";
@@ -165,21 +165,22 @@ function setup() {
   });
   return registry;
 }
-function renderDetails(registry: AtomRegistry.AtomRegistry) {
+const details = (onForgotten: (message: string) => void) => (
+  <MemoryDetails
+    target={validateMemorySettingsSearch({
+      environmentId: "remote-owner",
+      memorySpaceId: id(1),
+      memoryId: id(2),
+    })}
+    environmentId={EnvironmentId.make("remote-owner")}
+    memorySpaceId={MemorySpaceId.make(id(1))}
+    onForgotten={onForgotten}
+    memoryEnabled
+  />
+);
+function renderDetails(registry: AtomRegistry.AtomRegistry, ui = details(state.onForgotten)) {
   return render(
-    <RegistryContext value={registry}>
-      <MemoryDetails
-        target={validateMemorySettingsSearch({
-          environmentId: "remote-owner",
-          memorySpaceId: id(1),
-          memoryId: id(2),
-        })}
-        environmentId={EnvironmentId.make("remote-owner")}
-        memorySpaceId={MemorySpaceId.make(id(1))}
-        onForgotten={state.onForgotten}
-        memoryEnabled
-      />
-    </RegistryContext>,
+    <RegistryContext value={registry}>{ui}</RegistryContext>,
     // useNavigate is mocked to observe where the details send the person.
     { router: false },
   );
@@ -385,3 +386,26 @@ it.each([
     );
   },
 );
+
+it("leaves once on a forget while its parent re-renders with a new callback", async () => {
+  const registry = setup();
+  // Like the memory list, whose callback captures its refreshed page: a new callback each update.
+  function List() {
+    const [notices, setNotices] = useState(0);
+    return (
+      <>
+        <p>{notices} notices</p>
+        {details((message) => {
+          state.onForgotten(message);
+          // Capped so a details view that re-fires fails on the count instead of looping forever.
+          setNotices(Math.min(notices + 1, 3));
+        })}
+      </>
+    );
+  }
+  await using screen = await renderDetails(registry, <List />);
+  await update(() => signal(registry, "forget"));
+  expect(screen.container.textContent).toContain("1 notices");
+  expect(state.onForgotten).toHaveBeenCalledTimes(1);
+  expect(state.navigate).toHaveBeenCalledTimes(1);
+});

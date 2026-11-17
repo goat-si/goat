@@ -3,10 +3,11 @@ import { MemoryImportSettings } from "./MemoryImportSettings";
 import { MemoryAgentAccessSettings } from "./MemoryAgentAccessSettings";
 import { MemoryGenerationSettings } from "./MemoryGenerationSettings";
 import { MemoryReportRetrySettings } from "./MemoryReportRetrySettings";
+import { MemoryBodyGapNotice, MemoryEditor, useMemoryEditSession } from "./MemoryEditor";
 import { XIcon } from "../solar";
 import { MemoryAdministration } from "./MemorySharingSettings";
 import { randomUUID } from "../../lib/utils";
-import { RegistryContext, useAtom, useAtomSubscribe, useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomSubscribe, useAtomValue } from "@effect/atom-react";
 import { LegendList } from "@legendapp/list/react";
 import {
   AuthMemoryReadScope,
@@ -49,7 +50,7 @@ import {
 } from "@goat/client-runtime/memory-presentation";
 import { useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
-import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { useContext, useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironment, useEnvironments } from "../../state/environments";
 import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
@@ -65,7 +66,6 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { memoryEnvironment } from "../../state/memory";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Textarea } from "../ui/textarea";
 import { Switch } from "../ui/switch";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Collapsible, CollapsibleTrigger, CollapsiblePanel } from "../ui/collapsible";
@@ -799,7 +799,6 @@ export function MemoryDetails({
   const deviceName = (id: EnvironmentId) =>
     environments.find((e) => e.environmentId === id)?.label ?? "Unknown device";
   const memoryId = target.memoryId!;
-  const [editing, setEditing] = useState(false);
   const writePermission = useAtomValue(memoryEnvironment.upsert.permissionAtom(environmentId));
   const canWrite = writePermission && memoryEnabled;
   const read = useEnvironmentQuery(
@@ -813,25 +812,32 @@ export function MemoryDetails({
     }),
   );
   const item = read.data ? Option.getOrNull(read.data) : null;
-  if ((item === null || !canWrite) && editing) setEditing(false);
+  const edit = useMemoryEditSession({
+    environmentId,
+    memorySpaceId,
+    memoryId,
+    item,
+    canWrite,
+    refresh: () => {
+      read.refresh();
+      history.refresh();
+    },
+  });
   const value = history.data ? Option.getOrNull(history.data) : null;
   const navigate = useNavigate();
-  const hadVisibleItem = useRef(false);
+  const leaveForgotten = useEffectEvent(() => {
+    onForgotten(
+      "Closed because this memory is no longer available. A related memory may have been forgotten.",
+    );
+    void navigate({
+      to: "/settings/memory",
+      search: validateMemorySettingsSearch({ environmentId, memorySpaceId }),
+      hash: "",
+    });
+  });
   useEffect(() => {
-    if (item) {
-      hadVisibleItem.current = true;
-    } else if (hadVisibleItem.current) {
-      hadVisibleItem.current = false;
-      onForgotten(
-        "Closed because this memory is no longer available. A related memory may have been forgotten.",
-      );
-      void navigate({
-        to: "/settings/memory",
-        search: validateMemorySettingsSearch({ environmentId, memorySpaceId }),
-        hash: "",
-      });
-    }
-  }, [item, onForgotten, navigate, environmentId, memorySpaceId]);
+    if (edit.gap === "forgotten") leaveForgotten();
+  }, [edit.gap]);
   const detailsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     detailsRef.current?.scrollIntoView?.({ block: "start" });
@@ -844,7 +850,7 @@ export function MemoryDetails({
         control={
           <div className="flex items-center justify-end gap-2">
             {item?.status === "active" && canWrite ? (
-              <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
+              <Button size="sm" variant="ghost" onClick={() => edit.begin(item)}>
                 Edit
               </Button>
             ) : null}
@@ -880,6 +886,7 @@ export function MemoryDetails({
       >
         <div ref={detailsRef} tabIndex={-1} aria-label="Memory details" className="space-y-3">
           {read.error || history.error ? <p role="alert">{read.error ?? history.error}</p> : null}
+          {edit.notice ? <p role="status">{edit.notice}</p> : null}
           {item ? (
             <>
               {item.status !== "active" ? (
@@ -895,27 +902,21 @@ export function MemoryDetails({
               {item.status === "active" ? (
                 <p className="whitespace-pre-wrap break-words">{item.payload.text}</p>
               ) : null}
-              {item.status === "active" && canWrite ? (
-                <>
-                  {editing ? (
-                    <MemoryEditor
-                      key={item.revision.revisionId}
-                      environmentId={environmentId}
-                      memorySpaceId={memorySpaceId}
-                      item={item}
-                      onClose={() => {
-                        setEditing(false);
-                        read.refresh();
-                        history.refresh();
-                      }}
-                    />
-                  ) : null}
-                </>
-              ) : null}
             </>
           ) : (
-            <p role="status">This memory is unavailable. Visible details have been cleared.</p>
+            <MemoryBodyGapNotice session={edit} />
           )}
+          {edit.start && canWrite ? (
+            <MemoryEditor
+              key={edit.start.revisionId}
+              environmentId={environmentId}
+              memorySpaceId={memorySpaceId}
+              start={edit.start}
+              seedText={item?.status === "active" ? item.payload.text : undefined}
+              {...edit.editorEvents}
+              onClose={edit.close}
+            />
+          ) : null}
           {item && item.status !== "forgotten" && value ? (
             <>
               {value.resolutions.length > 0 ? (
@@ -1453,123 +1454,6 @@ function MemoryReportControl({ report }: { report: MemoryReportDelivery }) {
         </Button>
       ) : null}
     </div>
-  );
-}
-
-const DEFAULT_MEMORY_SCOPE = { kind: "user" } as const;
-
-function MemoryEditor({
-  environmentId,
-  memorySpaceId,
-  item,
-  scope = DEFAULT_MEMORY_SCOPE,
-  scopeLabel,
-  onClose,
-}: {
-  environmentId: EnvironmentId;
-  memorySpaceId: MemorySpaceId;
-  item?: Extract<MemoryItem, { status: "active" }>;
-  scope?: MemoryScope;
-  scopeLabel?: string;
-  onClose: () => void;
-}) {
-  const [id] = useState(() => item?.memoryId ?? MemoryId.make(randomUUID()));
-  const [operationId, setOperationId] = useState<MemoryOperationId | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const draft = memoryEnvironment.draftAtom({
-    environmentId,
-    input: { memorySpaceId },
-    draftId: `editor:${id}`,
-  });
-  const [text, setText] = useAtom(draft);
-  const registry = useContext(RegistryContext);
-  const upsert = useAtomCommand(memoryEnvironment.upsert, { reportFailure: false });
-  const canWrite = useAtomValue(memoryEnvironment.upsert.permissionAtom(environmentId));
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    if (item)
-      registry.set(draft, {
-        text: item.payload.text,
-        memoryIds: [id],
-      });
-    return () => {
-      mounted.current = false;
-      registry.set(draft, null);
-    };
-  }, [draft, id, item, registry]);
-  if (!canWrite || (item && text === null))
-    return (
-      <div>
-        <p>Editing unavailable. Close this editor and reload the memory.</p>
-        <Button size="sm" variant="ghost" onClick={onClose}>
-          Close editor
-        </Button>
-      </div>
-    );
-  return (
-    <form
-      className="space-y-3"
-      onSubmit={async (event) => {
-        event.preventDefault();
-        if (
-          busy ||
-          !text?.trim() ||
-          !registry.get(memoryEnvironment.upsert.permissionAtom(environmentId))
-        )
-          return;
-        const intentId = operationId ?? MemoryOperationId.make(randomUUID());
-        setOperationId(intentId);
-        setBusy(true);
-        const result = await upsert({
-          environmentId,
-          input: {
-            memorySpaceId,
-            memoryId: id,
-            operationId: intentId,
-            expectedHeads: item ? [item.revision.revisionId] : [],
-            scope: item?.scope ?? scope,
-            assertionKind: item?.revision.assertionKind ?? "fact",
-            payload: {
-              text,
-              evidence: item?.payload.evidence ?? [{ origin: "user", messageIds: [] }],
-              derivedFromMemoryRevisions: item?.payload.derivedFromMemoryRevisions ?? [],
-            },
-            baseBoundary: null,
-          },
-        });
-        if (
-          !mounted.current ||
-          !registry.get(memoryEnvironment.upsert.permissionAtom(environmentId))
-        )
-          return;
-        setBusy(false);
-        if (result._tag === "Success" && result.value.outcome !== "rejected") onClose();
-        else
-          setError("Memory update failed. Retry the same request or close the editor and reload.");
-      }}
-    >
-      <p>Save to: {scopeLabel ?? memoryScopeLabel(item?.scope ?? scope)}</p>
-      <Textarea
-        aria-label="Memory text"
-        value={text ?? ""}
-        disabled={busy || operationId !== null}
-        onChange={(event) =>
-          setText({
-            text: event.currentTarget.value,
-            memoryIds: item ? [id] : [],
-          })
-        }
-      />
-      {error ? <p role="alert">{error}</p> : null}
-      <Button type="submit" size="sm" disabled={busy || !text?.trim()}>
-        {operationId ? "Retry memory request" : "Save memory"}
-      </Button>
-      <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={onClose}>
-        Cancel
-      </Button>
-    </form>
   );
 }
 

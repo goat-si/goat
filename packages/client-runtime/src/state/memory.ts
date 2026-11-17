@@ -97,6 +97,26 @@ export function memoryExposureMatches(
   );
 }
 
+/** Why a direct body for memoryId may be empty now, given the exposure seen while it was visible. */
+export type MemoryBodyGap = "unchanged" | "changed" | "forgotten" | "unavailable";
+export function memoryBodyGap(
+  seen: MemoryExposure,
+  now: MemoryExposure,
+  memoryId: MemoryId,
+): MemoryBodyGap {
+  if (!seen.ready || !now.ready || seen.epoch !== now.epoch) return "unavailable";
+  if (now.forgotten.has(memoryId) || seen.forgetGeneration !== now.forgetGeneration)
+    return "forgotten";
+  // Includes privacy-hold invalidations (pending forget, scanner hold, forgotten source, hub
+  // entries), so "changed" is never a reason to keep a draft.
+  if (
+    Option.getOrUndefined(HashMap.get(seen.versions, memoryId)) !==
+    Option.getOrUndefined(HashMap.get(now.versions, memoryId))
+  )
+    return "changed";
+  return "unchanged";
+}
+
 function containsForgottenMemory(value: unknown, forgotten: ReadonlySet<MemoryId>): boolean {
   if (typeof value !== "object" || value === null) return false;
   // Tombstones are body-free records and remain visible consistently across devices.
@@ -125,8 +145,9 @@ interface MemoryTarget {
   readonly input: { readonly memorySpaceId: MemorySpaceId };
 }
 
-// Bodies are ephemeral, including source text and snippets. Expiry removes the
-// displayed value; a consumer must explicitly refresh to request it again.
+// Bodies are ephemeral, including source text and snippets. Expiry removes the displayed
+// value; a consumer must explicitly refresh to request it again. The one exception is a draft
+// the person has changed: drafts have no TTL, so an edited draft outlives its body's expiry.
 const BODY_TTL = "1 minute";
 
 /** Body-free ledger owned by the factory, independent of weak atom-family lifetimes.
@@ -442,11 +463,10 @@ export function createMemoryEnvironmentAtoms<R, E>(
         const draft = get(stored);
         if (draft === null || draft.memoryIds.length === 0) return draft?.text ?? null;
         const current = get(state);
-        // No current contract field proves independence from earlier summaries.
-        // Existing-memory edits close on every same-space forget.
+        // No current contract field proves independence from earlier summaries, so existing-memory
+        // edits close on every same-space forget. Expiry ("unchanged") is the only gap a draft keeps.
         if (
-          draft.exposure.forgetGeneration !== current.forgetGeneration ||
-          !memoryExposureMatches(draft.exposure, current, draft.memoryIds)
+          draft.memoryIds.some((id) => memoryBodyGap(draft.exposure, current, id) !== "unchanged")
         ) {
           // Purge the retained text, rather than only hiding it from the view.
           get.set(stored, null);
