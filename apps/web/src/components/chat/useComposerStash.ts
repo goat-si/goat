@@ -60,7 +60,7 @@ import {
 import { BackgroundThreadContext } from "./backgroundThread";
 import { encodeImagesForStash, reportStashedImages } from "./stashFailedSend";
 import { useStableCallback } from "../../hooks/useStableCallback";
-import { restoreStashedReply, stashedReplyCanBeJudged } from "./composerReply";
+import { restoreStashedReply } from "./composerReply";
 
 /**
  * The prompt stash: saving the draft aside, restoring or deleting an entry, the badge pulse,
@@ -181,7 +181,6 @@ export function useComposerStash(input: {
         .map((file) => file.attachmentId),
     );
 
-    if (!(await stashedReplyCanBeJudged(menuEntry.records ?? [], composerDraftTarget))) return;
     // A thread switch during the verify await would mix the new thread's
     // prompt with this invocation's captured target. Nothing was taken yet,
     // so abort and leave the entry restorable where the user now is.
