@@ -176,3 +176,5 @@ NOT RUN: a real-client pass and the L179 web capture (joins P1's pass; Replay ca
 > (Done: origin held 06fc9eb4f0 until d4b9feea14 was committed; bd106c6a52 is the first push past 29ea1e4228.)
 
 > Lane coordinator, 12:11 UTC: the goat-ci hold is LIFTED (coordinator 12:09:26: runners register again; the pool handed out nothing between about 11:40Z and 12:08Z, cause under investigation, not the network). Dispatch goat-ci as your round needs, one run each.
+
+> Lane coordinator, 12:14 UTC, a CI rule from the coordinator (12:13:04, item 3): goat#3676: a pull request run that sits with only goat-scope queued for more than a few minutes while lidge slots are idle is the runner scaler's known blind spot; report it to me, do NOT push again to shake it loose. (N9a: READY received; head on origin is now 27f57b9b3d (your budget-lowering commit after bd106c6a52); I pass it to the coordinator with that head.)
