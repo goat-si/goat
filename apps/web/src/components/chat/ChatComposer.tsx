@@ -14,17 +14,12 @@ import {
   useQuestionAttachmentPreparation,
 } from "../../questionAttachments";
 import type {
-  KeybindingCommand,
-  AssistantCitation,
   ChatAttachment as ContractChatAttachment,
   ChatFileAttachment,
   EnvironmentId,
   ModelSelection,
   ProjectId,
-  PreviewAnnotationPayload,
-  PreviewTabContextRecord,
   ProviderApprovalDecision,
-  ThreadContextRecord,
   ProviderInteractionMode,
   ResolvedKeybindingsConfig,
   RuntimeMode,
@@ -288,7 +283,6 @@ import { useSoftwareKeyboardOpen } from "../../hooks/useSoftwareKeyboardOpen";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { usePanelAnimationSettings } from "../../panelAnimations";
 import { readEnvironmentScope, readPreparedConnection } from "../../state/session";
-import type { ReviewCommentContext } from "../../reviewCommentContext";
 import { useComposerRestingTransition } from "./useComposerRestingTransition";
 import { ComposerCommandMenuLayer } from "./ComposerCommandMenuLayer";
 import { useRestingComposerControlsLayout } from "./useRestingComposerControlsLayout";
@@ -304,6 +298,7 @@ import {
 } from "./preparingComposerImages";
 import { ComposerControlsBar } from "./ComposerControlsBar";
 import { composerCommandKeyHandler } from "./composerCommandKey";
+import type { ChatComposerHandle } from "./chatComposerHandle";
 
 function consumePasteAsTextShortcut(deadline: { current: number }): boolean {
   const armed = Date.now() <= deadline.current;
@@ -313,68 +308,7 @@ function consumePasteAsTextShortcut(deadline: { current: number }): boolean {
 
 const runtimeModeOptions = runtimeModes.map((mode) => ({ mode, ...runtimeModeConfig[mode] }));
 
-export interface ChatComposerHandle {
-  focusAtEnd: () => void;
-  focusAt: (cursor: number) => void;
-  restoreAfterTimelineReachedEnd: () => void;
-  collapseForTimelineScrollKey: (key: string) => void;
-  addDroppedFiles: (files: File[]) => void;
-  addDroppedFolders: (folders: File[]) => void;
-  hasPendingAttachments: () => boolean;
-  insertTextAtEnd: (
-    text: string,
-    options?: { ensureLeadingBoundary?: boolean; clipboardData?: DataTransfer },
-  ) => boolean;
-  pasteTextAtEnd: (text: string, options?: { bypassAutoAttachment?: boolean }) => boolean;
-  citeAssistantText: (
-    citation: AssistantCitation,
-    sourceAnchor: AssistantCitationSourceAnchor,
-  ) => boolean;
-  openModelPicker: () => void;
-  stepReasoningEffort: (direction: 1 | -1) => void;
-  toggleModelPicker: () => void;
-  openControl: (command: KeybindingCommand) => void;
-  isModelPickerOpen: () => boolean;
-  isCaretAtStart: () => boolean;
-  compactContext: () => void;
-  readSnapshot: () => {
-    value: string;
-    cursor: number;
-    expandedCursor: number;
-    contextIds: string[];
-  };
-  resetCursorState: (options?: {
-    cursor?: number;
-    prompt?: string;
-    detectTrigger?: boolean;
-  }) => void;
-  addTerminalContext: (selection: TerminalContextSelection) => void;
-  getSendContext: () => {
-    answeringPendingUserInput: boolean;
-    prompt: string;
-    images: ComposerImageAttachment[];
-    files: ComposerFileAttachment[];
-    terminalContexts: TerminalContextDraft[];
-    previewAnnotations: PreviewAnnotationPayload[];
-    reviewComments: ReviewCommentContext[];
-    threadContexts: ThreadContextRecord[];
-    previewTabs: PreviewTabContextRecord[];
-    threadContextRoutingEnvironmentId: EnvironmentId;
-    selectedPromptEffort: string | null;
-    selectedModelOptionsForDispatch: unknown;
-    selectedModelSelection: ModelSelection;
-    multipleModelSelections: ReadonlyArray<ModelSelection> | null;
-    providerAvailable: boolean;
-    selectedProvider: ProviderDriverKind;
-    selectedModel: string;
-    selectedProviderModels: ReadonlyArray<ServerProvider["models"][number]>;
-    interactionMode: ProviderInteractionMode;
-    interactionModeEnabled: boolean;
-    shownPendingApprovalIds: ReadonlyArray<RuntimeRequestId>;
-  };
-  validateProviderInput: (providerInput: string) => boolean;
-  setMultipleModelSelections: (selections: ReadonlyArray<ModelSelection>) => void;
-}
+export type { ChatComposerHandle };
 
 export interface ChatComposerProps {
   sshWorktreeSelected?: boolean;
