@@ -18,10 +18,10 @@ export class TerminalLeaseBusy extends Data.TaggedError("TerminalLeaseBusy")<{
 }> {}
 
 /**
- * Which run of a terminal request this is: its first, a rerun after it waited for its folder, or
- * a rerun that an open, restart or close of the same terminal overtook while it waited.
+ * Which run of a terminal request this is: its first, a rerun after it waited for its folder, a
+ * rerun that an open or restart of the same terminal overtook, or one that a close overtook.
  */
-export type TerminalAttempt = "first" | "rerun" | "overtaken";
+export type TerminalAttempt = "first" | "rerun" | "overtaken" | "closed";
 const Attempt = Context.Reference<TerminalAttempt>("goat/terminal/terminalLeaseOrder/Attempt", {
   defaultValue: () => "first",
 });
@@ -30,7 +30,7 @@ interface WaitingRequest {
   /** Undefined for an agent's open, whose terminal id is new each run. */
   readonly terminalId: string | undefined;
   readonly restart: boolean;
-  overtaken: boolean;
+  rerunAs: Exclude<TerminalAttempt, "first">;
 }
 
 /** Claims of other GOAT servers that cannot be read fail like an unreachable cwd. */
@@ -59,52 +59,69 @@ export const makeTerminalLeaseOrder = (options: {
   const waiting = new Map<string, Set<WaitingRequest>>();
 
   /**
-   * Under the thread lock, by whatever opens, restarts or closes a terminal (all of the thread's
-   * without terminalId): requests still waiting for it must not undo that when they run again.
-   * An open that only reused a running shell leaves waiting restarts to run.
+   * Under the thread lock, by an open or restart that ran, or a person's or agent's close (all of
+   * the thread's without terminalId): requests still waiting must not undo it when they run again.
+   * A reuse leaves waiting restarts to run; housekeeping closes (idle, settle) never call this.
    */
-  const supersede = (threadId: string, terminalId?: string, restartsToo = true) =>
+  const supersede = (
+    threadId: string,
+    terminalId: string | undefined,
+    by: "start" | "reuse" | "close",
+  ) =>
     Effect.sync(() => {
-      for (const request of waiting.get(threadId) ?? [])
-        if (
-          (terminalId === undefined || request.terminalId === terminalId) &&
-          (restartsToo || !request.restart)
-        )
-          request.overtaken = true;
+      for (const request of waiting.get(threadId) ?? []) {
+        if (terminalId !== undefined && request.terminalId !== terminalId) continue;
+        if (by === "close") request.rerunAs = "closed";
+        else if ((by === "start" || !request.restart) && request.rerunAs !== "closed")
+          request.rerunAs = "overtaken";
+      }
     });
 
   const attempt = Effect.withFiber((fiber) => Effect.succeed(fiber.getRef(Attempt)));
 
   /**
-   * Starts or restarts a terminal under cwd's lease, or fails TerminalLeaseBusy without running
-   * it. An overtaken rerun runs `overtaken` instead, which must start nothing.
+   * Starts or restarts a terminal under cwd's lease, or fails TerminalLeaseBusy without running it.
+   * An overtaken rerun returns the terminal as it is now; when it is gone, `gone` after a close,
+   * else the start, since only housekeeping removed it.
    */
-  const tryTerminalLease = <A, E, R, B, E2, R2>(
+  const tryTerminalLease = <A, E, R, B, E2, R2, C, E3, R3>(
     terminal: { readonly threadId: string; readonly terminalId: string },
     cwd: string,
     effect: Effect.Effect<A, E, R>,
-    overtaken: Effect.Effect<B, E2, R2>,
-  ): Effect.Effect<A | B, E | E2 | TerminalCwdStatError | TerminalLeaseBusy, R | R2> =>
-    Effect.withFiber<A | B, E | E2 | TerminalCwdStatError | TerminalLeaseBusy, R | R2>((fiber) =>
-      fiber.getRef(Attempt) === "overtaken"
-        ? overtaken
-        : cwdUnavailable(
-            cwd,
-            tryEnterWorkspaceLease(
-              options.resolve(cwd),
-              effect.pipe(
-                Effect.tap(() => supersede(terminal.threadId, terminal.terminalId, false)),
-              ),
-            ),
-          ).pipe(
-            Effect.flatMap(
-              Option.match({
-                onNone: () => Effect.fail(new TerminalLeaseBusy({ cwd })),
-                onSome: Effect.succeed,
-              }),
-            ),
-          ),
+    current: Effect.Effect<Option.Option<B>, E2, R2>,
+    gone: Effect.Effect<C, E3, R3>,
+  ): Effect.Effect<
+    A | B | C,
+    E | E2 | E3 | TerminalCwdStatError | TerminalLeaseBusy,
+    R | R2 | R3
+  > => {
+    type Started = Effect.Effect<
+      A | B | C,
+      E | E3 | TerminalCwdStatError | TerminalLeaseBusy,
+      R | R3
+    >;
+    const start = cwdUnavailable(
+      cwd,
+      tryEnterWorkspaceLease(
+        options.resolve(cwd),
+        effect.pipe(Effect.tap(() => supersede(terminal.threadId, terminal.terminalId, "reuse"))),
+      ),
+    ).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.fail(new TerminalLeaseBusy({ cwd })),
+          onSome: Effect.succeed,
+        }),
+      ),
     );
+    return Effect.withFiber((fiber) => {
+      const run = fiber.getRef(Attempt);
+      if (run === "first" || run === "rerun") return start;
+      return Effect.flatMap(current, (found): Started =>
+        Option.isSome(found) ? Effect.succeed(found.value) : run === "closed" ? gone : start,
+      );
+    });
+  };
 
   /**
    * The thread's lock for work that may start a shell. A busy folder releases the lock, waits in
@@ -116,7 +133,7 @@ export const makeTerminalLeaseOrder = (options: {
     effect: Effect.Effect<A, E | TerminalLeaseBusy, R>,
     restart = false,
   ): Effect.Effect<A, E | TerminalCwdStatError, R> => {
-    const request: WaitingRequest = { terminalId, restart, overtaken: false };
+    const request: WaitingRequest = { terminalId, restart, rerunAs: "rerun" };
     const join = Effect.sync(() => {
       const requests = waiting.get(threadId) ?? new Set<WaitingRequest>();
       waiting.set(threadId, requests.add(request));
@@ -133,12 +150,7 @@ export const makeTerminalLeaseOrder = (options: {
         Effect.suspend(() =>
           leave.pipe(
             Effect.andThen(
-              effect.pipe(
-                Effect.provideService(
-                  Attempt,
-                  !rerun ? "first" : request.overtaken ? "overtaken" : "rerun",
-                ),
-              ),
+              effect.pipe(Effect.provideService(Attempt, rerun ? request.rerunAs : "first")),
             ),
             Effect.tapError((error) => (isBusy(error) ? join : Effect.void)),
           ),
