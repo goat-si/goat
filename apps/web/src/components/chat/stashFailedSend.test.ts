@@ -160,37 +160,58 @@ describe("a failed send that replied to a response", () => {
   });
 
   it("puts a reply back in a side chat when the response is its parent's", () => {
-    const parent = ThreadId.make("reply-parent");
-    const sideChat = scopeThreadRef(environmentId, ThreadId.make("reply-side-chat"));
-    const shell = { forkedFrom: { type: "run", threadId: parent, runId: "run-1" } };
-    const get = appAtomRegistry.get.bind(appAtomRegistry);
-    using _shells = vi
-      .spyOn(appAtomRegistry, "get")
-      .mockImplementation(((atom: unknown) =>
-        atom === environmentThreadShells.threadShellAtom(sideChat)
-          ? shell
-          : get(atom as never)) as typeof appAtomRegistry.get);
-    const reply: ResponseContextRecord = {
-      version: 1,
-      kind: "response",
-      contextId: "response_m2" as ComposerContextId,
-      label: "The parent's answer",
-      citation: {
-        version: 1,
-        environmentId,
-        threadId: parent,
-        messageId: MessageId.make("m2"),
-        text: "The parent's answer",
-        start: 0,
-        end: 19,
-        prefix: "",
-        suffix: "",
-      },
-      itemId: TurnItemId.make("item-2"),
-    };
+    using shells = sideChatOfParent({ parentLive: true });
+    restoreStashedReply([shells.reply], shells.sideChat);
+    expect(useComposerDraftStore.getState().getComposerDraft(shells.sideChat)?.replyTo).toEqual(
+      shells.reply,
+    );
+  });
 
-    restoreStashedReply([reply], sideChat);
-
-    expect(useComposerDraftStore.getState().getComposerDraft(sideChat)?.replyTo).toEqual(reply);
+  it("leaves a reply out when the client no longer holds the thread that held its response", () => {
+    using shells = sideChatOfParent({ parentLive: false });
+    restoreStashedReply([shells.reply], shells.sideChat);
+    expect(
+      useComposerDraftStore.getState().getComposerDraft(shells.sideChat)?.replyTo ?? null,
+    ).toBeNull();
   });
 });
+
+// A side chat forked from a parent that holds the response; a deleted or archived parent's shell
+// is not held by the client at all.
+function sideChatOfParent(options: { readonly parentLive: boolean }) {
+  const parent = ThreadId.make(`reply-parent-${options.parentLive}`);
+  const sideChat = scopeThreadRef(
+    environmentId,
+    ThreadId.make(`reply-side-chat-${options.parentLive}`),
+  );
+  const sideChatShell = { forkedFrom: { type: "run", threadId: parent, runId: "run-1" } };
+  const get = appAtomRegistry.get.bind(appAtomRegistry);
+  const spy = vi
+    .spyOn(appAtomRegistry, "get")
+    .mockImplementation(((atom: unknown) =>
+      atom === environmentThreadShells.threadShellAtom(sideChat)
+        ? sideChatShell
+        : options.parentLive &&
+            atom === environmentThreadShells.threadShellAtom(scopeThreadRef(environmentId, parent))
+          ? { id: parent, deletedAt: null }
+          : get(atom as never)) as typeof appAtomRegistry.get);
+  const reply: ResponseContextRecord = {
+    version: 1,
+    kind: "response",
+    contextId: "response_m2" as ComposerContextId,
+    label: "The parent's answer",
+    citation: {
+      version: 1,
+      environmentId,
+      threadId: parent,
+      messageId: MessageId.make("m2"),
+      text: "The parent's answer",
+      start: 0,
+      end: 19,
+      prefix: "",
+      suffix: "",
+    },
+    itemId: TurnItemId.make("item-2"),
+  };
+  return { sideChat, reply, [Symbol.dispose]: () => spy.mockRestore() };
+}

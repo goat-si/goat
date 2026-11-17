@@ -90,7 +90,7 @@ function composer() {
 }
 
 it("names the thread that holds the response when Reply is on a row a side chat inherits", async () => {
-  using _configs = serverConfigs(true);
+  using _configs = serverConfigs(true, { id: PARENT, deletedAt: null });
   const target = composer();
   await using screen = await renderElement(<SideChatColumn handleRef={target.ref} />);
 
@@ -111,8 +111,9 @@ it("offers no Reply when the thread's server does not check replies", async () =
   expect(screen.buttons("Reply to this response")).toHaveLength(0);
 });
 
-it("offers no Reply on a row inherited from a deleted thread, which no agent can read", async () => {
-  using _configs = serverConfigs(true, { id: PARENT, deletedAt: "2026-11-17T00:00:00Z" });
+it("offers no Reply on a row inherited from a thread the client no longer holds", async () => {
+  // A deleted or archived thread's shell is dropped from the client; no agent could be sent to it.
+  using _configs = serverConfigs(true);
   const target = composer();
   await using screen = await renderElement(<SideChatColumn handleRef={target.ref} />);
 

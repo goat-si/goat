@@ -1,6 +1,7 @@
 import { RegistryContext } from "@effect/atom-react";
 import type { DecisionItem } from "@goat/client-runtime/state/decision-inbox";
 import { makeThreadRequestsResolvedAnnouncer } from "@goat/client-runtime/state/thread-requests";
+import { seedUserInputDraftAnswers } from "@goat/client-runtime/state/thread-requests";
 import { EnvironmentId, RuntimeRequestId, ThreadId, type ScopedThreadRef } from "@goat/contracts";
 import { Atom, AtomRegistry } from "effect/reactivity";
 import { useLayoutEffect } from "react";
@@ -174,4 +175,41 @@ it("shows in the inbox an answer typed in the thread composer", async () => {
   expect(inbox.latest.inbox!.drafts[twoQuestions.id]?.approach?.customAnswer).toBe(
     "Typed in the composer",
   );
+});
+
+it("Stop returns only what the person typed, not the agent's suggested answers", async () => {
+  const suggested: typeof twoQuestions = {
+    ...twoQuestions,
+    request: {
+      ...twoQuestions.request,
+      questions: twoQuestions.request.questions.map((entry) =>
+        entry.id === "scope" ? { ...entry, initialAnswer: "All files" } : entry,
+      ),
+    },
+  };
+  using inbox = setup(suggested);
+  // A bare hook host; nothing here links or navigates.
+  await using _screen = await render(inbox.ui, { router: false });
+
+  // The inbox form sends its whole seeded map, the suggested answer included.
+  const seeded = seedUserInputDraftAnswers(
+    suggested.request.questions,
+    inbox.latest.inbox!.drafts[suggested.id] ?? {},
+  );
+  await act(() =>
+    inbox.latest.inbox!.setAnswers(suggested.id, {
+      ...seeded,
+      approach: { customAnswer: "Typed in the inbox" },
+    }),
+  );
+  await act(() =>
+    makeThreadRequestsResolvedAnnouncer(
+      environmentId,
+      threadId,
+    )([{ id: requestId, status: "cancelled" }]),
+  );
+
+  expect(
+    useComposerDraftStore.getState().getComposerDraft({ environmentId, threadId })?.prompt,
+  ).toBe("Typed in the inbox");
 });
