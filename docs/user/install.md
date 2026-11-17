@@ -242,6 +242,14 @@ Pass a path, such as `goat app ../my-project`, to open another directory. It req
 the desktop app, so a standalone server or an SSH session is not enough. If the
 command cannot reach the app, start or update the desktop app and try again.
 
+### Drop a folder on the sidebar
+
+Drag one or more folders from Finder, Explorer, or your file manager onto the
+sidebar. Each one opens as a project on this computer, the same as `goat app`.
+Files dropped on a thread still attach to that thread. This needs the desktop app
+with its local environment on (Settings › Connections); browsers do not share
+folder paths, so in the web app use **Add project** instead.
+
 ## Mobile app
 
 GOAT's mobile app for iPhone, iPad and Android is in beta and is not in the
