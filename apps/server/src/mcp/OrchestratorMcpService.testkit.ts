@@ -8,7 +8,10 @@ import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 
 export const layerOrchestratorService = OrchestratorMcpService.layer.pipe(
   Layer.provide(layerNoFleetSync),
-  Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
+  // A replayed delegation marks its child as about to be prepared; nothing here prepares it.
+  Layer.provide(
+    Layer.mock(ThreadLaunchService.ThreadLaunchService)({ preparationPending: () => Effect.void }),
+  ),
   // Scheduling resolves a base ref; a checkout with no remote and a main branch is enough here.
   Layer.provide(
     Layer.mock(GitVcsDriver.GitVcsDriver)({
