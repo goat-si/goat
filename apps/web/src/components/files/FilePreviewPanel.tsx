@@ -111,7 +111,6 @@ import {
 } from "./fileCommentAnnotations";
 import { installFileEditorDismissal } from "./fileEditorDismissal";
 import {
-  FILE_LINK_REVEAL_ATTRIBUTE,
   FILE_LINK_REVEAL_UNSAFE_CSS,
   FILE_SURFACE_SUBHEADER_CLASS,
   FileSurfaceAction,
@@ -120,6 +119,7 @@ import {
 } from "./fileSurfaceChrome";
 import SourceFilePreview from "./ReadOnlySourcePreview";
 import { clampFileLine, resolveCenteredFileLineScrollTop } from "./fileLineReveal";
+import { updateFileLinkReveal } from "./fileLinkReveal";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import { projectFileCacheKey } from "./fileContentRevision";
 import {
@@ -356,21 +356,6 @@ function WorkspaceAudioPreview(props: {
       onError={() => setFailedUrl(url)}
     />
   );
-}
-
-function updateFileLinkReveal(fileContainer: HTMLElement, line: number | null): void {
-  const root = fileContainer.shadowRoot ?? fileContainer;
-  for (const element of root.querySelectorAll<HTMLElement>(`[${FILE_LINK_REVEAL_ATTRIBUTE}]`)) {
-    element.removeAttribute(FILE_LINK_REVEAL_ATTRIBUTE);
-  }
-  if (line === null) return;
-
-  root
-    .querySelector<HTMLElement>(`[data-line="${line}"]`)
-    ?.setAttribute(FILE_LINK_REVEAL_ATTRIBUTE, "");
-  root
-    .querySelector<HTMLElement>(`[data-column-number="${line}"]`)
-    ?.setAttribute(FILE_LINK_REVEAL_ATTRIBUTE, "");
 }
 
 const REVEAL_MAX_ATTEMPTS = 30;
