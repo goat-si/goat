@@ -259,7 +259,12 @@ pass <code>--worktree &lt;base-branch&gt;</code>. <code>send</code> never interr
 the message as its next turn. Pass <code>-</code> as the message to read it from stdin.</p>
 <p><code>--wait</code> prints the agent’s reply. It exits 1 when the run fails or stops, and
 2 when the agent waits for an answer you give in the app. Add <code>--json</code> for a
-result that always includes the thread id.</p>
+result that always includes the thread id.
+With <code>start --wait</code>, and with <code>send --wait</code> to a thread that was idle when you
+sent the message, a turn that ends waiting on tasks or background work keeps
+the wait going until that work wakes the agent and the woken run ends; you get
+that reply instead. A send to a busy thread returns that turn’s reply, and a
+message someone else sends meanwhile ends the wait with the first reply.</p>
 <p>Every other capability is a command too. <code>goat describe</code> lists them, <code>goat describe thread</code>
 shows one resource, and <code>goat describe thread.read</code> prints its arguments. Run one as
 <code>goat thread read -f threadId=$id</code> or <code>goat call thread.read '{"threadId":"…"}'</code>: <code>-f key=value</code>
