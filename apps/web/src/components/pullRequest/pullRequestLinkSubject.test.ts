@@ -61,5 +61,13 @@ describe("pullRequestLinkSubject", () => {
     for (const url of [pr, `${pr}/files`, `${pr}/checks`, `${pr}#issuecomment-6`]) {
       expect(pullRequestLinkSubject(url, activity), url).toBeNull();
     }
+    // An emoji straddling the cut is dropped whole rather than split into a lone surrogate.
+    const [comment] = activity.comments;
+    const long = comment
+      ? { ...activity, comments: [{ ...comment, body: `${"i ".repeat(139)}😀bb` }] }
+      : activity;
+    const cut = pullRequestLinkSubject(`${pr}#issuecomment-5`, long);
+    const excerpt = cut && "excerpt" in cut ? cut.excerpt : null;
+    expect(excerpt).toMatch(/^(?:i ?)+…$/u);
   });
 });
