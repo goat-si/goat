@@ -16,18 +16,16 @@ const InsideGuardedCall = Context.Reference<boolean>("goat/mcp/McpSessionCut/Ins
   defaultValue: () => false,
 });
 
-const cutResult = (readOnly: boolean) =>
-  new McpSchema.CallToolResult({
-    isError: true,
-    content: [
-      {
-        type: "text",
-        text: readOnly
-          ? "This GOAT session was revoked while the call ran, so GOAT stopped it. Nothing changed."
-          : "This GOAT session was revoked while the call ran, so GOAT stopped it. Work it had started may have finished; check before repeating it with a new sign-in.",
-      },
-    ],
-  });
+// One message for every tool: a read-only hint is not proof the call wrote nothing.
+const cutResult = new McpSchema.CallToolResult({
+  isError: true,
+  content: [
+    {
+      type: "text",
+      text: "This GOAT session was revoked while the call ran, so GOAT stopped it. If the call changes anything, part of it may already have happened; check before repeating it with a new sign-in.",
+    },
+  ],
+});
 
 type ToolResult = McpSchema.CallToolResult | McpSchema.InputRequired;
 
@@ -44,7 +42,6 @@ export const guardedToolRegistration = <
   registration: Registration,
 ): Registration => {
   const traced = tracedToolRegistration<P, ToolResult, E, R, Registration>(registration);
-  const readOnly = registration.tool.annotations?.readOnlyHint === true;
   return {
     ...traced,
     // The traced handle already opens this call's span.
@@ -56,7 +53,7 @@ export const guardedToolRegistration = <
       const result = yield* sessionEnd.run(
         traced.handle(payload).pipe(Effect.provideService(InsideGuardedCall, true)),
       );
-      return Option.isSome(result) ? result.value : cutResult(readOnly);
+      return Option.isSome(result) ? result.value : cutResult;
     }),
   };
 };
