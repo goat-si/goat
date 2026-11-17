@@ -295,3 +295,8 @@ NOT RUN: a goat-ci run on the merge commit daf4b9bb3b; the 385-file check:change
 - Fix `ce893ca4ea`: the import is restored and the budget entry follows the real length (1375). A recheck of every name the old import block declared, against both files, finds no other dropped import. Locally after the fix: knip exports exit 0; GitActionsControl.browser, GitActionsControl.logic and PublishRepositoryDialog.browser tests: 34 passed; format and lint passed at commit.
 - Run 44109073502 cancelled (failed, jobs still queued). New goat-ci run on ce893ca4ea (workflow_dispatch, lane all): https://github.com/goat-si/goat/actions/runs/44113761706.
 - Run 44101194777 on daf4b9bb3b (the integration tree's full check) finished with conclusion success.
+
+### Local typecheck on ce893ca4ea (heavy-job token, released by P1 at about 15:14 UTC)
+
+- `vp run --cache --parallel --concurrency-limit 4 --filter @goat/mobile --filter @goat/oxlint-plugin-goat --filter @goat/scripts --filter @goat/web --filter goat typecheck`, scoped as check:changed scopes it against origin/chase/t3-261114-next2 (e04442e66c): exit 0, "5/5 successful", 0 "error TS" lines.
+- Record line, as asked. Cause: the import pruning in the move-out 73467df4f6 read the spread in `...resolveThreadBranchMetadataPatch(` as a property access and dropped the import. The local typecheck was not run before the first push of c63e00683b (the token was with P1); the first goat-ci run found it. After the fix, every name the old import block of GitActionsControl.tsx declared was rechecked against GitActionsControl.tsx and PublishRepositoryDialog.tsx; no other import is missing. Token handed back.
