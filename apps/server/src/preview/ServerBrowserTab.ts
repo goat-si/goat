@@ -83,6 +83,12 @@ export interface ServerTab {
   desktopViewportRead: Promise<ServerTab["desktopViewport"]>;
   /** A read queued behind `desktopViewportRead`, shared by every caller that waits for it. */
   desktopViewportNext: Promise<ServerTab["desktopViewport"]> | null;
+  /** A page resize or load since the last read started; status measures again. */
+  desktopViewportStale: boolean;
+  /** Counts page resizes, loads and dialog closes, so a caller can tell one landed during a read. */
+  desktopViewportChanges: number;
+  /** Settles at the desktop page's next main-frame resize. */
+  desktopResize: PromiseWithResolvers<void>;
   loading: boolean;
   loadError: import("@goat/contracts").PreviewAutomationLoadError | undefined;
   closing: boolean;

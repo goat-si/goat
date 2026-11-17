@@ -267,8 +267,14 @@ const make = Effect.gen(function* () {
   const { runFork, recordAction, keepTypedText } = yield* makeBrowserHistorySupport;
   const popupCloseFailure = (p: Page) => closeUnadoptedPopup(p, runFork);
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
-  const { applyOpenRendering, applyRendering, applySetting, broadcastViewport, layoutSize } =
-    makeRendering(runPromise);
+  const {
+    applyOpenRendering,
+    applyRendering,
+    applySetting,
+    broadcastViewport,
+    desktopStatusViewport,
+    measureDesktopViewport,
+  } = makeRendering(runPromise);
   const blockedTabs = yield* makeBlockedTabFence();
   const openRuns = makeOpenRunSignals();
   const launchServices = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
@@ -610,6 +616,9 @@ const make = Effect.gen(function* () {
         desktopViewport: null,
         desktopViewportRead: Promise.resolve(null),
         desktopViewportNext: null,
+        desktopViewportStale: true,
+        desktopViewportChanges: 0,
+        desktopResize: Promise.withResolvers<void>(),
         loading: false,
         loadError: undefined,
         closing: false,
@@ -636,12 +645,13 @@ const make = Effect.gen(function* () {
       };
       if (desktop) {
         // The desktop resizes and zooms its webview itself; viewers map input with the new size.
-        const remeasure = () => {
+        const remeasure = (resized = false) => {
+          AgentTabState.desktopViewportChanged(tab, resized);
           if (tab.viewers.size > 0) return broadcastViewport(tab).catch(constVoid);
         };
-        cdp.on("Page.frameResized", remeasure);
+        cdp.on("Page.frameResized", () => remeasure(true));
         // A read a navigation broke has a fresh page to measure.
-        cdp.on("Page.loadEventFired", remeasure);
+        cdp.on("Page.loadEventFired", () => remeasure());
         // Closing a dialog resizes nothing, and the host can close it without us.
         cdp.on("Page.javascriptDialogClosed", () => {
           tab.dialog = null;
@@ -1267,7 +1277,7 @@ const make = Effect.gen(function* () {
     const url = ServerBrowserPage.withoutDataPayload(tab.page.url());
     const [viewport, title] = await Promise.all([
       tab.desktop
-        ? withinStatusDeadline(layoutSize(tab), () => tab.desktopViewport)
+        ? withinStatusDeadline(desktopStatusViewport(tab), () => tab.desktopViewport)
         : tab.page.viewportSize(),
       url === "about:blank" || tab.dialog
         ? null
@@ -1884,11 +1894,16 @@ const make = Effect.gen(function* () {
         const setting = resolvePreviewViewport(input as PreviewAutomationResizeInput);
         const gate = actionGate();
         await gate();
-        await runPromise(
-          manager.resize({ threadId: tab.threadId, tabId: tab.tabId, viewport: setting }),
-        );
-        const sized = await AgentTabState.measuredResize(tab, UNATTACHED_FILL_VIEWPORT, () =>
-          applySetting(tab, setting, gate.channel),
+        const sized = await AgentTabState.measuredResize(
+          tab,
+          UNATTACHED_FILL_VIEWPORT,
+          async () => {
+            await runPromise(
+              manager.resize({ threadId: tab.threadId, tabId: tab.tabId, viewport: setting }),
+            );
+            await applySetting(tab, setting, gate.channel);
+          },
+          { measure: () => measureDesktopViewport(tab), deadlineMs },
         );
         return { tabId: tab.tabId, setting, ...sized(setting) };
       }
@@ -2117,6 +2132,8 @@ const make = Effect.gen(function* () {
         return;
       }
       if (event.type === "resized") {
+        // Desktop tabs only record the setting, so status need not wait behind an agent action.
+        if (tab.desktop) tab.setting = event.snapshot.viewport ?? FILL_PREVIEW_VIEWPORT;
         await tab.control
           .system(async () => {
             if (
