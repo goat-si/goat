@@ -15,7 +15,6 @@ import type {
 import {
   ArrowDownUpIcon,
   ChevronDownIcon,
-  ChevronRightIcon,
   HammerIcon,
   ListFilterIcon,
   TagIcon,
@@ -91,7 +90,7 @@ import {
 } from "./PullRequestMarkdownTextarea";
 import { PullRequestReactionBar } from "./PullRequestReactions";
 import { PullRequestConversationGhost } from "./PullRequestGhosts";
-import { sectionCollapseAnchorScrollTop } from "./pullRequestSummaryScroll.logic";
+import { Section } from "./PullRequestSummarySection";
 
 function reviewerKey(login: string): string {
   return login.toLowerCase();
@@ -314,69 +313,6 @@ function MetaRow({
       </span>
       <span className="min-w-0 text-foreground">{children}</span>
     </div>
-  );
-}
-
-function Section({
-  title,
-  defaultOpen = true,
-  keepMounted = false,
-  actions,
-  children,
-}: {
-  title: string;
-  defaultOpen?: boolean;
-  keepMounted?: boolean;
-  actions?: ReactNode;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  const headingRef = useRef<HTMLDivElement>(null);
-  const setOpenWithScrollAnchor = (nextOpen: boolean) => {
-    if (!nextOpen) {
-      const heading = headingRef.current;
-      const section = heading?.closest<HTMLElement>("[data-pull-request-summary-section]");
-      const scroller = heading?.closest<HTMLElement>("[data-pull-request-summary-scroll]");
-      if (heading && section && scroller) {
-        const target = sectionCollapseAnchorScrollTop({
-          scrollTop: scroller.scrollTop,
-          viewportTop: scroller.getBoundingClientRect().top,
-          sectionTop: section.getBoundingClientRect().top,
-          headingTop: heading.getBoundingClientRect().top,
-        });
-        // Adjust before paint to keep the collapsed heading in place.
-        if (target !== null) scroller.scrollTop = target;
-      }
-    }
-    setOpen(nextOpen);
-  };
-  return (
-    <Collapsible
-      open={open}
-      onOpenChange={setOpenWithScrollAnchor}
-      render={<section aria-label={title} />}
-      data-pull-request-summary-section
-    >
-      <div
-        ref={headingRef}
-        className="sticky top-0 z-10 flex w-full items-center bg-background pr-4"
-      >
-        <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-1.5 px-4 py-3 text-left text-xs font-medium text-muted-foreground hover:text-foreground">
-          <span>{title}</span>
-          <ChevronRightIcon
-            aria-hidden
-            className={cn(
-              "size-3.5 text-muted-foreground/60 transition-transform",
-              open && "rotate-90",
-            )}
-          />
-        </CollapsibleTrigger>
-        {actions}
-      </div>
-      <CollapsiblePanel keepMounted={keepMounted}>
-        <div className="px-4 pb-4">{children}</div>
-      </CollapsiblePanel>
-    </Collapsible>
   );
 }
 
