@@ -326,7 +326,7 @@ jobs:
       # A full run hands it every test file no suite owns instead (goat-ci-scope.cjs withUnownedTests).
       # A selected file that no Vitest project collects fails here, so a quick run cannot pass
       # without running a test it chose. Every runner runs; the step exits with the last failure.
-      # A list with web browser tests runs with loopback only (goat-ci-scope.cjs wrapsChangedTests).
+      # Its web browser tests run with loopback only (goat-ci-scope.cjs loopbackTests), the rest on the host.
       - name: Test changed files
         if: matrix.task == 'test-changed'
         env:
@@ -351,9 +351,15 @@ jobs:
               for (const file of missing) console.log("::error file=" + file + "::no Vitest project collects this changed test file");
               process.exit(missing.length > 0 ? 1 : 0);
             ' || status=$?
-            netns=()
-            if [ "$CHANGED_TESTS_NETNS" = true ]; then netns=(bash .github/scripts/loopback-netns.sh); fi
-            "${netns[@]}" vp test run "${files[@]}" || status=$?
+            mapfile -t netns_files < <(node -e 'for (const file of JSON.parse(process.env.CHANGED_TESTS_NETNS || "[]")) console.log(file)')
+            mapfile -t host_files < <(node -e '
+              const netns = new Set(JSON.parse(process.env.CHANGED_TESTS_NETNS || "[]"));
+              for (const file of JSON.parse(process.env.CHANGED_TESTS)) if (!netns.has(file)) console.log(file);
+            ')
+            if [ "${#host_files[@]}" -gt 0 ]; then vp test run "${host_files[@]}" || status=$?; fi
+            if [ "${#netns_files[@]}" -gt 0 ]; then
+              bash .github/scripts/loopback-netns.sh vp test run "${netns_files[@]}" || status=$?
+            fi
           fi
           if [ "${#node_files[@]}" -gt 0 ]; then
             echo "${#node_files[@]} changed node:test files"
