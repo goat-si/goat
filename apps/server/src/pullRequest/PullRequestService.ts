@@ -60,7 +60,6 @@ import {
   type PullRequestRoutingResult,
   type PullRequestRoutingIdentityInput,
   type PullRequestRoutingIdentityResult,
-  type PullRequestReviewVerdict,
   type PullRequestReviewerCandidateList,
   type PullRequestReviewerCandidatesInput,
   type PullRequestReviewerRequestInput,
@@ -126,6 +125,7 @@ import {
   type UnavailableRequirementOf,
 } from "./pullRequestProviderErrors.ts";
 import { noteRefinedHost, unreadListResult, withListResult } from "./pullRequestListFallback.ts";
+import { VERDICT_LABELS } from "./pullRequestReviewVerdictLabels.ts";
 
 export interface PullRequestMergeEvent extends PullRequestRef {
   readonly mergedAt: string;
@@ -345,12 +345,6 @@ export class PullRequestService extends Context.Service<
     ) => Effect.Effect<void>;
   }
 >()("goat/pullRequest/PullRequestService") {}
-
-const VERDICT_LABELS: Record<PullRequestReviewVerdict, string> = {
-  comment: "review",
-  approve: "approve",
-  "request-changes": "request changes on",
-};
 
 const REVIEWER_REQUEST_REFUSAL = "You need write access on this repository to ask for a review.";
 const LABEL_CHANGE_REFUSAL = "You need triage access on this repository to change its labels.";
