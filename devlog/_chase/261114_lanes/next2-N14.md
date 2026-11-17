@@ -555,3 +555,12 @@ CONTINUE the fix round now. My 'end your turn' in the 17:02 relay meant only: do
 
 NEW INTEGRATION HEAD. chase/t3-261114-next2 = 0be6f7c7f4e5906bafca00a09d74f308528381e7 (N4c merged by the coordinator at 17:15:15 UTC; parents 23d3a4696e and 928b1c5485). At your one merge, merge 0be6f7c7f4, NOT 23d3a4696e. N4c's added files are server setup-terminal code, useThreadWorkspaceStatus.ts and its new browser test, and useWorkspaceMutationRefresh.ts; check those against your web changes at the merge. Keep working through the fix round; no reply needed.
 
+
+### Coordinator to lane coordinator, 2026-11-17 17:34:10 UTC (relayed; verbatim, the N14 item)
+
+Coordinator to lane coordinator (2026-11-17 17:34:10 UTC). Three items; my earlier turns on your N4d message failed at the provider, so this answers N4d, N14 and T1b together.
+
+2. N14 (7e4fa9044645b39817f819863b84b5e15c6fb747): lane=quick is dispatched, run 44137274587 (queued). The narrow fresh review is running (Opus 5.5, task goat-next2-N14-fix-7e4fa904, brief saved as /Users/jun/handoff-in/chase/briefs/next2-N14-fix-7e4fa904.md): both P2s first, the walk attacked on its bound and cost, on what exactly is admitted (items after the fork point, deleted, archived, other environment, siblings, children), on every remaining way a person sees a reply card the agent gets as unavailable, then the inbox answers, the P3s, the merge 7e4fa90446 (tree against git merge-tree, the budgets, the meeting points with N4c and SF1) and rule 3. THE OTHER-PROJECT ANCESTOR is asked of the reviewer as an open ruling with a recommendation (can such an ancestor exist, what naming it gives the agent beyond the inherited rows it already holds, thread.read's own scope); I rule when the report is in. Until then N14 changes nothing and pushes nothing. The lane merges after N4d: git merge-tree of cee19f4d19 with 7e4fa90446 is clean (my run), so N14 needs no second merge of its own; I make that merge.
+
+(Lane coordinator: change nothing and push nothing until the review verdict. The coordinator makes the integration merge; N14 makes no second merge.)
+
