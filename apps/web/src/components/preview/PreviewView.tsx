@@ -47,7 +47,10 @@ import {
   useThreadPreviewState,
 } from "~/previewStateStore";
 import { resolveDiscoveredServerUrl } from "~/browser/browserTargetResolver";
-import { useEnvironmentSupportsServerBrowser } from "~/state/entities";
+import {
+  useEnvironmentSupportsServerBrowser,
+  useEnvironmentSupportsServerBrowserStop,
+} from "~/state/entities";
 import {
   useEnvironment,
   useEnvironmentHttpBaseUrl,
@@ -140,6 +143,7 @@ export function PreviewView({
   const environmentLabel = useEnvironment(threadRef.environmentId)?.label ?? "the environment";
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const serverBrowser = useEnvironmentSupportsServerBrowser(threadRef.environmentId);
+  const serverBrowserStop = useEnvironmentSupportsServerBrowserStop(threadRef.environmentId);
   const adjust = useAtomCommand(previewEnvironment.adjust, "preview appearance or zoom");
 
   usePreviewSession(threadRef);
@@ -268,6 +272,11 @@ export function PreviewView({
     if (isServerTab) serverSurfaceRef.current?.reload();
     else if (previewBridge && runtimeTabId) void previewBridge.refresh(runtimeTabId);
   };
+  const handleStopLoading = () => {
+    if (isServerTab) serverSurfaceRef.current?.stopLoading();
+    else if (runtimeTabId) void previewBridge?.stopLoading?.(runtimeTabId);
+  };
+  const canStopLoading = isServerTab ? serverBrowserStop : Boolean(previewBridge?.stopLoading);
 
   const adjustServerTab = async (change: Omit<PreviewAdjustInput, "threadId" | "tabId">) => {
     if (!tabId) return;
@@ -909,6 +918,7 @@ export function PreviewView({
         onBack={handleBack}
         onForward={handleForward}
         onRefresh={handleRefresh}
+        onStopLoading={canStopLoading ? handleStopLoading : undefined}
         onSubmit={(next) => void handleSubmitUrl(next)}
         onInvalidInput={(next) => void handleSubmitUrl(next)}
         onOpenInBrowser={tabId ? handleOpenInBrowser : undefined}

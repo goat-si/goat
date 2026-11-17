@@ -129,6 +129,7 @@ import { makeOpenRunSignals } from "./openRunSignals.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 import { makeCapacity } from "./ServerBrowserCapacity.ts";
 import { makeSavedBrowserProfiles } from "./SavedBrowserProfiles.ts";
+import * as Stop from "./ServerBrowserStop.ts";
 import {
   assertReusable,
   assertStoreUsed,
@@ -627,6 +628,8 @@ const make = Effect.gen(function* () {
         initialNavigation: null,
         initialNavigationSent: false,
         navigationGeneration: 0,
+        stoppedGeneration: null,
+        pendingInitialRequestUrl: null,
         documentGeneration: 0,
         abortedNavigation: null,
         captureLock: Promise.resolve(),
@@ -669,11 +672,16 @@ const make = Effect.gen(function* () {
             observeNavigation(hop.url());
         }
         if (!isMainNavigation(request)) return;
+        const stoppedFirst = Stop.stoppedFirstRequest(tab, request.url());
         navigationGenerations.set(request, ++tab.navigationGeneration);
         tab.documentGeneration++;
         clearAbortedNavigation(tab);
         tab.loading = true;
         tab.loadError = undefined;
+        if (stoppedFirst) {
+          tab.stoppedGeneration = tab.navigationGeneration;
+          return stopLoading.settle(tab, tab.navigationGeneration);
+        }
         report(tab, {
           _tag: "Loading",
           url: ServerBrowserPage.withoutDataPayload(request.url()).slice(0, 2048),
@@ -689,6 +697,7 @@ const make = Effect.gen(function* () {
       }
       popupNavigation.track(page);
       page.on("load", () => {
+        tab.pendingInitialRequestUrl = null;
         tab.loading = false;
         void reportLoaded(tab);
       });
@@ -720,6 +729,7 @@ const make = Effect.gen(function* () {
         if (generation !== tab.navigationGeneration) return;
         // An aborted navigation is usually a download; its `download` event settles the status.
         if (errorText.includes("ERR_ABORTED")) {
+          if (tab.stoppedGeneration === generation) return stopLoading.settle(tab, generation);
           const url = request.url();
           const navigationGeneration = tab.navigationGeneration;
           clearAbortedNavigation(tab);
@@ -775,6 +785,8 @@ const make = Effect.gen(function* () {
       ) {
         const options = { waitUntil: "commit", timeout: NAVIGATION_TIMEOUT_MS } as const;
         const initialUrl = snapshot.navStatus.url;
+        tab.loading = true;
+        tab.pendingInitialRequestUrl = Stop.initialRequestUrl(initialUrl);
         const activeRun = blockedTabs.capture(tab.threadId);
         const initialChannel = initialTabChannel(
           tab,
@@ -805,6 +817,11 @@ const make = Effect.gen(function* () {
     if (tab.abortedNavigation !== null) clearTimeout(tab.abortedNavigation.timer);
     tab.abortedNavigation = null;
   };
+  const stopLoading = Stop.makeStopLoading<ServerTab>((tab) => {
+    clearAbortedNavigation(tab);
+    if (tab.page.url() === "about:blank") report(tab, { _tag: "Idle" });
+    else void reportLoaded(tab);
+  });
 
   const settleAbortedNavigation = (
     tab: ServerTab,
@@ -2231,10 +2248,12 @@ const make = Effect.gen(function* () {
       case "navigate":
         if (typeof message.url === "string") {
           const url = normalizePreviewUrl(message.url);
+          tab.pendingInitialRequestUrl = null;
           tab.control.trackUntilHandoff(tab.page.goto(url, VIEWER_NAVIGATION_OPTIONS));
         }
         return;
       case "history":
+        tab.pendingInitialRequestUrl = null;
         tab.control.trackUntilHandoff(
           ViewerInput.num(message.delta) < 0
             ? tab.page.goBack(VIEWER_NAVIGATION_OPTIONS)
@@ -2242,11 +2261,15 @@ const make = Effect.gen(function* () {
         );
         return;
       case "reload":
+        tab.pendingInitialRequestUrl = null;
         if (message.ignoreCache === true) {
           await session.send("Page.reload", { ignoreCache: true });
           return;
         }
         tab.control.trackUntilHandoff(tab.page.reload(VIEWER_NAVIGATION_OPTIONS));
+        return;
+      case "stopLoading":
+        await stopLoading.stop(tab, session);
         return;
       case "probe": {
         const x = ViewerInput.num(message.x);

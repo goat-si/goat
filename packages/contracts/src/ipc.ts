@@ -1309,6 +1309,8 @@ export interface DesktopPreviewBridge extends AnnotationVoiceBridge {
   goBack: (tabId: string) => Promise<void>;
   goForward: (tabId: string) => Promise<void>;
   refresh: (tabId: string) => Promise<void>;
+  /** Absent in desktop apps older than Stop; the web shows Stop only when it is here. */
+  stopLoading?: (tabId: string) => Promise<void>;
   zoomIn: (tabId: string) => Promise<void>;
   zoomOut: (tabId: string) => Promise<void>;
   resetZoom: (tabId: string) => Promise<void>;

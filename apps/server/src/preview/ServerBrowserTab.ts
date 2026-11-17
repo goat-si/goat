@@ -96,6 +96,10 @@ export interface ServerTab {
   initialNavigation: Promise<void> | null;
   initialNavigationSent: boolean;
   navigationGeneration: number;
+  /** The navigation Stop cancelled; its aborted request is the stop, not a download. */
+  stoppedGeneration: number | null;
+  /** The first load's URL until its request event arrives, which can come after Stop. */
+  pendingInitialRequestUrl: string | null;
   /** Moves on every main-frame navigation, same-document routes and reloads included. */
   documentGeneration: number;
 
