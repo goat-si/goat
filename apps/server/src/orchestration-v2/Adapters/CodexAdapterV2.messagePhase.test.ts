@@ -164,4 +164,38 @@ describe("CodexAdapterV2 assistant message phases", () => {
         }).pipe(Effect.provide(layerAdapterTest)),
       ),
   );
+
+  it.effect.each([false, true])(
+    "emits a message whose phase this build does not know without a phase (streamed: %s)",
+    (streamed) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const transcript = finalAnswerTranscript("codex-unknown-phase", [
+            // Codex types the phase as a string; a newer one must not reach the stored item.
+            { id: "summary", text: "What changed", phase: "summary" as never, streamed },
+            { id: "final", text: "CODEX_RECOVERY_OK", phase: "final_answer", streamed },
+          ]);
+          const harness = yield* makeCodexReplayHarness(transcript);
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-codex-unknown-phase"),
+              text: "Reply with the requested recovery marker.",
+            }),
+          );
+          yield* harness.firstTerminal;
+          const summary = harness.events.flatMap((event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "assistant_message" &&
+            event.turnItem.nativeItemRef?.nativeId === "summary"
+              ? [event.turnItem]
+              : [],
+          );
+          assert.isTrue(summary.some((item) => !item.streaming && item.text === "What changed"));
+          assert.isTrue(summary.every((item) => item.phase === undefined));
+        }).pipe(Effect.provide(layerAdapterTest)),
+      ),
+  );
 });
