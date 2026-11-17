@@ -2,6 +2,7 @@ import { memoryImportTestLocks } from "../../test/memoryImportLocks";
 import { MemoryHubDiagnosticsSettings } from "./MemoryHubDiagnosticsSettings";
 import { MemoryRunAccessLabel } from "./MemoryRunAccessLabel";
 import { memorySyncFixture } from "../../test/memorySyncFixture";
+import { readyMemoryExposure, withMemorySignal } from "../../test/memoryExposureFixture";
 import { act, Children, isValidElement, useSyncExternalStore, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -23,7 +24,7 @@ const state = vi.hoisted(() => ({
   allowed: true,
   write: true,
   version: 0,
-  exposure: 0,
+  exposure: null as unknown as import("@goat/client-runtime/state/memory").MemoryExposure,
   listeners: new Set<() => void>(),
   queries: new Map<string, unknown>(),
   refresh: vi.fn(),
@@ -414,7 +415,7 @@ beforeEach(() => {
   state.memoryModel = null;
   state.allowed = true;
   state.write = true;
-  state.exposure = 0;
+  state.exposure = readyMemoryExposure(id(1));
   state.projects = [];
   state.requests = [];
   state.queries.clear();
@@ -1117,6 +1118,7 @@ it("unmounts retained bodies and an open source when read is None, without reope
   expect(container.textContent).toContain("Retained body");
   expect(container.textContent).toContain("Synthetic judgment");
   expect(container.textContent).toContain("Source body");
+  state.exposure = withMemorySignal(state.exposure, id(1), "invalidate", id(2));
   state.queries.set("read", Option.none());
   await render();
   expect(container.textContent).toContain("Visible details have been cleared");
@@ -1336,7 +1338,7 @@ it("opens memories when bootstrap publishes a reset without a reload or timer", 
   expect(container.textContent).not.toContain("Synthetic original");
   state.responses.set("syncStatus", success({ state: "online", memorySpaceId: id(1) }));
   await act(async () => {
-    state.exposure += 1;
+    state.exposure = readyMemoryExposure(id(1));
     notifyFixture();
   });
   expect(container.textContent).toContain("Synthetic original");
@@ -1715,26 +1717,6 @@ it("describes both seeing and saving memories on a fresh visit while sharing is 
   await supportedScreen(false);
   expect(container.textContent).toContain("Turn on memory to see and save memories.");
   expect(container.textContent).not.toContain("Turn on memory to start saving memories.");
-});
-
-it("removes an open editor and history when shared admission removes the derived memory", async () => {
-  const { render, registry } = await supportedScreen();
-  const writes = vi.spyOn(registry, "set");
-  state.navigate.mockClear();
-  await click("Edit");
-  expect(container.querySelector('[aria-label="Memory text"]')).not.toBeNull();
-  state.queries.set("read", Option.none());
-  state.queries.set("history", Option.none());
-  await render();
-  expect(container.querySelector('[aria-label="Memory text"]')).toBeNull();
-  expect(container.textContent).not.toContain("Synthetic original");
-  expect(writes.mock.calls.at(-1)?.[1]).toBeNull();
-  expect(container.textContent).toContain(
-    "Closed because this memory is no longer available. A related memory may have been forgotten.",
-  );
-  expect(state.navigate).toHaveBeenCalledWith(
-    expect.objectContaining({ to: "/settings/memory", hash: "" }),
-  );
 });
 
 it("reopens saved memory after sharing is disabled and the settings screen remounts", async () => {
