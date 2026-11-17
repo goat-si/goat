@@ -1,3 +1,4 @@
+import { CopyIcon } from "~/components/solar";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, ProjectReadFileResult, ScopedThreadRef } from "@goat/contracts";
 import {
@@ -6,8 +7,6 @@ import {
 } from "@pierre/diffs/edit";
 import { useEffect, useRef, useState } from "react";
 
-import { Copy } from "~/components/solar/nodes";
-import { MorphIcon } from "~/components/MorphIcon";
 import { Button } from "~/components/ui/button";
 import { Menu, MenuItem, MenuPopup, MenuShortcut, MenuTrigger } from "~/components/ui/menu";
 import { toastManager } from "~/components/ui/toast";
@@ -209,7 +208,7 @@ export function FileViewMenu(props: {
               />
             }
           >
-            <MorphIcon className="size-3.5" icon={Copy} />
+            <CopyIcon className="size-3.5" />
           </TooltipTrigger>
           <TooltipPopup>
             <div>Copy path</div>

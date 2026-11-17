@@ -30,8 +30,7 @@ import {
   type IconComponent,
   UndoIcon as Undo2Icon,
 } from "~/components/solar";
-import { Link as LinkIconNode } from "~/components/solar/nodes";
-import { ChevronDownIcon, ChevronRightIcon } from "~/components/solar";
+import { ChevronDownIcon, ChevronRightIcon, LinkIcon } from "~/components/solar";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Button, InlineButton } from "../ui/button";
 import { ModelSwitchRow } from "./V2LifecycleRow";
@@ -244,7 +243,7 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
                 <MessageCopyButton
                   text={promptLink}
                   label="Copy prompt link"
-                  icon={LinkIconNode}
+                  icon={LinkIcon}
                   variant="ghost"
                 />
               )}
@@ -799,7 +798,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                 <MessageCopyButton
                   text={promptLink}
                   label="Copy prompt link"
-                  icon={LinkIconNode}
+                  icon={LinkIcon}
                   variant="ghost"
                 />
               )}

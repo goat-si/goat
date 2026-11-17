@@ -1,5 +1,6 @@
 import { Button } from "~/components/ui/button";
 import { DownloadIcon, CopyIcon, CheckIcon } from "~/components/solar";
+import { CodeIcon, EyeIcon, TableIcon } from "~/components/solar";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { Spinner } from "~/components/ui/spinner";
 import {
@@ -50,7 +51,6 @@ import {
   GlobeIcon as Globe2,
   TextWrapIcon as WrapTextIcon,
 } from "~/components/solar";
-import { Code as Code2, Eye, Table as Table2 } from "~/components/solar/nodes";
 import * as Schema from "effect/Schema";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
@@ -60,7 +60,6 @@ import { OpenInPicker } from "~/components/chat/OpenInPicker";
 import { MediaVideoPlayer } from "~/components/media/MediaVideoPlayer";
 import { MediaImagePreview } from "~/components/media/MediaImagePreview";
 import { MediaActions, type MediaActionSource } from "~/components/media/MediaActions";
-import { MorphIcon } from "~/components/MorphIcon";
 import { useRemoteOpenState } from "~/remoteOpen";
 import { useClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
@@ -1330,10 +1329,13 @@ export default function FilePreviewPanel({
                 );
               }}
             >
-              <MorphIcon
-                className="size-3.5"
-                icon={rendered ? Code2 : renderedMode === "table" ? Table2 : Eye}
-              />
+              {rendered ? (
+                <CodeIcon className="size-3.5" />
+              ) : renderedMode === "table" ? (
+                <TableIcon className="size-3.5" />
+              ) : (
+                <EyeIcon className="size-3.5" />
+              )}
             </FileSurfaceAction>
           ) : null}
           {showsRawText ? (

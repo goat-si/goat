@@ -7,9 +7,9 @@ import {
   MinimizeIcon as Minimize2Icon,
   PlayIcon,
   SquareIcon,
+  CornerUpRightIcon,
+  ListPlusIcon,
 } from "~/components/solar";
-import { CornerUpRight, ListPlus } from "~/components/solar/nodes";
-import { MorphIcon } from "~/components/MorphIcon";
 import { useClientSettings } from "~/hooks/useSettings";
 import { formatContextWindowTokens } from "~/lib/contextWindow";
 import { cn, isMacPlatform } from "~/lib/utils";
@@ -402,7 +402,11 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       ) : isEditingQueuedMessage ? (
         <CheckIcon className="size-3.5" aria-hidden="true" />
       ) : isRunning ? (
-        <MorphIcon className="size-3.5" icon={isQueuing ? ListPlus : CornerUpRight} />
+        isQueuing ? (
+          <ListPlusIcon className="size-3.5" />
+        ) : (
+          <CornerUpRightIcon className="size-3.5" />
+        )
       ) : (
         <ArrowUpIcon className="size-4" aria-hidden="true" />
       )}

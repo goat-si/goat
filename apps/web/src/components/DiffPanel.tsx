@@ -26,7 +26,7 @@ import {
   Rows3Icon,
   TextWrapIcon,
 } from "~/components/solar";
-import { ChevronsDownUp, ChevronsUpDown } from "~/components/solar/nodes";
+import { ChevronsDownUpIcon, ChevronsUpDownIcon } from "~/components/solar";
 import * as Schema from "effect/Schema";
 import { useEffect, useRef, useState } from "react";
 import { useDiffViewControls } from "./diffs/useDiffViewControls";
@@ -70,7 +70,6 @@ import { AnnotatableCodeView } from "./diffs/AnnotatableCodeView";
 import { DiffFileTree } from "./diffs/DiffFileTree";
 import { diffFileTreeEntries } from "./diffs/diffFileTree.logic";
 import { Button } from "./ui/button";
-import { MorphIcon } from "~/components/MorphIcon";
 import { ToggleGroup, Toggle } from "./ui/toggle-group";
 import { Switch } from "./ui/switch";
 import {
@@ -864,10 +863,11 @@ export default function DiffPanel({
                 />
               }
             >
-              <MorphIcon
-                className="size-3.5"
-                icon={allDiffFilesCollapsed ? ChevronsUpDown : ChevronsDownUp}
-              />
+              {allDiffFilesCollapsed ? (
+                <ChevronsUpDownIcon className="size-3.5" />
+              ) : (
+                <ChevronsDownUpIcon className="size-3.5" />
+              )}
             </TooltipTrigger>
             <TooltipPopup side="top">
               {allDiffFilesCollapsed ? "Expand all files" : "Collapse all files"}

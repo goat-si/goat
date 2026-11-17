@@ -15,7 +15,7 @@ import {
   TrashIcon as Trash2Icon,
   XIcon,
 } from "~/components/solar";
-import { Lock as LockGlyph, LockOpen } from "~/components/solar/nodes";
+import { LockIcon, LockOpenIcon } from "~/components/solar";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
@@ -50,7 +50,6 @@ import { useStableCallback } from "../../hooks/useStableCallback";
 import { normalizeProviderAccentColor } from "../../providerInstances";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { MorphIcon } from "~/components/MorphIcon";
 import { DraftInput } from "../ui/draft-input";
 import { SecretInput } from "./SecretInput";
 import { SecretReferencePicker } from "./SecretReferencePicker";
@@ -485,10 +484,11 @@ export function ProviderEnvironmentSection(props: {
                       aria-pressed={variable.sensitive}
                       aria-label={`Mark environment variable ${variable.name || index + 1} as sensitive`}
                     >
-                      <MorphIcon
-                        className="size-3"
-                        icon={variable.sensitive ? LockGlyph : LockOpen}
-                      />
+                      {variable.sensitive ? (
+                        <LockIcon className="size-3" />
+                      ) : (
+                        <LockOpenIcon className="size-3" />
+                      )}
                     </Button>
                   }
                 />

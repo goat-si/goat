@@ -1,5 +1,4 @@
-import { ChevronDown, ChevronRight } from "~/components/solar/nodes";
-import { MorphIcon } from "~/components/MorphIcon";
+import { ChevronDownIcon, ChevronRightIcon } from "~/components/solar";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -37,10 +36,11 @@ export function DiffFileCollapseToggle({
           />
         }
       >
-        <MorphIcon
-          className={cn("size-4", iconClassName)}
-          icon={collapsed ? ChevronRight : ChevronDown}
-        />
+        {collapsed ? (
+          <ChevronRightIcon className={cn("size-4", iconClassName)} />
+        ) : (
+          <ChevronDownIcon className={cn("size-4", iconClassName)} />
+        )}
       </TooltipTrigger>
       <TooltipPopup side="top">{collapsed ? "Expand diff" : "Collapse diff"}</TooltipPopup>
     </Tooltip>

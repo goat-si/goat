@@ -1,6 +1,10 @@
-import { PanelBottomIcon, PanelRightIcon, SquareMenuIcon } from "~/components/solar";
-import { Maximize as Maximize2, Minimize as Minimize2 } from "~/components/solar/nodes";
-import { MorphIcon } from "~/components/MorphIcon";
+import {
+  PanelBottomIcon,
+  PanelRightIcon,
+  SquareMenuIcon,
+  MaximizeIcon,
+  MinimizeIcon,
+} from "~/components/solar";
 import { memo, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
@@ -160,7 +164,7 @@ export const RightPanelMaximizeControl = memo(function RightPanelMaximizeControl
             variant="ghost"
             size="sm"
           >
-            <MorphIcon className="size-4" icon={maximized ? Minimize2 : Maximize2} />
+            {maximized ? <MinimizeIcon className="size-4" /> : <MaximizeIcon className="size-4" />}
           </Toggle>
         }
       />

@@ -25,13 +25,9 @@ import {
   Settings2Icon,
   TextWrapIcon,
   TriangleAlertIcon,
+  ChevronsDownUpIcon,
+  ChevronsUpDownIcon,
 } from "~/components/solar";
-import {
-  ChevronDown,
-  ChevronRight,
-  ChevronsDownUp,
-  ChevronsUpDown,
-} from "~/components/solar/nodes";
 import { useAtomRefresh } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
 import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
@@ -86,7 +82,6 @@ import { useHideTestFiles } from "../diffs/useHideTestFiles";
 import { diffFileTreeEntries } from "../diffs/diffFileTree.logic";
 import { StyledDiffCodeView } from "../diffs/StyledDiffCodeView";
 import { Button } from "../ui/button";
-import { MorphIcon } from "~/components/MorphIcon";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
   DropdownMenu,
@@ -731,7 +726,11 @@ function PullRequestCodeTab({
           toggleFile(item.id);
         }}
       >
-        <MorphIcon className="size-4" icon={collapsed ? ChevronRight : ChevronDown} />
+        {collapsed ? (
+          <ChevronRightIcon className="size-4" />
+        ) : (
+          <ChevronDownIcon className="size-4" />
+        )}
       </Button>
     );
   };
@@ -1198,10 +1197,11 @@ function PullRequestCodeTab({
                 />
               }
             >
-              <MorphIcon
-                className="size-3.5"
-                icon={allFilesCollapsed ? ChevronsUpDown : ChevronsDownUp}
-              />
+              {allFilesCollapsed ? (
+                <ChevronsUpDownIcon className="size-3.5" />
+              ) : (
+                <ChevronsDownUpIcon className="size-3.5" />
+              )}
             </TooltipTrigger>
             <TooltipPopup side="top">
               {allFilesCollapsed ? "Expand all files" : "Collapse all files"}

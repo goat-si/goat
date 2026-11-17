@@ -7,8 +7,13 @@ import type {
   PullRequestThreadCommentsResult,
   PullRequestThreadComment,
 } from "@goat/contracts";
-import { HammerIcon, MessageSquareIcon, TrashIcon as Trash2Icon } from "~/components/solar";
-import { Circle, CircleCheck } from "~/components/solar/nodes";
+import {
+  HammerIcon,
+  MessageSquareIcon,
+  TrashIcon as Trash2Icon,
+  CircleCheckIcon,
+  CircleIcon,
+} from "~/components/solar";
 import { useRef, useState } from "react";
 import { settlePromise, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 
@@ -16,7 +21,6 @@ import { RelativeTime } from "~/components/RelativeTime";
 import { cn } from "~/lib/utils";
 
 import { Button } from "../ui/button";
-import { MorphIcon } from "~/components/MorphIcon";
 import { PullRequestEditButton } from "./PullRequestEditButton";
 import { CommentSpeechControls, CommentSpeechScope } from "../../speech/useCommentSpeech";
 import { isCommentSubmitShortcut } from "../diffs/commentSubmitShortcut";
@@ -233,10 +237,13 @@ export function ReviewThreadCard({
       onPointerDown={(event) => event.stopPropagation()}
     >
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <MorphIcon
-          className={cn("size-3.5", thread.isResolved && "text-success-foreground")}
-          icon={thread.isResolved ? CircleCheck : Circle}
-        />
+        {thread.isResolved ? (
+          <CircleCheckIcon
+            className={cn("size-3.5", thread.isResolved && "text-success-foreground")}
+          />
+        ) : (
+          <CircleIcon className={cn("size-3.5", thread.isResolved && "text-success-foreground")} />
+        )}
         <button
           type="button"
           className="hover:text-foreground"

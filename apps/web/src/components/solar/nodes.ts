@@ -1,44 +1,11 @@
 /**
- * Solar Linear glyph data for code that draws icons itself, such as MorphIcon. React
- * call sites import components from `~/components/solar` instead.
+ * Solar Linear glyph data for code that draws icons itself (context menus, injected markup).
+ * React call sites import components from `~/components/solar` instead.
  */
 import type { IconNode } from "./iconNode";
 import * as solar from "./solar.generated";
 
 export const Box = solar.box;
-export const Check = solar.check;
-export const ChevronDown = solar.altArrowDown;
-export const ChevronRight = solar.altArrowRight;
-export const ChevronUp = solar.altArrowUp;
-export const ChevronsDownUp = solar.chevronsDownUp;
-export const ChevronsUpDown = solar.chevronsUpDown;
-export const Circle = solar.record;
-export const CircleAlert = solar.dangerCircle;
-export const CircleCheck = solar.checkCircle;
-export const Code = solar.code;
-export const Copy = solar.copy;
-export const Keyboard = solar.keyboard;
-export const CornerUpRight = solar.forward;
-export const Eye = solar.eye;
-export const Folder = solar.folder;
-export const FolderOpen = solar.folderOpen;
-export const Image = solar.gallery;
-export const Link = solar.link;
-export const ListPlus = solar.listPlus;
-export const Lock = solar.lock;
-export const LockOpen = solar.lockUnlocked;
-export const Maximize = solar.maximize;
-export const Minimize = solar.minimize;
-export const Minus = solar.minus;
-export const Moon = solar.moon;
-export const PanelLeft = solar.panelLeft;
-export const PanelLeftClose = solar.panelLeftClose;
-export const Plus = solar.add;
-export const Sun = solar.sun;
-export const Table = solar.table;
-export const Text = solar.text;
-export const Volume = solar.volumeLoud;
-export const VolumeOff = solar.volumeCross;
 
 /** Context menu glyphs keyed by the icon names that `ContextMenuItem.icon` carries. */
 export const CONTEXT_MENU_ICONS: Readonly<Record<string, IconNode>> = {
