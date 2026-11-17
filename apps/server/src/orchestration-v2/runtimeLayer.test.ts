@@ -4827,15 +4827,14 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       yield* restarted.sweep;
       yield* worker.drain();
       const { messages } = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
-      const told = messages.flatMap(
-        (message) => message.text.match(/removed from the merge queue[^\n]*/g) ?? [],
+      const removals = messages.filter(
+        (message) => message.notification?.summary === "#7: removed from merge queue",
       );
-      assert.deepEqual(
-        told,
-        Array(2).fill("removed from the merge queue without merging: Required checks failed."),
-      );
-      const digest = messages.find((message) => message.notification?.outcome === "failed");
-      assert.equal(digest?.notification?.summary, "2 notices · #7: removed from merge queue");
+      assert.lengthOf(removals, 2);
+      for (const message of removals) {
+        assert.equal(message.notification?.outcome, "failed");
+        assert.include(message.text, "Required checks failed");
+      }
       assert.equal(
         (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch
           ?.mergeQueueRemovalId,
