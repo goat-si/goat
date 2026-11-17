@@ -573,8 +573,7 @@ export const layer = HttpApiBuilder.group(
           function* (args) {
             yield* annotateEnvironmentRequest(args.endpoint.name);
             const session = yield* requireEnvironmentScope(AuthAccessWriteScope);
-            const revokedCount = yield* serverAuth.revokeOtherClientSessions(session.sessionId);
-            return { revokedCount };
+            return yield* serverAuth.revokeOtherClientSessions(session.sessionId);
           },
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
             failEnvironmentInternal("client_session_revoke_failed", error),

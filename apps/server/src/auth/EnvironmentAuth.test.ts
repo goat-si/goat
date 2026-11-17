@@ -643,7 +643,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("EnvironmentAuth.
         const clientsBeforeRevoke = yield* serverAuth.listClientSessions(
           administrativeSession.sessionId,
         );
-        const revokedCount = yield* serverAuth.revokeOtherClientSessions(
+        const { revokedCount } = yield* serverAuth.revokeOtherClientSessions(
           administrativeSession.sessionId,
         );
         const clientsAfterRevoke = yield* serverAuth.listClientSessions(

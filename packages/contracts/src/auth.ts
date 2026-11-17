@@ -323,6 +323,14 @@ export type AuthClientMetadata = typeof AuthClientMetadata.Type;
 export const SessionPrincipalKind = Schema.Literals(["person", "outside_client", "proxied_person"]);
 export type SessionPrincipalKind = typeof SessionPrincipalKind.Type;
 
+/** A session "Revoke others" leaves: the desktop app's own, or one a Pen member holds. */
+export const AuthRevokeOthersKeep = Schema.Literals(["desktop", "pen"]);
+export type AuthRevokeOthersKeep = typeof AuthRevokeOthersKeep.Type;
+
+/** How many other sessions of each kind one "Revoke others" kept. */
+export const AuthRevokeOthersKept = Schema.Struct({ desktop: Schema.Int, pen: Schema.Int });
+export type AuthRevokeOthersKept = typeof AuthRevokeOthersKept.Type;
+
 export const AuthClientSession = Schema.Struct({
   sessionId: AuthSessionId,
   subject: TrimmedNonEmptyString,
@@ -336,6 +344,8 @@ export const AuthClientSession = Schema.Struct({
   current: Schema.Boolean,
   /** Absent from servers that predate principal kinds. */
   principalKind: Schema.optionalKey(SessionPrincipalKind),
+  /** Set when "Revoke others" keeps this session. Absent from older servers, which keep none. */
+  keptByRevokeOthers: Schema.optionalKey(AuthRevokeOthersKeep),
 });
 export type AuthClientSession = typeof AuthClientSession.Type;
 
