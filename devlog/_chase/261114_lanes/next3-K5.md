@@ -434,3 +434,60 @@ index 0f653f4524..6d43a3f48f 100644
        Effect.gen(function* () {
 ```
 
+
+### Further coordinator rulings (relayed verbatim)
+
+> 3. CLAIMS: K4's ProviderTurnStartService.ts :189-217 as a wrapper plus a call line is accepted on the pre-commit's terms: the moved expression byte for byte inside the new function, every added line (signature, parameters, return, call) listed in the commit message and the record, no behaviour change; the review reads it. Any other claim that is not a top-level declaration follows the same terms without asking.
+
+(2026-11-17 21:59:20 UTC)
+
+> IV gains (iv), for every lane (relay it): where GOAT's test file is byte for byte upstream's parent of the commit being ported (git diff <sha>^ on that file empty), the file may become upstream's file at that commit, whole, deletions and retitles included; the record gives both empty diffs (before against <sha>^, after against <sha>). If GOAT's file differs from upstream's parent in any line, deletions and retitles still come to me.
+>
+> Quote it in next3-K5.md. (It may cover R2 if agentScope.test.ts is byte for byte upstream's parent of the commit you port; check with git diff <sha>^.)
+
+(2026-11-17 22:00:50 UTC.) Not used: GOAT's agentScope.test.ts differs from e4025c8528^ (ServerSettings provide, slice names, AGENTS_TASKS_MAX_PERCENT import), so R2 rests on (i) and (ii) as quoted above.
+
+> IV gains (v), mock scaffolding: a line added to a test's mocks so that existing cases keep loading or rendering after the lane's row adds a component, hook or import. Covered: one export added to an existing vi.mock factory, or one vi.mock of a module the lane's own row introduced. Conditions: the stub is inert (renders its children, returns undefined, or does nothing); no existing title, body, setup value or expectation changes; the line is quoted in the record before the commit; the file stays within its entry; and what the stub hides is tested in a case of its own or named in the lane's P1 rows. Still to me: a mock that returns data existing assertions read, a changed existing mock line, a stub of a module the lane did not add, and anything a lane is unsure of. The review checks each; a miss is a P2.
+>
+> IV gains (vi), a describe moved whole: a whole top-level describe block of an at-entry test file moved byte for byte into a sibling test file, in a commit that does nothing else, on K7's conditions a to d above (empty diff of the two ranges in the record; helpers copied byte for byte and listed, none moved or shared; the same case titles and the same total count before and after; the entry lowered; the card row before the cut; TEST_TITLES updated in the same commit when the file is listed). Still to me: a harness or helper moved or shared into a testkit, a describe split in two, a nested block, and a move that needs any line of a case to change.
+
+(2026-11-17 22:16:44 UTC.) Neither (v) nor (vi) was used: no existing mock or describe moved. The new ClaudeSteerSelection.test.ts carries its own copy of the effect/Queue capture mock that ClaudeWakeDispatch.test.ts and ClaudeAdapterV2.test.ts already use (new file, no existing line changed).
+
+### e4025c8528 (f91c53bfe3b07e28b2f144835f9be9d4ad394bf8)
+
+providerProcesses.ts as upstream with D4: no boot_id, unreadable own identity, or an unwritable state directory logs once and returns the default (no reaping, no register; the spawn gate is still opened). The startup barrier: agentScope.ts forks the cached systemd probe in the layer scope and awaits it for at most STARTUP_PROBE_DEADLINE = 10 seconds, logging and continuing after that; the probe keeps running and wrap still awaits it. The reaper skips pid 1 (schema minimum 2), this server and its ancestors (ppid walk from process.pid through /proc). A dead owner's record with no survivor is removed; so is a dead owner's never-renamed .json.pending (its CLI was still gated on fd 4 and exited when the server's pipe closed). Layer order: server.ts:1273 provides AgentScopeLive (and with it ProviderProcesses) to everything above it, layerRuntimeServices and recovery included, so the reap and the leftover stop finish before recovery is built. guardChild already routes errors on every stdio stream, the fd-4 gate included, so upstream's gate.on("error") is not added.
+Fail first: upstream's "records the CLI before it runs and forgets it once it exits" with ClaudeProcessSpawn.ts at HEAD: Expected "0 0" Received "67723 " (the CLI ran with no record). agentScope.test.ts before its test change: only "stops agents a killed server left before the first launch" failed (Expected [["--user","stop",…]] Received []), 14 passed. Mutation: without the live-owner guard "leaves the slice to another live server sharing this home" fails. After: 44 passed, 2 skipped (the two Linux providerProcesses cases) across the runner, descendants, agentScope, providerProcesses, ClaudeProcessExit and ClaudeStopTeardown files.
+
+### M2 (301ff1933fbd4eb70ea1b1cceb23ec8374110ff0)
+
+Card row first (records 306c3a02cf). Verbatim move of ClaudeAdapterV2.ts:524-543 at c995c5427a to ClaudeLiveSelection.ts; export added to both functions. Adapter lines removed and not re-added: the blank separator :544; "type EffortLevel," (import list, now only the new module uses it, re-imported there); "type ClaudeFlagSettings," (runner import list, same reason; lint caught it). Added: a four-line import of the two names. 10933 -> 10914.
+
+### d6e5f2e06f (276261bd66a1e31e4a7480745fb743263f981842), option C as confirmed
+
+LiveModelSelection.ts (orchestration-v2/goat), started from runtimeLayer.ts layerProduction with the memoized orchestrator and session manager layers; Orchestrator.ts, EffectOutbox and ProviderTurnControlService's shape untouched. Conditions: bounded (latest selection per thread, at most 256 threads draining; a full table drops and logs once); per-thread serialisation (one drain fiber per thread, forked in the reactor's scope; the stream handler never waits on a call); 10 second deadline on each call; failures and defects caught and logged inside; events with rawEventId (ProviderEventIngestor.ts:436 writes them with the raw event's id) are not applied. Claude: applyModelSelection through ClaudeLiveSelection.applyClaudeSelectionToRunningQuery (upstream's guards and applySelectionLive helper; openQuery calls the helper, GOAT's reportedModel reset kept in it).
+Other adapters, each: not supported here, applies at the next turn. Codex, Cursor (CLI and SDK), Grok, OpenCode, Antigravity, Pi, Muse Code, fx, ACP agents, and the cloud providers (Claude Cloud, Cursor Cloud, Devin Cloud) leave applyModelSelection unset; the reactor finds no method and does nothing; their next turn starts with the thread's selection as today.
+Fail first: ClaudeLiveEffort.integration.test.ts with the reactor wired and no adapter method hung on the applied Deferred (timeout 50, exit 124). After: 1 passed. LiveModelSelection.test.ts 3 passed; mutations: echo (no rawEventId filter) fails the first case; no deadline and no defect catch each hang the third (timeout 20, exit 124). Run: 508 passed across ClaudeLiveEffort, LiveModelSelection, ClaudeLiveSelection, ClaudeAdapterV2, runtimeLayer and ClaudeAutomaticDelivery test files. Adapter 10914 -> 10904.
+
+### 5984bbb36e adapter half (d7feb27f021d9cc264af82e0d301bbc8ad8be387)
+
+ProviderAdapterV2SteerInput.modelSelection (upstream's); ProviderTurnControlService.steer takes modelSelection?: ModelSelection | undefined and passes it to steerTurn; EffectWorker forwards effect.request.modelSelection in one line (998 -> 999, cap 1000). Claude: claudeSteerSelection (upstream's guard) decides; the selection is applied after the background moves and before the turn-ended check, with its prompt-effort prefix. SteeringCompletion's harness is not extended.
+Fail first: ClaudeSteerSelection.test.ts against the adapter at HEAD: "applies a model change sent with a steer to the running turn" expected [] to deeply equal [Array(2)]; "fails a model-changing steer when the turn ends during the selection change" expected 'Success' to equal 'Failure'. After: 2 passed. End to end: "applies a model change sent with a steer through the effect worker" (ClaudeLiveEffort.integration.test.ts) hangs with the EffectWorker line reverted (timeout 30, exit 124) and passes with it. Run: 562 passed across ClaudeSteerSelection, ClaudeLiveEffort, ClaudeAdapterV2, ClaudeLiveSelection, EffectWorker, ProviderTurnControlService, SteeringCompletion, runtimeLayer and ClaudeWakeDispatch test files. Adapter 10904 -> 10916: 17 below its entry at the cut (10933); the lane nets -17 in this at-entry file.
+
+### Integration head merge (once, before READY)
+
+Lane head before: d7feb27f021d9cc264af82e0d301bbc8ad8be387. Integration head: 259883c788bb32d5601023932e07f879bde9af60. git merge --no-edit origin/chase/t3-261114-next3: "Auto-merging oxlint-plugin-goat/code-budgets.json. Merge made by the 'ort' strategy." (3 files: ThreadWorkspaceService.setupLockOrder.test.ts +3, Manager.leaseOrder.test.ts +115, code-budgets.json 1 line; no conflict). Merge commit 9ea1bd0d421c9d544b6a601bdeb80c969d381118.
+Then 18c6644ea83ed79bb24536d3960270035d9f1a97: four lane exports made module-private after knip flagged them in check:changed.
+
+
+> FOR EVERY LANE (relay it): before a push, every changed test file runs whole, with no -t filter; and for a row that changes when or whether something wakes, notifies or holds a thread, the test files of that subsystem run whole as well. A -t run is for iteration and is named as such in the record.
+
+(2026-11-17 22:45:36 UTC.) Whole runs of every changed test file: ClaudeAgentSdkQueryRunner.test.ts (19/19 after e4025c8528, and inside the 44-run), ClaudeDescendants.test.ts, agentScope.test.ts (16/16), providerProcesses.test.ts (1 passed, 2 Linux skipped), LiveModelSelection.test.ts, ClaudeLiveSelection.test.ts, ClaudeLiveEffort.integration.test.ts (2/2), ClaudeSteerSelection.test.ts (2/2), each also inside check:changed's 305 files. The -t runs (process-group cases, "records the CLI", the two steer cases singly, the steer case against reverted EffectWorker) were iteration and fail-first runs only. No K5 row changes when or whether a thread wakes, is notified or is held. Push order: the lane branch was pushed at 18c6644ea8 while check:changed's test step was still running; that run then passed on the same head (below), and nothing was pushed after it.
+
+### Lane gate at 18c6644ea83ed79bb24536d3960270035d9f1a97 (on origin)
+
+vp run check:changed origin/chase/t3-261114-next3 (22 files since 259883c788bb): format, lint (two pre-existing no-low-value-comments warnings at ClaudeAdapterV2.ts:749 and :756, not lane lines), knip 1/2 and 2/2, graphql, agent surface audit, agent context budget, typecheck (17 packages): pass. test (305 files): pass, 1349.7 s, Test Files 305 passed, Tests 3898 passed | 4 skipped. The first check:changed run (knip failure) was followed by a second; an overlapping leftover of the first (PID 29605 with its vitest 30041/30105, cwd this worktree) was stopped by PID.
+Budgets at the head: ClaudeAdapterV2.ts 10916 (entry 10916, dev 10933); ClaudeAgentSdkQueryRunner.ts 979, EffectWorker.ts 999, agentScope.ts 457, ClaudeProcessSpawn.ts 96 (no entries, under 1000).
+
+NOT RUN: providerProcesses.test.ts's two Linux cases and every /proc path (reaping, register identity, ancestor guard): Linux only, they run in the coordinator's goat-ci on this head. Real Claude turns: none; live effort, steer selection and stray-job reaping are shown with the adapter harness and real fake-CLI processes. P1: no client-visible change in K5, so no capture row. Linux e4025c8528 behaviour on a host with user systemd (the startup barrier against a real systemctl): goat-ci's Linux job runs agentScope.test.ts with a fake systemd only.
+Cleanup: no build outputs created. Three fixture folders under /private/tmp/goat-test-* from the killed process-group runs remain (the shell refused rm -rf); a few KB each.
+
