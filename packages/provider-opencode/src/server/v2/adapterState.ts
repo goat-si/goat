@@ -40,6 +40,7 @@ export interface ActiveTurn {
   providerTurn: OrchestrationV2ProviderTurn;
   readonly texts: Map<string, OpenBlock>;
   answer: string | undefined;
+  closingText: OpenBlock | undefined;
   readonly tools: Map<string, { readonly name: string; input: Record<string, unknown> }>;
   readonly startedAt: Map<string, DateTime.Utc>;
   readonly ordinals: Map<string, number>;
