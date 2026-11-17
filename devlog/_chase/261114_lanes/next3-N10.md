@@ -171,3 +171,40 @@ D6, O25's identity. O25 = e07585e5fb by #3176's line order (above). Confirm.
 - Windows (93c10239b4 and f6b260df15's win32 branch held for the owner).
 - goat#3579 installer builds per platform: measured from published nightly assets instead. A local mac build only if D4's option changes packaging.
 
+
+
+## Coordinator rulings for this lane
+
+> Coordinator to lane coordinator, 2026-11-17 23:58 UTC, relayed verbatim:
+>
+> VI. N10 PLAN: ACCEPTED with these rulings (records 688c83424d; I read the decisions section and the headings; claims as corrected on card 10.028 at 0dcef33f5f).
+> D1: B. Durable state and the child context stay protocol 3; the launcher says what it can do in an optional launcherProtocol field. A machine that cannot start after a rollback is the worst outcome this lane can produce. Conditions: the fail-first case for the stranding (probation rollback after a restart under the new launcher); every launcher 3 or 4 with runtime 3 or 4 pairing as a case; and proof against the SHIPPED protocol-3 decoder (git show of a release tag's serviceProtocol.ts, not this head) that it ignores the extra field. Fork delta entry with the reason.
+> D2: yes, one more commit: back up -wal and -shm from beside the resolved file, test first. It is committed writes lost on rollback. Note in the record that upstream has the same defect.
+> D3: confirmed with one amendment: the backup is discarded at the bound only if the new runtime never opened the database; if it may have, the backup is kept and the normal rollback path runs. A case for each. The 30 s probe without a bound and exit 79 as you read them.
+> D4: the direction is accepted for a PLAN only. goat#3579's code is not N10's: N10 records the measurement and sends the C4 plan (what the SSH install sends, the older-runtime case, a browser paired straight to the remote host, a failed copy falling back to system fonts), and it becomes its own lane after N10's READY.
+> D5: yes: code after K5's review reports, one heavy job at a time on pen-mac-studio.
+> D6: confirmed, O25 = e07585e5fb (I read #3176: its row is the unticked "AppImage updates keep their filename", a release decision). Conditions: a case showing what an INSTALLED versioned AppImage does with the new feed; the READY names the one-line revert; and "an installed versioned AppImage updates in place to the next release" stays an open release row that must be RUN on a nightly before that nightly's commit may go stable. I carry that row.
+> Claim (3): IV (vi) covers a top-level it.layer block moved whole, on the same terms as a describe (byte-identical body, the case counts add up, TEST_TITLES updated in the same commit). Claims (4) and (5) need exact ranges on the card before the cut.
+> Review weight: this lane is launcher, update and release in one. Its READY comes in two parts with a fresh C4 review each: N10-1 = move-outs, C17 with D2, C12 parts 1 to 5 and C20; N10-2 = C19 and O25. One branch, two READY reports, unless the whole delta ends under about 1,500 lines.
+> f6b260df15's Windows part stays an open row on the card (not taken, no Windows run).
+>
+> Lane coordinator, for N10: quote it in next3-N10.md. Code waits for K5's review to report (I will tell you). Send claims (4) and (5) with exact ranges at the integration head before you cut them; claim (1) is on the card as :80-106 and :138-402.
+
+> Coordinator to lane coordinator, 2026-11-17 23:50:37 UTC, relayed verbatim:
+>
+> II. Queue and one rule changed.
+> - K7's wire review STARTED now (task goat-next3-K7-wire-review-9fb762a2), beside the conn review. Both read 9fb762a2b5; K7's head stays put until both report.
+> - A fix-delta review (small: the delta and its test files only) does not count against the cap of two. So K5's fix-delta review starts as soon as its head and runs are there, and K10's likewise.
+> - SF3 and N10 may start code now (K5's review has reported), heavy jobs by the machine token, K5's and K10's fix rounds first.
+>
+> Lane coordinator, for N10: CODE MAY START NOW, on the rulings of VI (relayed earlier). Before your first commit: git merge --ff-only origin/chase/t3-261114-next3 (still 259883c788) and report the sha. Heavy jobs by the machine token: K5's fix round first, then K10's, then you and SF3 one at a time. Claims (4) and (5) with exact ranges before you cut them.
+
+Effects on the plan: D1 B replaces the upstream protocol-4 durable state and context; D3's discard condition changes C20; goat#3579 stops at the measurement and a C4 plan (no code in N10); READY in two parts (N10-1, N10-2).
+
+ff-only merge before the first commit: `git merge --ff-only origin/chase/t3-261114-next3` reported "Already up to date"; HEAD stays 259883c788bb32d5601023932e07f879bde9af60.
+
+## Claims (4) and (5), exact ranges at 259883c788
+
+- (4) scripts/build-desktop-artifact.ts :1169-1253, InvalidMacPasskeyRpDomainReason..isMacPasskeySigningConfigurationError (85 lines: the Mac passkey error schemas and their union; they depend only on Schema) -> scripts/lib/mac-passkey-signing-errors.ts. build-desktop-artifact.ts imports the four classes it throws and re-exports the block's exports for build-desktop-artifact.test.ts and release-desktop-runtime.test.ts. This replaces the earlier "about :1236-1338": that range would have moved functions using the local DESKTOP_APP_ID (:114).
+- (5) apps/server/src/server.ts :636-669, layerScheduledTaskWebhookOrigin (34 lines; it uses only imported names: ScheduledTaskWebhookOrigin, ServerSecretStore, isGoatConnectEnabled, RELAY_URL_SECRET, CLOUD_ENDPOINT_RUNTIME_CONFIG, decodeRuntimeConfig, relayHookBaseUrl) -> apps/server/src/scheduledTasks/scheduledTaskWebhookOriginLayer.ts (GOAT-owned), imported back by server.ts.
+
