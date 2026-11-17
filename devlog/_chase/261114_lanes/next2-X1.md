@@ -1,6 +1,6 @@
 # X1 CI (lane record)
 
-Lane branch: `chase/t3-261114-next2-x1-ci`, head `6ff107eda7ff79eac9147b550a736ae0f472e3a2`, cut from the integration branch `chase/t3-261114-next2` at `ed4268897e3183341694f27e488232572d5c5151` (draft PR #3660). Host pen-mac-studio. Plain push, no force. The nightly run 44049199276 signs on this host, so the lane stays light (logs, single test files) until the coordinator says its macOS jobs are done.
+Lane branch: `chase/t3-261114-next2-x1-ci`, head on origin `de982166fa` (local `92bc15f067` waits on the coordinator), cut from the integration branch `chase/t3-261114-next2` at `ed4268897e3183341694f27e488232572d5c5151` (draft PR #3660). Host pen-mac-studio. Plain push, no force. The nightly run 44049199276 signs on this host, so the lane stays light (logs, single test files) until the coordinator says its macOS jobs are done.
 
 ## Rows and commits
 
@@ -9,7 +9,12 @@ Lane branch: `chase/t3-261114-next2-x1-ci`, head `6ff107eda7ff79eac9147b550a736a
 | goat#3646, probe (branch only, reverted before READY) | `83689f6caf476682820ca5e7831b718519f7a0ed` | `netns-probe` dispatch lane: one lidge `probe-netns` entry that checks a loopback-only network namespace |
 | goat#3493 | `65e425704683d2b47668e41d69e8dd50667a6645` | every full run gets test-changed with every test file no suite owns; the two hand-written steps are gone; the step runs node --test after a Vitest failure |
 | goat#3646, probe 2 (branch only, reverted before READY) | `a91b8064dc8c4fd7c59ea0aeb02c0812b9e8e593` | the probe's browser file inside bwrap |
-| goat#3646, fix (proposed) | `4c2873c6a0` | goat-test's Test step runs inside bwrap --unshare-user --unshare-net on self-hosted runners |
+| goat#3646, fix (approved 10:07:04) | `4c2873c6a0` | goat-test's Test step runs inside bwrap --unshare-user --unshare-net on self-hosted runners |
+| goat#3646, the other two places (B2) | `ae4304d961` | the wrapper moves into `.github/scripts/loopback-netns.sh`; goat-test, test-changed's Vitest run when its list has a web browser test or an apps/server test, and both test-server steps use it |
+| goat#3646, proof lane (branch only) | `4f763a65ac` | the netns-probe lane runs test-changed with two browser files and test-server |
+| merges of the integration head | `2f8a9d40e4` (bd3901fca9), `de982166fa` (b531d2511c) | git's own merges, no conflict, no CI file touched by CF1 |
+| goat#3646, server tests back on the host (proposed, local) | `92bc15f067` | test-server unwrapped; test-changed wraps only web browser tests |
+| reverts of the four branch-only commits | `dc2ab0f891`, `c69e80fe25`, `dfab9857b6`, `757f01fe56` | revert 4f763a65ac, 6ff107eda7, a91b8064dc, 83689f6caf; no probe code remains (`rg 'netns-probe\|probe-netns'` finds nothing) |
 | goat#3646, run lane (branch only, reverted before READY) | `6ff107eda7ff79eac9147b550a736ae0f472e3a2` | the netns-probe lane runs goat-test alone, for the one full run |
 
 ## goat#3646: the cause
@@ -42,6 +47,15 @@ No log has an "optimized dependencies changed", reload, restart or out-of-memory
 > Coordinator to lane coordinator, 2026-11-17 09:22:05 UTC (quote verbatim in next2-pr-plan.md under "Coordinator answers" and in each lane's record).
 > 4. THE RUNNER HOST: understood: lidge, lidge-ts are lidge-AI-AI (a GPU box, no runners), lidge-cf times out, intmb refuses. I am asking the owner which machine carries the lidge-goat-0x runners and how to reach it. Nothing more to do on option 1 until he answers; the read-only thread is finished (it changed nothing: noted). Option 2 goes on: X1's wrapper diff and one full goat-test run inside it.
 > 5. X1's second probe (run 44053573362, lidge-goat-04: loopback only inside bwrap, the browser file 8 of 8, no network error line beyond Vitest's own probe): accepted as passed.
+
+> Coordinator to lane coordinator, 2026-11-17 10:07:04 UTC (quote each part verbatim in the lane's record and in next2-pr-plan.md under "Coordinator answers").
+>
+> B. X1, goat#3646:
+> 1. THE WRAPPER IS APPROVED for goat-test's Test step as proposed at 4c2873c6a0 (self-hosted runners run the web tests inside bwrap with loopback only; no bwrap or a refusing profile fails the step before any test, never the host network; hosted runners unchanged). Evidence accepted: full run 44054114825 on lidge-goat-01, 984 of 984 files, 10,957 tests, 0 ERR_NETWORK_CHANGED lines.
+> 2. YES, wrap the two other places with the same exposure, in the same commit series: the quick runs' test-changed step when it runs browser tests, and test-server's browser integration tests. Same rule: loud failure, never a silent fallback. One run each as proof (a quick pull request run that includes a browser test file; the server shard that holds the browser integration tests). Say for the server tests what they reach beyond loopback today (the preview browser tests start Chromium: do any need the network), before wrapping; if one does, bring it to me.
+> 3. The two real hosts the web tests used to reach (Google's favicon service and cdn.agentclientprotocol.com): fine that nothing needs them; one line in the record naming the tests, and an issue only if a test's meaning depended on the live answer.
+> 4. THE RUNNER HOST FINDING is accepted (the read-only thread on "linux": the eduroam Wi-Fi link wlp13s0 fails to reconnect and loses its IPv4 address for about a second; 14 times in the last 24 hours, exact matches to both failed runs; the wired link stays the default route; nothing changed on the host). X1 posts it on goat#3646 as one comment and quotes it in next2-X1.md. I am asking the owner whether to turn Wi-Fi off on that host; that is his to apply. The wrapper goes in regardless.
+> 5. The nightly: run 44055174254 failed its Windows jobs again (a different gate, see G) and is cancelled, so the Mac Studio runner is idle NOW: X1 runs its check:changed and the timing of goat#3493's added files now, and must be back to light work when I announce the next nightly (I will say so). Then: the three branch-only probe commits reverted, READY.
 
 Item 2 (the lidge host thread) is the coordinator's, per the lane coordinator's relay.
 
@@ -80,7 +94,25 @@ A runner without bwrap, or a profile that refuses it: the step fails before any 
 
 EPYC and hosted runners: goat-ci's `ci` job can only be the lidge pool or a hosted image (`.vite-hooks/goat-workflow-guard.mjs` pins it); the `epyc` labels are allowed only for the release workflows (guard :59, :494), and goat-ci.yml calls that host retired, so goat-test never runs there. Hosted ubuntu-24.04 runners are one VM per job with no neighbour jobs, show no ERR_NETWORK_CHANGED in the evidence, and do not ship bwrap, so the guard is by `RUNNER_ENVIRONMENT` (self-hosted wraps, hosted does not); any future self-hosted pool, EPYC included, gets the wrapper or fails loudly.
 
-Shared exposure, not in this diff: quick runs' test-changed and test-server's browser integration tests run Chromium on the same host.
+## goat#3646: the host (B4)
+
+Posted on goat#3646 as one comment: https://github.com/goat-si/goat/issues/3646#issuecomment-6945075169. The finding as accepted, quoted from B4: "the read-only thread on "linux": the eduroam Wi-Fi link wlp13s0 fails to reconnect and loses its IPv4 address for about a second; 14 times in the last 24 hours, exact matches to both failed runs; the wired link stays the default route; nothing changed on the host". Turning Wi-Fi off is the owner's to apply.
+
+## goat#3646: the hosts the web tests reached for real (B3)
+
+Google's favicon service (URL built in `packages/shared/src/favicon.ts`; `ChatMarkdown.browser.test.tsx` "favicon privacy" asserts the URL string only; chat views that render links load it) and cdn.agentclientprotocol.com (registry icons rendered by `AcpRegistrySearchStep.browser.test.tsx`; the fetch and cache test `AcpRegistryIcon.test.ts` stubs `fetch`). No test's meaning depends on the live answer and all passed with the network gone, so no issue.
+
+## goat#3646: test-changed and test-server (B2, commit ae4304d961)
+
+What the server tests reach beyond loopback, read before wrapping: the 78 server test files that name Chromium or Playwright (mostly `apps/server/src/preview/`, plus three `mcp/SecretRequest*.integration` files) use reserved hosts (`login.test`, `page.test`, `*.example`, `example.com`) through route interception or fake pages; the others are `10.255.255.1` (`ServerBrowser.test.ts:629`, a message to a fake page), `frame.local` and `device.local` (request objects emitted on a fake page). None loads a real host. The rest of the server suite has no network guard and names real hosts mostly as fixture strings (github.com 404 times, provider API hosts), which static reading cannot prove unfetched; the proof run below decides it.
+
+One script for every place, `.github/scripts/loopback-netns.sh`: a hosted runner runs the command as it is; a self-hosted one without bwrap prints `::error::bwrap is missing on <runner>` and exits 1; otherwise `exec bwrap --unshare-user --unshare-net --dev-bind / / --proc /proc "$@"`. test-changed wraps its Vitest run only when the list holds a `.browser.test.` file or an `apps/server/` test, so a full run's test-changed (scripts, marketing, provider-testing files) keeps the host network. Local check of the script with stubs: no bwrap gives the error and exit 1; a refusing bwrap exit 1; a working bwrap gets exactly those arguments; hosted runs vp. The test-changed condition under bash: a web browser file or a server file selects the wrapper, a packages/shared file does not.
+
+Proof run (branch-only lane at 4f763a65ac): https://github.com/goat-si/goat/actions/runs/44062651705.
+
+- goat-test-changed, job 133968995754, lidge-goat-01: CHANGED_TESTS `ReopenClosedViewShortcut.browser.test.tsx` and `apps/server/src/preview/ServerBrowserPage.test.ts` (launches real Chromium); `Test Files 2 passed (2)`, 8 and 49 tests; the only `net::ERR_` line is Vitest's `__vitest_interception_probe__` ERR_ABORTED. It was a dispatch of the test-changed step, not a pull request's quick run: AGENTS.md says "Never make a PR unless the developer explicitly asks you to do so".
+- test-server inside bwrap (all four shards; the Chromium-launching files are spread over every shard by the weighted sequencer): 2/4 lidge-goat-04 `527 passed | 1 skipped (528)`; 4/4 lidge-goat-03 `525 passed | 3 skipped (528)`; 1/4 lidge-goat-01 (job 133968995580) `1 failed | 525 passed | 1 skipped`, 11 tests; 3/4 lidge-goat-05 (job 133968995858) `2 failed | 522 passed | 4 skipped`, 23 tests. No shard log has ERR_NETWORK_CHANGED, ENOTFOUND, EAI_AGAIN, ENETUNREACH or ERR_INTERNET_DISCONNECTED: no server test needs the network.
+- The three failing files fail on ownership, not network: inside an unprivileged user namespace host root is unmapped and shows as uid 65534. `src/preview/BrowserDevToolsActivePort.test.ts` receives `untrusted_owner` (e.g. :231 expected `not_found`); `src/cua/linuxHelperHost/helperBundle.test.ts` receives "GOAT's Linux computer use helper was not started: /tmp belongs to another user" (:64); `src/hub/disposable/keyPath.test.ts` receives `{ directory: "/", owner: 65534, problem: "owner" }`. These are trust checks refusing correctly; bwrap cannot map host root without privilege, so the namespace cannot hold them. Brought to the coordinator (needs_input) with the options; local commit `92bc15f067` is the narrow one: test-server on the host, test-changed wraps only `.browser.test.` files.
 
 ## goat#3493
 
@@ -89,14 +121,17 @@ Shared exposure, not in this diff: quick runs' test-changed and test-server's br
 - `.github/workflows/goat-ci.yml`: "Test build scripts" (13 files) and "Test CI scripts" (7 files) removed; "Test changed files" keeps going after a failure and exits with the last failure.
 - What a full run now adds: 126 Vitest files (123 under scripts/, apps/marketing/src/accountDeletion.test.ts, apps/marketing/src/lib/userDocs.test.ts, packages/provider-testing/src/replayWorkspace.test.ts) and all 10 node files under .github/scripts, 5,052 bytes of the 100,000-byte list limit. Previously run there: 13 scripts files and 7 node files.
 
-Verification (fresh, on 65e4257046's tree):
+Verification (fresh, on 65e4257046's tree; rerun on the final tree as noted):
+
+- `vp run check:changed origin/chase/t3-261114-next2` (the rule from the coordinator's 10:39:09 message) on de982166fa (before 92bc15f067 existed): `check:changed: 5 files since b531d2511c26`, `CHECK_EXIT=0`, all checks pass. `node --test .github/scripts/goat-ci-scope.test.cjs` on the reverted tree: tests 72, pass 72, fail 0.
+
+- `vp run check:changed` at 2026-11-17 10:08Z (nightly cancelled, answer B5): `CHECK_EXIT=0`; format, lint, knip 1/2 and 2/2, agent surface audit, agent context budget, typecheck (42 packages), test (1 file), node --test (1 file) all pass; the lint warnings are all on comments that predate the change.
+- Timing on pen-mac-studio: the 126 Vitest files `Test Files 125 passed | 1 skipped (126)`, `Tests 1350 passed | 12 skipped (1362)`, 72 s wall; the 10 node files `tests 224, pass 224, fail 0`, 38 s. The summary output does not name the skipped file (not checked). In dev's full run 44049203514 the two removed steps took 8 s and 31 s of goat-test, so goat-test gets about 39 s shorter and a full run gains one parallel lidge job, test-changed, of about two minutes of tests plus its setup; the test-server shards still set the run's wall time.
 
 - Fail first: the new case "gives every full run, manual or ci:full, the test files no suite owns as test-changed (#3493)" failed before the fix at `assert.ok(result.tasks.includes("test-changed"))` (goat-ci-scope.test.cjs:524).
 - `node --test .github/scripts/goat-ci-scope.test.cjs`: tests 72, pass 72, fail 0. No existing expectation changed (the quick fallback case at :662 passes unchanged).
 - Step reproduction: the "Test changed files" script from HEAD^ and from the change, extracted from the YAML and run under `bash -e` with a stub `vp` whose `test run` fails: before `exit=1 node_ran=0`, after `exit=1 node_ran=1`. The Mac's bash 3.2 lacks `mapfile`, so only the two `mapfile` lines were replaced by an equivalent read loop in both copies.
 - `vp fmt --check` and `vp lint` on the four files clean except three warnings that predate the change. Line count `goat-ci-scope.cjs` 993 with the probe commit, 984 without (cap 1000, unbudgeted).
 
-NOT RUN: `vp run check:changed` (host constraint: waits for the coordinator to say the nightly's macOS jobs are done; Desktop macOS x64 was still running at 09:17Z).
-NOT RUN: the time the 126 Vitest and 10 node files add (needs a scripts-wide run; same constraint, and the real figure comes from a lidge runner).
 NOT RUN: a full goat-ci run with the change.
 NOT RUN: a CI run of the wrapper on a runner without bwrap or with a refusing profile (shown locally with stubs only).
