@@ -692,20 +692,13 @@ function laneRun(lane) {
       server: fullServer(why),
     };
   }
-  // Branch-only goat#3646 probe, not for merge: test-changed with browser files, and test-server.
+  // Branch-only goat#3646 probe, not for merge: runs goat-test alone.
   if (lane === "netns-probe") {
     return {
       full: false,
-      tasks: [CHANGED_TESTS_TASK, "test-server"],
-      reasons: reasons([CHANGED_TESTS_TASK, "test-server"], why),
+      tasks: ["test"],
+      reasons: reasons(["test"], why),
       server: fullServer(why),
-      changedTests: {
-        vitest: [
-          "apps/web/src/components/ReopenClosedViewShortcut.browser.test.tsx",
-          "apps/server/src/preview/ServerBrowserPage.test.ts",
-        ],
-        node: [],
-      },
     };
   }
   return {
