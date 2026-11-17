@@ -2523,6 +2523,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           return attachEvent ? listener(attachEvent) : Effect.void;
         },
         (cleanup) => {
+          // A rerun after a busy folder replaces the earlier attempt's listener, never keeps it.
+          unsubscribe?.();
           unsubscribe = cleanup;
           registerCleanup?.(stop);
         },
