@@ -15,7 +15,7 @@ import {
 } from "@goat/contracts/settings";
 import { describe, expect, it } from "vite-plus/test";
 import { createModelSelection } from "@goat/shared/model";
-import { deriveEffectiveComposerModelState } from "./composerDraftStore";
+import { deriveEffectiveComposerModelState } from "./composerModelState";
 import { getComposerProviderState } from "./components/chat/composerProviderState";
 import { resolveComposerProviderSelection } from "./components/ChatView.logic";
 import { deriveProviderInstanceEntries, NO_PROVIDER_MODEL_SELECTION } from "./providerInstances";
