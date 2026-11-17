@@ -9,7 +9,7 @@ import {
   inlineCodeFilePathCandidate,
 } from "@goat/shared/markdownLinks";
 import { taskListMarkerOffset } from "@goat/shared/markdownTaskList";
-import { isHostPath, resolveWorkspaceFilePath, workspaceRelativeFilePath } from "@goat/shared/path";
+import { isHostPath, workspaceRelativeFilePath } from "@goat/shared/path";
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";
 import {
   AuthFilesystemReadScope,
@@ -144,11 +144,9 @@ import { projectEnvironment } from "../state/projects";
 import { filesystemEnvironment } from "../state/filesystem";
 import {
   claimWorkspaceBasenameLookup,
-  needsWorkspaceBasenameLookup,
-  pickWorkspaceLinkMatch,
-  WORKSPACE_BASENAME_LOOKUP_LIMIT,
   workspaceLinkLookupQuery,
 } from "@goat/client-runtime/workspace-basename-lookup";
+import { findChatFileLinkMatch } from "./chatMarkdownFileLinks";
 import { resolvePullRequestPreviewTarget } from "@goat/client-runtime/change-request-links";
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
@@ -648,24 +646,15 @@ function useChatMarkdownState({
     ) {
       return null;
     }
-    const query = workspaceLinkLookupQuery(workspaceRelativePath, cwd);
-    if (query === null) return null;
-    // Search can be truncated or still scanning, so it cannot rule out the literal
-    // path. A path with a folder opens as written whenever it exists.
-    if (!needsWorkspaceBasenameLookup(workspaceRelativePath)) {
-      const metadata = await getFilesystemMetadata({
-        environmentId,
-        input: { paths: [resolveWorkspaceFilePath(workspaceRelativePath, cwd)] },
-      });
-      if (metadata._tag !== "Success" || metadata.value.entries[0] !== null) return null;
-    }
-    const result = await searchProjectEntries({
+    return findChatFileLinkMatch({
+      workspaceRelativePath,
+      cwd,
       environmentId,
-      input: { cwd, query, limit: WORKSPACE_BASENAME_LOOKUP_LIMIT, kind: "file" },
+      threadProjectId: threadRef ? readThreadShell(threadRef)?.projectId : undefined,
+      projects,
+      searchProjectEntries,
+      getFilesystemMetadata,
     });
-    return result._tag === "Success"
-      ? pickWorkspaceLinkMatch(workspaceRelativePath, cwd, result.value.entries)
-      : null;
   };
   const openFileInPanel = (fileLinkMeta: MarkdownFileLinkMeta, panelPath: string) => {
     if (!threadRef) return;

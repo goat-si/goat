@@ -248,7 +248,13 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { ThreadWorkflowOpening, useWorkflowOpening } from "./thread-workflow-opening";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { fileRoutePathSegments, resolveFileLinkPath } from "../files/filePath";
+import {
+  fileRoutePathSegments,
+  isAbsolutePath,
+  resolveFileLinkPath,
+  resolveWorkspaceFilePath,
+  resolveWorkspaceRelativeFilePath,
+} from "../files/filePath";
 import { AssistantForkButton } from "./AssistantForkButton";
 import { resolveUserMessageIntentBadge } from "./userMessageIntentBadge";
 import { fileChipClipboardPath, fileChipMenu, resolveFileChipTarget } from "./fileChipMenu";
@@ -2225,6 +2231,7 @@ export const ThreadFeed = memo(function ThreadFeed({
       if (path === null) return;
       void findFileLinkTarget({
         environmentId: props.environmentId,
+        threadId: props.threadId,
         workspaceRoot: props.workspaceRoot,
         linkPath: presentation.path,
         path,
@@ -2324,8 +2331,44 @@ export const ThreadFeed = memo(function ThreadFeed({
       switch (actionId) {
         case "copy-full-path":
         case "copy-relative-path": {
-          const clipboardPath = fileChipClipboardPath(target, actionId);
-          if (clipboardPath !== undefined) copyTextWithHaptic(clipboardPath);
+          const presentation = resolveMarkdownLinkPresentation(href);
+          const path =
+            presentation.kind === "file"
+              ? resolveFileLinkPath(props.workspaceRoot, presentation.path)
+              : null;
+          if (presentation.kind !== "file" || path === null) return;
+          markdownLinkRequest.current?.abort();
+          const request = new AbortController();
+          markdownLinkRequest.current = request;
+          void findFileLinkTarget({
+            environmentId: props.environmentId,
+            threadId: props.threadId,
+            workspaceRoot: props.workspaceRoot,
+            linkPath: presentation.path,
+            path,
+            signal: request.signal,
+          }).then((found) => {
+            if (request.signal.aborted) return;
+            const fullPath =
+              props.workspaceRoot && !isAbsolutePath(found)
+                ? resolveWorkspaceFilePath(props.workspaceRoot, found)
+                : found;
+            const clipboardPath = fileChipClipboardPath(
+              {
+                ...target,
+                ...(target.fullPath ? { fullPath } : {}),
+                ...(target.relativePath
+                  ? {
+                      relativePath:
+                        resolveWorkspaceRelativeFilePath(props.workspaceRoot, fullPath) ??
+                        target.relativePath,
+                    }
+                  : {}),
+              },
+              actionId,
+            );
+            if (clipboardPath !== undefined) copyTextWithHaptic(clipboardPath);
+          });
           return;
         }
         case "open-file":
