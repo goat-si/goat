@@ -303,7 +303,8 @@ const make = Effect.gen(function* () {
     return { trigger: "plan", checkedAt, members } satisfies OpenCodexSyncReport;
   });
 
-  // When the caller stops waiting, the machine being synced finishes and no further machine starts.
+  // A caller leaving does not interrupt the machine being synced (its timeouts and shutdown still
+  // can), and no further machine starts.
   const run = (scope: McpInvocationScope, permits: SyncPermits = everyone) =>
     runAsServerJob(permit, serviceScope, "OpenCodexSync.run", (stopped) =>
       Effect.gen(function* () {

@@ -242,8 +242,9 @@ export const makeMove = (deps: MoveDeps) =>
         offered.fingerprint,
         fromEnvironment,
       );
-      // A move whose caller is gone asks no one and changes nothing; one under way finishes.
-      // Each check sits right before a side effect, after the read or write that could outlast a stop.
+      // A move whose caller is gone asks no one and changes nothing. One already changing routing
+      // is not interrupted by its caller leaving, but a later failure or a shutdown can still leave
+      // the device in no hub. Each check sits right before a side effect.
       const refused = () =>
         stop("Move stopped before changing anything: its caller stopped waiting.");
       if (yield* stopped) return refused();
