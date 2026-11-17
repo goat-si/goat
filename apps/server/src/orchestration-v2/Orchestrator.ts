@@ -1,4 +1,5 @@
 import { retainedUserItemFailures } from "./goat/RetainedQueuedInput.ts";
+import { OrchestratorThreadAboveModeLimitError } from "./OrchestratorModeLimitError.ts";
 import { commandThreadId } from "./commandThreadId.ts";
 import { guardArchiveDelegates } from "./goat/ArchiveDelegatedGuard.ts";
 import { isHistoryArchiveOnlyUpdate, withoutHistoryArchive } from "./goat/HistoryArchive.ts";
@@ -398,20 +399,7 @@ export class OrchestratorSubagentThreadReadOnlyError extends Schema.TaggedError<
   }
 }
 
-export class OrchestratorThreadAboveModeLimitError extends Schema.TaggedError<OrchestratorThreadAboveModeLimitError>()(
-  "OrchestratorThreadAboveModeLimitError",
-  {
-    commandId: CommandId,
-    threadId: ThreadId,
-    mode: Schema.Literals(["runtime", "interaction"]),
-    runtimeMode: RuntimeMode,
-    interactionMode: ProviderInteractionMode,
-  },
-) {
-  override get message(): string {
-    return `Thread ${this.threadId} now runs in ${this.runtimeMode}/${this.interactionMode} mode, above what this caller may change.`;
-  }
-}
+export { OrchestratorThreadAboveModeLimitError } from "./OrchestratorModeLimitError.ts";
 
 export const OrchestratorV2Error = Schema.Union([
   RuntimeAdmission.ServerDrainingError,
