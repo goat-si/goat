@@ -317,3 +317,32 @@ it("a reply sent as a plan follow-up carries its response record", async () => {
     expect.objectContaining({ kind: "response", contextId: "response_m9" }),
   );
 });
+
+it("a plan follow-up with a reply that fails to send puts the reply back with its text", async () => {
+  await using fixture = await setupSshComposer();
+  const { AsyncResult } = await import("effect/reactivity");
+  const Cause = await import("effect/Cause");
+  const { useComposerDraftStore } = await import("~/composerDraftStore");
+  const redirect = await redirectSend(fixture, {
+    composerMode: "full-access",
+    refuse: false,
+    input: {
+      showPlanFollowUpPrompt: true,
+      activeProposedPlan: { id: "plan-1", planMarkdown: "# Plan\n\n1. Do it" },
+    },
+    sendContext: { interactionModeEnabled: true },
+  });
+  const environmentId = await draftReply("redirect-thread");
+  using _server = await serverTakesReplies(environmentId);
+  state.normal.mockImplementation(async () =>
+    AsyncResult.failure(Cause.fail(new Error("offline"))),
+  );
+
+  await redirect.send();
+
+  const draft = useComposerDraftStore
+    .getState()
+    .getComposerDraft({ environmentId, threadId: "redirect-thread" } as never);
+  expect(draft?.prompt).toBe("Stop that and list the files instead.");
+  expect(draft?.replyTo?.contextId).toBe("response_m9");
+});

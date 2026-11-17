@@ -1,4 +1,8 @@
-import type { PreviewAnnotationPayload, ThreadContextRecord } from "@goat/contracts";
+import type {
+  PreviewAnnotationPayload,
+  ResponseContextRecord,
+  ThreadContextRecord,
+} from "@goat/contracts";
 
 import { collapseExpandedComposerCursor } from "../composer-logic";
 import type { TerminalContextDraft } from "../lib/terminalContext";
@@ -10,6 +14,8 @@ export interface PlanFollowUpComposerSnapshot {
   readonly reviewComments: ReadonlyArray<ReviewCommentContext>;
   readonly previewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
   readonly threadContexts: ReadonlyArray<ThreadContextRecord>;
+  /** The reply the send carried; the send cleared it with the rest of the draft. */
+  readonly replyTo?: ResponseContextRecord | null;
 }
 
 // A draft typed while the send was in flight is newer and stays. Composer refs and the cursor
@@ -24,6 +30,7 @@ export function restorePlanFollowUpComposer(input: {
   readonly writeReviewComments: (comments: ReadonlyArray<ReviewCommentContext>) => void;
   readonly writePreviewAnnotations: (annotations: ReadonlyArray<PreviewAnnotationPayload>) => void;
   readonly writeThreadContexts: (records: ReadonlyArray<ThreadContextRecord>) => void;
+  readonly writeReplyTo?: (reply: ResponseContextRecord) => void;
   readonly resetCursor: (options: {
     cursor: number;
     prompt: string;
@@ -37,6 +44,7 @@ export function restorePlanFollowUpComposer(input: {
   input.writeReviewComments(input.snapshot.reviewComments);
   input.writePreviewAnnotations(input.snapshot.previewAnnotations);
   input.writeThreadContexts(input.snapshot.threadContexts);
+  if (input.snapshot.replyTo) input.writeReplyTo?.(input.snapshot.replyTo);
   if (!input.routeIsCurrent) return;
   input.resetCursor({
     cursor: collapseExpandedComposerCursor(input.snapshot.prompt, input.snapshot.prompt.length),
