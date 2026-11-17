@@ -47,6 +47,7 @@ import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Project from "../project/ProjectService.ts";
 import * as ScreenRunService from "../screenCode/ScreenRunService.ts";
 import * as Settings from "../serverSettings.ts";
+import type * as AuthSessions from "../persistence/AuthSessions.ts";
 import { catalog, dependencies, serveOverHttp } from "./agentSurface.testkit.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -283,6 +284,111 @@ it.effect.each(["revoked by the command line", "Pen-bound and its row is deleted
         Effect.scoped,
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
++it.effect(
+  "a request verified before its session is revoked never runs, even after a second removal of 10,001 others",
+  () =>
+    Effect.gen(function* () {
+      const probe = yield* makeProbe;
+      const auth = yield* EnvironmentAuth.EnvironmentAuth;
+      const client = yield* signIn;
+      for (let index = 0; index < 10_001; index++)
+        yield* auth.issueSession({ subject: "bulk", scopes: ["orchestration:read"] });
+      yield* client.revoke;
+      // A second removal, larger than any count a forgetful record could keep.
+      yield* client.revokeOthers;
+      yield* Effect.gen(function* () {
+        const result = yield* call(client.scope, "goat_project_create", create("after-removals"));
+        expect(yield* Ref.get(probe.landed)).toEqual([]);
+        expect(textOf(result)).toContain(CUT);
+      }).pipe(Effect.provide(served(probe)));
+    }).pipe(Effect.provide(layerAuth)),
+);
+
+/** Pauses the next armed session read until the gate opens: a verify that has read the row. */
+const makeVerifyPause = Effect.gen(function* () {
+  const reached = yield* Deferred.make<void>();
+  const gate = yield* Deferred.make<void>();
+  let armed = false;
+  const wrap = (repository: AuthSessions.AuthSessionRepository["Service"]) => ({
+    ...repository,
+    getById: (input: Parameters<typeof repository.getById>[0]) =>
+      repository.getById(input).pipe(
+        Effect.tap(() =>
+          Effect.suspend(() => {
+            if (!armed) return Effect.void;
+            armed = false;
+            return Deferred.succeed(reached, undefined).pipe(Effect.andThen(Deferred.await(gate)));
+          }),
+        ),
+      ),
+  });
+  return {
+    wrap,
+    arm: Effect.sync(() => {
+      armed = true;
+    }),
+    reached: Deferred.await(reached),
+    open: Deferred.succeed(gate, undefined),
+  };
+});
+
+it.effect(
+  "a session revoked after its request's verify read the row, before it finished, never runs",
+  () =>
+    Effect.gen(function* () {
+      const pause = yield* makeVerifyPause;
+      const probe = yield* makeProbe;
+      const { running } = yield* makeServerAndCli(pause.wrap);
+      yield* Effect.gen(function* () {
+        const auth = yield* EnvironmentAuth.EnvironmentAuth;
+        const store = yield* SessionStore.SessionStore;
+        const issued = yield* store.issue({
+          subject: "mcp-client",
+          method: "bearer-access-token",
+          scopes: mcpClientScopes("full-access"),
+          runtimeModeCeiling: "full-access",
+        });
+        yield* pause.arm;
+        const verifying = yield* authenticate(auth, issued.token).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* pause.reached;
+        yield* store.revoke(issued.sessionId);
+        yield* pause.open;
+        const scope = yield* Fiber.join(verifying);
+        const result = yield* call(scope, "goat_project_create", create("raced"));
+        expect(yield* Ref.get(probe.landed)).toEqual([]);
+        expect(textOf(result)).toContain(CUT);
+      }).pipe(
+        Effect.provide(served(probe).pipe(Layer.provideMerge(layerAuthOver(running)))),
+        Effect.scoped,
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "a session whose last connection closes after it expired does not cut its running call",
+  () =>
+    Effect.gen(function* () {
+      const probe = yield* makeProbe;
+      const store = yield* SessionStore.SessionStore;
+      const client = yield* signIn;
+      yield* Effect.gen(function* () {
+        yield* store.markConnected(client.sessionId);
+        const running = yield* call(client.scope, "goat_project_create", create("gated")).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Deferred.await(probe.admitted);
+        yield* TestClock.adjust(Duration.hours(2));
+        // The connection closes at expiry; the session ends, but nothing revoked it.
+        yield* store.markDisconnected(client.sessionId);
+        yield* Deferred.succeed(probe.gate, undefined);
+        const result = yield* Fiber.join(running);
+        expect(yield* Ref.get(probe.landed)).toEqual(["gated"]);
+        expect(textOf(result)).not.toContain(CUT);
+      }).pipe(Effect.provide(served(probe)));
+    }).pipe(Effect.provide(layerAuth)),
 );
 
 it.effect("an eval cut during one step never runs its next step", () =>
