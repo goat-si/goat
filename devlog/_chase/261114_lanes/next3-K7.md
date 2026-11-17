@@ -225,3 +225,86 @@ Quote it in next3-K7.md. It does not cover D5's makeHarness move (already ruled 
 
 Sidebar.tsx (row 8) is planned to net zero or less (upstream's own change nets -10 by moving toast code to a helper); if GOAT's adaptation would grow it, a claim comes first. Net freed per file is the block less the import or re-export lines it costs; each move-out commit reports the real number.
 
+
+
+## Coordinator, 2026-11-17 21:52:47 UTC, IV (iii), verbatim
+
+IV gains one more mirrored-free case, for every lane (relay it): (iii) a test file that moves with the module it tests, where the commit is a rename and the only changed lines are import paths to the moved module, with TEST_TITLES updated in the same commit when the file is listed there. Titles, bodies, setup and expectations byte for byte; the review checks the rename with git show -M, and anything more is a P2. A harness moved out of a test file into a testkit still comes to me.
+
+## Lane coordinator, claims ruled (records 80779b9a5e)
+
+All eleven claims accepted. Correction to claim 5: packages/contracts/src/orchestrationV2.ts:624-653 (line 624 "export type OrchestrationV2GoalCommand =" through parseGoalCommand's closing brace at 653), not 625-655.
+
+## Build log, rows 1 and 2
+
+- d9c7ecbbc0 move-out claim 1: commands.ts:201-256 (55 interface lines + the blank at 256) -> operations/commandInputs.ts:11-65, byte-identical (`diff` of the two ranges empty). commands.ts 1202 -> 1168 (block 56; an 11-line type import and an 11-line type re-export added). Entry 1202 -> 1168. Only other change: `export` on `interface CommandMetadata` (line 41) for the new module's type import.
+- b4751f97de row 1 (962eeefa03): dispatch.ts resend loop, upstream main's shape with the 60 s per-attempt bound. Adaptation: dispatchMessage(resend, command) takes the flag first so each commands.ts call site changes one line. commands.ts 1168 -> 1170 (the field and its comment); the lane nets -32 in the file against 1202. Tests: dispatch.socketLoss.test.ts (7; the four resend cases failed on the base with a single attempt), useComposerSend.resend.browser.test.tsx (2, condition (a)). Existing suites unchanged and passing: commands.test.ts + commands.performance.test.ts, the mobile outbox (4 files, 81 tests). Typecheck exits 0 for client-runtime, mobile and web.
+- 37f08d1690 move-out claim 2: threads.ts:66-100 + blank 101 -> state/threadResumeCache.ts:7-41; the only changed text is `export` on the four declarations. threads.ts 1101 -> 1071 (block 36, 6-line import). Entry 1101 -> 1071.
+- Row 2 (de21fbcff3), adapted without dc3fdc6a3e's socket-only branch. The recovery logic lives in a new state/threadSubscriptionRecovery.ts (defect backoff, a 404 retried with backoff while mounted, a defect during apply restarts the follow after backoff, and applied items reset the backoff). threads.ts gets call-site lines only: 1071 -> 1079 (+8; the lane nets -22 against 1101). rpc/client.ts exports subscriptionRetryDelay (upstream's hunk). New tests in state/threads-sync.defect.test.ts, all three failing on the base: upstream's "resubscribes after a snapshot decode defect ends the thread subscription (#23041)" (defect injected by wrapping the session client, because GOAT's harness has no TEST_DEFECT and upstream added it in an earlier commit), upstream's "keeps asking a mounted thread over HTTP after a miss until it exists" (on the base it times out: the thread never asks again), and the condition (b) case "backs off repeated defects up to 30 seconds and keeps one stream open" (nine defects; each resubscribes within a 30 s step and exactly one stream is open after each). Not covered by a direct test: a defect while applying items (the restartAfterDefect path). Upstream has none either, and the harness gives no way to make applyItems die.
+
+### Rule 3, IV(i) mirrored: threadsSync.testkit.ts harness gains httpSnapshots (quoted before the commit)
+
+Upstream's own copy of the same helper (makeHarness in threads-sync.test.ts at de21fbcff3), its hunks:
+
+```diff
+@@ -118,6 +118,8 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
+     readonly latestLocalTurnOrdinal?: number | null;
+   };
+   readonly httpSnapshot?: ThreadSnapshotLoadResult;
++  /** Answers per load call; the last one repeats. Overrides `httpSnapshot`. */
++  readonly httpSnapshots?: readonly ThreadSnapshotLoadResult[];
+   /** The test sends the completion marker itself instead of the fake server sending it first. */
+   readonly completionMarker?: boolean;
+   readonly resumeCache?: NonNullable<Parameters<typeof makeEnvironmentThreadState>[1]>;
+@@ -193,11 +195,12 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
+   );
+   const snapshotLoader = ThreadSnapshotLoader.ThreadSnapshotLoader.of({
+     load: (_prepared, threadId) =>
+-      Ref.update(loaderCalls, (count) => count + 1).pipe(
+-        Effect.as(
++      Ref.updateAndGet(loaderCalls, (count) => count + 1).pipe(
++        Effect.map((count) =>
+           threadId === THREAD_ID
+-            ? (options?.httpSnapshot ??
+-                ({ _tag: "unavailable" } satisfies ThreadSnapshotLoadResult))
++            ? (options?.httpSnapshots?.[Math.min(count, options.httpSnapshots.length) - 1] ??
++              options?.httpSnapshot ??
++              ({ _tag: "unavailable" } satisfies ThreadSnapshotLoadResult))
+             : ({ _tag: "unavailable" } satisfies ThreadSnapshotLoadResult),
+         ),
+       ),
+```
+
+GOAT's copy (makeHarness in packages/client-runtime/src/state/threadsSync.testkit.ts), the same change:
+
+```diff
+@@ -68,6 +68,8 @@ export const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(funct
+     readonly latestLocalTurnOrdinal?: number | null;
+   };
+   readonly httpSnapshot?: ThreadSnapshotLoadResult;
++  /** Answers per load call; the last one repeats. Overrides `httpSnapshot`. */
++  readonly httpSnapshots?: readonly ThreadSnapshotLoadResult[];
+   readonly completionMarker?: boolean;
+   readonly resumeCache?: NonNullable<Parameters<typeof makeEnvironmentThreadState>[1]>;
+   readonly loadCached?: ReturnType<Persistence.EnvironmentCacheStore["Service"]["loadThread"]>;
+@@ -129,11 +131,12 @@ export const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(funct
+   );
+   const snapshotLoader = ThreadSnapshotLoader.ThreadSnapshotLoader.of({
+     load: (_prepared, threadId) =>
+-      Ref.update(loaderCalls, (count) => count + 1).pipe(
+-        Effect.as(
++      Ref.updateAndGet(loaderCalls, (count) => count + 1).pipe(
++        Effect.map((count) =>
+           threadId === THREAD_ID
+-            ? (options?.httpSnapshot ??
+-                ({ _tag: "unavailable" } satisfies ThreadSnapshotLoadResult))
++            ? (options?.httpSnapshots?.[Math.min(count, options.httpSnapshots.length) - 1] ??
++              options?.httpSnapshot ??
++              ({ _tag: "unavailable" } satisfies ThreadSnapshotLoadResult))
+             : ({ _tag: "unavailable" } satisfies ThreadSnapshotLoadResult),
+         ),
+       ),
+```
+
+No other existing test, fixture or expectation changes in this commit. Upstream's other test hunk at de21fbcff3 (the comment wording "would resubscribe forever" -> "without backing off" in the config-read case) is not taken: GOAT's copy of that case does not exist.
+
