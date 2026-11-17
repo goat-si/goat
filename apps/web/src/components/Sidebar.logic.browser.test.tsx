@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { act, fakeTimers, render } from "../../test/render";
-import { useSnoozeWakeClock, useThreadJumpHintsVisible } from "./Sidebar.logic";
+import { useSnoozeWakeClock } from "./Sidebar.logic";
+import { useThreadJumpHintsVisible } from "./sidebar/threadJumpHints";
 
 const MOUNTED_AT_MS = Date.parse("2026-10-24T08:00:00.000Z");
 

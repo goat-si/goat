@@ -210,11 +210,11 @@ import {
   sidebarThreadKeyAtY,
   sortInboxThreadsByReturn,
   useSnoozeWakeClock,
-  useThreadJumpHintsVisible,
   type SidebarListItem,
   type SidebarSection,
   resolveSidebarRowThreadId,
 } from "./Sidebar.logic";
+import { useThreadJumpHintsVisible } from "./sidebar/threadJumpHints";
 import {
   createSidebarCollisionDetection,
   createSidebarSortingStrategy,

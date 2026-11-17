@@ -215,11 +215,11 @@ import {
   sortPinnedThreadsForSidebar,
   useSidebarRowSubscriptionLease,
   setFileDragActive,
-  useThreadJumpHintsVisible,
   ThreadStatusPill,
   type SidebarChildAttention,
   withSidebarChildRequest,
 } from "./Sidebar.logic";
+import { useThreadJumpHintsVisible } from "./sidebar/threadJumpHints";
 import {
   isProjectsViewPinnedThread,
   isProjectsViewListedThread,
