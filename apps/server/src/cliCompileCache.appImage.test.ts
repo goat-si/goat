@@ -58,6 +58,16 @@ it.live("an AppImage launch keeps a link named v1 and what it points to", () =>
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
+it.live("an AppImage launch keeps a broken link named v1", () =>
+  Effect.gen(function* () {
+    const { fs, root, cacheDir } = yield* fixture;
+    yield* fs.makeDirectory(cacheDir, { recursive: true });
+    yield* fs.symlink(`${root}/gone`, `${cacheDir}/v1`);
+    yield* launchAsAppImage(root);
+    expect(yield* fs.readLink(`${cacheDir}/v1`)).toBe(`${root}/gone`);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.live("an AppImage launch keeps a file named v1", () =>
   Effect.gen(function* () {
     const { fs, root, cacheDir } = yield* fixture;
