@@ -164,3 +164,76 @@ it.effect("keeps rows unverified when an older server omits lookup results", () 
     }),
   ),
 );
+
+it.effect("a link lookup takes projects only from answers that name them", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const requests = yield* Queue.bounded<Deferred.Deferred<OrchestrationV2ThreadFamily>>(3);
+      const harness = yield* makeEnvironmentQueryHarness(Effect.void, {
+        rpcSession: {
+          client: {
+            [ORCHESTRATION_V2_WS_METHODS.getThreadFamily]: () =>
+              Effect.gen(function* () {
+                const answer = yield* Deferred.make<OrchestrationV2ThreadFamily>();
+                yield* Queue.offer(requests, answer);
+                return yield* Deferred.await(answer);
+              }),
+          },
+        } as unknown as RpcSession.RpcSession,
+      });
+      const shell = Atom.make<Pick<EnvironmentShellState, "removedAt">>({ removedAt: new Map() });
+      const lookup = createThreadLineageLookup(harness.runtime, () => shell);
+      const registry = AtomRegistry.make();
+      yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
+      const resolve = Effect.fn("test.resolveLinks")(function* (
+        id: string,
+        answer: OrchestrationV2ThreadFamily,
+      ) {
+        const atom = lookup.resolution(QUERY_ENVIRONMENT.environmentId, ThreadId.make(id), [
+          ThreadId.make(id),
+        ]);
+        const settled = yield* Deferred.make<void>();
+        const unsubscribe = registry.subscribe(
+          atom,
+          (result) => {
+            if (result.checked.size > 0) Deferred.doneUnsafe(settled, Exit.void);
+          },
+          { immediate: true },
+        );
+        yield* Deferred.succeed(yield* Queue.take(requests), answer);
+        if (answer.lookupTitles !== undefined) yield* Deferred.await(settled);
+        const result = registry.get(atom);
+        unsubscribe();
+        return result;
+      });
+
+      const current = yield* resolve("linked", {
+        snapshotSequence: 1,
+        threads: [],
+        lookupTitles: { [ThreadId.make("linked")]: "Linked" },
+        lookupProjectIds: { [ThreadId.make("linked")]: "project-1" as never },
+      });
+      expect(current.titles).toEqual({ linked: "Linked" });
+      expect(current.projectIds).toEqual({ linked: "project-1" });
+
+      // A server from before lookupProjectIds names titles only.
+      const titlesOnly = yield* resolve("titled", {
+        snapshotSequence: 1,
+        threads: [],
+        lookupTitles: { [ThreadId.make("titled")]: "Titled" },
+      });
+      expect(titlesOnly.titles).toEqual({ titled: "Titled" });
+      expect(titlesOnly.projectIds).toEqual({});
+
+      // A server from before lookupOnly answers with a whole family; none of it is link metadata.
+      const family = yield* resolve("family", {
+        snapshotSequence: 1,
+        threads: [
+          { id: ThreadId.make("family"), title: "Family", projectId: "project-2" } as never,
+        ],
+      });
+      expect(family.titles).toEqual({});
+      expect(family.projectIds).toEqual({});
+    }),
+  ),
+);

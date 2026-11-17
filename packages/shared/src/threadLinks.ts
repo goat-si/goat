@@ -90,6 +90,21 @@ export function hasThreadLinks(markdown: string): boolean {
   );
 }
 
+/** Every thread a message links, as written and percent-decoded, once each, outside code. */
+export function threadLinkIds(markdown: string): ThreadId[] {
+  if (!hasThreadLinks(markdown)) return [];
+  const ids = new Set<ThreadId>();
+  for (const match of markdown.matchAll(THREAD_LINK_OUTSIDE_CODE)) {
+    const href = match.groups?.angleHref ?? match.groups?.href;
+    const written = href === undefined ? null : parseThreadLinkHref(href);
+    if (written === null) continue;
+    ids.add(written);
+    const decoded = percentDecodedThreadLinkId(written);
+    if (decoded !== null) ids.add(decoded);
+  }
+  return [...ids];
+}
+
 export function relabelThreadLinks(
   markdown: string,
   title: (threadId: ThreadId) => string | undefined,

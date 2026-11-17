@@ -462,7 +462,7 @@
   "apps/web/scripts/generate-solar-icons.ts": { "nonNull": 6 },
   "apps/web/src/browser/ServerBrowserSurface.tsx": { "lines": 1015 },
   "apps/web/src/browserFaviconStore.ts": { "nonNull": 2 },
-  "apps/web/src/components/ChatMarkdown.tsx": { "lines": 1657, "nonNull": 1 },
+  "apps/web/src/components/ChatMarkdown.tsx": { "lines": 1662, "nonNull": 1 },
   "apps/web/src/components/ChatView.logic.test.ts": { "lines": 1451 },
   "apps/web/src/components/ChatView.logic.ts": { "lines": 1550, "nonNull": 1 },
   "apps/web/src/components/ChatView.tsx": { "lines": 4213, "nonNull": 1 },

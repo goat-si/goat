@@ -6,7 +6,7 @@ import {
   OrchestrationV2ThreadHistoryOrigin,
 } from "./orchestrationV2Attribution.ts";
 export * from "./orchestrationV2Attribution.ts";
-import { OrchestrationV2GetThreadFamilyInput } from "./threadFamilyLookup.ts";
+import { OrchestrationV2GetThreadFamilyInput, ThreadLookupAnswer } from "./threadFamilyLookup.ts";
 export { OrchestrationV2GetThreadFamilyInput } from "./threadFamilyLookup.ts";
 import { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
 import { OrchestrationV2ProviderThreadNativeMetadata } from "./orchestrationV2NativeMetadata.ts";
@@ -3842,7 +3842,7 @@ export type OrchestrationV2SubscribeShellInput = typeof OrchestrationV2Subscribe
 export const OrchestrationV2ThreadFamily = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   threads: Schema.Array(OrchestrationV2ThreadShell),
-  lookupTitles: Schema.optionalKey(Schema.Record(ThreadId, Schema.String)),
+  ...ThreadLookupAnswer,
 });
 export type OrchestrationV2ThreadFamily = typeof OrchestrationV2ThreadFamily.Type;
 

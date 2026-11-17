@@ -1,5 +1,5 @@
 import { scopeProjectRef } from "@goat/client-runtime/environment";
-import type { ThreadContextRecord } from "@goat/contracts";
+import type { ProjectId, ThreadContextRecord } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { MessagesSquareIcon } from "~/components/solar";
 
@@ -12,10 +12,13 @@ export function ThreadContextChip(props: {
   record: Pick<ThreadContextRecord, "environmentId" | "threadId" | "title" | "host">;
   copyMarkdown?: string;
   state?: "readable" | "unavailable" | "invalid";
+  /** A thread this client holds no shell for, as the server named it; null without a project. */
+  projectId?: ProjectId | null;
 }) {
   const { environmentId, threadId } = props.record;
   const shell = useThreadShell({ environmentId, threadId });
-  const project = useProject(shell ? scopeProjectRef(environmentId, shell.projectId) : null);
+  const projectId = shell?.projectId ?? props.projectId ?? null;
+  const project = useProject(projectId ? scopeProjectRef(environmentId, projectId) : null);
   const title = shell?.title?.trim() || props.record.title;
   return (
     <Tooltip>
@@ -48,7 +51,7 @@ export function ThreadContextChip(props: {
           ? "On another machine, so this machine's agent can't read it. Remove it or switch back to send."
           : props.state === "unavailable"
             ? `Host ${props.record.host} is not connected. The connection is unavailable or reconnecting; the agent can still try reading it through this host.`
-            : shell
+            : shell || props.projectId !== undefined
               ? "Open thread"
               : "Thread no longer available"}
       </TooltipPopup>
