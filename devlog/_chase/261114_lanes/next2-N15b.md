@@ -318,3 +318,7 @@ I listed these with `git diff --color-moved=plain`: a removed line that git does
   - `useSourceControlPublishRepositoryAction`: only the moved dialog uses it; the new file imports it.
   - `sourceControlIcon` (from the import that also has getSourceControlPresentation): only the moved code uses it; the new file imports it, and GitActionsControl keeps getSourceControlPresentation.
   - `function PublishRepositoryDialog(`: becomes `export function PublishRepositoryDialog(` in the new file, which GitActionsControl now imports.
+
+## Closed
+
+- #3660 merged to dev at 20:27:10 UTC (dev = `42bf8633ce55b4077f923d02ebddfe701d3d1bfd`, the whole integration tree); this lane's branch and its follow-ups (N15bb) are in dev. Lane N15b closed; scratch repositories and local captures under /tmp removed.
