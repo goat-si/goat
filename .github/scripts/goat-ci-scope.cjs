@@ -44,7 +44,11 @@ const {
   mentionsOf,
 } = require("./goat-ci-imports.cjs");
 // Node strips the types, so CI picks the same files check:changed runs before every push.
-const { INGEST_SUITE_TRIGGER, testsForChanges } = require("../../scripts/lib/changed-tests.ts");
+const {
+  INGEST_SUITE_TRIGGER,
+  testsForChanges,
+  trackedTests,
+} = require("../../scripts/lib/changed-tests.ts");
 
 const FULL_LABEL = "ci:full";
 const AFFECTED_LABEL = "ci:affected";
@@ -112,7 +116,7 @@ const PEN_GO_PATHS = ["apps/pen/", "packages/pen-protocol/"];
 const PEN_WINDOWS_TASK = "test-pen-windows";
 /** Tasks that run on hosted Windows. */
 const WINDOWS_RUNNER_TASKS = new Set([WINDOWS_TASK, PEN_WINDOWS_TASK]);
-/** The quick run's selected tests. */
+/** A quick run's selected tests, or the tests no suite of a full run owns. */
 const CHANGED_TESTS_TASK = "test-changed";
 /**
  * goat-ci.yml hands test-changed its list in one environment string, which Linux caps at 128 KiB.
@@ -232,7 +236,8 @@ const packageSuiteDirs = (workspace) =>
 
 /**
  * Names of the workspace packages test-packages runs: every one with a test script that no other
- * task owns, so a new package is tested without editing goat-ci.yml. scripts keeps its own list.
+ * task owns, so a new package is tested without editing goat-ci.yml. A full run's test-changed runs
+ * the rest: scripts, .github/scripts and packages without a test script (withUnownedTests).
  */
 function packageSuiteManifests(root) {
   const dirs = ["oxlint-plugin-goat"];
@@ -727,16 +732,7 @@ function quickRun(changed, root) {
   };
   if (Buffer.byteLength(JSON.stringify(changedTests.vitest)) > CHANGED_TESTS_MAX_BYTES) {
     const why = tests.length + " test files for the changes, more than test-changed takes";
-    const left = testsOutsideSuites(root, tests);
-    return {
-      ...laneRun("all"),
-      tasks: MATRIX_ORDER.filter((task) => task !== CHANGED_TESTS_TASK || left.length > 0),
-      reasons: new Map([["full", why]]),
-      changedTests: {
-        vitest: left.filter((file) => !NODE_TEST_RE.test(file)),
-        node: left.filter((file) => NODE_TEST_RE.test(file)),
-      },
-    };
+    return { ...laneRun("all"), reasons: new Map([["full", why]]) };
   }
   if (tests.length > 0) {
     reasons.set(CHANGED_TESTS_TASK, tests.length + " test file(s) for the changes");
@@ -752,6 +748,24 @@ function quickRun(changed, root) {
 }
 
 const noChangedTests = () => ({ vitest: [], node: [] });
+
+/** test-changed's apps/web browser tests (Chromium), which run with loopback only; the rest, mobile's jsdom ones included, stay on the host. */
+const webBrowserTests = (vitest) =>
+  vitest.filter((file) => /^apps\/web\/.+\.browser\.test\.[cm]?[jt]sx?$/.test(file));
+
+/** A full run's test-changed: every test file no suite of the matrix runs. */
+function withUnownedTests(root, result) {
+  const left = testsOutsideSuites(root, trackedTests(root)).sort();
+  const tasks = new Set(left.length > 0 ? [...result.tasks, CHANGED_TESTS_TASK] : result.tasks);
+  return {
+    ...result,
+    tasks: MATRIX_ORDER.filter((task) => tasks.has(task)),
+    changedTests: {
+      vitest: left.filter((file) => !NODE_TEST_RE.test(file)),
+      node: left.filter((file) => NODE_TEST_RE.test(file)),
+    },
+  };
+}
 
 /** One line for goat-ci-result: what kind of run this was and how to widen it. */
 function noteFor(result, branch = "<branch>") {
@@ -778,7 +792,8 @@ function describeRun(result, branch) {
  */
 async function planRun({ env, payload, root, fetchImpl, files }) {
   const result = await planTasks({ env, payload, root, fetchImpl, files });
-  const planned = { quick: false, changedTests: noChangedTests(), ...result };
+  const base = { quick: false, changedTests: noChangedTests(), ...result };
+  const planned = base.full ? withUnownedTests(root, base) : base;
   return { ...planned, note: noteFor(planned, env.GITHUB_HEAD_REF || env.GITHUB_REF_NAME) };
 }
 
@@ -930,6 +945,8 @@ async function main(env = process.env, fetchImpl = fetch) {
         JSON.stringify(result.changedTests.vitest) +
         "\nchanged_node_tests=" +
         JSON.stringify(result.changedTests.node) +
+        "\nchanged_tests_netns=" +
+        JSON.stringify(webBrowserTests(result.changedTests.vitest)) +
         "\nnote=" +
         result.note +
         "\n",
@@ -964,6 +981,7 @@ module.exports = {
   matrixFor,
   laneRun,
   planRun,
+  webBrowserTests,
 };
 
 if (require.main === module) {
