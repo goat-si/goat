@@ -71,6 +71,11 @@ export const PreviewAutomationProfile = Schema.Struct({
 });
 export type PreviewAutomationProfile = typeof PreviewAutomationProfile.Type;
 
+export const PreviewAutomationProfileListFields = {
+  profiles: Schema.optional(Schema.Array(PreviewAutomationProfile)),
+  defaultProfileId: Schema.optional(BrowserProfileId),
+};
+
 /** The open input's combinations that cannot mean one thing. */
 export const openInputRule = Schema.makeFilter(
   (input: {

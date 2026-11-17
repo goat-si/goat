@@ -18,17 +18,13 @@ import {
   PreviewViewportSetting as PreviewViewportSettingSchema,
   SERVER_BROWSER_AUTOMATION_CLIENT_ID,
   ThreadId,
-  type PreviewAppearancePreference,
-  type PreviewAutomationActionEvent,
   type PreviewAutomationClickInput,
-  type PreviewAutomationConsoleEntry,
   type PreviewAutomationDialogInput,
   type PreviewAutomationDragInput,
   type PreviewAutomationEvaluateInput,
   type PreviewAutomationFetchInput,
   type PreviewAutomationHoverInput,
   type PreviewAutomationNavigateInput,
-  type PreviewAutomationNetworkEntry,
   type PreviewAutomationOpenInput,
   type PreviewAutomationPressInput,
   type PreviewAutomationReloadInput,
@@ -46,8 +42,6 @@ import {
   type PreviewNavStatus,
   type PreviewReportProfilesInput,
   type PreviewSessionSnapshot,
-  type PreviewTabSession,
-  type PreviewViewportSetting,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { normalizePreviewUrl } from "@goat/shared/preview";
@@ -68,7 +62,7 @@ import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
-import type { CDPSession, Dialog, Download, FileChooser, Frame, Page } from "playwright-core";
+import type { CDPSession, Download, FileChooser, Page } from "playwright-core";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -82,6 +76,7 @@ import * as ServerBrowserReadiness from "./serverBrowserReadiness.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
+import type { Recording, ServerDownload, ServerTab, ViewerState } from "./ServerBrowserTab.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import { settleInitialOpen } from "./unloadedOpen.ts";
 import * as AgentTabState from "./agentTabState.ts";
@@ -253,104 +248,6 @@ export class ServerBrowser extends Context.Service<
     }) => Effect.Effect<boolean>;
   } & ServerBrowserScreen.SurfaceService
 >()("goat/preview/ServerBrowser") {}
-
-interface ViewerState {
-  readonly id: string;
-  readonly canOperate: boolean;
-  readonly pressedKeys: Map<string, { key: string; code: string }>;
-  readonly pressedButtons: Map<"left" | "middle" | "right", { x: number; y: number }>;
-  readonly push: (output: ServerBrowserViewerOutput) => void;
-  readonly pause: () => Promise<void>;
-  readonly resume: () => Promise<void>;
-  scrolledAt: number;
-
-  requestedSize: { width: number; height: number; order: number } | null;
-}
-
-interface Recording {
-  readonly encoder: Page;
-  readonly session: CDPSession;
-  readonly startedAt: string;
-  readonly frames: ReturnType<typeof makeRecordingFrames>;
-}
-
-interface ServerTab {
-  readonly threadId: ThreadId;
-  readonly tabId: string;
-  readonly page: Page;
-  readonly cdp: CDPSession;
-  readonly frameSessions: Map<Frame, CDPSession>;
-  copyReads: Promise<void>;
-  copyKeyedUntil: number;
-  pendingCopyReads: number;
-  readonly createdAt: number;
-  usedAt: number;
-  readonly viewers: Set<ViewerState>;
-  viewerAttached: PromiseWithResolvers<void> | null;
-  readonly consoleEntries: Array<PreviewAutomationConsoleEntry>;
-  readonly networkEntries: Array<PreviewAutomationNetworkEntry>;
-  readonly diagnostics: ServerBrowserDiagnostics;
-  readonly actionTimeline: Array<PreviewAutomationActionEvent>;
-  readonly control: SessionControl;
-  agentOperating: boolean;
-  /** Whose input last reached this tab, and so whose popups it opens. */
-  readonly popups: AgentTabState.PopupAttribution;
-  fileChooserIntercepted: boolean;
-  readonly onFileChooser: (chooser: FileChooser) => void;
-
-  readonly isolatedContext: boolean;
-  /** The sign-in mode and store the tab was opened with; it never changes. */
-  readonly session: PreviewTabSession;
-
-  readonly desktop: { readonly close: () => Promise<void> } | null;
-  readonly profileId: string | undefined;
-  readonly openerTabId: string | undefined;
-
-  readonly downloads: Array<ServerDownload>;
-  fileChooser: {
-    readonly id: string;
-    readonly chooser: FileChooser;
-    readonly accept: string;
-    readonly offeredTo: string | null;
-  } | null;
-  dialog: Dialog | null;
-  setting: PreviewViewportSetting;
-  colorScheme: PreviewAppearancePreference;
-  zoomFactor: number;
-  /** Last usable CSS size measured on the desktop. */
-  desktopViewport: { readonly width: number; readonly height: number } | null;
-  desktopViewportRead: Promise<ServerTab["desktopViewport"]>;
-  /** A read queued behind `desktopViewportRead`, shared by every caller that waits for it. */
-  desktopViewportNext: Promise<ServerTab["desktopViewport"]> | null;
-  loading: boolean;
-  loadError: import("@goat/contracts").PreviewAutomationLoadError | undefined;
-  closing: boolean;
-  recording: Recording | null;
-  initialNavigation: Promise<void> | null;
-  initialNavigationSent: boolean;
-  navigationGeneration: number;
-  /** Moves on every main-frame navigation, same-document routes and reloads included. */
-  documentGeneration: number;
-
-  abortedNavigation: {
-    readonly url: string;
-    readonly generation: number;
-    readonly timer: ReturnType<typeof setTimeout>;
-  } | null;
-
-  recordingStart: Promise<Recording> | null;
-  captureLock: Promise<void>;
-  capturing: number;
-}
-
-interface ServerDownload {
-  readonly id: string;
-  readonly fileName: string;
-  readonly path: string;
-  readonly sizeBytes: number;
-  readonly url: string;
-  readonly completedAt: string;
-}
 
 const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
