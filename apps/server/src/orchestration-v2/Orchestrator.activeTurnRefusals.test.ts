@@ -18,9 +18,11 @@ import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapte
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -318,4 +320,180 @@ it.effect.each([
     assert.equal(thread.title, "Renamed");
     assert.equal(thread.worktreePath, "/repo");
   }).pipe(Effect.provide(layerFor(false))),
+);
+
+/** Re-attaches the seeded session as a provider that cannot switch modes inside a session. */
+const reattachSession = (
+  threadId: ThreadId,
+  input: { readonly switchesInSession: boolean; readonly status: "ready" | "stopped" | "error" },
+) =>
+  Effect.gen(function* () {
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const now = yield* DateTime.now;
+    yield* projections.apply({
+      id: EventId.make("active-turn:session-reattached"),
+      type: "provider-session.attached",
+      threadId,
+      occurredAt: now,
+      payload: {
+        id: ProviderSessionId.make("session:active-turn"),
+        driver: adapter.driver,
+        providerInstanceId: instanceId,
+        status: input.status,
+        cwd: "/repo",
+        model: modelSelection.model,
+        capabilities: {
+          ...CodexProviderCapabilitiesV2,
+          sessions: {
+            ...CodexProviderCapabilitiesV2.sessions,
+            supportsRuntimeModeSwitchInSession: input.switchesInSession,
+          },
+        },
+        createdAt: now,
+        updatedAt: now,
+        lastError: null,
+      },
+    });
+  });
+
+it.effect.each([
+  {
+    case: "a running turn on a session that cannot switch",
+    active: true,
+    switches: false,
+    status: "ready",
+    refused: true,
+  },
+  {
+    case: "an idle thread on that session",
+    active: false,
+    switches: false,
+    status: "ready",
+    refused: false,
+  },
+  {
+    case: "a running turn on a session that switches in place",
+    active: true,
+    switches: true,
+    status: "ready",
+    refused: false,
+  },
+  {
+    case: "a running turn beside a stopped session",
+    active: true,
+    switches: false,
+    status: "stopped",
+    refused: false,
+  },
+  {
+    case: "a running turn beside an errored session",
+    active: true,
+    switches: false,
+    status: "error",
+    refused: false,
+  },
+] as const)(
+  "regression goat#3558: a runtime mode change during $case",
+  ({ active, switches, status, refused }) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const { threadId, runId } = yield* seedThread(active);
+      yield* reattachSession(threadId, { switchesInSession: switches, status });
+      const commandId = CommandId.make("set-runtime-mode");
+      const dispatch = orchestrator.dispatch({
+        type: "thread.runtime-mode.set",
+        commandId,
+        threadId,
+        runtimeMode: "approval-required",
+      });
+      if (refused) {
+        yield* assertRefusedUnchanged(
+          threadId,
+          commandId,
+          dispatch,
+          "This thread has a turn running, and changing its access mode would end it.",
+        );
+        const { runs } = yield* projections.getThreadRecords(threadId, ["runs"]);
+        assert.equal(runs.find((run) => run.id === runId)?.status, "running");
+        return;
+      }
+      yield* dispatch;
+      assert.equal((yield* projections.getThread(threadId)).runtimeMode, "approval-required");
+      if (active) {
+        const { runs } = yield* projections.getThreadRecords(threadId, ["runs"]);
+        assert.equal(runs.find((run) => run.id === runId)?.status, "running");
+      }
+    }).pipe(Effect.provide(layerFor(false))),
+);
+
+/** The seeded turn completes, as its provider would report it. */
+const completeSeededTurn = (threadId: ThreadId, runId: RunId) =>
+  Effect.gen(function* () {
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const now = yield* DateTime.now;
+    const { runs } = yield* projections.getThreadRecords(threadId, ["runs"]);
+    const run = runs.find((candidate) => candidate.id === runId)!;
+    yield* projections.apply({
+      id: EventId.make("active-turn:run-completed"),
+      type: "run.updated",
+      threadId,
+      runId,
+      providerInstanceId: run.providerInstanceId,
+      occurredAt: now,
+      payload: { ...run, status: "completed", completedAt: now },
+    });
+  });
+
+it.effect.each([
+  { refusal: "provider switch", text: "this provider change would end it" },
+  { refusal: "worktree change", text: "moving it to another worktree would end it" },
+  { refusal: "runtime mode change", text: "changing its access mode would end it" },
+] as const)(
+  "a $refusal refused during a turn records no receipt, and the same command id succeeds once the turn ends",
+  ({ refusal, text }) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+      const { threadId, runId } = yield* seedThread(true);
+      if (refusal === "runtime mode change")
+        yield* reattachSession(threadId, { switchesInSession: false, status: "ready" });
+      const commandId = CommandId.make("retried-with-the-same-id");
+      const command =
+        refusal === "provider switch"
+          ? ({
+              type: "provider.switch",
+              commandId,
+              threadId,
+              modelSelection: { instanceId: otherInstanceId, model: modelSelection.model },
+            } as const)
+          : refusal === "worktree change"
+            ? ({
+                type: "thread.metadata.update",
+                commandId,
+                threadId,
+                worktreePath: "/other-worktree",
+              } as const)
+            : ({
+                type: "thread.runtime-mode.set",
+                commandId,
+                threadId,
+                runtimeMode: "approval-required",
+              } as const);
+
+      yield* assertRefusedUnchanged(threadId, commandId, orchestrator.dispatch(command), text);
+      assert.isTrue(Option.isNone(yield* receipts.getByCommandId(commandId)));
+
+      yield* completeSeededTurn(threadId, runId);
+      const accepted = yield* orchestrator.dispatch(command);
+      assert.isUndefined(accepted.replayed);
+      assert.isTrue(Option.isSome(yield* receipts.getByCommandId(commandId)));
+      const replayed = yield* orchestrator.dispatch(command);
+      assert.isTrue(replayed.replayed);
+      assert.equal(replayed.sequence, accepted.sequence);
+    }).pipe(
+      Effect.provide(
+        Layer.merge(layerFor(false), CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase))),
+      ),
+    ),
 );
