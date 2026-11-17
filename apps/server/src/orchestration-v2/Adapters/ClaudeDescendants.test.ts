@@ -1,0 +1,95 @@
+import { assert, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as TestClock from "effect/testing/TestClock";
+
+import {
+  type ClaudeProcessRow,
+  makeClaudeDescendantSampler,
+  parseClaudeProcessTable,
+} from "./ClaudeDescendants.ts";
+
+const row = (pid: number, ppid: number, started: string, pgid = pid): ClaudeProcessRow => ({
+  pid,
+  ppid,
+  pgid,
+  started,
+});
+
+const fakeTable = (initial: ReadonlyArray<ClaudeProcessRow> | undefined) => {
+  const state = { rows: initial, reads: 0, killed: [] as Array<number> };
+  return {
+    state,
+    sampler: makeClaudeDescendantSampler({
+      readTable: Effect.sync(() => {
+        state.reads += 1;
+        return Option.fromUndefinedOr(state.rows);
+      }),
+      interval: "1 second",
+      kill: (killed) => void state.killed.push(killed.pid),
+    }),
+  };
+};
+
+it.effect("samples one process table per interval however many CLIs it tracks", () =>
+  Effect.gen(function* () {
+    const { state, sampler } = fakeTable([]);
+    const { track } = yield* sampler;
+    const trackers = [track(100), track(200), track(300)];
+    yield* TestClock.adjust("3 seconds");
+    assert.equal(state.reads, 4);
+
+    for (const tracker of trackers) yield* tracker.stop;
+    const afterStop = state.reads;
+    yield* TestClock.adjust("10 seconds");
+    assert.equal(state.reads, afterStop);
+  }),
+);
+
+it.effect("stops a job that left the CLI's group once the CLI has exited", () =>
+  Effect.gen(function* () {
+    const { state, sampler } = fakeTable([row(100, 1, "A"), row(200, 100, "B")]);
+    const tracker = (yield* sampler).track(100);
+    yield* TestClock.adjust("1 second");
+    // The CLI exited; its job was re-parented to launchd.
+    state.rows = [row(200, 1, "B"), row(201, 200, "C", 200)];
+    yield* tracker.stop;
+    assert.deepEqual(state.killed.toSorted(), [200, 201]);
+  }),
+);
+
+it.effect("never signals a reused pid, the CLI's old pid or this server", () =>
+  Effect.gen(function* () {
+    const { state, sampler } = fakeTable([
+      row(100, 1, "A"),
+      row(200, 100, "B"),
+      row(process.pid, 100, "S"),
+    ]);
+    const tracker = (yield* sampler).track(100);
+    yield* tracker.refresh;
+    // Both pids now belong to other processes: different start times.
+    state.rows = [row(100, 1, "X"), row(300, 100, "Y"), row(200, 1, "Z"), row(process.pid, 1, "S")];
+    yield* tracker.stop;
+    assert.deepEqual(state.killed, []);
+  }),
+);
+
+it.effect("a process table that cannot be read kills nothing", () =>
+  Effect.gen(function* () {
+    const { state, sampler } = fakeTable([row(100, 1, "A"), row(200, 100, "B")]);
+    const tracker = (yield* sampler).track(100);
+    yield* tracker.refresh;
+    state.rows = undefined;
+    yield* tracker.stop;
+    assert.deepEqual(state.killed, []);
+  }),
+);
+
+it("parses ps rows with their start times and skips malformed lines", () => {
+  assert.deepEqual(
+    parseClaudeProcessTable(
+      "  100     1   100 Tue Nov 17 21:00:00 2026\nnot a row\n  200   100   100 Tue Nov 17 21:00:01 2026\n",
+    ),
+    [row(100, 1, "Tue Nov 17 21:00:00 2026"), row(200, 100, "Tue Nov 17 21:00:01 2026", 100)],
+  );
+});

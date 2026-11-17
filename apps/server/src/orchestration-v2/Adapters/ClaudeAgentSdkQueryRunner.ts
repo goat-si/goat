@@ -16,6 +16,8 @@ import {
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- the SDK's spawned CLI is a Node ChildProcess.
 import * as NodeChildProcess from "node:child_process";
 import { spawnClaudeProcessGroup, spawnClaudeWindowsProcess } from "./ClaudeProcessSpawn.ts";
+import { makeClaudeDescendantSampler, readClaudeProcessTable } from "./ClaudeDescendants.ts";
+import * as ProcessRunner from "../../processRunner.ts";
 import { lastClaudeTranscriptModel } from "./ClaudeForkedSkillModel.ts";
 import { AgentScope, nodeChildAgentProcess } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -64,6 +66,8 @@ const CLAUDE_SCRIPT_EXTENSIONS = [".js", ".mjs", ".tsx", ".ts", ".jsx"];
 // The SDK has no control-request deadline; the CLI waits up to 30 s per MCP server.
 const CLAUDE_MCP_REGISTRATION_TIMEOUT = "90 seconds";
 const CLAUDE_BOOT_TIMEOUT = "5 minutes";
+// How often CLIs no agent scope holds have their process trees recorded, all from one table.
+const CLAUDE_DESCENDANT_POLL = "1 second";
 
 export const CLAUDE_CODE_PRESET_TOOLS = {
   type: "preset",
@@ -478,6 +482,10 @@ export const layerQueryRunner: Layer.Layer<
     const agentScope = yield* AgentScope;
     const platform = yield* HostProcess.Platform;
     const runFork = Effect.runForkWith(yield* Effect.context<never>());
+    const descendants = yield* makeClaudeDescendantSampler({
+      readTable: readClaudeProcessTable(yield* ProcessRunner.make()),
+      interval: CLAUDE_DESCENDANT_POLL,
+    });
 
     return ClaudeAgentSdkQueryRunner.of({
       allocateSessionId: random
@@ -532,13 +540,25 @@ export const layerQueryRunner: Layer.Layer<
           const appendStderr = (text: string) => {
             if (!answered) stderrTail = (stderrTail + text).slice(-2_048);
           };
+          let refreshDescendants: Effect.Effect<void> = Effect.void;
           const spawnProcess =
             options.spawnClaudeCodeProcess ??
             ((spawnOptions: ClaudeSpawnOptions) => {
               if (platform !== "win32") {
                 let stderrDone = () => {};
                 stderrClosed = new Promise((resolve) => (stderrDone = resolve));
-                return spawnClaudeProcessGroup(spawnOptions, stopScope, appendStderr, stderrDone);
+                const child = spawnClaudeProcessGroup(
+                  spawnOptions,
+                  stopScope,
+                  appendStderr,
+                  stderrDone,
+                );
+                if (unit === undefined && child.pid !== undefined) {
+                  const tracker = descendants.track(child.pid);
+                  child.once("exit", () => runFork(tracker.stop));
+                  refreshDescendants = tracker.refresh;
+                }
+                return child;
               }
               return spawnClaudeWindowsProcess(spawnOptions, (chunk) => options.stderr?.(chunk));
             });
@@ -813,7 +833,9 @@ export const layerQueryRunner: Layer.Layer<
                 }),
               ),
             ),
-            close: Queue.shutdown(promptQueue).pipe(
+            // A job started since the last sample is recorded before the CLI is told to exit.
+            close: Effect.suspend(() => (processExited ? Effect.void : refreshDescendants)).pipe(
+              Effect.andThen(Queue.shutdown(promptQueue)),
               Effect.andThen(closeClaudeQuery(queryRuntime)),
               Effect.tap(() =>
                 logProtocolEvent({

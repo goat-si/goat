@@ -22,7 +22,7 @@ export function spawnClaudeProcessGroup(
   onExit?: () => void,
   onStderr: (text: string) => void = () => {},
   onStderrClose: () => void = () => {},
-): SpawnedProcess {
+): SpawnedProcess & Pick<NodeChildProcess.ChildProcess, "pid"> {
   const cwd = options.cwd ?? ".";
   const child = guardChild(
     NodeChildProcess.spawn(
@@ -53,7 +53,7 @@ export function spawnClaudeProcessGroup(
     onExit?.();
   });
   // Node's typings make stdin and stdout nullable once stdio has a fourth entry; both are pipes.
-  return child as SpawnedProcess;
+  return child as SpawnedProcess & Pick<NodeChildProcess.ChildProcess, "pid">;
 }
 
 export function spawnClaudeWindowsProcess(
