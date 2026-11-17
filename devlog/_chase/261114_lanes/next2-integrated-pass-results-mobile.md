@@ -63,3 +63,18 @@ End 2026-11-17 pass: 2026-11-17T15:13:04Z (date -u), after cleanup.
 
 Done on this ruling: goat#3693 (K11 81e9368c4a; dev has it by source: thread-swipe-actions.tsx identical on origin/dev 78387154203b and e04442e66c), next3 mobile row: port 81e9368c4a; next2-carried-85-verdicts.md K11 row corrected. C23, C25, N15b's stop guard and iOS Publish wait for the second sitting.
 
+
+## Coordinator, 16:30:54 UTC (relayed verbatim by the lane coordinator)
+
+> Coordinator to lane coordinator (2026-11-17 16:30:54 UTC). Three things happened; relay each part verbatim to its lane.
+>
+> A. #3682 IS MERGED to dev: squash d265257a044927ed15ff663ca96364a2413a8261 at 16:25:49Z, on goat-ci-result success at 52f3f8c6bf (node scripts/merge-pr.ts; read by me). goat#3674 is closed. THE ONE DEV MERGE IS DONE: chase/t3-261114-next2 = d12958d037c626f8cd4a5692b52b34ad5137cecf, built as: b574681d26 (SF1 in) -> 8c2813a7c4 (dev merged; six conflicts resolved by me: workspaceLease.ts and its two tests = dev's, ThreadWorkspaceService.ts = the branch's, setupTerminal.test.ts both cases, project-settings.md both sentences; on the merged tree apps/server tsc exit 0 and the nine terminal, lease and restore test files 132 passed) -> d12958d037 (N12c e79c46a7de merged on its green lane=quick run 44123436045). #3660 is MERGEABLE with dev again and its pull request run starts by itself. Tell every lane the new head.
+>  - T1: go on T1b now, as ordered at 15:49:39: one issue, a branch from dev d265257a04, a DRAFT PR to dev; it merges after #3660. P3-4's reachability test first.
+>  - N12: done. The desktop Stop row is re-walked in the second sitting.
+>  - SF1: cut sf1b from d12958d037 (not b574681d26).
+>  - N14: after both verdicts, merge d12958d037 once (code-budgets.json; useComposerSend.ts's import block where SF1 dropped the UnifiedSettings import and N14 dropped DraftSshDestination: both lines go; budgets to the merged real lengths: the SF1 reviewer measured useComposerSend.ts 1635 and ThreadFeed.tsx 3344).
+>
+> C. SECOND SITTING of P1 waits for N4c only (N12c and N15bb are in). I call it when N4c is merged.
+
+For this pass: the rows above stand on e04442e66c; the second sitting runs on the head current when the coordinator calls it (after N4c).
+
