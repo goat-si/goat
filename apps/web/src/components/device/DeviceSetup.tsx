@@ -1,6 +1,6 @@
 import { DeviceHostUpdates } from "./DeviceHostUpdates";
 import type { DevicePlatform, DeviceServiceState, EnvironmentId } from "@goat/contracts";
-import { CheckIcon as Check, CheckIcon, CircleAlertIcon } from "~/components/solar";
+import { CheckIcon as Check, CircleAlertIcon } from "~/components/solar";
 import { AuthSettingsWriteScope } from "@goat/contracts";
 import { useAtomMount } from "@effect/atom-react";
 import { useState } from "react";
@@ -388,7 +388,7 @@ export function PlatformStatus(props: {
       className={cn("flex gap-2", !props.compact && "rounded-md border border-border/60 px-3 py-2")}
     >
       {props.status.ready ? (
-        <CheckIcon
+        <Check
           className={cn(
             "mt-0.5 size-4 shrink-0",
             props.status.ready ? "text-success" : "text-muted-foreground",

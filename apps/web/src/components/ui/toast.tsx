@@ -193,17 +193,9 @@ function ToastExpandableSection({
         type="button"
       >
         {open ? (
-          <ChevronUpIcon
-            className="size-3.5 shrink-0 opacity-80"
-
-            strokeWidth={2.25}
-          />
+          <ChevronUpIcon className="size-3.5 shrink-0 opacity-80" />
         ) : (
-          <ChevronDownIcon
-            className="size-3.5 shrink-0 opacity-80"
-
-            strokeWidth={2.25}
-          />
+          <ChevronDownIcon className="size-3.5 shrink-0 opacity-80" />
         )}
         {open ? collapseLabel : expandLabel}
       </button>
@@ -288,15 +280,11 @@ function ToastDescriptionAndExpandable({
             <ChevronUpIcon
               aria-hidden
               className="size-3.5 h-lh shrink-0 text-muted-foreground opacity-80"
-
-              strokeWidth={2.25}
             />
           ) : (
             <ChevronDownIcon
               aria-hidden
               className="size-3.5 h-lh shrink-0 text-muted-foreground opacity-80"
-
-              strokeWidth={2.25}
             />
           )}
         </TooltipTrigger>

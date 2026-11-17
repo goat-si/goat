@@ -112,7 +112,7 @@ export function revealSideChatCitation(
   });
 }
 
-/** Called by the routed thread view, which is the one place a side chat quote can land. */
+/** Called from the chat route layout (routes/_chat.tsx), where a side chat quote lands. */
 function useSideChatCitationReveal(
   routeThreadRef: ScopedThreadRef | null,
   citation: AssistantCitation | null,
