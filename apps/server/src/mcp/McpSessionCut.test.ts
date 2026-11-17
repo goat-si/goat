@@ -189,7 +189,9 @@ const call = (
   );
 const textOf = (result: McpSchema.CallToolResult) =>
   result.content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
-const CUT = "while the call ran, so GOAT stopped it";
+/** One message for every tool, read or write, since a tool's read-only hint is not proof it wrote nothing. */
+const CUT =
+  "This GOAT session was revoked while the call ran, so GOAT stopped it. If the call changes anything, part of it may already have happened; check before repeating it with a new sign-in.";
 const create = (title: string) => ({ title, workspaceRoot: "/tmp/goat-session-cut/" + title });
 
 it.effect.each(["Settings revoke", "Revoke others"] as const)(
