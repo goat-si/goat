@@ -49,7 +49,7 @@
   "apps/mobile/src/features/notes/test-fixtures.ts": { "nonNull": 1 },
   "apps/mobile/src/features/projects/AddProjectScreen.tsx": { "lines": 1119 },
   "apps/mobile/src/features/pull-requests/PullRequestDescription.tsx": { "nonNull": 1 },
-  "apps/mobile/src/features/pull-requests/PullRequestRouteScreen.tsx": { "lines": 1358 },
+  "apps/mobile/src/features/pull-requests/PullRequestRouteScreen.tsx": { "lines": 1282 },
   "apps/mobile/src/features/pull-requests/PullRequestToolbar.android.tsx": { "nonNull": 1 },
   "apps/mobile/src/features/pull-requests/PullRequestsScreen.tsx": { "nonNull": 1 },
   "apps/mobile/src/features/pull-requests/pullRequestAutolinks.ts": { "nonNull": 1 },
