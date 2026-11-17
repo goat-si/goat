@@ -9,12 +9,14 @@ import {
 import {
   seedUserInputDraftAnswers,
   type ThreadUserInputQuestion,
+  userInputDraftKey,
 } from "@goat/client-runtime/state/thread-requests";
 import {
   AuthOrchestrationOperateScope,
   type DecisionAnswerInput,
   type ProviderApprovalDecision,
   type RuntimeRequestId,
+  type ScopedThreadRef,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -28,6 +30,19 @@ import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { serverEnvironment } from "../../state/server";
 import { decisionInbox, environmentThreads, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { sideChatAnswer } from "../../state/answer-side-chat";
+import { setUserInputDraftCustomAnswer } from "../../state/user-input-drafts";
+
+/** How the inbox opens a thread's side chat for "/side ..." typed as an answer. */
+export interface DecisionInboxSideChat {
+  readonly available: (ref: ScopedThreadRef) => boolean;
+  readonly hasAttachmentsOrContext: (
+    ref: ScopedThreadRef,
+    requestId: RuntimeRequestId,
+    questionId: string,
+  ) => boolean;
+  readonly open: (ref: ScopedThreadRef, prompt: string) => Promise<unknown>;
+}
 
 const sameRef = (a: DecisionItem["ref"], b: DecisionItem["ref"]) =>
   a.environmentId === b.environmentId && a.threadId === b.threadId;
@@ -80,6 +95,7 @@ export function useDecisionInboxSessionState() {
 export function useDecisionInbox(
   session: ReturnType<typeof useDecisionInboxSessionState>,
   isFocused: () => boolean,
+  sideChat?: DecisionInboxSideChat,
 ) {
   const registry = useContext(RegistryContext);
   const state = useAtomValue(decisionInbox.itemsAtom);
@@ -247,6 +263,22 @@ export function useDecisionInbox(
     const item = readActionItem(current.id);
     if (item?.kind !== "user_input") return;
     const draft = seedUserInputDraftAnswers(item.request.questions, draftsById[item.id] ?? {});
+    const command =
+      sideChat === undefined
+        ? null
+        : sideChatAnswer({
+            questions: item.request.questions,
+            customAnswer: (question) => draft[question.id]?.customAnswer,
+            hasAttachmentsOrContext: (question) =>
+              sideChat.hasAttachmentsOrContext(item.ref, item.request.requestId, question.id),
+            sideChatAvailable: () => sideChat.available(item.ref),
+          });
+    if (sideChat !== undefined && command !== null) {
+      // As in the composer: the question stays pending and the command leaves the answer.
+      onChangeCustomAnswer(item.request.requestId, command.question.id, "");
+      await sideChat.open(item.ref, command.prompt);
+      return;
+    }
     const submittedAnswers = buildPendingUserInputAnswers(item.request.questions, draft);
     if (submittedAnswers === null) return;
     return runResponse(item, () =>
@@ -331,6 +363,13 @@ export function useDecisionInbox(
         },
       };
     });
+    // Also where the thread's question card keeps answers, so Stop returns this one to the
+    // thread's draft through the one resolution listener, as web's inbox does.
+    setUserInputDraftCustomAnswer(
+      userInputDraftKey(item.ref.environmentId, item.ref.threadId, requestId),
+      question,
+      value,
+    );
   }
 
   function skip() {
