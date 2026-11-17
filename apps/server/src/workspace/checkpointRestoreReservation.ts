@@ -105,8 +105,7 @@ export const tryTurnStartReservation = <A, E, R>(
           reservations.add(reservation);
           return true;
         }),
-        (reserved) =>
-          reserved ? Effect.map(effect, Option.some) : Effect.succeed(Option.none<A>()),
+        (reserved) => (reserved ? Effect.asSome(effect) : Effect.succeed(Option.none<A>())),
         (reserved) => (reserved ? release(reservation) : Effect.void),
       );
     }),

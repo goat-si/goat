@@ -10,10 +10,10 @@ import type * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
  * of its own stays where it is. True when the checkout ends on the head; never fails.
  */
 export const makeRefreshNewPullRequestWorktree =
-  (deps: {
+  <E>(deps: {
     readonly gitCore: GitVcsDriver.GitVcsDriver["Service"];
     readonly configureUpstream: (cwd: string) => Effect.Effect<void>;
-    readonly changeRequestHeadRef: (cwd: string) => Effect.Effect<string, unknown>;
+    readonly changeRequestHeadRef: (cwd: string) => Effect.Effect<string, E>;
     readonly headSha: string | undefined;
     readonly localBranch: string;
   }) =>

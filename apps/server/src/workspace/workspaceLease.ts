@@ -206,8 +206,9 @@ export const reuseHeldWorkspaceLease = <A, E, R>(effect: Effect.Effect<A, E, R>)
 /** The hold this marked fiber may enter for cwd: only one this very fiber holds. */
 const enterHeld = (cwd: string) =>
   Effect.withFiber((fiber): Effect.Effect<HeldLease | undefined> => {
-    if (!fiber.getRef(ReuseHeldLease)) return Effect.succeed(undefined);
-    const key = canonical(cwd, fiber.getRef(HostProcess.Platform));
+    const key = fiber.getRef(ReuseHeldLease)
+      ? canonical(cwd, fiber.getRef(HostProcess.Platform))
+      : undefined;
     const marked = fiber.getRef(HeldLeases).filter((each) => each.key === key);
     const held = marked.find((each) => each.holder === fiber.id);
     // A fork of the holder queues behind its own marker's lease, which hangs if the holder awaits it.

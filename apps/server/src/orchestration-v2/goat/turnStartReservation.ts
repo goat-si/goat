@@ -24,12 +24,12 @@ export const makeTurnStartReservation = Effect.gen(function* () {
     startup: Effect.Effect<A, E, R>,
   ) =>
     Effect.gen(function* () {
-      const thread = Option.getOrUndefined(
+      const thread = Option.getOrNull(
         yield* projectionStore.getThreadShell(input.threadId).pipe(Effect.option),
       );
       const cwd =
         thread?.worktreePath ??
-        (thread === undefined
+        (thread == null
           ? undefined
           : yield* projects.getById(thread.projectId, { includeDeleted: true }).pipe(
               Effect.map((project) => Option.getOrUndefined(project)?.workspaceRoot),
