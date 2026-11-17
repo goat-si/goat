@@ -2,7 +2,7 @@ import * as React from "react";
 import { deadlineAfter } from "@goat/client-runtime/clock";
 import { useDeadlinePassed } from "../../hooks/useDeadline";
 
-const THREAD_JUMP_HINT_SHOW_DELAY_MS = 200;
+export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 200;
 
 /**
  * Thread jump hints appear once the jump modifier has been held for a moment,
