@@ -6,8 +6,10 @@ import {
 } from "@goat/contracts";
 import { makeSignedInMediaFetch } from "@goat/source-control-github/server/gitHubMediaFetch.testkit";
 import { fakeSourceControlDriverInstance } from "@goat/source-control-testing/fakeSourceControlDriver";
+import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -32,7 +34,7 @@ const decodeCreateUrlInput = Schema.decodeEffect(AssetCreateUrlInput);
 const makeServer = (input: {
   readonly projects: Set<string>;
   readonly cwdRepository?: string;
-  readonly lookup?: "fails" | "never answers";
+  readonly lookup?: "fails" | "never answers" | "dies" | "fails and dies" | "is interrupted";
 }) => {
   const authorizations: Array<string | null> = [];
   const github = sourceControlDefinitions.find("github");
@@ -65,14 +67,25 @@ const makeServer = (input: {
       ]),
     ),
     Layer.mock(PullRequestService.PullRequestService)({
-      hasProjectRepository: ({ host, repository }) =>
-        input.lookup === "fails"
-          ? Effect.fail(
-              new PullRequestOperationError({ operation: "listProjects", detail: "down" }),
-            )
-          : input.lookup === "never answers"
-            ? Effect.never
-            : Effect.succeed(host === "github.com" && input.projects.has(repository.toLowerCase())),
+      hasProjectRepository: ({ host, repository }) => {
+        const down = new PullRequestOperationError({ operation: "listProjects", detail: "down" });
+        switch (input.lookup) {
+          case "fails":
+            return Effect.fail(down);
+          case "never answers":
+            return Effect.never;
+          case "dies":
+            return Effect.die(new Error("lookup died"));
+          case "fails and dies":
+            return Effect.failCause(Cause.combine(Cause.fail(down), Cause.die("lookup died")));
+          case "is interrupted":
+            return Effect.interrupt;
+          default:
+            return Effect.succeed(
+              host === "github.com" && input.projects.has(repository.toLowerCase()),
+            );
+        }
+      },
     }),
     Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
       resolve: () =>
@@ -169,7 +182,7 @@ describe("GitHub media credential at the asset route", () => {
     },
   );
 
-  it.effect.each(["fails", "never answers"] as const)(
+  it.effect.each(["fails", "never answers", "dies", "fails and dies"] as const)(
     "a project lookup that %s sends no GitHub token",
     (lookup) => {
       const server = makeServer({ projects: new Set(["owner/repo"]), lookup });
@@ -183,6 +196,23 @@ describe("GitHub media credential at the asset route", () => {
         yield* TestClock.adjust(Duration.minutes(1));
         expect(yield* Fiber.join(fetching)).toBe(404);
         expect(server.authorizations).toEqual([null]);
+      }).pipe(Effect.provide(server.layer), Effect.scoped);
+    },
+  );
+
+  it.effect(
+    "a project lookup that is interrupted interrupts the media request and sends nothing",
+    () => {
+      const server = makeServer({ projects: new Set(["owner/repo"]), lookup: "is interrupted" });
+      return Effect.gen(function* () {
+        const asset = yield* mint({
+          cwd: "/repo",
+          url: raw("owner/repo"),
+          repository: "owner/repo",
+        });
+        const exit = yield* Effect.exit(status(asset));
+        expect(Exit.hasInterrupts(exit)).toBe(true);
+        expect(server.authorizations).toEqual([]);
       }).pipe(Effect.provide(server.layer), Effect.scoped);
     },
   );
