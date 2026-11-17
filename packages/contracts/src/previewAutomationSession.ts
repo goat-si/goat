@@ -74,6 +74,10 @@ export type PreviewAutomationProfile = typeof PreviewAutomationProfile.Type;
 export const PreviewAutomationProfileListFields = {
   profiles: Schema.optional(Schema.Array(PreviewAutomationProfile)),
   defaultProfileId: Schema.optional(BrowserProfileId),
+  savedProfilesUnreadable: Schema.optional(Schema.Literal(true)).annotate({
+    description:
+      "The profiles saved before the server restarted could not be read, so only the built-in profiles are listed until a GOAT app reports its profiles.",
+  }),
 };
 
 /** The open input's combinations that cannot mean one thing. */

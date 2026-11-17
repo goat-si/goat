@@ -127,6 +127,7 @@ import { initialTabChannel, secretBlockedGate, tabActionGate } from "./tabAction
 import { makeOpenRunSignals } from "./openRunSignals.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 import { makeCapacity } from "./ServerBrowserCapacity.ts";
+import { makeSavedBrowserProfiles } from "./SavedBrowserProfiles.ts";
 import {
   assertReusable,
   assertStoreUsed,
@@ -318,7 +319,10 @@ const make = Effect.gen(function* () {
   const closedSessions = new Set<string>();
   let hostConnectionId: string | null = null;
   let viewerResizeOrder = 0;
-  const profiles = new SessionProfiles();
+  const savedProfiles = yield* makeSavedBrowserProfiles(
+    NodePath.join(config.stateDir, "server-browser", "reported-profiles.json"),
+  );
+  const profiles = new SessionProfiles(savedProfiles.restored);
 
   const contexts = new ServerBrowserContexts({
     profilesDir: NodePath.join(config.stateDir, "server-browser", "profiles"),
@@ -1186,7 +1190,11 @@ const make = Effect.gen(function* () {
             if (input.recordingFrameRate !== undefined)
               recordingFrameRate = input.recordingFrameRate;
             profiles.report(client, input);
-          }),
+            return profiles.catalog;
+          }).pipe(
+            Effect.flatMap((catalog) => (catalog ? savedProfiles.save(catalog) : Effect.void)),
+            Effect.uninterruptible,
+          ),
     ),
   );
 

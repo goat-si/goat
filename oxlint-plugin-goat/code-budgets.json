@@ -383,7 +383,7 @@
   "apps/server/src/preview/PortScanner.ts": { "nonNull": 1 },
   "apps/server/src/preview/PreviewBrowserHost.ts": { "nonNull": 1 },
   "apps/server/src/preview/ServerBrowser.test.ts": { "lines": 2611 },
-  "apps/server/src/preview/ServerBrowser.ts": { "lines": 2596, "nonNull": 3 },
+  "apps/server/src/preview/ServerBrowser.ts": { "lines": 2604, "nonNull": 3 },
   "apps/server/src/preview/ServerBrowserDiagnostics.ts": { "nonNull": 3 },
   "apps/server/src/preview/ServerBrowserPage.ts": { "lines": 1205, "nonNull": 4 },
   "apps/server/src/project/AgentSessionScanner.test.ts": { "lines": 2659 },
