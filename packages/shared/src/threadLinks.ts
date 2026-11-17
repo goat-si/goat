@@ -11,10 +11,20 @@ import * as Schema from "effect/Schema";
 const THREAD_LINK_PROTOCOL = GOAT_THREAD_LINK_PROTOCOL;
 const THREAD_LINK_HREF_PREFIX = `${THREAD_LINK_PROTOCOL}://v1/`;
 const THREAD_LINK_HREF_PREFIXES = THREAD_LINK_PROTOCOLS.map((protocol) => `${protocol}://v1/`);
-// Code comes first in the alternation so a link written inside a code span or fence is skipped.
-// A labeled link's destination may be angle-bracketed, as CommonMark allows: [label](<href>).
+const THREAD_HREF = String.raw`(?:${THREAD_LINK_PROTOCOLS.join("|")}):\/\/v1\/`;
+// A label stops at any bracket, so a run of unclosed brackets is scanned once, not once per bracket.
+const LABEL = String.raw`[^[\]\n]*`;
+// Earlier alternatives claim text so later ones cannot match inside it: an escaped character opens
+// nothing, code is literal, and a link to anywhere else keeps a thread link in its label or href.
 const THREAD_LINK_OUTSIDE_CODE = new RegExp(
-  String.raw`\\[!-/:-@[-\`{-~]|(?<fence>(\`{3,}|~{3,})[\s\S]*?(?:\2|$))|(?<span>(\`+)[^\n]*?\4)|\[[^[\]\n]*\]\((?:<(?<angleHref>(?:${THREAD_LINK_PROTOCOLS.join("|")}):\/\/v1\/[^\s<>]+)>|(?<href>(?:${THREAD_LINK_PROTOCOLS.join("|")}):\/\/v1\/[^\s>)]+))\)`,
+  [
+    String.raw`\\[!-/:-@[-\`{-~]`,
+    String.raw`(?<fence>(\`{3,}|~{3,})[\s\S]*?(?:\2|$))`,
+    String.raw`(?<span>(\`+)[^\n]*?\4)`,
+    // A labeled link's destination may be angle-bracketed, as CommonMark allows: [label](<href>).
+    String.raw`\[${LABEL}\]\((?:<(?<angleHref>${THREAD_HREF}[^\s<>]+)>|(?<href>${THREAD_HREF}[^\s>)]+))\)`,
+    String.raw`\[${LABEL}\]\((?:<[^<>\n]*>|[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'))?\)`,
+  ].join("|"),
   "g",
 );
 
