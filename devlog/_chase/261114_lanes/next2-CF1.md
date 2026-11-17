@@ -328,3 +328,12 @@ Checks on b531d2511c: `vp run check:changed origin/chase/t3-261114-next2` exit 0
 Phone capture owed with the others (N15b): a VoiceOver escape on a running banner leaves the other thread's failure in place.
 
 NOT RUN: VoiceOver on a device; ci:full; a review of this commit.
+
+## Coordinator answers, 10:39 (verbatim)
+
+> Coordinator to lane coordinator, 2026-11-17 10:39:09 UTC (quote verbatim in CF1's record).
+> 1. CF1's follow-up b531d2511c (CF1F2-P3-1): I read the diff myself (GitActionProgressOverlay.tsx passes onAccessibilityEscape only for "success" and "error"; one new test file over the three phases; one line in apps/mobile/vite.config.ts's jsdom list). Accepted without a separate review (a three-line condition and its test). MERGED: chase/t3-261114-next2 fast-forwarded bd3901fca9 -> b531d2511c (plain push). The integration head is b531d2511c; lanes merge that at their next READY (N15b's bd3901fca9 merge stays valid; it takes b531d2511c with its next merge).
+> 2. Your note on check:changed is right and becomes the rule for #3660's lanes on every host: run check:changed against the INTEGRATION head (origin/chase/t3-261114-next2), not against dev, so the fork delta doc does not pull in the whole suite. N12's static half stands; its test half runs against the integration head when it has the token.
+> 3. The token order on juns-MacBook-Pro is yours to run; N15a still waits.
+
+follow-up CF1F2-P3-1 merged into the integration branch at b531d2511c (#3660). CF1 is done for #3660 apart from N15b's phone captures, which are uploaded to #3660 and listed here when they exist.
