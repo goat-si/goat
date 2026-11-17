@@ -151,10 +151,18 @@ export class GitManager extends Context.Service<
       input: VcsStatusInput,
       options?: GitRemoteStatusOptions,
     ) => Effect.Effect<VcsStatusRemoteResult | null, GitManagerServiceError>;
-    /** refresh queries the host; freshGitState rereads only git state and is required before persisting. */
+    /**
+     * refresh queries the host; freshGitState rereads only git state and is required before persisting.
+     * A merged or closed answer is confirmed against git state unless confirmTerminal is false;
+     * callers that opt out confirm before acting on it.
+     */
     readonly branchPullRequest: (
       input: { readonly cwd: string; readonly branch: string },
-      options?: { readonly refresh?: boolean; readonly freshGitState?: boolean },
+      options?: {
+        readonly refresh?: boolean;
+        readonly freshGitState?: boolean;
+        readonly confirmTerminal?: boolean;
+      },
     ) => Effect.Effect<GitBranchPullRequest | null, GitManagerServiceError>;
     readonly checkedOutPullRequest: (input: {
       cwd: string;
@@ -2406,7 +2414,14 @@ export const make = Effect.gen(function* () {
       refresh,
       freshGitState,
     });
-    if (pullRequest === null || pullRequest.state === "open" || freshGitState) return pullRequest;
+    if (
+      pullRequest === null ||
+      pullRequest.state === "open" ||
+      freshGitState ||
+      options?.confirmTerminal === false
+    ) {
+      return pullRequest;
+    }
     const recheck = { refresh: false, freshGitState: true };
     const verify = lookupBranchPullRequest(cacheCwd, branch, recheck);
     return yield* verifyTerminalPrLookup(cacheCwd, branch, pullRequest, verify);
