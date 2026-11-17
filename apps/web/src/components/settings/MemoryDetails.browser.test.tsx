@@ -526,3 +526,28 @@ it("chosen behaviour: when the reread after a change never answers, the edited d
   expect(screen.container.textContent).toContain(CHANGED_LINE);
   expect(state.onForgotten).not.toHaveBeenCalled();
 });
+it("a second click on Edit keeps the typing, Save and the edit past the minute", async () => {
+  const registry = setup();
+  await using screen = await renderDetails(registry);
+  await click(screen, "Edit");
+  await type(screen, "Synthetic original, edited");
+  const button = (label: string) =>
+    [...screen.container.querySelectorAll("button")].find((b) => b.textContent === label);
+  await act(() => button("Edit")?.click());
+  expect(memoryText(screen)?.value).toBe("Synthetic original, edited");
+  expect(button("Save memory")?.disabled).toBe(false);
+  await update(expire);
+  expect(memoryText(screen)?.value).toBe("Synthetic original, edited");
+  expect(screen.container.textContent).toContain(HIDDEN_LINE);
+});
+it("Edit is unavailable while an edit is open, and available again after Cancel", async () => {
+  const registry = setup();
+  await using screen = await renderDetails(registry);
+  const editButton = () =>
+    [...screen.container.querySelectorAll("button")].find((b) => b.textContent === "Edit");
+  expect(editButton()?.disabled).toBe(false);
+  await click(screen, "Edit");
+  expect(editButton()?.disabled).toBe(true);
+  await click(screen, "Cancel");
+  expect(editButton()?.disabled).toBe(false);
+});

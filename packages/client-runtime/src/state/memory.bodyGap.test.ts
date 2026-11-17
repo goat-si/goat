@@ -524,8 +524,12 @@ it.effect(
 /** Collects garbage inside this test only: the flag is switched off again before any other code runs. */
 const collectGarbage = Effect.sync(() => {
   NodeV8.setFlagsFromString("--expose-gc");
-  const gc = NodeVM.runInNewContext("gc") as () => void;
-  NodeV8.setFlagsFromString("--no-expose-gc");
+  let gc: () => void;
+  try {
+    gc = NodeVM.runInNewContext("gc") as () => void;
+  } finally {
+    NodeV8.setFlagsFromString("--no-expose-gc");
+  }
   gc();
 });
 
