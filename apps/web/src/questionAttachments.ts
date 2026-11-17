@@ -18,31 +18,26 @@ import { usePendingUserInputAnswers } from "./pendingUserInputAnswers";
 import { DraftId, useComposerDraftStore } from "./composerDraftStore";
 import { releaseDraftAttachments } from "./lib/attachmentUploadQueue";
 import {
+  countQuestionAttachments,
+  questionAttachmentDraftId,
+  questionAttachmentDraftPrefix,
+  useQuestionAttachmentPreparation,
+} from "./questionAttachmentDrafts";
+import {
   carryDisplacedCustomAnswerIntoPrompt,
   threadContextsReferencedByAnswer,
 } from "./pendingUserInput";
 
 /** Edited question answers, keyed by `userInputDraftKey`; suggested answers are not stored. */
 export { usePendingUserInputAnswers };
+// Light enough for the Decisions inbox, which must not load the attachment upload queue.
+export {
+  countQuestionAttachments,
+  questionAttachmentDraftId,
+  questionAttachmentDraftPrefix,
+  useQuestionAttachmentPreparation,
+};
 export const usePendingUserInputQuestionIndex = create<Record<string, number>>(() => ({}));
-
-export function questionAttachmentDraftPrefix(
-  environmentId: EnvironmentId,
-  threadId: ThreadId,
-): string {
-  return `${encodeURIComponent(JSON.stringify(environmentId))}:question-${encodeURIComponent(JSON.stringify(threadId))}-`;
-}
-
-export function questionAttachmentDraftId(
-  environmentId: EnvironmentId,
-  threadId: ThreadId,
-  requestId: string,
-  questionId: string,
-): DraftId {
-  return DraftId.make(
-    `${questionAttachmentDraftPrefix(environmentId, threadId)}${encodeURIComponent(JSON.stringify([requestId, questionId]))}`,
-  );
-}
 
 type OpenQuestionAttachmentDraft = {
   readonly draftId: DraftId;
@@ -73,19 +68,6 @@ export function trackOpenQuestionAttachmentDraft(
   return () => {
     if (openQuestionDrafts.get(key) === draft) openQuestionDrafts.delete(key);
   };
-}
-
-export const useQuestionAttachmentPreparation = create<{ counts: Record<string, number> }>(() => ({
-  counts: {},
-}));
-
-export function countQuestionAttachments(keys: ReadonlyArray<DraftId>): number {
-  const store = useComposerDraftStore.getState();
-  const { counts } = useQuestionAttachmentPreparation.getState();
-  return keys.reduce((total, key) => {
-    const draft = store.getComposerDraft(key);
-    return total + (draft?.images.length ?? 0) + (draft?.files.length ?? 0) + (counts[key] ?? 0);
-  }, 0);
 }
 
 export function changeQuestionAttachmentPreparation(key: DraftId, delta: number): void {
