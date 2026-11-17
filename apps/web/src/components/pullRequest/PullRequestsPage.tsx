@@ -1,3 +1,4 @@
+import { pullRequestLinkRevealProps, useLinkedPullRequest } from "./pullRequestLinkedSelection";
 import { PullRequestPanelControls } from "./PullRequestPanelControls";
 import { PullRequestFiltersMenuInSidebarOrder } from "./PullRequestFiltersMenuInSidebarOrder";
 import { getShortcutContext } from "./pullRequestShortcutContext";
@@ -989,10 +990,7 @@ export function PullRequestsPage() {
     if (rightPanelState.isOpen) setMaximized((value) => !value);
   };
   const onGuideShown = () => setMaximized(true);
-  useEffect(() => {
-    if (!pullRequestsSupported || rightPanelRef === null || linkedSelection === null) return;
-    useRightPanelStore.getState().openPullRequest(rightPanelRef, linkedSelection);
-  }, [linkedSelection, pullRequestsSupported, rightPanelRef]);
+  useLinkedPullRequest(pullRequestsSupported ? rightPanelRef : null, linkedSelection, updateSearch);
 
   const selected =
     rightPanelState.isOpen && activePullRequestSurface !== null
@@ -1482,6 +1480,7 @@ export function PullRequestsPage() {
               getShortcutContext={getShortcutContext}
               shortcutsEnabled={activePullRequestSurface?.id === renderedPullRequestSurface.id}
               key={renderedPullRequestSurface.id}
+              {...pullRequestLinkRevealProps(rightPanelRef, renderedPullRequestSurface)}
               environmentId={panelEnvironmentId}
               onGuideShown={onGuideShown}
               onSelectPullRequest={(reference) => {

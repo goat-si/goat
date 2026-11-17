@@ -10,16 +10,27 @@ export function Section({
   title,
   defaultOpen = true,
   keepMounted = false,
+  revealCount = 0,
   actions,
   children,
 }: {
   title: string;
   defaultOpen?: boolean;
   keepMounted?: boolean;
+  /** Reopens the section each time a link reveals it. */
+  revealCount?: number;
   actions?: ReactNode;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  // A reveal opens at once: the opening animation would move what was just scrolled to.
+  const [open, setOpen] = useState<boolean | "revealed">(
+    revealCount > 0 ? "revealed" : defaultOpen,
+  );
+  const [seenRevealCount, setSeenRevealCount] = useState(revealCount);
+  if (revealCount !== seenRevealCount) {
+    setSeenRevealCount(revealCount);
+    setOpen("revealed");
+  }
   const headingRef = useRef<HTMLDivElement>(null);
   const setOpenWithScrollAnchor = (nextOpen: boolean) => {
     if (!nextOpen) {
@@ -41,7 +52,7 @@ export function Section({
   };
   return (
     <Collapsible
-      open={open}
+      open={open !== false}
       onOpenChange={setOpenWithScrollAnchor}
       render={<section aria-label={title} />}
       data-pull-request-summary-section
@@ -62,7 +73,7 @@ export function Section({
         </CollapsibleTrigger>
         {actions}
       </div>
-      <CollapsiblePanel keepMounted={keepMounted}>
+      <CollapsiblePanel keepMounted={keepMounted} animate={open !== "revealed"}>
         <div className="px-4 pb-4">{children}</div>
       </CollapsiblePanel>
     </Collapsible>

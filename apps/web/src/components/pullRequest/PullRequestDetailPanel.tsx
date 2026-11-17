@@ -4,6 +4,8 @@ import {
   UPDATE_BRANCH_REBASE_FAILURE_HINT,
 } from "./pullRequestActionFailures";
 import { addPullRequestCommentToComposer } from "./pullRequestChatHandoff";
+import { parsePullRequestAnchor, pullRequestLinkCommit } from "@goat/shared/pullRequestAnchor";
+import { linkedTab, usePullRequestDetailReveal } from "./usePullRequestDetailReveal";
 import { projectChangeRequestUrl } from "@goat/client-runtime/change-request-links";
 import { normalizeThreadPullRequestKey } from "@goat/client-runtime/thread-pull-requests";
 import { useAtomValue } from "@effect/atom-react";
@@ -188,6 +190,8 @@ export function PullRequestDetailPanel({
   onBack,
   onSelectPullRequest,
   onGuideShown,
+  revealUrl,
+  onRevealSettled,
   initialTab = "summary",
   onTabChange,
 }: {
@@ -214,6 +218,10 @@ export function PullRequestDetailPanel({
   composerDraftTarget?: ScopedThreadRef | DraftId;
   onBack?: (() => void) | undefined;
   onGuideShown?: (() => void) | undefined;
+  /** A clicked link into this pull request, waiting to be shown. */
+  revealUrl?: string | undefined;
+  /** Reports the link it was given shown or missing, so a newer link stays pending. */
+  onRevealSettled?: ((revealUrl: string) => void) | undefined;
   initialTab?: PullRequestDetailTab;
   onTabChange?: ((tab: PullRequestDetailTab) => void) | undefined;
 }) {
@@ -273,7 +281,10 @@ export function PullRequestDetailPanel({
     coreDetail,
     detail,
   } = usePullRequestDetail(environmentId, reference, matchingListEntry);
-  const [selectedTab, setTab] = useState<PullRequestDetailTab>(initialTab);
+  const revealAnchor = parsePullRequestAnchor(revealUrl);
+  const [selectedTab, setTab] = useState<PullRequestDetailTab>(
+    () => linkedTab(revealAnchor) ?? initialTab,
+  );
   const reviewGuidesEnabled = useEnvironmentSettings(
     environmentId,
     (settings) => settings.reviewGuidesEnabled,
@@ -297,7 +308,7 @@ export function PullRequestDetailPanel({
   const [codeCommitScope, setCodeCommitScope] = useState<{
     readonly pullRequestKey: string;
     readonly oid: string | null;
-  }>(() => ({ pullRequestKey, oid: null }));
+  }>(() => ({ pullRequestKey, oid: pullRequestLinkCommit(revealUrl) }));
   const selectedCodeCommitOid =
     codeCommitScope.pullRequestKey === pullRequestKey ? codeCommitScope.oid : null;
   const selectCodeCommit = (oid: string | null) => {
@@ -518,14 +529,30 @@ export function PullRequestDetailPanel({
   const invalidate = useAtomCommand(pullRequestEnvironment.invalidate, { reportFailure: false });
   const [isInvalidating, setIsInvalidating] = useState(false);
   const refreshing = isInvalidating || detailQuery.isPending;
-  const refreshFromHost = async () => {
+  /** Resolves whether the host cache was invalidated before the refetch. */
+  const refetchFromHost = async () => {
     setIsInvalidating(true);
     // Atom commands settle without throwing, so reset always runs.
-    await invalidate({ environmentId, input: { reference } });
+    const invalidated = await invalidate({ environmentId, input: { reference } });
     refreshDetail();
     setRefreshToken((token) => token + 1);
     setIsInvalidating(false);
+    return invalidated._tag === "Success";
   };
+  const refreshFromHost = async () => {
+    await refetchFromHost();
+  };
+  const settleReveal = usePullRequestDetailReveal({
+    revealUrl,
+    revealAnchor,
+    onRevealSettled,
+    detail,
+    activity: activityQuery,
+    selectTab,
+    selectCodeCommit,
+    loadCodeTab: () => void loadCodeTab(),
+    refetchFromHost,
+  });
   const refreshFromHostOnRequest = useEffectEvent(() => void refreshFromHost());
   const appliedForcedToken = useRef(forcedRefreshToken);
   useEffect(() => {
@@ -1629,6 +1656,8 @@ export function PullRequestDetailPanel({
               <div className={cn("absolute inset-0", tab !== "summary" && "invisible")}>
                 <PullRequestSummaryTab
                   scrollerRef={scrollerRefs.summary}
+                  revealUrl={tab === "summary" ? revealUrl : undefined}
+                  onRevealSettled={settleReveal}
                   environmentId={environmentId}
                   threadRef={threadRef}
                   reference={reference}
@@ -1692,6 +1721,8 @@ export function PullRequestDetailPanel({
                 ) : (
                   <PullRequestTimelineTab
                     scrollerRef={scrollerRefs.timeline}
+                    revealUrl={tab === "timeline" ? revealUrl : undefined}
+                    onRevealSettled={settleReveal}
                     detail={detail}
                     environmentId={environmentId}
                     threadRef={threadRef}
@@ -1727,6 +1758,8 @@ export function PullRequestDetailPanel({
                     refreshToken={refreshToken}
                     backgroundRefreshToken={turnRefresh ?? 0}
                     revealRequest={codeRevealRequest}
+                    revealUrl={tab === "code" ? revealUrl : undefined}
+                    onRevealSettled={settleReveal}
                   />
                 </Suspense>
               </div>

@@ -239,6 +239,10 @@ checks activity and tells you when it cannot confirm the result; a partial GitLa
 unconfirmed approval does not count as complete. Merge requests act on the host's current head
 and may be queued; use branch protection when a merge must require a particular head.
 
+A link to part of a pull request opens that part: a comment or review is marked in the activity, a
+changed-line link opens the file at those lines, a checks link opens the checks, and a commit link
+opens that commit's changes. On web and desktop, hovering a comment or commit link previews it.
+
 On mobile, **Pull requests** lists reviews across your connected environments. Open a review
 to read its description, activity, commits, and changed files. Line comments stay as drafts
 until you submit the review. **Work on PR** opens a chat with the review attached; sending

@@ -6,6 +6,8 @@ import { guideFocusedRows, type GuideDiffFocus } from "./guide/guideDiffFocus";
 import { PullRequestGuideContent } from "./guide/PullRequestGuideScreen";
 import { useReviewGuidesEnabled } from "./guide/useReviewGuide";
 import { DEFAULT_ACTIVITY_FILTER, type ActivityFilter } from "./pullRequestActivityFilter";
+import * as Link from "./pullRequestLinkNavigation";
+import { usePullRequestLinkReveal } from "./usePullRequestLinkReveal";
 import { PullRequestActivityFilters } from "./PullRequestActivityFilters";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
@@ -216,13 +218,15 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
   const params = route.params;
   usePullRequestEnvironmentFallback(params);
   const connected = usePullRequestConnected(params.environmentId);
-  const [section, setSection] = useState<"overview" | "activity" | "guide">("overview");
+  const [section, setSection] = useState(() => Link.linkedPullRequestSection(params.navigationUrl));
   const requestedSection = useRef(section);
   const [listAnimationsReady, setListAnimationsReady] = useState(false);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const filesContent = usePullRequestFilesSection(params);
   const guidesEnabled = useReviewGuidesEnabled(params);
-  const [activityFilter, setActivityFilter] = useState<ActivityFilter>(DEFAULT_ACTIVITY_FILTER);
+  const [activityFilter, setActivityFilter] = useState<ActivityFilter>(() =>
+    Link.linkedActivityFilter(params.navigationUrl, DEFAULT_ACTIVITY_FILTER),
+  );
   const activityContent = usePullRequestActivityRows(params, activityFilter);
   const scrollOffsets = useRef<Record<string, number>>({});
   const currentScrollOffset = useRef(-barInsets.top);
@@ -264,6 +268,14 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
       setSection("overview");
     }
   }, [guidesEnabled, section, barInsets.top, currentScrollOffset, requestedSection, scrollOffsets]);
+  const linkReveal = usePullRequestLinkReveal({
+    params,
+    selectSection,
+    setActivityFilter,
+    list: (tab) => scrollViews.current[tab],
+    topInset: barInsets.top,
+    activity: activityContent,
+  });
   const tabContent = activityContent;
   const filesY = useRef(0);
   const descriptionY = useRef(0);
@@ -591,6 +603,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                 <AnimatedLegendList
                   ref={listRefs[tab]}
                   // LegendList keeps its first offset, which may have the window's inset rather than the header's.
+                  onScrollBeginDrag={tab === "activity" ? linkReveal.release : undefined}
                   onScroll={(event) => {
                     const offset = event.nativeEvent.contentOffset.y;
                     scrollOffsets.current[tab] = offset;
@@ -614,6 +627,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                   alwaysBounceVertical
                   scrollsToTop={section === tab}
                   onContentSizeChange={() => {
+                    if (tab === "activity") linkReveal.hold();
                     if (
                       tab !== "overview" ||
                       section !== "overview" ||
@@ -832,9 +846,13 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
     (detail.data ?? route.params.initialSummary)?.provider,
   ).changeRequest;
   const result = usePullRequestDiff(route.params, terminology);
+  const link = Link.fileRouteLink(
+    route.params,
+    result.parsed.kind === "files" ? result.parsed.files : null,
+  );
   const filter = usePullRequestFileFilter(
     result.parsed,
-    route.params.focus ? route.params.path : undefined,
+    link.path ?? (route.params.focus ? route.params.path : undefined),
   );
   const { refresh: refreshDetail } = detail;
   useFocusEffect(refreshDetail);
@@ -906,15 +924,21 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
       code: row.content ?? "",
     });
   };
-  const [jumpPath, setJumpPath] = useState(route.params.path);
+  const [pickedPath, setJumpPath] = useState<string | null>(null);
+  const jumpPath = pickedPath ?? link.path ?? route.params.path;
   const requestedFile =
     result.parsed.kind === "files"
       ? result.parsed.files.find((file) => file.path === jumpPath)
       : undefined;
   const targetFile =
     data.files.find((file) => file.path === jumpPath) ??
-    (!jumpPath || requestedFile ? data.files[0] : undefined);
-  const focus = route.params.focus;
+    (link.anchor?.kind === "diff" && !link.path
+      ? undefined
+      : !jumpPath || requestedFile
+        ? data.files[0]
+        : undefined);
+  const focus =
+    route.params.focus ?? (pickedPath === null ? Link.linkedDiffFocus(link.anchor) : undefined);
   const focusedRows = guideFocusedRows(data.rows, targetFile?.id, focus);
   const focusIndex = focusedRows.length
     ? data.rows.findIndex((row) => row.id === focusedRows[0]?.id)
@@ -924,7 +948,8 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
   const nativeView = useRef<NativeReviewDiffViewHandle>(null);
   // Native applies the entry destination before its first viewport. Imperative
   // jumps below are for subsequent selections and filter changes only.
-  const jumpStarted = useRef(true);
+  // A diff link names its file only once the diff loads, so that first jump is imperative too.
+  const jumpStarted = useRef(link.anchor?.kind !== "diff" || targetFile !== undefined);
   const lastSelection = useRef({ path: route.params.path, id: route.params.fileSelectionId });
   useEffect(() => {
     if (

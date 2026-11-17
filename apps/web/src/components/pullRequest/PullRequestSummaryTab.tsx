@@ -1,6 +1,7 @@
 import { AddToChatButton, chatSubject } from "./PullRequestChatActions";
 import { filterPullRequestConversationItems } from "./pullRequestConversationFilter";
 import { pullRequestCommentPreview } from "./pullRequestMarkdown.logic";
+import { usePullRequestSummaryReveal } from "./usePullRequestSummaryReveal";
 import { useAtomValue } from "@effect/atom-react";
 import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -323,6 +324,8 @@ const CommentFilterSchema = Schema.Struct({ bots: Schema.Boolean, resolved: Sche
 const DEFAULT_COMMENT_FILTER: typeof CommentFilterSchema.Type = { bots: false, resolved: false };
 
 export function PullRequestSummaryTab({
+  revealUrl,
+  onRevealSettled,
   scrollerRef,
   environmentId,
   threadRef,
@@ -339,6 +342,9 @@ export function PullRequestSummaryTab({
   onRefresh,
   onRefreshChecks = onRefresh,
 }: {
+  /** A clicked link to scroll to, until onRevealSettled reports it shown. */
+  revealUrl?: string | undefined;
+  onRevealSettled?: ((revealUrl: string) => void) | undefined;
   scrollerRef: (node: HTMLDivElement | null) => void;
   environmentId: EnvironmentId;
   threadRef: ScopedThreadRef | null;
@@ -463,6 +469,13 @@ export function PullRequestSummaryTab({
   const [commentSaving, setCommentSaving] = useState(false);
   const editingCommentId = commentScope?.pullRequest === detail.url ? commentScope.commentId : null;
 
+  const editingDescription = bodyScope?.url === detail.url;
+  const { scrollRef, checksReveals, descriptionReveals } = usePullRequestSummaryReveal({
+    revealUrl,
+    onRevealSettled,
+    description,
+    editingDescription,
+  });
   // Checkbox ticks and the editor share one draft, so each starts from the other's latest body.
   const saveDescription = async (body: string) => {
     const key = detail.url;
@@ -634,7 +647,14 @@ export function PullRequestSummaryTab({
   };
 
   return (
-    <div ref={scrollerRef} className="h-full overflow-y-auto" data-pull-request-summary-scroll>
+    <div
+      ref={(node) => {
+        scrollRef.current = node;
+        scrollerRef(node);
+      }}
+      className="h-full overflow-y-auto"
+      data-pull-request-summary-scroll
+    >
       <section className="px-4 pt-2.5 pb-1">
         <div className="space-y-2">
           <MetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
@@ -734,9 +754,14 @@ export function PullRequestSummaryTab({
         </div>
       </section>
 
-      <Section key={`description:${detail.url}`} title="Description" keepMounted>
+      <Section
+        key={`description:${detail.url}`}
+        title="Description"
+        keepMounted
+        revealCount={descriptionReveals}
+      >
         <div className="group">
-          {bodyScope?.url === detail.url ? (
+          {editingDescription ? (
             <PullRequestMarkdownEditor
               allowEmpty
               value={bodyScope.body}
@@ -751,7 +776,7 @@ export function PullRequestSummaryTab({
               onCancel={() => setBodyScope(null)}
             />
           ) : (
-            <div className="flex items-start gap-1">
+            <div className="flex items-start gap-1" data-pr-description>
               <PullRequestMarkdown
                 className="min-w-0 flex-1"
                 text={description.trim().length > 0 ? description : "_No description provided._"}
@@ -771,7 +796,12 @@ export function PullRequestSummaryTab({
         </div>
       </Section>
 
-      <Section key={`checks:${detail.url}`} title="Checks" defaultOpen={false}>
+      <Section
+        key={`checks:${detail.url}`}
+        title="Checks"
+        defaultOpen={false}
+        revealCount={checksReveals}
+      >
         {checksStale ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <span>Check details are out of date.</span>

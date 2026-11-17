@@ -1,5 +1,6 @@
 import { useWordWrap } from "~/hooks/useWordWrap";
 import { reviewThreadsByPath } from "./pullRequestThreadsByPath";
+import { useCodeLinkTarget, useRevealCodeLink } from "./usePullRequestCodeLink";
 import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import type { CodeViewItem, SelectedLineRange } from "@pierre/diffs";
 import type { CodeViewAnnotationArgs, CodeViewDiffItem } from "@pierre/diffs/react";
@@ -149,6 +150,8 @@ function PullRequestCodeTab({
   refreshToken = 0,
   backgroundRefreshToken = 0,
   revealRequest = null,
+  revealUrl,
+  onRevealSettled,
 }: {
   scrollerRef: (node: HTMLDivElement | null) => void;
   environmentId: EnvironmentId;
@@ -165,6 +168,9 @@ function PullRequestCodeTab({
   onRefresh: () => void;
   refreshToken?: number;
   backgroundRefreshToken?: number;
+  /** A clicked link to a file or line range, until onRevealSettled reports it shown. */
+  revealUrl?: string | undefined;
+  onRevealSettled?: ((revealUrl: string) => void) | undefined;
   revealRequest?: { readonly path: string; readonly nonce: number } | null;
 }) {
   const resolvedTheme = useRenderedAppearance();
@@ -375,6 +381,7 @@ function PullRequestCodeTab({
     `pull-request:${scopeKey}:${resolvedTheme}:${ignoreWhitespace}`,
     ignoreWhitespace,
   );
+  const link = useCodeLinkTarget(revealUrl, loadedFiles, scopeKey);
   const testFileCount = loadedFiles.filter((file) =>
     isTestChangedFile(resolveFileDiffPath(file)),
   ).length;
@@ -382,7 +389,7 @@ function PullRequestCodeTab({
   const files = hideTestFiles
     ? loadedFiles.filter((file) => {
         const path = resolveFileDiffPath(file);
-        return path === revealRequest?.path || !isTestChangedFile(path);
+        return path === revealRequest?.path || path === link.path || !isTestChangedFile(path);
       })
     : loadedFiles;
   const hiddenTestFileCount = loadedFiles.length - files.length;
@@ -589,7 +596,7 @@ function PullRequestCodeTab({
     setFileViewed,
   };
 
-  const revealFile = (path: string) => {
+  const revealFile = (path: string, range?: SelectedLineRange) => {
     const item = items.find((candidate) => resolveFileDiffPath(candidate.fileDiff) === path);
     if (item === undefined) return;
     if (item.collapsed === true) {
@@ -597,7 +604,8 @@ function PullRequestCodeTab({
         toggleFileDiffFoldForViewed(item.id, false, effectiveFoldOverride, current),
       );
     }
-    codeViewReveal.request(item.id);
+    if (range) setSelectedLines({ id: item.id, range });
+    codeViewReveal.request(item.id, range);
   };
 
   const toggleAllFiles = () => {
@@ -1246,6 +1254,19 @@ function PullRequestCodeTab({
     answerReveal();
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Re-checked as pages load until the requested file arrives.
   }, [canLoadNextSlice, items, revealRequest]);
+  useRevealCodeLink({
+    revealUrl,
+    onRevealSettled,
+    link,
+    commit,
+    commitOids: detail.commits.map((entry) => entry.oid),
+    scopeKey,
+    items,
+    canLoadNextSlice,
+    loadNextSlice,
+    everyPageLoaded: loadedSlices.length > 0 && nextCursor === null,
+    revealFile,
+  });
   const withToolbar = (body: ReactNode) => (
     <div className="flex h-full min-h-0 flex-col">
       {toolbar}
@@ -1350,6 +1371,10 @@ function PullRequestCodeTab({
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div
           className="relative min-h-0 min-w-0 flex-1"
+          onWheelCapture={codeViewReveal.cancel}
+          onTouchStartCapture={codeViewReveal.cancel}
+          onPointerDownCapture={codeViewReveal.cancel}
+          onKeyDownCapture={codeViewReveal.cancel}
           // Headers live in shadow DOM; composedPath crosses that boundary.
           onClickCapture={(event) => {
             const composedPath = event.nativeEvent.composedPath?.() ?? [];
