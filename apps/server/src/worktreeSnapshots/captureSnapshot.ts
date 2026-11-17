@@ -111,7 +111,11 @@ const program = Effect.fn("WorktreeSnapshot.capture")(function* (cwd: string) {
   const tempIndex = path.join(tmp, "index");
   yield* fs.copyFile(path.resolve(cwd, indexPath), tempIndex);
   const env = { ...identity, GIT_INDEX_FILE: tempIndex };
-  yield* run(["add", "-A", "--"], env);
+  // A sparse checkout's tracked files outside its patterns are left out by a plain add, edits too.
+  const sparse = (yield* run(["config", "--type=bool", "--default=false", "core.sparseCheckout"]))
+    .trim()
+    .startsWith("true");
+  yield* run(["add", "-A", ...(sparse ? ["--sparse"] : []), "--"], env);
   // A nested repository is only a gitlink here: its files and history would be lost. Submodules
   // already in the index and registered in .gitmodules pass, since cleanup's submodule check
   // (which walks exactly those) keeps dirty or unpushed ones first.

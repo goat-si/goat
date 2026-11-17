@@ -210,8 +210,12 @@ export const verifyRestoredWorktree = Effect.fn("restoreSnapshot.verifyRestoredW
         check((await text(cwd, "rev-parse", "HEAD")) === input.expectedHead, "head");
         if (input.snapshot) {
           const snapshot = input.snapshot;
+          // Capture adds files outside a sparse checkout's patterns too, so the check must as well.
+          const sparse = (
+            await text(cwd, "config", "--type=bool", "--default=false", "core.sparseCheckout")
+          ).startsWith("true");
           const actual = await withIndex(cwd, true, async (index) => {
-            await git(cwd, ["add", "-A"], { index });
+            await git(cwd, ["add", "-A", ...(sparse ? ["--sparse"] : [])], { index });
             return (await git(cwd, ["write-tree"], { index })).toString().trim();
           });
           check(actual === (await text(cwd, "rev-parse", `${snapshot}^{tree}`)), "worktree-tree");
