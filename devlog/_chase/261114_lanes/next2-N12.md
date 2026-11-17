@@ -1,6 +1,6 @@
 # N12 preview browser (lane record)
 
-Lane branch `chase/t3-261114-next2-n12-preview`, head `fc1c92cfa0fe70a5ee8d5496ce49b4a85ebb9ad0` (pushed, plain), cut from `chase/t3-261114-next2` at `ed4268897e3183341694f27e488232572d5c5151`. Host juns-MacBook-Pro (shared with N15b and the GOAT Bot parity loop). Status: rows committed; not READY yet (open items below). Classes: C4 for O15 and C25.
+Lane branch `chase/t3-261114-next2-n12-preview`, head `9590bef1895f6fe0516ecb49cf50d17f4326b181` (pushed, plain), cut from `chase/t3-261114-next2` at `ed4268897e3183341694f27e488232572d5c5151`. Host juns-MacBook-Pro (shared with N15b and the GOAT Bot parity loop). Status: rows committed; not READY yet (open items below). Classes: C4 for O15 and C25.
 
 ## Rows and commits
 
@@ -16,6 +16,8 @@ Lane branch `chase/t3-261114-next2-n12-preview`, head `fc1c92cfa0fe70a5ee8d5496c
 | L237 0c6b5afef2 P3-B | `2be79d05fa9250e280feeaa5d66a168a5b5188e3` | encodeFinalFrame drops only the final frame on an encoder failure |
 | L237 0c6b5afef2 P3-A | `ee89c6fd56aed234baff8713f90a882dad033ff1` | each in-page wait of the final capture races a 1 s page timer |
 | L238 759e649ea8 | `4fd254bb49890c44342aa12cae68e70517065965` | an encoder-page failure on a frame drops that frame; channel interruptions still stop (RecordingFrames.test.ts unchanged) |
+| L234 (C25) agent tool | `9590bef1895f6fe0516ecb49cf50d17f4326b181` | goat_preview_stop, below |
+| merge | `1dd4720879` | git's own merge of the integration head b531d2511c |
 | L241 43ce39595b rest | `fc1c92cfa0fe70a5ee8d5496ce49b4a85ebb9ad0` | three it.live to it.effect (authorised); rest of the list decided below |
 
 Budgets: every entry at its real length by countLines and at or below dev's: ServerBrowser.ts 2654 (dev 2699), previewAutomation.ts 1027 (1028), PreviewView.tsx 1093 (1095), ServerBrowserSurface.tsx 1015 (1030), ipc.ts 1393 (1398), desktop Manager.ts 3652 (3673), previewZoom.ts nonNull 2 (moved from Manager.ts). New files all under 800 lines.
@@ -60,10 +62,24 @@ Old pin on disk (coordinator option A): `PreviewBrowser.ts:505-530` keeps the ne
 - `vp run typecheck` exit 0 in contracts, client-runtime, server, web, desktop, mobile.
 - `vp run check:changed` (second run): format, lint, graphql, agent context budget, agent surface audit, knip 1/2 and 2/2, typecheck (42 packages) all pass. Its test phase ran the whole suite (devlog/_chase/010_fork_delta.md in the diff from dev makes it "run everything") and was stopped under the 10:12 resource rule.
 
+## C25 agent tool (goat_preview_stop)
+
+Commit `9590bef1895f6fe0516ecb49cf50d17f4326b181` (second commit of row L234; the first is on origin, so no amend). Entry preview.stop, tool `goat_preview_stop`, operation `stopLoading` (packages/contracts/src/previewAutomationOperations.ts), parameters: the tab target only.
+
+- Capability decides: the handler (apps/server/src/mcp/toolkits/preview/handlers.ts, requireStopLoading) reads this server's descriptor `capabilities.serverBrowserStopLoading`; absent or false: `OrchestratorMcpFailure` invalid_request "This GOAT server's browser cannot stop a loading page, so nothing was sent. Navigate elsewhere with goat_preview_navigate, or update GOAT on this machine." Test handlers.stop.test.ts: refuses for absent and for false with the broker untouched; with the capability, the broker receives exactly `{ operation: "stopLoading", tabId: "tab-1" }` (3/3). A native desktop-only automation host does not list stopLoading in its supported operations, so the broker never routes it there.
+- Same method: ServerBrowser.ts executeTabOperation `case "stopLoading"` calls `stopLoading.stop(tab, tab.cdp)`; the person's Stop (viewer input) calls `stopLoading.stop(tab, session)`; both are ServerBrowserStop.ts makeStopLoading's stop. Test: ServerBrowser.stopLoading.test.ts "an agent's Stop ends its tab's load through the same stop a person's Stop uses" (one Page.stopLoading, status loading false).
+- Rule 3 lines. registry.test.ts BEFORE `"preview_snapshot", "preview_status", "preview_type",` AFTER `"preview_snapshot", "preview_status", "preview_stop", "preview_type",`. core.test.ts:159 BEFORE `expect(names.size).toBe(258);` AFTER `expect(names.size).toBe(259);`.
+- Published names diffed (PUBLISHED_TOOLKITS from coreToolNames.testkit.ts, sorted; before = tool changes stashed, after = this commit): 258 vs 259 names, diff exactly `244a245 > preview_stop`.
+- Agent surface audit: `node scripts/agent-surface/audit.ts --check` exit 0 after regenerating docs/internals/agent-surface-audit.md; counts move: tools on /mcp 307 -> 308, mutating tools 192 -> 193, preview toolkit 32 -> 33. Context budget check passes; the counts it gates do not move (core listing 2 tools, 4,041 B; every harness within budget).
+- Tests after: core.test.ts, handlers.test.ts, handlers.stop.test.ts, ServerBrowser.stopLoading.test.ts 39/39; registry.test.ts 14/14; preview tools.test.ts and handlers.test.ts 8/8 earlier; goatMcpToolPresentation.test.ts 62/62.
+
+## Integration merge
+
+Git's own merge `1dd4720879` of `b531d2511c` (contains bd3901fca9), parents fc1c92cfa0 and b531d2511c, no conflicts, no file changed on both sides.
+
 ## Open before READY
 
-- C25 agent tool `goat_preview_stop`: rule 3 request n12-rule3-c25-1 (registry.test.ts tool list) unanswered.
-- Merge of the integration head `bd3901fca9` and its check:changed: needs the heavy-job token.
+- check:changed against origin/chase/t3-261114-next2 (b531d2511c): needs the heavy-job token; then the typecheck of the agent tool commit with it.
 - Real-client passes: web Stop control through test-goat-app (dev server; token); mobile Stop loading and the C23 bootstrap timeout need a device check (own simulator; token).
 
 NOT RUN: whole-suite test phase of check:changed (stopped under the resource rule; CI runs it); web real-client pass and before/after captures of the Stop control (dev server is a heavy job, token not yet given); mobile device checks for C23 and C25 (simulator boot is a heavy job); desktop app manual check of the Stop IPC (no desktop dev build run); a real install of the new Chrome pin on this Mac (hashes proven by download instead).
@@ -78,3 +94,9 @@ NOT RUN: whole-suite test phase of check:changed (stopped under the resource rul
 
 > Coordinator to lane coordinator, 2026-11-17 10:10:00 UTC (quote each part verbatim in the lane's record and in next2-pr-plan.md under "Coordinator answers").
 > 2. N12, L241 rest, RULE 3: AUTHORISED for the three tests. "Coordinator authorisation, 2026-11-17, rule 3: 'it.live' may become 'it.effect', title and body unchanged, in apps/server/src/usage/usageUnpriced.testkit.ts:23 ('counts unpriced tokens from the unpriced records of a mixed model'), apps/server/src/usage/usageProvisional.testkit.ts:140 ('credits the same copy of a duplicate from the last scan as an exact read does') and apps/server/src/preview/ServerBrowser.test.ts:1659 ('a busy frame does not hold a copy key back'). Reason: upstream 43ce39595b moved their counterparts to TestClock; the repository keeps it.live for subprocess and network fixtures only." Condition: the record says for each test that it starts no subprocess and opens no socket, and either that it waits on no timer or which TestClock.adjust drives the wait it needs, so the move cannot let the test pass without the behaviour it checks; each is run 5 times after the move. The rest of L241's list (two ported with C22, two with GOAT counterparts, two that do not apply) is accepted as recorded, with the path:line of each counterpart and the reason for "does not apply".
+
+> Coordinator to lane coordinator, 2026-11-17 10:07:04 UTC (quote each part verbatim in the lane's record and in next2-pr-plan.md under "Coordinator answers").
+> C. N12, C25, RULE 3: AUTHORISED. "Coordinator authorisation, 2026-11-17, rule 3, packages/contracts/src/agentSurface/registry.test.ts:59-104 (the exhaustive tool-name list): the line '"preview_snapshot", "preview_status", "preview_type",' may become '"preview_snapshot", "preview_status", "preview_stop", "preview_type",'. Reason: C25 gives agents Stop through the preview tools wherever a navigation tool exists; the new tool goat_preview_stop (agent surface entry preview.stop, operation stopLoading) sits beside reload. Nothing else in that test changes." Conditions: the agent surface audit and the context budget check pass and the record says whether their counts move; on a host that cannot stop loading the tool refuses with a clear message and a test proves it (and the capability serverBrowserStopLoading decides it, not a guess); the tool is a thin call of the same service method the person's Stop button uses; the record lists the line before and after. A new agent tool is a public surface: C4 in the review.
+
+> Coordinator to lane coordinator, 2026-11-17 10:43:40 UTC (quote each part verbatim in the lane's record and in next2-pr-plan.md under "Coordinator answers").
+> 1. N12, C25, RULE 3 (second line): AUTHORISED. "Coordinator authorisation, 2026-11-17, rule 3, apps/server/src/mcp/toolkits/core.test.ts:159 ('publishes unique tool names with reference-free object-root inputs'): expect(names.size).toBe(258) may become expect(names.size).toBe(259). Reason: the one new tool goat_preview_stop authorised at 10:07:04; nothing else in the test changes." The record shows that the 259th name is preview_stop and nothing else (the names before and after, diffed), with the audit counts (tools on /mcp 307 -> 308, mutating 192 -> 193). The refusal on a host without serverBrowserStopLoading and the same stop a person's button calls are as I asked. N12's merge 1dd4720879 of b531d2511c: noted.
