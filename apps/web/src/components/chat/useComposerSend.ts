@@ -132,6 +132,7 @@ import type { ComposerSendInput } from "./useComposerSend.input";
 import {
   checkoutBranchOverride,
   draftHasNonPromptContent,
+  firstCallOnly,
   liveAttachmentCapabilities,
   readEnvironmentPresentation,
   saveSettingsBeforeRedirect,
@@ -1175,15 +1176,15 @@ export function useComposerSend(input: ComposerSendInput) {
       );
       return;
     }
-    let savedSettings: Promise<AtomCommandResult<void, unknown>> | undefined;
-    const persistSendSettings = () =>
-      (savedSettings ??= persistThreadSettingsForNextTurn({
+    const persistSendSettings = firstCallOnly(() =>
+      persistThreadSettingsForNextTurn({
         threadId: threadIdForSend,
         createdAt: messageCreatedAt,
         ...checkoutBranchOverride(localCheckoutBranchMismatch),
         runtimeMode,
         interactionMode: sendInteractionMode,
-      }));
+      }),
+    );
     // A message sent while approvals are pending redirects the agent. They are declined only
     // here, after everything above has accepted the send, so local commands and rejected
     // drafts leave them alone. After navigating away during an upload, the shown approvals

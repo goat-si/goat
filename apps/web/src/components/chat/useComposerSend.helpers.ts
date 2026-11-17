@@ -75,3 +75,12 @@ export function showMultipleModelsNeedGitThread() {
 /** The branch a send saves when the local checkout moved off the thread's branch. */
 export const checkoutBranchOverride = (mismatch: { readonly currentBranch: string } | null) =>
   mismatch ? { branch: mismatch.currentBranch } : {};
+
+/** Runs `run` on the first call; later calls return that first result. */
+export const firstCallOnly = <A>(run: () => A): (() => A) => {
+  let first: { readonly value: A } | undefined;
+  return () => {
+    if (first === undefined) first = { value: run() };
+    return first.value;
+  };
+};
