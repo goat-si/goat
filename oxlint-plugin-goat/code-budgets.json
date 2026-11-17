@@ -840,7 +840,7 @@
   },
   "packages/source-control-github/src/server/cloudSessionPullRequest.ts": { "nonNull": 3 },
   "packages/source-control-github/src/server/gitHubPullRequestJson.test.ts": { "lines": 1596 },
-  "packages/source-control-github/src/server/gitHubPullRequestJson.ts": { "lines": 1775 },
+  "packages/source-control-github/src/server/gitHubPullRequestJson.ts": { "lines": 1765 },
   "packages/source-control-github/src/server/gitHubRepositoryResolution.ts": { "nonNull": 11 },
   "packages/source-control-github/src/server/githubStackActions.ts": { "nonNull": 3 },
   "packages/source-control-gitlab/src/server/GitLabPullRequestCli.test.ts": { "lines": 1359 },

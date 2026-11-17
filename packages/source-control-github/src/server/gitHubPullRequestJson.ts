@@ -1,5 +1,6 @@
 import { toLabels, type LabelFields } from "./gitHubPullRequestLabels.ts";
 import { toMergeMethod } from "./gitHubMergeMethod.ts";
+import { toFileViewedState } from "./gitHubFileViewedState.ts";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as Result from "effect/Result";
@@ -1663,17 +1664,6 @@ export interface GitHubPullRequestFilesViewedPage {
     readonly state: PullRequestFileViewedState;
   }>;
   readonly nextCursor: string | null;
-}
-
-function toFileViewedState(raw: string): PullRequestFileViewedState {
-  switch (raw.trim().toUpperCase()) {
-    case "VIEWED":
-      return "viewed";
-    case "DISMISSED":
-      return "dismissed";
-    default:
-      return "unviewed";
-  }
 }
 
 export function toPullRequestFilesViewedPage(
