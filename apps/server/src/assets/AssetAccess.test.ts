@@ -1,5 +1,4 @@
 // @effect-diagnostics nodeBuiltinImport:off - tests inject swaps at the native open boundary.
-import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
@@ -9,13 +8,11 @@ import {
   AssetPreviewTypeValidationError,
   SOURCE_CONTROL_MEDIA_ASSET,
   ThreadId,
-  TurnItemId,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { MCP_APP_MAX_HTML_BYTES } from "@goat/shared/mcpApp";
 import { PROJECT_FAVICON_FALLBACK_MARKER } from "@goat/shared/projectFavicon";
 import { symlinksSupported } from "@goat/shared/testing/symlinks";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -26,16 +23,18 @@ import * as TestClock from "effect/testing/TestClock";
 import { HttpClientRequest, HttpClientResponse, HttpServerResponse } from "effect/http";
 import * as NodeFSP from "node:fs/promises";
 import { vi } from "vite-plus/test";
-import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import { assetFileResponse } from "../http.ts";
-import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-import * as GoatProjectFileLoader from "../project/GoatProjectFileLoader.ts";
-import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { ASSET_ROUTE_PREFIX, issueAssetUrl, readMcpAppHtml, resolveAsset } from "./AssetAccess.ts";
-import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
+import {
+  layerTest,
+  oversizedScreenshotItem,
+  screenshotItem,
+  screenshotPng,
+} from "./AssetAccess.testkit.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import { fakeSourceControlDriverInstance } from "@goat/source-control-testing/fakeSourceControlDriver";
 import * as BuiltInDrivers from "../sourceControl/builtInDrivers.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
@@ -44,79 +43,6 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof NodeFSP>();
   return { ...actual, open: vi.fn(actual.open), realpath: vi.fn(actual.realpath) };
 });
-const layerConfig = ServerConfig.ServerConfig.layerTest(process.cwd(), {
-  prefix: "goat-asset-access-test-",
-});
-const screenshotPng = new Uint8Array(24);
-screenshotPng.set([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52,
-]);
-new DataView(screenshotPng.buffer).setUint32(16, 390);
-new DataView(screenshotPng.buffer).setUint32(20, 844);
-const screenshotItem = {
-  id: TurnItemId.make("tool-screenshot"),
-  type: "dynamic_tool" as const,
-  threadId: ThreadId.make("thread-1"),
-  runId: null,
-  nodeId: null,
-  providerThreadId: null,
-  providerTurnId: null,
-  nativeItemRef: null,
-  parentItemId: null,
-  ordinal: 1,
-  status: "completed" as const,
-  title: null,
-  toolName: "mcp__t3-code__device_screenshot",
-  input: { deviceId: "phone" },
-  output: {
-    content: [
-      {
-        type: "image",
-        source: {
-          type: "base64",
-          media_type: "image/png",
-          data: Buffer.from(screenshotPng).toString("base64"),
-        },
-      },
-    ],
-  },
-  startedAt: DateTime.makeUnsafe("2026-10-05T00:00:00.000Z"),
-  completedAt: DateTime.makeUnsafe("2026-10-05T00:00:01.000Z"),
-  updatedAt: DateTime.makeUnsafe("2026-10-05T00:00:01.000Z"),
-};
-const oversizedScreenshotItem = {
-  ...screenshotItem,
-  id: TurnItemId.make("tool-screenshot-oversized"),
-  output: {
-    content: [
-      {
-        type: "image",
-        source: { type: "base64", media_type: "image/png", data: "A".repeat(14 * 1024 * 1024) },
-      },
-    ],
-  },
-};
-const layerTest = Layer.mergeAll(
-  NodeHttpPlatform.layer,
-  Layer.mock(Orchestrator.OrchestratorV2)({
-    getTurnItem: ({ itemId }) =>
-      Effect.succeed(
-        itemId === screenshotItem.id
-          ? screenshotItem
-          : itemId === oversizedScreenshotItem.id
-            ? oversizedScreenshotItem
-            : null,
-      ),
-  }),
-  layerConfig,
-  WorkspacePaths.layer,
-  ProjectFaviconResolver.layer.pipe(
-    Layer.provide(WorkspacePaths.layer),
-    Layer.provide(GoatProjectFileLoader.layer),
-  ),
-  NativeAppIconResolver.layer.pipe(Layer.provide(layerConfig)),
-  ServerSecretStore.layer.pipe(Layer.provide(layerConfig)),
-).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 describe("AssetAccess", () => {
   describe("readMcpAppHtml", () => {
     it.effect("accepts snapshots at the stored HTML byte limit", () =>
@@ -1648,7 +1574,17 @@ describe("AssetAccess", () => {
       yield* sourceControlMediaResponse({ ...asset, repository: "enterprise/private" }, {});
       expect(fetched.at(-1)?.repository).toBe("enterprise/private");
     }).pipe(
-      Effect.provide(Layer.mergeAll(layerTest, layerDrivers, layerIdentities)),
+      Effect.provide(
+        Layer.mergeAll(
+          layerTest,
+          layerDrivers,
+          layerIdentities,
+          // Both repositories this case names belong to projects here.
+          Layer.mock(PullRequestService.PullRequestService)({
+            hasProjectRepository: () => Effect.succeed(true),
+          }),
+        ),
+      ),
       Effect.scoped,
     );
   });

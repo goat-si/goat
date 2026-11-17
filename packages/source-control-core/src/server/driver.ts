@@ -19,7 +19,7 @@ export interface SourceControlMediaRequest {
   readonly url: string;
   /** Request headers to forward, such as `range`. */
   readonly headers: Readonly<Record<string, string>>;
-  /** `owner/name` of the change request the media is in, else of the checkout it was shown in. */
+  /** `owner/name` the host credential may go with: an active project's origin or upstream. */
   readonly repository?: string;
 }
 
