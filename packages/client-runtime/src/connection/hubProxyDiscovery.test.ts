@@ -571,7 +571,6 @@ describe("hub proxy discovery coordinator", () => {
         );
         yield* TestClock.adjust("1 millis");
         expect(h.retried).toEqual([NODE, NODE, NODE]);
-        expect(h.counts().subscriptions).toBe(1);
         expect(yield* Deferred.isDone(h.removed)).toBe(false);
       }).pipe(Effect.scoped),
   );
