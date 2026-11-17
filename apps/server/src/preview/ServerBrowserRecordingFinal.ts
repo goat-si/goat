@@ -41,11 +41,13 @@ export const captureFinalRecordingFrame = async (
     return await control.observe(async () => {
       await cdp.send("Runtime.evaluate", {
         expression: `(async () => {
-        const paint = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        // A page that stops painting answers no frame; each wait gives up after a second.
+        const bounded = wait => Promise.race([wait, new Promise(resolve => setTimeout(resolve, 1000))]);
+        const paint = () => bounded(new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         await paint();
-        await Promise.allSettled(document.getAnimations()
+        await bounded(Promise.allSettled(document.getAnimations()
           .filter(animation => animation.playState === "running" && animation.effect?.getComputedTiming().iterations !== Infinity)
-          .map(animation => animation.finished));
+          .map(animation => animation.finished)));
         await paint();
       })()`,
         awaitPromise: true,

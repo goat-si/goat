@@ -145,3 +145,22 @@ it("an encoder that fails on the final frame leaves the recording to stop withou
   };
   await expect(encodeFinalFrame(encoder, "frame", 1280)).resolves.toBeUndefined();
 });
+
+it("a final frame on a page that never paints answers once its in-page waits give up", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    // A page that stops painting never runs requestAnimationFrame callbacks.
+    await page.setContent(
+      "<script>window.requestAnimationFrame = () => 0;</script><body style='background: blue'></body>",
+    );
+    const frame = await captureFinalRecordingFrame(
+      await page.context().newCDPSession(page),
+      80,
+      new SessionControl("agent"),
+    );
+    expect(frame).toBeDefined();
+  } finally {
+    await browser.close();
+  }
+});
