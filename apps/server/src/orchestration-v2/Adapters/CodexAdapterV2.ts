@@ -200,6 +200,7 @@ import {
   subagentThreadTitle,
 } from "@goat/provider-core/server/subagentProjection";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
+import { providerThreadFromCodexThread } from "./codexProviderThread.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { codexFileChangeLineCounts } from "../fileChangeLineCounts.ts";
 import { codexFileChangePatch } from "../fileChangePatch.ts";
@@ -236,7 +237,7 @@ import {
   toCodexUserInputAnswers,
 } from "./CodexApprovalResponses.ts";
 
-const CODEX_PROVIDER = ProviderDriverKind.make("codex");
+export const CODEX_PROVIDER = ProviderDriverKind.make("codex");
 // How long Stop waits for Codex to end the turn before the user is offered Force stop.
 const CODEX_STOP_CONFIRM_TIMEOUT_MS = 10_000;
 export const CODEX_DRIVER_KIND = CODEX_PROVIDER;
@@ -337,7 +338,7 @@ function normalizeCodexCause(error: unknown): unknown {
   return error;
 }
 
-function codexTimestamp(seconds: number | null | undefined): DateTime.Utc {
+export function codexTimestamp(seconds: number | null | undefined): DateTime.Utc {
   return seconds === null || seconds === undefined
     ? DateTime.nowUnsafe()
     : DateTime.makeUnsafe(seconds * 1000);
@@ -535,46 +536,6 @@ const getNativeThreadId = Effect.fn("CodexAdapterV2.getNativeThreadId")(function
   }
   return nativeThreadId;
 });
-
-function providerThreadFromCodexThread(input: {
-  readonly appThreadId: ThreadId | null;
-  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
-  readonly ownerNodeId: OrchestrationV2ProviderThread["ownerNodeId"];
-  readonly providerSessionId: OrchestrationV2ProviderThread["providerSessionId"];
-  readonly providerInstanceId: ProviderInstanceId;
-  readonly thread: {
-    readonly createdAt: number;
-    readonly forkedFromId?: string | null;
-    readonly id: string;
-    readonly updatedAt: number;
-  };
-  readonly forkedFrom?: OrchestrationV2ProviderThread["forkedFrom"];
-}): OrchestrationV2ProviderThread {
-  return {
-    id: input.idAllocator.derive.providerThread({
-      driver: CODEX_PROVIDER,
-      nativeThreadId: input.thread.id,
-    }),
-    driver: CODEX_PROVIDER,
-    providerInstanceId: input.providerInstanceId,
-    providerSessionId: input.providerSessionId,
-    appThreadId: input.appThreadId,
-    ownerNodeId: input.ownerNodeId,
-    nativeThreadRef: {
-      driver: CODEX_PROVIDER,
-      nativeId: input.thread.id,
-      strength: "strong" as const,
-    },
-    nativeConversationHeadRef: null,
-    status: "idle",
-    firstRunOrdinal: null,
-    lastRunOrdinal: null,
-    handoffIds: [],
-    forkedFrom: input.forkedFrom ?? null,
-    createdAt: codexTimestamp(input.thread.createdAt),
-    updatedAt: codexTimestamp(input.thread.updatedAt),
-  };
-}
 
 // Codex starts the next goal turn milliseconds after the last one completes.
 const CODEX_GOAL_CONTINUATION_GRACE = "5 seconds";
