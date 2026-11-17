@@ -517,6 +517,28 @@ describe("planRun", () => {
     assert.equal((await run("nonsense")).full, true);
   });
 
+  it("gives every full run, manual or ci:full, the test files no suite owns as test-changed (#3493)", async () => {
+    const env = { GITHUB_EVENT_NAME: "workflow_dispatch", INPUT_LANE: "all" };
+    const manual = await planRun({ env, payload: {}, root, fetchImpl: labels([]) });
+    for (const result of [manual, await plan(pr(), labels([FULL_LABEL]))]) {
+      assert.ok(result.tasks.includes("test-changed"));
+      const { vitest, node } = result.changedTests;
+      for (const file of [
+        "scripts/lib/goat-rename/rules-meta.test.ts",
+        "scripts/dev-runner.test.ts",
+        "apps/marketing/src/lib/userDocs.test.ts",
+        "packages/provider-testing/src/replayWorkspace.test.ts",
+      ])
+        assert.ok(vitest.includes(file), file);
+      for (const name of ["check-nightly-release", "goat-ci-rerun-republish", "relay-state-output"])
+        assert.ok(node.includes(".github/scripts/" + name + ".test.cjs"), name);
+      assert.deepEqual(
+        vitest.filter((file) => /^(?:apps\/web|packages\/ssh)\//.test(file)),
+        [],
+      );
+    }
+  });
+
   it("runs everything for ci:full from the event, the added label, or the live PR", async () => {
     assert.equal((await plan(pr({ labels: [{ name: FULL_LABEL }] }), labels([]))).full, true);
     assert.equal((await plan({ ...pr(), label: { name: FULL_LABEL } }, labels([]))).full, true);

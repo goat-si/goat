@@ -366,8 +366,9 @@ jobs:
       # Changed, companion, and importing tests (directly or through testkit/fixture files), plus
       # special suites, as check:changed runs them: from the repository root,
       # whose Vitest config hands each file to its package's config. CI script tests use node:test.
+      # A full run hands it every test file no suite owns instead (goat-ci-scope.cjs withUnownedTests).
       # A selected file that no Vitest project collects fails here, so a quick run cannot pass
-      # without running a test it chose.
+      # without running a test it chose. Every runner runs; the step exits with the last failure.
       - name: Test changed files
         if: matrix.task == 'test-changed'
         env:
@@ -379,23 +380,25 @@ jobs:
           mapfile -t files < <(node -e 'for (const file of JSON.parse(process.env.CHANGED_TESTS || "[]")) console.log(file)')
           mapfile -t node_files < <(node -e 'for (const file of JSON.parse(process.env.CHANGED_NODE_TESTS || "[]")) console.log(file)')
           test "$(( ${#files[@]} + ${#node_files[@]} ))" -gt 0
+          status=0
           if [ "${#files[@]}" -gt 0 ]; then
             echo "${#files[@]} changed Vitest files"
             listed="$RUNNER_TEMP/changed-tests-listed.json"
-            vp test list --filesOnly --json="$listed" "${files[@]}"
+            vp test list --filesOnly --json="$listed" "${files[@]}" || status=$?
             LISTED="$listed" node -e '
               const path = require("node:path");
               const listed = new Set(require(process.env.LISTED).map((entry) => path.relative(process.cwd(), entry.file)));
               const missing = JSON.parse(process.env.CHANGED_TESTS).filter((file) => !listed.has(file));
               for (const file of missing) console.log("::error file=" + file + "::no Vitest project collects this changed test file");
               process.exit(missing.length > 0 ? 1 : 0);
-            '
-            vp test run "${files[@]}"
+            ' || status=$?
+            vp test run "${files[@]}" || status=$?
           fi
           if [ "${#node_files[@]}" -gt 0 ]; then
             echo "${#node_files[@]} changed node:test files"
-            node --test "${node_files[@]}"
+            node --test "${node_files[@]}" || status=$?
           fi
+          exit "$status"
 
       # The ssh tests start real shells, servers and sshd, and several wait a fixed
       # 2 seconds for a process to stop. Two workers leave a 4-vCPU hosted runner room for them.
@@ -566,26 +569,6 @@ jobs:
       - name: Check release version
         if: matrix.task == 'test'
         run: node scripts/check-release-version.ts
-
-      - name: Test build scripts
-        if: matrix.task == 'test'
-        working-directory: scripts
-        run: >-
-          vp test run build-desktop-artifact.test.ts check-release-version.test.ts
-          resolve-nightly-release.test.ts goat-workflow-guard.test.ts goat-workflow-guard-matrix.test.ts
-          lib/release-notices.test.ts
-          lib/release-version.test.ts vendored-gitlinks.test.ts install-goat-server.test.ts
-          pr-assets.test.ts merge-pr.test.ts
-          lib/desktop-launch-fixture.test.ts
-          smoke-desktop-app.test.ts
-
-      - name: Test CI scripts
-        if: matrix.task == 'test'
-        run: >-
-          node --test .github/scripts/pr-screenshot-gate.test.cjs .github/scripts/goat-ci-scope.test.cjs
-          .github/scripts/goat-ci-imports.test.cjs .github/scripts/goat-rename-gate.test.cjs
-          .github/scripts/release-train.test.cjs .github/scripts/goat-ci-trigger.test.cjs
-          .github/scripts/goat-ci-result-mirror.test.cjs
 
       # Plain shell, so the check still runs when a runner's node cannot load TypeScript.
       # A leftover goat-test-* sandbox means a test worker died before its file finished.

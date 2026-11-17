@@ -50,6 +50,21 @@ const git = (root: string, args: ReadonlyArray<string>) => {
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** Every test file in the tree, tracked or new, that a suite or test-changed could run. */
+export const trackedTests = (root: string) =>
+  git(root, [
+    "ls-files",
+    "--cached",
+    "--others",
+    "--exclude-standard",
+    "--",
+    "apps",
+    "packages",
+    "scripts",
+    ".github/scripts",
+    "infra",
+  ]).filter((file) => TEST.test(file) && NodeFS.existsSync(NodePath.join(root, file)));
+
 /**
  * Prompt text reaches recorded provider payloads through adapters and the replay harness, so the
  * suites that compare it are never beside it (#901). The modules compose each other, so a change
@@ -119,20 +134,7 @@ export function testsForChanges(
   changed: ReadonlyArray<string> = code,
 ): ReadonlySet<string> {
   if (changed.includes("packages/shared/src/testing/providerEnv.ts")) {
-    return new Set(
-      git(root, [
-        "ls-files",
-        "--cached",
-        "--others",
-        "--exclude-standard",
-        "--",
-        "apps",
-        "packages",
-        "scripts",
-        ".github/scripts",
-        "infra",
-      ]).filter((file) => TEST.test(file) && NodeFS.existsSync(NodePath.join(root, file))),
-    );
+    return new Set(trackedTests(root));
   }
   const present = code.filter((file) => NodeFS.existsSync(NodePath.join(root, file)));
   const tests = new Set(present.filter((file) => TEST.test(file)));
