@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
+import { reuseHeldWorkspaceLease } from "../../workspace/workspaceLease.ts";
 import { WorktreeSnapshotStore } from "../../worktreeSnapshots/WorktreeSnapshotStore.ts";
 import { makeDiscardWorktree, makeRecreateMissingWorktree } from "./RecreateWorktree.ts";
 import { makeRestorePending, type RestorePendingState } from "./restorePending.ts";
@@ -135,16 +136,17 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
     const setup = yield* Effect.gen(function* () {
       const setup = Option.isNone(setupScripts)
         ? ({ status: "no-script" } as const)
-        : yield* setupScripts.value
-            .runForThread({
+        : // Its terminal takes the worktree's lease, which this restore holds.
+          yield* reuseHeldWorkspaceLease(
+            setupScripts.value.runForThread({
               threadId: input.threadId,
               projectCwd: input.cwd,
               worktreePath: input.worktreePath,
               trigger: "setup",
               // The runner reports the exit code only when asked to watch for it.
               observeCompletion: {},
-            })
-            .pipe(Effect.mapError((error) => fail("setup-failed", error.message)));
+            }),
+          ).pipe(Effect.mapError((error) => fail("setup-failed", error.message)));
       if (setup.status === "started" && !setup.async) {
         if (setup.completion === undefined)
           return yield* fail("setup-failed", "GOAT couldn't follow the setup script to its end.");
