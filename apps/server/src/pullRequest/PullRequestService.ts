@@ -118,6 +118,13 @@ import * as PullRequestProviderRegistry from "./PullRequestProviderRegistry.ts";
 import { pullRequestHoldReason } from "./pullRequestHold.ts";
 import * as ViewedFiles from "./pullRequestViewedFiles.ts";
 import { toChangeBreakdown } from "./pullRequestChangeBreakdown.ts";
+import {
+  isProviderUnusable,
+  providerDetail,
+  toPullRequestErrorWith,
+  toUnavailableError,
+  type UnavailableRequirementOf,
+} from "./pullRequestProviderErrors.ts";
 
 export interface PullRequestMergeEvent extends PullRequestRef {
   readonly mergedAt: string;
@@ -194,6 +201,11 @@ type CredentialRef = PullRequestRef & { readonly [credentialNamespace]?: string 
 export class PullRequestService extends Context.Service<
   PullRequestService,
   {
+    /** Whether `repository` on `host` is the origin or upstream of an active project. */
+    readonly hasProjectRepository: (input: {
+      readonly host: string;
+      readonly repository: string;
+    }) => Effect.Effect<boolean, PullRequestError>;
     readonly findCloudSessionPullRequest: (input: {
       readonly projectId: ProjectId;
       readonly repository: string;
@@ -355,6 +367,15 @@ export interface SupportedProject {
   readonly upstream: boolean;
 }
 
+/** requireProject's own-repository match: `repository` on `host`, or on any host when undefined. */
+const listsRepository = (
+  candidate: SupportedProject,
+  repository: string,
+  host: string | undefined,
+) =>
+  candidate.repository.toLowerCase() === repository.toLowerCase() &&
+  (host === undefined || host === candidate.host);
+
 interface WorkspaceProjects {
   readonly supported: ReadonlyArray<SupportedProject>;
   readonly unimplemented: ReadonlyMap<
@@ -390,61 +411,6 @@ function parseListCursor(raw: string): ListCursor | null {
     delivered: Number(match[2]),
     seenAt: seenAt === undefined ? [] : seenAt.split(",").map(Number),
     ...(match[4] === undefined ? {} : { resumeAfter: match[4] }),
-  };
-}
-
-function isProviderUnusable(error: PullRequestProviderError): boolean {
-  return error.reason === "missing-tool" || error.reason === "unauthenticated";
-}
-
-type UnavailableRequirementOf = (
-  kind: SourceControlProviderKind,
-) => PullRequestProviderApi["unavailableRequirement"];
-
-function unavailableRequirement(
-  requirementOf: UnavailableRequirementOf,
-  error: PullRequestProviderError,
-): string | undefined {
-  const requirement = requirementOf(error.provider);
-  if (requirement === undefined) return undefined;
-  return error.reason === "missing-tool" ? requirement.missing : requirement.unauthenticated;
-}
-
-function providerDetail(
-  requirementOf: UnavailableRequirementOf,
-  error: PullRequestProviderError,
-): string {
-  if (!isProviderUnusable(error)) return error.detail;
-  return unavailableRequirement(requirementOf, error) ?? error.detail;
-}
-
-function toUnavailableError(error: PullRequestProviderError): PullRequestUnavailableError {
-  return new PullRequestUnavailableError({
-    reason: error.reason === "missing-tool" ? "cli-missing" : "cli-unauthenticated",
-    provider: error.provider,
-    cause: error,
-  });
-}
-
-function toPullRequestErrorWith(
-  requirementOf: UnavailableRequirementOf,
-): (operation: string) => (error: PullRequestProviderError) => PullRequestError {
-  return (operation) => (error) => {
-    if (isProviderUnusable(error)) {
-      const requirement = unavailableRequirement(requirementOf, error);
-      return new PullRequestUnavailableError({
-        reason: error.reason === "missing-tool" ? "cli-missing" : "cli-unauthenticated",
-        provider: error.provider,
-        ...(requirement === undefined ? {} : { requirement }),
-        cause: error,
-      });
-    }
-    return new PullRequestOperationError({
-      operation,
-      detail: error.detail,
-      ...(error.reason === "not-found" ? { reason: "not-found" as const } : {}),
-      cause: error,
-    });
   };
 }
 
@@ -723,17 +689,23 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  // Every active project, unlike requireProject's one, since a client's read scope is the environment.
+  const hasProjectRepository: PullRequestService["Service"]["hasProjectRepository"] = (input) => {
+    const host = input.host.trim().toLowerCase();
+    return listWorkspaceProjects({ host }).pipe(
+      Effect.map(({ supported }) =>
+        supported.some((candidate) => listsRepository(candidate, input.repository.trim(), host)),
+      ),
+    );
+  };
+
   // Azure derives organization from the checkout; require the matching repository.
   const requireProject = (ref: PullRequestRef): Effect.Effect<SupportedProject, PullRequestError> =>
     listWorkspaceProjects({ projectId: ref.projectId }).pipe(
       Effect.flatMap(({ supported }): Effect.Effect<SupportedProject, PullRequestError> => {
         const repository = ref.repository.trim();
         const host = ref.host?.trim().toLowerCase();
-        const own = supported.find(
-          (candidate) =>
-            candidate.repository.toLowerCase() === repository.toLowerCase() &&
-            (host === undefined || host === candidate.host),
-        );
+        const own = supported.find((candidate) => listsRepository(candidate, repository, host));
         if (own !== undefined) return Effect.succeed(own);
         if (host === undefined) {
           if (supported.length === 0) {
@@ -3693,6 +3665,7 @@ export const make = Effect.gen(function* () {
   const revisions = (ref: SubscriptionRef.SubscriptionRef<number>) =>
     SubscriptionRef.changes(ref).pipe(Stream.filter((revision) => revision > 0));
   return PullRequestService.of({
+    hasProjectRepository,
     findCloudSessionPullRequest,
     withSharedProjectReads,
     routing,
