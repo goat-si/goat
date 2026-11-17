@@ -183,6 +183,10 @@ K1 (PR watch chain): GO on pen-lidge. READ BY ME: next3-K1.md whole; docs/user/s
 
 LANE COORDINATOR, FOR K1: quote your section (and I, III, IV, V) in next3-K1.md. Before your first commit run git merge --ff-only origin/chase/t3-261114-next3 (it must land on c995c5427accaaa92dadac50ec756c35f4b92034) and report the sha in your first report. Write your row in the "at-entry move-outs" table on card 10.028 BEFORE you cut any block of an at-entry file: send me the row (file, block as path:line at c995c5427a, new module, lines freed) through goat_origin_report needs_input if you cannot push the card yourself; I keep the table. Every rule 3 item outside IV's mirrored case comes to the coordinator through me with its exact before and after. Report each step through goat_origin_report and end your turn after it; READY as completed.
 
+## Coordinator, 2026-11-17 21:43:15 UTC, B, verbatim
+
+B. IV IS WIDENED, for every lane (relay it). The standing authorisation also covers, under the same three conditions (upstream's own copy changes the same way; both hunks quoted in the record before the commit; nothing else existing changes): (i) fixture, mock and helper lines in a test file or testkit, where upstream changes its own copy of that fixture or helper the same way; (ii) an existing case whose title and body become upstream's verbatim text of that same case. Still to me, with exact before and after: a deleted test or test file, a moved harness, a test with no upstream counterpart, and any case where GOAT's result differs from upstream's text by more than names. The review matches each one to upstream's hunk; a mismatch is a P2.
+
 ## Build log
 
 - 2026-11-18: git merge --ff-only origin/chase/t3-261114-next3: fast-forward a608046c51 to c995c5427accaaa92dadac50ec756c35f4b92034 (git reported "Fast-forward", files incl. apps/server/src/terminal/terminalProbes.ts and apps/web/src/components/chat/useComposerSend.ssh.ts created).
