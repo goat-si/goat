@@ -94,7 +94,6 @@ import {
   decodeNotesJson,
   decodeOwnAwardIdJson,
   decodeProjectMergeCapabilitiesJson,
-  decodeProjectLabelsJson,
   decodeRepositoryBlobsJson,
   decodeTriggerJobChecksJson,
   gitLabAwardName,
@@ -106,6 +105,7 @@ import {
   type GitLabMergeRequestListItem,
   type GitLabMergeRequestListState,
 } from "./gitLabMergeRequestJson.ts";
+import { decodeProjectLabelsJson } from "./gitLabProjectLabels.ts";
 import type {
   ProviderChangeRequestSummary,
   ProviderFileStats,

@@ -398,7 +398,7 @@ function toDetail(raw: Schema.Schema.Type<typeof RawMergeRequestSchema>): GitLab
   };
 }
 
-const decodeUnknownList = decodeJsonResult(Schema.Array(Schema.Unknown));
+export const decodeUnknownList = decodeJsonResult(Schema.Array(Schema.Unknown));
 const decodeMergeRequestEntry = Schema.decodeUnknownExit(RawMergeRequestSchema);
 const decodeMergeRequest = decodeJsonResult(RawMergeRequestSchema);
 const decodeTriggerJobEntry = Schema.decodeUnknownExit(RawTriggerJobSchema);
@@ -419,7 +419,7 @@ const decodeDiffRefs = decodeJsonResult(RawDiffRefsSchema);
 const decodeViewer = decodeJsonResult(RawViewerSchema);
 const decodeProjectMergeSettings = decodeJsonResult(RawProjectMergeSettingsSchema);
 
-type DecodeFailure = Cause.Cause<Schema.SchemaError>;
+export type DecodeFailure = Cause.Cause<Schema.SchemaError>;
 
 export interface GitLabProjectUsers {
   readonly candidates: ReadonlyArray<PullRequestReviewerCandidate>;
@@ -533,45 +533,11 @@ const RawLabelSchema = Schema.Struct({
   description: Schema.optional(Schema.NullOr(Schema.String)),
   archived: Schema.optional(Schema.Boolean),
 });
-const decodeLabelEntry = Schema.decodeUnknownExit(RawLabelSchema);
+export const decodeLabelEntry = Schema.decodeUnknownExit(RawLabelSchema);
 const decodeLabel = decodeJsonResult(RawLabelSchema);
 
 export function decodeLabelNameJson(raw: string): Result.Result<string | null, DecodeFailure> {
   return Result.map(decodeLabel(raw), (label) => trimmed(label.name));
-}
-
-export interface GitLabProjectLabel extends PullRequestLabel {
-  readonly description: string | null;
-  readonly archived: boolean;
-}
-
-export interface GitLabProjectLabels {
-  readonly labels: ReadonlyArray<GitLabProjectLabel>;
-  readonly rawCount: number;
-}
-
-export function decodeProjectLabelsJson(
-  raw: string,
-): Result.Result<GitLabProjectLabels, DecodeFailure> {
-  const decoded = decodeUnknownList(raw);
-  if (!Result.isSuccess(decoded)) {
-    return Result.fail(decoded.failure);
-  }
-  const labels: GitLabProjectLabel[] = [];
-  for (const entry of decoded.success) {
-    const label = decodeLabelEntry(entry);
-    if (Exit.isFailure(label)) continue;
-    const name = trimmed(label.value.name);
-    if (name !== null) {
-      labels.push({
-        name,
-        color: trimmed(label.value.color),
-        description: trimmed(label.value.description),
-        archived: label.value.archived === true,
-      });
-    }
-  }
-  return Result.succeed({ labels, rawCount: decoded.success.length });
 }
 
 export function decodeProjectMergeCapabilitiesJson(

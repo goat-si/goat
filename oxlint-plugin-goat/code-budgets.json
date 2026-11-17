@@ -849,7 +849,7 @@
     "nonNull": 2
   },
   "packages/source-control-gitlab/src/server/GitLabSourceControlProvider.ts": { "nonNull": 1 },
-  "packages/source-control-gitlab/src/server/gitLabMergeRequestJson.ts": { "lines": 1069 },
+  "packages/source-control-gitlab/src/server/gitLabMergeRequestJson.ts": { "lines": 1035 },
   "packages/ssh/src/config.ts": { "nonNull": 4 },
   "packages/ssh/src/hostKey.ts": { "nonNull": 4 },
   "packages/ssh/src/preflight.ts": { "nonNull": 1 },
