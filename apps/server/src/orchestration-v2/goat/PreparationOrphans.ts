@@ -15,7 +15,7 @@ import type * as SqlError from "effect/sql/SqlError";
 
 import * as ThreadManagement from "../ThreadManagementService.ts";
 import { PreparationClaims } from "./PreparationClaims.ts";
-import { PREPARATION_NOT_STARTED_CODE } from "./PreparationFailure.ts";
+import { PREPARATION_NOT_STARTED_CODE, RUN_NOT_STARTED_CODE } from "./PreparationFailure.ts";
 import {
   OWNED,
   STRETCH_CHANGED,
@@ -36,6 +36,9 @@ const PASS_LIMIT = 200;
 
 export const NOT_STARTED_MESSAGE =
   "Nothing is preparing this run's workspace, so the agent did not start. Retry to prepare it.";
+/** A run with no workspace strategy has nothing for Retry to prepare. */
+const NOT_STARTED_WITHOUT_WORKSPACE_MESSAGE =
+  "Nothing is starting this run, so the agent did not get your message. Send it again.";
 
 export interface Suspect {
   readonly runId: RunId;
@@ -105,6 +108,10 @@ const start = Effect.fnUntraced(function* (suspects: SuspectRead, wait: Effect.E
   ) {
     // A fresh id each time: a run retried and stuck again must not replay the first fail.
     const nonce = yield* randomUuidV4;
+    const { runs } = yield* threads.getThreadRecords(suspect.threadId, ["runs"], {
+      runIds: [suspect.runId],
+    });
+    const retryable = runs[0]?.workspacePreparation !== undefined;
     yield* dispatchGuardedFail(
       threads,
       claims,
@@ -115,9 +122,9 @@ const start = Effect.fnUntraced(function* (suspects: SuspectRead, wait: Effect.E
         runId: suspect.runId,
         failure: makeProviderFailure({
           class: "unknown",
-          code: PREPARATION_NOT_STARTED_CODE,
-          message: NOT_STARTED_MESSAGE,
-          retryable: true,
+          code: retryable ? PREPARATION_NOT_STARTED_CODE : RUN_NOT_STARTED_CODE,
+          message: retryable ? NOT_STARTED_MESSAGE : NOT_STARTED_WITHOUT_WORKSPACE_MESSAGE,
+          retryable,
         }),
       },
       { generation, unlessOwned: true },

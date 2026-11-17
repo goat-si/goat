@@ -5,11 +5,14 @@ const isGitCommandError = Schema.is(GitCommandError);
 
 /** The code of a run the orphan check failed because nothing was preparing it. */
 export const PREPARATION_NOT_STARTED_CODE = "preparation_not_started";
+/** The same for a run with no workspace to prepare, which Retry cannot restart. */
+export const RUN_NOT_STARTED_CODE = "run_not_started";
 
-export const preparationFailureTitle = (failure: { readonly code: string | null }) =>
-  failure.code === PREPARATION_NOT_STARTED_CODE
-    ? "Workspace preparation did not finish"
-    : "Workspace preparation failed";
+export const preparationFailureTitle = (failure: { readonly code: string | null }) => {
+  if (failure.code === PREPARATION_NOT_STARTED_CODE) return "Workspace preparation did not finish";
+  if (failure.code === RUN_NOT_STARTED_CODE) return "The agent did not start";
+  return "Workspace preparation failed";
+};
 
 /**
  * Most preparation failures are a request this machine cannot satisfy, such as a missing
