@@ -336,7 +336,7 @@ it.live(
 /** A person's request for the setup terminal itself, with the pid it got. */
 const askSetupTerminal = (
   terminals: TerminalManager.TerminalManager["Service"],
-  person: "open" | "restart" | "attach",
+  person: "open" | "restart",
   worktreePath: string,
 ) =>
   Effect.gen(function* () {
@@ -348,24 +348,18 @@ const askSetupTerminal = (
       cols: 80,
       rows: 24,
     };
-    if (person === "open") return (yield* terminals.open(input)).pid;
-    if (person === "restart") return (yield* terminals.restart(input)).pid;
-    const pids: Array<number | null> = [];
-    const stop = yield* terminals.attachStream(input, (event) =>
-      Effect.sync(() => {
-        if (event.type === "snapshot") pids.push(event.snapshot.pid);
-      }),
-    );
-    stop();
-    return pids[0] ?? null;
+    return person === "open"
+      ? (yield* terminals.open(input)).pid
+      : (yield* terminals.restart(input)).pid;
   });
 
-// Setup closing its own idle terminal is housekeeping: it overtakes no request that waited.
+// Setup closing its own idle terminal is housekeeping: it overtakes no request that waited. (An
+// attach finds the setup's shell already restarted, so it waits for nothing; the manager's
+// lease-order tests cover an attach that waited.)
 it.live.each([
   ["beforeSentinel", "open"],
   ["beforeSentinel", "restart"],
   ["beforeOpen", "open"],
-  ["beforeOpen", "attach"],
 ] as const)(
   "a restore paused %s and a person's %s of its setup terminal get a shell once setup closed it",
   ([window, person]) =>

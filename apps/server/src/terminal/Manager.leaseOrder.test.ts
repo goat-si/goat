@@ -328,11 +328,12 @@ it.layer(
   );
 
   it.effect.each([
-    ["closed as idle, starts its own shell after that one", true],
-    ["still running, returns that shell and starts nothing", false],
+    ["open", "closed as idle, starts its own shell after that one", true],
+    ["open", "still running, returns that shell and starts nothing", false],
+    ["attach", "closed as idle, starts its own shell after that one", true],
   ] as const)(
-    "an open that waited while the holder opened the same terminal, with that one %s",
-    ([, closedAsIdle]) =>
+    "an %s that waited while the holder opened the same terminal, with that one %s",
+    ([request, , closedAsIdle]) =>
       Effect.gen(function* () {
         const { manager, ptyAdapter } = yield* createManager(5, {
           subprocessInspector: () =>
@@ -356,12 +357,24 @@ it.layer(
           ),
         );
         yield* Deferred.await(folder.held);
-        const waiting = yield* manager
-          .open(openInput({ cwd: folder.cwd, cols: 120, rows: 40, env: { GOAT_BY: "person" } }))
-          .pipe(Effect.forkChild({ startImmediately: true }));
+        const own = openInput({ cwd: folder.cwd, cols: 120, rows: 40, env: { GOAT_BY: "person" } });
+        const attached: Array<string> = [];
+        const waiting = yield* (
+          request === "open"
+            ? manager.open(own).pipe(Effect.map((opened) => opened.pid))
+            : manager
+                .attachStream(own, (event) =>
+                  Effect.sync(() => {
+                    if (event.type === "snapshot")
+                      attached.push(`${event.snapshot.status} ${event.snapshot.pid}`);
+                    if (event.type === "closed") attached.push("closed");
+                  }),
+                )
+                .pipe(Effect.map((stop) => (stop(), Number(attached[0]?.split(" ")[1]))))
+        ).pipe(Effect.forkChild({ startImmediately: true }));
         yield* Deferred.succeed(folder.release, undefined);
         yield* Fiber.join(holder);
-        const snapshot = yield* Fiber.join(waiting);
+        const pid = yield* Fiber.join(waiting);
         unsubscribe();
         const spawned = ptyAdapter.spawnInputs.map((input) => [
           input.cwd,
@@ -371,16 +384,19 @@ it.layer(
         ]);
         if (closedAsIdle) {
           assert.deepEqual(lifecycle, ["started", "closed", "started"]);
+          // A waiting attach is already a viewer, and a viewer's grid sizes the terminal's shells.
+          const setupSize = request === "attach" ? [120, 40] : [100, 24];
           assert.deepEqual(spawned, [
-            [folder.cwd, 100, 24, "setup"],
+            [folder.cwd, ...setupSize, "setup"],
             [folder.cwd, 120, 40, "person"],
           ]);
-          assert.strictEqual(snapshot.pid, ptyAdapter.processes[1]?.pid);
+          assert.strictEqual(pid, ptyAdapter.processes[1]?.pid);
         } else {
           assert.deepEqual(lifecycle, ["started"]);
           assert.deepEqual(spawned, [[folder.cwd, 100, 24, "setup"]]);
-          assert.strictEqual(snapshot.pid, ptyAdapter.processes[0]?.pid);
+          assert.strictEqual(pid, ptyAdapter.processes[0]?.pid);
         }
+        if (request === "attach") assert.deepEqual(attached, [`running ${pid}`]);
       }),
   );
 
