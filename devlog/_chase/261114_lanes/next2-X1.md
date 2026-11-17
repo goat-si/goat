@@ -1,6 +1,6 @@
 # X1 CI (lane record)
 
-Lane branch: `chase/t3-261114-next2-x1-ci`, head `530fabce64271dc1f27be020d420560e3d8b071f` (verified on origin; contains the integration head b531d2511c), cut from the integration branch `chase/t3-261114-next2` at `ed4268897e3183341694f27e488232572d5c5151` (draft PR #3660). Host pen-mac-studio. Plain push, no force. The nightly run 44049199276 signs on this host, so the lane stays light (logs, single test files) until the coordinator says its macOS jobs are done.
+Lane branch: `chase/t3-261114-next2-x1-ci`, head `f8c3a1897b8c79f898ce0c9c940884b4380c53c1` (verified on origin; contains the integration head e9e20d52be), cut from the integration branch `chase/t3-261114-next2` at `ed4268897e3183341694f27e488232572d5c5151` (draft PR #3660). Host pen-mac-studio. Plain push, no force.
 
 ## Rows and commits
 
@@ -218,4 +218,65 @@ Comment rule (the coordinator's 11:34:08 UTC item 4, as relayed): "PR bodies, is
 Facts as relayed by the lane coordinator at 11:40 UTC: the owner's decision "와이파이를 꺼" (turn the Wi-Fi off), asked at 10:07 UTC with the warning that there is then no way in over Wi-Fi if the wired link drops; done 2026-11-17 11:28:56 UTC on the runner host with `nmcli radio wifi off` (exit 0; NetworkManager's reboot-persistent radio state, a reboot not tested; nothing else changed; the eduroam profile kept); at 11:29:04 UTC `wlp13s0` DOWN, the only default route the wired `enp6s0`, Tailscale up, runners 02 and 03 listening; no test process in flight, so no rerun needed; undo `nmcli radio wifi on`.
 
 Posted on goat#3646: https://github.com/goat-si/goat/issues/3646#issuecomment-6946856016. Closing rule stated there: open until a week of goat-test runs shows no ERR_NETWORK_CHANGED, counted over every goat-test job on a lidge runner started 2026-11-17 11:29Z to 2026-11-24 11:29Z that ran its web tests on the host network (any branch without the wrapper; dev's runs until #3660 lands), ERR_NETWORK_CHANGED lines counted in each job's raw log; zero over the week closes it, with the job count and run ids in the closing comment. Jobs inside the wrapper cannot show the error and do not count.
+
+## Fix round after the BLOCK of 530fabce64
+
+> Coordinator to lane coordinator, 2026-11-17 11:16:16 UTC, for X1 (quote verbatim in its record and in next2-pr-plan.md under "Coordinator answers").
+> THE FRESH REVIEW of X1 at 530fabce64271dc1f27be020d420560e3d8b071f IS A BLOCK (Opus 5.5 xhigh). Report /Users/jun/handoff-in/chase/next2-X1-review-530fabce.md: relay it in full. What holds: goat#3493's coverage (lane=all and ci:full give test-changed 126 Vitest and 10 node files; all 13 + 7 files of the two deleted steps are in it; nothing ends up run by nothing), the exit status in every combination, quoting, the workflow guard satisfied honestly, no secret into the namespace, no web test needs the network, rule 3 (203 to 210 assert statements, none removed or changed), 73 of 73 scope tests run by the reviewer.
+> FIX ROUND, on top of the local 8ae3f33912 and 6ab397e58f (push them first; then merge the integration head e9e20d52be):
+> X1-P1-1: the mixed selection, the defect X1 found itself: the reviewer reproduced it with planRun (a pull request changing hub/disposable/keyPath.ts and a web component: test-changed = [keyPath.test.ts, a web browser file, reactCompilerCoverage.test.ts] with the whole list wrapped). 8ae3f33912's split is the prescribed fix: the scope script outputs the browser subset; the step runs that subset through loopback-netns.sh and the rest with plain vp test run, each inside its own non-empty check, each ending with || status=$?. The pinned scope test asserts that keyPath.test.ts lands in the part that runs on the host. This REPLACES my 10:49:07 condition (3) wording ("a selection holding a web *.browser.test.* file is wrapped"): the pin is now "only the web browser files of a selection run inside the namespace".
+> X1-P2-1: the full run's new test-changed job has never run on Linux (113 Vitest and 3 node files no full run ran before, under GOAT_TEST_TMP_GUARD=fail and the leaked-temp check; the only evidence is a macOS run with one unnamed skipped file). After the fixes are pushed: ONE gh workflow run goat-ci.yml --ref chase/t3-261114-next2-x1-ci (lane all). It must end with goat-test-changed green and the record names the counts (126 + 10) and the skipped file with its reason. A failure there is a finding for me, per file: a real failure in a test nobody ran is what goat#3493 exists to surface; say whether it is the test or the code. If goat-test or a server shard fails on a known flake, rerun that job; the gate for this lane is goat-test-changed and goat-test inside the namespace with zero ERR_NETWORK_CHANGED lines.
+> X1-P3, all in this round:
+> (a) loopback-netns.sh:8 fails OPEN: with RUNNER_ENVIRONMENT unset or unknown and bwrap present, the tests ran on the host and exited 0. Make it fail closed: only the literal "github-hosted" skips the namespace; anything else needs bwrap. An empty changed_tests_netns at goat-ci.yml:355 must not be read as "wrap nothing" by accident: say what the step does with an empty or missing output and pin it in the step reproduction.
+> (b) add --die-with-parent to the bwrap call (a cancelled job must not leave Vite and Chromium running); try --unshare-pid only if the tests pass with a private /proc, otherwise leave it and say so.
+> (c) messages: a pre-check (bwrap --unshare-user --unshare-net --dev-bind / / true) that prints ::error:: naming the bubblewrap package and goat#3646 when bwrap is missing or its profile refuses, then exits 1.
+> (d) stale text rewritten, not appended: structure/ci.md:57-61, goat-ci-scope.cjs:239 and :119, goat-ci.yml:13 and :124, the wrapsChangedTests docstring (its regex matches any path, including apps/mobile/.../device-stream.browser.test.ts: decide whether a mobile *.browser.test.* file belongs inside the namespace and make the name, the regex and the docstring agree).
+> (e) ci:affected runs that reach apps/web no longer run the 13 + 7 files of the deleted steps (only a change to their own subjects sends ci:affected to a full run): one Known limits line for #3660's body, text to me.
+> Then: the scope tests, the workflow guard, check:changed against the integration head, the step reproduction with every case (mixed, server-only, web-only, web fails and host passes, host fails and web passes, RUNNER_ENVIRONMENT unset with and without bwrap), the lane=all run, READY. A new reviewer reads the round with this report. The nightly's macOS jobs are still running on the Mac Studio: X1 keeps to light work there (scope tests and the reproduction are light; check:changed over five CI files is acceptable; nothing heavier).
+
+Review report: /Users/jun/handoff-in/chase/next2-X1-review-530fabce.md (BLOCK 530fabce64; P1 mixed selection, P2 no Linux run of the full run's test-changed, P3 fail-open detection, cancellation, messages, stale text, ci:affected coverage).
+
+Lidge pool (coordinator's 12:07:55 order, as relayed): no new goat-ci dispatches or reruns until the coordinator says the pool works again.
+
+Commits of the round (all on origin):
+
+| commit | finding | what |
+| --- | --- | --- |
+| `8ae3f33912` | P1 | goat-ci-scope.cjs publishes the browser subset as `changed_tests_netns` (JSON list); the step runs that subset through loopback-netns.sh and the rest with plain `vp test run`, each in its own non-empty check ending with `\|\| status=$?` |
+| `6ab397e58f` | merge | integration head a6992a0f36 (S4), git's own merge |
+| `2bd027de0d` | merge | integration head e9e20d52be (S4 follow-ups), git's own merge |
+| `f8c3a1897b` | P3 (a) to (d) | loopback-netns.sh skips the namespace only for `RUNNER_ENVIRONMENT=github-hosted`; pre-check `bwrap --unshare-user --unshare-net --dev-bind / / true`; `::error::` names the bubblewrap package and goat#3646 for a missing or refused bwrap; `--die-with-parent` and `--unshare-pid`; test-changed fails when `changed_tests_netns` is missing (`"[]"` is the scope's own "nothing to wrap"); `webBrowserTests` = `apps/web/**/*.browser.test.*` (mobile's `device-stream.browser.test.ts` runs in jsdom in the mobile `react` project, so it stays on the host); stale text rewritten in structure/ci.md, goat-ci-scope.cjs (CHANGED_TESTS_TASK, packageSuiteManifests), goat-ci.yml (header, matrix note, the step comment) |
+
+Pin (P1, replaces condition (3)): `goat-ci-scope.test.cjs` "runs only the web browser files of a selection inside the namespace, never a server test beside them": the reviewer's planRun case (a pull request changing `apps/server/src/hub/disposable/keyPath.ts` and `apps/web/src/components/ReopenClosedViewShortcut.tsx`) selects `keyPath.test.ts`, and `webBrowserTests` of the selection is exactly `[ReopenClosedViewShortcut.browser.test.tsx]`; the mobile jsdom file and `ServerBrowserPage.test.ts` give `[]`.
+
+Checks of the round:
+
+- `node --test .github/scripts/goat-ci-scope.test.cjs` on f8c3a1897b: tests 73, pass 73, fail 0.
+- Workflow guard on f8c3a1897b: exit 0.
+- `vp run check:changed origin/chase/t3-261114-next2` on f8c3a1897b: `6 files since e9e20d52bec4`, `CHECK_EXIT=0`; format, lint, knip 1/2 and 2/2, agent surface audit, agent context budget, typecheck (42 packages), test (1 file), node --test (1 file) pass.
+- Line counts: goat-ci-scope.cjs 992, goat-ci-scope.test.cjs 999 (cap 1000, no budget entry).
+- Step reproduction (the step's script from goat-ci.yml and the real loopback-netns.sh; /bin/bash -e with a `mapfile` shim; stub `vp` that fails on a chosen file; stub `bwrap` that parses its options, prints them and runs the command marked inside; `env -i`):
+
+| case | result |
+| --- | --- |
+| mixed (keyPath, web browser file, scripts file), self-hosted | keyPath and the scripts file on the host (netns=no); the web file inside with `--unshare-user --unshare-net --unshare-pid --die-with-parent --dev-bind / / --proc /proc`; exit 0 |
+| server only | one host run, no bwrap; exit 0 |
+| web only | one run inside; exit 0 |
+| web fails, host passes | both ran; exit 1 |
+| host fails, web passes | both ran; exit 1 |
+| RUNNER_ENVIRONMENT unset, bwrap present | inside the namespace; exit 0 |
+| RUNNER_ENVIRONMENT unset, no bwrap | `::error::bwrap is missing on lidge-t; ... install the bubblewrap package ... (goat#3646)`; exit 1, vp never ran |
+| self-hosted, bwrap refused (`setting up uid map: Permission denied`) | `::error::bwrap cannot create a user and network namespace on lidge-t; ...`; exit 1, vp never ran |
+| github-hosted, no bwrap | on the host; exit 0 |
+| `changed_tests_netns` missing (empty) | `::error::goat-scope wrote no changed_tests_netns output`; exit 1 |
+| `changed_tests_netns` = `[]` with a web file listed | the file runs on the host (the scope's contract; the scope test pins how the list is built); exit 0 |
+
+The lane=all run (P2): https://github.com/goat-si/goat/actions/runs/44073635721 on f8c3a1897b. All 25 task jobs succeeded (goat-scope, check, typecheck, test, test-changed, test-packages, test-ssh, test-desktop, test-contracts, test-client-runtime, test-mobile, test-shared, test-relay, test-ingest, test-memory-growth, test-windows, smoke-linux-computer-use, test-pen, test-pen-windows, build, test-server 1/4 to 4/4, Connect auth PostgreSQL boundaries); goat-ci-result was still queued at 12:08Z behind the stalled lidge pool, and nothing was rerun.
+
+- goat-test-changed, job 134008403446, lidge-goat-05: `126 changed Vitest files`, `Test Files 125 passed | 1 skipped (126)`, `Tests 1358 passed | 4 skipped (1362)`, 42.92 s; `10 changed node:test files`, `tests 225, pass 225, fail 0`; the collection check and "Check for leaked temp files" succeeded. The skipped file: `scripts/install-windows.test.ts`, `describe.skipIf(platform !== "win32")` (:22), "Windows-only integration launches real PowerShell and native archive executables" (:25). It is not in WINDOWS_SUITES, so test-windows never runs it either: it runs nowhere in CI, before and after this lane (a finding for the coordinator; no change here). No failure, so no test-or-code finding.
+- goat-test, job 134008403426, lidge-goat-04: the step ran `bash .github/scripts/loopback-netns.sh vp run --filter @goat/web test` (f8c3a1897b's script: pre-check, `--unshare-pid`, `--die-with-parent`); `Test Files 987 passed (987)`, `Tests 10966 passed (10966)`, 618.21 s (the whole full matrix shared the host; 44054114825 took 406 s); ERR_NETWORK_CHANGED lines: 0; loopback errors 58 ERR_ABORTED and 4 ERR_FAILED (the red herring). `--unshare-pid` with a private /proc therefore passes and stays.
+
+Known limits line for #3660's body (P3 e), sent to the coordinator: "ci:affected runs that reach apps/web no longer run the 13 scripts tests and 7 CI script tests that goat-test's two deleted steps ran; a ci:affected change to those files' own subjects (scripts/, .github/, a package.json) still becomes a full run, whose test-changed runs them, and every full run (ci:full, lane all, the dev runs before a nightly) runs them."
+
+NOT RUN: goat-ci-result of run 44073635721 (queued behind the stalled lidge pool; no rerun allowed); a real runner without bwrap or with a refusing profile (stubs only); a cancelled job on a runner (`--die-with-parent` and `--unshare-pid` are bwrap's documented behavior, not observed here).
 
