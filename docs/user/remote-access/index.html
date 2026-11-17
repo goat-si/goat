@@ -664,6 +664,11 @@ is refused at once, and a running server closes its open connections within
 about 5 seconds. An MCP request that was admitted before the revoke runs to
 completion on the access it was admitted with, and can still write or start work
 until it finishes. More commands are listed by <code>goat auth --help</code>.</p>
+<p><strong>Revoke others</strong> keeps sessions signed in with the desktop app’s built-in
+credential, normally the desktop app on that computer, and sessions Pen members
+hold; both are marked <strong>Kept by Revoke others</strong>. If you do not recognise one or
+suspect it, revoke it by itself. After you revoke the desktop app’s session, quit
+and reopen GOAT on that computer.</p>
 <p>A session with an open connection stays listed after its access credential
 expires. <strong>Settings → Connections</strong> shows which sessions are connected;
 <code>goat auth session list</code> cannot tell.</p>
