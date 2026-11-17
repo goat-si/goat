@@ -308,3 +308,22 @@ GOAT's copy (makeHarness in packages/client-runtime/src/state/threadsSync.testki
 
 No other existing test, fixture or expectation changes in this commit. Upstream's other test hunk at de21fbcff3 (the comment wording "would resubscribe forever" -> "without backing off" in the config-read case) is not taken: GOAT's copy of that case does not exist.
 
+
+
+## Coordinator, 2026-11-17 21:59:20 UTC, item 3 (claims that are not a top-level declaration), verbatim
+
+3. CLAIMS: K4's ProviderTurnStartService.ts :189-217 as a wrapper plus a call line is accepted on the pre-commit's terms: the moved expression byte for byte inside the new function, every added line (signature, parameters, return, call) listed in the commit message and the record, no behaviour change; the review reads it. Any other claim that is not a top-level declaration follows the same terms without asking.
+
+## Coordinator, 2026-11-17 22:00:50 UTC, IV (iv), verbatim
+
+IV gains (iv), for every lane (relay it): where GOAT's test file is byte for byte upstream's parent of the commit being ported (git diff <sha>^ on that file empty), the file may become upstream's file at that commit, whole, deletions and retitles included; the record gives both empty diffs (before against <sha>^, after against <sha>). If GOAT's file differs from upstream's parent in any line, deletions and retitles still come to me.
+
+## Lane coordinator, 22:0x UTC (K10 and ChatMarkdown.tsx), for the claims
+
+K10 changed ChatMarkdown.tsx (findWorkspaceFileMatch :652-674 and nearby, 1679 -> 1657) without touching K7's claimed :259-267, so the claim stands as written at c995c5427a. Once both lanes are in, the budget line is countLines of the merged file. K10 also holds MessagesTimeline.logic.ts :918-951 and contracts settings.ts :145-199.
+
+## Build log, rows 2 and 3 (commits)
+
+- d78a28f0e9 row 2 (de21fbcff3), as described above; the mirrored testkit hunks were quoted in records 727f898ed3 before the commit.
+- a37c72ff48 row 3 (00f617db4e): rpc/client.ts resubscribes on the same session after a stream transport failure or a chunk decode defect (no onDefect), at 1 s doubling to 30 s, or the caller's retryExpectedFailureAfter. It logs once per failed stream; the finite thread search keeps waiting for the next session. GOAT addition: an "Unknown request tag: <method>" answer from an older server also keeps waiting (new hubNodes.ts isUnknownRequestTagError). The whole client-runtime suite before the guard turned up the GOAT-only computerUseReadiness.test.ts case "keeps the status query and setting refresh working on older servers without retrying" failing (6 subscriptions instead of 1); with the guard it passes unchanged, and no expectation was touched. New tests: rpc/client.streamRecovery.test.ts (6: upstream's three, all failing on the base; one log per failed stream with at most one stream open; a pending retry does not resubscribe a replaced session; the older-server case, which fails with the guard removed) and state/runtime.streamRecovery.test.ts (upstream's finite-search guard, passing before and after). Upstream's added clock-advance line in an existing client.test.ts case is not taken; the new replaced-session case covers it. Whole client-runtime suite after: 313 files, 4013 tests, exit 0. rpc/client.ts 772 -> 816 (no budget entry, under 1000).
+
