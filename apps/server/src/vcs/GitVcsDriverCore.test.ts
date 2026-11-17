@@ -2671,7 +2671,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
-    it.effect("reads Changes totals without minimizing and keeps review diffs minimal", () =>
+    it.effect("reads Changes totals and review diffs without minimizing", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
         const { initialBranch } = yield* initRepoWithCommit(cwd);
@@ -2703,10 +2703,8 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           deletions: Number(deletions),
         });
 
-        const [additions, removals] = minimalStat.split("\t");
-        const minimalPatch = yield* git(cwd, [
+        const defaultPatch = yield* git(cwd, [
           "diff",
-          "--minimal",
           "--patch",
           "--no-color",
           "--no-ext-diff",
@@ -2722,12 +2720,12 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
             {
               path: "repeated.txt",
               previousPath: null,
-              additions: Number(additions),
-              deletions: Number(removals),
+              additions: Number(insertions),
+              deletions: Number(deletions),
               changeType: "change",
             },
           ]);
-          assert.strictEqual(source.diff.trim(), minimalPatch);
+          assert.strictEqual(source.diff.trim(), defaultPatch);
         }
       }),
     );
