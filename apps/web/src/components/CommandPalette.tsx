@@ -994,9 +994,9 @@ function OpenCommandPaletteDialog(props: {
   const newProjectsRootFor = (environmentId: EnvironmentId | null): string | null =>
     environments.find((environment) => environment.environmentId === environmentId)?.serverConfig
       ?.newProjectsRoot ?? null;
-  const offeredProvidersFor = (environmentId: EnvironmentId | null) =>
+  const offerSettingsFor = (environmentId: EnvironmentId | null) =>
     environments.find((environment) => environment.environmentId === environmentId)?.serverConfig
-      ?.settings.offeredSourceControlProviders;
+      ?.settings;
 
   const startNewProject = (
     environmentId: EnvironmentId,
@@ -1054,7 +1054,7 @@ function OpenCommandPaletteDialog(props: {
 
     const orderedSources: ReadonlyArray<AddProjectRemoteSource> = [
       "url",
-      ...sortAddProjectProviderSources(readinessBySource, offeredProvidersFor(environmentId)),
+      ...sortAddProjectProviderSources(readinessBySource, offerSettingsFor(environmentId)),
     ];
 
     for (const source of orderedSources) {
@@ -1999,7 +1999,7 @@ function OpenCommandPaletteDialog(props: {
       ? []
       : getNewProjectPublishTargets(
           sourceControlDiscovery.data ?? null,
-          offeredProvidersFor(newProjectFlow.environmentId),
+          offerSettingsFor(newProjectFlow.environmentId),
         );
   const newProjectPublishTarget = getNewProjectPublishTarget(
     newProjectPublishTargets,

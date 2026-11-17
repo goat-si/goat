@@ -549,7 +549,7 @@ export function SourceControlSettingsPanel() {
   const handleScan = () => {
     discovery.refresh();
   };
-  const offeredProviders = environment?.serverConfig?.settings.offeredSourceControlProviders;
+  const offerSettings = environment?.serverConfig?.settings;
   // An older server drops the patch, so its switches stay on and disabled.
   const offeredSupported =
     environment?.serverConfig?.environment.capabilities.offeredSourceControlProviders === true;
@@ -666,7 +666,7 @@ export function SourceControlSettingsPanel() {
                   key={`provider:${item.kind}`}
                   item={item}
                   offered={{
-                    checked: isSourceControlProviderOffered(offeredProviders, item.kind),
+                    checked: isSourceControlProviderOffered(offerSettings, item.kind),
                     disabled: !offeredSupported || !canUpdateServerSettings,
                     onChange: (checked) => {
                       if (environmentId === null) return;

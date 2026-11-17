@@ -128,7 +128,7 @@ import {
 import { getSourceControlPresentation, sourceControlIcon } from "~/sourceControlPresentation";
 import {
   isSourceControlProviderOffered,
-  type OfferedSourceControlProviders,
+  type SourceControlOfferSettings,
 } from "@goat/client-runtime/operations/projects";
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { formatDiffCount } from "@goat/client-runtime/diff-count";
@@ -225,7 +225,7 @@ interface PublishRepositoryDialogProps {
   readonly environmentId: ScopedThreadRef["environmentId"] | null;
   readonly threadRef: ScopedThreadRef | null;
   readonly gitCwd: string;
-  readonly offeredProviders: OfferedSourceControlProviders | undefined;
+  readonly offerSettings: SourceControlOfferSettings | undefined;
 }
 
 function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
@@ -274,7 +274,7 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
   const publishProviderReadiness = (provider: SourceControlProviderKind) =>
     publishReadinessByProvider.get(provider) ?? { ready: false, hint: null };
   const offeredPublishProviderOptions = PUBLISH_PROVIDER_OPTIONS.filter((option) =>
-    isSourceControlProviderOffered(props.offeredProviders, option.value),
+    isSourceControlProviderOffered(props.offerSettings, option.value),
   );
   const hasReadyPublishProvider = offeredPublishProviderOptions.some(
     (option) => publishProviderReadiness(option.value).ready,
@@ -293,7 +293,7 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
   // The dialog stays mounted, so a host turned off after it was picked must not stay selected.
   const offeredSelection =
     selectedPublishProvider !== null &&
-    isSourceControlProviderOffered(props.offeredProviders, selectedPublishProvider)
+    isSourceControlProviderOffered(props.offerSettings, selectedPublishProvider)
       ? selectedPublishProvider
       : null;
   const publishProvider =
@@ -1902,7 +1902,7 @@ export default function GitActionsControl({
         environmentId={activeEnvironmentId}
         threadRef={activeThreadRef}
         gitCwd={gitCwd}
-        offeredProviders={serverConfig?.settings?.offeredSourceControlProviders}
+        offerSettings={serverConfig?.settings}
       />
       <Dialog
         open={pendingDefaultBranchAction !== null}

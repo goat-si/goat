@@ -142,7 +142,7 @@ function useEnvironmentOptions(
         connectionErrorTraceId: runtime?.connectionErrorTraceId ?? null,
         supportsCloneTracking: config?.environment.capabilities.projectCloneTracking === true,
         ghqCloneLayout: config?.settings.ghqCloneLayout === true,
-        offeredSourceControlProviders: config?.settings.offeredSourceControlProviders,
+        sourceControlOfferSettings: config?.settings,
       };
     });
     return Arr.sort(
@@ -378,7 +378,7 @@ export function AddProjectSourceScreen(props: { readonly environmentId?: string 
                 "url",
                 ...sortAddProjectProviderSources(
                   readiness,
-                  selectedEnvironment.offeredSourceControlProviders,
+                  selectedEnvironment.sourceControlOfferSettings,
                 ),
               ] as AddProjectRemoteSource[]
             ).map((candidate) => (
@@ -645,7 +645,7 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
   );
   const publishTargets = getNewProjectPublishTargets(
     discoveryState.data,
-    environment?.offeredSourceControlProviders,
+    environment?.sourceControlOfferSettings,
   );
   const [name, setName] = useState("");
   const [publishes, setPublishes] = useState(false);

@@ -24,17 +24,34 @@ import {
 import type { EnvironmentProject } from "../state/models.ts";
 
 describe("add project shared logic", () => {
-  it("offers every host until one is turned off, also against a server without the setting", () => {
+  it("offers every host until one is turned off, also against a server without the setting (decoded as {})", () => {
     const ready = () => ({ ready: true, hint: null });
-    const all = sortAddProjectProviderSources(ready, undefined);
-    expect(all).toEqual(expect.arrayContaining(["github", "gitlab", "gitcafe"]));
-    expect(sortAddProjectProviderSources(ready, {})).toEqual(all);
-    expect(sortAddProjectProviderSources(ready, { gitlab: false, github: true })).toEqual(
-      all.filter((source) => source !== "gitlab"),
+    const all = sortAddProjectProviderSources(ready, {});
+    expect(sortAddProjectProviderSources(ready, { offeredSourceControlProviders: {} })).toEqual(
+      all,
     );
+    expect(all).toEqual(expect.arrayContaining(["github", "gitlab", "gitcafe"]));
+    expect(
+      sortAddProjectProviderSources(ready, {
+        offeredSourceControlProviders: { gitlab: false, github: true },
+      }),
+    ).toEqual(all.filter((source) => source !== "gitlab"));
     const github = SourceControlProviderKind.make("github");
-    expect(isSourceControlProviderOffered({ github: false }, github)).toBe(false);
-    expect(isSourceControlProviderOffered(undefined, github)).toBe(true);
+    expect(
+      isSourceControlProviderOffered({ offeredSourceControlProviders: { github: false } }, github),
+    ).toBe(false);
+    expect(isSourceControlProviderOffered({}, github)).toBe(true);
+    expect(isSourceControlProviderOffered({ offeredSourceControlProviders: {} }, github)).toBe(
+      true,
+    );
+  });
+
+  it("offers no host while the server's settings are not known, so a host turned off never shows", () => {
+    const ready = () => ({ ready: true, hint: null });
+    expect(
+      isSourceControlProviderOffered(undefined, SourceControlProviderKind.make("gitlab")),
+    ).toBe(false);
+    expect(sortAddProjectProviderSources(ready, undefined)).toEqual([]);
   });
 
   it("asks for a repository name when GitHub input is only an owner path", () => {

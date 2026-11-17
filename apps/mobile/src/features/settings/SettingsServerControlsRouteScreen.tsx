@@ -585,10 +585,7 @@ function ServerSettingsDetail(props: {
                     >
                       {sourceControlClients.definitions.map((definition) => {
                         const offered = displayTargets.map((target) =>
-                          isSourceControlProviderOffered(
-                            target.settings.offeredSourceControlProviders,
-                            definition.kind,
-                          ),
+                          isSourceControlProviderOffered(target.settings, definition.kind),
                         );
                         return (
                           <SettingsSwitchRow

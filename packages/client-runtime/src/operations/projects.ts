@@ -142,26 +142,31 @@ export function getDefaultCloneUrl(
     : repository.sshUrl;
 }
 
-export type OfferedSourceControlProviders = ServerSettings["offeredSourceControlProviders"];
+/** The part of a server's settings the add and publish pickers read; undefined until it is known. */
+export type SourceControlOfferSettings = Pick<
+  Partial<ServerSettings>,
+  "offeredSourceControlProviders"
+>;
 
 /**
  * Whether the add and publish project pickers offer a host. GOAT offers every host until the user
- * turns one off; a server without the setting offers them all.
+ * turns one off. Before the server's settings are known nothing is offered, so a host the person
+ * turned off never shows while they load.
  */
 export function isSourceControlProviderOffered(
-  offered: OfferedSourceControlProviders | undefined,
+  settings: SourceControlOfferSettings | undefined,
   kind: SourceControlProviderKind,
 ): boolean {
-  return offered?.[kind] ?? true;
+  return settings === undefined ? false : (settings.offeredSourceControlProviders?.[kind] ?? true);
 }
 
 export function sortAddProjectProviderSources(
   readiness: AddProjectRemoteSourceReadiness,
-  offered?: OfferedSourceControlProviders,
+  settings: SourceControlOfferSettings | undefined,
 ): ReadonlyArray<SourceControlProviderKind> {
   return Arr.sort(
     ADD_PROJECT_REMOTE_PROVIDER_SOURCES.filter((source) =>
-      isSourceControlProviderOffered(offered, source),
+      isSourceControlProviderOffered(settings, source),
     ),
     Order.mapInput(
       Order.Struct({
@@ -270,11 +275,11 @@ export interface NewProjectPublishTarget {
 
 export function getNewProjectPublishTargets(
   discovery: SourceControlDiscoveryResult | null,
-  offered?: OfferedSourceControlProviders,
+  settings: SourceControlOfferSettings | undefined,
 ): ReadonlyArray<NewProjectPublishTarget> {
   const readiness = buildAddProjectRemoteSourceReadiness(discovery);
   return sourceControlClients.definitions.flatMap((definition) => {
-    if (!isSourceControlProviderOffered(offered, definition.kind)) return [];
+    if (!isSourceControlProviderOffered(settings, definition.kind)) return [];
     if (!readiness(definition.kind).ready) return [];
     const provider = discovery?.sourceControlProviders.find(
       (candidate) => candidate.kind === definition.kind,
