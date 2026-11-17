@@ -160,3 +160,59 @@ it.effect("accepts a redirect but rejects a load superseded by another navigate"
     }
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
+
+it.effect("regression: a load the person stopped is not a failed navigation", () =>
+  Effect.gen(function* () {
+    const manager = yield* PreviewManager.PreviewManager;
+    const started = Promise.withResolvers<void>();
+    let abortLoad: () => void = () => {};
+    const debuggee = Object.assign(new NodeEvents.EventEmitter(), {
+      isAttached: () => false,
+      attach: vi.fn(),
+      sendCommand: vi.fn(),
+    });
+    const contents = Object.assign(new NodeEvents.EventEmitter(), {
+      id: 43,
+      isDestroyed: () => false,
+      getType: () => "webview",
+      getURL: () => "about:blank",
+      getTitle: () => "",
+      isLoadingMainFrame: () => false,
+      isDevToolsOpened: () => false,
+      getZoomFactor: () => 1,
+      setZoomFactor: vi.fn(),
+      setAudioMuted: vi.fn(),
+      isCurrentlyAudible: () => false,
+      send: vi.fn(),
+      setIgnoreMenuShortcuts: vi.fn(),
+      setWindowOpenHandler: vi.fn(),
+      isFocused: () => true,
+      focusedFrame: {},
+      ipc: new NodeEvents.EventEmitter(),
+      session: { fetch: vi.fn() },
+      navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+      debugger: debuggee, // justified: Electron WebContents exposes this property.
+      // Electron rejects a stopped loadURL with ERR_ABORTED (-3).
+      loadURL: vi.fn(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            abortLoad = () => reject(Object.assign(new Error("ERR_ABORTED"), { errno: -3 }));
+            started.resolve();
+          }),
+      ),
+      stop: vi.fn(() => abortLoad()),
+    });
+    fromId.mockReturnValue(contents);
+    yield* manager.createTab("stop-test");
+    yield* manager.registerWebview("stop-test", 43);
+    const load = yield* Effect.forkChild(
+      Effect.exit(manager.navigate("stop-test", "https://example.com/slow")),
+    );
+    yield* Effect.promise(() => started.promise);
+
+    yield* manager.stopLoading("stop-test");
+
+    expect(contents.stop).toHaveBeenCalledOnce();
+    expect(Exit.isSuccess(yield* Fiber.join(load))).toBe(true);
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
