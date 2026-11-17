@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
+import type * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 
 import * as ClaudeRuntimeSkills from "./ClaudeRuntimeSkills.ts";
 
@@ -118,3 +119,24 @@ it.each([undefined, false, true])(
     );
   },
 );
+
+it("preapproves the six granted reads and never any memory write on read-only policy", () => {
+  const session: McpProviderSession.McpProviderSessionConfig = {
+    environmentId: EnvironmentId.make("fixture"),
+    threadId: ThreadId.make("fixture"),
+    providerSessionId: "fixture",
+    providerInstanceId: ProviderInstanceId.make("claude"),
+    endpoint: "http://127.0.0.1:1/mcp",
+    authorizationHeader: "Bearer fixture",
+    browserToolsAvailable: false,
+    grantedScopes: ["memory:read", "memory:write", "orchestration:read"],
+  };
+  const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
+    mcpSession: session,
+    readOnlySandbox: true,
+  });
+  for (const tool of ClaudeAdapterV2.CLAUDE_MEMORY_READ_TOOLS)
+    assert.include(overrides.allowedTools ?? [], tool);
+  for (const tool of ClaudeAdapterV2.CLAUDE_MEMORY_WRITE_TOOLS)
+    assert.notInclude(overrides.allowedTools ?? [], tool);
+});
