@@ -33,13 +33,18 @@ function useFixtureVersion() {
 function fixtureValue(label: string) {
   return label === "exposure" ? state.exposure : label === "upsert" ? state.write : true;
 }
-vi.mock("@effect/atom-react", async (original) => ({
-  ...(await original<typeof import("@effect/atom-react")>()),
-  useAtomValue: (atom: { label: string }) => {
-    useFixtureVersion();
-    return fixtureValue(atom.label);
-  },
-}));
+vi.mock("@effect/atom-react", async (original) => {
+  const actual = await original<typeof import("@effect/atom-react")>();
+  return {
+    ...actual,
+    // Fixture atoms carry a label; real atoms (the shared draft) read through the registry.
+    useAtomValue: (atom: { label?: string }) => {
+      if (atom.label === undefined) return actual.useAtomValue(atom as never);
+      useFixtureVersion();
+      return fixtureValue(atom.label);
+    },
+  };
+});
 vi.mock("../../state/memory", async () => {
   const { Atom } = await import("effect/reactivity");
   // Unlike the shared draft, this one never purges: tests purge it where the shared fence would.
@@ -203,10 +208,15 @@ const expire = () => {
   state.queries.set("read", Option.none());
   state.queries.set("history", Option.none());
 };
-/** A body-free change: the read empties and the shared draft fence purges the edit. */
-function signal(registry: AtomRegistry.AtomRegistry, kind: "upsert" | "forget", memoryId = id(2)) {
+/** A body-free change: the read empties and, unless the shared reread keeps it, the draft purges. */
+function signal(
+  registry: AtomRegistry.AtomRegistry,
+  kind: "upsert" | "forget" | "invalidate",
+  memoryId = id(2),
+  { purge = true } = {},
+) {
   state.exposure = withMemorySignal(state.exposure, id(1), kind, memoryId);
-  registry.set(editDraft(), null);
+  if (purge) registry.set(editDraft(), null);
   expire();
 }
 const memoryText = (screen: Screen) =>
@@ -378,7 +388,6 @@ it.each([
     await type(screen, "Synthetic original, edited");
     await update(() => signal(registry, "forget", memoryId));
     expect(memoryText(screen)).toBeNull();
-    expect(registry.get(editDraft())).toBeNull();
     expect(screen.container.textContent).not.toContain("Synthetic original");
     expect(state.onForgotten).toHaveBeenCalledWith(FORGOTTEN_LINE);
     expect(state.navigate).toHaveBeenCalledWith(
@@ -408,4 +417,75 @@ it("leaves once on a forget while its parent re-renders with a new callback", as
   expect(screen.container.textContent).toContain("1 notices");
   expect(state.onForgotten).toHaveBeenCalledTimes(1);
   expect(state.navigate).toHaveBeenCalledTimes(1);
+});
+
+const heldForScan = decodeItem({
+  memorySpaceId: id(1),
+  memoryId: id(2),
+  status: "blocked",
+  scope: { kind: "user" },
+  failureCode: "scanner_pending",
+  pendingSync: false,
+  localAvailability: {
+    exposure: "held",
+    reasons: ["scanner_pending"],
+    deferred: [],
+    cleanupPending: false,
+  },
+});
+
+it("keeps an edited draft open through its own save's hub confirmation and the scanner's release", async () => {
+  const registry = setup();
+  await using screen = await renderDetails(registry);
+  await click(screen, "Edit");
+  await type(screen, "Synthetic original, edited");
+  // The shared reread found the same revision held for this device's re-scan: the draft stays.
+  await update(() => signal(registry, "upsert", id(2), { purge: false }));
+  expect(memoryText(screen)?.value).toBe("Synthetic original, edited");
+  await update(() => state.queries.set("read", Option.some(heldForScan)));
+  expect(memoryText(screen)?.value).toBe("Synthetic original, edited");
+  await update(() => {
+    signal(registry, "invalidate", id(2), { purge: false });
+    state.queries.set("read", Option.some(original));
+  });
+  expect(memoryText(screen)?.value).toBe("Synthetic original, edited");
+  expect(screen.container.textContent).not.toContain(CHANGED_LINE);
+  expect(state.onForgotten).not.toHaveBeenCalled();
+});
+
+it("closes an untouched editor with the version line when the shared reread discards its draft", async () => {
+  const registry = setup();
+  await using screen = await renderDetails(registry);
+  await click(screen, "Edit");
+  await update(() => {
+    signal(registry, "upsert");
+    state.queries.set("read", Option.some(heldForScan));
+  });
+  expect(memoryText(screen)).toBeNull();
+  expect(screen.container.textContent).not.toContain("Synthetic original");
+  expect(screen.container.textContent).toContain(CHANGED_LINE);
+});
+
+it("hides and closes an edited draft kept past the minute when a privacy hold arrives", async () => {
+  const registry = setup();
+  await using screen = await renderDetails(registry);
+  await click(screen, "Edit");
+  await type(screen, "Synthetic original, edited");
+  await update(expire);
+  expect(memoryText(screen)?.value).toBe("Synthetic original, edited");
+  await update(() => signal(registry, "invalidate"));
+  expect(memoryText(screen)).toBeNull();
+  expect(screen.container.textContent).not.toContain("Synthetic original, edited");
+  expect(screen.container.textContent).toContain(CHANGED_LINE);
+});
+
+it("offers Save only once the draft differs from the memory", async () => {
+  const registry = setup();
+  await using screen = await renderDetails(registry);
+  await click(screen, "Edit");
+  const saveButton = () =>
+    [...screen.container.querySelectorAll("button")].find((b) => b.textContent === "Save memory");
+  expect(saveButton()?.disabled).toBe(true);
+  await type(screen, "Synthetic original, edited");
+  expect(saveButton()?.disabled).toBe(false);
 });
