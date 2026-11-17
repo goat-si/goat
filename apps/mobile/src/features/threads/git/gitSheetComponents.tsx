@@ -2,7 +2,9 @@ import { sourceControlClients } from "@goat/client-runtime/source-control-client
 import { SymbolView } from "../../../components/ui/AppSymbol";
 import type { ComponentProps } from "react";
 import { View } from "react-native";
+import { AppText as Text } from "../../../components/ui/AppText";
 import { Button } from "../../../components/ui/Button";
+import { useGitActionResultNotification } from "../../../state/use-vcs-action-state";
 
 export function SheetActionButton(props: {
   readonly icon: ComponentProps<typeof SymbolView>["name"];
@@ -14,6 +16,26 @@ export function SheetActionButton(props: {
   return (
     <View className="flex-1">
       <Button {...props} fullWidth />
+    </View>
+  );
+}
+
+/** A failed Git action's message inside the sheet, which covers the thread screen's banner. */
+export function GitActionFailure() {
+  const { result, dismiss } = useGitActionResultNotification();
+  if (result?.type !== "error") return null;
+  return (
+    <View
+      accessibilityRole="alert"
+      className="gap-1 rounded-[18px] border border-border bg-card px-4 py-3"
+    >
+      <Text className="font-goat-medium text-sm text-danger-foreground">{result.title}</Text>
+      {result.description ? (
+        <Text selectable className="text-sm text-foreground-muted">
+          {result.description}
+        </Text>
+      ) : null}
+      <Button label="Dismiss" tone="text" onPress={dismiss} />
     </View>
   );
 }

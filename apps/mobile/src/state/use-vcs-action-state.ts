@@ -32,7 +32,10 @@ function broadcast(result: GitActionResultNotification | null): void {
 
 export function showGitActionResult(result: GitActionResultNotification): void {
   if (dismissTimer) clearTimeout(dismissTimer);
+  dismissTimer = null;
   broadcast(result);
+  // A failure stays until dismissed: the person may be in a Git sheet that covers the banner.
+  if (result.type === "error") return;
   dismissTimer = setTimeout(() => {
     dismissTimer = null;
     broadcast(null);
