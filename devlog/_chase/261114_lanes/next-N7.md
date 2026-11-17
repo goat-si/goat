@@ -409,3 +409,88 @@ Coordinator ruling (verbatim):
 - NOT RUN on 673fd197ad: `check:changed` (the ruling asks for focused tests on these two items; it runs after the post-N3 merge); captures (owed to #3519's integrated pass); PostgreSQL relay tests; the Effect 4.1 adaptation (after N3).
 - Next, after lane N3 merges: merge origin/chase/t3-261114-next once, with a verbatim move-out first if either at-entry file (ScheduledTasksSettings.tsx 1747, mobile route screen 1181) would grow; then the checks and READY.
 
+
+
+## Part 2 after lane N3: merge of the integration head and Effect 4.1.3 (2026-11-17)
+
+Coordinator decision (verbatim):
+
+> Coordinator decision, 2026-11-17 04:25 UTC, lane N7 part 2: GO. Lane N3 is merged; the integration head is 24aa0d5f70a7080483897996a13eabf62af0dbc6 (chase/t3-261114-next; Effect 4.1.3, dev through 229ae283d3). N7 part 2 was accepted at 673fd197ad. Now, on chase/t3-261114-n7b-scheduler (a fresh thread in the same worktree on pen-macbookpro2 if the old one is gone):
+> 1. Merge origin/chase/t3-261114-next at 24aa0d5f70 (a merge, not a rebase). The reviewers' trial merges conflict only in oxlint-plugin-goat/code-budgets.json: every entry at the merged file's real length by countLines, none above the integration head's entry unless every added line is the lane's own already-reviewed code, in which case move code out first (verbatim, its own commit). ScheduledTasksSettings.tsx (1747) and the mobile SettingsScheduledTasksRouteScreen.tsx (1181) are exactly at their entries: if the merge or the adaptation adds a line to either, the move-out comes first.
+> 2. Adapt to Effect 4.1.3 until typecheck is 0 in server, contracts, web and mobile. Known points from the N3 reviews: apps/server ScheduledTaskService.threadMode.test.ts:185-189 and :215-224 (forkChild followed by TestClock.adjust: 4.1 needs the forked fiber to have started; N3's receipt-delivery harness is the precedent), Effect.result in scheduledTaskRowDecode.ts:95 (a typed recovery: say what it does on a cause that mixes a failure and a defect), NodeCrypto where a test provided only NodeServices. Any test whose harness must change beyond an import or a provide line is a rule 3 request to me with the exact before and after; no expectation changes. Apply lane N3's three audits to the lane's own production code: a fork into a scope that may be closed with startImmediately or uninterruptible; a typed recovery over a mixed cause; crypto. And the new one: a value captured from a mutable Map or Ref, a yield on a database read, then an object-identity comparison (the memoryAccessInputs shape; on 4.1.3 the SQLite connection lock no longer takes a free permit inline while a waiter is queued).
+> 3. Checks: goat-rename --check; format; lint; typecheck server, contracts, web, mobile; the lane's focused suites (server scheduler and MCP files, contracts, web ScheduledTasksSettings browser files, mobile three files) plus N6's and N8's files that share Orchestrator.ts, OrchestratorMcpService.ts and ThreadManagementService.ts; then check:changed against 24aa0d5f70 on pen-macbookpro2. Known failures are cited by issue (goat#3363, goat#3560, goat#3416).
+> 4. Plain push; records (merge section, budgets, the adaptation list with path:line, rule 3 lines if any, NOT RUN); READY with the head. I then run ONE narrow fresh review of the merge and the adaptation and merge the lane into the integration branch. N9b part 2 works in parallel on pen-macmini and merges after you; both lanes edit the top of dispatchMessage in Orchestrator.ts, so do not reformat or move lines there.
+
+### Merges
+
+- `76a43a3eec` merges origin/chase/t3-261114-next at `24aa0d5f70a7080483897996a13eabf62af0dbc6` into the accepted head `673fd197ad`. The only conflict was `oxlint-plugin-goat/code-budgets.json` (20 conflicted entries); every other file is git's automatic merge. Each conflicted entry is set to the merged file's real length by `countLines`, and `node oxlint-plugin-goat/update-code-budgets.ts` (which only lowers) then exits 0 with no file over its entry.
+- `8d5f7a37ef` merges origin/chase/t3-261114-next at `f848a4dcd2ecb457d7cb15d801771709c6afd094` (a fast-forward of 24aa0d5f70) on top of 76a43a3eec. It is git's own merge with no conflict and no hand edit: ProviderSessionManager.test.ts, the new ProviderSessionManagerBrowserAccess.testkit.ts, docs/internals/effect-services.md and the one budget line (ProviderSessionManager.test.ts 5903, its real length).
+- Orchestrator.ts: no line at the top of `dispatchMessage` was moved or reformatted by either merge (the file is git's automatic merge both times).
+
+### Budgets
+
+The merged tree differs from the integration head's `code-budgets.json` in eight entries:
+
+| File | Merged (countLines) | Integration | Dev | Why |
+| --- | --- | --- | --- | --- |
+| apps/server/src/mcp/OrchestratorMcpService.ts | 3871 | 3880 | | lowered |
+| apps/server/src/orchestration-v2/Orchestrator.ts | 13546 | 13555 | | lowered |
+| apps/server/src/scheduledTasks/ScheduledTaskService.ts | 2274 | 2313 | | lowered |
+| packages/contracts/src/orchestratorMcp.ts | 1083 | 1092 | | lowered |
+| apps/server/src/orchestration-v2/ProjectionStore.ts | 8823 | 8744 | 8836 | lane head's reviewed entry |
+| apps/server/src/orchestration-v2/ThreadManagementService.ts | 2196 | 2195 | 2201 | lane head's reviewed entry |
+| apps/web/src/components/settings/ScheduledTasksSettings.tsx | 1747 | 1737 | 1750 | lane head's reviewed entry |
+| apps/mobile/src/features/settings/SettingsScheduledTasksRouteScreen.tsx | 1181 | 1178 | 1202 | lane head's reviewed entry |
+
+For the last four, the integration side did not change the file between the merge base c5d8d872d0 and 24aa0d5f70 (`git diff --shortstat` empty), and the merged file is byte-identical to the file at 673fd197ad (`git diff HEAD` empty before the merge commit). No line was written in this round in any of the four, so no move-out was made.
+
+Coordinator answer on these four entries (verbatim):
+
+> Coordinator answer, 2026-11-17 04:45 UTC, the budget rule after a merge of the integration head (lane N7 part 2 asked; it applies to N9b part 2 as well): THE CHILD'S READING IS RIGHT, no move-out is needed for the four entries, and my 04:25 sentence was badly worded. The rule, stated exactly, the same as the dev-merge rule of 02:58 UTC: after merging the integration head, an entry is the merged file's real length by countLines when (1) every line the merged file has beyond the integration side is the lane's own line as it stood at the lane's reviewed head (the merged file is byte-identical to the lane head's file, or it is git's automatic merge of the two sides), and (2) the entry is at or below dev's entry. A verbatim move-out FIRST is required only when lines written NOW (an adaptation to Effect 4.1, a hand resolution) would land in a file that is at its entry, or when the entry would pass dev's. I checked the four here: ProjectionStore.ts 8823 (integration 8744, dev 8836), ThreadManagementService.ts 2196 (2195, 2201), ScheduledTasksSettings.tsx 1747 (1737, 1750), the mobile SettingsScheduledTasksRouteScreen.tsx 1181 (1178, 1202): each is the lane head's reviewed entry and below dev's. Quote this paragraph in the record beside the entries; the narrow review verifies both conditions per file.
+> ALSO, the integration head has moved once more, by three small commits: chase/t3-261114-next = f848a4dcd2ecb457d7cb15d801771709c6afd094 (fast-forward from 24aa0d5f70, verified on origin): lane N3's test-only follow-up (653864850b a verbatim testkit move, 823ffe7d2f one added row and a reworded comment in ProviderSessionManager.test.ts, entry 5906 to 5903) and a docs note (f848a4dcd2, docs/internals/effect-services.md "Reads under the database connection lock"). N7 part 2 and N9b part 2: merge origin/chase/t3-261114-next at f848a4dcd2 before your push (N7: once more on top of your local 76a43a3eec; it touches only that test file, a new testkit, the docs page and one budget line), say that the result is git's own merge, and run check:changed against f848a4dcd2. Read that docs section: it names the shape to look for in your own production code.
+
+### Effect 4.1.3 adaptation
+
+None was needed. Typecheck is 0 in contracts, server, web and mobile on the merge with no source change, and every focused suite passes unchanged. No test harness or expectation changed, so there is no rule 3 request. The known points:
+
+- `apps/server/src/scheduledTasks/ScheduledTaskService.threadMode.test.ts:185-186` and `:215-216`: each `Effect.forkChild` is followed by `Deferred.await(held.launching)`, which completes only once the forked run has reached the held launch. The `TestClock.adjust` calls at `:189` and `:224` come after that (and `:224` after `Fiber.join`), so the fiber has always started. The file passes 10 of 10 on 4.1.3.
+- `apps/server/src/scheduledTasks/scheduledTaskRowDecode.ts:95`, `Effect.result(decodeRow(row))` in `listDueTasks` (dev's code, moved verbatim by this lane; the integration head has it at ScheduledTaskService.ts:319). On 4.1.3 `Effect.result` recovers only a cause without defects (`findRecoverableError`): a typed decode failure is still skipped with "Skipping undecodable schedule task row"; a cause that mixes a failure and a defect now propagates the defects only, so the poll fails instead of skipping that row (4.0.5 recovered the first failure and dropped the defect); a defect alone propagates on both versions. `decodeRow` composes its decoders sequentially and the first failure ends it, so it cannot produce a mixed cause; no change.
+- NodeCrypto: the scheduler tests that need `SecureRandom` already provide `NodeCrypto.layer` (threadMode.test.ts:97, ScheduledTaskService.test.ts:214 and :312, scheduleReconcile.test.ts:95, :189 and :249); typecheck would reject a missing one.
+
+### Audits of the lane's own production code (the diff against the integration head)
+
+1. Forks into a scope that may be closed: the lane adds no fork, `startImmediately` or `uninterruptible` (server, contracts; web and mobile add no Effect code).
+2. Typed recovery over a mixed cause: `bindThread`'s `Effect.catchCause` (ScheduledTaskService.ts:583) takes the whole cause, the same on both versions. `Effect.option(readCommandProjection(threadId, recent))` (Orchestrator.ts:880) was already on the integration head (:875); the lane only adds the argument. On 4.1.3 `match` also propagates defects of a mixed cause, and one read mapped to `OrchestratorProjectionError` cannot produce one. `Effect.result` at scheduledTaskRowDecode.ts:95 is above.
+3. Crypto: the lane adds no crypto use; ScheduledTaskService.ts:41 and :260 use `SecureRandom` from lane N3's rename.
+4. A value captured from a Map or Ref, a database read, then an identity comparison (docs/internals/effect-services.md, "Reads under the database connection lock"): none. The run guard `activeRuns` (ScheduledTaskService.ts:864) is a set of task ids changed atomically by `Ref.modify`, and `bindThread`'s two reads inside it compare nothing. Every comparison the lane adds is between ids, strings, null or literals (for example the provider-switch reread in Orchestrator.ts compares provider instance ids). The two move-outs (goat/TaskCompletionDisposal.ts, goat/PullRequestWakeDrops.ts) compare status literals only.
+
+### The palette test fix merged; the integration head is ab59bbdacc
+
+Coordinator ruling (verbatim):
+
+> Coordinator, 2026-11-17 05:30 UTC: the palette test fix is read and MERGED. chase/t3-261114-next = ab59bbdacc95f4e12ab05bde02cfaa3e2fdb7ad4 (fast-forward from f848a4dcd2, verified on origin): one commit, one line in apps/web/src/components/CommandPalette.browser.test.tsx (the one-shot query becomes await expect.element(row).not.toBeInTheDocument()). All four conditions of the authorisation are met in the commit message: nothing else in the case changes; with flushSync(close) removed on a scratch copy the case fails ("expected document not to contain element ... Matcher did not succeed in time"); the mechanism is named (Base UI keeps the closed popup mounted and unmounts it in a later commit of its own after the popup's animations finish: @base-ui/react 1.9.0 internals/useUnmountAfterClose.js:88 and useAnimationsFinished.js:88 and :72; a person sees the designed 200 ms dialog exit while the drag ghost follows the pointer); and under CI-like load (24 copies on 8 workers, 20 runs each) the old assertion failed in 11 of 20 runs with CI's exact message and the new one passed 20 of 20.
+> For N3d (mcp:639f307d): the goat#3416 comment (the commit, the mechanism, the counts, "fixed in #3519; the issue closes when #3519 merges into dev"), then the records line (the authorisation verbatim, the commit, the merge line "merged into the integration branch at ab59bbdacc (#3519)") and you are done.
+> For N7 part 2 (mcp:ae0dbf69) and N9b part 2 (mcp:76435a27): the integration head is now ab59bbdacc; the only change since f848a4dcd2 is that one line in a web test neither lane touches. N7 part 2: when check:changed against f848a4dcd2 has passed, merge origin/chase/t3-261114-next once more (git's own merge, say so), no second check:changed for it, push and send READY. N9b part 2: nothing now; your next merge is the integration head that contains N7 part 2, which will contain this commit too.
+> Also for the record of both lanes: the pull request run on f848a4dcd2 (44018308235) failed goat-test on a different known class, a vi.mock factory that could not fetch its module (apps/web/src/components/chat/TurnThreadCards.browser.test.tsx, "Failed to fetch dynamically imported module", the class of goat#928 and goat#1719): filed as goat#3646; it is not caused by #3519.
+
+- `dd6096a1685b31e5b164fd9751d5fa4c23ab7c52` merges origin/chase/t3-261114-next at `ab59bbdacc95f4e12ab05bde02cfaa3e2fdb7ad4` on top of 8d5f7a37ef. It is git's own merge with no conflict and no hand edit: one line in apps/web/src/components/CommandPalette.browser.test.tsx. As ruled, no second `check:changed` ran for it.
+- Pushed plainly: origin/chase/t3-261114-n7b-scheduler = `dd6096a168` (673fd197ad..dd6096a168, checked with `git ls-remote`).
+
+### Checks
+
+- On `76a43a3eec` (the merge of 24aa0d5f70; 8d5f7a37ef adds only N3's test-only follow-up and a docs page):
+  - `node scripts/goat-rename.ts --check` 0 (0 lines with T3 residue); `vp fmt --check` 0; `vp lint --report-unused-disable-directives` over the lane's 41 changed files 0 errors (4 warnings, all outside the lane's hunks: Orchestrator.ts:4596, :5825, :5838, ProjectionStore.ts:6175).
+  - Typecheck (`vp run typecheck`) 0 errors in packages/contracts, apps/server, apps/web, apps/mobile.
+  - `node scripts/agent-surface/audit.ts --check` 0; `node scripts/agent-surface/context-budget.ts --check` 0, every harness within its budget, none raised.
+  - Server, scheduler: src/scheduledTasks (18 files), ChannelRoutines, scheduleReconcile, ProjectionStore.sinceLastCompaction, SteeringCompletionWake.integration, runtimeLayer.projectDeletion: 23 files, 202 tests passed.
+  - Server, MCP and N6/N8: src/mcp/OrchestratorMcp*.test.ts, HostThreadsMcpService*.test.ts, scheduleReconcile, src/mcp/toolkits, Orchestrator.activeTurnRefusals, QuestionEscalationService.staleWake, ThreadManagementService.worktreeSend, DelegatedCompletionDelivery.followupSubagents, ThreadStop.staleNativeSubagent, DelegatedCompletionDelivery.remoteFollowUp, RemoteDispatchCoordinator.followUp, cli/thread, ThreadManagementService, ProjectionStore: 102 files, 1101 tests passed.
+  - Contracts orchestratorMcp, scheduledTask and agentSurface: 9 files, 94 tests passed. Web ScheduledTasksSettings.browser and .notifications.browser: 2 files, 23 tests passed. Mobile ScheduledTaskContextSections, scheduledTaskDraft, scheduled-task-editor: 3 files, 40 tests passed.
+- On `8d5f7a37ef`: `set -o pipefail; vp run check:changed f848a4dcd2ecb457d7cb15d801771709c6afd094` on pen-macbookpro2: exit 0. Format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget, typecheck (39 packages) and vp test (733 files: 731 passed, 2 skipped; 13211 tests passed, 7 skipped) all pass. No known failure (goat#3363, goat#3560, goat#3416) appeared in this file set.
+- PR run 44018308235 on f848a4dcd2: goat-test failed on TurnThreadCards.browser.test.tsx ("Failed to fetch dynamically imported module"), filed by the coordinator as goat#3646, not caused by #3519 (per the ruling above; not run here).
+
+### NOT RUN
+
+- `check:changed` on dd6096a168 (ruled unnecessary: one web test line neither this lane nor its files touch).
+- Focused suites on 8d5f7a37ef and dd6096a168 separately (check:changed on 8d5f7a37ef covers them).
+- Web, desktop and mobile captures (owed to #3519's integrated pass, list in Part 2); PostgreSQL relay tests; full CI (ci:full).
+
