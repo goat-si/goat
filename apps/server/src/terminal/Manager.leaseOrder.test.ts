@@ -93,7 +93,7 @@ it.layer(
   );
 
   it.effect(
-    "an open that waited finds the terminal the holder opened meanwhile and reuses it",
+    "an open overtaken by the holder's open of the same terminal returns the holder's terminal",
     () =>
       Effect.gen(function* () {
         const { manager, ptyAdapter } = yield* createManager();
@@ -428,6 +428,42 @@ it.layer(
         assert.strictEqual(fromOlder.pid, running.pid);
         assert.strictEqual(fromOlder.cwd, folder.other);
         assert.strictEqual(ptyAdapter.spawnInputs.length, 1);
+      }),
+  );
+
+  it.effect(
+    "an open that waited reads its terminal again, so one evicted meanwhile starts anew",
+    () =>
+      Effect.gen(function* () {
+        const { manager, ptyAdapter } = yield* createManager(5, { maxRetainedInactiveSessions: 0 });
+        const folder = yield* heldFolder;
+        const input = openInput({ cwd: folder.cwd });
+        yield* manager.open(openInput({ cwd: folder.cwd }));
+        // This request object has read the running terminal once, before it exits.
+        yield* manager.open(input);
+        const exited = yield* Deferred.make<void>();
+        const unsubscribe = yield* manager.subscribe((event) =>
+          event.type === "exited" ? Deferred.succeed(exited, undefined) : Effect.void,
+        );
+        ptyAdapter.processes[0]?.emitExit({ exitCode: 0, signal: null });
+        yield* Deferred.await(exited);
+        unsubscribe();
+        const holder = yield* folder.hold(Effect.void);
+        yield* Deferred.await(folder.held);
+        const reopened = yield* manager
+          .open(input)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        // A new terminal evicts the exited one while the reopen waits; eviction overtakes nothing.
+        yield* manager.open(openInput({ terminalId: "other", cwd: folder.other }));
+        yield* Deferred.succeed(folder.release, undefined);
+        yield* Fiber.join(holder);
+        const snapshot = yield* Fiber.join(reopened);
+        assert.strictEqual(snapshot.status, "running");
+        assert.strictEqual((yield* manager.getShell(input)) !== null, true);
+        assert.deepEqual(
+          ptyAdapter.spawnInputs.map((spawned) => spawned.cwd),
+          [folder.cwd, folder.other, folder.cwd],
+        );
       }),
   );
 });
