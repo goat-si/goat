@@ -143,6 +143,8 @@ export interface Fixture {
   readonly afterRevoke?: Effect.Effect<void>;
   /** Runs while the move probes the target's host key, before anything changes. */
   readonly duringProbe?: Effect.Effect<void>;
+  /** Runs while GOAT reads the key it pinned for the target, before anyone is asked. */
+  readonly duringPin?: Effect.Effect<void>;
   /** Home `ocx link routes` answers; absent answers as an OpenCodex without the command. */
   readonly routes?: (args: ReadonlyArray<string>) => OcxOutput;
   /** Home `ocx link routes` as a run that can fail or never finish; overrides routes. */
@@ -415,7 +417,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
                       connect: { code: fixture.connectExit ?? 0, stdout: "" },
                     };
               }),
-            pinnedFingerprint: () => Effect.succeed(fixture.pin),
+            pinnedFingerprint: () => Effect.as(fixture.duringPin ?? Effect.void, fixture.pin),
             ensureDeviceRuntime: () => Effect.die("unused"),
             syncDevice: () => Effect.die("unused"),
             directAlias: () =>

@@ -4,6 +4,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
+import * as Statement from "effect/sql/Statement";
 
 import { PINNED, scope, setup, threadScope } from "./HubMembership.testkit.ts";
 
@@ -367,4 +368,53 @@ it.effect.each(["asking an owner", "an owner's pinned move"] as const)(
         ),
       ).toEqual([]);
     }),
+);
+
+it.effect("a move whose caller stops while GOAT reads the pinned key asks no one", () =>
+  Effect.gen(function* () {
+    const reading = yield* Deferred.make<void>();
+    const gate = yield* Deferred.make<void>();
+    const hub = yield* setup({
+      ...asking,
+      duringPin: Deferred.succeed(reading, undefined).pipe(Effect.andThen(Deferred.await(gate))),
+    });
+    const moving = yield* startMove(hub, move);
+    yield* Deferred.await(reading);
+    yield* moving.stop;
+    yield* Deferred.succeed(gate, undefined);
+    yield* afterMoves(hub);
+    expect((yield* hub.inboxItems).items).toEqual([]);
+    expect(hub.calls.filter((call) => /revoke|disconnect|link add/.test(call))).toEqual([]);
+  }),
+);
+
+it.effect("a move whose caller stops while its start is audited leaves the old link alone", () =>
+  Effect.gen(function* () {
+    const auditing = yield* Deferred.make<void>();
+    const gate = yield* Deferred.make<void>();
+    // Holds the "started" audit row's insert until the caller has gone.
+    const holdStarted: Statement.Transformer = (statement) => {
+      const [query, params] = statement.compile();
+      return query.includes("INSERT INTO audit_events") && params.includes("started")
+        ? Deferred.succeed(auditing, undefined).pipe(
+            Effect.andThen(Deferred.await(gate)),
+            Effect.as(statement),
+          )
+        : Effect.succeed(statement);
+    };
+    const hub = yield* setup({ linked: ["mini"], pin: PINNED });
+    const moving = yield* startMove(hub, move).pipe(
+      Effect.provideService(Statement.CurrentTransformer, holdStarted),
+    );
+    yield* Deferred.await(auditing);
+    yield* moving.stop;
+    yield* Deferred.succeed(gate, undefined);
+    yield* afterMoves(hub);
+    expect(hub.calls.filter((call) => /revoke|disconnect|link add/.test(call))).toEqual([]);
+    expect(
+      (yield* hub.audit)
+        .filter(({ action, target }) => action === "hub.move" && target === "pen-mini")
+        .map(({ outcome }) => outcome),
+    ).toEqual(["started", "failed"]);
+  }),
 );

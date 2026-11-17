@@ -1,4 +1,5 @@
 import { expect, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -21,6 +22,26 @@ it.effect("a job that dies is logged under its job name, and its permit is relea
     expect(exit._tag).toBe("Failure");
     expect(JSON.stringify(logged)).toContain("Test.job");
     expect(yield* Semaphore.take(permit, 1)).toBe(1);
+  }).pipe(Effect.scoped, Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
+});
+
+it.effect("a job's defect log carries a fixed category and never the defect's own text", () => {
+  const logged: Array<string> = [];
+  const logger = Logger.make(({ message, cause }) => {
+    logged.push(JSON.stringify(message), Cause.pretty(cause));
+  });
+  return Effect.gen(function* () {
+    const permit = yield* Semaphore.make(1);
+    const scope = yield* Effect.scope;
+    yield* Effect.exit(
+      runAsServerJob(permit, scope, "Test.job", () =>
+        Effect.die(new Error("token=sk-live-123 at /Users/someone/secret")),
+      ),
+    );
+    expect(logged.join("\n")).toContain("Test.job");
+    expect(logged.join("\n")).toContain("defect");
+    expect(logged.join("\n")).not.toContain("sk-live-123");
+    expect(logged.join("\n")).not.toContain("/Users/someone");
   }).pipe(Effect.scoped, Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
 });
 
