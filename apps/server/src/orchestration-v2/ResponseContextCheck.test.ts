@@ -81,10 +81,11 @@ const reply = (
   ...(overrides.subagents ? { subagents: overrides.subagents } : {}),
 });
 
-const providerText = (record: ComposerContextRecord, threadId: ThreadId | undefined = main) =>
+// null is a message without a thread; undefined would take the default.
+const providerText = (record: ComposerContextRecord, threadId: ThreadId | null = main) =>
   builtInSkillProviderText(Option.none(), {
     message: {
-      ...(threadId === undefined ? {} : { threadId }),
+      ...(threadId === null ? {} : { threadId }),
       text: "[Reviewer finished](goat-context://v1/response/response_m1) check the empty state too",
       context: { records: [record] },
     },
@@ -142,7 +143,7 @@ describe("a reply to a response, checked by the server before an agent reads it"
 
   it.effect("leaves a reply unavailable when the message names no thread", () =>
     Effect.gen(function* () {
-      const text = yield* providerText(reply(), undefined);
+      const text = yield* providerText(reply(), null);
       expect(text).toContain(UNAVAILABLE);
       expect(text).not.toContain("thread.read");
     }),
