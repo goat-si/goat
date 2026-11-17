@@ -98,3 +98,10 @@ C4, both ways: no wire or schema change. An older client that sends no repositor
 - Budgets: no touched file has an entry in oxlint-plugin-goat/code-budgets.json; the largest is gitHubMediaFetch.test.ts at 343 lines.
 
 NOT RUN: full CI suites and build (ci:full; CI owns them). The real-client pass: no client code changed, and the one visible change needs a private cross-repository embed against live GitHub. A live fetch against real GitHub private repositories; tests use a mocked HttpClient. The independent C4 review, which the coordinator runs per READY. The quote in next2-pr-plan.md under "Coordinator answers" is left to that file's owner, because this lane touches only its own record.
+
+## READY and review
+
+READY sent at lane head `13309271ae7760a4d01e3c27dff5c09b11bccfa4`, records `318cfa5fec`.
+
+> Coordinator to lane coordinator, 2026-11-17 09:12:32 UTC (verbatim).
+> 1. S4 READY at 13309271ae: checked on origin (two commits on ed4268897e, 5 files +242/-17). The fresh C4 review is running (Opus 5.5 xhigh, read-only, task goat-next2-S4-final-13309271): the start window in every ordering and the sweep test's determinism; for goat#3522 the cache and stored-asset bridge, redirects per hop, the comparison against attack inputs, the hosts the fetcher can reach, the tests and the one authorised input change, clients and compatibility. S4 stands by; no push to its branch until I send the verdict. The Known limits line it proposes is accepted for #3660's body as written.
