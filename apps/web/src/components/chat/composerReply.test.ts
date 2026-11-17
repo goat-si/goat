@@ -99,7 +99,7 @@ it("refuses a draft reply whose holding thread the client no longer holds", () =
     expect(refuseReplyWhoseHolderIsGone(reply, sideChat)).toBe(true);
   }
   expect(toast).toHaveBeenCalledWith(
-    expect.objectContaining({ title: "The response this replies to is gone" }),
+    expect.objectContaining({ title: "Can't find the response this replies to" }),
   );
 });
 

@@ -177,8 +177,8 @@ shows above the composer until you send or cancel it, and the sent message opens
 it. The agent gets where the response is and how it starts, and rereads the rest itself, so a
 reply costs the same however long the response was. Reply appears only when the thread's machine
 runs a GOAT version that supports it, and, on a response a fork or side chat shows from the thread
-it started from, only while that thread still exists and is not archived. Mobile shows a received
-reply as a chip and has no Reply action.
+it started from, only while GOAT can find that thread: not after it was deleted or archived. Mobile
+shows a received reply as a chip and has no Reply action.
 
 ## Recall a sent prompt
 

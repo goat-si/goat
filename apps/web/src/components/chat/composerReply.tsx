@@ -82,31 +82,38 @@ export function replyHolderIsHeld(
 const readHolderShell = (environmentId: EnvironmentId, threadId: ThreadId) =>
   readThreadShell(scopeThreadRef(environmentId, threadId));
 
+/** The response a composer draft replies to, if any. */
+export const draftReplyTo = (target: ComposerThreadTarget): ResponseContextRecord | null =>
+  useComposerDraftStore.getState().getComposerDraft(target)?.replyTo ?? null;
+
 /** A draft reply whose response's thread the client no longer holds is refused with a sentence. */
 export function refuseReplyWhoseHolderIsGone(
   replyTo: ResponseContextRecord | null,
-  target: ComposerThreadTarget,
+  target: ComposerThreadTarget | null,
 ): boolean {
-  if (!replyTo || typeof target === "string") return false;
+  if (!replyTo || target === null || typeof target === "string") return false;
   const { citation } = replyTo;
   const holderShell = readHolderShell(citation.environmentId, citation.threadId);
   if (replyHolderIsHeld(target.threadId, citation.threadId, holderShell)) return false;
   toastManager.add(
     stackedThreadToast({
       type: "warning",
-      title: "The response this replies to is gone",
+      title: "Can't find the response this replies to",
       description:
-        "The thread that held it was deleted or archived. Cancel the reply above the composer and send again.",
+        "GOAT can't find the thread that held it here. It may have been deleted or archived. Cancel the reply above the composer and send again.",
     }),
   );
   return true;
 }
 
-/** The send gate: a draft reply the agent could not read is refused with its sentence. */
+/**
+ * The send gate: a draft reply the agent could not read is refused with its sentence. `target`
+ * is the thread the send goes to, also when the composer edits a queued message there.
+ */
 export function refuseReplyThatGoesUnread(
   replyTo: ResponseContextRecord | null,
   environmentId: EnvironmentId,
-  target: ComposerThreadTarget,
+  target: ComposerThreadTarget | null,
 ): boolean {
   return (
     refuseReplyTheServerDrops(replyTo, environmentId) ||
@@ -134,7 +141,7 @@ function showsHistoryOf(
 
 /**
  * A stashed reply returns only in a thread that shows its response (the thread that holds it, or
- * a side chat or fork of it), and a pending one wins.
+ * a side chat or fork of it), and a pending one wins. The send gate judges whether it may go.
  */
 export function restoreStashedReply(
   records: ReadonlyArray<ComposerContextRecord>,
@@ -145,12 +152,7 @@ export function restoreStashedReply(
   const { citation } = reply;
   if (
     citation.environmentId !== target.environmentId ||
-    !showsHistoryOf(target, citation.threadId) ||
-    !replyHolderIsHeld(
-      target.threadId,
-      citation.threadId,
-      readHolderShell(citation.environmentId, citation.threadId),
-    )
+    !showsHistoryOf(target, citation.threadId)
   ) {
     return;
   }

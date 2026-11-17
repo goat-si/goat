@@ -278,6 +278,23 @@ it.effect("serializes actual family requests in one environment before they reac
   ),
 );
 
+it.effect("settles a family read empty on a server without families, without asking it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeFamilyHarness();
+      // An older server does not advertise shellThreadFamilies; its shell leaves nothing out.
+      Object.assign(h.session, { initialConfig: Effect.succeed({}) });
+      const family = h.families.familyAtom(TARGET.environmentId, ThreadId.make("fork"));
+      h.registry.mount(family);
+
+      const read = yield* AtomRegistry.getResult(h.registry, family, { suspendOnWaiting: true });
+      expect(read.threads).toEqual([]);
+      expect(threadFamilyRead(h.registry.get(family))).toBe("settled");
+      expect(h.activity.calls).toBe(0);
+    }),
+  ),
+);
+
 const REMOTE = EnvironmentId.make("environment-remote");
 const PROJECT = ProjectId.make("fixture-project");
 const NOW = "2026-10-28T12:00:00.000Z";

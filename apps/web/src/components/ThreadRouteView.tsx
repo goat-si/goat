@@ -6,6 +6,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
 import ChatView from "./ChatView";
+import { useForkSourceMissing } from "./forkSourceShell";
 import { GoatBotThreadView } from "./goatBot/GoatBotThreadView";
 import { useGoatBotMemberAt } from "./goatBot/goatBotMemberThread";
 import { GoatBotMemberUnavailable } from "./goatBot/GoatBotMemberUnavailable";
@@ -145,7 +146,11 @@ export function ThreadRouteView({
     unlistedThreadRef?.environmentId ?? null,
     unlistedThreadRef?.threadId ?? null,
   );
-  useOpenThreadFamily(serverThreadRef, bootstrapComplete && unlistedThreadRef !== null);
+  const forkSourceMissing = useForkSourceMissing(serverThreadRef, serverThreadShell);
+  useOpenThreadFamily(
+    serverThreadRef,
+    bootstrapComplete && (unlistedThreadRef !== null || forkSourceMissing),
+  );
   const renderState = resolveThreadRouteRenderState({
     bootstrapComplete,
     serverThreadExists: serverThreadShell !== null,

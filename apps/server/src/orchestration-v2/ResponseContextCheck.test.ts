@@ -87,11 +87,11 @@ const items = new Map<string, Partial<OrchestrationV2TurnItem>>([
   ["orphan/item-1", { type: "assistant_message", messageId: MessageId.make("m1") }],
 ]);
 
-// Each read is recorded in `reads`, for the case that counts them.
-const makeStore = (reads: Array<ThreadId> = []) =>
+// With `reads`, each thread read is recorded there, for the case that counts them.
+const makeStore = (reads?: Array<ThreadId>) =>
   Layer.mock(ProjectionStoreV2)({
     getThread: (threadId) => {
-      reads.push(threadId);
+      reads?.push(threadId);
       return threadId === missing
         ? Effect.fail(new Error("no such thread") as never)
         : Effect.succeed({
