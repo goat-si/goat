@@ -5,7 +5,9 @@ import {
   MemoryItem,
   MemoryHistoryPage,
   MemoryRevisionId,
+  MemorySourcePage,
   MemorySpaceId,
+  MessageId,
   type AuthSessionState,
   type ServerConfig,
   WS_METHODS,
@@ -102,6 +104,50 @@ const history = Schema.decodeUnknownSync(MemoryHistoryPage)({
   localAvailability: visible,
   nextCursor: null,
 });
+const resolutionId = "00000000-0000-4000-8000-000000000021";
+/** History whose resolution carries a judgment, as the details view renders it. */
+const judged = Schema.decodeUnknownSync(MemoryHistoryPage)({
+  memoryId: id,
+  revisions: [{ revision, payload }],
+  resolutions: [
+    {
+      resolution: {
+        resolutionId,
+        memorySpaceId: space,
+        memoryId: id,
+        inputRevisionIds: [
+          "00000000-0000-4000-8000-000000000022",
+          "00000000-0000-4000-8000-000000000023",
+        ],
+        inputPayloadRefs: [
+          "00000000-0000-4000-8000-000000000022",
+          "00000000-0000-4000-8000-000000000023",
+        ],
+        judgmentRef: resolutionId,
+        requestedModelSelection: { instanceId: "codex", model: "synthetic", options: [] },
+        effectiveProvider: "codex",
+        effectiveModel: "synthetic",
+        resolvingEnvironmentId: env,
+        fencingToken: 1,
+        resultRevisionId: revision.revisionId,
+        appliedAtUtc: "2026-10-14T00:00:00.000Z",
+        revertDeadlineUtc: "2026-11-13T00:00:00.000Z",
+      },
+      payload: { resolutionId, judgment: "Synthetic judgment" },
+    },
+  ],
+  tombstone: null,
+  reports: [],
+  revertResults: [],
+  localAvailability: visible,
+  nextCursor: null,
+});
+const sourcePage = Schema.decodeSync(MemorySourcePage)({
+  sourceThread: { environmentId: env, threadId: "synthetic-thread" },
+  watermark: { fromEventId: "e1", toEventId: "e2", throughSequence: 2 },
+  messages: [{ messageId: "m1", text: "Synthetic source" }],
+  nextCursor: null,
+});
 function waitFor<A>(
   registry: AtomRegistry.AtomRegistry,
   atom: Atom.Atom<A>,
@@ -115,11 +161,20 @@ function waitFor<A>(
 }
 
 /** One environment whose memory subscription and reads the test drives by hand. */
-const harness = Effect.fn(function* () {
+const harness = Effect.fn(function* ({ holdPages = false }: { readonly holdPages?: boolean } = {}) {
   const registry = AtomRegistry.make();
   yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
   const signals = yield* Queue.unbounded<MemoryChangeSignal>();
   const reads = yield* Queue.unbounded<Deferred.Deferred<MemoryItem>>();
+  // With holdPages, history and source requests wait for the test to answer them.
+  const historyReplies = yield* Queue.unbounded<Deferred.Deferred<MemoryHistoryPage>>();
+  const sourceReplies = yield* Queue.unbounded<Deferred.Deferred<MemorySourcePage>>();
+  const held = <A>(replies: Queue.Queue<Deferred.Deferred<A>>) =>
+    Effect.gen(function* () {
+      const reply = yield* Deferred.make<A>();
+      yield* Queue.offer(replies, reply);
+      return yield* Deferred.await(reply);
+    });
   let historyRequests = 0;
   const client = {
     [WS_METHODS.memoryChanges]: () => Stream.fromQueue(signals),
@@ -130,10 +185,12 @@ const harness = Effect.fn(function* () {
         return yield* Deferred.await(reply);
       }),
     [WS_METHODS.memoryHistory]: () =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
         historyRequests++;
-        return history;
+        return holdPages ? held(historyReplies) : Effect.succeed(history);
       }),
+    [WS_METHODS.memoryReadSource]: () =>
+      holdPages ? held(sourceReplies) : Effect.succeed(sourcePage),
   };
   const active = yield* SubscriptionRef.make(
     Option.some({ client, initialConfig: Effect.succeed(config) } as unknown as RpcSession),
@@ -166,8 +223,9 @@ const harness = Effect.fn(function* () {
     grants(env),
     AsyncResult.success({
       authenticated: true,
-      scopes: ["memory:read", "memory:write"],
-      permissions: ["memory:read", "memory:write"],
+      // Reading the original conversation also needs orchestration:read.
+      scopes: ["memory:read", "memory:write", "orchestration:read"],
+      permissions: ["memory:read", "memory:write", "orchestration:read"],
       auth: {
         policy: "remote-reachable",
         bootstrapMethods: [],
@@ -190,6 +248,8 @@ const harness = Effect.fn(function* () {
     edit,
     signals,
     reads,
+    historyReplies,
+    sourceReplies,
     active,
     historyRequests: () => historyRequests,
   };
@@ -595,4 +655,71 @@ it.effect("a read opened after a collection is the one the draft's decision is w
       expect(requests()).toBe(1);
     }),
   ),
+);
+
+it.effect(
+  "every hold withholds the open memory's history, judgment and original conversation, the second as the first",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* harness({ holdPages: true });
+        const shown = <A, E>(atom: Atom.Atom<AsyncResult.AsyncResult<Option.Option<A>, E>>) =>
+          Atom.make((get) => Option.flatten(AsyncResult.value(get(atom))));
+        const body = shown(h.memory.read(readTarget));
+        const past = shown(
+          h.memory.history({ ...readTarget, input: { ...readTarget.input, limit: 10 } }),
+        );
+        const original = shown(
+          h.memory.readSource({
+            ...readTarget,
+            input: {
+              ...readTarget.input,
+              sourceThread: sourcePage.sourceThread,
+              messageIds: [MessageId.make("m1")],
+              limit: 10,
+            },
+          }),
+        );
+        h.registry.mount(body);
+        h.registry.mount(past);
+        h.registry.mount(original);
+        const answerPages = Effect.gen(function* () {
+          yield* Deferred.succeed(yield* Queue.take(h.historyReplies), judged);
+          yield* Deferred.succeed(yield* Queue.take(h.sourceReplies), sourcePage);
+          yield* waitFor(h.registry, past, Option.isSome);
+          yield* waitFor(h.registry, original, Option.isSome);
+        });
+        yield* Deferred.succeed(yield* Queue.take(h.reads), item);
+        yield* waitFor(h.registry, body, Option.isSome);
+        yield* answerPages;
+        expect(JSON.stringify(h.registry.get(past))).toContain("Synthetic judgment");
+        expect(JSON.stringify(h.registry.get(original))).toContain("Synthetic source");
+        h.registry.set(h.edit, {
+          text: "Synthetic memory",
+          memoryIds: [id],
+          expectedHeads: [revisionId(4)],
+        });
+        h.registry.set(h.edit, { text: "Synthetic memory, edited", memoryIds: [id] });
+        /** A hold signal; its reread answers with reply. */
+        const hold = Effect.fn(function* (reply: MemoryItem) {
+          const seen = h.registry.get(h.exposure);
+          yield* Queue.offer(h.signals, signal("invalidate"));
+          yield* waitFor(h.registry, h.exposure, (state) => state !== seen);
+          // Withheld at the signal, before any reread answers.
+          expect(Option.isNone(h.registry.get(past))).toBe(true);
+          expect(Option.isNone(h.registry.get(original))).toBe(true);
+          expect(Option.isNone(h.registry.get(body))).toBe(true);
+          yield* Deferred.succeed(yield* Queue.take(h.reads), reply);
+          yield* waitFor(h.registry, body, isStatus(reply.status));
+        });
+        // First hold: this device re-scans revision 4, so the edited draft stays open.
+        yield* hold(blocked("scanner_pending"));
+        expect(h.registry.get(h.edit)).toBe("Synthetic memory, edited");
+        yield* answerPages;
+        // Second hold: a secret detected by another device's scan.
+        yield* hold(blocked("secret_detected"));
+        yield* waitFor(h.registry, h.edit, (text) => text === null);
+        expect(h.registry.get(h.edit)).toBeNull();
+      }),
+    ),
 );

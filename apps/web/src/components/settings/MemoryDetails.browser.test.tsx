@@ -551,3 +551,74 @@ it("Edit is unavailable while an edit is open, and available again after Cancel"
   await click(screen, "Cancel");
   expect(editButton()?.disabled).toBe(false);
 });
+
+/** A detected secret from another device's scan: a hold that is not this device's own re-scan. */
+const heldForSecret = decodeItem({
+  memorySpaceId: id(1),
+  memoryId: id(2),
+  status: "blocked",
+  scope: { kind: "user" },
+  failureCode: "secret_detected",
+  pendingSync: false,
+  localAvailability: {
+    exposure: "held",
+    reasons: ["secret_detected"],
+    deferred: [],
+    cleanupPending: false,
+  },
+});
+
+it.each([
+  { outcome: "accepted", line: false },
+  { outcome: "rejected", line: true },
+])(
+  "a hold during an in-flight save keeps the typed text disabled until the reread settles, then empty; the reply ($outcome) closes the editor",
+  async ({ outcome, line }) => {
+    const registry = setup();
+    let reply!: (value: unknown) => void;
+    state.upsert = () => new Promise((resolve) => (reply = resolve));
+    await using screen = await renderDetails(registry);
+    await click(screen, "Edit");
+    await type(screen, "Synthetic original, edited");
+    await save(screen);
+    // The hold empties the read; the shared reread is pending, so the draft is unchanged.
+    await update(() => signal(registry, "invalidate", id(2), { purge: false }));
+    expect(memoryText(screen)?.value).toBe("Synthetic original, edited");
+    expect(memoryText(screen)?.disabled).toBe(true);
+    // The reread shows the hold: the shared draft discards the typing; the save keeps its form.
+    await update(() => {
+      registry.set(editDraft(), null);
+      state.queries.set("read", Option.some(heldForSecret));
+    });
+    expect(memoryText(screen)?.value).toBe("");
+    expect(memoryText(screen)?.disabled).toBe(true);
+    expect(screen.container.textContent).not.toContain("Synthetic original");
+    await act(() => reply({ _tag: "Success", value: { outcome } }));
+    expect(memoryText(screen)).toBeNull();
+    expect(screen.container.textContent).not.toContain("Synthetic original");
+    if (line) expect(screen.container.textContent).toContain(CHANGED_LINE);
+    else expect(screen.container.textContent).not.toContain(CHANGED_LINE);
+    expect(state.onForgotten).not.toHaveBeenCalled();
+    expect(state.navigate).not.toHaveBeenCalled();
+  },
+);
+
+it("a hold after a refused save discards the draft and closes the editor with the version line", async () => {
+  const registry = setup();
+  state.upsert = async () => ({ _tag: "Success", value: { outcome: "rejected" } });
+  await using screen = await renderDetails(registry);
+  await click(screen, "Edit");
+  await type(screen, "Synthetic original, edited");
+  await save(screen);
+  expect(memoryText(screen)?.value).toBe("Synthetic original, edited");
+  expect(screen.container.textContent).toContain("Memory update failed.");
+  await update(() => {
+    signal(registry, "invalidate");
+    state.queries.set("read", Option.some(heldForSecret));
+  });
+  expect(memoryText(screen)).toBeNull();
+  expect(screen.container.textContent).not.toContain("Synthetic original");
+  expect(screen.container.textContent).toContain(CHANGED_LINE);
+  expect(state.onForgotten).not.toHaveBeenCalled();
+  expect(state.navigate).not.toHaveBeenCalled();
+});
