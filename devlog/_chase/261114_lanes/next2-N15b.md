@@ -273,3 +273,10 @@ NOT RUN: a goat-ci run on the merge commit daf4b9bb3b; the 385-file check:change
 - N15b-P3-1, the coordinator's ruling (record only). L420 hides, it does not block: an older client, the Repository URL row and agents can still use a hidden host. The server does not refuse a host that is turned off (docs/user/source-control.md:200, "To hide one you do not use"). No server check in this cycle.
 - Devices: the simulator "N15b iPhone 17" (001CF105-B867-4FBB-A09A-E2B40C92D019) and the AVD n15b-pixel7 are shut down and handed to P1. The dev server tree (dev-runner 45502 and its server and web) was stopped with SIGINT to the dev-runner after checking each process's cwd; ports 16232 and 8192 are free.
 - check:changed against origin/chase/t3-261114-next2 selects 9 test files (9 changed files), under the 300-file rule; it runs when the token comes.
+
+### Follow-up checks (light, token held by P1; the 12:07:55 rule's shape)
+
+- Branch head on origin: `c63e00683bd5bfe211f8dad645bab55e5afef067` (`chase/t3-261114-next2-n15bb-followups`, plain push, 5 commits on e04442e66c).
+- Ran locally: format on the 9 changed files (exit 0), lint on the 8 changed code files (exit 0, no warnings), and the 9 test files check:changed selects (useComposerStopGuard, ServerEnvironment, PublishRepositoryDialog.browser, GitActionsControl.browser and .logic, both reactCompilerCoverage, thread-settings-sheet-state, ThreadDetailsPanel.history.browser): 9 files, 3380 tests passed.
+- Runs on goat-ci: typecheck, knip and the rest of the selection, in ONE run (workflow_dispatch, lane all): https://github.com/goat-si/goat/actions/runs/44109073502 (queued when recorded).
+- NOT RUN locally: the typecheck of the affected packages (heavy; goat-ci carries it).
