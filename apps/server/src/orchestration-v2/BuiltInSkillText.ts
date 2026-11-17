@@ -33,7 +33,17 @@ const checkedRecords = Effect.fn("BuiltInSkillText.checkedRecords")(function* (m
   }
   const store = yield* Effect.serviceOption(ProjectionStoreV2);
   const identity = yield* Effect.serviceOption(ServerEnvironmentIdentity);
-  if (Option.isNone(store) || Option.isNone(identity)) return none;
+  if (Option.isNone(store) || Option.isNone(identity)) {
+    const missing = [
+      ...(Option.isNone(store) ? ["ProjectionStoreV2"] : []),
+      ...(Option.isNone(identity) ? ["ServerEnvironmentIdentity"] : []),
+    ];
+    yield* Effect.logWarning("Reply not checked: a service it needs is missing.", {
+      missing,
+      threadId: message.threadId,
+    });
+    return none;
+  }
   return yield* checkResponseContexts({
     environmentId: yield* identity.value.getEnvironmentId,
     threadId: message.threadId,
