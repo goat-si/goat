@@ -59,7 +59,7 @@ import {
   claudePendingBackgroundTask,
   mergeClaudeBackgroundTasks,
   parseClaudeBackgroundTaskEntry,
-  claudeBackgroundDetails,
+  makeClaudeTaskLaunches,
 } from "./ClaudeBackgroundTasks.ts";
 import { claudeForkedSkillModels } from "./ClaudeForkedSkillModel.ts";
 import {
@@ -3237,6 +3237,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const lastKnownOpaqueTasks = yield* Ref.make(
           new Map<string, OrchestrationV2PendingBackgroundTask>(),
         );
+        const taskLaunches = makeClaudeTaskLaunches();
         const claudeMonitors = yield* Ref.make<{
           readonly calls: ReadonlySet<string>;
           readonly tasks: ReadonlyMap<
@@ -6978,7 +6979,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 task.nativeThreadId === input.nativeThreadId && !listedTaskIds.has(taskId),
             );
             for (const entry of roster) {
-              const task = parseClaudeBackgroundTaskEntry(entry, monitorTasks);
+              const task = parseClaudeBackgroundTaskEntry(entry, monitorTasks, taskLaunches);
               if (task !== null) {
                 nextTasks.push(task);
               }
@@ -6986,9 +6987,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             yield* replacePendingBackgroundTasks(input.nativeThreadId, nextTasks);
             rosterChanged = true;
           } else if (message.type === "system" && message.subtype === "task_started") {
-            if (!isClaudeNonSubagentTask(message) || message.is_backgrounded === false) {
-              return false;
-            }
+            if (!isClaudeNonSubagentTask(message)) return false;
+            const launch = taskLaunches.remember(
+              message.task_id,
+              message.tool_use_id,
+              message.tool_use_id === undefined || input.activeContext === null
+                ? undefined
+                : findToolCall(input.activeContext, message.tool_use_id),
+            );
+            if (message.is_backgrounded === false) return false;
             yield* upsertPendingBackgroundTask(input.nativeThreadId, {
               ...claudePendingBackgroundTask({
                 taskId: message.task_id,
@@ -7002,15 +7009,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   typeof message.description === "string" ? message.description : undefined,
                 parentTaskId: Reflect.get(message, "parent_task_id"),
               }),
-              ...claudeBackgroundDetails(
-                message.tool_use_id === undefined || input.activeContext === null
-                  ? undefined
-                  : findToolCall(input.activeContext, message.tool_use_id),
-              ),
+              ...launch,
             });
             rosterChanged = true;
           } else if (message.type === "system" && message.subtype === "task_notification") {
             yield* endClaudeMonitorTasks((taskId) => taskId === message.task_id);
+            taskLaunches.forget(message.task_id);
             const removed = yield* clearPendingBackgroundTask(
               input.nativeThreadId,
               message.task_id,
