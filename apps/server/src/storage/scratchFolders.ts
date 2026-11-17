@@ -1,10 +1,14 @@
-import type { StorageItem, StorageItemState } from "@goat/contracts";
+import type { OrchestrationV2ThreadShell, StorageItem, StorageItemState } from "@goat/contracts";
+import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { WORKTREE_BUSY_STATUSES } from "../mcp/WorktreeInventoryService.ts";
+import { threadHasQueuedTurnStart } from "../orchestration-v2/ThreadSettlementService.ts";
 import type { ContentStamp, FileIdentity } from "./fileState.ts";
 import { lstatOf } from "./fileState.ts";
 import { isStrictlyInside, type PathRules, samePath } from "./storagePaths.ts";
@@ -29,14 +33,33 @@ interface ScratchThreadRow {
   readonly pendingRequest: string | null;
   readonly pendingTasks: number | null;
   readonly updatedAt: string | null;
+  readonly latestUserMessageAt: string | null;
+  readonly latestRunId: string | null;
+  readonly latestRunRequestedAt: string | null;
+  readonly latestRunStartedAt: string | null;
+  readonly latestRunCompletedAt: string | null;
 }
 
+const at = (value: string | null) =>
+  value === null ? null : Option.getOrNull(DateTime.make(value));
+
 /** A run, a queued or waiting turn, a question or background work: the folder is in use. */
-const busy = (row: ScratchThreadRow) =>
+const busy = (row: ScratchThreadRow, nowMs: number) =>
   row.activeRunId !== null ||
   (row.status !== null && WORKTREE_BUSY_STATUSES.has(row.status)) ||
   row.pendingRequest !== null ||
-  (row.pendingTasks ?? 0) > 0;
+  (row.pendingTasks ?? 0) > 0 ||
+  threadHasQueuedTurnStart(
+    {
+      status: row.status as OrchestrationV2ThreadShell["status"],
+      latestRunId: row.latestRunId as OrchestrationV2ThreadShell["latestRunId"],
+      latestUserMessageAt: at(row.latestUserMessageAt),
+      latestRunRequestedAt: at(row.latestRunRequestedAt),
+      latestRunStartedAt: at(row.latestRunStartedAt),
+      latestRunCompletedAt: at(row.latestRunCompletedAt),
+    },
+    nowMs,
+  );
 
 interface ScratchThread extends ScratchThreadRow {
   /** The folder as recorded and as the filesystem resolves it. */
@@ -57,15 +80,25 @@ const readScratchThreads = Effect.fn("scratchFolders.readThreads")(function* () 
       json_extract(payload_json, '$.activeRunId') AS "activeRunId",
       json_extract(payload_json, '$.pendingRuntimeRequest') AS "pendingRequest",
       json_array_length(payload_json, '$.pendingBackgroundTasks') AS "pendingTasks",
-      updated_at AS "updatedAt"
+      updated_at AS "updatedAt",
+      json_extract(payload_json, '$.latestUserMessageAt') AS "latestUserMessageAt",
+      json_extract(payload_json, '$.latestRunId') AS "latestRunId",
+      json_extract(payload_json, '$.latestRunRequestedAt') AS "latestRunRequestedAt",
+      json_extract(payload_json, '$.latestRunStartedAt') AS "latestRunStartedAt",
+      json_extract(payload_json, '$.latestRunCompletedAt') AS "latestRunCompletedAt"
     FROM orchestration_v2_projection_threads
     WHERE deleted_at IS NULL AND json_extract(payload_json, '$.worktreePath') IS NOT NULL
   `.pipe(Effect.orElseSucceed(() => null));
   if (rows === null) return null;
+  const nowMs = yield* Clock.currentTimeMillis;
   return yield* Effect.forEach(rows, (row): Effect.Effect<ScratchThread> =>
     fs.realPath(row.path).pipe(
       Effect.orElseSucceed(() => path.resolve(row.path)),
-      Effect.map((real) => ({ ...row, bound: [path.resolve(row.path), real], busy: busy(row) })),
+      Effect.map((real) => ({
+        ...row,
+        bound: [path.resolve(row.path), real],
+        busy: busy(row, nowMs),
+      })),
     ),
   );
 });
@@ -108,6 +141,27 @@ export const scratchReuseReason = Effect.fn("scratchFolders.reuseReason")(functi
     return "a thread started using it after it was reviewed";
   return null;
 });
+
+/** Names every thread of an idle folder and says what removing it costs. */
+const idleReason = (users: ReadonlyArray<ScratchThread>) => {
+  if (users.length === 0)
+    return "No thread uses this No project folder. Removing it deletes its files for good.";
+  const names = users.map((user) => `"${user.title ?? user.id}"`);
+  const listed =
+    names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  const idleSince = users
+    .map((user) => user.updatedAt)
+    .filter((value) => value !== null)
+    .toSorted()
+    .at(-1);
+  return (
+    `Folder of the No project thread${users.length === 1 ? "" : "s"} ${listed}` +
+    (idleSince === undefined ? "" : `, idle since ${idleSince.slice(0, 10)}`) +
+    ". Removing it deletes its files for good; " +
+    (users.length === 1 ? "the thread's" : "their") +
+    " next turn starts in an empty folder."
+  );
+};
 
 type Decision = {
   readonly state: StorageItemState;
@@ -182,7 +236,6 @@ export const scanScratchFolders = Effect.fn("scratchFolders.scan")(function* (sc
     }
     const users = yield* threadsUsing(folder, threads, scan.rules);
     const working = users.find((user) => user.busy);
-    const named = users[0];
     const projectInside = projectRoots.some(
       (projectRoot) =>
         samePath(projectRoot, folder, scan.rules) ||
@@ -197,16 +250,7 @@ export const scanScratchFolders = Effect.fn("scratchFolders.scan")(function* (sc
               "protected",
               `The No project thread "${working.title ?? working.id}" is working in it`,
             )
-          : scan.state(
-              "removable",
-              (named === undefined
-                ? "No thread uses this No project folder."
-                : `Folder of the No project thread "${named.title ?? named.id}"${
-                    named.updatedAt === null ? "" : `, idle since ${named.updatedAt.slice(0, 10)}`
-                  }.`) +
-                " Removing it deletes its files for good" +
-                (named === undefined ? "." : "; the thread's next turn starts in an empty folder."),
-            ));
+          : scan.state("removable", idleReason(users)));
     const id = "orphan_folder:" + folder;
     const { decision, token, stamp } = yield* scan.stamped(id, folder, SCRATCH_MIN_AGE_MS, offered);
     const threadIds = users.map((user) => user.id);

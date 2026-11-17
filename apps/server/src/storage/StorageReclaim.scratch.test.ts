@@ -1,4 +1,5 @@
 import { expect, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -10,6 +11,7 @@ import { backdate, layer, machine, setup } from "./StorageReclaim.testkit.ts";
 interface ThreadState {
   readonly activeRunId?: string;
   readonly status?: string;
+  readonly latestUserMessageAt?: string;
 }
 
 // A No project thread working in <GOAT home>/scratch/<name>, idle unless told otherwise.
@@ -60,6 +62,19 @@ it.live("lists an idle No project folder as removable, never in the default sele
   }).pipe(Effect.scoped, provide),
 );
 
+it.live("names every thread that shares a No project folder", () =>
+  Effect.gen(function* () {
+    const { bind, listed } = yield* scratchFixture;
+    yield* bind("thread-other", "Other");
+    const { item } = yield* listed;
+    expect(item).toMatchObject({
+      state: "removable",
+      reason:
+        'Folder of the No project threads "Notes" and "Other", idle since 2026-11-02. Removing it deletes its files for good; their next turn starts in an empty folder.',
+    });
+  }).pipe(Effect.scoped, provide),
+);
+
 it.live("keeps a No project folder whose thread is working in it", () =>
   Effect.gen(function* () {
     const { bind, listed } = yield* scratchFixture;
@@ -96,6 +111,11 @@ it.live.each([
     change: "thread",
     reason: "A thread started using it after it was reviewed",
   },
+  {
+    name: "its thread got a message whose turn has not started",
+    change: "message",
+    reason: "Its thread is working in it now",
+  },
 ] as const)(
   "keeps a chosen No project folder when $name after it was listed",
   ({ change, reason }) =>
@@ -103,6 +123,7 @@ it.live.each([
       const { fs, path, folder, bind, reclaim, listed } = yield* scratchFixture;
       const { item } = yield* listed;
       expect(item?.state).toBe("removable");
+      const now = DateTime.formatIso(yield* DateTime.now);
       // The clean's own scan lists processes once; the change lands after it, before deletion.
       machine.onProcessListing = {
         after: 1,
@@ -111,9 +132,11 @@ it.live.each([
             ? bind("thread-notes", "Notes", { activeRunId: "run-2", status: "running" })
             : change === "thread"
               ? bind("thread-other", "Other")
-              : Effect.sync(() => {
-                  machine.cwds = [folder];
-                }),
+              : change === "message"
+                ? bind("thread-notes", "Notes", { latestUserMessageAt: now })
+                : Effect.sync(() => {
+                    machine.cwds = [folder];
+                  }),
       };
       const result = yield* reclaim.clean({
         items: [{ id: item?.id ?? "", token: item?.token ?? "" }],
