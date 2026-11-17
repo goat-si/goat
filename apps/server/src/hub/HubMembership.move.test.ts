@@ -304,24 +304,25 @@ it.effect(
     }),
 );
 
-type Ending = "stop" | "revoke";
-/**
- * Runs a move as a caller would; `stop` ends that caller as a cancel or dropped request does, or,
- * for "revoke", as revoking the MCP session it came in on does.
- */
-const startMove = (
-  hub: Effect.Success<ReturnType<typeof setup>>,
-  input: HubDeviceMoveInput,
-  how: Ending = "stop",
-) =>
+/** Runs a move as a caller would; `stop` ends that caller the way a cancel or dropped request does. */
+const startMove = (hub: Effect.Success<ReturnType<typeof setup>>, input: HubDeviceMoveInput) =>
   Effect.gen(function* () {
-    if (how === "revoke")
-      return { stop: (yield* startGuardedCall(hub.membership.move(scope, input))).revoke };
     const fiber = yield* hub.membership
       .move(scope, input)
       .pipe(Effect.forkChild({ startImmediately: true }));
     return { stop: Fiber.interrupt(fiber) };
   });
+/** As startMove, or, for "revoke", a move on an MCP session that `stop` revokes. */
+const startMoveEndedBy = (
+  hub: Effect.Success<ReturnType<typeof setup>>,
+  input: HubDeviceMoveInput,
+  how: "stop" | "revoke",
+) =>
+  how === "stop"
+    ? startMove(hub, input)
+    : Effect.map(startGuardedCall(hub.membership.move(scope, input)), (call) => ({
+        stop: call.revoke,
+      }));
 // The next membership change waits on the permit a running move holds until it finishes.
 const afterMoves = (hub: Effect.Success<ReturnType<typeof setup>>) =>
   Effect.exit(hub.membership.move(scope, { fromAlias: "not an alias", toAlias: "x" }));
@@ -339,7 +340,7 @@ it.effect.each(["stop", "revoke"] as const)(
           Effect.andThen(Deferred.await(gate)),
         ),
       });
-      const moving = yield* startMove(hub, move, how);
+      const moving = yield* startMoveEndedBy(hub, move, how);
       yield* Deferred.await(revoked);
       // The caller is gone here, with the device routing through no hub.
       yield* moving.stop;
@@ -377,7 +378,7 @@ it.effect.each([
           Effect.andThen(Deferred.await(gate)),
         ),
       });
-      const moving = yield* startMove(hub, move, how);
+      const moving = yield* startMoveEndedBy(hub, move, how);
       yield* Deferred.await(probing);
       yield* moving.stop;
       yield* Deferred.succeed(gate, undefined);
