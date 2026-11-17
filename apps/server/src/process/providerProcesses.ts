@@ -119,12 +119,17 @@ export const make = Effect.fn("ProviderProcesses.make")(function* (
   // using this home must not stop the shared systemd slice while we are alive.
   const forgetOwner = yield* Effect.try(() => writeRecord([])).pipe(Effect.option);
   if (forgetOwner._tag === "None") return ProviderProcesses.defaultValue();
-  yield* Effect.addFinalizer(() => Effect.sync(forgetOwner.value));
+  // Startup must survive a state directory that turns unreadable or read-only under it.
+  const tryQuietly = (operation: () => void) => Effect.try(operation).pipe(Effect.ignore);
+  yield* Effect.addFinalizer(() => tryQuietly(forgetOwner.value));
   let hasOtherLiveOwner = false;
 
   // Only immutable per-launch records are shared between server instances. A
   // live owner's records belong to that server, even when it uses this home.
-  for (const file of NodeFS.readdirSync(directory)) {
+  const files = yield* Effect.try(() => NodeFS.readdirSync(directory)).pipe(
+    Effect.orElseSucceed((): ReadonlyArray<string> => []),
+  );
+  for (const file of files) {
     const pending = file.endsWith(".json.pending");
     if (!file.endsWith(".json") && !pending) continue;
     const recordPath = NodePath.join(directory, file);
@@ -137,7 +142,7 @@ export const make = Effect.fn("ProviderProcesses.make")(function* (
     }
     // A CLI whose record was never renamed was still gated and exited when its server died.
     if (pending) {
-      NodeFS.rmSync(recordPath, { force: true });
+      yield* tryQuietly(() => NodeFS.rmSync(recordPath, { force: true }));
       continue;
     }
     let survived = false;
@@ -146,9 +151,7 @@ export const make = Effect.fn("ProviderProcesses.make")(function* (
       // Never infer ownership from argv, executable names, or group membership.
       // As in the ACP controller, starttime blocks reuse between observations.
       // Node has no pidfd_send_signal, so the final read-to-signal race remains.
-      yield* Effect.try(() => controller.signalProcess(survivor.pid, "SIGKILL")).pipe(
-        Effect.ignore,
-      );
+      yield* tryQuietly(() => controller.signalProcess(survivor.pid, "SIGKILL"));
       for (let attempt = 0; matches(survivor) && !survived; attempt++) {
         survived = attempt === 100;
         if (!survived) yield* Effect.sleep("10 millis");
@@ -160,7 +163,7 @@ export const make = Effect.fn("ProviderProcesses.make")(function* (
       yield* Effect.logWarning("Could not stop a provider left by a previous server", { file });
       continue;
     }
-    NodeFS.rmSync(recordPath, { force: true });
+    yield* tryQuietly(() => NodeFS.rmSync(recordPath, { force: true }));
   }
 
   return {
