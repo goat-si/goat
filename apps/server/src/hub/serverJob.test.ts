@@ -2,8 +2,10 @@ import { expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Logger from "effect/Logger";
+import * as Scheduler from "effect/Scheduler";
 import * as Semaphore from "effect/Semaphore";
 
 import { runAsServerJob } from "./serverJob.ts";
@@ -64,4 +66,38 @@ it.effect("a caller that stops waiting sets stopped, and the job still runs to i
     yield* Deferred.succeed(gate, undefined);
     expect(yield* Deferred.await(seen)).toBe(true);
   }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "a caller interrupted after it took the permit, before it waits on its job, stops the job before the job's first check",
+  () =>
+    Effect.gen(function* () {
+      // Each budget makes the caller yield at a different operation, as any fiber can on its
+      // operation budget, so some land between forking the job and waiting on it (from 3: at 2 a
+      // resumed fiber yields again before it makes progress).
+      const seen = yield* Effect.forEach(
+        Array.from({ length: 62 }, (_, index) => index + 3),
+        (budget) =>
+          Effect.gen(function* () {
+            const permit = yield* Semaphore.make(1);
+            const scope = yield* Effect.scope;
+            const first = yield* Deferred.make<boolean>();
+            let caller: Fiber.Fiber<unknown, unknown> | undefined;
+            const job = runAsServerJob(permit, scope, "Test.job", (stopped) => {
+              // Runs on the caller after it took the permit, while it is uninterruptible: the
+              // interruption is only recorded here.
+              caller?.interruptUnsafe();
+              return stopped.pipe(Effect.flatMap((value) => Deferred.succeed(first, value)));
+            });
+            caller = yield* job.pipe(
+              Effect.provideService(Scheduler.MaxOpsBeforeYield, budget),
+              Effect.forkChild({ startImmediately: false }),
+            );
+            const value = yield* Deferred.await(first);
+            expect(Exit.hasInterrupts(yield* Fiber.await(caller))).toBe(true);
+            return { budget, stoppedAtFirstCheck: value };
+          }).pipe(Effect.scoped),
+      );
+      expect(seen.filter(({ stoppedAtFirstCheck }) => !stoppedAtFirstCheck)).toEqual([]);
+    }),
 );
