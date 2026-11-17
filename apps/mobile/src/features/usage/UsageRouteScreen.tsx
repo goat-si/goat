@@ -8,6 +8,7 @@ import { cursorKeychainAccessEnvironments } from "@goat/client-runtime/state/usa
 import {
   updatingProvidersLabel,
   usageEnvironmentProgress,
+  usageLoadingState,
   usageProgress,
 } from "@goat/client-runtime/state/usage-progress";
 import {
@@ -145,6 +146,10 @@ function UsageScreen(props: {
     refreshing: refreshingUsage,
     providerLabel,
   });
+  // The web's rule: saved totals dim while any provider updates, a provider's own figures while it does.
+  const loading = usageLoadingState(selectedEnvironments, refreshingUsage);
+  const providerLoading = (provider: UsageProviderKind) =>
+    loading.everyProvider || loading.providers.has(provider);
   const selectWindow = (days: number) => {
     setWindowSelection({
       days,
@@ -352,27 +357,32 @@ function UsageScreen(props: {
                       {message}
                     </Text>
                   ))}
-                  <UsageUpdating dimmed={progress.dimmed} label={progress.label}>
-                    <ChartCard
-                      merged={merged}
-                      days={chartDays}
-                      daily={chartTotals}
-                      metric={metric}
-                      sinceDay={window.sinceDay}
-                      untilDay={window.untilDay}
-                      isPast24Hours={isPast24Hours}
-                      timeZone={window.timeZone}
-                    />
+                  <UsageUpdating busy={loading.partial} label={progress.label}>
+                    <UsageDim dimmed={loading.partial}>
+                      <ChartCard
+                        merged={merged}
+                        days={chartDays}
+                        daily={chartTotals}
+                        metric={metric}
+                        sinceDay={window.sinceDay}
+                        untilDay={window.untilDay}
+                        isPast24Hours={isPast24Hours}
+                        timeZone={window.timeZone}
+                      />
+                    </UsageDim>
                     <ProviderSection
                       merged={merged}
                       metric={metric}
                       cursorAccessEnvironments={cursorAccessEnvironments}
                       showCursorEnvironment={selectedEnvironments.length > 1}
                       onCursorEnabled={refreshAfterCursorEnable}
+                      loading={providerLoading}
                     />
-                    <TotalsSection merged={merged} isPast24Hours={isPast24Hours} />
-                    <CostSection merged={merged} />
-                    <ModelsSection merged={merged} metric={metric} />
+                    <UsageDim dimmed={loading.partial} className="gap-6">
+                      <TotalsSection merged={merged} isPast24Hours={isPast24Hours} />
+                      <CostSection merged={merged} />
+                    </UsageDim>
+                    <ModelsSection merged={merged} metric={metric} loading={providerLoading} />
                   </UsageUpdating>
                 </>
               )}
@@ -385,28 +395,19 @@ function UsageScreen(props: {
 }
 
 function UsageUpdating({
-  dimmed,
+  busy,
   label,
   children,
 }: {
-  readonly dimmed: boolean;
+  readonly busy: boolean;
   readonly label: string | null;
   readonly children: ReactNode;
 }) {
-  const reduceMotion = useReduceMotionEnabled();
-  // The delay keeps a quick refresh from flashing the content.
-  const dimStyle = {
-    opacity: dimmed ? 0.5 : 1,
-    transitionProperty: "opacity",
-    transitionDuration: reduceMotion ? 0 : 150,
-    transitionDelay: dimmed ? 150 : 0,
-  } as const;
-
   return (
     <View>
-      <Animated.View style={dimStyle} className="gap-6" accessibilityState={{ busy: dimmed }}>
+      <View className="gap-6" accessibilityState={{ busy }}>
         {children}
-      </Animated.View>
+      </View>
       {label !== null ? (
         <Animated.View
           entering={FadeIn.delay(150).duration(150).reduceMotion(ReduceMotion.System)}
@@ -421,6 +422,31 @@ function UsageUpdating({
         </Animated.View>
       ) : null}
     </View>
+  );
+}
+
+/** Saved figures shown at half strength while they update. */
+function UsageDim({
+  dimmed,
+  className,
+  children,
+}: {
+  readonly dimmed: boolean;
+  readonly className?: string;
+  readonly children: ReactNode;
+}) {
+  const reduceMotion = useReduceMotionEnabled();
+  // The delay keeps a quick refresh from flashing the content.
+  const dimStyle = {
+    opacity: dimmed ? 0.5 : 1,
+    transitionProperty: "opacity",
+    transitionDuration: reduceMotion ? 0 : 150,
+    transitionDelay: dimmed ? 150 : 0,
+  } as const;
+  return (
+    <Animated.View style={dimStyle} className={className}>
+      {children}
+    </Animated.View>
   );
 }
 
@@ -603,6 +629,7 @@ function ProviderSection(props: {
   readonly cursorAccessEnvironments: readonly EnvironmentUsageStatus[];
   readonly showCursorEnvironment: boolean;
   readonly onCursorEnabled: () => void;
+  readonly loading: (provider: UsageProviderKind) => boolean;
 }) {
   const { merged, metric } = props;
   const colors = useProviderColors();
@@ -648,8 +675,9 @@ function ProviderSection(props: {
         const provider = row.provider;
         const share = metric === "cost" ? provider.costShare : provider.tokenShare;
         return (
-          <View
+          <UsageDim
             key={provider.provider}
+            dimmed={props.loading(provider.provider)}
             className={index === 0 ? "gap-2 p-4" : "gap-2 border-t border-border-subtle p-4"}
           >
             <View className="flex-row items-baseline justify-between gap-3">
@@ -678,7 +706,7 @@ function ProviderSection(props: {
                 ? `${formatPercent(share)} of cost · ${formatTokens(provider.totalTokens)} tokens`
                 : `${formatPercent(share)} of tokens · ${formatUsd(provider.costUsd)}`}
             </Text>
-          </View>
+          </UsageDim>
         );
       })}
     </SettingsSection>
@@ -827,7 +855,11 @@ function MetricCell(props: {
   );
 }
 
-function ModelsSection(props: { readonly merged: MergedUsage; readonly metric: UsageChartMetric }) {
+function ModelsSection(props: {
+  readonly merged: MergedUsage;
+  readonly metric: UsageChartMetric;
+  readonly loading: (provider: UsageProviderKind) => boolean;
+}) {
   const { merged, metric } = props;
   const colors = useProviderColors();
   if (merged.models.length === 0) return null;
@@ -842,8 +874,9 @@ function ModelsSection(props: { readonly merged: MergedUsage; readonly metric: U
   return (
     <SettingsSection title="By model">
       {ordered.map((model, index) => (
-        <View
+        <UsageDim
           key={`${model.provider}:${model.model}`}
+          dimmed={props.loading(model.provider)}
           className={
             index === 0
               ? "flex-row items-center gap-3 p-4"
@@ -875,7 +908,7 @@ function ModelsSection(props: { readonly merged: MergedUsage; readonly metric: U
                 ? "Unpriced"
                 : formatUsd(model.costUsd)}
           </Text>
-        </View>
+        </UsageDim>
       ))}
     </SettingsSection>
   );
