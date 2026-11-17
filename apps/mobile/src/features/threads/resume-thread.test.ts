@@ -87,4 +87,22 @@ describe("resumeThread", () => {
 
     expect(calls.map((call) => call.command)).toEqual(["resumeQueue"]);
   });
+
+  it("regression goat#3656: releases a held queue under the modes the composer shows", async () => {
+    const { calls, base } = setup();
+    await resumeThread({
+      ...base,
+      runtimeMode: "approval-required",
+      interactionMode: "plan",
+      resumableRunId: null,
+      queueHeld: true,
+    });
+
+    expect(calls.map((call) => call.command)).toEqual([
+      "setRuntimeMode",
+      "setInteractionMode",
+      "resumeQueue",
+    ]);
+    expect(calls[0]?.input).toMatchObject({ runtimeMode: "approval-required" });
+  });
 });

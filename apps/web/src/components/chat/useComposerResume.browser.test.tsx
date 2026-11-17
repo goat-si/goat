@@ -93,3 +93,55 @@ it("continues on the resumed thread's model after the composer moves to another 
     modelSelection: threadAModel,
   });
 });
+
+function ResumeQueueButton(props: {
+  readonly persistSettings: (input: {
+    readonly runtimeMode: string;
+  }) => Promise<AtomCommandResult<void, unknown>>;
+}) {
+  const { onResume } = useComposerResume({
+    environmentId: EnvironmentId.make("environment:test"),
+    routeThreadKey: "environment:test:thread:a",
+    currentRouteThreadKeyRef: { current: "environment:test:thread:a" },
+    activeThread: { id: threadA } as never,
+    resumableRunId: null,
+    hasHeldQueuedRuns: true,
+    projection: { runtimeRequests: [] },
+    isSendBusy: false,
+    isConnecting: false,
+    isRevertingCheckpoint: false,
+    threadDetailLoading: false,
+    activeEnvironmentUnavailable: false,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    localCheckoutBranchMismatch: null,
+    composerRef: { current: composerShowing(threadAModel) },
+    persistThreadSettingsForNextTurn: props.persistSettings,
+    clearUsageLimitsFor: () => undefined,
+    scrollToEnd: () => undefined,
+    setThreadError: () => undefined,
+  });
+  return (
+    <button type="button" onClick={() => void onResume()}>
+      Resume
+    </button>
+  );
+}
+
+it("regression goat#3656: saves the composer's runtime mode before releasing a held queue", async () => {
+  const { startedTurn } = setup();
+  const persisted: Array<string> = [];
+  await using screen = await render(
+    <ResumeQueueButton
+      persistSettings={async ({ runtimeMode }) => {
+        persisted.push(runtimeMode);
+        return AsyncResult.success(undefined);
+      }}
+    />,
+  );
+
+  await screen.getByRole("button", { name: "Resume" }).click();
+
+  expect(await startedTurn.promise).toEqual({ threadId: threadA });
+  expect(persisted).toEqual(["full-access"]);
+});
