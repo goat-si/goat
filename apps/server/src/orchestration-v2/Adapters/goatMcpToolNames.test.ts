@@ -72,13 +72,18 @@ describe("Claude approval of GOAT tools", () => {
   });
 
   it("still asks in Plan mode before every other GOAT tool, directly or through goat_call", () => {
+    const memory = { read: true, write: true, source: true };
     for (const entry of Object.values(agentSurfaceRegistry)) {
       const tool = listedToolName(entry);
       if (tool === "goat_background_wait") continue;
-      expect(decide(tool, false, { read: true, write: true, source: true }), tool).toEqual({
-        direct: "ask",
-        called: "ask",
-      });
+      for (const [toolName, toolInput] of [
+        [`mcp__goat__${tool}`, {}],
+        [GOAT_CALL, { path: tool, args: {} }],
+      ] as const)
+        expect(
+          claudeGoatToolDecision({ toolName, toolInput, readOnlySandbox: false, memory }),
+          `${tool} as ${toolName}`,
+        ).toBe("ask");
     }
   });
 

@@ -331,8 +331,12 @@ it.effect.each(["default", "plan"] as const)(
       yield* started("task-held", "toolu_held", true);
       const otherThread = {
         ...harness.providerThread,
-        nativeThreadRef: { driver: "claudeAgent", nativeId: "other-native", strength: "strong" },
-      } as const;
+        nativeThreadRef: {
+          driver: harness.providerThread.driver,
+          nativeId: "other-native",
+          strength: "strong" as const,
+        },
+      };
       const fromOther = yield* awaitBackgroundTasks({
         providerThread: otherThread,
         taskIds: ["task-held"],
