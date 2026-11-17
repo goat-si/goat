@@ -173,3 +173,5 @@ Refs with subject "goat checkpoint ref=" dated inside a window: opencodex none. 
 - refs/goat/orchestration-v2/checkpoints/MjljYWM0MTFjZGQ0NzZiNzlhNTYxYWMxNWQwOWJkZjg/ordinal/1 = 531d7900f8ebc9c1f07dac67fe1974c4e72fe003, 15:17:11Z, parent e04442e66c. KEPT: written after this pass's servers were stopped (15:13Z), so not mine.
 Deleted: none.
 
+
+Closing note (relayed by the lane coordinator, 20:3x UTC): #3660 merged to dev at 2026-11-17 20:27:10 UTC; dev = 42bf8633ce55b4077f923d02ebddfe701d3d1bfd carries the whole integration tree (empty diff against df1a69dfd2, the head of the third sitting). P1 web and desktop is closed.
