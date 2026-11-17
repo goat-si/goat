@@ -14,21 +14,6 @@ import { GITHUB_CREDENTIALED_MEDIA_HOSTS } from "../shared/gitHubMedia.ts";
 import * as GitHubCredentials from "./GitHubCredentials.ts";
 import * as GitHubRest from "./GitHubRest.ts";
 
-/**
- * Everything a redirect leads to — the presigned object stores GitHub hands assets off to —
- * authorizes with its own signature, and some of them reject a request that also carries a
- * bearer token.
- */
-const isCredentialedHost = (url: string) => {
-  const target = URL.parse(url);
-  return (
-    target !== null &&
-    target.protocol === "https:" &&
-    target.port === "" &&
-    GITHUB_CREDENTIALED_MEDIA_HOSTS.has(target.hostname.toLowerCase())
-  );
-};
-
 const MAX_REDIRECTS = 3;
 const MANUAL_REDIRECT: RequestInit = { redirect: "manual" };
 const MEDIA_CONTENT_TYPE_PATTERN = /^(?:image|video|audio)\/[\w!#$&^.+-]+$/i;
@@ -36,9 +21,47 @@ const ATTACHMENT_PATH_PATTERN =
   /^\/(?:user-attachments\/assets\/[\w-]+|[^/]+\/[^/]+\/assets\/\d+\/[\w-]+)$/u;
 const LEGACY_ATTACHMENT_REPOSITORY_PATTERN = /^\/([^/]+\/[^/]+)\/assets\//u;
 const REPOSITORY_PATTERN = /^[\w.-]+\/[\w.-]+$/u;
+const REPOSITORY_SEGMENT_PATTERN = /^[\w.-]+$/u;
 // GitHub's signed upload links last about five minutes.
 const SIGNED_URL_CACHE_TTL_MS = 4 * 60_000;
 const SIGNED_URL_CACHE_MAX_ENTRIES = 64;
+
+const WEB_HOSTS = new Set(["github.com", "www.github.com"]);
+
+/** The `owner/name` segments a repository file or LFS object URL addresses, or null. */
+const addressedRepository = (host: string, segments: ReadonlyArray<string>) => {
+  if (host === "raw.githubusercontent.com") return segments.slice(0, 2);
+  if (host === "media.githubusercontent.com" && segments[0] === "media") {
+    return segments.slice(1, 3);
+  }
+  if (WEB_HOSTS.has(host) && (segments[2] === "raw" || segments[2] === "blob")) {
+    return segments.slice(0, 2);
+  }
+  return null;
+};
+
+/**
+ * The github.com token goes with an upload on github.com, and with a repository file or LFS object
+ * only of `repository`; read from the parsed path, so dot segments are already resolved. Whatever
+ * else a redirect leads to (the presigned object stores) authorizes with its own signature.
+ */
+const carriesCredential = (url: string, repository: string | undefined) => {
+  const target = URL.parse(url);
+  if (target === null || target.protocol !== "https:" || target.port !== "") return false;
+  if (target.username !== "" || target.password !== "") return false;
+  const host = target.hostname.toLowerCase();
+  if (!GITHUB_CREDENTIALED_MEDIA_HOSTS.has(host)) return false;
+  if (WEB_HOSTS.has(host) && ATTACHMENT_PATH_PATTERN.test(target.pathname)) return true;
+  const addressed = addressedRepository(host, target.pathname.split("/").slice(1));
+  return (
+    addressed !== null &&
+    addressed.length === 2 &&
+    addressed.every((segment) => REPOSITORY_SEGMENT_PATTERN.test(segment)) &&
+    repository !== undefined &&
+    REPOSITORY_PATTERN.test(repository) &&
+    addressed.join("/").toLowerCase() === repository.toLowerCase()
+  );
+};
 
 const contentTypeOf = (response: HttpClientResponse.HttpClientResponse) =>
   response.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
@@ -80,11 +103,14 @@ export const make = Effect.gen(function* () {
     url: string,
     headers: Readonly<Record<string, string>>,
     token: Redacted.Redacted<string> | null,
+    repository?: string,
   ) {
     let target = url;
     for (let hop = 0; ; hop += 1) {
       const authorization =
-        token !== null && isCredentialedHost(target) ? `Bearer ${Redacted.value(token)}` : null;
+        token !== null && carriesCredential(target, repository)
+          ? `Bearer ${Redacted.value(token)}`
+          : null;
       const response: HttpClientResponse.HttpClientResponse = yield* httpClient
         .execute(
           HttpClientRequest.get(target).pipe(
@@ -163,6 +189,7 @@ export const make = Effect.gen(function* () {
         request.url,
         request.headers,
         signedIn?.token ?? null,
+        request.repository,
       );
       if (response === null || contentTypeOf(response) !== "text/html") return response;
     }

@@ -51,4 +51,40 @@ describe("sourceControlMediaResponse", () => {
       expect(response.headers["content-length"]).toBeUndefined();
     }).pipe(Effect.provide(Layer.mergeAll(layerDrivers, layerIdentities)), Effect.scoped);
   });
+
+  it.effect(
+    "media an older client sends with no repository, shown in a checkout with no repository identity, is fetched for no repository",
+    () => {
+      const url = "https://raw.githubusercontent.com/owner/private/main/a.png";
+      const media = sourceControlDefinitions.mediaUrl(url)!;
+      const requests: Array<{ readonly url: string; readonly repository?: string }> = [];
+      const layerDrivers = Layer.succeed(BuiltInDrivers.SourceControlDrivers, [
+        {
+          driver: { kind: media.definition.kind, definition: media.definition },
+          instance: fakeSourceControlDriverInstance(media.definition.kind, {
+            pullRequests: null,
+            fetchMedia: (request) =>
+              Effect.sync(() => {
+                requests.push(request);
+                return HttpClientResponse.fromWeb(
+                  HttpClientRequest.get(request.url),
+                  new Response(null, { status: 404 }),
+                );
+              }),
+          }),
+        },
+      ]);
+      const layerIdentities = Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
+        resolve: () => Effect.succeed(null),
+      });
+      return Effect.gen(function* () {
+        const response = yield* sourceControlMediaResponse(
+          { url: media.fetchUrl, cwd: "/not-a-checkout", expiresAt: 0 },
+          {},
+        );
+        expect(requests).toEqual([{ url, headers: {} }]);
+        expect(response.status).toBe(404);
+      }).pipe(Effect.provide(Layer.mergeAll(layerDrivers, layerIdentities)), Effect.scoped);
+    },
+  );
 });
