@@ -720,7 +720,7 @@
   "packages/contracts/src/memory.ts": { "lines": 3110, "nonNull": 2 },
   "packages/contracts/src/notes.ts": { "nonNull": 1 },
   "packages/contracts/src/orchestrationV2.test.ts": { "lines": 1616 },
-  "packages/contracts/src/orchestrationV2.ts": { "lines": 4438 },
+  "packages/contracts/src/orchestrationV2.ts": { "lines": 4395 },
   "packages/contracts/src/orchestratorMcp.ts": { "lines": 1083 },
   "packages/contracts/src/previewAutomation.ts": { "lines": 1027, "nonNull": 2 },
   "packages/contracts/src/project.ts": { "asAny": 5 },
