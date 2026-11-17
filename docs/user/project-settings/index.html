@@ -283,7 +283,9 @@ the worktree automatically, and the thread notes what came back and what did not
 files or changes that were never committed. <strong>Start in a new worktree</strong> continues on a new branch
 started from the thread’s branch; the saved snapshot remains available for manual recovery. If a
 restore stops before its setup script finishes, the banner says so and offers <strong>Run setup now</strong>;
-the next turn also runs it.</p>
+the next turn also runs it. When a setup script waits to finish before the agent starts, new
+terminals in that thread open once it finishes. During <strong>Start in a new worktree</strong>, open them again
+once the new worktree is ready.</p>
 <p>Snapshots live in the project repository under <code>refs/goat/snapshots/&lt;thread&gt;/&lt;time&gt;</code> and are kept
 for 30 days by default; change the retention period in <strong>Settings → Storage</strong>. Snapshots of
 deleted threads are kept for at least 24 hours after they are created, subject to the configured
