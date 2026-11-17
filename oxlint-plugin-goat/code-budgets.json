@@ -132,7 +132,7 @@
   "apps/server/scripts/acp-mock-agent.ts": { "lines": 2750 },
   "apps/server/scripts/record-codex-app-server-replay-fixture.ts": { "lines": 1662, "nonNull": 2 },
   "apps/server/scripts/record-grok-acp-replay-fixture.ts": { "nonNull": 1 },
-  "apps/server/src/assets/AssetAccess.test.ts": { "lines": 1673 },
+  "apps/server/src/assets/AssetAccess.test.ts": { "lines": 1598 },
   "apps/server/src/assets/AssetAccess.ts": { "lines": 1077 },
   "apps/server/src/assets/NativeAppIconResolver.ts": { "nonNull": 1 },
   "apps/server/src/auth/EnvironmentAuth.ts": { "lines": 1149 },
