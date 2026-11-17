@@ -74,7 +74,12 @@ import {
   withPreparationLog,
 } from "./preparationLog.ts";
 import { confirmLaunchStep, type LaunchConfirm } from "./goat/LaunchConfirm.ts";
-import { classifyPreparationFailure } from "./goat/PreparationFailure.ts";
+import {
+  failureDetail,
+  preparationFailureClass,
+  ThreadLaunchError,
+} from "./goat/ThreadLaunchError.ts";
+export { preparationFailureClass, ThreadLaunchError } from "./goat/ThreadLaunchError.ts";
 import { makeLaunchCommandSlots } from "./goat/launchCommandSlots.ts";
 import {
   preparationRunStopped,
@@ -164,32 +169,6 @@ export interface ThreadLaunchResult {
   readonly sequence?: number;
 }
 
-export class ThreadLaunchError extends Schema.TaggedError<ThreadLaunchError>()(
-  "ThreadLaunchError",
-  {
-    operation: Schema.Literals([
-      "resolve-project",
-      "read-receipt",
-      "generate-metadata",
-      "provision-worktree",
-      "run-setup-script",
-      "create-thread",
-      "update-thread",
-      "dispatch-message",
-      "release-run",
-      "fail-run",
-    ]),
-    commandId: CommandId,
-    projectId: ProjectId,
-    threadId: Schema.optional(ThreadId),
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Thread launch ${this.commandId} failed during ${this.operation}.`;
-  }
-}
-
 /**
  * An agent or server launch named a folder that is gone from this machine, such as a
  * project whose checkout was deleted or never cloned here. Refused before any thread exists.
@@ -250,20 +229,6 @@ export class ThreadLaunchService extends Context.Service<
     readonly prepareRun: (input: ThreadLaunchPreparationInput) => Effect.Effect<void>;
   }
 >()("goat/orchestration-v2/ThreadLaunchService") {}
-
-const isThreadLaunchError = Schema.is(ThreadLaunchError);
-
-function failureDetail(error: unknown): string {
-  if (isThreadLaunchError(error)) {
-    const cause = error.cause;
-    const detail = cause instanceof Error ? cause.message : String(cause);
-    return `Workspace preparation failed during ${error.operation.replaceAll("-", " ")}: ${detail}`;
-  }
-  return `Workspace preparation failed: ${error instanceof Error ? error.message : String(error)}`;
-}
-
-export const preparationFailureClass = (error: unknown) =>
-  classifyPreparationFailure(isThreadLaunchError(error) ? error.cause : error);
 
 const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
