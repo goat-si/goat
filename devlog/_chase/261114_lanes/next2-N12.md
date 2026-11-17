@@ -1,6 +1,6 @@
 # N12 preview browser (lane record)
 
-Lane branch `chase/t3-261114-next2-n12-preview`, head `9590bef1895f6fe0516ecb49cf50d17f4326b181` (pushed, plain), cut from `chase/t3-261114-next2` at `ed4268897e3183341694f27e488232572d5c5151`. Host juns-MacBook-Pro (shared with N15b and the GOAT Bot parity loop). Status: rows committed; not READY yet (open items below). Classes: C4 for O15 and C25.
+Lane branch `chase/t3-261114-next2-n12-preview`, head `807c3b78fcd3e5351320cf961bb2bf697cd9bb15` (pushed, plain), cut from `chase/t3-261114-next2` at `ed4268897e3183341694f27e488232572d5c5151`. Host juns-MacBook-Pro (shared with N15b and the GOAT Bot parity loop). Status: READY at 807c3b78fc (goat-ci success on that exact head); the real-client passes stay open (below). Classes: C4 for O15 and C25.
 
 ## Rows and commits
 
@@ -18,6 +18,10 @@ Lane branch `chase/t3-261114-next2-n12-preview`, head `9590bef1895f6fe0516ecb49c
 | L238 759e649ea8 | `4fd254bb49890c44342aa12cae68e70517065965` | an encoder-page failure on a frame drops that frame; channel interruptions still stop (RecordingFrames.test.ts unchanged) |
 | L234 (C25) agent tool | `9590bef1895f6fe0516ecb49cf50d17f4326b181` | goat_preview_stop, below |
 | merge | `1dd4720879` | git's own merge of the integration head b531d2511c |
+| merges | `26f22bff89`, `f857d06bf8`, `25acc2ba48` | a6992a0f36, e9e20d52be, ef8e62ad8c |
+| L234 (C25) fix | `d919ffe7c09d2f0a284e8c6df9069d2c037e2004` | handler capability read without Effect.succeed(undefined) |
+| merge | `e03dfdb0bd` | 308b3d11b8 |
+| L234 (C25) rename and counts | `807c3b78fcd3e5351320cf961bb2bf697cd9bb15` | goat_preview_stop by its path; authorised count lines |
 | L241 43ce39595b rest | `fc1c92cfa0fe70a5ee8d5496ce49b4a85ebb9ad0` | three it.live to it.effect (authorised); rest of the list decided below |
 
 Budgets: every entry at its real length by countLines and at or below dev's: ServerBrowser.ts 2654 (dev 2699), previewAutomation.ts 1027 (1028), PreviewView.tsx 1093 (1095), ServerBrowserSurface.tsx 1015 (1030), ipc.ts 1393 (1398), desktop Manager.ts 3652 (3673), previewZoom.ts nonNull 2 (moved from Manager.ts). New files all under 800 lines.
@@ -68,8 +72,8 @@ Commit `9590bef1895f6fe0516ecb49cf50d17f4326b181` (second commit of row L234; th
 
 - Capability decides: the handler (apps/server/src/mcp/toolkits/preview/handlers.ts, requireStopLoading) reads this server's descriptor `capabilities.serverBrowserStopLoading`; absent or false: `OrchestratorMcpFailure` invalid_request "This GOAT server's browser cannot stop a loading page, so nothing was sent. Navigate elsewhere with goat_preview_navigate, or update GOAT on this machine." Test handlers.stop.test.ts: refuses for absent and for false with the broker untouched; with the capability, the broker receives exactly `{ operation: "stopLoading", tabId: "tab-1" }` (3/3). A native desktop-only automation host does not list stopLoading in its supported operations, so the broker never routes it there.
 - Same method: ServerBrowser.ts executeTabOperation `case "stopLoading"` calls `stopLoading.stop(tab, tab.cdp)`; the person's Stop (viewer input) calls `stopLoading.stop(tab, session)`; both are ServerBrowserStop.ts makeStopLoading's stop. Test: ServerBrowser.stopLoading.test.ts "an agent's Stop ends its tab's load through the same stop a person's Stop uses" (one Page.stopLoading, status loading false).
-- Rule 3 lines. registry.test.ts BEFORE `"preview_snapshot", "preview_status", "preview_type",` AFTER `"preview_snapshot", "preview_status", "preview_stop", "preview_type",`. core.test.ts:159 BEFORE `expect(names.size).toBe(258);` AFTER `expect(names.size).toBe(259);`.
-- Published names diffed (PUBLISHED_TOOLKITS from coreToolNames.testkit.ts, sorted; before = tool changes stashed, after = this commit): 258 vs 259 names, diff exactly `244a245 > preview_stop`.
+- Rule 3 lines: the registry.test.ts OFF_GRAMMAR_NAMES addition of 10:07:04 was withdrawn at 13:01:25 and removed in 807c3b78fc (the list equals the integration branch's); core.test.ts:159 BEFORE `expect(names.size).toBe(258);` AFTER `expect(names.size).toBe(259);`; the rest in the section on 807c3b78fc below.
+- Published names diffed at 9590bef189 (PUBLISHED_TOOLKITS, sorted): 258 vs 259 names, the added name then preview_stop; after the rename in 807c3b78fc it is goat_preview_stop.
 - Agent surface audit: `node scripts/agent-surface/audit.ts --check` exit 0 after regenerating docs/internals/agent-surface-audit.md; counts move: tools on /mcp 307 -> 308, mutating tools 192 -> 193, preview toolkit 32 -> 33. Context budget check passes; the counts it gates do not move (core listing 2 tools, 4,041 B; every harness within budget).
 - Tests after: core.test.ts, handlers.test.ts, handlers.stop.test.ts, ServerBrowser.stopLoading.test.ts 39/39; registry.test.ts 14/14; preview tools.test.ts and handlers.test.ts 8/8 earlier; goatMcpToolPresentation.test.ts 62/62.
 
@@ -77,12 +81,34 @@ Commit `9590bef1895f6fe0516ecb49cf50d17f4326b181` (second commit of row L234; th
 
 Git's own merge `1dd4720879` of `b531d2511c` (contains bd3901fca9), parents fc1c92cfa0 and b531d2511c, no conflicts, no file changed on both sides.
 
+## Checks after the rows (rule of 12:07:55: wide selection in CI)
+
+- Why check:changed selected the whole suite against a6992a0f36 and e9e20d52be: the barrel line `export * from "./confirmDialog.ts"` in packages/contracts/src/index.ts (from move-out bf4efa6c75) selects 2,660 of 2,707 test files by itself (scripts/lib/changed-tests.ts testsForChanges on the lane diff); next ServerEnvironment.ts 269, entities.ts 98.
+- The local run of check:changed against a6992a0f36 (started 11:13 UTC) was stopped: its test step (one vitest task over about 2,700 files, one fork worker at a time) prints nothing until it ends, so no file can be named; it ended with the aborted turn about 12:00 UTC. Its static half: all pass but typecheck, 1 error, handlers.ts:218 effectSucceedWithVoid, fixed in `d919ffe7c09d2f0a284e8c6df9069d2c037e2004` (server typecheck exit 0, handlers.stop.test.ts 3/3).
+- Static half locally (check-changed.ts with only its two test steps disabled, run from the git-ignored .goat/): against e9e20d52be at d919ffe7c0 and again against ef8e62ad8c at the merge 25acc2ba48: format, lint, graphql, agent context budget, agent surface audit, knip 1/2 and 2/2, typecheck (39 packages) all pass, exit 0.
+- Tests beside the lane's own changed files, locally at d919ffe7c0 (46 files: the lane's test files, each changed module's existing companions, UsageService.test.ts for the two testkits, ServerBrowserSurface.browser.test.tsx, PreviewView.browser.test.tsx): Test Files 46 passed (46), Tests 651 passed (651), 186 s.
+- Wide selection, first run at d919ffe7c0: https://github.com/goat-si/goat/actions/runs/44081334826, failed only goat-test-server 2/4 (the agent tool counts, fixed in 807c3b78fc); second run at 807c3b78fc green (below).
+- Merges of the integration head, all git's own, no conflicts: 1dd4720879 (b531d2511c), 26f22bff89 (a6992a0f36; code-budgets.json changed on both sides, different lines), f857d06bf8 (e9e20d52be), 25acc2ba48 (ef8e62ad8c, contains X1 f8c3a1897b and N9a; every budget entry for a file changed since e9e20d52be equals its real length: 11 checked, 0 mismatches).
+
+## C25 agent tool: counts and the rename (807c3b78fc)
+
+Commit `807c3b78fcd3e5351320cf961bb2bf697cd9bb15`. The first goat-ci run (https://github.com/goat-si/goat/actions/runs/44081334826, head d919ffe7c0) failed only goat-test-server 2/4: 6 tests, McpToolAccess.capabilities.test.ts (ALLOWED_WRITES, five roles) and agentSurface.test.ts:80 (307), counts the new tool moves; every other job passed. Running apps/server/src/mcp's count tests by name then showed agentSurface.test.ts:84 (legacy names 83) moving too: the entry was named "preview_stop" off the path grammar and had been let into OFF_GRAMMAR_NAMES (names already shipped). Renamed to `goat_preview_stop`.
+
+- Registry names diff (agentSurfaceRegistry paths, and per role the writes allowed by BUILTIN_PERMISSION_PROFILES: capability "none" or in the profile; lane vs origin/chase/t3-261114-next2): entries 307 -> 308, added [preview.stop], removed []; observer 77 -> 78, worker 132 -> 133, manager 146 -> 147, merge-manager 148 -> 149, owner 186 -> 187, each added [preview.stop], removed [].
+- Published names (core.test.ts): 258 -> 259, the 259th is goat_preview_stop; CORE_GOAT_TOOL_NAMES gains "goat_preview_stop" between "goat_preview_sign_in_state" and "goat_project_clone".
+- OFF_GRAMMAR_NAMES: `git diff origin/chase/t3-261114-next2 -- packages/contracts/src/agentSurface/registry.test.ts` is empty (0 lines) after 807c3b78fc. Legacy names stay 83, no line about it changed.
+- No bare tool name left: `git grep -n -E '(^|[^_a-zA-Z])preview_stop' -- apps packages docs` prints nothing. docs/user does not mention the tool.
+- Capability "none": the same class as preview.reload, back and forward: it acts only on the calling thread's own preview tab and changes nothing but that page's loading state; no data leaves, nothing is written to disk or to another thread. What an observer can now do that it could not: stop a page still loading in its own thread's preview tab (it could already reload it, go back and forward).
+- Why the counts were missed: the 46 beside-files run selects companions of changed files and cannot see exhaustive count tests; a lane that adds or removes an agent tool now runs apps/server/src/mcp's count tests by name before its CI run.
+- Tests at 807c3b78fc, locally: the 10 count-test files (McpToolAccess.capabilities, McpToolAccess.race, McpToolAccess, agentSurface.failureClasses, agentSurface, agentSurface.toolNames, agentSurfaceKeys, agentSurfaceOutcome, toolkits/core, contracts agentSurface/registry) + handlers.stop.test.ts + goatMcpToolPresentation.test.ts: 12 files, 212 tests, all pass. Audit regenerated, --check exit 0: goat_resource_verb 232 -> 233, verb_resource 39 -> 38 (tools on /mcp 308, mutating 193 as before).
+- Merge e03dfdb0bd of 308b3d11b8 (contains e80f5132e7), git's own, no conflicts.
+- goat-ci at 807c3b78fc: https://github.com/goat-si/goat/actions/runs/44088724466, workflow_dispatch lane all, conclusion success: 25 jobs success (goat-check, goat-typecheck, goat-test, goat-test-server 1/4 to 4/4, contracts, desktop, mobile, client-runtime, shared, packages, Windows, ssh, relay, build and the rest), 2 skipped by design, goat-ci-result success (13:44 UTC). The lane contains the integration head 308b3d11b8, so no merge was due at READY.
+
 ## Open before READY
 
-- check:changed against origin/chase/t3-261114-next2 (b531d2511c): needs the heavy-job token; then the typecheck of the agent tool commit with it.
 - Real-client passes: web Stop control through test-goat-app (dev server; token); mobile Stop loading and the C23 bootstrap timeout need a device check (own simulator; token).
 
-NOT RUN: whole-suite test phase of check:changed (stopped under the resource rule; CI runs it); web real-client pass and before/after captures of the Stop control (dev server is a heavy job, token not yet given); mobile device checks for C23 and C25 (simulator boot is a heavy job); desktop app manual check of the Stop IPC (no desktop dev build run); a real install of the new Chrome pin on this Mac (hashes proven by download instead).
+NOT RUN: the local whole-suite test phase of check:changed (by the 12:07:55 rule the wide selection runs in goat-ci); web real-client pass and before/after captures of the Stop control (dev server is a heavy job, token not yet given); mobile device checks for C23 and C25 (simulator boot is a heavy job); desktop app manual check of the Stop IPC (no desktop dev build run); a real install of the new Chrome pin on this Mac (hashes proven by download instead).
 
 ## Coordinator answers (verbatim)
 
@@ -100,3 +126,18 @@ NOT RUN: whole-suite test phase of check:changed (stopped under the resource rul
 
 > Coordinator to lane coordinator, 2026-11-17 10:43:40 UTC (quote each part verbatim in the lane's record and in next2-pr-plan.md under "Coordinator answers").
 > 1. N12, C25, RULE 3 (second line): AUTHORISED. "Coordinator authorisation, 2026-11-17, rule 3, apps/server/src/mcp/toolkits/core.test.ts:159 ('publishes unique tool names with reference-free object-root inputs'): expect(names.size).toBe(258) may become expect(names.size).toBe(259). Reason: the one new tool goat_preview_stop authorised at 10:07:04; nothing else in the test changes." The record shows that the 259th name is preview_stop and nothing else (the names before and after, diffed), with the audit counts (tools on /mcp 307 -> 308, mutating 192 -> 193). The refusal on a host without serverBrowserStopLoading and the same stop a person's button calls are as I asked. N12's merge 1dd4720879 of b531d2511c: noted.
+
+> Coordinator to lane coordinator, 2026-11-17 12:54:53 UTC (date -u), for N12 (quote verbatim in its record).
+> RULE 3, n12-rule3-c25-3, AUTHORISED, exactly these:
+> (i) apps/server/src/mcp/McpToolAccess.capabilities.test.ts:194-200, ALLOWED_WRITES: observer 77 -> 78, worker 132 -> 133, manager 146 -> 147, "merge-manager" 148 -> 149, owner 186 -> 187. Reason: the one new tool preview.stop carries capability "none", so each role's count of allowed writes grows by exactly one; no other number, role or test changes.
+> (ii) apps/server/src/mcp/agentSurface.test.ts:80: expect(entries).toHaveLength(307) -> toHaveLength(308). If the comment above :80 lists what the count includes, add the stop to it in the same words as its neighbours; otherwise leave the comment.
+> Conditions: the record shows, by a names diff of the registry before and after, that the ONLY entry added is preview.stop (so 308 is 307 plus it, and each role's set differs by that one name); it states why "none" is the right capability (the same class as preview.reload: it changes nothing but the page's loading state in the thread's own preview) and what an observer can now do that it could not; the reviewer checks both. And one line on how these two files were missed: the 46 beside-files run cannot see exhaustive count tests, so from now a lane that adds or removes an agent tool runs apps/server/src/mcp's count tests by name before its CI run (put that in the lane rules for N14 and SF1 too).
+> Then commit, push, ONE more goat-ci run on the lane branch; READY with the run.
+
+> Coordinator to lane coordinator, 2026-11-17 13:01:25 UTC (date -u), for N12 (quote verbatim in its record).
+> RULE 3, n12-rule3-c25-4: THE RENAME IS RIGHT AND IS AUTHORISED. A new tool is named by its path (goat_preview_stop for preview.stop); my 10:07:04 line that let "preview_stop" into OFF_GRAMMAR_NAMES was a mistake on my side as much as the lane's: that list is for names already shipped.
+>  (a) packages/contracts/src/agentSurface/registry.test.ts OFF_GRAMMAR_NAMES: the '"preview_stop",' line is removed, so the list equals dev's again. The 10:07:04 authorisation for that list is WITHDRAWN; after this commit the lane's diff of that list against origin/chase/t3-261114-next2 must be empty (show the empty diff in the record).
+>  (b) apps/server/src/mcp/toolkits/coreToolNames.testkit.ts CORE_GOAT_TOOL_NAMES: one added line '"goat_preview_stop",' between '"goat_preview_sign_in_state",' and '"goat_project_clone",'. Nothing else in that list changes.
+>  Standing as authorised before: core.test.ts:159 259; ALLOWED_WRITES plus one per role; agentSurface.test.ts:80 308 with the comment's added words; legacyNames stays 83 and no test line about it changes.
+> Conditions: no string "preview_stop" without the goat_ prefix remains as a tool name anywhere in the lane (git grep in server, contracts, web, mobile, client-runtime, docs; the operation name stopLoading and the capability serverBrowserStopLoading are different things and stay); the handler tests, the presentation test and the capability refusal still name the tool a person or agent would see; docs/internals/agent-surface-audit.md regenerated with --check exit 0 (233 and 38 as you say); if docs/user mentions the tool, the name there too. Your answers to my 12:54:53 conditions are accepted (the names diff: only preview.stop added, per role too; capability none as for reload, back and forward).
+> Then commit, push, ONE goat-ci run on the lane branch, READY with it.
