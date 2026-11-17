@@ -40,7 +40,6 @@ import {
 } from "./HubOcx.ts";
 import { makeLeaveSteps } from "./hubLeave.ts";
 import { makeMove } from "./hubMove.ts";
-import { runAsServerJob } from "./serverJob.ts";
 import { makeRoutes } from "./hubRoutes.ts";
 import { makeProvisionedLinks, type ProvisionedLinkReleases } from "./HubProvisionedLinks.ts";
 import {
@@ -174,7 +173,6 @@ const make = Effect.gen(function* () {
   const releases = yield* ReleaseCatalog;
   // One hub, one link store: membership changes never interleave.
   const permit = yield* Semaphore.make(1);
-  const serviceScope = yield* Effect.scope;
 
   const audit = Effect.fn("HubMembership.audit")(function* (
     caller: { readonly actor: string; readonly profile: string },
@@ -878,11 +876,7 @@ const make = Effect.gen(function* () {
     join: (scope, input, person) => permit.withPermits(1)(join(scope, input, person)),
     leave: (scope, input, person) => permit.withPermits(1)(leave(scope, input, person)),
     repair: (scope, input, person) => permit.withPermits(1)(repair(scope, input, person)),
-    // A move under way finishes when its caller goes, so no device is left in no hub.
-    move: (scope, input, person) =>
-      runAsServerJob(permit, serviceScope, "HubMembership.move", (stopped) =>
-        move(scope, input, person, stopped),
-      ),
+    move: (scope, input, person) => permit.withPermits(1)(move(scope, input, person)),
     routes: routes.list,
     updateRoutes: (scope, input, person) =>
       permit.withPermits(1)(routes.update(scope, input, person)),
