@@ -850,7 +850,12 @@ export function MemoryDetails({
         control={
           <div className="flex items-center justify-end gap-2">
             {item?.status === "active" && canWrite ? (
-              <Button size="sm" variant="ghost" onClick={() => edit.begin(item)}>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={edit.start !== null}
+                onClick={() => edit.begin(item)}
+              >
                 Edit
               </Button>
             ) : null}

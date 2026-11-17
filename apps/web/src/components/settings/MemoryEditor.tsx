@@ -95,6 +95,8 @@ export function useMemoryEditSession({
     seenBody: seen !== null,
     ownRequest: own,
     begin(visible: ActiveMemoryItem) {
+      // An open edit keeps its starting revision and its edited state until it closes.
+      if (start) return;
       setStart({
         memoryId: visible.memoryId,
         revisionId: visible.revision.revisionId,
