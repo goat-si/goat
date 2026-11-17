@@ -138,7 +138,7 @@ function forkOfUnheldSource() {
     scopeThreadRef(environmentId, reply.citation.threadId),
   );
   let sourceShell: unknown = null;
-  const familyRead = Atom.make(AsyncResult.initial<never, never>(true));
+  const familyRead = Atom.make<AsyncResult.AsyncResult<unknown>>(AsyncResult.initial(true));
   const get = appAtomRegistry.get.bind(appAtomRegistry);
   const shells = vi
     .spyOn(appAtomRegistry, "get")

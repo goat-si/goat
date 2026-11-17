@@ -1,3 +1,4 @@
+import type { ComposerContextId } from "@goat/contracts";
 import { setupSshComposer, state } from "~/test/sshComposerFixture";
 import { useLayoutEffect, useRef } from "react";
 import { expect, it, vi } from "vite-plus/test";
@@ -193,7 +194,7 @@ async function draftReply(holder: string) {
     {
       version: 1,
       kind: "response",
-      contextId: "response_m9",
+      contextId: "response_m9" as ComposerContextId,
       label: "An answer",
       citation: {
         version: 1,
