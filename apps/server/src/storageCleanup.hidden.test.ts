@@ -99,3 +99,29 @@ it.live("removes a sparse worktree whose files outside its patterns are not on d
     }),
   ),
 );
+// A name holding a newline cannot be handed back to Git, so an edit to it counts as one; outside
+// the sparse patterns it is usually not on disk, which is no edit at all.
+it.live.each([
+  ["not on disk", "removed", null],
+  ["edited", "kept", "hidden edit\n"],
+] as const)(
+  "a flagged name with a newline outside a sparse checkout's patterns, %s, is %s",
+  ([, outcome, edit]) =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const fixture = yield* cleanupFixture();
+        const { fs, repo, worktree, command } = fixture;
+        const name = "line\nbreak.txt";
+        yield* fs.writeFileString(`${worktree}/${name}`, "original\n");
+        yield* command(worktree, ["add", "--", name]);
+        yield* command(worktree, ["commit", "-m", "a name with a newline"]);
+        // The commit is on the default branch too, so only the hidden check can keep the worktree.
+        yield* command(repo, ["update-ref", "refs/heads/main", "refs/heads/feature"]);
+        yield* command(worktree, ["config", "sparse.expectFilesOutsideOfPatterns", "true"]);
+        yield* command(worktree, ["sparse-checkout", "set", "--no-cone", "/.gitignore"]);
+        expect(yield* fs.exists(`${worktree}/${name}`)).toBe(false);
+        if (edit !== null) yield* fs.writeFileString(`${worktree}/${name}`, edit);
+        expect((yield* fixture.service.runNow).entries[0]).toMatchObject({ outcome });
+      }),
+    ),
+);
