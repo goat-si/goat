@@ -19,7 +19,7 @@ import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
-import { tryWithWorkspaceLease } from "../../workspace/workspaceLease.ts";
+import { reuseHeldWorkspaceLease, tryWithWorkspaceLease } from "../../workspace/workspaceLease.ts";
 import { makeIsManagedWorktreePath } from "../../worktreesDirectory.ts";
 import { WorktreeSnapshotStore } from "../../worktreeSnapshots/WorktreeSnapshotStore.ts";
 import * as ProjectionStore from "../ProjectionStore.ts";
@@ -228,15 +228,16 @@ const make = Effect.gen(function* () {
     // can start in a half-prepared worktree, and the folder is checked after setup ran in it.
     const prepareAndRebind = Effect.gen(function* () {
       const createdHead = yield* headOf(worktreePath);
-      const setup = yield* setupScripts
-        .runForThread({
+      // Its terminal takes the new folder's lease, which this holds.
+      const setup = yield* reuseHeldWorkspaceLease(
+        setupScripts.runForThread({
           threadId,
           projectCwd: project.workspaceRoot,
           worktreePath,
           trigger: "setup",
           observeCompletion: {},
-        })
-        .pipe(Effect.mapError((error) => fail("setup-failed", error.message)));
+        }),
+      ).pipe(Effect.mapError((error) => fail("setup-failed", error.message)));
       if (setup.status === "started" && !setup.async) {
         if (setup.completion === undefined)
           return yield* fail("setup-failed", "GOAT couldn't follow the setup script to its end.");
