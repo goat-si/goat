@@ -481,6 +481,15 @@ Nothing else in those files changes. L357's deletion of shouldCollapseUserMessag
 PART 3, pen-mac-studio: the stable run 44086810768 has finished CLI darwin-arm64; its desktop macOS jobs have not started yet. The light rule stays; I lift it when Desktop macOS arm64 and x64 are done. N14 keeps reading, planning and committing; its fail-first runs wait.
 (Lane coordinator: part 1 relayed verbatim to SF1, parts 2 and 3 to N14, 13:08 UTC.)
 
+Coordinator to lane coordinator, 2026-11-17 13:41:48 UTC (date -u), for N14 (quote verbatim in its record).
+Addition (a), the Decisions inbox half of O2/O4: YES, N14's (1) to (3) is the intended shape. apps/mobile is not touched in this lane.
+
+1.  The move of web's existing logic (which questions of a request hold an unsent answer; sideChatCommandOverAnswer) into packages/client-runtime/src/state/unsent-question-answers.ts is ITS OWN COMMIT, as verbatim as the move allows, with web's existing tests of that logic passing unchanged before any inbox wiring; if an existing test must change its import line only, that is an import line; anything more comes to me first.
+2.  Then the inbox: DecisionUserInputForm's Stop and submit call the shared functions; a failing test first for each of the two behaviours (Stop keeps the typed answer and its attachments; "/side ..." typed in the inbox opens the side chat and is not sent as an answer); the two web captures.
+3.  The shared functions take plain data (answer drafts, attachment draft keys, the text), nothing of web's stores or React, so next3's mobile row can call them as they are; N14 names the file and exports at READY, and the lane coordinator's next3 plan names the two copies of the selection rule that exist until that row lands (client-runtime for web; apps/mobile/src/state/unsent-question-answers.ts) and that the mobile row removes the second.
+4.  If the two existing implementations (web's and mobile's) DISAGREE on any case while you read them (what counts as an unsent answer: whitespace only, an attachment without text, a question already answered), list the cases in the record; the shared rule follows web's behaviour in this lane, and the difference goes to next3's row as a decision, not silently unified.
+    (Lane coordinator: relayed verbatim to N14, 13:44 UTC. NEXT3 PLAN NOTES OWED, collected here until next3's plan is written: (i) the two copies of the unsent-answer selection rule (packages/client-runtime/src/state/unsent-question-answers.ts for web, apps/mobile/src/state/unsent-question-answers.ts for mobile) until the mobile row lands and removes the second; (ii) goat#3680 (Android Branches sheet does not scroll to its last branch) as a mobile row; (iii) goat#3681 (workspace lease reentry only from the holder's own fiber) as a row; (iv) goat#3670 (per-image project read, SF rows); (v) goat#3677 and check-changed per-file progress as TF1 rows.)
+
 ## Appendix: 85 carried #3176 rows outside next-pr-plan.md (verdict needed)
 
 - `479ee74135` persists PR metadata in drafts: changes draft normalization used by the persisted-state migration (`apps/web/src/composerDraftStore.ts:2084`, `:2242`).
