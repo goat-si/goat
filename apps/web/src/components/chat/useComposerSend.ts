@@ -105,24 +105,17 @@ import {
 } from "./chatViewSend";
 import { notifyDirectAnnotationAttached } from "./composerSendNotices";
 import { NO_PROVIDER_MODEL_SELECTION } from "../../providerInstances";
-import type { SavedSshWorktreeOption } from "../../lib/sshWorktree";
 import { environmentCatalog } from "../../connection/catalog";
-import { environmentThreadDetails } from "../../state/threads";
 import { findSavedSshWorktreeOption } from "../../lib/sshWorktree";
-import { openSshThread } from "../../lib/sshWorktreeSubmission";
 import { parseSideChatCommand } from "../sideChat/sideChat.logic";
-import { readThreadShell } from "../../state/entities";
-import { remoteRefOf } from "../../lib/sshWorktreeSubmission";
 import { savedSshWorktreeOptions } from "../../lib/sshWorktree";
 import { snapshotDraftContent } from "../ChatView.logic";
-import { sshThreadHandoffBlockReason } from "../../lib/sshWorktree";
 import { sshWorktreeErrorFeedback } from "../../lib/sshWorktreeSubmission";
 import { sshWorktreeSendBlockReason } from "../../lib/sshWorktree";
 import { submitSshWorktree } from "../../lib/sshWorktreeSubmission";
-import { sshStartedNotOpenedToast } from "./sshStartedNotOpenedToast";
 import { queueSideChatQuestion, startSideChatOverAnswer } from "../sideChat/sideChatFromComposer";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { sshComposerPorts, type SshComposerPorts } from "./sshComposerPorts";
+import { composerSshContinuation, type SshContinuation } from "./useComposerSend.ssh";
 import { draftReplyTo, refuseReplyThatGoesUnread, withReplyReference } from "./composerReply";
 import { vcsEnvironment } from "../../state/vcs";
 import type { ComposerSendInput } from "./useComposerSend.input";
@@ -298,9 +291,9 @@ export function useComposerSend(input: ComposerSendInput) {
     respondingRequestIdsRef.current = respondingRequestIds;
   }, [pendingApprovals, respondingRequestIds]);
 
-  // Built when a send runs, as the inline factories were: the ports read refs, which render must not.
-  const sshPorts = () =>
-    sshComposerPorts({
+  // Built when a send runs: the SSH ports read refs, which render must not.
+  const ssh = () =>
+    composerSshContinuation({
       navigate,
       launchSshWorkspace,
       retryEnvironment,
@@ -309,102 +302,14 @@ export function useComposerSend(input: ComposerSendInput) {
       currentRouteThreadKeyRef,
       composerRef,
       promptRef,
+      sendInFlightRef,
+      environmentId,
+      routeThreadRef,
+      routeThreadKey,
+      sshHandoffGuard,
     });
-  const makeSshThreadOpenPorts: SshComposerPorts["makeSshThreadOpenPorts"] = (...args) =>
-    sshPorts().makeSshThreadOpenPorts(...args);
-  const makeSshSubmissionPorts: SshComposerPorts["makeSshSubmissionPorts"] = (...args) =>
-    sshPorts().makeSshSubmissionPorts(...args);
-  const showSshStartedNotOpened: ReturnType<typeof sshStartedNotOpenedToast> = (...args) =>
-    sshStartedNotOpenedToast(makeSshThreadOpenPorts)(...args);
-  const continueThreadOnSsh = async (
-    selected: SavedSshWorktreeOption,
-    instructions: string,
-  ): Promise<boolean> => {
-    if (sendInFlightRef.current) return false;
-    const source = readThreadShell(routeThreadRef);
-    const projection = appAtomRegistry.get(
-      environmentThreadDetails.threadAtom(routeThreadRef),
-    )?.projection;
-    const catalog = appAtomRegistry.get(environmentCatalog.catalogValueAtom);
-    const option = findSavedSshWorktreeOption(
-      savedSshWorktreeOptions(catalog.entries, window.desktopBridge !== undefined),
-      selected.destination,
-    );
-    const reason =
-      sshThreadHandoffBlockReason({
-        ...sshHandoffGuard,
-        sourceThreadAvailable: source !== null,
-        hasMessages: (projection?.messages.length ?? 0) > 0,
-        runs: projection?.runs ?? [],
-        catalogReady: catalog.isReady,
-        options: savedSshWorktreeOptions(catalog.entries, window.desktopBridge !== undefined),
-        canLaunch: appAtomRegistry.get(sshWorkspaceLaunchCommand.permissionAtom(environmentId)),
-      }) ??
-      option?.disabledReason ??
-      (option === null ? "This saved SSH connection is unavailable. Choose another host." : null);
-    if (reason !== null || source === null || option === null) {
-      toastManager.add(
-        stackedThreadToast({ type: "error", title: reason ?? "This thread is unavailable." }),
-      );
-      return false;
-    }
-    const capturedRouteKey = routeThreadKey;
-    sendInFlightRef.current = true;
-    let dispatchBegan = false;
-    const launchSshThread = async () => {
-      dispatchBegan = true;
-      const result = await launchSshWorkspace({
-        environmentId,
-        input: {
-          sourceProjectId: source.projectId,
-          sourceThreadId: source.id,
-          destination: {
-            connectionId: option.destination.connectionId,
-            expectedEnvironmentId: option.destination.environmentId,
-            target: option.profile.target,
-          },
-          title: source.title,
-          modelSelection: source.modelSelection,
-          runtimeMode: source.runtimeMode,
-          interactionMode: source.interactionMode,
-          initialMessage: { text: instructions },
-        },
-      });
-      if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-      const remoteRef = remoteRefOf(result.value);
-      try {
-        await openSshThread(
-          { remoteRef, savedEnvironmentId: option.destination.environmentId },
-          makeSshThreadOpenPorts(option.destination, capturedRouteKey),
-        );
-      } catch (error) {
-        showSshStartedNotOpened(
-          {
-            kind: "started-not-opened",
-            remoteRef,
-            reason: error instanceof Error ? error.message : "Could not open the remote thread.",
-          },
-          { destination: option.destination, hostLabel: option.label },
-        );
-      }
-      return true;
-    };
-    return launchSshThread()
-      .catch((error: unknown) => {
-        const feedback = sshWorktreeErrorFeedback(error, option.label, dispatchBegan, "thread");
-        toastManager.add(
-          stackedThreadToast({
-            type: feedback.uncertain ? "warning" : "error",
-            title: feedback.message,
-            description: feedback.details,
-          }),
-        );
-        return false;
-      })
-      .finally(() => {
-        sendInFlightRef.current = false;
-      });
-  };
+  const continueThreadOnSsh: SshContinuation["continueThreadOnSsh"] = (...args) =>
+    ssh().continueThreadOnSsh(...args);
   const onSend = async (
     e?: { preventDefault: () => void },
     dispatchMode: ComposerDispatchMode = "auto",
@@ -612,7 +517,7 @@ export function useComposerSend(input: ComposerSendInput) {
               initialMessage: { text: outgoingText },
             },
           },
-          makeSshSubmissionPorts(
+          ssh().makeSshSubmissionPorts(
             capturedDraftId,
             submittedContentSnapshot,
             capturedSavedDestination,
@@ -623,7 +528,7 @@ export function useComposerSend(input: ComposerSendInput) {
           ),
         );
         if (outcome.kind === "started-not-opened") {
-          showSshStartedNotOpened(outcome, {
+          ssh().showSshStartedNotOpened(outcome, {
             destination: capturedSavedDestination,
             hostLabel: capturedHostLabel,
           }); // caller owns the toast and its connect-only Open thread action
