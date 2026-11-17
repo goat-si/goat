@@ -86,7 +86,7 @@ import {
   type ActiveCursorTextStream,
   type ActiveCursorTurn,
 } from "./activeTurn.ts";
-import { isCursorSdkError } from "./sdk.ts";
+import { classifyCursorModelRejection } from "./modelRejection.ts";
 import { cursorRunPrompt, type CursorRunPrompt } from "./steerPrompt.ts";
 import {
   assistantTextsFromConversationSteps,
@@ -219,26 +219,6 @@ function providerSession(input: {
     lastError: null,
   };
 }
-
-class CursorModelUnavailableError extends Schema.TaggedError<CursorModelUnavailableError>()(
-  "CursorModelUnavailableError",
-  {
-    model: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Cursor cannot run the model "${this.model}". Cursor only runs models from your Cursor account. Choose one of those, or use OpenCode for OpenRouter and other API-key models.`;
-  }
-}
-
-// Uncoded SDK model rejections are identifiable only by message prefix.
-const classifyCursorModelRejection =
-  (modelSelection: ModelSelection) => (error: CursorAgentSdk.CursorAgentSdkRunnerError) =>
-    isCursorSdkError(error.cause, "ConfigurationError") &&
-    error.cause.message.startsWith("Cannot use this model:")
-      ? new CursorModelUnavailableError({ model: modelSelection.model, cause: error.cause })
-      : error;
 
 // Cursor results can omit output; retain more streamed fallback than the persisted tail.
 const MAX_CURSOR_STREAMED_OUTPUT_CHARS = 256 * 1024;
