@@ -132,10 +132,24 @@ export const scanScratchFolders = Effect.fn("scratchFolders.scan")(function* (sc
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const sql = yield* SqlClient.SqlClient;
   const root = yield* fs
     .realPath(path.join(scan.baseDir, "scratch"))
     .pipe(Effect.orElseSucceed(() => null));
   if (root === null) return;
+  // A promoted No project thread leaves its folder as a project's root, with no thread bound.
+  const projectRows = yield* sql<{ readonly root: string }>`
+    SELECT workspace_root AS "root" FROM projection_projects WHERE deleted_at IS NULL
+  `.pipe(Effect.orElseSucceed(() => null));
+  if (projectRows === null) {
+    scan.notes.push(
+      "This server's projects could not be read, so no No project folder is offered.",
+    );
+    return;
+  }
+  const projectRoots = yield* Effect.forEach(projectRows, (row) =>
+    fs.realPath(row.root).pipe(Effect.orElseSucceed(() => path.resolve(row.root))),
+  );
   for (const name of yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []))) {
     const folder = path.join(root, name);
     const stat = yield* lstatOf(folder);
@@ -149,23 +163,30 @@ export const scanScratchFolders = Effect.fn("scratchFolders.scan")(function* (sc
     }
     const working = users.find((user) => user.busy);
     const named = users[0];
+    const projectInside = projectRoots.some(
+      (projectRoot) =>
+        samePath(projectRoot, folder, scan.rules) ||
+        isStrictlyInside(folder, projectRoot, scan.rules),
+    );
     const offered =
       scan.usedOutside(folder) ??
-      (working !== undefined
-        ? scan.state(
-            "protected",
-            `The No project thread "${working.title ?? working.id}" is working in it`,
-          )
-        : scan.state(
-            "removable",
-            (named === undefined
-              ? "No thread uses this No project folder."
-              : `Folder of the No project thread "${named.title ?? named.id}"${
-                  named.updatedAt === null ? "" : `, idle since ${named.updatedAt.slice(0, 10)}`
-                }.`) +
-              " Removing it deletes its files for good" +
-              (named === undefined ? "." : "; the thread's next turn starts in an empty folder."),
-          ));
+      (projectInside
+        ? scan.state("protected", "A project's folder is at or inside it")
+        : working !== undefined
+          ? scan.state(
+              "protected",
+              `The No project thread "${working.title ?? working.id}" is working in it`,
+            )
+          : scan.state(
+              "removable",
+              (named === undefined
+                ? "No thread uses this No project folder."
+                : `Folder of the No project thread "${named.title ?? named.id}"${
+                    named.updatedAt === null ? "" : `, idle since ${named.updatedAt.slice(0, 10)}`
+                  }.`) +
+                " Removing it deletes its files for good" +
+                (named === undefined ? "." : "; the thread's next turn starts in an empty folder."),
+            ));
     const id = "orphan_folder:" + folder;
     const { decision, token, stamp } = yield* scan.stamped(id, folder, SCRATCH_MIN_AGE_MS, offered);
     const threads = users.map((user) => user.id);

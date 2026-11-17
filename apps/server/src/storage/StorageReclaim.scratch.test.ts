@@ -150,3 +150,23 @@ it.live("keeps a chosen No project folder while a terminal works in it", () =>
     expect(yield* fs.readFileString(path.join(folder, "notes.md"))).toBe("draft\n");
   }).pipe(Effect.scoped, provide),
 );
+
+// Promoting a No project thread makes its folder a project's root and unbinds the thread.
+it.live("keeps a No project folder that became a project's folder", () =>
+  Effect.gen(function* () {
+    const { folder, listed } = yield* scratchFixture;
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`DELETE FROM orchestration_v2_projection_threads WHERE thread_id = 'thread-notes'`;
+    yield* sql`
+      INSERT INTO projection_projects
+        (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+      VALUES ('promoted', 'Notes', ${folder}, '[]', '2026-11-01T00:00:00.000Z',
+        '2026-11-01T00:00:00.000Z')
+    `;
+    const { item } = yield* listed;
+    expect(item).toMatchObject({
+      state: "protected",
+      reason: "A project's folder is at or inside it",
+    });
+  }).pipe(Effect.scoped, provide),
+);
