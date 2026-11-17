@@ -1,7 +1,8 @@
 import {
   CommandId,
+  describeThreadWorkspaceRestore,
+  ThreadId,
   ThreadWorkspaceRestoreError,
-  type ThreadId,
   type ThreadWorkspaceRestoreFailure,
   type ThreadWorkspaceRestoreInput,
   type ThreadWorkspaceRestoreResult,
@@ -19,7 +20,8 @@ import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
-import { tryWithWorkspaceLease } from "../../workspace/workspaceLease.ts";
+import { isWithinRoot } from "../../workspace/KnownWorkspaces.ts";
+import { tryWithWorkspaceLease, withWorkspaceLease } from "../../workspace/workspaceLease.ts";
 import { makeIsManagedWorktreePath } from "../../worktreesDirectory.ts";
 import { WorktreeSnapshotStore } from "../../worktreeSnapshots/WorktreeSnapshotStore.ts";
 import * as ProjectionStore from "../ProjectionStore.ts";
@@ -39,6 +41,11 @@ export class ThreadWorkspaceService extends Context.Service<
     readonly restore: (
       input: ThreadWorkspaceRestoreInput,
     ) => Effect.Effect<ThreadWorkspaceRestoreResult, ThreadWorkspaceRestoreError>;
+    /** Before a terminal starts in a thread's worktree, brings a missing one back as a turn would. */
+    readonly prepareTerminal: (input: {
+      readonly threadId: string;
+      readonly cwd?: string | undefined;
+    }) => Effect.Effect<void>;
   }
 >()("goat/orchestration-v2/goat/ThreadWorkspaceService") {}
 
@@ -307,6 +314,63 @@ const make = Effect.gen(function* () {
     };
   });
 
+  const prepareTerminal = Effect.fn("ThreadWorkspace.prepareTerminal")(function* (input: {
+    readonly threadId: string;
+    readonly cwd?: string | undefined;
+  }) {
+    const threadId = ThreadId.make(input.threadId);
+    const loaded = yield* load(threadId).pipe(Effect.option);
+    if (Option.isNone(loaded)) return;
+    const { project, worktreePath, branch } = loaded.value;
+    if (
+      !isWithinRoot(path, path.resolve(input.cwd ?? worktreePath), worktreePath) ||
+      (yield* restorePending.ready(worktreePath)) ||
+      !(yield* isManagedWorktreePath(worktreePath))
+    )
+      return;
+    // Waits out a turn or another terminal restoring the same folder, then finds it ready.
+    const restored = yield* withWorkspaceLease(
+      worktreePath,
+      Effect.gen(function* () {
+        if (yield* restorePending.ready(worktreePath)) return null;
+        return yield* restoreMissing({
+          threadId,
+          cwd: project.workspaceRoot,
+          worktreePath,
+          branch,
+        });
+      }),
+    ).pipe(
+      // The terminal then fails on the missing folder, which the thread's banner offers to restore.
+      Effect.catch((cause) =>
+        Effect.logWarning("terminal open could not restore the thread's worktree", {
+          threadId,
+          worktreePath,
+          cause,
+        }).pipe(Effect.as(null)),
+      ),
+    );
+    if (restored === null) return;
+    const { summary, lost } = describeThreadWorkspaceRestore({ ...restored, branch });
+    const stamp = (yield* Clock.currentTimeMillis).toString(36);
+    yield* threads
+      .dispatch({
+        type: "thread.notice.record",
+        commandId: CommandId.make(`worktree-restored:${threadId}:${stamp}`),
+        threadId,
+        recordKey: `worktree-restored:${stamp}`,
+        message: lost === null ? summary : `${summary} ${lost}`,
+      })
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("worktree restored for a terminal, but its notice was not recorded", {
+            threadId,
+            cause,
+          }),
+        ),
+      );
+  });
+
   return ThreadWorkspaceService.of({
     status,
     restore: Effect.fn("ThreadWorkspaceService.restore")(function* (input) {
@@ -314,6 +378,7 @@ const make = Effect.gen(function* () {
         ? yield* startFresh(input.threadId)
         : yield* restoreInPlace(input.threadId);
     }),
+    prepareTerminal,
   });
 });
 
