@@ -15,7 +15,7 @@ const isCheckoutField = (value: unknown): value is string =>
  * fail the strict whole-storage read the attachment check relies on. Anything but two strings
  * within the limit is dropped, and the draft hydrates without the link.
  */
-export function readStoredCheckoutPullRequest(value: unknown): DraftCheckoutPullRequest | null {
+function readStoredCheckoutPullRequest(value: unknown): DraftCheckoutPullRequest | null {
   if (!value || typeof value !== "object") return null;
   const { url, branch } = value as Record<string, unknown>;
   return isCheckoutField(url) && isCheckoutField(branch) ? { url, branch } : null;
@@ -47,7 +47,7 @@ export function resolveCheckoutPullRequest(
   return projectChanged ? undefined : existing?.checkoutPullRequest;
 }
 
-export function checkoutPullRequestsEqual(
+function checkoutPullRequestsEqual(
   left: DraftCheckoutPullRequest | undefined,
   right: DraftCheckoutPullRequest | undefined,
 ): boolean {
