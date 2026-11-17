@@ -419,6 +419,22 @@ describe("remote thread lifecycle commands", () => {
     }),
   );
 
+  it.effect("counts a row action for its own environment only", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      const otherEnvironment = EnvironmentId.make("other-remote");
+      const result = h.commands.settle.run(h.registry, {
+        environmentId: ENVIRONMENT_ID,
+        input: { threadId: THREAD_ID },
+      });
+      const request = yield* Queue.take(h.requests);
+      expect(h.registry.get(h.commands.rowActionsAtom(ENVIRONMENT_ID))).toBe(1);
+      expect(h.registry.get(h.commands.rowActionsAtom(otherEnvironment))).toBe(0);
+      yield* Deferred.succeed(request.reply, { sequence: 2 });
+      yield* Effect.promise(() => result);
+    }),
+  );
+
   const undoableActions = ["settle", "snooze"] as const;
 
   it.effect.each(undoableActions)("restores a confirmed %s when a queued undo fails", (action) =>

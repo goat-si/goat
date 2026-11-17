@@ -20,7 +20,7 @@ import {
 
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useProjects } from "../../state/entities";
-import { environmentThreadShells } from "../../state/threads";
+import { steadyNavigationThreadShellsAtom } from "../../state/threads";
 import { useLaunchingThreads, usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -67,7 +67,7 @@ export function HomeRouteScreen() {
   const visible = routeVisible && tabActive;
   const threads = useLaunchingThreads(
     useAtomValueWhileVisible(
-      environmentThreadShells.navigationThreadShellsAtom,
+      steadyNavigationThreadShellsAtom,
       tabActive &&
         (layout.usesSplitView
           ? nativePrimaryColumn !== null && panes.primarySidebarVisible

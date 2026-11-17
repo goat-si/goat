@@ -4,7 +4,7 @@ import { installPermissionUpdateNotice } from "./features/connection/permissionU
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
 import { requireNativeModule } from "expo";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Platform, StatusBar } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
@@ -15,7 +15,7 @@ import {
   getStateFromPath,
 } from "@react-navigation/native";
 
-import { RegistryContext } from "@effect/atom-react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { ProjectChipIconRasterizer } from "./native/ProjectChipIconImages";
 import { ThreadArrangementHost } from "./features/threads/ThreadArrangementSheet";
 import * as Dialog from "./components/ui/Dialog";
@@ -31,7 +31,7 @@ import { appAtomRegistry } from "./state/atom-registry";
 import { followKeptPerComputerCatalog } from "./features/goat-bot/useKeptPerComputer";
 import { subscribeComposerDraftModelReconciliation } from "./state/use-composer-drafts";
 import { environmentThreadShells, threadEnvironment } from "./state/threads";
-import { environmentShell } from "./state/shell";
+import { environmentShell, shellCachesReadAtom } from "./state/shell";
 import { OverlayPortalHost } from "./components/ui/OverlayPortal";
 import {
   shouldHandleAppLink,
@@ -118,12 +118,27 @@ disposeOnFoundationReplace(typeof module === "undefined" ? undefined : module.ho
   for (const dispose of appServiceDisposers) dispose();
 });
 
+// Cached shells are local reads that end in a fraction of this time; the limit only keeps a
+// failed read from holding the splash screen.
+const SPLASH_SHELL_CACHE_WAIT_MS = 1_500;
+
 function SplashScreenCoordinator() {
   const { isReady } = useAppearancePreferences();
+  const shellCachesRead = useAtomValue(shellCachesReadAtom);
+  const [waitEnded, setWaitEnded] = useState(false);
 
+  // oxlint-disable-next-line goat/react-effect-budget -- bounds how long the native splash screen waits for cached shells
   useEffect(() => {
-    if (isReady) void SplashScreen.hide();
-  }, [isReady]);
+    const timer = setTimeout(() => setWaitEnded(true), SPLASH_SHELL_CACHE_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // The thread list paints every environment's cached rows at once when the splash hides
+  // after they are read.
+  const canHide = isReady && (shellCachesRead || waitEnded);
+  useEffect(() => {
+    if (canHide) void SplashScreen.hide();
+  }, [canHide]);
 
   return null;
 }
