@@ -115,6 +115,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
           );
           expect(descriptor.capabilities.drainRestart).toBe(true);
           expect(descriptor.capabilities.goatBotLibrary).toBe(true);
+          expect(descriptor.capabilities.offeredSourceControlProviders).toBe(true);
+          expect(descriptor.capabilities.serverBrowserStopLoading).toBe(true);
           expect(descriptor.capabilities.memoryHubProtocolVersion).toBeUndefined();
           return identity.instanceId;
         }).pipe(Effect.provide(Layer.fresh(layerServerEnvironment(baseDir))));

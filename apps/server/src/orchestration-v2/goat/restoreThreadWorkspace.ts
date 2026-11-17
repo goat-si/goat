@@ -145,6 +145,8 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
               trigger: "setup",
               // The runner reports the exit code only when asked to watch for it.
               observeCompletion: {},
+              // The folder may be new at the old path, or resumed after an attempt that made it.
+              freshShell: true,
             }),
           ).pipe(Effect.mapError((error) => fail("setup-failed", error.message)));
       if (setup.status === "started" && !setup.async) {

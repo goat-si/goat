@@ -89,7 +89,6 @@ import {
   startAttachmentUpload,
 } from "../../lib/attachmentUploadQueue";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
-import { fileAttachmentCapabilityBlockReason } from "./composerAttachmentFiles";
 import { readEnvironmentScope } from "../../state/session";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import {
@@ -105,7 +104,6 @@ import {
   restoreComposerDraft,
 } from "./chatViewSend";
 import { notifyDirectAnnotationAttached } from "./composerSendNotices";
-import type { UnifiedSettings } from "@goat/contracts";
 import { NO_PROVIDER_MODEL_SELECTION } from "../../providerInstances";
 import type { SavedSshWorktreeOption } from "../../lib/sshWorktree";
 import { environmentCatalog } from "../../connection/catalog";
@@ -128,14 +126,21 @@ import { sshComposerPorts, type SshComposerPorts } from "./sshComposerPorts";
 import { refuseReplyTheServerDrops, withReplyReference } from "./composerReply";
 import { vcsEnvironment } from "../../state/vcs";
 import type { ComposerSendInput } from "./useComposerSend.input";
-import { draftHasNonPromptContent, readEnvironmentPresentation } from "./useComposerSend.helpers";
+import {
+  checkoutBranchOverride,
+  draftHasNonPromptContent,
+  firstCallOnly,
+  liveAttachmentCapabilities,
+  readEnvironmentPresentation,
+  saveSettingsBeforeRedirect,
+  selectPlanModeEnabled,
+  showMultipleModelsNeedGitThread,
+} from "./useComposerSend.helpers";
 import { keepFailedSendInStash } from "./stashFailedSend";
 
 const sshWorkspaceLaunchCommand = vcsEnvironment.sshWorkspaceLaunch;
 
 const ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE = 3;
-
-const selectPlanModeEnabled = (settings: UnifiedSettings) => settings.planModeEnabled;
 
 /**
  * Everything the composer's send button can start: a turn on this thread or a new one,
@@ -673,14 +678,7 @@ export function useComposerSend(input: ComposerSendInput) {
       return;
     }
     if (multipleModelBlock === "needs-new-git-thread") {
-      toastManager.add(
-        stackedThreadToast({
-          type: "warning",
-          title: "Choose models and a base branch",
-          description:
-            "Multiple models need a new thread in a Git project. Each gets its own worktree.",
-        }),
-      );
+      showMultipleModelsNeedGitThread();
       return;
     }
     const {
@@ -1033,21 +1031,8 @@ export function useComposerSend(input: ComposerSendInput) {
       return;
     }
 
-    const readLiveAttachmentCapabilities = () => {
-      const config = appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId) ?? null;
-      const liveSupportsAttachmentUploads =
-        config?.environment.capabilities.attachmentUploads === true;
-      return {
-        supportsAttachmentUploads: liveSupportsAttachmentUploads,
-        fileBlockReason: fileAttachmentCapabilityBlockReason({
-          files: composerFilesSnapshot,
-          attachmentUploadsCapabilityKnown: config !== null,
-          supportsAttachmentUploads: liveSupportsAttachmentUploads,
-          maxFileAttachmentBytes:
-            config?.environment.capabilities.fileAttachments?.maxUploadBytes ?? null,
-        }),
-      };
-    };
+    const readLiveAttachmentCapabilities = () =>
+      liveAttachmentCapabilities(environmentId, composerFilesSnapshot);
 
     const multipleTargets: MultipleModelTarget[] = [];
     for (const resolved of resolveMultipleModelTargets({
@@ -1146,6 +1131,15 @@ export function useComposerSend(input: ComposerSendInput) {
       );
       return;
     }
+    const persistSendSettings = firstCallOnly(() =>
+      persistThreadSettingsForNextTurn({
+        threadId: threadIdForSend,
+        createdAt: messageCreatedAt,
+        ...checkoutBranchOverride(localCheckoutBranchMismatch),
+        runtimeMode,
+        interactionMode: sendInteractionMode,
+      }),
+    );
     // A message sent while approvals are pending redirects the agent. They are declined only
     // here, after everything above has accepted the send, so local commands and rejected
     // drafts leave them alone. After navigating away during an upload, the shown approvals
@@ -1229,6 +1223,19 @@ export function useComposerSend(input: ComposerSendInput) {
           clearComposerDraftContent(composerDraftTarget);
           composerRef.current?.resetCursorState();
         }
+        return;
+      }
+      const refusal = await saveSettingsBeforeRedirect(
+        isServerThread &&
+          runtimeMode !== activeThread.runtimeMode &&
+          !changedBeforeDecline &&
+          !approvalResponding,
+        persistSendSettings,
+      );
+      if (refusal !== null) {
+        sendInFlightRef.current = false;
+        setThreadError(threadIdForSend, refusal);
+        setDockedDraftHeroThreadKey((key) => (key === activeThreadKey ? null : key));
         return;
       }
       const declined =
@@ -1369,15 +1376,7 @@ export function useComposerSend(input: ComposerSendInput) {
     let failure: AtomCommandResult<unknown, unknown> | null = null;
 
     if (failure === null && isServerThread) {
-      const settingsResult = await persistThreadSettingsForNextTurn({
-        threadId: threadIdForSend,
-        createdAt: messageCreatedAt,
-        ...(localCheckoutBranchMismatch
-          ? { branch: localCheckoutBranchMismatch.currentBranch }
-          : {}),
-        runtimeMode,
-        interactionMode: sendInteractionMode,
-      });
+      const settingsResult = await persistSendSettings();
       if (settingsResult._tag === "Failure") {
         failure = settingsResult;
       }

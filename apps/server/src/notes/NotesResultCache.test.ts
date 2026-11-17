@@ -166,3 +166,40 @@ it.effect("an evicted completion token cannot match a reintroduced thread genera
     );
   }),
 );
+
+it.effect(
+  "regression goat#3641: a notes read between a thread's result and auto-done still moves the note to done",
+  () =>
+    Effect.gen(function* () {
+      const notes = yield* Notes.NotesService;
+      const fs = yield* FileSystem.FileSystem;
+      const { notesDir } = yield* Config.ServerConfig;
+      yield* fs.writeFileString(`${notesDir}/task.md`, linkedFile);
+      yield* notes.refresh;
+      const observed: ThreadResult = { ...succeeded };
+      yield* notes.refreshResults(link.threadId, null, observed);
+      // A client or an agent reads the note: the same result, read again as a new object.
+      yield* notes.read({ path: "task.md" });
+      assert.isTrue(yield* notes.complete("task.md", link, observed));
+      assert.strictEqual((yield* notes.cached("task.md"))?.status, "done");
+    }).pipe(Effect.provide(notesLayer(() => Effect.sync(() => ({ ...succeeded }))))),
+);
+
+it.effect("a notes read that finds a newer run keeps the note in doing", () =>
+  Effect.gen(function* () {
+    let latest: ThreadResult = succeeded;
+    yield* Effect.gen(function* () {
+      const notes = yield* Notes.NotesService;
+      const fs = yield* FileSystem.FileSystem;
+      const { notesDir } = yield* Config.ServerConfig;
+      yield* fs.writeFileString(`${notesDir}/task.md`, linkedFile);
+      yield* notes.refresh;
+      const observed: ThreadResult = { ...succeeded };
+      yield* notes.refreshResults(link.threadId, null, observed);
+      latest = { ...running, runId: RunId.make("newer-run") };
+      yield* notes.read({ path: "task.md" });
+      assert.isFalse(yield* notes.complete("task.md", link, observed));
+      assert.strictEqual((yield* notes.cached("task.md"))?.status, "doing");
+    }).pipe(Effect.provide(notesLayer(() => Effect.sync(() => latest))));
+  }),
+);

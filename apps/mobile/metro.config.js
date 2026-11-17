@@ -30,6 +30,8 @@ config.resolver = {
         ? [config.resolver.blockList]
         : []),
     new RegExp(`${escapedWorkspaceRoot}[/\\\\]\\.t3[/\\\\].*`),
+    // Dev homes and agent tools write here while Metro runs; each write would refresh the app.
+    new RegExp(`${escapedWorkspaceRoot}[/\\\\]\\.(?:goat|codexclaw)[/\\\\].*`),
   ],
   extraNodeModules: {
     ...config.resolver?.extraNodeModules,

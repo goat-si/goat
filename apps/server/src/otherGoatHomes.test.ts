@@ -1,6 +1,8 @@
 import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
 import { vi } from "vite-plus/test";
-// @effect-diagnostics nodeBuiltinImport:off - seeds other homes' databases the way their servers write them.
+// @effect-diagnostics nodeBuiltinImport:off - seeds other homes' databases as their servers write them, and reads Windows 8.3 names.
+import * as NodeChildProcess from "node:child_process";
+import * as NodeOS from "node:os";
 import * as NodeSqlite from "node:sqlite";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -13,7 +15,7 @@ import * as PlatformError from "effect/PlatformError";
 
 import { CHANNEL_STATE_COPY_MARKER_FILE_NAME } from "@goat/contracts";
 
-import { ownWorktreeRoots, readOtherHomeBindings } from "./otherGoatHomes.ts";
+import { otherHomeReason, ownWorktreeRoots, readOtherHomeBindings } from "./otherGoatHomes.ts";
 
 const withHome = <A, E>(
   run: (
@@ -46,6 +48,55 @@ const seedDatabase = (file: string, worktreePaths: ReadonlyArray<string>) =>
     }
     db.close();
   });
+
+/**
+ * The same existing folder under another spelling: its 8.3 short name on Windows, which is how
+ * TEMP and some settings name it, and a symlink at `link` elsewhere.
+ */
+const alias = (target: string, link: string) =>
+  Effect.gen(function* () {
+    if (HostProcess.Platform.defaultValue() === "win32") {
+      const short = NodeChildProcess.execFileSync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          `(New-Object -ComObject Scripting.FileSystemObject).GetFolder('${target}').ShortPath`,
+        ],
+        { encoding: "utf8" },
+      ).trim();
+      assert.notEqual(short.toLowerCase(), target.toLowerCase(), `no 8.3 name for ${target}`);
+      return short;
+    }
+    yield* (yield* FileSystem.FileSystem).symlink(target, link);
+    return link;
+  });
+
+/**
+ * withHome on the system volume on Windows, where a real install's home and TEMP have 8.3 names;
+ * CI keeps TEMP on a volume that has none.
+ */
+const withAliasableHome = <A, E>(
+  run: (
+    home: string,
+  ) => Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | AuxiliarySqlite.AuxiliarySqlite>,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory =
+      HostProcess.Platform.defaultValue() === "win32"
+        ? path.join(NodeOS.homedir(), "AppData", "Local", "Temp")
+        : undefined;
+    const home = yield* fs.realPath(
+      yield* fs.makeTempDirectoryScoped({ prefix: "goat-homes-", directory }),
+    );
+    return yield* run(home).pipe(
+      Effect.provideService(HostProcess.HomeDirectory, home),
+      Effect.provideService(HostProcess.Environment, {}),
+    );
+  }).pipe(Effect.provide(AuxiliarySqlite.layer), Effect.scoped, Effect.provide(NodeServices.layer));
 
 describe("otherGoatHomes", () => {
   it.effect("shows stable's cleanup the worktrees a nightly copy still binds, and back", () =>
@@ -156,6 +207,68 @@ describe("otherGoatHomes", () => {
           assert.deepEqual(yield* ownWorktreeRoots({ roots, baseDir: nightly }), [roots[1]]);
         }),
       ),
+  );
+
+  it.effect(
+    "judges each app's worktree folder the same when its home arrives by another name",
+    () =>
+      withAliasableHome((home) =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path;
+          const fs = yield* FileSystem.FileSystem;
+          const roots = [
+            path.join(home, ".goat", "desktop", "worktrees"),
+            path.join(home, ".goat", "desktop-nightly", "worktrees"),
+          ];
+          for (const root of roots) yield* fs.makeDirectory(root, { recursive: true });
+          const named = yield* alias(home, path.join(home, "home-alias"));
+          const judge = (app: string) =>
+            ownWorktreeRoots({ roots, baseDir: path.join(named, ".goat", app) }).pipe(
+              Effect.provideService(HostProcess.HomeDirectory, named),
+            );
+
+          assert.deepEqual(yield* judge("desktop-nightly"), [roots[1]]);
+          assert.deepEqual(yield* judge("desktop"), [roots[0]]);
+        }),
+      ),
+  );
+
+  it.effect("drops another app's worktree folder when its root is named through an alias", () =>
+    withAliasableHome((home) =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const fs = yield* FileSystem.FileSystem;
+        const stableRoot = path.join(home, ".goat", "desktop", "worktrees");
+        yield* fs.makeDirectory(stableRoot, { recursive: true });
+        const named = yield* alias(stableRoot, path.join(home, "stable-worktrees"));
+        const nightly = path.join(home, ".goat", "desktop-nightly");
+
+        assert.deepEqual(yield* ownWorktreeRoots({ roots: [named], baseDir: nightly }), []);
+      }),
+    ),
+  );
+
+  it.effect("keeps a worktree another app's database records under another spelling", () =>
+    withAliasableHome((home) =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const fs = yield* FileSystem.FileSystem;
+        const shared = path.join(home, ".goat", "desktop", "worktrees", "repo", "feature");
+        yield* fs.makeDirectory(shared, { recursive: true });
+        const named = yield* alias(shared, path.join(home, "feature-alias"));
+        const nightlyDb = path.join(home, ".goat", "desktop-nightly", "userdata", "statev2.sqlite");
+        yield* seedDatabase(nightlyDb, [named]);
+
+        const bindings = yield* readOtherHomeBindings({
+          ownDatabase: path.join(home, ".goat", "desktop", "userdata", "statev2.sqlite"),
+        });
+        assert.deepEqual(bindings.unreadable, []);
+        assert.equal(
+          otherHomeReason(path, bindings, shared),
+          "another GOAT app on this machine uses this worktree",
+        );
+      }),
+    ),
   );
 });
 

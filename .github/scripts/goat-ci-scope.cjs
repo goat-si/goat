@@ -67,6 +67,7 @@ const WINDOWS_SUITES = [
   "apps/server/src/runtimeRelaunch",
   "apps/server/src/cli/updateServerRestart",
   "apps/server/src/terminal/nodePtyNativeKill",
+  "apps/server/src/otherGoatHomes",
   "packages/shared/src/cuaDriver",
   "packages/shared/src/computerUse",
   "packages/shared/src/path",
@@ -77,6 +78,7 @@ const WINDOWS_SUITES = [
   "packages/shared/src/testing/",
   "scripts/lib/changed-tests",
   "scripts/build-computer-use-helper",
+  "scripts/build-desktop-artifact.selfcheck",
 ];
 /** Sources whose changes also select test-windows, without filtering in their POSIX-only suites. */
 const WINDOWS_TRIGGERS = [

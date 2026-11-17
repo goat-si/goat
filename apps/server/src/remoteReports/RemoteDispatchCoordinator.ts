@@ -6,12 +6,9 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 import {
   ChannelWorkerObservation,
-  NodeId,
-  RunId,
   RuntimeRequestId,
   ThreadId,
   RuntimeMode,
-  RemoteReportDeliveryMode,
   RemoteReportKind,
   RemoteOriginReportsWaitResult,
   OrchestratorMcpFailure,
@@ -20,6 +17,7 @@ import {
   type RemoteReport,
   type RemoteObservedRun,
 } from "@goat/contracts";
+import * as KeyedLock from "@goat/shared/KeyedLock";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -69,12 +67,14 @@ import {
   remoteTaskQuestionNotice,
 } from "./reportFrame.ts";
 import { storeInboxReport } from "./RemoteReportInbox.ts";
-import { recordRemoteFollowUp, type RemoteFollowUp } from "./remoteTaskFollowUp.ts";
+import { recordRemoteFollowUp } from "./remoteTaskFollowUp.ts";
 import { dispatchMonitorMessage } from "./remoteMonitorMessage.ts";
 import { persistThreadObservation, threadKnownRun } from "./remoteThreadObservation.ts";
 import {
   clearUnreachable,
+  DRAIN_LOST_TRACK_AFTER,
   isUnreachable,
+  notifyDrainLostTrack,
   notifyTaskOutage,
   recordUnreachable,
 } from "./remoteDispatchOutage.ts";
@@ -85,6 +85,11 @@ import {
   publicRow,
 } from "./remoteDispatchModel.ts";
 export { RemoteDispatchError, type RemoteDispatchRecord, dispatchView };
+import type {
+  RemoteDispatchCoordinatorShape,
+  RemoteLaunchInput,
+} from "./RemoteDispatchCoordinatorService.ts";
+export type { RemoteDispatchCoordinatorShape, RemoteLaunchInput };
 
 type Row = RemoteDispatchRow.RemoteDispatchRow;
 
@@ -101,91 +106,10 @@ const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
 const MISSING_RUN_GRACE_MS = 300_000;
 /** What the launcher is told about one relayed send, and whether it is woken for it. */
 type RelayOutcome = { readonly wake: boolean; readonly text: string };
-export interface RemoteLaunchInput {
-  readonly kind: "thread" | "task";
-  readonly originThreadId: ThreadId;
-  readonly delivery: typeof RemoteReportDeliveryMode.Type;
-  readonly launch: SshRemoteDispatch.SshLaunchInput;
-  readonly task?: { readonly taskId: NodeId; readonly parentRunId: RunId };
-  /** A durable caller identity (a channel child-work record) keys the row for launch retries. */
-  readonly correlationId?: string | undefined;
-}
+
 export class RemoteDispatchCoordinator extends Context.Service<
   RemoteDispatchCoordinator,
-  {
-    readonly launch: <E, R>(
-      input: RemoteLaunchInput,
-      beforeLaunch: Effect.Effect<void, E, R>,
-    ) => Effect.Effect<
-      {
-        correlationId: string;
-        launch: SshRemoteDispatch.SshLaunchResult;
-        reportsSupported: boolean;
-      },
-      RemoteDispatchError | SshRemoteDispatch.SshRemoteDispatchError | E,
-      R
-    >;
-    readonly cancel: <E, R>(
-      id: string,
-      authorize: Effect.Effect<RuntimeMode, E, R>,
-    ) => Effect.Effect<
-      "cancel_requested" | "cancelled" | "already_settled",
-      RemoteDispatchError | SshRemoteDispatch.SshRemoteDispatchError | E,
-      R
-    >;
-    readonly get: (id: string) => Effect.Effect<RemoteDispatchRecord | null, RemoteDispatchError>;
-    readonly listForOrigin: (
-      id: ThreadId,
-      limit?: number,
-    ) => Effect.Effect<ReadonlyArray<RemoteDispatchRecord>, RemoteDispatchError>;
-    /** Every dispatch of these remoteThreadKey values, newest first. */
-    readonly listForRemoteThreads: (
-      keys: ReadonlyArray<string>,
-    ) => Effect.Effect<ReadonlyArray<RemoteDispatchRecord>, RemoteDispatchError>;
-    /** Every origin's dispatches, most recently updated first. */
-    readonly listRecent: (
-      limit: number,
-    ) => Effect.Effect<ReadonlyArray<RemoteDispatchRecord>, RemoteDispatchError>;
-    /** The task owner remains available after completion, including for sends from other threads. */
-    readonly taskOrigin: (
-      host: string,
-      threadId: string,
-    ) => Effect.Effect<ThreadId | null, RemoteDispatchError>;
-    readonly isTaskThread: (
-      host: string,
-      threadId: string,
-    ) => Effect.Effect<boolean, RemoteDispatchError>;
-    readonly resume: (host: string, threadId: string) => Effect.Effect<void, RemoteDispatchError>;
-    /** A send that starts a run on the thread of one of the caller's finished remote tasks. */
-    readonly followUp: RemoteFollowUp;
-    /** Stops following dismissable thread dispatches without contacting their host. */
-    readonly dismiss: (
-      selector: DismissSelector,
-    ) => Effect.Effect<ReadonlyArray<RemoteDispatchRecord>, RemoteDispatchError>;
-    readonly claimDelete: (input: {
-      readonly originThreadId: ThreadId;
-      readonly host: string;
-      readonly remoteThreadId: string;
-      readonly requestKey: string;
-    }) => Effect.Effect<
-      | { readonly _tag: "missing" }
-      | { readonly _tag: "reports" }
-      | { readonly _tag: "state"; readonly state: string }
-      | { readonly _tag: "other_key" }
-      | { readonly _tag: "claimed"; readonly correlationId: string; readonly readKey: string },
-      RemoteDispatchError
-    >;
-    readonly clearDelete: (
-      correlationId: string,
-      requestKey: string,
-    ) => Effect.Effect<void, RemoteDispatchError>;
-    /**
-     * One pass settling lost thread launches with their destinations (rebound or fenced), then
-     * asking hosts of threads lost to an outage whether they answer again. The coordinator runs it
-     * on its own schedule; an inconclusive row is asked again after a backoff.
-     */
-    readonly resolveLostLaunches: Effect.Effect<void>;
-  }
+  RemoteDispatchCoordinatorShape
 >()("goat/remoteReports/RemoteDispatchCoordinator") {}
 
 const terminal = (status: string) =>
@@ -206,7 +130,7 @@ const make = Effect.gen(function* () {
   const taskHosts = new Map<string, Semaphore.Semaphore>();
   // Relayed sends must not wait behind report long-polls to the same host.
   const relayHosts = new Map<string, Semaphore.Semaphore>();
-  const locks = new Map<string, Semaphore.Semaphore>();
+  const locks = yield* KeyedLock.make<string>();
   // The drain that owns each row; a replaced or dismissed drain finds another owner and stops writing.
   const owners = new Map<string, number>();
   let generations = 0;
@@ -223,7 +147,8 @@ const make = Effect.gen(function* () {
     statement.pipe(Effect.flatMap(decodeRows), db);
   // The owner is read once the lock is held: a dismissal or resume may change it while waiting.
   const owned = <A, E, R>(id: string, owner: number, effect: Effect.Effect<A, E, R>) =>
-    gate(locks, id, 1).withPermits(1)(
+    locks.withLock(
+      id,
       Effect.suspend(() => (owners.get(id) === owner ? Effect.asSome(effect) : Effect.succeedNone)),
     );
   const taskOrigin = (host: string, threadId: string) =>
@@ -242,7 +167,7 @@ const make = Effect.gen(function* () {
     );
     return noted.length > 0;
   });
-  const deleteIntentHeld = (id: string) => gate(locks, id, 1).withPermits(1)(noteDeleteIntent(id));
+  const deleteIntentHeld = (id: string) => locks.withLock(id, noteDeleteIntent(id));
   const call = (r: Row, tool: string, args: Readonly<Record<string, unknown>>) =>
     gate(hosts, r.host, 8).withPermits(1)(
       ssh.callHostTool(
@@ -310,7 +235,8 @@ const make = Effect.gen(function* () {
     observed: RemoteObservedRun | null,
     hasMore: boolean,
   ) {
-    yield* gate(locks, id, 1).withPermits(1)(
+    yield* locks.withLock(
+      id,
       Effect.gen(function* () {
         const r = yield* load(id);
         if (r === null || r.kind !== "task" || r.state !== "running" || owners.get(id) !== owner)
@@ -608,7 +534,8 @@ const make = Effect.gen(function* () {
     const existing = yield* load(id);
     if (existing?.kind === "task")
       return yield* importTaskBatch(id, owner, reports, observed, hasMore);
-    yield* gate(locks, id, 1).withPermits(1)(
+    yield* locks.withLock(
+      id,
       Effect.gen(function* () {
         const r = yield* load(id);
         // A forced loss comes from a drain that loaded the row running; it must still own it.
@@ -764,6 +691,7 @@ const make = Effect.gen(function* () {
     let backoff = 5_000;
     let hostFailures = 0;
     let outageNotified = false;
+    let failedPasses: { count: number; since: string } | undefined;
     const grace = makeRefusalGrace(deleteIntentHeld(id));
     while (true) {
       const keepDraining = yield* Effect.gen(function* () {
@@ -918,6 +846,7 @@ const make = Effect.gen(function* () {
         } else backoff = 5_000;
         return true;
       }).pipe(
+        Effect.tap(() => Effect.sync(() => (failedPasses = undefined))),
         Effect.catchCause((cause) => {
           if (Cause.hasInterrupts(cause)) return Effect.failCause(cause);
           // A transport or SQL cause can carry private arguments. Log only a fixed category.
@@ -925,6 +854,20 @@ const make = Effect.gen(function* () {
             yield* Effect.logWarning("Remote report drain failed; retrying.", {
               correlationId: id,
             });
+            failedPasses = {
+              count: (failedPasses?.count ?? 0) + 1,
+              since: failedPasses?.since ?? (yield* now),
+            };
+            const { count, since } = failedPasses;
+            if (count === DRAIN_LOST_TRACK_AFTER)
+              yield* load(id).pipe(
+                Effect.flatMap((lost) =>
+                  lost?.state === "running"
+                    ? taskEffect(notifyDrainLostTrack(publicRow(lost), since))
+                    : Effect.void,
+                ),
+                Effect.ignoreCause({ log: true }),
+              );
             // A retry leaves updated_at alone, so a failing row does not stay on top of the list.
             yield* owned(
               id,
@@ -950,6 +893,19 @@ const make = Effect.gen(function* () {
         drains,
         id,
         drain(id, owner, waitForRun, interruptSent).pipe(
+          // A drain that ends with its row settled, lost or gone gives the row up; a replaced one
+          // finds another owner and leaves it.
+          Effect.ensuring(
+            locks
+              .withLock(
+                id,
+                Effect.gen(function* () {
+                  if (owners.get(id) !== owner || (yield* load(id))?.state === "running") return;
+                  if (owners.get(id) === owner) owners.delete(id);
+                }),
+              )
+              .pipe(Effect.ignoreCause({ log: true })),
+          ),
           Effect.mapError((cause) =>
             isRemoteDispatchError(cause)
               ? cause
@@ -1105,7 +1061,8 @@ const make = Effect.gen(function* () {
     authorize: Effect.Effect<RuntimeMode, E, R>,
   ) {
     yield* authorize;
-    const result = yield* gate(locks, id, 1).withPermits(1)(
+    const result = yield* locks.withLock(
+      id,
       Effect.gen(function* () {
         const r = yield* load(id);
         if (r === null) return yield* new RemoteDispatchError({ stage: "not_found" });
@@ -1126,7 +1083,7 @@ const make = Effect.gen(function* () {
   });
   const { claimDelete, clearDelete } = makeDeleteClaims({
     sql,
-    withLock: (id, effect) => gate(locks, id, 1).withPermits(1)(effect),
+    withLock: (id, effect) => locks.withLock(id, effect),
   });
   const resume: RemoteDispatchCoordinator["Service"]["resume"] = Effect.fn(
     "RemoteDispatchCoordinator.resume",
@@ -1139,7 +1096,8 @@ const make = Effect.gen(function* () {
     for (const r of matching) {
       // Stop a final observation before resetting the ledger for the new send.
       yield* FiberMap.remove(drains, r.correlation_id);
-      const resumed = yield* gate(locks, r.correlation_id, 1).withPermits(1)(
+      const resumed = yield* locks.withLock(
+        r.correlation_id,
         db(sql<{ readonly correlation_id: string }>`UPDATE remote_dispatches SET
         state = 'running', cancel_requested_at = NULL, cancel_ceiling = NULL,
         known_run_id = NULL, known_run_status = NULL, updated_at = ${yield* now}, end_reason = NULL,
@@ -1160,7 +1118,8 @@ const make = Effect.gen(function* () {
       const id = r.correlation_id;
       // The drain is detached under the lock and interrupted outside it, so nothing waits on the
       // lock for an interruption, and a drain a later send starts has another owner.
-      const drain = yield* gate(locks, id, 1).withPermits(1)(
+      const drain = yield* locks.withLock(
+        id,
         Effect.gen(function* () {
           const changed = yield* rows(dismissRow(sql, id, yield* now, cutoff));
           const row = changed[0];
@@ -1201,7 +1160,8 @@ const make = Effect.gen(function* () {
         // Its rows are bound and resolve's are not, so one retry map serves both passes.
         retryAt: resolveRetryAt,
         reopen: (id) =>
-          gate(locks, id, 1).withPermits(1)(
+          locks.withLock(
+            id,
             reopenUnreachable(id).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
           ),
         start,
@@ -1218,7 +1178,7 @@ const make = Effect.gen(function* () {
     ),
     Effect.forkScoped,
   );
-  return RemoteDispatchCoordinator.of({
+  const service = RemoteDispatchCoordinator.of({
     launch,
     cancel,
     resume,
@@ -1257,5 +1217,22 @@ const make = Effect.gen(function* () {
       ),
     ),
   });
+  heldProbes.set(
+    service,
+    FiberMap.awaitEmpty(drains).pipe(
+      Effect.ignore,
+      Effect.andThen(locks.activeKeys),
+      Effect.map((held) => ({ owners: owners.size, locks: held.length })),
+    ),
+  );
+  return service;
 });
 export const layer = Layer.effect(RemoteDispatchCoordinator, make);
+
+/** Each coordinator's own read of what it still holds, for its testkit; off the service shape. */
+const heldProbes = new WeakMap<
+  RemoteDispatchCoordinatorShape,
+  Effect.Effect<{ readonly owners: number; readonly locks: number }>
+>();
+export const heldAfterDrains = (coordinator: RemoteDispatchCoordinatorShape) =>
+  heldProbes.get(coordinator) ?? Effect.die(new Error("Not a RemoteDispatchCoordinator."));

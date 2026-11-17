@@ -40,6 +40,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { assetImageSource } from "../../lib/assetImageSource";
 import { beginQueuedRunEdit, useQueuedRunEdit } from "../../state/queued-run-edit";
+import { useComposerDraftSettings } from "../../state/use-composer-drafts";
 import { environmentThreadDetails, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
@@ -51,6 +52,7 @@ import {
   resolveThreadQueueRowControls,
 } from "./threadQueueControlPresentation";
 import { threadDragGapOffset } from "./threadDragGap";
+import { resumeHeldQueue } from "./resume-thread";
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
 const REMOVE_ACTION_WIDTH = 76;
@@ -130,10 +132,23 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
   const promote = useAtomCommand(threadEnvironment.promoteQueuedRun, "promote queued message");
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun, "remove queued message");
   const resume = useAtomCommand(threadEnvironment.resumeThreadQueue, "resume queue");
-  const resumeHeldQueue = useAtomCommand(threadEnvironment.resumeThreadQueue, {
+  const resumeQueueCommand = useAtomCommand(threadEnvironment.resumeThreadQueue, {
     label: "resume queue",
     reportFailure: false,
   });
+  const setRuntimeModeCommand = useAtomCommand(threadEnvironment.setRuntimeMode, {
+    label: "set thread runtime mode",
+    reportFailure: false,
+  });
+  const setInteractionModeCommand = useAtomCommand(threadEnvironment.setInteractionMode, {
+    label: "set thread interaction mode",
+    reportFailure: false,
+  });
+  const threadShell = useQuietThreadShell(scopeThreadRef(target.environmentId, target.threadId));
+  const composerSettings = useComposerDraftSettings(threadKey);
+  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(target.environmentId));
+  const composerInstanceId = (composerSettings.modelSelection ?? threadShell?.modelSelection)
+    ?.instanceId;
   const [resuming, setResuming] = useState(false);
   const [busyRunId, setBusyRunId] = useState<RunId | null>(null);
   const busyRef = useRef(false);
@@ -273,8 +288,15 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
               busyRef.current = true;
               setResuming(true);
               const result = await resumeHeldQueue({
-                ...target,
-                input: { threadId: target.threadId },
+                thread: threadShell,
+                draft: composerSettings,
+                provider: serverConfig?.providers.find(
+                  (provider) => provider.instanceId === composerInstanceId,
+                ),
+                createdAt: new Date().toISOString(),
+                setRuntimeMode: setRuntimeModeCommand,
+                setInteractionMode: setInteractionModeCommand,
+                resumeQueue: resumeQueueCommand,
               });
               busyRef.current = false;
               setResuming(false);

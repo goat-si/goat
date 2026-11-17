@@ -29,6 +29,12 @@ export const stoppedFirstRequest = (tab: StoppableTab, url: string) => {
   return stopped;
 };
 
+/** A hard reload is a new navigation, never the first load Stop ended. */
+export const hardReload = (tab: StoppableTab, session: Pick<CDPSession, "send">) => {
+  tab.pendingInitialRequestUrl = null;
+  return session.send("Page.reload", { ignoreCache: true });
+};
+
 export const makeStopLoading = <Tab extends StoppableTab>(settled: (tab: Tab) => void) => {
   const settle = (tab: Tab, generation: number) => {
     if (tab.navigationGeneration !== generation || !tab.loading) return;

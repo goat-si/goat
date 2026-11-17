@@ -30,3 +30,14 @@ export function queuedRunsInDeliveryOrder(
       );
     });
 }
+
+/** Run ordinals can skip values: a queued run moves past newer runs when it starts. */
+export function nextRunOrdinal(projection: Pick<OrchestrationV2ThreadProjection, "runs">): number {
+  return projection.runs.reduce((max, run) => Math.max(max, run.ordinal), 0) + 1;
+}
+
+export function nextQueuedRun(
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages">,
+): OrchestrationV2Run | undefined {
+  return queuedRunsInDeliveryOrder(projection).find((run) => run.queueHeld !== true);
+}
