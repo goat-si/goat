@@ -83,6 +83,18 @@ Coordinator to lane coordinator, 2026-11-17 08:48:01 UTC (verbatim):
 
 Lanes started 2026-11-17 after #3519's merge (S = 3ecea04f19), all from chase/t3-261114-next2 = ed4268897e (draft PR #3660): X1 CI on pen-mac-studio (mcp:f6b11538-1291-48b4-98b5-7a4d86f85534), S4 auth on pen-macbookpro2 (mcp:06e3d315-d2cc-45ba-a3f0-5cc843d554c8), N4 on pen-macbookair (mcp:4ea150a3-314d-42cf-afd9-46b535476d90), CF1 clients on pen-macmini (mcp:ce248a26-a8cd-42e4-8522-7914348034f4).
 
+Coordinator to lane coordinator, 2026-11-17 08:53:31 UTC, for CF1 (quote verbatim in next2-pr-plan.md under "Coordinator answers" and in CF1's record).
+goat#3658, the C4 plan: YES, with these conditions.
+
+1. The field as planned: ThreadWorkspaceStatus.recreatable, Schema.optionalKey(Schema.Boolean), set by ThreadWorkspaceService.status from the same isManagedWorktreePath the restore and the send check use, on "missing" and "cleaned" only; absent means "as today". No other contract change.
+2. "cleaned": show that recreatable=false there matches what the server refuses. Name with path:line what Restore (the snapshot path) does for a cleaned worktree outside the worktrees folder, and whether such a state can exist at all (cleanup of an unmanaged worktree; a worktreesDirectory setting changed after the cleanup, which previousWorktreesDirectories should cover). If Restore would SUCCEED for a case where recreatable is false, the banner must not hide Restore for it: the rule is that the banner offers exactly what the server will do. One server test per state.
+3. The sentence under "cleaned" and "missing" that says a send restores or recreates it ("Sending a message restores it too." / "Sending a message does the same.") is dropped when recreatable is false; when it is true or absent the text is today's, unchanged.
+4. Agents: say whether any agent tool or thread read returns ThreadWorkspaceStatus (worktree.status, thread.read, the agent surface contracts). If it does, the field reaches agents too: update the tool's description only if it lists fields, run the agent surface audit and say whether its counts move. If no agent path returns it, say so in the record.
+5. Wording for both clients, one helper in contracts as planned: title unchanged; body "GOAT can't recreate it: it is outside GOAT's worktrees folder. Put the folder back at <path>, or start in a new worktree." (for "cleaned", "restore" in place of "recreate" if case 2 keeps that state). No Recreate or Restore button; "Start in a new worktree" stays.
+6. Tests as planned (server: outside false, inside true, present absent; the shared helper: false, true, absent). Captures: web before and after from the real client; the phone captures are owed and listed. Docs: check docs/user for a sentence that promises Recreate or a send always rebuilds a missing worktree and correct it if there is one.
+7. The review of CF1's head treats this row as C4: both directions of old and new client and server, as the plan states them.
+   Carry on with the other rows meanwhile; goat#3557 stays C4 with negative cases as you said.
+
 ## Appendix: 85 carried #3176 rows outside next-pr-plan.md (verdict needed)
 
 - `479ee74135` persists PR metadata in drafts: changes draft normalization used by the persisted-state migration (`apps/web/src/composerDraftStore.ts:2084`, `:2242`).
