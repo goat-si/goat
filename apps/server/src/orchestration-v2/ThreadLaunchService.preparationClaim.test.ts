@@ -4,12 +4,14 @@ import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
 
 import { makeClaimProbe, makeLaunchHold } from "./goat/PreparationClaims.testkit.ts";
 import { orphanRun, released, runStatus } from "./goat/PreparationOrphans.testkit.ts";
 import { preparationSettled } from "./testkit/preparationSettled.ts";
 import { makeHarness, project } from "./testkit/ThreadLaunchHarness.ts";
 import { launchInput } from "./testkit/threadLaunchInput.ts";
+import { OrchestratorProjectionError } from "./Orchestrator.ts";
 import * as ThreadLaunch from "./ThreadLaunchService.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
@@ -122,6 +124,67 @@ it.effect(
         assert.equal(yield* hold.next, "read again");
         assert.deepEqual(yield* hold.releases, []);
         assert.equal(yield* runStatus(threadId, runId), "failed");
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
+
+it.effect(
+  "a replay whose scheduling fails while another preparation holds the run leaves the run to that preparation",
+  () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const allow = yield* Deferred.make<void>();
+      const failMessages = yield* Ref.make(false);
+      const harness = makeHarness({
+        createWorktree: (request) =>
+          Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(allow)),
+            Effect.as({
+              worktree: {
+                path: "/repo-worktrees/held",
+                refName: request.newRefName,
+                headSha: "abc",
+              },
+            } as never),
+          ),
+        // The replay's read of the run's message fails, so its scheduling fails.
+        launchThreads: (threads) => ({
+          ...threads,
+          getThreadRecords: (threadId, fields, filter) =>
+            Ref.get(failMessages).pipe(
+              Effect.flatMap((failing) =>
+                failing && (fields as ReadonlyArray<string>).includes("messages")
+                  ? Effect.fail(new OrchestratorProjectionError({ threadId, cause: "unreadable" }))
+                  : threads.getThreadRecords(threadId, fields, filter),
+              ),
+            ),
+        }),
+      });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const launched = yield* launches.launch(
+          launchInput({
+            command: "command:held-preparation",
+            thread: "thread:held-preparation",
+            message: "Prepare once",
+            workspace: { type: "worktree", baseRef: "main" },
+          }),
+        );
+        const runId = launched.projection.runs[0]!.id;
+        yield* Deferred.await(entered);
+
+        // A replayed delegation reaches prepareRun with its own command id.
+        yield* Ref.set(failMessages, true);
+        yield* launches.prepareRun({
+          commandId: CommandId.make("command:held-preparation:replay"),
+          threadId: launched.threadId,
+          runId,
+        });
+        assert.equal(yield* runStatus(launched.threadId, runId), "preparing");
+
+        yield* Ref.set(failMessages, false);
+        yield* Deferred.succeed(allow, undefined);
+        yield* released(launched.threadId, "command:held-preparation");
       }).pipe(Effect.provide(harness.layer));
     }),
 );

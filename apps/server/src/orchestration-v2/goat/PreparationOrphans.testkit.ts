@@ -91,6 +91,10 @@ export const makeOrphanProbe = Effect.gen(function* () {
   // When set, the check waits here after its next fail is committed, still holding the claim.
   const failGate = yield* Ref.make<Deferred.Deferred<void> | undefined>(undefined);
   const failCommitted = yield* Queue.unbounded<void>();
+  // When set, the check waits here before it dispatches its next fail, after deciding to.
+  const beforeFailGate = yield* Ref.make<Deferred.Deferred<void> | undefined>(undefined);
+  const failEntered = yield* Queue.unbounded<void>();
+  const failAttempts = yield* Queue.unbounded<void>();
   const waitAt = (
     gate: Ref.Ref<Deferred.Deferred<void> | undefined>,
     reached: Effect.Effect<void>,
@@ -129,17 +133,17 @@ export const makeOrphanProbe = Effect.gen(function* () {
       return ThreadManagement.ThreadManagementService.of({
         ...threads,
         dispatch: (command) =>
-          threads
-            .dispatch(command)
-            .pipe(
-              Effect.tap(() =>
-                command.type === "prepared-run.fail"
-                  ? waitAt(failGate, Queue.offer(failCommitted, undefined)).pipe(
-                      Effect.andThen(Queue.offer(fails, command.runId)),
-                    )
-                  : Effect.void,
+          command.type !== "prepared-run.fail"
+            ? threads.dispatch(command)
+            : waitAt(beforeFailGate, Queue.offer(failEntered, undefined)).pipe(
+                Effect.andThen(threads.dispatch(command)),
+                Effect.tap(() =>
+                  waitAt(failGate, Queue.offer(failCommitted, undefined)).pipe(
+                    Effect.andThen(Queue.offer(fails, command.runId)),
+                  ),
+                ),
+                Effect.onExit(() => Queue.offer(failAttempts, undefined)),
               ),
-            ),
       });
     }),
   );
@@ -179,6 +183,16 @@ export const makeOrphanProbe = Effect.gen(function* () {
       const release = yield* gate(failGate);
       return { committed: Queue.take(failCommitted), release };
     }),
+    /**
+     * Makes the check wait after it decided to fail a run and before it dispatches the fail. The
+     * first effect returned waits until it is there; the second lets it go on.
+     */
+    holdBeforeFail: Effect.gen(function* () {
+      const release = yield* gate(beforeFailGate);
+      return { entered: Queue.take(failEntered), release };
+    }),
+    /** The next fail the check dispatched has ended, committed or refused. */
+    failAttempted: Queue.take(failAttempts),
     /** The run of the next fail the check dispatched, once that dispatch returned. */
     failed: Queue.take(fails),
     failCount: Queue.size(fails),

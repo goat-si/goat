@@ -3,6 +3,7 @@ import {
   CommandId,
   GitCommandError,
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+  RunId,
   ThreadId,
 } from "@goat/contracts";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
@@ -44,6 +45,34 @@ const passesBeforeGrace = <E, R>(probe: Probe, still: Effect.Effect<void, E, R>)
       assert.equal(yield* probe.pass, "read");
       yield* still;
     }
+  });
+
+/** A preparation failure and a Retry, neither by the check, with nothing then preparing the run. */
+const failAndRetry = (threadId: ThreadId, runId: RunId, name: string, cycle: number) =>
+  Effect.gen(function* () {
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    yield* threads.dispatch({
+      type: "prepared-run.fail",
+      commandId: CommandId.make(`command:${name}:fail-${cycle}`),
+      threadId,
+      runId,
+      failure: makeProviderFailure({ message: `Cycle ${cycle} failed.` }),
+    });
+    yield* threads.dispatch({
+      type: "prepared-run.retry",
+      commandId: CommandId.make(`command:${name}:retry-${cycle}`),
+      threadId,
+      runId,
+    });
+  });
+
+const errorMessage = (threadId: ThreadId, runId: RunId) =>
+  Effect.gen(function* () {
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const item = (yield* threads.getThreadProjection(threadId)).turnItems.find(
+      (candidate) => candidate.runId === runId && candidate.type === "error",
+    );
+    return item?.type === "error" ? item.failure.message : undefined;
   });
 
 it.effect(
@@ -469,4 +498,131 @@ it.effect(
         yield* released(threadId, "command:stopped-service:retry");
       }).pipe(Effect.provide(withCheck(harness, probe)));
     }),
+);
+
+it.effect(
+  "a launch replay that marks a stuck run after the check found it unowned keeps the run",
+  () =>
+    Effect.gen(function* () {
+      const probe = yield* makeOrphanProbe;
+      const hold = yield* makeLaunchHold;
+      const harness = makeHarness({ launchThreads: hold.wrap });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const { input, threadId, runId } = yield* orphanRun("replay-marks");
+        yield* passesBeforeGrace(probe, Effect.void);
+        const fail = yield* probe.holdBeforeFail;
+        assert.equal(yield* probe.pass, "read");
+        yield* fail.entered;
+        // The replay takes its mark after the check's last look at the run's owners.
+        yield* hold.arm;
+        const replay = yield* launches
+          .launch(input)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* hold.held;
+        yield* fail.release;
+        yield* probe.failAttempted;
+        assert.equal(yield* runStatus(threadId, runId), "preparing");
+
+        yield* hold.resume;
+        yield* Fiber.join(replay);
+        yield* released(threadId, "command:replay-marks");
+      }).pipe(Effect.provide(withCheck(harness, probe)));
+    }),
+);
+
+it.effect(
+  "a fail the check decided for one stretch does not land on the next after a fail and a Retry",
+  () =>
+    Effect.gen(function* () {
+      const probe = yield* makeOrphanProbe;
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const { threadId, runId } = yield* orphanRun("decided-earlier");
+        const preparing = runStatus(threadId, runId).pipe(
+          Effect.map((status) => assert.equal(status, "preparing")),
+        );
+        yield* passesBeforeGrace(probe, preparing);
+        const fail = yield* probe.holdBeforeFail;
+        assert.equal(yield* probe.pass, "read");
+        yield* fail.entered;
+        yield* failAndRetry(threadId, runId, "decided-earlier", 1);
+        yield* fail.release;
+        yield* probe.failAttempted;
+        yield* preparing;
+        assert.equal(yield* errorMessage(threadId, runId), "Cycle 1 failed.");
+
+        yield* passesBeforeGrace(probe, preparing);
+        assert.equal(yield* probe.pass, "read");
+        assert.equal(yield* probe.failed, runId);
+        assert.equal(yield* errorMessage(threadId, runId), NOT_STARTED_MESSAGE);
+      }).pipe(Effect.provide(withCheck(harness, probe)));
+    }),
+);
+
+it.effect(
+  "a fail the check decided for the second stretch does not land on the third after another fail and Retry",
+  () =>
+    Effect.gen(function* () {
+      const probe = yield* makeOrphanProbe;
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const { threadId, runId } = yield* orphanRun("two-cycles");
+        const preparing = runStatus(threadId, runId).pipe(
+          Effect.map((status) => assert.equal(status, "preparing")),
+        );
+        yield* failAndRetry(threadId, runId, "two-cycles", 1);
+        yield* passesBeforeGrace(probe, preparing);
+        const fail = yield* probe.holdBeforeFail;
+        assert.equal(yield* probe.pass, "read");
+        yield* fail.entered;
+        yield* failAndRetry(threadId, runId, "two-cycles", 2);
+        yield* fail.release;
+        yield* probe.failAttempted;
+        yield* preparing;
+        assert.equal(yield* errorMessage(threadId, runId), "Cycle 2 failed.");
+
+        yield* passesBeforeGrace(probe, preparing);
+        assert.equal(yield* probe.pass, "read");
+        assert.equal(yield* probe.failed, runId);
+        assert.equal(yield* errorMessage(threadId, runId), NOT_STARTED_MESSAGE);
+      }).pipe(Effect.provide(withCheck(harness, probe)));
+    }),
+);
+
+it.effect(
+  "a run's claim keeps at most four preparations in line, and a fifth returns without preparing",
+  () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const claims = yield* PreparationClaims;
+      const runId = RunId.make("run:claim-line");
+      const holding = yield* Deferred.make<void>();
+      const letGo = yield* Deferred.make<void>();
+      const ran = yield* Ref.make(0);
+      const holder = yield* claims
+        .whileClaimed(
+          runId,
+          Deferred.succeed(holding, undefined).pipe(Effect.andThen(Deferred.await(letGo))),
+          Effect.void,
+        )
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(holding);
+      const callers: Array<Fiber.Fiber<void>> = [];
+      for (let caller = 1; caller <= 5; caller++)
+        callers.push(
+          yield* claims
+            .whileClaimed(
+              runId,
+              Ref.update(ran, (count) => count + 1),
+              Effect.void,
+            )
+            .pipe(Effect.forkChild({ startImmediately: true })),
+        );
+      yield* Deferred.succeed(letGo, undefined);
+      yield* Fiber.join(holder);
+      for (const caller of callers) yield* Fiber.join(caller);
+      assert.equal(yield* Ref.get(ran), 4);
+    }).pipe(Effect.provide(harness.layer));
+  },
 );
