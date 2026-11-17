@@ -386,4 +386,25 @@ it.layer(
         );
       }),
   );
+
+  it.effect("a restart that waited still restarts after an open that only reused the shell", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      const folder = yield* heldFolder;
+      const input = openInput({ cwd: folder.cwd });
+      const running = yield* manager.open(input);
+      const holder = yield* folder.hold(Effect.void);
+      yield* Deferred.await(folder.held);
+      // Two clients: one opens the running terminal, the other restarts it.
+      const opened = yield* manager.open(input).pipe(Effect.forkChild({ startImmediately: true }));
+      const restarted = yield* manager
+        .restart({ ...input, cols: 100, rows: 24 })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.succeed(folder.release, undefined);
+      yield* Fiber.join(holder);
+      assert.strictEqual((yield* Fiber.join(opened)).pid, running.pid);
+      assert.notStrictEqual((yield* Fiber.join(restarted)).pid, running.pid);
+      assert.strictEqual(ptyAdapter.spawnInputs.length, 2);
+    }),
+  );
 });
