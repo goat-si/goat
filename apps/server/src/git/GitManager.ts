@@ -106,6 +106,7 @@ import {
   resolveHeadRepositoryNameWithOwner,
 } from "./pullRequestHeadIdentity.ts";
 export { matchesBranchHeadContext } from "./pullRequestHeadIdentity.ts";
+import { makeRefreshNewPullRequestWorktree } from "./pullRequestWorktreeRefresh.ts";
 
 export interface GitActionProgressReporter {
   readonly publish: (event: GitActionProgressEvent) => Effect.Effect<void, never>;
@@ -2676,6 +2677,53 @@ export const make = Effect.gen(function* () {
         });
       }
 
+      const createPullRequestWorktree = Effect.fn("createPullRequestWorktree")(function* (
+        onWorktreeClaimed?: (path: string) => Effect.Effect<void>,
+      ) {
+        return yield* gitCore.createWorktree(
+          { cwd: input.cwd, refName: localPullRequestBranch, path: null },
+          {
+            ...(onWorktreeClaimed ? { progress: { onWorktreeClaimed } } : {}),
+            worktreesDirectory: yield* readWorktreesDirectory,
+            skipSetupHook: input.threadId !== undefined,
+            submodules: yield* projectSettingsFor(input).pipe(
+              Effect.map(({ settings }) => settings.worktreeSubmodules),
+              Effect.orElseSucceed(() => null),
+            ),
+          },
+        );
+      });
+      // Materializing would force this branch onto the head; its own commits would leave it.
+      if (existingBranchBeforeFetch !== null) {
+        const refresh = makeRefreshNewPullRequestWorktree({
+          gitCore,
+          configureUpstream: (cwd) =>
+            configurePullRequestHeadUpstream(
+              cwd,
+              pullRequestWithRemoteInfo,
+              localPullRequestBranch,
+            ),
+          changeRequestHeadRef: (cwd) => changeRequestHeadRef(cwd, pullRequest.number),
+          headSha: pullRequestSummary.headSha,
+          localBranch: localPullRequestBranch,
+        });
+        let isOnPullRequestHead = false;
+        const worktree = yield* createPullRequestWorktree((cwd) =>
+          refresh(cwd).pipe(
+            Effect.map((onTarget) => {
+              isOnPullRequestHead = onTarget;
+            }),
+          ),
+        );
+        yield* runPullRequestSetup(input, worktree.worktree.path);
+        return {
+          pullRequest,
+          branch: worktree.worktree.refName,
+          worktreePath: worktree.worktree.path,
+          isOnPullRequestHead,
+        };
+      }
+
       yield* materializePullRequestHeadBranch(
         input.cwd,
         pullRequestWithRemoteInfo,
@@ -2704,21 +2752,7 @@ export const make = Effect.gen(function* () {
         });
       }
 
-      const worktree = yield* gitCore.createWorktree(
-        {
-          cwd: input.cwd,
-          refName: localPullRequestBranch,
-          path: null,
-        },
-        {
-          worktreesDirectory: yield* readWorktreesDirectory,
-          skipSetupHook: input.threadId !== undefined,
-          submodules: yield* projectSettingsFor(input).pipe(
-            Effect.map(({ settings }) => settings.worktreeSubmodules),
-            Effect.orElseSucceed(() => null),
-          ),
-        },
-      );
+      const worktree = yield* createPullRequestWorktree();
       yield* ensureExistingWorktreeUpstream(worktree.worktree.path);
       yield* runPullRequestSetup(input, worktree.worktree.path);
 
