@@ -154,3 +154,5 @@ Coordinator's ruling (relayed verbatim by the lane coordinator):
 
 - Supersedes the third sitting's L353 NOT RUN line above.
 - Cleanup: server and Metro stopped through their sessions (ports 14840 and 8081 free); agent-device sessions closed and device.close; "N15b iPhone 17" shut down and n15b-pixel7 stopped, both kept; the scratch git folder /private/tmp/p1m4-repo (with its own checkpoint refs), <worktree>/.t3 and /tmp captures removed after upload. No real checkout was touched. Token handed back.
+
+- Closed: #3660 merged to dev at 20:27:10Z (dev 42bf8633ce, tree equal to df1a69dfd2, per the lane coordinator); every mobile row above stands on the head named in its section.
