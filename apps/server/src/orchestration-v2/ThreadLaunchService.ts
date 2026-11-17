@@ -74,6 +74,7 @@ import {
   withPreparationLog,
 } from "./preparationLog.ts";
 import { confirmLaunchStep, type LaunchConfirm } from "./goat/LaunchConfirm.ts";
+import { checkedOutTo, submoduleProgress } from "./goat/worktreeSubmoduleProgress.ts";
 import {
   failureDetail,
   preparationFailureClass,
@@ -390,7 +391,7 @@ const make = Effect.gen(function* () {
         threadId,
         branch: input.workspaceStrategy.branch ?? null,
         baseRef: input.workspaceStrategy.baseRef,
-        stages: ["fetch", "checkout", "setup-script", "agent"],
+        stages: ["fetch", "checkout", "submodules", "setup-script", "agent"],
         fiber: yield* Effect.fiber,
       });
     } else if (reused !== undefined) {
@@ -568,6 +569,7 @@ const make = Effect.gen(function* () {
                   Effect.sync(() => {
                     worktreesDirectoryNotice = `Used the default folder: ${configured} ${describeWorktreesDirectoryUnavailable(unavailable.reason)}`;
                   }),
+                ...submoduleProgress(setupTracker, threadId),
                 onCheckoutProgress: (progress) =>
                   setupTracker.stage(threadId, "checkout", { percent: progress.percent }),
                 onHookStarted: (hookName) =>
@@ -605,7 +607,7 @@ const make = Effect.gen(function* () {
         if (existingBranchNotice !== null) {
           yield* Effect.logInfo(existingBranchNotice, { threadId, worktreePath });
         }
-        yield* setupTracker.update(threadId, (snapshot) => ({ ...snapshot, worktreePath, branch }));
+        yield* setupTracker.update(threadId, checkedOutTo(worktreePath, branch));
         const checkoutWarning = worktreesDirectoryNotice ?? hookStallNotice;
         yield* checkoutWarning === null
           ? setupTracker.stageStatus(
