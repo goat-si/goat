@@ -439,7 +439,7 @@
   "apps/server/src/sshRemote/SshWorkspaceSync.test.ts": { "lines": 1784 },
   "apps/server/src/sshRemote/SshWorkspaceSync.ts": { "nonNull": 1 },
   "apps/server/src/storageCleanup.test.ts": { "lines": 2140 },
-  "apps/server/src/storageCleanup.ts": { "lines": 1219, "nonNull": 6 },
+  "apps/server/src/storageCleanup.ts": { "lines": 1221, "nonNull": 6 },
   "apps/server/src/terminal/Manager.test.ts": { "lines": 2019 },
   "apps/server/src/terminal/Manager.ts": { "lines": 3217 },
   "apps/server/src/terminal/OutputProtocol.ts": { "nonNull": 5 },

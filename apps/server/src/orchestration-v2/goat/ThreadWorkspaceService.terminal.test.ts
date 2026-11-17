@@ -24,6 +24,8 @@ const threadId = ThreadId.make("thread-terminal");
 interface Options {
   readonly unmanaged?: boolean;
   readonly setupExitCode?: number;
+  /** Uses the thread banner's Restore instead of opening a terminal. */
+  readonly restoreButton?: boolean;
   readonly prepare?: (paths: { readonly worktreePath: string; readonly repo: string }) => void;
 }
 
@@ -100,10 +102,20 @@ const openTerminal = (
     const service = yield* ThreadWorkspace.ThreadWorkspaceService.pipe(
       Effect.provide(ThreadWorkspace.layer.pipe(Layer.provide(fakes))),
     );
-    yield* service.prepareTerminal({ threadId, cwd: cwdOf({ worktreePath, repo }) });
+    const result = options.restoreButton
+      ? yield* service.restore({ threadId, mode: "restore" })
+      : yield* service.prepareTerminal({ threadId, cwd: cwdOf({ worktreePath, repo }) });
     const notices = dispatched.filter((command) => command.type === "thread.notice.record");
     const linked = NodeFS.existsSync(NodePath.join(worktreePath, ".git"));
-    return { notices, linked, head: linked ? git(worktreePath, "symbolic-ref", "HEAD") : null };
+    const siblings = NodeFS.readdirSync(NodePath.dirname(worktreePath)).toSorted();
+    return {
+      notices,
+      linked,
+      head: linked ? git(worktreePath, "symbolic-ref", "HEAD") : null,
+      result,
+      siblings,
+      inPlace: NodeFS.existsSync(worktreePath) ? NodeFS.readdirSync(worktreePath).toSorted() : [],
+    };
   }).pipe(
     Effect.provide(
       layerRealGit.pipe(
@@ -136,6 +148,13 @@ it.effect.each<Options & { readonly name: string; readonly inRepo?: boolean }>([
   { name: "a terminal opened in the project folder", inRepo: true },
   { name: "a worktree outside GOAT's worktrees folder", unmanaged: true },
   { name: "a restore whose setup script fails", setupExitCode: 1 },
+  {
+    name: "a folder that also holds the person's files",
+    prepare: ({ worktreePath }) => {
+      NodeFS.mkdirSync(NodePath.join(worktreePath, "node_modules"), { recursive: true });
+      NodeFS.writeFileSync(NodePath.join(worktreePath, "notes.md"), "keep me");
+    },
+  },
 ])("a terminal leaves the worktree missing for $name", ({ inRepo, ...options }) =>
   Effect.gen(function* () {
     const { notices, linked } = yield* openTerminal(
@@ -160,6 +179,43 @@ it.effect("a terminal opened in a worktree that is in place changes nothing", ()
         ),
     });
     assert.isTrue(linked);
+    assert.deepEqual(notices, []);
+  }),
+);
+
+const leaveDependencies = ({ worktreePath }: { readonly worktreePath: string }) =>
+  void NodeFS.mkdirSync(NodePath.join(worktreePath, "node_modules", "pkg"), { recursive: true });
+
+it.effect.each([
+  { name: "a terminal", restoreButton: false },
+  { name: "the Restore button", restoreButton: true },
+])(
+  "$name sets aside a folder left with only dependencies and names it in the thread",
+  ({ restoreButton }) =>
+    Effect.gen(function* () {
+      const { notices, linked, siblings, result } = yield* openTerminal(
+        ({ worktreePath }) => worktreePath,
+        { prepare: leaveDependencies, restoreButton },
+      );
+      assert.isTrue(linked);
+      const setAside = siblings.find((name) => name !== "feature");
+      assert.match(setAside ?? "", /^feature-set-aside-/);
+      assert.equal(notices.length, 1);
+      assert.include(notices[0]?.message ?? "", setAside ?? "missing");
+      // The restore result a client decodes keeps its shape.
+      if (restoreButton) assert.notProperty(result, "setAsidePath");
+    }),
+);
+
+it.effect("a terminal puts a set-aside folder back when the restore fails", () =>
+  Effect.gen(function* () {
+    const { notices, linked, siblings, inPlace } = yield* openTerminal(
+      ({ worktreePath }) => worktreePath,
+      { prepare: leaveDependencies, setupExitCode: 1 },
+    );
+    assert.isFalse(linked);
+    assert.deepEqual(siblings, ["feature"]);
+    assert.deepEqual(inPlace, ["node_modules"]);
     assert.deepEqual(notices, []);
   }),
 );

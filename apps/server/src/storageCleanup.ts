@@ -700,8 +700,10 @@ const make = Effect.gen(function* () {
         if (otherHome !== null) return keep(otherHome);
         if (yield* containsProjectRoot(worktreePaths, [project, ...snapshot.projects]))
           return keep("contains a project checkout");
-        if ((yield* fs.stat(path.join(worktreePath, ".git"))).type !== "File")
-          return keep("not a linked worktree");
+        const gitLink = yield* fs
+          .stat(path.join(worktreePath, ".git"))
+          .pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.undefined));
+        if (gitLink?.type !== "File") return keep("not a linked worktree");
         if (yield* branchChanged(worktreePath, thread.branch))
           return keep("repository or branch changed");
         const changes = yield* localChangesReason(worktreePath, settings);

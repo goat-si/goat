@@ -4,6 +4,9 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
+// `git worktree remove` skips pnpm junctions on Windows, leaving these behind without a checkout.
+const LEFTOVER_ENTRIES = new Set(["node_modules", ".next"]);
+
 /** The sentence a restore notice adds when it moved a folder aside to make room. */
 export const setAsideSentence = (setAsidePath: string) =>
   `The files that were in the folder are now in ${setAsidePath}.`;
@@ -32,6 +35,27 @@ export const makeSetAsideFolder = Effect.gen(function* () {
     lostCheckout: (worktreePath: string) =>
       Effect.all([fs.exists(worktreePath), fs.exists(path.join(worktreePath, ".git"))]).pipe(
         Effect.map(([present, linked]) => present && !linked),
+        Effect.orElseSucceed(() => false),
+      ),
+    /** Present without its `.git` link and holding nothing but what a failed removal leaves. */
+    leftover: (worktreePath: string) =>
+      Effect.all([fs.exists(worktreePath), fs.exists(path.join(worktreePath, ".git"))]).pipe(
+        Effect.flatMap(([present, linked]) =>
+          !present || linked
+            ? Effect.succeed(false)
+            : fs.readDirectory(worktreePath).pipe(
+                Effect.flatMap((entries) =>
+                  Effect.forEach(entries, (entry) =>
+                    LEFTOVER_ENTRIES.has(entry)
+                      ? fs
+                          .stat(path.join(worktreePath, entry))
+                          .pipe(Effect.map((info) => info.type === "Directory"))
+                      : Effect.succeed(false),
+                  ),
+                ),
+                Effect.map((leftovers) => leftovers.every(Boolean)),
+              ),
+        ),
         Effect.orElseSucceed(() => false),
       ),
     /** Runs `recreate` with the folder set aside and succeeds with where the folder went. */

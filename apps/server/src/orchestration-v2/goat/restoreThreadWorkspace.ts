@@ -11,8 +11,17 @@ import { WorktreeSnapshotStore } from "../../worktreeSnapshots/WorktreeSnapshotS
 import { makeDiscardWorktree, makeRecreateMissingWorktree } from "./RecreateWorktree.ts";
 import { makeRestorePending, type RestorePendingState } from "./restorePending.ts";
 import { git, RestoreSnapshotError, verifyRestoredWorktree } from "./restoreSnapshot.ts";
+import { makeSetAsideFolder } from "./setAsideFolder.ts";
 
 export { makeRestorePending } from "./restorePending.ts";
+
+export interface RestoredThreadWorkspace {
+  readonly restoredFrom: RestorePendingState["restoredFrom"];
+  readonly headSha: string;
+  readonly setupScript: "started" | "none";
+  /** Where a folder that held only a failed removal's leftovers went to make room. */
+  readonly setAsidePath?: string;
+}
 
 /**
  * Whether a restore that stopped before it finished left a usable folder: the right path and
@@ -51,27 +60,29 @@ export const verifyInterruptedRestore = Effect.fn("ThreadWorkspace.verifyInterru
   },
 );
 
+interface RestoreInput {
+  readonly threadId: ThreadId;
+  readonly cwd: string;
+  readonly worktreePath: string;
+  readonly branch: string;
+}
+
 /**
- * Brings back a thread's missing worktree: from its newest snapshot when cleanup saved one,
- * otherwise from its branch. Setup runs again, and the result is verified before any provider
- * may use the folder. A worktree whose earlier restore did not finish resumes at setup. The
- * caller holds the workspace lease.
+ * Brings back a thread's missing worktree from its newest snapshot, else its branch, reruns setup
+ * and verifies it before any provider may use it. An unfinished restore resumes at setup, and a
+ * folder holding only a failed removal's leftovers is set aside first. The caller holds the lease.
  */
 export const makeRestoreThreadWorkspace = Effect.gen(function* () {
   const recreate = yield* makeRecreateMissingWorktree;
   const discardWorktree = yield* makeDiscardWorktree;
   const pending = yield* makeRestorePending;
+  const setAside = yield* makeSetAsideFolder;
   // Optional so turn-start harnesses without the ledger or setup runner keep plain recreation.
   const snapshots = yield* Effect.serviceOption(WorktreeSnapshotStore);
   const setupScripts = yield* Effect.serviceOption(
     ProjectSetupScriptRunner.ProjectSetupScriptRunner,
   );
-  return Effect.fn("ThreadWorkspace.restoreMissing")(function* (input: {
-    readonly threadId: ThreadId;
-    readonly cwd: string;
-    readonly worktreePath: string;
-    readonly branch: string;
-  }) {
+  const restore = Effect.fn("ThreadWorkspace.restoreFolder")(function* (input: RestoreInput) {
     const fail = (reason: ThreadWorkspaceRestoreFailure, detail: string) =>
       new ThreadWorkspaceRestoreError({ threadId: input.threadId, reason, detail });
     // A rollback that could not delete the folder keeps the marker, so this repeats until it passes.
@@ -177,5 +188,26 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
       headSha: state.headSha,
       setupScript: setup.status === "started" ? ("started" as const) : ("none" as const),
     };
+  });
+  return Effect.fn("ThreadWorkspace.restoreMissing")(function* (
+    input: RestoreInput,
+  ): Effect.fn.Return<RestoredThreadWorkspace, ThreadWorkspaceRestoreError> {
+    // Git refuses a folder that is not empty; a failed restore moves the leftovers back.
+    if (!(yield* setAside.leftover(input.worktreePath))) return yield* restore(input);
+    const { result, setAsidePath } = yield* setAside
+      .around(input.worktreePath, restore(input))
+      .pipe(
+        Effect.catchTags({
+          PlatformError: (error) =>
+            Effect.fail(
+              new ThreadWorkspaceRestoreError({
+                threadId: input.threadId,
+                reason: "git-failed",
+                detail: `GOAT couldn't move the leftover folder at ${input.worktreePath} aside: ${error.message}`,
+              }),
+            ),
+        }),
+      );
+    return { ...result, setAsidePath };
   });
 });

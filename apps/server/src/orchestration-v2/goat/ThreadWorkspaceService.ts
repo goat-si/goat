@@ -32,6 +32,7 @@ import {
   verifyInterruptedRestore,
 } from "./restoreThreadWorkspace.ts";
 import { verifyRestoredWorktree } from "./restoreSnapshot.ts";
+import { makeSetAsideFolder, setAsideSentence } from "./setAsideFolder.ts";
 
 /** What a client shows for a thread whose worktree cleanup removed, and the ways back. */
 export class ThreadWorkspaceService extends Context.Service<
@@ -62,6 +63,43 @@ const make = Effect.gen(function* () {
   const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
   const restoreMissing = yield* makeRestoreThreadWorkspace;
   const restorePending = yield* makeRestorePending;
+  const setAside = yield* makeSetAsideFolder;
+  // Ready for a terminal: present, not mid-restore, and not just a failed removal's leftovers.
+  const ready = (worktreePath: string) =>
+    Effect.zipWith(
+      restorePending.ready(worktreePath),
+      setAside.leftover(worktreePath),
+      (present, leftover) => present && !leftover,
+    );
+
+  const recordRestoreNotice = Effect.fn("ThreadWorkspace.recordRestoreNotice")(function* (
+    threadId: ThreadId,
+    branch: string,
+    restored: Omit<Parameters<typeof describeThreadWorkspaceRestore>[0], "branch"> & {
+      readonly setAsidePath?: string;
+    },
+  ) {
+    const { summary, lost } = describeThreadWorkspaceRestore({ ...restored, branch });
+    const setAsideNote =
+      restored.setAsidePath === undefined ? null : setAsideSentence(restored.setAsidePath);
+    const stamp = (yield* Clock.currentTimeMillis).toString(36);
+    yield* threads
+      .dispatch({
+        type: "thread.notice.record",
+        commandId: CommandId.make(`worktree-restored:${threadId}:${stamp}`),
+        threadId,
+        recordKey: `worktree-restored:${stamp}`,
+        message: [summary, lost, setAsideNote].filter((part) => part !== null).join(" "),
+      })
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("worktree restored, but its thread notice was not recorded", {
+            threadId,
+            cause,
+          }),
+        ),
+      );
+  });
 
   const load = Effect.fn("ThreadWorkspace.load")(function* (threadId: ThreadId) {
     const fail = (reason: ThreadWorkspaceRestoreFailure, detail: string) =>
@@ -169,7 +207,11 @@ const make = Effect.gen(function* () {
     );
     if (Option.isNone(held))
       return yield* fail("busy", "Another task is using this worktree. Try again in a moment.");
-    return { threadId, worktreePath, branch, ...held.value };
+    const { restoredFrom, headSha, setupScript } = held.value;
+    // The client shows the restore itself; only the thread can say where the leftovers went.
+    if ("setAsidePath" in held.value && held.value.setAsidePath !== undefined)
+      yield* recordRestoreNotice(threadId, branch, held.value);
+    return { threadId, worktreePath, branch, restoredFrom, headSha, setupScript };
   });
 
   const startFresh = Effect.fn("ThreadWorkspace.startFresh")(function* (threadId: ThreadId) {
@@ -324,7 +366,7 @@ const make = Effect.gen(function* () {
     const { project, worktreePath, branch } = loaded.value;
     if (
       !isWithinRoot(path, path.resolve(input.cwd ?? worktreePath), worktreePath) ||
-      (yield* restorePending.ready(worktreePath)) ||
+      (yield* ready(worktreePath)) ||
       !(yield* isManagedWorktreePath(worktreePath))
     )
       return;
@@ -332,7 +374,7 @@ const make = Effect.gen(function* () {
     const restored = yield* withWorkspaceLease(
       worktreePath,
       Effect.gen(function* () {
-        if (yield* restorePending.ready(worktreePath)) return null;
+        if (yield* ready(worktreePath)) return null;
         return yield* restoreMissing({
           threadId,
           cwd: project.workspaceRoot,
@@ -350,25 +392,7 @@ const make = Effect.gen(function* () {
         }).pipe(Effect.as(null)),
       ),
     );
-    if (restored === null) return;
-    const { summary, lost } = describeThreadWorkspaceRestore({ ...restored, branch });
-    const stamp = (yield* Clock.currentTimeMillis).toString(36);
-    yield* threads
-      .dispatch({
-        type: "thread.notice.record",
-        commandId: CommandId.make(`worktree-restored:${threadId}:${stamp}`),
-        threadId,
-        recordKey: `worktree-restored:${stamp}`,
-        message: lost === null ? summary : `${summary} ${lost}`,
-      })
-      .pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("worktree restored for a terminal, but its notice was not recorded", {
-            threadId,
-            cause,
-          }),
-        ),
-      );
+    if (restored !== null) yield* recordRestoreNotice(threadId, branch, restored);
   });
 
   return ThreadWorkspaceService.of({
