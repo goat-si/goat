@@ -17,6 +17,7 @@ import {
   type RemoteReport,
   type RemoteObservedRun,
 } from "@goat/contracts";
+import * as KeyedLock from "@goat/shared/KeyedLock";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -127,7 +128,7 @@ const make = Effect.gen(function* () {
   const taskHosts = new Map<string, Semaphore.Semaphore>();
   // Relayed sends must not wait behind report long-polls to the same host.
   const relayHosts = new Map<string, Semaphore.Semaphore>();
-  const locks = new Map<string, Semaphore.Semaphore>();
+  const locks = yield* KeyedLock.make<string>();
   // The drain that owns each row; a replaced or dismissed drain finds another owner and stops writing.
   const owners = new Map<string, number>();
   let generations = 0;
@@ -144,7 +145,8 @@ const make = Effect.gen(function* () {
     statement.pipe(Effect.flatMap(decodeRows), db);
   // The owner is read once the lock is held: a dismissal or resume may change it while waiting.
   const owned = <A, E, R>(id: string, owner: number, effect: Effect.Effect<A, E, R>) =>
-    gate(locks, id, 1).withPermits(1)(
+    locks.withLock(
+      id,
       Effect.suspend(() => (owners.get(id) === owner ? Effect.asSome(effect) : Effect.succeedNone)),
     );
   const taskOrigin = (host: string, threadId: string) =>
@@ -163,7 +165,7 @@ const make = Effect.gen(function* () {
     );
     return noted.length > 0;
   });
-  const deleteIntentHeld = (id: string) => gate(locks, id, 1).withPermits(1)(noteDeleteIntent(id));
+  const deleteIntentHeld = (id: string) => locks.withLock(id, noteDeleteIntent(id));
   const call = (r: Row, tool: string, args: Readonly<Record<string, unknown>>) =>
     gate(hosts, r.host, 8).withPermits(1)(
       ssh.callHostTool(
@@ -231,7 +233,8 @@ const make = Effect.gen(function* () {
     observed: RemoteObservedRun | null,
     hasMore: boolean,
   ) {
-    yield* gate(locks, id, 1).withPermits(1)(
+    yield* locks.withLock(
+      id,
       Effect.gen(function* () {
         const r = yield* load(id);
         if (r === null || r.kind !== "task" || r.state !== "running" || owners.get(id) !== owner)
@@ -529,7 +532,8 @@ const make = Effect.gen(function* () {
     const existing = yield* load(id);
     if (existing?.kind === "task")
       return yield* importTaskBatch(id, owner, reports, observed, hasMore);
-    yield* gate(locks, id, 1).withPermits(1)(
+    yield* locks.withLock(
+      id,
       Effect.gen(function* () {
         const r = yield* load(id);
         // A forced loss comes from a drain that loaded the row running; it must still own it.
@@ -871,6 +875,19 @@ const make = Effect.gen(function* () {
         drains,
         id,
         drain(id, owner, waitForRun, interruptSent).pipe(
+          // A drain that ends with its row settled, lost or gone gives the row up; a replaced one
+          // finds another owner and leaves it.
+          Effect.ensuring(
+            locks
+              .withLock(
+                id,
+                Effect.gen(function* () {
+                  if (owners.get(id) !== owner) return;
+                  if ((yield* load(id))?.state !== "running") owners.delete(id);
+                }),
+              )
+              .pipe(Effect.ignoreCause({ log: true })),
+          ),
           Effect.mapError((cause) =>
             isRemoteDispatchError(cause)
               ? cause
@@ -1026,7 +1043,8 @@ const make = Effect.gen(function* () {
     authorize: Effect.Effect<RuntimeMode, E, R>,
   ) {
     yield* authorize;
-    const result = yield* gate(locks, id, 1).withPermits(1)(
+    const result = yield* locks.withLock(
+      id,
       Effect.gen(function* () {
         const r = yield* load(id);
         if (r === null) return yield* new RemoteDispatchError({ stage: "not_found" });
@@ -1047,7 +1065,7 @@ const make = Effect.gen(function* () {
   });
   const { claimDelete, clearDelete } = makeDeleteClaims({
     sql,
-    withLock: (id, effect) => gate(locks, id, 1).withPermits(1)(effect),
+    withLock: (id, effect) => locks.withLock(id, effect),
   });
   const resume: RemoteDispatchCoordinator["Service"]["resume"] = Effect.fn(
     "RemoteDispatchCoordinator.resume",
@@ -1060,7 +1078,8 @@ const make = Effect.gen(function* () {
     for (const r of matching) {
       // Stop a final observation before resetting the ledger for the new send.
       yield* FiberMap.remove(drains, r.correlation_id);
-      const resumed = yield* gate(locks, r.correlation_id, 1).withPermits(1)(
+      const resumed = yield* locks.withLock(
+        r.correlation_id,
         db(sql<{ readonly correlation_id: string }>`UPDATE remote_dispatches SET
         state = 'running', cancel_requested_at = NULL, cancel_ceiling = NULL,
         known_run_id = NULL, known_run_status = NULL, updated_at = ${yield* now}, end_reason = NULL,
@@ -1081,7 +1100,8 @@ const make = Effect.gen(function* () {
       const id = r.correlation_id;
       // The drain is detached under the lock and interrupted outside it, so nothing waits on the
       // lock for an interruption, and a drain a later send starts has another owner.
-      const drain = yield* gate(locks, id, 1).withPermits(1)(
+      const drain = yield* locks.withLock(
+        id,
         Effect.gen(function* () {
           const changed = yield* rows(dismissRow(sql, id, yield* now, cutoff));
           const row = changed[0];
@@ -1122,7 +1142,8 @@ const make = Effect.gen(function* () {
         // Its rows are bound and resolve's are not, so one retry map serves both passes.
         retryAt: resolveRetryAt,
         reopen: (id) =>
-          gate(locks, id, 1).withPermits(1)(
+          locks.withLock(
+            id,
             reopenUnreachable(id).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
           ),
         start,
@@ -1148,6 +1169,11 @@ const make = Effect.gen(function* () {
     claimDelete,
     clearDelete,
     resolveLostLaunches,
+    heldAfterDrains: FiberMap.awaitEmpty(drains).pipe(
+      Effect.ignore,
+      Effect.andThen(locks.activeKeys),
+      Effect.map((held) => ({ owners: owners.size, locks: held.length })),
+    ),
     taskOrigin,
     isTaskThread: (host, threadId) =>
       db(

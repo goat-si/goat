@@ -93,4 +93,6 @@ export interface RemoteDispatchCoordinatorShape {
    * on its own schedule; an inconclusive row is asked again after a backoff.
    */
   readonly resolveLostLaunches: Effect.Effect<void>;
+  /** For tests: once every drain has ended, the drain owners and row locks still held. */
+  readonly heldAfterDrains: Effect.Effect<{ readonly owners: number; readonly locks: number }>;
 }
