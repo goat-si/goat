@@ -46,6 +46,25 @@ const HeldSubtrees = Context.Reference<ReadonlyArray<string>>(
   { defaultValue: () => [] },
 );
 
+/**
+ * A folder lease this fiber holds, one cell shared with every fiber it forks: the holder's release
+ * marks it dead before the permit goes back, and waits for reentrant sections still running.
+ */
+interface HeldLease {
+  readonly key: string;
+  live: boolean;
+  inFlight: number;
+  readonly drained: Deferred.Deferred<void>;
+}
+const HeldLeases = Context.Reference<ReadonlyArray<HeldLease>>(
+  "goat/workspace/workspaceLease/HeldLeases",
+  { defaultValue: () => [] },
+);
+/** Set by reuseHeldWorkspaceLease: only work marked so may enter its holder's folder lease. */
+const ReuseHeldLease = Context.Reference<boolean>("goat/workspace/workspaceLease/ReuseHeldLease", {
+  defaultValue: () => false,
+});
+
 const comparable = (folder: string, platform: NodeJS.Platform) => {
   const slashed = folder.replaceAll("\\", "/").replace(/\/+$/u, "");
   return platform === "linux" ? slashed : slashed.toLowerCase();
@@ -177,20 +196,76 @@ const waitForForeignClaim = <A, E, R>(
     ),
   );
 
+/**
+ * Lets effect, run for the holder of a folder's lease, take that same folder's lease without
+ * waiting on itself: a restore holds a worktree's lease and runs its setup script, whose terminal
+ * asks for it. A reentrant section takes no permit and no claim; only the holder's own do. Only
+ * withWorkspaceLease reenters: a try never waits on the holder, so it stays Busy.
+ */
+export const reuseHeldWorkspaceLease = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.provideService(effect, ReuseHeldLease, true);
+
+/** The live hold this marked fiber may enter for cwd, counted in flight until it leaves. */
+const enterHeld = (cwd: string) =>
+  Effect.withFiber((fiber): Effect.Effect<HeldLease | undefined> => {
+    const key = fiber.getRef(ReuseHeldLease)
+      ? canonical(cwd, fiber.getRef(HostProcess.Platform))
+      : undefined;
+    const held = fiber.getRef(HeldLeases).find((each) => each.live && each.key === key);
+    if (held !== undefined) held.inFlight++;
+    return Effect.succeed(held);
+  });
+
+const leaveHeld = (held: HeldLease | undefined) =>
+  Effect.suspend(() => {
+    if (held === undefined) return Effect.void;
+    held.inFlight--;
+    return held.inFlight === 0 && !held.live
+      ? Deferred.succeed(held.drained, undefined)
+      : Effect.void;
+  });
+
+/** Runs effect as the holder of key, inside its permit and claim. */
+const asHolder = <A, E, R>(key: string, effect: Effect.Effect<A, E, R>) =>
+  Effect.withFiber((fiber) => {
+    const held: HeldLease = { key, live: true, inFlight: 0, drained: Deferred.makeUnsafe<void>() };
+    return effect.pipe(
+      Effect.provideService(HeldLeases, [...fiber.getRef(HeldLeases), held]),
+      Effect.ensuring(
+        Effect.suspend(() => {
+          held.live = false;
+          return held.inFlight === 0 ? Effect.void : Deferred.await(held.drained);
+        }),
+      ),
+    );
+  });
+
 /** Coordinates checkout removal and cleanup across threads and GOAT servers using one resolved cwd. */
 export const withWorkspaceLease = <A, E, R>(
   cwd: string,
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E | WorkspaceLeaseUnavailableError, R> =>
   Effect.acquireUseRelease(
-    admit(cwd),
-    (admission): Effect.Effect<A, E | WorkspaceLeaseUnavailableError, R> =>
-      admission.kind === "admitted"
-        ? admission.lease.semaphore.withPermit(
-            waitForForeignClaim(admission.lease.canonical, effect),
-          )
-        : Deferred.await(admission.released).pipe(Effect.andThen(withWorkspaceLease(cwd, effect))),
-    leave,
+    enterHeld(cwd),
+    (held): Effect.Effect<A, E | WorkspaceLeaseUnavailableError, R> =>
+      held !== undefined
+        ? effect
+        : Effect.acquireUseRelease(
+            admit(cwd),
+            (admission): Effect.Effect<A, E | WorkspaceLeaseUnavailableError, R> =>
+              admission.kind === "admitted"
+                ? admission.lease.semaphore.withPermit(
+                    waitForForeignClaim(
+                      admission.lease.canonical,
+                      asHolder(admission.lease.canonical, effect),
+                    ),
+                  )
+                : Deferred.await(admission.released).pipe(
+                    Effect.andThen(withWorkspaceLease(cwd, effect)),
+                  ),
+            leave,
+          ),
+    leaveHeld,
   );
 
 /** Attempts checkout startup without keeping an effect worker waiting on another holder. */
@@ -203,7 +278,13 @@ export const tryWithWorkspaceLease = <A, E, R>(
     (admission): Effect.Effect<Option.Option<A>, E | WorkspaceLeaseUnavailableError, R> =>
       admission.kind === "admitted"
         ? admission.lease.semaphore
-            .withPermitsIfAvailable(1)(withForeignClaim("lease", admission.lease.canonical, effect))
+            .withPermitsIfAvailable(1)(
+              withForeignClaim(
+                "lease",
+                admission.lease.canonical,
+                asHolder(admission.lease.canonical, effect),
+              ),
+            )
             .pipe(Effect.map(Option.flatten))
         : Effect.succeed(Option.none()),
     leave,

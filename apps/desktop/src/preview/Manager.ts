@@ -93,6 +93,12 @@ import { captureFavicon, safeHttpOrigin, selectFaviconCandidates } from "./Favic
 import { DEFAULT_RECORDING_INPUT_OPTIONS, type RecordingInputOptions } from "./RecordingInput.ts";
 import { createPreviewPopupLifecycle, isBlankPopupUrl, popupWebOrigin } from "./PopupLifecycle.ts";
 import { loadUrlAllowingRedirects } from "./loadUrlAllowingRedirects.ts";
+import {
+  DEFAULT_ZOOM_FACTOR,
+  normalizeZoomFactor,
+  nextZoomLevel,
+  ZOOM_EPSILON,
+} from "./previewZoom.ts";
 
 export type PreviewNavStatus =
   | { kind: "Idle" }
@@ -124,12 +130,6 @@ export interface PreviewTabState {
   updatedAt: string;
 }
 
-const ZOOM_LEVELS: ReadonlyArray<number> = [
-  0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0,
-];
-
-const DEFAULT_ZOOM_FACTOR = 1.0;
-const ZOOM_EPSILON = 0.001;
 const RECORDING_ARM_GRACE_MS = 10_000;
 const PICTURE_IN_PICTURE_FRAME_INTERVAL_MS = Math.ceil(1_000 / 12);
 const PICTURE_IN_PICTURE_JPEG_QUALITY = 80;
@@ -191,31 +191,6 @@ interface PreviewOperationContext {
   readonly webContentsId?: number;
   readonly artifactPath?: string;
 }
-
-const findZoomStep = (current: number): number => {
-  const index = ZOOM_LEVELS.findIndex(
-    (level) => Math.abs(level - current) < ZOOM_EPSILON || level > current,
-  );
-  if (index < 0) return ZOOM_LEVELS.length - 1;
-  return Math.abs(ZOOM_LEVELS[index]! - current) < ZOOM_EPSILON ? index : index - 1;
-};
-
-const normalizeZoomFactor = (value: number | undefined): number => {
-  if (value === undefined || !Number.isFinite(value)) return DEFAULT_ZOOM_FACTOR;
-  let closest = ZOOM_LEVELS[0]!;
-  for (const level of ZOOM_LEVELS) {
-    if (Math.abs(level - value) < Math.abs(closest - value)) closest = level;
-  }
-  return closest;
-};
-
-const nextZoomLevel = (current: number, direction: "in" | "out"): number => {
-  const step = findZoomStep(current);
-  if (direction === "in") {
-    return ZOOM_LEVELS[Math.min(step + 1, ZOOM_LEVELS.length - 1)] ?? current;
-  }
-  return ZOOM_LEVELS[Math.max(step - 1, 0)] ?? current;
-};
 
 type Listener = (tabId: string, state: PreviewTabState) => Effect.Effect<void>;
 type RecordingFrameListener = (frame: DesktopPreviewRecordingFrame) => Effect.Effect<void>;
@@ -1911,6 +1886,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       if (wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward();
     });
   const refresh = (tabId: string) => withWebContents("refresh", tabId, (wc) => wc.reload());
+  const stopLoading = (tabId: string) => withWebContents("stopLoading", tabId, (wc) => wc.stop());
   const hardReload = (tabId: string) =>
     withWebContents("hardReload", tabId, (wc) => wc.reloadIgnoringCache());
 
@@ -3259,6 +3235,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     prepareWebview,
     reapplyZoom,
     refresh,
+    stopLoading,
     registerWebview,
     resetZoom: (tabId: string) => applyZoom(tabId, () => DEFAULT_ZOOM_FACTOR),
     setZoomFactor: (tabId: string, zoomFactor: number) =>
@@ -3459,6 +3436,7 @@ export class PreviewManager extends Context.Service<
     readonly goBack: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly goForward: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly refresh: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
+    readonly stopLoading: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly zoomIn: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly zoomOut: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly resetZoom: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
@@ -3612,6 +3590,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     goBack: operations.goBack,
     goForward: operations.goForward,
     refresh: operations.refresh,
+    stopLoading: operations.stopLoading,
     zoomIn: operations.zoomIn,
     zoomOut: operations.zoomOut,
     resetZoom: operations.resetZoom,

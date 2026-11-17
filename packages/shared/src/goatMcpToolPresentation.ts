@@ -393,6 +393,12 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "browser",
     "browser",
   ),
+  goat_preview_stop: tool(
+    ["Stop", "Stopping", "Stopped", "the preview page"],
+    "browser",
+    "browser",
+  ),
+
   goat_environment_usage: tool(
     ["Read", "Reading", "Read", "environment usage"],
     "environment-usage",

@@ -230,6 +230,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   commandOutputStreaming: Schema.optionalKey(Schema.Boolean),
   /** Hosts headless Chromium tabs streamed over /api/preview-stream for clients without a local runtime. */
   serverBrowser: Schema.optionalKey(Schema.Boolean),
+  /** Server browser viewers' stopLoading input cancels a loading page; older servers ignore it. */
+  serverBrowserStopLoading: Schema.optionalKey(Schema.Boolean),
   /** Server exposes the bounded SSH runtime activity probe. */
   sshActivity: Schema.optionalKey(Schema.Boolean),
   /** Server proxies its nodes' APIs below `/hub/nodes` for clients holding `hub:proxy`. */
