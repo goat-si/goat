@@ -1,6 +1,6 @@
 # N15b mobile parity (lane record)
 
-Lane branch: `chase/t3-261114-next2-n15b-mobile`. Head at this record: `d8dd40a1663`, cut from the integration branch `chase/t3-261114-next2` at `ed4268897e3183341694f27e488232572d5c5151` (draft PR #3660). Host juns-MacBook-Pro (shared). C4 rows: O12 (L184, lockfile importer) and L420 (new server setting). Plain push, no force.
+Lane branch: `chase/t3-261114-next2-n15b-mobile`. Head at this record: `daf4b9bb3b754fce9a04ef2a8199b4897c0d87e0`, cut from the integration branch `chase/t3-261114-next2` at `ed4268897e3183341694f27e488232572d5c5151` (draft PR #3660). Host juns-MacBook-Pro (shared). C4 rows: O12 (L184, lockfile importer) and L420 (new server setting). Plain push, no force.
 
 ## Rows and commits
 
@@ -231,3 +231,14 @@ When the atom updates, the component re-renders and the hosts appear. No test re
 - Beside tests: 37 test files (the 23 beside files plus the palette, Publish and Add-project tests), 433 passed.
 - ONE goat-ci run (workflow_dispatch, lane all) on d8dd40a166: https://github.com/goat-si/goat/actions/runs/44091082395 (queued when recorded).
 - Token handed back.
+
+## READY (14:15 UTC)
+
+- Lane head on origin: `daf4b9bb3b754fce9a04ef2a8199b4897c0d87e0`. This is the merge of integration head 7023eb1ada (S4, CF1, X1, N9a, N4, N12), done by git with no conflict. Files changed on both sides, all merged without conflict: apps/server/src/environment/ServerEnvironment.ts and packages/contracts/src/environment.ts (N12 adds the `serverBrowserStopLoading` capability beside L420's `offeredSourceControlProviders`), and oxlint-plugin-goat/code-budgets.json. After the merge, ServerEnvironment.test.ts and environment.test.ts: 2 files, 33 passed, and lint on the both-sides and budgeted files is clean.
+- CI: goat-ci run 44091082395 (workflow_dispatch, lane all) on d8dd40a166 finished with `goat-ci-result` success and no failed job: https://github.com/goat-si/goat/actions/runs/44091082395. The merge of 7023eb1ada after it brings in only other lanes' files; no CI run is on daf4b9bb3b itself.
+- Local checks on d8dd40a166: format, lint, knip, the agent-surface checks, typecheck 42/42, and the beside tests (37 files, 433 passed).
+- Rows: L193, L431, L184, L142, L143, L144, L420 (with 661675656f and d8dd40a166), A1 (cde4c238e5). O5 is skipped by ruling D, with goat#3667. goat#3495 and goat#3496 are their own issues (goat#3496 has a comment on the cause). goat#3680 is A2, for next3.
+- OPEN: the O5 departure (option A against the owner's recorded B) is with the owner, who has not answered.
+- Still owed: goat#3658's outside-folder banner capture (needs a seeded database); the VoiceOver escape (no VoiceOver in the Simulator).
+
+NOT RUN: a goat-ci run on the merge commit daf4b9bb3b; the 385-file check:changed test step locally (carried by goat-ci under the 12:07:55 rule).
