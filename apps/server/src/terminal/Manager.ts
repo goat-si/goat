@@ -6,8 +6,13 @@ import {
 import { makeCloseOnSettle } from "./TerminalSettlement.ts";
 import { normalizedRuntimeEnv } from "./TerminalLaunchEnvironment.ts";
 import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto digest is effectful; a sync hash keeps historyPath a plain function.
-import * as NodeCrypto from "node:crypto";
+import {
+  encodedHistoryThreadPart,
+  hashId,
+  hashedHistoryThreadPart,
+  joinHistoryFileName,
+  legacySafeThreadId,
+} from "./historyFileNames.ts";
 
 import {
   createAgentTerminalState,
@@ -687,27 +692,6 @@ const windowsProcessTableSnapshot = Effect.fn("terminal.windowsProcessTableSnaps
   });
   return processTableSnapshotFromProcesses(processes);
 });
-
-function legacySafeThreadId(threadId: string): string {
-  return threadId.replace(/[^a-zA-Z0-9._-]/g, "_");
-}
-
-function encodedHistoryThreadPart(threadId: string): string {
-  return `terminal_${Base64Url.encode(threadId)}`;
-}
-
-function hashId(id: string): string {
-  return NodeCrypto.createHash("sha256").update(id).digest("base64url");
-}
-
-// "." is outside the base64url alphabet, so a hashed name can never collide with an encoded one.
-function hashedHistoryThreadPart(threadId: string): string {
-  return `terminal_sha256.${hashId(threadId)}`;
-}
-
-function joinHistoryFileName(threadPart: string, terminalPart: string | null): string {
-  return terminalPart === null ? `${threadPart}.log` : `${threadPart}_${terminalPart}.log`;
-}
 
 function toSessionKey(threadId: string, terminalId: string): string {
   return `${threadId}\u0000${terminalId}`;
