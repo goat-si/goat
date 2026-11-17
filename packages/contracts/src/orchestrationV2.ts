@@ -27,7 +27,6 @@ import {
 } from "./memory.ts";
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import { withRecordIdTable } from "./orchestrationV2IdTable.ts";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaGetter from "effect/SchemaGetter";
@@ -2217,21 +2216,7 @@ export function isLiveSubagentShell(
     (thread.pendingBackgroundTasks?.length ?? 0) > 0
   );
 }
-/**
- * A settled top-level thread settled before `beforeMs`. Shells that omit older settled threads
- * count every such thread, so the server and clients share this one rule.
- */
-export function isOlderSettledThreadShell(
-  thread: Pick<OrchestrationV2ThreadShell, "lineage" | "settledOverride" | "settledAt">,
-  beforeMs: number,
-): boolean {
-  return (
-    thread.lineage.relationshipToParent !== "subagent" &&
-    thread.settledOverride === "settled" &&
-    thread.settledAt !== null &&
-    DateTime.toEpochMillis(thread.settledAt) < beforeMs
-  );
-}
+export { isOlderSettledThreadShell } from "./orchestrationV2OlderSettled.ts";
 
 export const OrchestrationV2OlderSettledCount = Schema.Struct({
   projectId: ProjectId,
