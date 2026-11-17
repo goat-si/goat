@@ -32,6 +32,7 @@ import {
   verifyInterruptedRestore,
 } from "./restoreThreadWorkspace.ts";
 import { verifyRestoredWorktree } from "./restoreSnapshot.ts";
+import { makeRecreateScratchFolder } from "./recreateScratchFolder.ts";
 import { makeSetAsideFolder, setAsideSentence } from "./setAsideFolder.ts";
 
 /** What a client shows for a thread whose worktree cleanup removed, and the ways back. */
@@ -42,7 +43,7 @@ export class ThreadWorkspaceService extends Context.Service<
     readonly restore: (
       input: ThreadWorkspaceRestoreInput,
     ) => Effect.Effect<ThreadWorkspaceRestoreResult, ThreadWorkspaceRestoreError>;
-    /** Before a terminal starts in a thread's worktree, brings a missing one back as a turn would. */
+    /** Before a terminal starts in a thread's folder, brings a missing one back as a turn would. */
     readonly prepareTerminal: (input: {
       readonly threadId: string;
       readonly cwd?: string | undefined;
@@ -64,6 +65,7 @@ const make = Effect.gen(function* () {
   const restoreMissing = yield* makeRestoreThreadWorkspace;
   const restorePending = yield* makeRestorePending;
   const setAside = yield* makeSetAsideFolder;
+  const recreateScratchFolder = yield* makeRecreateScratchFolder;
   // Ready for a terminal: present, not mid-restore, and not just a failed removal's leftovers.
   const ready = (worktreePath: string) =>
     Effect.zipWith(
@@ -361,6 +363,15 @@ const make = Effect.gen(function* () {
     readonly cwd?: string | undefined;
   }) {
     const threadId = ThreadId.make(input.threadId);
+    const shell = yield* projections
+      .getThreadShell(threadId)
+      .pipe(Effect.orElseSucceed(() => null));
+    if (shell?.worktreePath != null && shell.branch === null) {
+      const scratch = path.resolve(shell.worktreePath);
+      if (isWithinRoot(path, path.resolve(input.cwd ?? scratch), scratch))
+        yield* withWorkspaceLease(scratch, recreateScratchFolder(scratch)).pipe(Effect.ignore);
+      return;
+    }
     const loaded = yield* load(threadId).pipe(Effect.option);
     if (Option.isNone(loaded)) return;
     const { project, worktreePath, branch } = loaded.value;

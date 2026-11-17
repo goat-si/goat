@@ -36,6 +36,7 @@ import {
 } from "./fileState.ts";
 import { LocalGoatServers, type OtherServerBindings } from "./localGoatServers.ts";
 import { measureFolder } from "./measureFolder.ts";
+import { scanScratchFolders } from "./scratchFolders.ts";
 import {
   identityToken,
   isRemovableTempName,
@@ -68,6 +69,8 @@ export type StorageTarget =
       readonly worktree: string | null;
       /** What a reviewed leftover or temp folder held; removal re-reads it and skips on change. */
       readonly stamp: ContentStamp | null;
+      /** A No project folder: the idle threads it was offered with, which removal checks again. */
+      readonly scratchThreads?: ReadonlyArray<string>;
     }
   | { readonly kind: "stale"; readonly repository: string; readonly missing: ReadonlyArray<string> }
   | { readonly kind: "runtime"; readonly version: string }
@@ -477,6 +480,10 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
     if (ownRows === null)
       return state("needs_attention", "This server's threads could not be read");
     if (referenced(target)) return state("protected", "A thread or project on this server uses it");
+    return usedOutside(target);
+  };
+  /** Another GOAT server or a running process uses the folder; null when none does. */
+  const usedOutside = (target: string) => {
     const otherReason = otherServerReason(other, target, rules);
     if (otherReason !== null)
       return state(
@@ -591,6 +598,17 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
       }
     }
   }
+
+  yield* scanScratchFolders({
+    baseDir: config.baseDir,
+    rules,
+    notes,
+    state,
+    usedOutside,
+    stamped,
+    add,
+    measureLater,
+  });
 
   // Runtimes this GOAT home installed for its service or SSH launches.
   const runtimes = yield* listPinnedRuntimes({

@@ -43,6 +43,7 @@ import {
 import { buildOutputKeeps, maskedIndexEntry } from "./buildOutputs.ts";
 import { deletedThreadAttachments } from "./deletedThreadAttachments.ts";
 import { goatDataReason, resolveGoatDataPaths } from "./goatData.ts";
+import { scratchReuseReason } from "./scratchFolders.ts";
 import { LocalGoatServers } from "./localGoatServers.ts";
 import {
   type ContentStamp,
@@ -330,10 +331,18 @@ const make = Effect.gen(function* () {
   }, Effect.provideContext(context));
 
   /** Why removing folder would reach GOAT's own data or a GOAT home, read now; null when not. */
-  const goatDataNow = Effect.fn("StorageReclaim.goatDataNow")(function* (folder: string) {
-    const goat = yield* resolveGoatDataPaths(
+  const goatDataNow = Effect.fn("StorageReclaim.goatDataNow")(function* (
+    folder: string,
+    scratchRoot?: string,
+  ) {
+    const resolved = yield* resolveGoatDataPaths(
       (yield* resolveOtherServerPaths(config.dbPath)).bindings.databases,
     );
+    // No project folders sit in the GOAT home's scratch folder as worktrees sit in theirs.
+    const goat =
+      scratchRoot === undefined
+        ? resolved
+        : { ...resolved, worktreeRoots: [...resolved.worktreeRoots, scratchRoot] };
     const realFolder = (yield* real(folder)) ?? path.resolve(folder);
     return (
       goatDataReason(path.resolve(folder), goat, rules) ?? goatDataReason(realFolder, goat, rules)
@@ -351,6 +360,32 @@ const make = Effect.gen(function* () {
       ),
       Effect.catchIf(isWorkspaceLeaseUnavailableError, (error) => Effect.succeed(error.message)),
     );
+
+  /**
+   * Why a No project folder must stay now: its threads changed or one started working, or a
+   * project sits at or inside it. The Scratch project's own root holds every such folder.
+   */
+  const scratchReference = Effect.fn("StorageReclaim.scratchReference")(function* (
+    folder: string,
+    reviewed: ReadonlyArray<string>,
+  ) {
+    const reused = yield* scratchReuseReason(folder, reviewed, rules);
+    if (reused !== null) return reused;
+    const projects = yield* sql<{ readonly root: string }>`
+      SELECT workspace_root AS "root" FROM projection_projects WHERE deleted_at IS NULL
+    `.pipe(
+      NodeSqliteClient.readOnly,
+      Effect.orElseSucceed(() => null),
+    );
+    if (projects === null) return "this server's projects could not be read";
+    const target = (yield* real(folder)) ?? path.resolve(folder);
+    for (const row of projects) {
+      const root = (yield* real(row.root)) ?? path.resolve(row.root);
+      if (samePath(root, target, rules) || isStrictlyInside(target, root, rules))
+        return "a project folder sits in it";
+    }
+    return null;
+  });
 
   /**
    * Why this server now uses a leftover folder: a thread bound to it or inside it since the scan,
@@ -451,9 +486,15 @@ const make = Effect.gen(function* () {
             Effect.gen(function* () {
               const reason = yield* inUse(item.path);
               if (reason !== null) return reason;
-              const own = yield* ownReference(item.path);
+              const own =
+                target.scratchThreads === undefined
+                  ? yield* ownReference(item.path)
+                  : yield* scratchReference(item.path, target.scratchThreads);
               if (own !== null) return own;
-              const goat = yield* goatDataNow(item.path);
+              const goat = yield* goatDataNow(
+                item.path,
+                target.scratchThreads === undefined ? undefined : target.root,
+              );
               if (goat !== null) return goat;
               // A batch removes items one after another; this one may have changed meanwhile.
               const changed = yield* changedSinceReview(item.path, target.stamp);

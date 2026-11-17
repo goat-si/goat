@@ -376,9 +376,10 @@ working. Current logs, message attachments, and browser profiles are kept.
 
 **Settings → Storage → Disk usage** shows each machine's free space and what GOAT's own folders
 hold there: worktrees and their `node_modules` and Rust `target/` folders, leftover folders of
-removed worktrees, worktrees Git still lists after their folder was deleted, older GOAT runtimes,
-rotated logs past retention, temporary folders, files deleted threads left behind, and the kache
-build cache. **Scan again** measures now; a scan can take a minute on machines with many worktrees.
+removed worktrees, the folders of **No project** threads, worktrees Git still lists after their
+folder was deleted, older GOAT runtimes, rotated logs past retention, temporary folders, files
+deleted threads left behind, and the kache build cache. **Scan again** measures now; a scan can
+take a minute on machines with many worktrees.
 
 **Clean up…** lists every path it would delete with its size. Nothing is deleted until you choose
 **Delete**. It starts with the categories that are safe to clear; tick build outputs, leftover
@@ -387,9 +388,12 @@ qualifies only when it has no uncommitted changes, every commit is on a remote, 
 any GOAT server on that machine uses it. Build outputs qualify once every thread using their
 worktree is archived, and only when Git ignores them and tracks nothing in them. A deleted thread's
 files stay while a surviving thread, its archived history, a task or a scheduled prompt still
-mentions that thread. Anything that changed after you reviewed it is skipped. Anything that holds
-work shows as **Needs attention** and is never deleted. Each deletion is written to
-`storage-cleanup.ndjson` in that machine's logs folder.
+mentions that thread. A **No project** thread's folder is listed with the leftover folders and is
+never selected for you: deleting it removes its files for good, and the thread's next turn or
+terminal starts in an empty folder. It is kept while its thread is working or a terminal is open
+in it. Anything that changed after you reviewed it is skipped. Anything that holds work shows as
+**Needs attention** and is never deleted. Each deletion is written to `storage-cleanup.ndjson` in
+that machine's logs folder.
 
 From a terminal, `goat storage --dry-run` lists the default selection and `goat storage --clean`
 asks you to approve exactly that list in the GOAT app; run it again with `--approval <id>` once

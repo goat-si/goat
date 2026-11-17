@@ -17,6 +17,7 @@ import { tryWithWorkspaceLease } from "../../workspace/workspaceLease.ts";
 import { makeIsManagedWorktreePath } from "../../worktreesDirectory.ts";
 import * as ProjectionStore from "../ProjectionStore.ts";
 import { makeRestorePending, makeRestoreThreadWorkspace } from "./restoreThreadWorkspace.ts";
+import { makeRecreateScratchFolder } from "./recreateScratchFolder.ts";
 import { makeSetAsideFolder, setAsideSentence } from "./setAsideFolder.ts";
 
 type Restored = Pick<ThreadWorkspaceRestoreResult, "restoredFrom" | "setupScript"> & {
@@ -36,6 +37,7 @@ export const makePrepareTurnWorkspace = Effect.gen(function* () {
   const restoreMissing = yield* makeRestoreThreadWorkspace;
   const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
   const setAside = yield* makeSetAsideFolder;
+  const recreateScratchFolder = yield* makeRecreateScratchFolder;
   return Effect.fn("ProviderTurnStart.prepareWorkspace")(function* (thread: {
     readonly id: ThreadId;
     readonly projectId: ProjectId;
@@ -51,7 +53,7 @@ export const makePrepareTurnWorkspace = Effect.gen(function* () {
         // A rebinding that committed after this start loaded the thread sends it to retry.
         const bound = yield* projectionStore.getThreadShell(thread.id).pipe(Effect.option);
         if (Option.getOrNull(bound)?.worktreePath !== worktreePath) return "rebound" as const;
-        if (branch === null) return undefined;
+        if (branch === null) return void (yield* recreateScratchFolder(worktreePath));
         const ready =
           (yield* restorePending.ready(worktreePath)) && !(yield* setAside.leftover(worktreePath));
         if (ready || !(yield* isManagedWorktreePath(worktreePath))) return undefined;
