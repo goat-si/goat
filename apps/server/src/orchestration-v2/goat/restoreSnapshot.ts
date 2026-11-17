@@ -111,7 +111,8 @@ export const applySnapshotToWorktree = Effect.fn("restoreSnapshot.applySnapshotT
           `${sha}^1`,
           sha,
         ]);
-        for (const name of deleted.toString().split("\0").filter(Boolean)) {
+        const deletedNames = deleted.toString().split("\0").filter(Boolean);
+        for (const name of deletedNames) {
           const path = NodePath.resolve(cwd, name);
           const rel = NodePath.relative(cwd, path);
           if (
@@ -144,6 +145,20 @@ export const applySnapshotToWorktree = Effect.fn("restoreSnapshot.applySnapshotT
             parent = NodePath.dirname(parent);
             parentRel = NodePath.relative(cwd, parent);
           }
+        }
+        // A sparse checkout flags paths outside its patterns skip-worktree, which hides their
+        // deletion; before cleanup they were unflagged, so the deletion shows and verify stages it.
+        if (deletedNames.length) {
+          const removed = new Set(deletedNames);
+          const flagged = (await git(cwd, ["ls-files", "-v", "-z"]))
+            .toString()
+            .split("\0")
+            .filter((entry) => entry.startsWith("S ") && removed.has(entry.slice(2)))
+            .map((entry) => entry.slice(2));
+          if (flagged.length)
+            await git(cwd, ["update-index", "--no-skip-worktree", "-z", "--stdin"], {
+              input: Buffer.from(flagged.join("\0") + "\0"),
+            });
         }
         const changed = await git(cwd, [
           "diff",

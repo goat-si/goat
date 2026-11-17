@@ -56,3 +56,50 @@ it.live("a sparse worktree's edit outside its patterns is in the snapshot and co
     }),
   ),
 );
+// A deletion outside the patterns is in the snapshot too: restore must leave the file deleted and
+// unflagged, as it was before cleanup, so the check rebuilds the same tree. The snapshot is taken by
+// the capture already shipped on the integration branch, so snapshots taken before the fix restore.
+it.live("a sparse worktree's deletion outside its patterns is restored as a deletion", () =>
+  runCleanupTest(
+    Effect.gen(function* () {
+      const { service, fs, repo, worktree, command } = yield* cleanupFixture({
+        ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        ...LEGACY_WORKTREE_RULES,
+        worktreeAfterDays: 8,
+        worktreeSnapshotChanges: true,
+        worktreeKeepWhen: "uncommitted-changes",
+      });
+      const sparse = (cwd: string) =>
+        command(cwd, ["sparse-checkout", "set", "--no-cone", "/.gitignore"]);
+      yield* sparse(worktree);
+      // On disk and unflagged in the index, as any index write leaves a present file on Git 2.37+.
+      const original = (yield* command(repo, ["show", "feature:tracked.txt"])).stdout;
+      yield* fs.writeFileString(`${worktree}/tracked.txt`, original);
+      yield* command(worktree, ["update-index", "--no-skip-worktree", "--", "tracked.txt"]);
+      yield* fs.remove(`${worktree}/tracked.txt`);
+      expect((yield* command(worktree, ["status", "--porcelain"])).stdout).toBe(" D tracked.txt\n");
+      const report = yield* service.runNow;
+      expect(report.entries[0]).toMatchObject({ outcome: "removed" });
+      const ref =
+        (yield* command(repo, [
+          "for-each-ref",
+          "--format=%(refname)",
+          "refs/goat/snapshots",
+        ])).stdout
+          .trim()
+          .split("\n")[0] ?? "";
+      const snapshotSha = (yield* command(repo, ["rev-parse", ref])).stdout.trim();
+      const headSha = (yield* command(repo, ["rev-parse", `${ref}^1`])).stdout.trim();
+      yield* command(repo, ["worktree", "add", worktree, "feature"]);
+      yield* sparse(worktree);
+      yield* applySnapshotToWorktree({ cwd: worktree, snapshotSha });
+      yield* verifyRestoredWorktree({
+        cwd: worktree,
+        branch: "feature",
+        expectedHead: headSha,
+        snapshot: snapshotSha,
+      });
+      expect((yield* command(worktree, ["status", "--porcelain"])).stdout).toBe(" D tracked.txt\n");
+    }),
+  ),
+);
