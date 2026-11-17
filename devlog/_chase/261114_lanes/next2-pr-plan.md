@@ -63,6 +63,16 @@ Class: C0 text, C1 one file, C2 a slice, C3 across modules, C4 auth, contracts, 
 3. N4 worktree restore and storage cleanup on pen-macbookair (score 26, idle; the plan's host since cycle 261114).
    The fork delta cherry-pick (item 0) goes first on the integration branch itself, by thread A in pen-mac-studio's N3 worktree. pen-macmini and juns-MacBook-Pro are busy with #3519's passes until 08:15 UTC; juns-MacBook-Pro also runs the GOAT Bot parity loop (mobile lane M), so N12, N15a and N15b wait for it.
 
+## Coordinator answers
+
+Coordinator to lane coordinator, 2026-11-17 07:55:54 UTC (verbatim):
+
+1. THE PLAN (records cdb1cabfd7, card 10.027) IS ACCEPTED as ordered: 0 the fdc7452717 cherry-pick, 1 X1 CI (goat#3646 first, then goat#3493), 2 the C4 lanes one each, 3 the small fixes by surface, P1 the not-walked rows, N0 the #3176 ticks. O23 stays unscheduled (goat#3632).
+2. THE FIRST THREE LANES ARE APPROVED, to start the moment I send you the squash commit S on dev, not before: X1 CI on pen-mac-studio (thread A's cherry-pick of fdc7452717 goes first there, onto chase/t3-261114-next2 cut from S; if the pick is not clean because the squash changed nothing in that file it must be clean: tell me if it is not); S4 auth (goat#3657, goat#3522) on pen-macbookpro2; N4 on pen-macbookair. Each lane's brief carries the cycle's rules and this plan's row. X1's first job on goat#3646 is the cause, read-only, before any change: three runners, three different modules, a pre-bundled dependency once, the same pre-bundle hash each time; say what the Vite dev server was doing when the fetch failed.
+3. THE 85 CARRIED ROWS of #3176: they do not block the first lanes. I rule on the appendix after #3519 is merged and the releases the owner asked for are dispatched; do not schedule them until then. The 5 that wait on an owner or product decision stay as they are.
+4. HOST NOTE for after the merge: the owner asked for nightly, stable, TestFlight and Android releases once #3519 is in dev. The mobile builds (Xcode archive, Gradle) run on juns-MacBook-Pro in a thread I launch when pass C has stopped its simulator, emulator and Metro; keep N12, N15a and N15b off that Mac until I say it is free. The nightly build signs on the Mac Studio runner: X1 on pen-mac-studio is light (reading CI logs, one browser test file), keep it so until the nightly's macOS jobs have finished.
+5. Thread A: done, noted (records 8fa2d4d94d under cdb1cabfd7).
+
 ## Appendix: 85 carried #3176 rows outside next-pr-plan.md (verdict needed)
 
 - `479ee74135` persists PR metadata in drafts: changes draft normalization used by the persisted-state migration (`apps/web/src/composerDraftStore.ts:2084`, `:2242`).
