@@ -45,8 +45,8 @@ export const hiddenTrackedChange = Effect.fn("WorktreeSnapshot.hiddenTrackedChan
       /^(\S) (\d+) ([0-9a-f]+) \d\t(.*)$/s.exec(record) ?? [];
     return hiddenTag.test(tag) && mode !== "160000" ? [{ mode, id, file }] : [];
   });
-  // Names that are not valid UTF-8, or hold a newline, cannot be handed back to Git to hash.
-  const unreadable = flagged.find(({ file }) => file.includes("\uFFFD") || file.includes("\n"));
+  // A name that is not valid UTF-8 cannot be found on disk or handed back to Git to hash.
+  const unreadable = flagged.find(({ file }) => file.includes("\uFFFD"));
   if (unreadable !== undefined) return unreadable.file;
   const files: Array<(typeof flagged)[number]> = [];
   // Without core.symlinks a tracked link is a regular file holding its target, compared unfiltered.
@@ -63,6 +63,8 @@ export const hiddenTrackedChange = Effect.fn("WorktreeSnapshot.hiddenTrackedChan
       ),
     );
     if (stat === null) continue;
+    // A name holding a newline cannot be handed to Git's hash-object; one on disk counts as edited.
+    if (entry.file.includes("\n")) return entry.file;
     if (stat.isFile()) (entry.mode === "120000" ? linkFiles : files).push(entry);
     else if (!stat.isSymbolicLink() || entry.mode !== "120000") return entry.file;
     else {
