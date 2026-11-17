@@ -91,7 +91,10 @@ const make = Effect.gen(function* () {
         commandId: CommandId.make(`worktree-restored:${threadId}:${stamp}`),
         threadId,
         recordKey: `worktree-restored:${stamp}`,
-        message: [summary, lost, setAsideNote].filter((part) => part !== null).join(" "),
+        // The first line is the row clients show; what did not come back opens with it.
+        message: [summary, [lost, setAsideNote].filter((part) => part !== null).join(" ")]
+          .filter((part) => part !== "")
+          .join("\n"),
       })
       .pipe(
         Effect.catchCause((cause) =>

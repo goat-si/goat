@@ -365,7 +365,8 @@ export const layer: Layer.Layer<
                 completedAt: now,
                 updatedAt: now,
                 type: "system_notice",
-                message: `The worktree folder had lost its checkout, so GOAT made a new checkout of ${branch} there. ${setAsideSentence(setAsidePath)}`,
+                // The first line is the row clients show; the folder opens with it.
+                message: `The worktree folder had lost its checkout, so GOAT made a new checkout of ${branch} there.\n${setAsideSentence(setAsidePath)}`,
               },
             });
           }
