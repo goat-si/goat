@@ -6,6 +6,7 @@ import {
   resolvedQuestionDraftKeys,
   userInputDraftKey,
 } from "@goat/client-runtime/state/thread-requests";
+import { questionDraftKeysForRequests } from "@goat/client-runtime/state/unsent-question-answers";
 import type {
   EnvironmentId,
   RuntimeRequestId,
@@ -139,15 +140,11 @@ function questionDraftIdsForRequests(
   requestIds: ReadonlySet<string>,
 ): DraftId[] {
   const prefix = questionAttachmentDraftPrefix(environmentId, threadId);
-  return Object.keys(useComposerDraftStore.getState().draftsByThreadKey).flatMap((key) => {
-    if (!key.startsWith(prefix)) return [];
-    try {
-      const [requestId] = JSON.parse(decodeURIComponent(key.slice(prefix.length))) as unknown[];
-      return typeof requestId === "string" && requestIds.has(requestId) ? [DraftId.make(key)] : [];
-    } catch {
-      return [];
-    }
-  });
+  return questionDraftKeysForRequests(
+    Object.keys(useComposerDraftStore.getState().draftsByThreadKey),
+    prefix,
+    requestIds,
+  ).map((key) => DraftId.make(key));
 }
 
 /**
