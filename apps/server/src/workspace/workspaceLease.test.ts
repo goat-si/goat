@@ -16,6 +16,7 @@ import * as Queue from "effect/Queue";
 
 import {
   reuseHeldWorkspaceLease,
+  tryEnterWorkspaceLease,
   tryWithForeignWorkspaceSubtree,
   tryWithWorkspaceLease,
   tryWithWorkspaceSubtree,
@@ -539,6 +540,31 @@ it.live(
         yield* Fiber.join(restore);
         assert.equal(yield* other.answer("subtree", folder), "held");
         assert.equal(yield* other.answer("release"), "released");
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live(
+  "while another server holds a folder whole a terminal's try is busy, and a fiber holding a folder whole fails instead of waiting",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { fs, base, folder, other } = yield* twoServers;
+        yield* fs.makeDirectory(base + "/own");
+        assert.equal(yield* other.answer("subtree", folder), "held");
+        assert.isTrue(
+          Option.isNone(yield* tryEnterWorkspaceLease(folder + "/inner", Effect.die("busy"))),
+        );
+        const waited = yield* tryWithWorkspaceSubtree(
+          base + "/own",
+          withWorkspaceLease(folder + "/inner", Effect.die("must not enter")).pipe(Effect.flip),
+        );
+        assert.equal(Option.getOrThrow(waited)._tag, "WorkspaceLeaseUnavailableError");
+        assert.equal(yield* other.answer("release"), "released");
+        assert.deepEqual(
+          yield* tryEnterWorkspaceLease(folder + "/inner", Effect.succeed(1)),
+          Option.some(1),
+        );
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
 );
