@@ -1121,7 +1121,7 @@ it("unmounts retained bodies and an open source when read is None, without reope
   state.exposure = withMemorySignal(state.exposure, id(1), "invalidate", id(2));
   state.queries.set("read", Option.none());
   await render();
-  expect(container.textContent).toContain("Visible details have been cleared");
+  expect(container.textContent).toContain("Show again");
   expect(container.textContent).not.toContain("Retained body");
   expect(container.textContent).not.toContain("Synthetic judgment");
   expect(container.textContent).not.toContain("Source body");

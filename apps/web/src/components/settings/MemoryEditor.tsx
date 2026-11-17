@@ -56,16 +56,33 @@ export function useMemoryEditSession({
   const gap = item || seen === null ? null : memoryBodyGap(seen, exposure, memoryId);
   const [start, setStart] = useState<MemoryEditStart | null>(null);
   const [edited, setEdited] = useState<"no" | "differs" | "kept">("no");
+  // The shared draft decides whether a change keeps the edit; the editor closes when it is gone.
+  const draftText = useAtomValue(
+    memoryEnvironment.draftAtom({
+      environmentId,
+      input: { memorySpaceId },
+      draftId: `editor:${memoryId}`,
+    }),
+  );
+  const [seeded, setSeeded] = useState(false);
+  if (start && !seeded && draftText !== null) setSeeded(true);
+  const draftLost = start !== null && seeded && draftText === null;
   // The person's own save, or a read this view asked for, until the next body arrives.
   const [own, setOwn] = useState<"save" | "pending" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   if ((item && own === "pending") || (!start && own === "save")) setOwn(null);
   if (
     start &&
-    (!canWrite || (own !== "save" && gap !== null && (gap !== "unchanged" || edited === "no")))
+    (!canWrite ||
+      (own !== "save" &&
+        (draftLost ||
+          gap === "forgotten" ||
+          gap === "unavailable" ||
+          (gap === "unchanged" && edited === "no"))))
   ) {
     setStart(null);
-    if (canWrite && gap === "changed")
+    setSeeded(false);
+    if (canWrite && draftLost && gap !== "forgotten" && gap !== "unavailable")
       setNotice(
         "Edit closed because this memory is no longer the version you started from. Your unsaved text was not kept.",
       );
@@ -86,6 +103,7 @@ export function useMemoryEditSession({
         derivedFromMemoryRevisions: visible.payload.derivedFromMemoryRevisions,
       });
       setEdited("no");
+      setSeeded(false);
       setNotice(null);
     },
     close: () => setStart(null),
@@ -94,6 +112,7 @@ export function useMemoryEditSession({
       refresh();
     },
     editorEvents: {
+      edited: edited !== "no",
       onTextChange: (text: string) =>
         setEdited((previous) =>
           previous === "kept" || item?.status !== "active"
@@ -122,7 +141,8 @@ export function MemoryBodyGapNotice({
     </Button>
   );
   if (session.ownRequest === "save") return null;
-  if (session.ownRequest === "pending") return showAgain;
+  // A read this view started, or the reread after a change, shows nothing new until it answers.
+  if (session.ownRequest === "pending" || session.gap === "changed") return showAgain;
   if (session.gap === "unchanged")
     return (
       <div className="flex flex-wrap items-center gap-2">
@@ -148,6 +168,7 @@ export function MemoryEditor({
   seedText,
   scope = DEFAULT_MEMORY_SCOPE,
   scopeLabel,
+  edited = true,
   onTextChange,
   onSaveStart,
   onSaveSettled,
@@ -160,6 +181,8 @@ export function MemoryEditor({
   seedText?: string | undefined;
   scope?: MemoryScope;
   scopeLabel?: string;
+  /** An existing memory can be saved only once the draft differs from it. */
+  edited?: boolean;
   onTextChange?: (text: string) => void;
   onSaveStart?: () => void;
   onSaveSettled?: (accepted: boolean) => void;
@@ -179,12 +202,19 @@ export function MemoryEditor({
   const upsert = useAtomCommand(memoryEnvironment.upsert, { reportFailure: false });
   const canWrite = useAtomValue(memoryEnvironment.upsert.permissionAtom(environmentId));
   const mounted = useRef(true);
-  const seed = useEffectEvent(() => seedText);
+  const seed = useEffectEvent(() =>
+    seedText !== undefined && start ? { text: seedText, revisionId: start.revisionId } : null,
+  );
   // oxlint-disable-next-line goat/react-effect-budget -- the shared draft atom lives outside React; it is seeded on open and cleared on close
   useEffect(() => {
     mounted.current = true;
-    const visibleText = seed();
-    if (visibleText !== undefined) registry.set(draft, { text: visibleText, memoryIds: [id] });
+    const opened = seed();
+    if (opened)
+      registry.set(draft, {
+        text: opened.text,
+        memoryIds: [id],
+        expectedHeads: [opened.revisionId],
+      });
     return () => {
       mounted.current = false;
       registry.set(draft, null);
@@ -207,6 +237,7 @@ export function MemoryEditor({
         event.preventDefault();
         if (
           busy ||
+          !edited ||
           !text?.trim() ||
           !registry.get(memoryEnvironment.upsert.permissionAtom(environmentId))
         )
@@ -256,7 +287,7 @@ export function MemoryEditor({
         }}
       />
       {error ? <p role="alert">{error}</p> : null}
-      <Button type="submit" size="sm" disabled={busy || !text?.trim()}>
+      <Button type="submit" size="sm" disabled={busy || !edited || !text?.trim()}>
         {operationId ? "Retry memory request" : "Save memory"}
       </Button>
       <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={onClose}>
