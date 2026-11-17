@@ -858,6 +858,7 @@ export function useComposerSend(input: ComposerSendInput) {
           reviewComments: composerReviewComments,
           previewAnnotations: composerPreviewAnnotations,
           threadContexts: composerThreadContexts,
+          replyTo,
           text: followUp.text,
         }),
         interactionMode: followUp.interactionMode,
@@ -1175,8 +1176,7 @@ export function useComposerSend(input: ComposerSendInput) {
           (annotationImageId !== undefined &&
             sameIds(attachmentIds, attachmentIdsBeforeAnnotation));
         // The reply is not in the prompt, so cancelling or changing it is checked on its own.
-        const liveReply =
-          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.replyTo ?? null;
+        const liveReply = draftReplyTo(composerDraftTarget);
         return !promptUnchanged || !attachmentsUnchanged || liveReply !== replyTo;
       };
       const draftBeforeDecline = useComposerDraftStore
