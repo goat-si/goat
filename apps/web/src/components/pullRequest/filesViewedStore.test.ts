@@ -258,4 +258,18 @@ describe("createFilesViewedStore", () => {
     expect(t.send.mock.calls[1]?.[1]).toEqual([{ path: "a.ts", viewed: false }]);
     release();
   });
+
+  it("sends the version of the file a press was made on, and none for a press that names none", async () => {
+    using t = setup();
+    const scope = t.store.scope(first);
+    const release = scope.subscribe(() => {});
+    scope.setViewed("a.ts", true, "shown-a");
+    scope.setViewed("b.ts", true);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(t.send.mock.calls[0]?.[1]).toEqual([
+      { path: "a.ts", viewed: true, revision: "shown-a" },
+      { path: "b.ts", viewed: true },
+    ]);
+    release();
+  });
 });
