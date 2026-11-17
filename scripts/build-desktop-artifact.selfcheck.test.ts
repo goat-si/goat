@@ -4,6 +4,7 @@ import * as NodeFS from "node:fs";
 import * as NodeURL from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -16,12 +17,34 @@ import {
 } from "./build-desktop-artifact.ts";
 import { BUNDLE_SELF_CHECK_RESOLVE_HOOK } from "./lib/bundle-self-check-hook.ts";
 
+// The nightly's Windows TEMP is the 8.3 spelling C:\Users\RUNNER~1\AppData\Local\Temp. CI and the
+// test setup swap in a canonical temp directory, so Windows probes go back under that spelling.
+const nightlyTempDirectory = Effect.fn("test.nightlyTempDirectory")(function* () {
+  const path = yield* Path.Path;
+  const localAppData = (yield* HostProcess.Environment).LOCALAPPDATA;
+  if ((yield* HostProcess.Platform) !== "win32" || localAppData === undefined) return {};
+  const shortPath = NodeChildProcess.spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:GOAT_LONG_PATH).ShortPath",
+    ],
+    { encoding: "utf8", env: { ...process.env, GOAT_LONG_PATH: path.join(localAppData, "Temp") } },
+  ).stdout.trim();
+  return shortPath === "" ? {} : { directory: shortPath };
+});
+
 // The self-check runs its probe under the OS temp directory. A node_modules above it is real
 // machine state (an install left in /private/tmp), so the probe must judge only the packaged tree.
 const withAncestorNodeModules = Effect.fn("test.withAncestorNodeModules")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-ancestor-node-modules-" });
+  const root = yield* fs.makeTempDirectoryScoped({
+    prefix: "goat-ancestor-node-modules-",
+    ...(yield* nightlyTempDirectory()),
+  });
   const packageDir = path.join(root, "node_modules/goat-ancestor-only-package");
   yield* fs.makeDirectory(packageDir, { recursive: true });
   yield* fs.writeFileString(
@@ -70,7 +93,10 @@ const serverAsar = Effect.fn("test.serverAsar")(function* (serverEntrySource: st
 const hookProbe = Effect.fn("test.hookProbe")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-selfcheck-hook-" });
+  const root = yield* fs.makeTempDirectoryScoped({
+    prefix: "goat-selfcheck-hook-",
+    ...(yield* nightlyTempDirectory()),
+  });
   const app = path.join(root, "app");
   yield* fs.makeDirectory(app);
   yield* fs.writeFileString(path.join(app, "dep.mjs"), "export default 1;\n");
