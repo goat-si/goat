@@ -417,7 +417,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   ...BETA_SETTINGS_SEARCH_ITEMS,
   {
     id: "screen-reader-announcements",
-    title: "Screen reader announcements",
+    title: msg("Screen reader announcements"),
     to: "/settings/general",
     searchTerms: [
       "accessibility a11y screen reader nvda jaws voiceover orca narrator speech announce read aloud messages activity steps",
@@ -425,7 +425,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "screen-reader-window-title",
-    title: "Screen reader window title",
+    title: msg("Screen reader window title"),
     to: "/settings/general",
     searchTerms: [
       "accessibility a11y screen reader nvda jaws voiceover orca narrator window title tab title alt tab taskbar thread status order working approval",

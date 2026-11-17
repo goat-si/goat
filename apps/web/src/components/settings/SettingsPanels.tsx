@@ -1047,7 +1047,7 @@ export function GeneralSettingsPanel() {
 
       <DiffSettingsSection />
       <ComposerSettingsSection />
-      <SettingsSection id="activity" title="Activity">
+      <SettingsSection id="activity" title={gt("Activity")}>
         <ScreenReaderAnnouncementsRow />
         <ScreenReaderWindowTitleRow />
       </SettingsSection>

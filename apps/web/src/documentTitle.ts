@@ -6,6 +6,8 @@ import { resolveServerBackedAppDisplayName, resolveWindowTitle } from "./brandin
 import { useComposerDraftStore } from "./composerDraftStore";
 import { isElectron } from "./env";
 import { getClientSettings, subscribeClientSettings } from "./hooks/useSettings";
+import { subscribeI18n } from "./i18n/runtime";
+import { translateWindowTitleStatus } from "./i18n/windowTitleStatus";
 import type { AppRouter } from "./router";
 import { appAtomRegistry } from "./rpc/atomRegistry";
 import { environmentProjects } from "./state/projects";
@@ -57,7 +59,10 @@ export function startDocumentTitle(router: AppRouter): void {
       threadTitle: thread?.title ?? null,
       ...(getClientSettings().screenReaderWindowTitle && {
         screenReader: {
-          threadStatus: thread === null ? null : resolveWindowTitleThreadStatus(thread),
+          threadStatus:
+            thread === null
+              ? null
+              : translateWindowTitleStatus(resolveWindowTitleThreadStatus(thread)),
         },
       }),
       desktop: isElectron,
@@ -96,6 +101,7 @@ export function startDocumentTitle(router: AppRouter): void {
   appAtomRegistry.subscribe(primaryServerConfigAtom, write, { immediate: true });
   appAtomRegistry.subscribe(environmentProjects.projectsAtom, write);
   subscribeClientSettings(write);
+  subscribeI18n(write);
   router.subscribe("onResolved", updateOpenThread);
   useComposerDraftStore.subscribe(updateOpenThread);
 }

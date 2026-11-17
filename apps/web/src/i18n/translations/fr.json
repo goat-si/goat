@@ -70,5 +70,16 @@
   "7e4d81ca21a72019": "Confirmation avant de désépingler",
   "1d5052cbe70d0b28": "Confirmation de l'archivage",
   "d5dd27a4eb853248": "Confirmation de la suppression",
-  "86b43caa9ff41ea2": "Raccourci Quitter"
+  "86b43caa9ff41ea2": "Raccourci Quitter",
+  "7bfe35051f932b93": "Approbation requise",
+  "b67d6bd5c4e311b7": "Attend votre réponse",
+  "624506a403296638": "En cours",
+  "0cb9ffcd1fb46b0c": "Statut uniquement",
+  "cf0f7fc3df26fa75": "Statut et messages",
+  "3bf40445a706e4c9": "Tout",
+  "a3048aaa541b7744": "Activité",
+  "216ed20b6f40fa6f": "Annonces du lecteur d’écran",
+  "0ce04933a7047deb": "Titre de fenêtre pour lecteur d’écran",
+  "a0bb7e0657eef5b7": "Ce qu’un lecteur d’écran annonce du fil ouvert : un tour qui commence, qui a besoin de vous et qui se termine. « Statut et messages » ajoute ce que l’agent écrit avant son dernier message. « Tout » ajoute chaque étape.",
+  "364dd15f43025a40": "Commence le titre de la fenêtre par le statut du fil, par exemple « Approbation requise », puis son nom, pour que les lecteurs d’écran les lisent en premier quand vous changez d’application. Les barres des tâches, les écrans partagés et les outils de suivi du temps le voient aussi."
 }
