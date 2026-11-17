@@ -11,5 +11,6 @@ fail() {
   exit 1
 }
 command -v bwrap >/dev/null || fail "bwrap is missing"
-bwrap --unshare-user --unshare-net --dev-bind / / true || fail "bwrap cannot create a user and network namespace"
-exec bwrap --unshare-user --unshare-net --unshare-pid --die-with-parent --dev-bind / / --proc /proc "$@"
+flags=(--unshare-user --unshare-net --unshare-pid --die-with-parent --dev-bind / / --proc /proc)
+bwrap "${flags[@]}" true || fail "bwrap cannot create its user, network and PID namespaces with /proc"
+exec bwrap "${flags[@]}" "$@"

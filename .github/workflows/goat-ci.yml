@@ -313,7 +313,8 @@ jobs:
 
       # web stays here. The other suites are their own matrix tasks so a
       # slow server shard does not block them. `check` above is still the aggregate.
-      # Web browser tests run through loopback-netns.sh: loopback only on a self-hosted runner.
+      # The whole @goat/web suite (unit, browser and render tests) runs through loopback-netns.sh:
+      # loopback only off GitHub-hosted runners.
       - name: Test
         if: matrix.task == 'test'
         # Logs each failed browser request with Chromium's network error, the evidence #1719 lacks.
@@ -324,11 +325,12 @@ jobs:
       # Changed, companion, and importing tests (directly or through testkit/fixture files), plus
       # special suites, as check:changed runs them: from the repository root,
       # whose Vitest config hands each file to its package's config. CI script tests use node:test.
-      # A full run hands it every test file no suite owns instead (goat-ci-scope.cjs withUnownedTests).
-      # A selected file that no Vitest project collects fails here, so a quick run cannot pass
-      # without running a test it chose. Every runner runs; the step exits with the last failure.
-      # Its apps/web browser tests run with loopback only (goat-ci-scope.cjs webBrowserTests), the rest
-      # on the host. A missing changed_tests_netns output fails the step; "[]" means none to wrap.
+      # A full run hands it every test file no suite owns instead (goat-ci-scope.cjs
+      # withUnownedTests). A selected file that no Vitest project collects fails here, so a quick run
+      # cannot pass without running a test it chose. Vitest and node:test both run; the step exits
+      # with the last failure. Its apps/web browser tests run with loopback only (goat-ci-scope.cjs
+      # webBrowserTests), the rest on the host. A changed_tests_netns output that is missing, not a
+      # list, or names a file outside the list fails the step; "[]" means none to wrap.
       - name: Test changed files
         if: matrix.task == 'test-changed'
         env:
@@ -357,11 +359,22 @@ jobs:
               echo "::error::goat-scope wrote no changed_tests_netns output"
               exit 1
             fi
-            mapfile -t netns_files < <(node -e 'for (const file of JSON.parse(process.env.CHANGED_TESTS_NETNS)) console.log(file)')
-            mapfile -t host_files < <(node -e '
-              const netns = new Set(JSON.parse(process.env.CHANGED_TESTS_NETNS));
-              for (const file of JSON.parse(process.env.CHANGED_TESTS)) if (!netns.has(file)) console.log(file);
-            ')
+            split="$RUNNER_TEMP/changed-tests-split"
+            mkdir -p "$split"
+            SPLIT="$split" node -e '
+              const fs = require("node:fs");
+              const files = JSON.parse(process.env.CHANGED_TESTS);
+              const netns = JSON.parse(process.env.CHANGED_TESTS_NETNS);
+              if (!Array.isArray(netns)) throw new Error("not a JSON list");
+              const stray = netns.filter((file) => !files.includes(file));
+              if (stray.length > 0) throw new Error("names files outside the list: " + stray.join(", "));
+              const inside = new Set(netns);
+              const lines = (list) => list.map((file) => file + "\n").join("");
+              fs.writeFileSync(process.env.SPLIT + "/netns", lines(netns));
+              fs.writeFileSync(process.env.SPLIT + "/host", lines(files.filter((file) => !inside.has(file))));
+            ' || { echo "::error::goat-scope changed_tests_netns is not a list of the changed test files"; exit 1; }
+            mapfile -t netns_files < "$split/netns"
+            mapfile -t host_files < "$split/host"
             if [ "${#host_files[@]}" -gt 0 ]; then vp test run "${host_files[@]}" || status=$?; fi
             if [ "${#netns_files[@]}" -gt 0 ]; then
               bash .github/scripts/loopback-netns.sh vp test run "${netns_files[@]}" || status=$?
