@@ -208,3 +208,29 @@ IV gains (iv), for every lane (relay it): where GOAT's test file is byte for byt
 BEFORE: apps/mobile/src/features/decisions/useDecisionInbox.test.tsx:235-239 is the last vi.mock (../threads/QuestionAttachments), followed at :240 by import { useDecisionInbox, useDecisionInboxSessionState } from "./useDecisionInbox";
 AFTER: one line inserted after :239 and before :240: vi.mock("./decisionInboxSideChat", () => ({ useDecisionInboxSideChat: () => undefined }));
 Nothing else changes: no title, body, other mock, fixture or expectation. With the opener undefined, the screen behaves exactly as at the cut in that test, so every existing case keeps testing what it tests today. The new behaviour is covered by useDecisionInbox.unsent.test.tsx. There is no upstream counterpart (GOAT's inbox), so IV does not cover it.
+
+## 17. Progress log, continued (O27 and 35bda28117)
+
+- O27, upstream order, each tarball taken byte for byte from upstream (git hash-object equals git rev-parse <sha>:<path>):
+  - ad58be1931 (986a4f56a8): t3.16 to t3.18-4287c5d3, plus the .pnpmfile.cjs fork guard (checked: a patch on the fork throws, @expo/ui passes) and the README in GOAT's wording. Mobile typecheck clean; src/native 98 tests pass.
+  - 96c057a36d (ea876cc4ac) and 6c2a0ce3d5 (0ca50a6f1e): t3.18-497fbe63, then t3.18-0dc7ed81. Typecheck clean after each.
+  - 489b2d4212 test (upstream's mermaidSvg.test.ts, byte-identical; failed first with "Cannot find module './mermaidSvg'") and c745767dc7 (d0807b705f): Mermaid and math fences, pele moved into the catalog. Adapted to GOAT's enrichedMarkdownStyle module and to MediaImagePreview's single source; the diagram cache's eviction narrows its key in place of a non-null assertion (code budget). Mobile and web typecheck clean.
+  - f81ab48ada test (upstream's codeBlockMarkdown.test.ts and menu-placement.test.ts, byte-identical; both failed first: missing module, and 3 failing placement cases) and a29cc376bc (7e45dcdd61): code block colours, plus the Android anchored menu's vertical placement, applied to GOAT's AndroidAnchoredMenu.tsx (6 of 7 hunks by patch; the seventh, close(), by hand; the trigger's accessibilityState now reads local !== null). With AndroidAnchoredMenu.test.tsx and src/native: 13 files, 123 tests; typecheck clean.
+- 35bda28117, decision D2:
+  - 30763f83bf test: SecretTextInput.android.test.tsx, failed first ("Failed to resolve import ./SecretTextInput.android").
+  - 7ffa0040bb port: GoatSecretInputModule.kt and SecretTextInput, wired into SecretRequestCard's masked field. GOAT differences (each listed in the commit): GOAT names; the login password and op:// reference share the field; an onFocus "onInputFocus" event keeps markOpened; the unechoed queue is capped at 64 (the 10.021 #324 note); a binary without the native view keeps the plain field. SecretRequestCard.test.tsx passes unchanged (5 tests with the new file).
+- Lane head on origin: 7ffa0040bbea781d1778d30ab02ead4821a84165.
+- HELD, request R3: 7fb54eb051 (the eye toggle) is ported locally and stashed. Its reveal button is a Pressable, and the existing SecretRequestCard.test.tsx mocks react-native with View only, so two of its three cases fail with "No "Pressable" export is defined on the "react-native" mock". Upstream's commit changes no test.
+
+## 18. Rule 3 request R3 (needs_input)
+
+BEFORE: apps/mobile/src/features/threads/SecretRequestCard.test.tsx:8-10
+vi.mock("react-native", () => ({
+  View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+}));
+AFTER:
+vi.mock("react-native", () => ({
+  View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  Pressable: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+}));
+One added line in the mock factory. Nothing else changes: no title, case body or expectation. Why: 7fb54eb051 puts an eye button (Pressable) beside the masked field on every platform; the three cases keep asserting what they assert today (masked by default, required fields, the saves). Alternative if refused: skip 7fb54eb051, and 35bda28117 stays as committed (D2 said port both; that would need your word too).
