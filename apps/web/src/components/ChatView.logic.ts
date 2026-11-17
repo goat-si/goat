@@ -1331,6 +1331,8 @@ export interface ComposerSendContents {
   readonly reviewComments: ReadonlyArray<ReviewCommentContext>;
   readonly threadContexts: ReadonlyArray<ThreadContextRecord>;
   readonly previewTabs?: ReadonlyArray<import("@goat/contracts").PreviewTabContextRecord>;
+  /** The response the message replies to. `prompt` already leads with its reference. */
+  readonly replyTo?: import("@goat/contracts").ResponseContextRecord | null;
 }
 
 /**
@@ -1342,6 +1344,15 @@ export function snapshotComposerSend(contents: ComposerSendContents) {
   const images = [...contents.images];
   const files = [...contents.files];
   const terminalContexts = [...contents.sendableTerminalContexts];
+  const replyTo = contents.replyTo ?? null;
+  const messageText = contents.terminalContexts
+    .filter((context) => !terminalContexts.includes(context))
+    .reduce(
+      (text, context) =>
+        removeInlineContextReference(text, terminalContextReference(context).contextId).prompt,
+      contents.prompt,
+    )
+    .trim();
   return {
     images,
     files,
@@ -1351,14 +1362,12 @@ export function snapshotComposerSend(contents: ComposerSendContents) {
     reviewComments: [...contents.reviewComments],
     threadContexts: [...contents.threadContexts],
     previewTabs: [...(contents.previewTabs ?? [])],
-    messageText: contents.terminalContexts
-      .filter((context) => !terminalContexts.includes(context))
-      .reduce(
-        (text, context) =>
-          removeInlineContextReference(text, terminalContextReference(context).contextId).prompt,
-        contents.prompt,
-      )
-      .trim(),
+    replyTo,
+    messageText,
+    /** What a failed send puts back in the composer: the reply returns above it, not in the text. */
+    draftText: replyTo
+      ? removeInlineContextReference(messageText, replyTo.contextId).prompt.trimStart()
+      : messageText,
   };
 }
 

@@ -343,6 +343,7 @@ export const make = Effect.gen(function* () {
         : {}),
       ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
       serverBrowser: true,
+      replyToResponse: true,
       sshActivity: true,
       hubProxy: true,
       drainRestart: true,

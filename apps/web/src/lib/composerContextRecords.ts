@@ -16,11 +16,13 @@ import type {
   PreviewAnnotationContextRecord,
   PreviewAnnotationPayload,
   PreviewTabContextRecord,
+  ResponseContextRecord,
   ReviewCommentContextRecord,
   ScopedThreadRef,
   TerminalContextRecord,
   ThreadContextRecord,
   ThreadId,
+  TurnItemId,
 } from "@goat/contracts";
 import { upgradeLegacyContextMessage } from "@goat/shared/composerContextLegacy";
 import { encodeComposerContextFragment } from "@goat/shared/composerContextClipboard";
@@ -183,6 +185,40 @@ export function threadContextRecord(ref: ScopedThreadRef, title: string): Thread
   };
 }
 
+export function isResponseContextRecord(
+  record: ComposerContextRecord,
+): record is ResponseContextRecord {
+  return record.kind === "response" && "citation" in record;
+}
+
+export function responseContextReference(record: ResponseContextRecord): ComposerContextReference {
+  return { kind: "response", contextId: record.contextId, label: record.label };
+}
+
+/** One record per response, so replying to it again reuses the same reference. */
+export function responseContextRecord(input: {
+  readonly citation: ResponseContextRecord["citation"];
+  readonly itemId: TurnItemId;
+  readonly subagents: ReadonlyArray<{ readonly threadId: ThreadId; readonly title: string }>;
+}): ResponseContextRecord {
+  return {
+    version: 1,
+    kind: "response",
+    contextId: toKindScopedComposerContextId("response", input.citation.messageId),
+    label: sanitizeComposerContextLabel(input.citation.text.slice(0, 64), "response"),
+    citation: input.citation,
+    itemId: input.itemId,
+    ...(input.subagents.length > 0
+      ? {
+          subagents: input.subagents.slice(0, 20).map(({ threadId, title }) => ({
+            threadId,
+            title: sanitizeComposerContextLabel(title, "response"),
+          })),
+        }
+      : {}),
+  };
+}
+
 export function terminalContextRecord(context: TerminalContextDraft): TerminalContextRecord {
   return {
     version: 1,
@@ -327,6 +363,7 @@ export function buildMessageContext(input: {
   previewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
   threadContexts?: ReadonlyArray<ThreadContextRecord>;
   previewTabs?: ReadonlyArray<PreviewTabContextRecord>;
+  replyTo?: ResponseContextRecord | null;
   attachments?: ReadonlyArray<BoundComposerAttachment>;
   /** The text being sent; its `@computer` / `@browser` chips become capability records. */
   text?: string;
@@ -340,6 +377,7 @@ export function buildMessageContext(input: {
     ...input.terminalContexts.map(terminalContextRecord),
     ...input.reviewComments.map(reviewCommentContextRecord),
     ...(input.threadContexts ?? []),
+    ...(input.replyTo ? [input.replyTo] : []),
     ...(input.previewTabs ?? []).filter((record) =>
       collectComposerContextReferences(input.text ?? "").some(
         (reference) => reference.contextId === record.contextId,

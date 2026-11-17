@@ -125,6 +125,7 @@ import { sshStartedNotOpenedToast } from "./sshStartedNotOpenedToast";
 import { queueSideChatQuestion, startSideChatOverAnswer } from "../sideChat/sideChatFromComposer";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { sshComposerPorts, type SshComposerPorts } from "./sshComposerPorts";
+import { refuseReplyTheServerDrops, withReplyReference } from "./composerReply";
 import { vcsEnvironment } from "../../state/vcs";
 import type { ComposerSendInput } from "./useComposerSend.input";
 import { draftHasNonPromptContent, readEnvironmentPresentation } from "./useComposerSend.helpers";
@@ -705,12 +706,18 @@ export function useComposerSend(input: ComposerSendInput) {
         previewAnnotations: sendContextPreviewAnnotations,
         direct: directAnnotation,
       });
+    const replyTo =
+      useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.replyTo ?? null;
+    if (refuseReplyTheServerDrops(replyTo, environmentId)) return;
     // Include a same-tick annotation reference before React renders its draft.
-    const promptForSend = directAnnotation
-      ? ensureInlineContextReferences(promptRef.current, [
-          previewAnnotationContextReference(directAnnotation.annotation),
-        ])
-      : promptRef.current;
+    const promptForSend = withReplyReference(
+      directAnnotation
+        ? ensureInlineContextReferences(promptRef.current, [
+            previewAnnotationContextReference(directAnnotation.annotation),
+          ])
+        : promptRef.current,
+      replyTo,
+    );
     const strandedThread = threadContextsOutsideEnvironment({
       text: promptForSend,
       records: composerThreadContexts,
@@ -742,6 +749,7 @@ export function useComposerSend(input: ComposerSendInput) {
           reviewComments: composerReviewComments,
           previewAnnotations: composerPreviewAnnotations,
           threadContexts: composerThreadContexts,
+          replyTo,
         },
         setThreadError,
       );
@@ -956,6 +964,7 @@ export function useComposerSend(input: ComposerSendInput) {
       reviewComments: composerReviewComments,
       threadContexts: composerThreadContexts,
       previewTabs: composerPreviewTabs,
+      replyTo,
     });
     const {
       files: composerFilesSnapshot,
@@ -1001,6 +1010,7 @@ export function useComposerSend(input: ComposerSendInput) {
         previewAnnotations: composerPreviewAnnotationsSnapshot,
         threadContexts: composerThreadContextsSnapshot,
         previewTabs: previewTabsSnapshot,
+        replyTo,
         text: messageTextForSend,
         attachments: composerAttachmentsSnapshot.map((attachment, index) => ({
           attachment,
@@ -1170,7 +1180,10 @@ export function useComposerSend(input: ComposerSendInput) {
           sameIds(attachmentIds, attachmentIdsAtSend) ||
           (annotationImageId !== undefined &&
             sameIds(attachmentIds, attachmentIdsBeforeAnnotation));
-        return !promptUnchanged || !attachmentsUnchanged;
+        // The reply is not in the prompt, so cancelling or changing it is checked on its own.
+        const liveReply =
+          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.replyTo ?? null;
+        return !promptUnchanged || !attachmentsUnchanged || liveReply !== replyTo;
       };
       const draftBeforeDecline = useComposerDraftStore
         .getState()
@@ -1561,13 +1574,16 @@ export function useComposerSend(input: ComposerSendInput) {
       } else {
         const retryComposerImages = restoreComposerDraft(composerDraftTarget, sendSnapshot);
         if (currentRouteThreadKeyRef.current === routeThreadKey) {
-          promptRef.current = messageTextForSend;
+          promptRef.current = sendSnapshot.draftText;
           composerImagesRef.current = retryComposerImages;
           composerFilesRef.current = composerFilesSnapshot;
           composerTerminalContextsRef.current = composerTerminalContextsSnapshot;
           composerRef.current?.resetCursorState({
-            cursor: collapseExpandedComposerCursor(messageTextForSend, messageTextForSend.length),
-            prompt: messageTextForSend,
+            cursor: collapseExpandedComposerCursor(
+              sendSnapshot.draftText,
+              sendSnapshot.draftText.length,
+            ),
+            prompt: sendSnapshot.draftText,
             detectTrigger: true,
           });
         }

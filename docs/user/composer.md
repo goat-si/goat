@@ -170,6 +170,15 @@ The quoted text and comment count toward the message limit.
 Mobile displays saved quotes and comments, but does not create citations or
 navigate to their sources.
 
+## Reply to a response
+
+On web and desktop, choose **Reply** in an assistant response's hover actions. The response
+shows above the composer until you send or cancel it, and the sent message opens with a card for
+it. The agent gets where the response is and how it starts, and rereads the rest itself, so a
+reply costs the same however long the response was. Reply appears only when the thread's machine
+runs a GOAT version that supports it. Mobile shows a received reply as a chip and has no Reply
+action.
+
 ## Recall a sent prompt
 
 Press `ArrowUp` in an empty composer to bring back the last prompt you sent in this thread. Press

@@ -288,6 +288,7 @@ export const QrCodeIcon = /* @__PURE__ */ solarIcon(solar.qrCode, "QrCodeIcon");
 export const QuoteIcon = /* @__PURE__ */ solarIcon(solar.quote, "QuoteIcon");
 export const RadioTowerIcon = /* @__PURE__ */ solarIcon(solar.station, "RadioTowerIcon");
 export const RedoIcon = /* @__PURE__ */ solarIcon(solar.undoRight, "RedoIcon");
+export const ReplyIcon = /* @__PURE__ */ solarIcon(solar.undoLeft, "ReplyIcon");
 export const RefreshCwIcon = /* @__PURE__ */ solarIcon(solar.refresh, "RefreshCwIcon");
 export const RocketIcon = /* @__PURE__ */ solarIcon(solar.rocket, "RocketIcon");
 export const RotateCcwIcon = /* @__PURE__ */ solarIcon(solar.restart, "RotateCcwIcon");

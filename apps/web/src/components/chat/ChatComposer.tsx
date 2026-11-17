@@ -298,6 +298,8 @@ import {
 } from "./preparingComposerImages";
 import { ComposerControlsBar } from "./ComposerControlsBar";
 import { composerCommandKeyHandler } from "./composerCommandKey";
+import { useReplyBannerItems } from "./composerReply";
+import { useComposerReplyTarget } from "./composerReplyTarget";
 import type { ChatComposerHandle } from "./chatComposerHandle";
 
 function consumePasteAsTextShortcut(deadline: { current: number }): boolean {
@@ -796,6 +798,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           : uploadGate.blockReason
       : null);
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
+  const setComposerDraftReplyTo = useComposerDraftStore((store) => store.setReplyTo);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const removeComposerDraftImage = useComposerDraftStore((store) => store.removeImage);
   const addComposerDraftFiles = useComposerDraftStore((store) => store.addFiles);
@@ -1063,6 +1066,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
   const pasteAsTextShortcutUntilRef = useRef(0);
   const composerFormRef = useRef<HTMLFormElement>(null);
+  const composerReplyTargetRef = useComposerReplyTarget(composerFormRef, composerRef);
   const composerSurfaceRef = useRef<HTMLDivElement>(null);
   const providerInputRejectedRef = useRef(false);
   const composerSelectLockRef = useRef(false);
@@ -2255,7 +2259,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setIsTasksDrawerOpen((open) => !open);
   };
   const toggleTasksDrawerStable = useStableCallback(toggleTasksDrawer);
-  const hasBannerItems = props.bannerItems.length > 0;
+  const replyBannerItems = useReplyBannerItems(composerDraftTarget, composerDraft?.replyTo ?? null);
+  const bannerItems = [...props.bannerItems, ...replyBannerItems];
+  const hasBannerItems = bannerItems.length > 0;
   const hasBlockingComposerTopDrawer =
     activePendingApproval !== null || pendingUserInputs.length > 0;
   const showInlineTasksBadge =
@@ -2503,9 +2509,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         content: activityStackContent,
       }
     : null;
-  const bannerStackItems = activityStackItem
-    ? [activityStackItem, ...props.bannerItems]
-    : props.bannerItems;
+  const bannerStackItems = activityStackItem ? [activityStackItem, ...bannerItems] : bannerItems;
   const [tasksDrawerThreadId, setTasksDrawerThreadId] = useState(activeThreadId);
   if (
     isTasksDrawerOpen &&
@@ -3015,6 +3019,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           "cursor",
           { ensureLeadingBoundary: true, citationCommentAnchor: sourceAnchor },
         ),
+      replyToResponse: (response) => {
+        // An open question owns the composer, and its answer would not carry the reply.
+        if (pendingUserInputs.length > 0 || projectSelectionRequired) return false;
+        setComposerDraftReplyTo(composerDraftTarget, response);
+        focusComposer();
+        return true;
+      },
       openModelPicker: openModelPickerStable,
       stepReasoningEffort: (direction) => {
         if (noProviderAvailable || pendingUserInputs.length > 0 || isEditingQueuedMessage) {
@@ -3225,6 +3236,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       isLiteralPendingAnswer,
       pendingUserInputs.length,
       projectSelectionRequired,
+      setComposerDraftReplyTo,
       applyPromptReplacementStable,
       isComposerModelPickerOpen,
       openModelPickerStable,
@@ -3301,7 +3313,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   return (
     <form
-      ref={composerFormRef}
+      ref={composerReplyTargetRef}
       onSubmit={submitComposerStable}
       onPointerDownCapture={(event) => {
         const target = event.target;

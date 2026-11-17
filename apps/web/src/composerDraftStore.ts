@@ -25,6 +25,7 @@ import {
   RuntimeMode,
   ThreadContextRecord,
   PreviewTabContextRecord,
+  ResponseContextRecord,
   type ScopedProjectRef,
   type ScopedThreadRef,
   ThreadId,
@@ -112,6 +113,7 @@ const isRuntimeMode = Schema.is(RuntimeMode);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 const isReviewCommentContext = Schema.is(ReviewCommentContextSchema);
 const isThreadContextRecord = Schema.is(ThreadContextRecord);
+const isResponseContextRecord = Schema.is(ResponseContextRecord);
 const isPreviewTabContextRecord = Schema.is(PreviewTabContextRecord);
 const isSnapShotSource = Schema.is(SnapShotSource);
 const isPreviewAnnotationPayload = Schema.is(PreviewAnnotationPayloadSchema);
@@ -218,6 +220,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   previewAnnotations: Schema.optionalKey(Schema.Array(PreviewAnnotationPayloadSchema)),
   reviewComments: Schema.optionalKey(Schema.Array(ReviewCommentContextSchema)),
   threadContexts: Schema.optionalKey(Schema.Array(ThreadContextRecord)),
+  replyTo: Schema.optionalKey(ResponseContextRecord),
   previewTabs: Schema.optionalKey(Schema.Array(PreviewTabContextRecord)),
   modelSelectionByProvider: Schema.optionalKey(Schema.Record(ProviderInstanceId, ModelSelection)),
   activeProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
@@ -343,6 +346,8 @@ export interface ComposerThreadDraftState {
   previewAnnotations: PreviewAnnotationPayload[];
   reviewComments: ReviewCommentContext[];
   threadContexts: ThreadContextRecord[];
+  /** The response this message replies to. It becomes a context record when the message is sent. */
+  replyTo: ResponseContextRecord | null;
   previewTabs: PreviewTabContextRecord[];
   modelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
   activeProvider: ProviderInstanceId | null;
@@ -366,7 +371,8 @@ export function composerDraftHasUserContent(
     draft.previewAnnotations.length > 0 ||
     draft.reviewComments.length > 0 ||
     draft.threadContexts.length > 0 ||
-    draft.previewTabs.length > 0
+    draft.previewTabs.length > 0 ||
+    draft.replyTo !== null
   );
 }
 
@@ -589,6 +595,7 @@ export interface ComposerDraftStoreState extends PreviewTabDraftActions {
     threadRef: ComposerThreadTarget,
     records: ReadonlyArray<ThreadContextRecord>,
   ) => void;
+  setReplyTo: (threadRef: ComposerThreadTarget, response: ResponseContextRecord | null) => void;
   clearPersistedAttachments: (threadRef: ComposerThreadTarget) => void;
   syncPersistedAttachments: (
     threadRef: ComposerThreadTarget,
@@ -698,6 +705,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   reviewComments: EMPTY_REVIEW_COMMENTS,
   threadContexts: EMPTY_THREAD_CONTEXTS,
   previewTabs: [],
+  replyTo: null,
   modelSelectionByProvider: EMPTY_MODEL_SELECTION_BY_PROVIDER,
   activeProvider: null,
   runtimeMode: null,
@@ -716,6 +724,7 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     reviewComments: [],
     threadContexts: [],
     previewTabs: [],
+    replyTo: null,
     modelSelectionByProvider: {},
     activeProvider: null,
     runtimeMode: null,
@@ -822,6 +831,7 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.reviewComments.length === 0 &&
     draft.threadContexts.length === 0 &&
     draft.previewTabs.length === 0 &&
+    draft.replyTo === null &&
     Object.keys(draft.modelSelectionByProvider).length === 0 &&
     draft.activeProvider === null &&
     draft.runtimeMode === null &&
@@ -1673,6 +1683,7 @@ function normalizePersistedDraftsByThreadId(
     const reviewComments = Array.isArray(draftCandidate.reviewComments)
       ? draftCandidate.reviewComments.filter(isReviewCommentContext)
       : [];
+    const replyTo = isResponseContextRecord(draftCandidate.replyTo) ? draftCandidate.replyTo : null;
     const threadContexts = Array.isArray(draftCandidate.threadContexts)
       ? draftCandidate.threadContexts.filter(isThreadContextRecord)
       : [];
@@ -1799,6 +1810,7 @@ function normalizePersistedDraftsByThreadId(
       reviewComments.length === 0 &&
       threadContexts.length === 0 &&
       previewTabs.length === 0 &&
+      replyTo === null &&
       !hasModelData &&
       !runtimeMode &&
       !interactionMode
@@ -1826,6 +1838,7 @@ function normalizePersistedDraftsByThreadId(
       ...(reviewComments.length > 0 ? { reviewComments } : {}),
       ...(threadContexts.length > 0 ? { threadContexts } : {}),
       ...(previewTabs.length > 0 ? { previewTabs } : {}),
+      ...(replyTo ? { replyTo: replyTo as DeepMutable<ResponseContextRecord> } : {}),
       ...(hasModelData
         ? {
             modelSelectionByProvider: compactModelSelectionByProvider(modelSelectionByProvider),
@@ -1850,7 +1863,8 @@ function persistedComposerDraftHasUserContent(draft: PersistedComposerThreadDraf
     (draft.previewAnnotations?.length ?? 0) > 0 ||
     (draft.reviewComments?.length ?? 0) > 0 ||
     (draft.threadContexts?.length ?? 0) > 0 ||
-    (draft.previewTabs?.length ?? 0) > 0
+    (draft.previewTabs?.length ?? 0) > 0 ||
+    draft.replyTo !== undefined
   );
 }
 
@@ -1930,6 +1944,7 @@ export function partializeComposerDraftStoreState(
       draft.reviewComments.length === 0 &&
       draft.threadContexts.length === 0 &&
       draft.previewTabs.length === 0 &&
+      draft.replyTo === null &&
       !hasModelData &&
       draft.runtimeMode === null &&
       draft.interactionMode === null
@@ -1987,6 +2002,9 @@ export function partializeComposerDraftStoreState(
         : {}),
       ...(draft.previewTabs.length > 0
         ? { previewTabs: draft.previewTabs.map((record) => ({ ...record })) }
+        : {}),
+      ...(draft.replyTo
+        ? { replyTo: { ...draft.replyTo } as DeepMutable<ResponseContextRecord> }
         : {}),
       ...(hasModelData
         ? {
@@ -2266,6 +2284,7 @@ function toHydratedThreadDraft(
     reviewComments: persistedDraft.reviewComments?.map((comment) => ({ ...comment })) ?? [],
     threadContexts: persistedDraft.threadContexts?.map((record) => ({ ...record })) ?? [],
     previewTabs: persistedDraft.previewTabs?.map((record) => ({ ...record })) ?? [],
+    replyTo: persistedDraft.replyTo ?? null,
     modelSelectionByProvider,
     activeProvider,
     ...(persistedDraft.modelSelectionExplicit ? { modelSelectionExplicit: true } : {}),
@@ -3781,6 +3800,18 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
         },
+        setReplyTo: (threadRef, response) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef);
+          if (!threadKey) return;
+          set((state) => {
+            const existing = state.draftsByThreadKey[threadKey] ?? createEmptyThreadDraft();
+            const nextDraft = { ...existing, replyTo: response };
+            const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
+            if (shouldRemoveDraft(nextDraft)) delete nextDraftsByThreadKey[threadKey];
+            else nextDraftsByThreadKey[threadKey] = nextDraft;
+            return { draftsByThreadKey: nextDraftsByThreadKey };
+          });
+        },
         removeReviewComment: (threadRef, commentId) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef);
           if (!threadKey || !commentId) return;
@@ -3878,6 +3909,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               reviewComments: [],
               threadContexts: [],
               previewTabs: [],
+              replyTo: null,
             };
             const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) {

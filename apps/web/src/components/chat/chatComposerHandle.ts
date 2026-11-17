@@ -7,6 +7,7 @@ import type {
   PreviewTabContextRecord,
   ProviderDriverKind,
   ProviderInteractionMode,
+  ResponseContextRecord,
   RuntimeRequestId,
   ServerProvider,
   ThreadContextRecord,
@@ -33,6 +34,8 @@ export interface ChatComposerHandle {
     citation: AssistantCitation,
     sourceAnchor: AssistantCitationSourceAnchor,
   ) => boolean;
+  /** Shows the reply above the composer and focuses it; false while a question owns it. */
+  replyToResponse: (response: ResponseContextRecord) => boolean;
   openModelPicker: () => void;
   stepReasoningEffort: (direction: 1 | -1) => void;
   toggleModelPicker: () => void;

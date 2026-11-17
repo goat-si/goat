@@ -5,6 +5,7 @@ import {
   resolveProjectBuiltInSkillEnabled,
   type ServerSettings,
   type ServerSettingsError,
+  type ThreadId,
 } from "@goat/contracts";
 import {
   namedBuiltInSkills,
@@ -15,7 +16,37 @@ import { projectComposerContextForProvider } from "@goat/shared/composerContextR
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
+import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
 import type { ProjectionStoreV2Error } from "./ProjectionStore.ts";
+import { ProjectionStoreV2 } from "./ProjectionStore.ts";
+import { checkResponseContexts } from "./ResponseContextCheck.ts";
+
+/** Reply records checked against this server's threads; without a thread, none pass. */
+const checkedRecords = Effect.fn("BuiltInSkillText.checkedRecords")(function* (message: {
+  readonly threadId?: ThreadId | undefined;
+  readonly context?: { readonly records: ReadonlyArray<ComposerContextRecord> } | undefined;
+}) {
+  const records = message.context?.records ?? [];
+  const none = { records, checkedResponseIds: new Set<never>() };
+  if (message.threadId === undefined || !records.some((record) => record.kind === "response")) {
+    return none;
+  }
+  const store = yield* Effect.serviceOption(ProjectionStoreV2);
+  const identity = yield* Effect.serviceOption(ServerEnvironmentIdentity);
+  if (Option.isNone(store) || Option.isNone(identity)) return none;
+  return yield* checkResponseContexts({
+    environmentId: yield* identity.value.getEnvironmentId,
+    threadId: message.threadId,
+    records,
+    store: store.value,
+  }).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("Reply not checked: the thread could not be read.", { cause }).pipe(
+        Effect.as(none),
+      ),
+    ),
+  );
+});
 
 /**
  * A message's text as its provider receives it, with the built-in skills the message names in
@@ -29,6 +60,8 @@ export const builtInSkillProviderText = Effect.fn("BuiltInSkillText.providerText
   }>,
   input: {
     readonly message: {
+      /** The receiving thread, which a reply's response must belong to. */
+      readonly threadId?: ThreadId | undefined;
       readonly text: string;
       readonly context?: { readonly records: ReadonlyArray<ComposerContextRecord> } | undefined;
     };
@@ -37,9 +70,11 @@ export const builtInSkillProviderText = Effect.fn("BuiltInSkillText.providerText
     readonly project: Effect.Effect<ProjectId | null, ProjectionStoreV2Error>;
   },
 ) {
+  const { records, checkedResponseIds } = yield* checkedRecords(input.message);
   const text = projectComposerContextForProvider({
     text: input.message.text,
-    records: input.message.context?.records ?? [],
+    records,
+    checkedResponseIds,
   });
   const named = namedBuiltInSkills(input.message.text);
   if (named.length === 0 || !BUILTIN_SKILL_PROVIDER_DRIVERS.has(input.driver)) return text;

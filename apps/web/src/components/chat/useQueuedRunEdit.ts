@@ -17,6 +17,7 @@ import {
   type PreviewAnnotationPayload,
   type RunId,
   type ScopedThreadRef,
+  type ResponseContextRecord,
   type ThreadContextRecord,
   type ThreadId,
 } from "@goat/contracts";
@@ -43,8 +44,11 @@ import {
   releaseDraftAttachments,
   startAttachmentUpload,
 } from "../../lib/attachmentUploadQueue";
-import { buildMessageContext } from "../../lib/composerContextRecords";
-import { collectInlineContextIds } from "../../lib/composerContextReferences";
+import { buildMessageContext, isResponseContextRecord } from "../../lib/composerContextRecords";
+import {
+  collectInlineContextIds,
+  removeInlineContextReference,
+} from "../../lib/composerContextReferences";
 import { readFileAsDataUrl } from "../../lib/imageCompression";
 import type { TerminalContextDraft } from "../../lib/terminalContext";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
@@ -89,9 +93,12 @@ export interface QueuedRunEditContent {
   readonly reviewComments: ReadonlyArray<ReviewCommentContext>;
   readonly previewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
   readonly threadContexts: ReadonlyArray<ThreadContextRecord>;
+  readonly replyTo?: ResponseContextRecord | null;
 }
 
-const isDraftOwnedRecord = (record: ComposerContextRecord) => record.kind === "thread";
+// The edit draft owns thread mentions and the reply, so one removed while editing is dropped.
+const isDraftOwnedRecord = (record: ComposerContextRecord) =>
+  record.kind === "thread" || record.kind === "response";
 
 function queuedRunEditDraftId(ref: ScopedThreadRef, runId: RunId) {
   return DraftId.make(queuedRunEditDraftKey(ref, runId));
@@ -150,6 +157,7 @@ async function submitQueuedRunEdit(input: {
         reviewComments: content.reviewComments,
         previewAnnotations: content.previewAnnotations,
         threadContexts: content.threadContexts,
+        replyTo: content.replyTo ?? null,
         text: editText,
         attachments: newAttachments.map((attachment, index) => ({
           attachment,
@@ -261,12 +269,15 @@ export function useQueuedRunEdit(input: {
       return;
     if (editing !== null && editing.runId !== request.runId) clearEditDraft(editing.runId);
     const target = queuedRunEditDraftId(routeThreadRef, request.runId);
-    const text = stripAttachmentOnlyBootstrapPrompt(request.text);
+    const sentText = stripAttachmentOnlyBootstrapPrompt(request.text);
     const context = serverProjection?.messages.find(
       (message) => message.id === request.messageId,
     )?.context;
-    const referenced = new Set(collectInlineContextIds(text));
+    const referenced = new Set(collectInlineContextIds(sentText));
     const records = (context?.records ?? []).filter((record) => referenced.has(record.contextId));
+    // A reply shows above the composer while its message is edited, not as a chip in the text.
+    const reply = records.find(isResponseContextRecord);
+    const text = reply ? removeInlineContextReference(sentText, reply.contextId).prompt : sentText;
     const store = useComposerDraftStore.getState();
     store.clearComposerContent(target);
     store.setPrompt(target, text);
@@ -274,6 +285,7 @@ export function useQueuedRunEdit(input: {
       target,
       records.filter((record): record is ThreadContextRecord => record.kind === "thread"),
     );
+    if (reply) store.setReplyTo(target, reply);
     const threadRef = { environmentId, threadId: activeThreadId };
     queuedRunEdits.begin(
       editKey,

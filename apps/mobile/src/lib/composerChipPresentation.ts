@@ -46,6 +46,8 @@ const CONTEXT_CHIP_PRESENTATIONS = {
   // A tab mention is picked on web or desktop; web draws it with the thread accent.
   "preview-tab": { accent: "#009c96", icon: "mouse-pointer-click" },
   capability: { accent: "#3f9a55", icon: "monitor" },
+  // An earlier response a message replies to. Mobile shows it as a plain labelled chip.
+  response: { accent: "#7f8793", icon: null },
 } as const satisfies Record<string, ContextChipPresentation>;
 
 const CHIP_CONTRAST = 5;
