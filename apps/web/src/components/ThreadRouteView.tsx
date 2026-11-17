@@ -28,6 +28,7 @@ import { useEnvironmentThreadRefs, useThreadRefs, useQuietThreadShell } from "..
 import { environmentShell, useEnvironmentShellStatus } from "../state/shell";
 import { threadFamilies, useEnvironmentThread } from "../state/threads";
 import { appAtomRegistry } from "../rpc/atomRegistry";
+import { SideChatCitationReveal } from "../lib/assistantCitationNavigation";
 import {
   buildThreadRouteParams,
   isThreadRouteSnapshotAuthoritative,
@@ -274,6 +275,9 @@ export function ThreadRouteView({
         </div>
       )}
       <BackgroundThreadContext value={background}>{view}</BackgroundThreadContext>
+      <SideChatCitationReveal
+        threadRef={target.kind === "server" && !background ? target.threadRef : null}
+      />
     </SidebarInset>
   );
 }
