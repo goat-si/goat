@@ -2067,6 +2067,7 @@ export const layerWsRpc = (
                   ThreadLaunchBaseRefError: launchErrorFor(input),
                   ThreadLaunchBranchError: launchErrorFor(input),
                   ThreadLaunchBranchConflictError: launchErrorFor(input),
+                  ThreadLaunchNotRepositoryError: launchErrorFor(input),
                   ThreadLaunchWorkspaceMissingError: launchErrorFor(input),
                   ServerRuntimeStartupError: launchErrorFor(input, "Failed to launch thread"),
                   ThreadManagementProviderInstanceDisabledError: launchErrorFor(input),
