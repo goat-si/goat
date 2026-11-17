@@ -513,3 +513,16 @@ it("keeps an edited draft visible and editable while the reread after a change i
   expect(memoryText(screen)?.value).toBe("Synthetic original, edited");
   expect(memoryText(screen)?.disabled).toBe(false);
 });
+it("chosen behaviour: when the reread after a change never answers, the edited draft closes with the version line", async () => {
+  const registry = setup();
+  await using screen = await renderDetails(registry);
+  await click(screen, "Edit");
+  await type(screen, "Synthetic original, edited");
+  await update(() => signal(registry, "upsert", id(2), { purge: false }));
+  expect(memoryText(screen)?.value).toBe("Synthetic original, edited");
+  // The shared draft discards itself when the reread's 60-second request ends unanswered.
+  await update(() => registry.set(editDraft(), null));
+  expect(memoryText(screen)).toBeNull();
+  expect(screen.container.textContent).toContain(CHANGED_LINE);
+  expect(state.onForgotten).not.toHaveBeenCalled();
+});
