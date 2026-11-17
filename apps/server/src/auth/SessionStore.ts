@@ -13,6 +13,7 @@ import {
   AuthStandardClientScopes,
   type AuthClientMetadata,
   type AuthClientSession,
+  type AuthRevokeOthersKept,
   type AuthEnvironmentScope,
   type AuthWebSocketTicketUse,
   type ChildSetupPurpose,
@@ -21,6 +22,7 @@ import {
   type ServerAuthSessionMethod,
   type SessionPrincipalKind,
 } from "@goat/contracts";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -58,6 +60,7 @@ import {
   resolveSessionCookieName,
 } from "./utils.ts";
 import * as ChildSetupSession from "./childSetupSession.ts";
+import { REVOKE_OTHERS_KEEPS_DESKTOP } from "./revokeOthersKeeps.ts";
 import {
   createDefaultClientMetadata,
   toAuthClientSession,
@@ -221,7 +224,10 @@ export class SessionStore extends Context.Service<
     ) => Effect.Effect<boolean, SessionCredentialInternalError>;
     readonly revokeAllExcept: (
       sessionId: AuthSessionId,
-    ) => Effect.Effect<number, SessionCredentialInternalError>;
+    ) => Effect.Effect<
+      { readonly revokedCount: number; readonly kept: AuthRevokeOthersKept },
+      SessionCredentialInternalError
+    >;
     readonly markConnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
     readonly markDisconnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
     /**
@@ -483,6 +489,7 @@ export const make = Effect.gen(function* () {
         lastConnectedAt: row.value.lastConnectedAt,
         connected,
         principalKind: row.value.principalKind,
+        penBound: row.value.penBinding !== null,
       }),
     );
   });
@@ -731,6 +738,7 @@ export const make = Effect.gen(function* () {
           lastConnectedAt: null,
           connected: false,
           principalKind,
+          penBound: input?.penBinding !== undefined,
         }),
       );
 
@@ -1061,6 +1069,7 @@ export const make = Effect.gen(function* () {
           lastConnectedAt: row.lastConnectedAt,
           connected: connectedSessions.has(row.sessionId),
           principalKind: row.principalKind,
+          penBound: row.penBinding !== null,
         }),
       );
     },
@@ -1087,22 +1096,51 @@ export const make = Effect.gen(function* () {
     "SessionStore.revokeAllExcept",
   )(function* (sessionId) {
     const revokedAt = yield* DateTime.now;
-    const revokedSessionIds = yield* authSessions
+    const { revoked, kept } = yield* authSessions
       .revokeAllExcept({
         currentSessionId: sessionId,
         revokedAt,
+        keep: REVOKE_OTHERS_KEEPS_DESKTOP,
       })
       .pipe(
         Effect.mapError(
           (cause) => new OtherSessionsRevocationError({ currentSessionId: sessionId, cause }),
         ),
       );
-    // Every other row is now revoked or gone, including ones another process revoked earlier.
+    const classified = new Set([sessionId, ...revoked, ...kept.map((row) => row.sessionId)]);
     const live = yield* liveSessionIds;
-    yield* settleEnded(
-      [...new Set([...revokedSessionIds, ...live])].filter((id) => id !== sessionId),
+    yield* settleEnded(revoked);
+    // A live id the press neither revoked nor kept was ended elsewhere earlier or added after its
+    // transaction; only its row may end it. Unreadable rows wait for the durable check.
+    const unclassified = live.filter((id) => !classified.has(id));
+    if (unclassified.length > 0) {
+      yield* authSessions.listUnrevoked({ sessionIds: unclassified }).pipe(
+        Effect.flatMap((rows) => {
+          const unrevoked = new Set(rows);
+          return settleEnded(unclassified.filter((id) => !unrevoked.has(id)));
+        }),
+        // The press is uninterruptible, so a cause here is a failure or a defect.
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Revoke others left sessions it could not read to the next check", {
+            // A bounded category only, as in DurableRevocations.
+            reason: Option.getOrElse(
+              Option.map(Cause.findErrorOption(cause), (error) => error._tag),
+              () => "defect",
+            ),
+          }),
+        ),
+      );
+    }
+    // Counted as the list shows rows: unexpired, or expired but still connected.
+    const connected = yield* Ref.get(connectedSessionsRef);
+    const shown = kept.filter(
+      (row) =>
+        row.expiresAt.epochMilliseconds > revokedAt.epochMilliseconds ||
+        connected.has(row.sessionId),
     );
-    return revokedSessionIds.length;
+    const count = (kind: (typeof kept)[number]["kind"]) =>
+      shown.filter((row) => row.kind === kind).length;
+    return { revokedCount: revoked.length, kept: { desktop: count("desktop"), pen: count("pen") } };
   });
 
   const awaitInvalidation = Effect.fn(function* (sessionId: AuthSessionId) {

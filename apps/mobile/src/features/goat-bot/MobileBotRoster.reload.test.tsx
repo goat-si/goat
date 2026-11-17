@@ -91,6 +91,12 @@ const state = vi.hoisted(() => ({
 vi.mock("@react-navigation/native", () => ({
   useNavigation: () => ({ getState: () => state.navState, getParent: () => undefined }),
 }));
+// The roster panel's Android row menu and its haptic; these tests run as iOS and never draw it.
+vi.mock("../../components/ui/AndroidAnchoredMenu", () => ({ AndroidAnchoredMenu: () => null }));
+vi.mock("expo-haptics", () => ({
+  impactAsync: async () => {},
+  ImpactFeedbackStyle: { Medium: "medium" },
+}));
 vi.mock("react-native", () => ({
   View: ({
     children,

@@ -1,5 +1,7 @@
 import type { AuthClientMetadata, AuthClientSession } from "@goat/contracts";
 
+import { keptByRevokeOthers } from "./revokeOthersKeeps.ts";
+
 export function createDefaultClientMetadata(): AuthClientMetadata {
   return {
     deviceType: "unknown",
@@ -24,9 +26,14 @@ export function toClientMetadata(record: {
   };
 }
 
-export function toAuthClientSession(input: Omit<AuthClientSession, "current">): AuthClientSession {
+export function toAuthClientSession(
+  input: Omit<AuthClientSession, "current" | "keptByRevokeOthers"> & { readonly penBound: boolean },
+): AuthClientSession {
+  const { penBound, ...session } = input;
+  const kept = keptByRevokeOthers({ subject: session.subject, method: session.method, penBound });
   return {
-    ...input,
+    ...session,
     current: false,
+    ...(kept === undefined ? {} : { keptByRevokeOthers: kept }),
   };
 }

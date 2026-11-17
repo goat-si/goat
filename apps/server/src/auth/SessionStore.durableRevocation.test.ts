@@ -1,14 +1,18 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { AuthStandardClientScopes } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
-import { MAIN_LISTENER } from "./connectionContext.testkit.ts";
+import { MAIN_LISTENER, penConnection } from "./connectionContext.testkit.ts";
 import { makeCheckProbe, makeReadBarrier, makeServerAndCli } from "./DurableRevocations.testkit.ts";
+import { PersistenceSqlError } from "../persistence/Errors.ts";
 import { reauthorizeSession } from "./McpClientAuthority.ts";
+import { PEN_PROXY_SUBJECT } from "./sessionBinding.ts";
 import * as SessionStore from "./SessionStore.ts";
 
 const grantState = (
@@ -68,18 +72,45 @@ it.effect.each(["revoked", "deleted"] as const)(
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-it.effect.each(["revoke", "revokeAllExcept"] as const)(
-  "Settings %s ends a session the command line already revoked, without waiting for a check",
-  (operation) =>
+const penPeer = {
+  meshId: "mesh-1",
+  nodeId: "node-a",
+  signPub: "sign",
+  noisePub: "noise",
+  name: "a",
+};
+// Revoke others keeps unrevoked sessions of these shapes, never ones another process revoked.
+const cliRevokedShapes = {
+  plain: { issue: {}, connection: MAIN_LISTENER },
+  "desktop app": { issue: { subject: "desktop-bootstrap" }, connection: MAIN_LISTENER },
+  "Pen-bound": {
+    issue: {
+      subject: PEN_PROXY_SUBJECT,
+      principalKind: "proxied_person",
+      penBinding: { meshId: "mesh-1", nodeId: "node-a", signPub: "sign", noisePub: "noise" },
+    },
+    connection: penConnection(penPeer).context,
+  },
+} as const;
+
+it.effect.each([
+  ["revoke", "plain"],
+  ["revokeAllExcept", "plain"],
+  ["revokeAllExcept", "desktop app"],
+  ["revokeAllExcept", "Pen-bound"],
+] as const)(
+  "Settings %s ends a %s session the command line already revoked, without waiting for a check",
+  ([operation, shape]) =>
     Effect.gen(function* () {
       const barrier = yield* makeReadBarrier;
       const { running, fromCli } = yield* makeServerAndCli(barrier.wrap);
       yield* Effect.gen(function* () {
         const store = yield* SessionStore.SessionStore;
+        const { issue, connection } = cliRevokedShapes[shape];
         const issued = yield* fromCli((cli) =>
-          cli.issue({ method: "bearer-access-token", scopes: ["memory:read"] }),
+          cli.issue({ ...issue, method: "bearer-access-token", scopes: ["memory:read"] }),
         );
-        yield* store.verify(issued.token, MAIN_LISTENER);
+        yield* store.verify(issued.token, connection);
         const current = yield* store.issue({ subject: "settings-page" });
         yield* barrier.arm;
         const waiting = yield* store
@@ -93,6 +124,107 @@ it.effect.each(["revoke", "revokeAllExcept"] as const)(
         expect(yield* grantState(store, issued.sessionId)).toBe("UnknownSessionTokenError");
         yield* Fiber.join(waiting);
         expect(yield* store.readActiveScopes(current.sessionId)).toEqual(AuthStandardClientScopes);
+      }).pipe(Effect.provide(running), Effect.scoped);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+type Repository = Parameters<Parameters<typeof makeServerAndCli>[0] & {}>[0];
+type ReadMode = (
+  repository: Repository,
+  input: Parameters<Repository["listUnrevoked"]>[0],
+) => ReturnType<Repository["listUnrevoked"]>;
+
+/** A store whose press runs `afterCommit` between its transaction and its read of live ids. */
+const makeLateAdmission = Effect.fn("makeLateAdmission")(function* (read: ReadMode) {
+  const afterCommit = yield* Ref.make<Effect.Effect<void>>(Effect.void);
+  const { running, fromCli } = yield* makeServerAndCli((repository) => ({
+    ...repository,
+    revokeAllExcept: (input) =>
+      repository
+        .revokeAllExcept(input)
+        .pipe(Effect.tap(() => Effect.flatten(Ref.get(afterCommit)))),
+    listUnrevoked: (input) => read(repository, input),
+  }));
+  // Another process adds a desktop session after the press commits; this one admits it (no lock).
+  const admitLateDesktop = (store: SessionStore.SessionStore["Service"]) =>
+    Effect.gen(function* () {
+      const late = yield* Deferred.make<SessionStore.IssuedSession>();
+      yield* Ref.set(
+        afterCommit,
+        Effect.gen(function* () {
+          const issued = yield* fromCli((cli) =>
+            cli.issue({ subject: "desktop-bootstrap", method: "bearer-access-token" }),
+          );
+          yield* store.verify(issued.token, MAIN_LISTENER);
+          yield* Deferred.succeed(late, issued);
+        }).pipe(Effect.orDie, Effect.provide(NodeServices.layer)),
+      );
+      return late;
+    });
+  return { running, admitLateDesktop };
+});
+
+const readModes = {
+  reads: (repository, input) => repository.listUnrevoked(input),
+  "fails reading": () =>
+    Effect.fail(new PersistenceSqlError({ operation: "listUnrevoked", detail: "injected" })),
+  "dies reading": () => Effect.die(new Error("injected defect")),
+} satisfies Record<string, ReadMode>;
+
+it.effect.each(Object.keys(readModes) as ReadonlyArray<keyof typeof readModes>)(
+  "Revoke others ends what it revoked and keeps a desktop session added after it commits when the store %s that session's row",
+  (mode) =>
+    Effect.gen(function* () {
+      const { running, admitLateDesktop } = yield* makeLateAdmission(readModes[mode]);
+      yield* Effect.gen(function* () {
+        const store = yield* SessionStore.SessionStore;
+        const current = yield* store.issue({ subject: "settings-page" });
+        const phone = yield* store.issue({ subject: "one-time-token" });
+        const late = yield* admitLateDesktop(store);
+
+        const pressed = yield* Effect.exit(store.revokeAllExcept(current.sessionId));
+
+        expect(Exit.isSuccess(pressed)).toBe(true);
+        expect(yield* grantState(store, phone.sessionId)).toBe("UnknownSessionTokenError");
+        expect(yield* grantState(store, (yield* Deferred.await(late)).sessionId)).toBe("live");
+      }).pipe(Effect.provide(running), Effect.scoped);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "Revoke others ends the sessions it revoked before it reads the rows of sessions added after it",
+  () =>
+    Effect.gen(function* () {
+      const reading = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const { running, admitLateDesktop } = yield* makeLateAdmission((repository, input) =>
+        Deferred.succeed(reading, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(repository.listUnrevoked(input)),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const store = yield* SessionStore.SessionStore;
+        const current = yield* store.issue({ subject: "settings-page" });
+        const phone = yield* store.issue({ subject: "one-time-token" });
+        const phoneEnded = yield* store
+          .awaitInvalidation(phone.sessionId)
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        const late = yield* admitLateDesktop(store);
+
+        const press = yield* store
+          .revokeAllExcept(current.sessionId)
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* Deferred.await(reading);
+
+        // The read is still held: what the press revoked has already ended. The release always
+        // runs, so a failed assertion cannot leave the uninterruptible press waiting.
+        yield* Effect.gen(function* () {
+          expect(yield* grantState(store, phone.sessionId)).toBe("UnknownSessionTokenError");
+          yield* Fiber.join(phoneEnded);
+        }).pipe(Effect.ensuring(Deferred.succeed(release, undefined)));
+        yield* Fiber.join(press);
+        expect(yield* grantState(store, (yield* Deferred.await(late)).sessionId)).toBe("live");
       }).pipe(Effect.provide(running), Effect.scoped);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

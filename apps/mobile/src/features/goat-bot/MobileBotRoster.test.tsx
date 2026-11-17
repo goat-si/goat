@@ -1,7 +1,8 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import type { AsyncResult } from "effect/reactivity";
-import { expect, it, vi } from "vite-plus/test";
+import { RegistryContext } from "@effect/atom-react";
+import { type AsyncResult, AtomRegistry } from "effect/reactivity";
+import { beforeEach, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   alert: vi.fn(),
@@ -54,6 +55,12 @@ const state = vi.hoisted(() => ({
   rosterError: null as string | null,
   mainUnreadable: false,
   view: { preview: undefined as string | undefined, mainEnvironmentId: null as string | null },
+  // The platform, and the rows the view stand-in draws (each with a long press).
+  os: "ios",
+  rows: [] as Array<{ kind: string; profile: { name: string } }>,
+  // Android menu measurements a test holds, each answered with whether the row could be measured.
+  holdMenus: false,
+  heldMenus: [] as Array<(measured: boolean) => void>,
 }));
 vi.mock("@react-navigation/native", () => ({
   useNavigation: () => ({ getState: () => state.navState, getParent: () => undefined }),
@@ -72,7 +79,11 @@ vi.mock("react-native", () => ({
   ),
   Alert: { alert: state.alert },
   AccessibilityInfo: { announceForAccessibility: vi.fn() },
-  Platform: { OS: "ios" },
+  Platform: {
+    get OS() {
+      return state.os;
+    },
+  },
   AppState: {
     get currentState() {
       return state.appState;
@@ -150,7 +161,8 @@ vi.mock("./useMobileBotRoster", () => ({
     error: state.rosterError,
   }),
 }));
-// The list itself is the view's; this stand-in keeps what the panel gives it and draws its New bot row.
+// The list itself is the view's; this stand-in keeps what the panel gives it, draws its New bot row,
+// and draws each row a test names with a long press, through the panel's menu helper when it has one.
 vi.mock("./MobileBotRosterView", () => ({
   MobileBotRosterView: (props: {
     members?: Record<string, unknown>;
@@ -163,9 +175,30 @@ vi.mock("./MobileBotRosterView", () => ({
     state.members = props.members ?? null;
     state.mainUnreadable = props.mainUnreadable === true;
     state.view = { preview: props.preview, mainEnvironmentId: props.mainEnvironmentId ?? null };
+    const members = props.members as
+      | {
+          onLongPressBot: (entry: object) => void;
+          menuRow?: (
+            entry: object,
+            row: (onLongPress: () => void) => React.ReactNode,
+          ) => React.ReactNode;
+        }
+      | undefined;
     return (
       <>
         {props.header}
+        {state.rows.map((entry) => {
+          const row = (onLongPress: () => void) => (
+            <button onClick={onLongPress}>Long press {entry.profile.name}</button>
+          );
+          return (
+            <div key={entry.profile.name}>
+              {members?.menuRow
+                ? members.menuRow(entry, row)
+                : row(() => members?.onLongPressBot(entry))}
+            </div>
+          );
+        })}
         {props.newBotRow}
       </>
     );
@@ -201,6 +234,7 @@ vi.mock("./MobileBotProfileSheet", () => ({
     );
   },
 }));
+import { connectionRefusedAtom } from "./keptPerComputerStore";
 import { MobileBotRoster } from "./MobileBotRosterPanel";
 const member = { botId: "research", name: "Research", hidden: false };
 type Choice = { text: string; onPress?: () => void };
@@ -613,3 +647,243 @@ it("shows no created bot's row once its computer may no longer be read", async (
     await view.unmount();
   }
 });
+vi.mock("expo-haptics", () => ({
+  impactAsync: async () => {},
+  ImpactFeedbackStyle: { Medium: "medium" },
+}));
+// Android's anchored menu as its contract says: open reaches the row; a choice and an outside tap
+// close first, and a menu that unmounts while open still reports that it closed.
+vi.mock("../../components/ui/AndroidAnchoredMenu", async () => {
+  const { useEffect, useRef, useState } = await import("react");
+  type Props = {
+    title?: string;
+    actions: ReadonlyArray<{ id: string; title: string }>;
+    onPressAction?: (event: { nativeEvent: { event: string } }) => void;
+    onClose?: () => void;
+    children: (open: () => void) => React.ReactNode;
+  };
+  // The real menu's contract: a requested open settles once, on a choice, an outside tap, a row
+  // that cannot be measured, or the menu leaving, whichever comes first.
+  return {
+    AndroidAnchoredMenu: (props: Props) => {
+      const [open, setOpen] = useState(false);
+      const owed = useRef(false);
+      const onClose = useRef(props.onClose);
+      onClose.current = props.onClose;
+      const settle = () => {
+        if (!owed.current) return;
+        owed.current = false;
+        onClose.current?.();
+      };
+      useEffect(() => () => settle(), []);
+      const measured = (ok: boolean) => {
+        if (!owed.current) return;
+        if (ok) setOpen(true);
+        else settle();
+      };
+      const request = () => {
+        owed.current = true;
+        if (state.holdMenus) state.heldMenus.push(measured);
+        else measured(true);
+      };
+      const close = () => {
+        setOpen(false);
+        settle();
+      };
+      return (
+        <>
+          {props.children(request)}
+          {open ? (
+            <div role="menu" aria-label={props.title}>
+              {props.actions.map((action) => (
+                <button
+                  key={action.id}
+                  onClick={() => {
+                    close();
+                    props.onPressAction?.({ nativeEvent: { event: action.id } });
+                  }}
+                >
+                  {action.title}
+                </button>
+              ))}
+              <button onClick={close}>Outside the menu</button>
+            </div>
+          ) : null}
+        </>
+      );
+    },
+  };
+});
+beforeEach(() => {
+  state.os = "ios";
+  state.rows = [];
+  state.holdMenus = false;
+  state.heldMenus = [];
+});
+
+const menuItems = (container: HTMLElement) =>
+  [...container.querySelectorAll('[role="menu"] button')].map((button) => button.textContent);
+const pressIn = (container: HTMLElement, label: string) =>
+  act(async () =>
+    [...container.querySelectorAll("button")]
+      .find((button) => button.textContent === label)
+      ?.click(),
+  );
+
+it("on Android, a member's long press opens a menu with Edit, Hide and Delete, and no alert (#3575)", async () => {
+  state.alert.mockClear();
+  state.manage.hide.mockClear();
+  state.os = "android";
+  state.rows = [{ kind: "member", profile: member }];
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
+    await pressIn(container, "Long press Research");
+    expect(menuItems(container)).toEqual(["Edit", "Hide", "Delete", "Outside the menu"]);
+    expect(state.alert).not.toHaveBeenCalled();
+    await pressIn(container, "Hide");
+    expect(state.manage.hide).toHaveBeenCalledWith(member, true);
+    expect(menuItems(container)).toEqual([]);
+  } finally {
+    state.os = "ios";
+    state.rows = [];
+    await act(async () => root.unmount());
+  }
+});
+
+it("on Android, a menu choice acts on nothing once its computer may not be read (#3575)", async () => {
+  state.manage.hide.mockClear();
+  state.os = "android";
+  state.rows = [{ kind: "member", profile: member }];
+  state.roster.environmentId = "env-menu-refused";
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
+    await pressIn(container, "Long press Research");
+    readable.refused.add("env-menu-refused");
+    await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
+    await pressIn(container, "Hide");
+    expect(state.manage.hide).not.toHaveBeenCalled();
+  } finally {
+    readable.refused.delete("env-menu-refused");
+    state.os = "ios";
+    state.rows = [];
+    state.roster.environmentId = "env";
+    await act(async () => root.unmount());
+  }
+});
+
+it("on Android, a long press opens no menu once its computer may not be read (#3575)", async () => {
+  state.os = "android";
+  state.rows = [{ kind: "member", profile: member }];
+  state.roster.environmentId = "env-press-refused";
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    const registry = AtomRegistry.make();
+    await act(async () =>
+      root.render(
+        <RegistryContext value={registry}>
+          <MobileBotRoster selectedKey={null} onOpenBot={() => {}} />
+        </RegistryContext>,
+      ),
+    );
+    // The connection refuses in the store after the last draw: the press itself must read it.
+    registry.set(connectionRefusedAtom("env-press-refused" as never), true);
+    await pressIn(container, "Long press Research");
+    expect(menuItems(container)).toEqual([]);
+  } finally {
+    state.os = "ios";
+    state.rows = [];
+    state.roster.environmentId = "env";
+    await act(async () => root.unmount());
+  }
+});
+
+it("on Android, an open menu holds back a New bot answer, and a menu whose row left no longer does (#3575)", async () => {
+  state.os = "android";
+  const other = {
+    kind: "member",
+    profile: { ...member, role: "member", defaultModelSelection: null },
+  };
+  state.rows = [other];
+  try {
+    const open = await newBotRoster();
+    await open.tap();
+    await pressIn(open.container, "Long press Research");
+    await open.answer(stored("research", "New bot"));
+    expect(open.opened).not.toHaveBeenCalled();
+    await open.unmount();
+    // The row leaves while its menu is open (another device deleted the bot).
+    const left = await newBotRoster();
+    await pressIn(left.container, "Long press Research");
+    state.rows = [];
+    await left.draw();
+    await left.tap();
+    await left.answer(stored("research", "New bot"));
+    expect(left.opened).toHaveBeenCalled();
+    await left.unmount();
+  } finally {
+    state.os = "ios";
+    state.rows = [];
+  }
+});
+
+it("on Android, a menu still being measured holds back a New bot answer like an open one (#3575)", async () => {
+  state.os = "android";
+  state.holdMenus = true;
+  const row = {
+    kind: "member",
+    profile: { ...member, role: "member", defaultModelSelection: null },
+  };
+  state.rows = [row];
+  const view = await newBotRoster();
+  try {
+    await view.tap();
+    await pressIn(view.container, "Long press Research");
+    await view.answer(stored("research", "New bot"));
+    expect(view.opened).not.toHaveBeenCalled();
+  } finally {
+    await view.unmount();
+  }
+});
+
+it.each([
+  [
+    "its row leaves before it is measured",
+    async (view: Awaited<ReturnType<typeof newBotRoster>>) => {
+      state.rows = [];
+      await view.draw();
+      await act(async () => state.heldMenus.splice(0).forEach((measured) => measured(true)));
+    },
+  ],
+  [
+    "its row cannot be measured",
+    (_view: Awaited<ReturnType<typeof newBotRoster>>) =>
+      act(async () => state.heldMenus.splice(0).forEach((measured) => measured(false))),
+  ],
+])(
+  "on Android, a New bot answer opens once a requested menu settles because %s (#3575)",
+  async (_, settle) => {
+    state.os = "android";
+    state.holdMenus = true;
+    const row = {
+      kind: "member",
+      profile: { ...member, role: "member", defaultModelSelection: null },
+    };
+    state.rows = [row];
+    const view = await newBotRoster();
+    try {
+      await view.tap();
+      await pressIn(view.container, "Long press Research");
+      await settle(view);
+      expect(menuItems(view.container)).toEqual([]);
+      await view.answer(stored("research", "New bot"));
+      expect(view.opened).toHaveBeenCalled();
+    } finally {
+      await view.unmount();
+    }
+  },
+);

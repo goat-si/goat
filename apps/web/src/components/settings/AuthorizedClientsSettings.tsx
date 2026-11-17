@@ -57,6 +57,7 @@ import { readEnvironmentScope } from "~/state/session";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
 import { PairingLinkTarget } from "./PairingLinkTarget";
+import { KeptByRevokeOthersBadge, RevokeOthersButton } from "./RevokeOthersKeeps";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
 import {
   formatAccessTimestamp,
@@ -465,6 +466,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
 
 type ConnectedClientListRowProps = {
   clientSession: ServerClientSessionRecord;
+  servedByEnvironment: boolean;
   presentation?: AccessSectionPresentation;
   revokingClientSessionId: string | null;
   onRevokeSession: (sessionId: ServerClientSessionRecord["sessionId"]) => void;
@@ -473,6 +475,7 @@ type ConnectedClientListRowProps = {
 
 const ConnectedClientListRow = memo(function ConnectedClientListRow({
   clientSession,
+  servedByEnvironment,
   presentation = "current",
   revokingClientSessionId,
   onRevokeSession,
@@ -516,6 +519,11 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
               <span className="text-3xs text-muted-foreground/80 rounded-md border border-border/50 bg-muted/50 px-1 py-0.5">
                 This device
               </span>
+            ) : clientSession.keptByRevokeOthers ? (
+              <KeptByRevokeOthersBadge
+                kept={clientSession.keptByRevokeOthers}
+                servedByEnvironment={servedByEnvironment}
+              />
             ) : null}
           </div>
           <p className="text-xs text-muted-foreground">
@@ -626,14 +634,11 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
   return (
     <div className="flex items-center gap-2">
       {showRevokeOthers ? (
-        <Button
-          size="xs"
-          variant="destructive-outline"
+        <RevokeOthersButton
           disabled={isRevokingOtherClients || !canRevokeOtherClients(clientSessions)}
+          revoking={isRevokingOtherClients}
           onClick={() => void onRevokeOtherClients()}
-        >
-          {isRevokingOtherClients ? "Revoking…" : "Revoke others"}
-        </Button>
+        />
       ) : null}
       <Dialog
         open={dialogOpen}
@@ -830,6 +835,7 @@ export const PairingClientsList = memo(function PairingClientsList({
         <ConnectedClientListRow
           key={clientSession.sessionId}
           clientSession={clientSession}
+          servedByEnvironment={servedByEnvironment}
           presentation={presentation}
           revokingClientSessionId={revokingClientSessionId}
           onRevokeSession={onRevokeClientSession}

@@ -1,4 +1,5 @@
 import { resolveGoatBotAvailability } from "@goat/client-runtime/goatBot";
+import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import { EnvironmentId, type BotProfile } from "@goat/contracts";
 import { type ReactNode, useSyncExternalStore } from "react";
 import { expect, it, vi } from "vite-plus/test";
@@ -13,16 +14,20 @@ const STUDIO = EnvironmentId.make("env-studio");
 const LAPTOP = EnvironmentId.make("env-laptop");
 const SENTENCE = "GOAT on Mac Studio did not accept this device";
 const PAIR_AGAIN = "Pair this device with Mac Studio again to send messages.";
+const RELOAD_STEP = "Reload this page, then pair this browser again.";
 
 interface Connection {
   readonly phase: string;
-  readonly failure: { readonly reason: string } | null;
+  readonly failure: {
+    readonly kind?: string;
+    readonly reason: string;
+    readonly sessionEnded?: true;
+  } | null;
 }
 
 const state = vi.hoisted(() => ({
   presentations: [] as ReadonlyArray<unknown>,
   primaryId: null as string | null,
-  revoked: false,
   listeners: new Set<() => void>(),
   version: 0,
 }));
@@ -65,15 +70,6 @@ vi.mock(import("../../state/environments"), async (original) => ({
     return state.primaryId;
   }) as never,
 }));
-vi.mock("~/environments/primary/sessionCheck", () => ({
-  primarySessionCheck: {
-    subscribe: (listener: () => void) => {
-      state.listeners.add(listener);
-      return () => state.listeners.delete(listener);
-    },
-    revoked: () => state.revoked,
-  },
-}));
 vi.mock("../WorkspacePageHeader", () => ({
   WorkspacePageHeader: ({ children }: { children: ReactNode }) => <header>{children}</header>,
 }));
@@ -94,6 +90,22 @@ const CLAIM = { environmentId: STUDIO, claimedAt: 1_000, claimId: "claim-studio"
 const connected: Connection = { phase: "connected", failure: null };
 const dropped: Connection = { phase: "reconnecting", failure: { reason: "transport" } };
 const blocked: Connection = { phase: "error", failure: { reason: "authentication" } };
+const sessionEnded: Connection = {
+  phase: "error",
+  failure: { kind: "blocked", reason: "authentication", sessionEnded: true },
+};
+const EARLIER: GoatBotRow = {
+  kind: "bot",
+  id: "bot-1",
+  text: "The deploy finished",
+  createdAt: "2026-10-12T09:40:00Z",
+  tone: "reply",
+  proactive: false,
+  replyTo: null,
+  options: [],
+  firstInGroup: true,
+  groupPosition: "single",
+};
 
 function presentation(
   environmentId: EnvironmentId,
@@ -115,18 +127,16 @@ function presentation(
 interface Scenario {
   readonly presentations: ReadonlyArray<unknown>;
   readonly primaryId: EnvironmentId;
-  readonly revoked: boolean;
 }
 
 function setup(scenario: Scenario) {
   state.presentations = scenario.presentations;
   state.primaryId = scenario.primaryId;
-  state.revoked = scenario.revoked;
   state.listeners.clear();
   state.version = 0;
 }
 
-function Harness() {
+function Harness({ rows = [] }: { readonly rows?: ReadonlyArray<GoatBotRow> }) {
   const environments = useGoatBotEnvironments();
   const availability = resolveGoatBotAvailability({
     environments,
@@ -138,7 +148,7 @@ function Harness() {
       <GoatBotChatView
         availability={availability}
         canOperate
-        rows={[]}
+        rows={rows}
         onSend={() => {}}
         onRetryInput={() => {}}
         legacyAgentRoute={null}
@@ -152,9 +162,8 @@ const refusals: ReadonlyArray<[string, Scenario, boolean]> = [
   [
     "this tab's own server said its session is gone",
     {
-      presentations: [presentation(STUDIO, "Mac Studio", dropped, CLAIM)],
+      presentations: [presentation(STUDIO, "Mac Studio", blocked, CLAIM)],
       primaryId: STUDIO,
-      revoked: true,
     },
     true,
   ],
@@ -166,23 +175,21 @@ const refusals: ReadonlyArray<[string, Scenario, boolean]> = [
         presentation(STUDIO, "Mac Studio", blocked, CLAIM),
       ],
       primaryId: LAPTOP,
-      revoked: false,
     },
     true,
   ],
   [
     "an unclaimed primary that refused this device",
     {
-      presentations: [presentation(STUDIO, "Mac Studio", dropped, null)],
+      presentations: [presentation(STUDIO, "Mac Studio", blocked, null)],
       primaryId: STUDIO,
-      revoked: true,
     },
     false,
   ],
 ];
 
 it.each(refusals)(
-  "the bot chat says GOAT on Mac Studio did not accept this device (%s) in its banner, header and empty-chat notice, never offline, and keeps the move (#3550, access)",
+  "the bot chat says GOAT on Mac Studio did not accept this device (%s) in its banner and empty-chat notice, Not accepted in its header, never offline, and keeps the move (#3550, access)",
   async (_refusal, scenario, claimed) => {
     setup(scenario);
     await using screen = await render(<Harness />);
@@ -202,7 +209,6 @@ it.each(refusals)(
     expect(screen.getByText("Offline", { exact: true }).elements()).toHaveLength(0);
 
     await change(() => {
-      state.revoked = false;
       state.presentations = state.presentations.map((entry) =>
         (entry as { environmentId: string }).environmentId === STUDIO
           ? { ...(entry as object), connection: connected }
@@ -223,7 +229,6 @@ const notRefused: ReadonlyArray<[string, Scenario, string]> = [
     {
       presentations: [presentation(STUDIO, "Mac Studio", dropped, CLAIM)],
       primaryId: STUDIO,
-      revoked: false,
     },
     "Goatie runs on Mac Studio, which isn't connected.",
   ],
@@ -232,7 +237,6 @@ const notRefused: ReadonlyArray<[string, Scenario, string]> = [
     {
       presentations: [presentation(LAPTOP, "MacBook", blocked, CLAIM)],
       primaryId: LAPTOP,
-      revoked: false,
     },
     "Goatie's home (env-stud) isn't a computer this app knows.",
   ],
@@ -248,5 +252,46 @@ it.each(notRefused)(
       .toHaveTextContent(line);
     await expect.element(screen.getByText("Offline", { exact: true })).toBeVisible();
     expect(screen.container.textContent ?? "").not.toContain("did not accept");
+  },
+);
+
+const histories: ReadonlyArray<[string, ReadonlyArray<GoatBotRow>]> = [
+  ["an empty chat", []],
+  ["a chat with history", [EARLIER]],
+];
+
+it.each(histories)(
+  "a browser whose own server ended its session reads how to get back in GOAT Bot's chat (%s), and is never told only to pair again (#3473, access)",
+  async (_history, rows) => {
+    setup({
+      presentations: [presentation(STUDIO, "Mac Studio", sessionEnded, CLAIM)],
+      primaryId: STUDIO,
+    });
+    await using screen = await render(<Harness rows={rows} />);
+    const banner = screen.getByRole("status").filter({ hasText: SENTENCE });
+    await expect.element(banner.getByText(RELOAD_STEP, { exact: true })).toBeVisible();
+    // An empty chat's notice says the same step; nothing on the screen gives another instruction.
+    expect(screen.getByText(RELOAD_STEP, { exact: true }).elements()).toHaveLength(
+      rows.length === 0 ? 2 : 1,
+    );
+    expect(screen.container.textContent ?? "").not.toContain(PAIR_AGAIN);
+  },
+);
+
+it.each(histories)(
+  "a home that refused this device's bearer keeps the pairing notice and shows no reload step (%s) (#3473, guard)",
+  async (_history, rows) => {
+    setup({
+      presentations: [
+        presentation(LAPTOP, "MacBook", connected, CLAIM),
+        presentation(STUDIO, "Mac Studio", blocked, CLAIM),
+      ],
+      primaryId: LAPTOP,
+    });
+    await using screen = await render(<Harness rows={rows} />);
+    await expect.element(screen.getByRole("status").filter({ hasText: SENTENCE })).toBeVisible();
+    if (rows.length === 0)
+      await expect.element(screen.getByText(PAIR_AGAIN, { exact: true })).toBeVisible();
+    expect(screen.container.textContent ?? "").not.toContain(RELOAD_STEP);
   },
 );

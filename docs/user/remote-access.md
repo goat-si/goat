@@ -832,6 +832,12 @@ An agent whose request was stopped sees the call fail and has to sign in again.
 Work the request had already handed to the server, such as a turn it started,
 keeps running. More commands are listed by `goat auth --help`.
 
+**Revoke others** keeps sessions signed in with the desktop app's built-in
+credential, normally the desktop app on that computer, and sessions Pen members
+hold; both are marked **Kept by Revoke others**. If you do not recognise one or
+suspect it, revoke it by itself. After you revoke the desktop app's session, quit
+and reopen GOAT on that computer.
+
 A session with an open connection stays listed after its access credential
 expires. **Settings → Connections** shows which sessions are connected;
 `goat auth session list` cannot tell.

@@ -642,7 +642,7 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
         const clientsBeforeRevoke = yield* serverAuth.listClientSessions(
           administrativeSession.sessionId,
         );
-        const revokedCount = yield* serverAuth.revokeOtherClientSessions(
+        const { revokedCount } = yield* serverAuth.revokeOtherClientSessions(
           administrativeSession.sessionId,
         );
         const clientsAfterRevoke = yield* serverAuth.listClientSessions(

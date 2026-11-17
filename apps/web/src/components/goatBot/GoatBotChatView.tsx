@@ -70,6 +70,7 @@ import {
   canSendToGoatBot,
   goatBotOpenQuestionPlaceholder,
   goatBotNotesRefreshKey,
+  goatBotRefusalStep,
   goatBotRefusedBy,
   goatBotRefusedText,
   type GoatBotAvailability,
@@ -429,6 +430,7 @@ function GoatBotChatViewContent({
             ? null
             : statusLine(availability);
   const refusedBy = goatBotRefusedBy(availability);
+  const refusalStep = goatBotRefusalStep(availability);
   return (
     <div ref={viewRef} className="flex min-h-0 min-w-0 flex-1" style={accentStyle}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
@@ -504,6 +506,7 @@ function GoatBotChatViewContent({
                 : availability.kind === "offline"
                   ? `${mainName}'s computer is offline. You can send messages again once it reconnects.`
                   : `Connecting to ${mainName}…`}
+            {refusalStep === null ? null : <span className="block">{refusalStep}</span>}
             {/* With no history the notice below carries the same action. */}
             {availability.kind === "home_offline" && homeMove && rows.length > 0 ? (
               <div className="mt-2">
@@ -897,7 +900,10 @@ function noticeCopy(
   if (refusedBy !== null)
     return {
       title: goatBotRefusedText(refusedBy),
-      description: `Pair this device with ${refusedBy} again to send messages.`,
+      // A browser whose session ended pairs again through a reload.
+      description:
+        goatBotRefusalStep(availability) ??
+        `Pair this device with ${refusedBy} again to send messages.`,
       retryLabel: null,
     };
   switch (availability.kind) {
