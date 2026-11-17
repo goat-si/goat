@@ -597,3 +597,20 @@ NOT RUN: a real shell (fake PTY), Linux and Windows, a real client.
 
 Coordinator to lane coordinator (2026-11-17 17:51:24 UTC), N4d (verbatim):
 lane=quick is dispatched on eb46f07428b02b4956936db6a8796ee7da615eaa: run 44141415169 (queued; the run on cee19f4d19, 44137268930, ended success and is now moot). I READ cee19f4d19..eb46f07428 (2 files, +71/-13): the registration before the open, the release on the open block's error path and at the writer's end, and the completion watcher ending a superseded run at the restart are as asked, and the new case waits on deferreds only. N4d MERGES by fast-forward at eb46f07428 when 44141415169 is green; N4 changes nothing more and does not watch it. One note for the record only, no code: between the registration and the open block the run still subscribes its two watchers, so a run interrupted exactly there keeps its entry (one small entry per thread and terminal, reused by the next run, harmless to the generation rule); state it beside the "bounded" line. The sync variant's "Unknown terminal" outcome is T1b's, as you say. Nothing needs an answer.
+
+N4d merged: the lane coordinator relayed the coordinator's 17:56:03 UTC word that chase/t3-261114-next2 was fast-forwarded to eb46f07428b02b4956936db6a8796ee7da615eaa on its green lane=quick run 44141415169.
+
+## N4e (planned, after #3660 is on dev): setupShell fixture marks the first shell busy
+
+Coordinator to lane coordinator (19:57 UTC), item 1 (verbatim):
+1. FINAL INTEGRATION REVIEW of #3660: APPROVE WITH NITS at df1a69dfd24a5a8ffd825a463cb587694e0dfb5a, no P0 to P2. Report: /Users/jun/handoff-in/chase/pr3660-final-review-df1a69df.md. 12 of 13 merges are git's own; the hand-resolved 8c2813a7c4 lost and doubled nothing; N4d, SF1b, N12c, N12b, N15bb each do what their message says (the swapped tests fail without their fix); the lock and lease seam, useComposerSend.ts (byte-identical to db856aaa) and the contracts hold.
+- ONE P3, accepted, does not block: ThreadWorkspaceService.setupShell.test.ts:404 (it.live) needs the terminal manager's 50 ms real-time poll to report the first shell busy before the setup runner's 3-second quiet fallback; a stalled runner can fail it spuriously, never pass it wrongly. RULED: N4's thread fixes it as N4e after #3660 is on dev, its own small pull request into dev (test fixture only: the fixture marks the first shell busy itself when it opens it; no production line), lane=quick, read by me, no separate review. Add it to the plan.
+- #3660 now waits only for the full run 44158583695 (21 of 27 at 19:53 UTC, none failed; packages, test-changed and the four server shards open) and the web and desktop third sitting. L353 on the phone as ruled.
+
+Plan for N4e. It starts only after the coordinator says #3660 is on dev.
+
+1. Cut a branch from origin/dev.
+2. Change the fixture in apps/server/src/orchestration-v2/goat/ThreadWorkspaceService.setupShell.test.ts so that it marks the first shell busy itself when it opens it. No production line changes, and no expectation changes.
+3. Run the setupShell file and check:changed against origin/dev.
+4. Push plainly and open a DRAFT pull request into dev, with the body passed through --body-file.
+5. Report the URL and the head. The coordinator dispatches lane=quick and reads the change; there is no separate review.
