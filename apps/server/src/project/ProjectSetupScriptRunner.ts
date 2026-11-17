@@ -500,8 +500,8 @@ export const make = Effect.gen(function* () {
     // Restarted before the watchers subscribe, so the old shell's end settles nothing of this run;
     // a prompt the new shell printed before them is covered by the readiness watcher's quiet fallback.
     if (input.freshShell === true)
-      yield* terminalManager
-        .restart({
+      yield* withoutBindingCheck(
+        terminalManager.restart({
           threadId: input.threadId,
           terminalId,
           cwd,
@@ -509,17 +509,17 @@ export const make = Effect.gen(function* () {
           cols: FRESH_SHELL_COLS,
           rows: FRESH_SHELL_ROWS,
           env: shellEnv,
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ProjectSetupScriptOperationError({
-                ...errorContext,
-                operation: "openTerminal",
-                cause,
-              }),
-          ),
-        );
+        }),
+      ).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProjectSetupScriptOperationError({
+              ...errorContext,
+              operation: "openTerminal",
+              cause,
+            }),
+        ),
+      );
     const observe = input.observeCompletion;
     const completionToken = observe ? (yield* random.uuidV4()).replaceAll("-", "") : null;
     // Registered before the open: an open that waits for a folder a restore holds comes back with the
