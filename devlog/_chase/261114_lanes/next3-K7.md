@@ -489,3 +489,70 @@ The mirrored hunk takes server.test.ts from 1411 to 1419, and its entry is 1411.
 - B: describe("provider setup commands") is server.test.ts:1331-1411 (81 lines). My report's ":1339-1419" was my worktree's numbers with the +8 hunk applied.
 - Row 4's uncommitted work is held in a local stash ("k7-row4-wip") on top of ebbba8c7f0, so row 5's commit carries only row 5.
 
+
+
+## Coordinator, 2026-11-17 22:16:44 UTC, item 2 (row 4, option A) and IV (v), (vi), verbatim
+
+2. K7, row 4 (a74ee4cc7c): OPTION A.
+READ BY ME: server.test.ts at c995c5427a (describes at :105, :228, :436, :1331; makeConfigPersistenceHarness at :384; 1411 lines; entry 1411); upstream's whole server.test.ts diff of a74ee4cc7c; next3-K7.md :332-340 and :478-482 at records f429de5b65. NOT READ: ebbba8c7f0, K7's worktree. NOT RUN: anything.
+Why A: claim 3 moved the server update code to serverUpdate.ts, so its tests follow the module, and upstream's hunk then lands beside the launcher cases it belongs with. B would leave the update tests split across two files.
+Conditions:
+a. One commit that only moves, before the row 4 commit: server.test.ts:228-382 at c995c5427a (155 lines, your range, not 228-443) arrives byte for byte in state/server.updateResume.test.ts; the record gives the empty diff of the two ranges. makeConfigPersistenceHarness (:384-434) stays where it is.
+b. The new file takes copies of CONFIG, TARGET and session byte for byte (the launcher cases need them there anyway). No shared testkit and no edit to those declarations in server.test.ts. Imports server.test.ts no longer uses are removed and listed; every line of the new file outside the moved block is listed in the commit message and the record (the 21:59 claims terms).
+c. Proof of a move: at the move commit, before row 4, both files pass, the five rows of the describe run in the new file under the same titles, and the total count of the two files equals server.test.ts's count before. The numbers go in the record.
+d. The server.test.ts entry is lowered to countLines after the move; the card row (server.test.ts, K7, :228-382 at c995c5427a, the new file, lines freed) is written before the cut.
+e. The row 4 commit applies the mirrored hunk in the new file under IV (i); the review matches it to upstream's @@ -254 and @@ -363 hunks.
+f. One fork delta line: in GOAT, upstream's server update cases of state/server.test.ts ("accepted server update recovery", "launcher update resume") live in server.updateResume.test.ts beside serverUpdate.ts.
+Row 5 in parallel on your condition (none of row 4's files) is fine.
+
+IV gains (v), mock scaffolding: a line added to a test's mocks so that existing cases keep loading or rendering after the lane's row adds a component, hook or import. Covered: one export added to an existing vi.mock factory, or one vi.mock of a module the lane's own row introduced. Conditions: the stub is inert (renders its children, returns undefined, or does nothing); no existing title, body, setup value or expectation changes; the line is quoted in the record before the commit; the file stays within its entry; and what the stub hides is tested in a case of its own or named in the lane's P1 rows. Still to me: a mock that returns data existing assertions read, a changed existing mock line, a stub of a module the lane did not add, and anything a lane is unsure of. The review checks each; a miss is a P2.
+
+IV gains (vi), a describe moved whole: a whole top-level describe block of an at-entry test file moved byte for byte into a sibling test file, in a commit that does nothing else, on K7's conditions a to d above (empty diff of the two ranges in the record; helpers copied byte for byte and listed, none moved or shared; the same case titles and the same total count before and after; the entry lowered; the card row before the cut; TEST_TITLES updated in the same commit when the file is listed). Still to me: a harness or helper moved or shared into a testkit, a describe split in two, a nested block, and a move that needs any line of a case to change.
+
+For K7: the server.test.ts row (:228-382 -> state/server.updateResume.test.ts) is on card 10.028 (records 5035238517), so the move may go ahead.
+
+## Lane coordinator, 22:1x UTC, for the record
+
+Row 5 may go on in parallel if it touches none of row 4's files, with row 4's uncommitted changes kept apart (a local stash or branch).
+
+## Build log, rows 5 and 6
+
+- af3f5f62c1 row 5 (7c22095fcc): driver.ts stops before a still-silent route once a transient failure is in hand; managedRelayState.ts replaces a Clerk token read over 4 s (3 tries, then a timeout error). The message says GOAT Connect: the 3-way apply conflicted only on the product name. Tests: upstream's two Clerk cases in managedRelayState.test.ts (no entry) and its silent-LAN case in the new connection/supervisor.silentRoute.test.ts, which copies the goatConnect vi.mock and the LAN-then-relay entry from supervisor.test.ts. All three timed out on the base (the waits never end). After: managedRelayState, supervisor.silentRoute, supervisor and driver suites, 134 tests. None of row 4's files changed; row 4 was held in stash "k7-row4-wip".
+- 0b6c07ee61 move-out, claim 4: ChatMarkdown.tsx:259-267 -> components/chatMarkdownLinkHref.ts:4-12. The only changed text is `export` on normalizeMarkdownLinkHrefKey; the new module imports normalizeMarkdownLinkDestination and rewriteMarkdownFileUriHref. ChatMarkdown.tsx 1679 -> 1671 (block 9, 1-line import). Entry 1679 -> 1671.
+- Row 6 (3a815e9749), being committed after this record:
+  - Prior check: GOAT already never falls back for a media-file path inside the workspace (state/assets.ts, the mediaFileReference(...).relativePath condition, present since the fork's initial commit; the existing table in assets.test.ts covers "relative Markdown image missing remotely" and "workspace path with dot segments"). Upstream's bug remains on GOAT for a relative image that leaves the workspace ("../shared/report.png" from /repo/app normalizes to /repo/shared/report.png and falls back to the desktop's file). The same holds when ChatMarkdown resolves against imageBaseDir. hostOnly closes both.
+  - Contract: AssetResource media-file `hostOnly: optionalKey(Literal(true))`. Set by classifyMarkdownImageSource (relative) through resolveMediaSource, by both web sites in ChatMarkdown.tsx (the image and the audio preview; upstream has the image only), and by mobile's markdownMedia.ts, which builds its own resource (upstream's commit does not touch mobile). The local fallback in state/assets.ts skips a hostOnly resource.
+  - Each way, tested in the new packages/contracts/src/assets.hostOnly.test.ts: an older server's media-file request schema (copied from c995c5427a) decodes a newer client's request and drops the flag; a newer server keeps it; an older client's request decodes without it; a non-true hostOnly is rejected. No asset decoder in contracts or the server sets onExcessProperty (`rg -n onExcessProperty`).
+  - Tests: the new describe in state/assets.test.ts ("keeps a relative image that leaves the workspace on the thread's environment": the relative case fell back on the base and now stays on the remote; the absolute case still falls back) and a new mobile describe in markdownMedia.test.ts. Runs: client-runtime assets/markdownImages/mediaSource 57; mobile markdownMedia + markdownMediaSource 91; contracts 3. Typecheck exits 0 for contracts, client-runtime, web and mobile. ChatMarkdown.tsx 1671 -> 1675 (the lane nets -4 against 1679).
+
+### Rule 3 for row 6 (quoted before the commit)
+
+1. packages/client-runtime/src/markdownImages.test.ts under IV (iv): GOAT's file is byte for byte upstream's at 3a815e9749^ (`diff <(git show 3a815e9749^:...) <(git show HEAD:...)`, with @t3tools read as @goat: empty) and after the change is upstream's file at 3a815e9749 (same diff: empty). Upstream's one added line: `...(source.startsWith("file:") ? {} : { relative: true }),` in the classifyMarkdownImageSource case.
+2. packages/client-runtime/src/mediaSource.test.ts under IV (standing, mirrored assertion). Upstream's own copy:
+
+```diff
+@@ -83,7 +83,7 @@ describe("resolveMediaSource", () => {
+         },
+         srcFragment: "#mark",
+         access: "environment",
+-        resource: { _tag: "media-file", threadId, path: "/repo/screens/logo.svg" },
++        resource: { _tag: "media-file", threadId, path: "/repo/screens/logo.svg", hostOnly: true },
+       });
+     });
+```
+
+GOAT's copy, the same assertion changed the same way (GOAT's file differs from upstream elsewhere, so this is the single-assertion case, not (iv)):
+
+```diff
+@@ -134,7 +134,7 @@ describe("resolveMediaSource", () => {
+         },
+         srcFragment: "#mark",
+         access: "environment",
+-        resource: { _tag: "media-file", threadId, path: "/repo/screens/logo.svg" },
++        resource: { _tag: "media-file", threadId, path: "/repo/screens/logo.svg", hostOnly: true },
+       });
+     });
+```
+
+No other existing expectation changes. The mobile and assets.test.ts additions are new cases.
+
