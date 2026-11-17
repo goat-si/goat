@@ -55,12 +55,13 @@ import { ThreadRouteView } from "./ThreadRouteView";
 const environmentId = EnvironmentId.make("env");
 const SOURCE = ThreadId.make("older-settled-source");
 const FORK = ThreadId.make("fresh-fork");
-const shell = (id: ThreadId, forkedFrom: unknown = null) => ({
+const shell = (id: ThreadId, forkedFrom: unknown = null, sideChatOf: ThreadId | null = null) => ({
   id,
   environmentId,
   deletedAt: null,
   archivedAt: null,
   forkedFrom,
+  sideChatOf,
 });
 
 function setup(shells: ReadonlyArray<ReturnType<typeof shell>>) {
@@ -102,4 +103,14 @@ it("reads nothing for a fork whose source the client holds, or for a thread that
   await expect.element(screen.getByText("chat view")).toBeVisible();
 
   expect(held.mounted).toEqual([]);
+});
+
+it("reads the family of a side chat whose parent the client does not hold", async () => {
+  // A side chat opened after its parent's first completed turn is a run fork of that parent.
+  const SIDE_CHAT = ThreadId.make("side-chat");
+  setup([shell(SIDE_CHAT, { type: "run", threadId: SOURCE, runId: "run-1" }, SOURCE)]);
+  await using screen = await render(route(SIDE_CHAT));
+  await expect.element(screen.getByText("chat view")).toBeVisible();
+
+  expect(held.mounted).toEqual([SIDE_CHAT]);
 });
