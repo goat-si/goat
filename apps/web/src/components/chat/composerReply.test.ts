@@ -6,7 +6,7 @@ import {
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
-import type { Atom } from "effect/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
 const toast = vi.hoisted(() => vi.fn());
@@ -17,8 +17,14 @@ vi.mock("../ui/toast", () => ({
 
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { environmentServerConfigsAtom } from "../../state/server";
-import { refuseReplyTheServerDrops, refuseReplyWhoseHolderIsGone } from "./composerReply";
-import { environmentThreadShells } from "../../state/threads";
+import {
+  refuseReplyTheServerDrops,
+  refuseReplyWhoseHolderIsGone,
+  restoreStashedReply,
+  stashedReplyCanBeJudged,
+} from "./composerReply";
+import { useComposerDraftStore } from "../../composerDraftStore";
+import { environmentThreadShells, threadFamilies } from "../../state/threads";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 
 const environmentId = EnvironmentId.make("environment-1");
@@ -121,4 +127,73 @@ it("lets a reply through while the client holds its thread, and to the thread's 
     ).toBe(false);
   }
   expect(toast).not.toHaveBeenCalled();
+});
+
+// A fresh fork of an older settled thread: the fork's shell names its source, which holds the
+// response; the client holds no shell for the source until the fork's family read brings it.
+function forkOfUnheldSource() {
+  const fork = scopeThreadRef(environmentId, ThreadId.make("fresh-fork"));
+  const forkShellAtom = environmentThreadShells.threadShellAtom(fork);
+  const sourceShellAtom = environmentThreadShells.threadShellAtom(
+    scopeThreadRef(environmentId, reply.citation.threadId),
+  );
+  let sourceShell: unknown = null;
+  const familyRead = Atom.make(AsyncResult.initial<never, never>(true));
+  const get = appAtomRegistry.get.bind(appAtomRegistry);
+  const shells = vi
+    .spyOn(appAtomRegistry, "get")
+    .mockImplementation(((atom: unknown) =>
+      atom === forkShellAtom
+        ? { forkedFrom: { type: "run", threadId: reply.citation.threadId, runId: "run-1" } }
+        : atom === sourceShellAtom
+          ? sourceShell
+          : get(atom as never)) as typeof appAtomRegistry.get);
+  const family = vi.spyOn(threadFamilies, "familyAtom").mockReturnValue(familyRead as never);
+  return {
+    ref: fork,
+    familyArrives: () => {
+      sourceShell = { id: reply.citation.threadId, deletedAt: null };
+      appAtomRegistry.set(familyRead, AsyncResult.success({ snapshotSequence: 1, threads: [] }));
+    },
+    [Symbol.dispose]: () => {
+      shells.mockRestore();
+      family.mockRestore();
+      useComposerDraftStore.getState().setReplyTo(fork, null);
+    },
+  };
+}
+
+it("a stashed reply in a fork waits for the family read that brings its thread, then comes back", async () => {
+  using fork = forkOfUnheldSource();
+  const judged = stashedReplyCanBeJudged([reply], fork.ref);
+
+  expect(await Promise.race([judged, Promise.resolve("still waiting")])).toBe("still waiting");
+  fork.familyArrives();
+  expect(await judged).toBe(true);
+  restoreStashedReply([reply], fork.ref);
+  expect(useComposerDraftStore.getState().getComposerDraft(fork.ref)?.replyTo).toEqual(reply);
+});
+
+it("keeps a stashed reply's entry when the family read is still out, and says so", async () => {
+  toast.mockReset();
+  using fork = forkOfUnheldSource();
+  vi.useFakeTimers();
+  using _timers = { [Symbol.dispose]: () => vi.useRealTimers() };
+  const judged = stashedReplyCanBeJudged([reply], fork.ref);
+
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(await judged).toBe(false);
+  expect(toast).toHaveBeenCalledWith(
+    expect.objectContaining({ title: "Still loading the thread this prompt replies to" }),
+  );
+});
+
+it("judges a stashed reply at once when its thread is held, or it replies in its own thread", async () => {
+  using _shells = heldShells([reply.citation.threadId]);
+  expect(
+    await stashedReplyCanBeJudged([reply], { environmentId, threadId: ThreadId.make("x") }),
+  ).toBe(true);
+  expect(await stashedReplyCanBeJudged([], { environmentId, threadId: ThreadId.make("x") })).toBe(
+    true,
+  );
 });
