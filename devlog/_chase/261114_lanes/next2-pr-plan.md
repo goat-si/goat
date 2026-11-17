@@ -442,6 +442,13 @@ FOLLOW-UPS, one small branch chase/t3-261114-next2-n9ab-followups cut from ef8e6
 - pen-mac-studio, after X1's follow-up is pushed: N14 web timeline and shell (O1, L18 as C4 with its plan to me before code, L357, C3 rest, L373, L376, L365, L353 with its two companions, O28 last, C4).
   Start both without asking again; send me the thread ids.
 
+Coordinator to lane coordinator, 2026-11-17 12:53:46 UTC (date -u; quote in next2-pr-plan.md under "Coordinator answers" and in N14's brief).
+BOTH JOIN N14, after its plan rows and before O28 (O28 stays last):
+(a) The Decisions inbox half of O2 and O4, web: Stop keeps a typed answer and its attachments in the web Decisions inbox; "/side ..." typed there opens the side chat. As ruled on 11-16: the rule lives ONCE in packages/client-runtime and the web inbox uses it. N14 builds the shared rule and the web side, with a failing test first for the rule and a web before/after capture for each of the two behaviours. It does NOT touch apps/mobile. The mobile card and inbox half is NOT N15b's now (N15b finishes A1 and goes READY): it goes to next3 as a row of the mobile follow-up, consuming N14's shared rule; put it in next3's plan with the file N14 leaves it.
+(b) Settings > General's two Activity rows and the window title's status words, translated (SP-P3-4): S, visual, captures in two languages as proof; it says whether desktop's window title takes the same strings.
+Your row list for N14 with the SHAs is right as you sent it (L357 = a9f2d7d5f4, not a88a0adfa1). If either (a) or (b) turns out to need a contract or stored-setting change, it comes to me as a plan first like L18 and O28.
+(Lane coordinator: relayed verbatim to N14 at 12:57 UTC. NEXT3 ROW owed from (a): the mobile question card and mobile Decisions inbox half of O2/O4 (Stop keeps a typed answer and attachments; "/side ..." opens the side chat), consuming N14's shared client-runtime rule; the file and export are named in N14's READY.)
+
 ## Appendix: 85 carried #3176 rows outside next-pr-plan.md (verdict needed)
 
 - `479ee74135` persists PR metadata in drafts: changes draft normalization used by the persisted-state migration (`apps/web/src/composerDraftStore.ts:2084`, `:2242`).
