@@ -464,7 +464,7 @@
   "apps/web/src/browserFaviconStore.ts": { "nonNull": 2 },
   "apps/web/src/components/ChatMarkdown.tsx": { "lines": 1679, "nonNull": 1 },
   "apps/web/src/components/ChatView.logic.test.ts": { "lines": 1451 },
-  "apps/web/src/components/ChatView.logic.ts": { "lines": 1586, "nonNull": 1 },
+  "apps/web/src/components/ChatView.logic.ts": { "lines": 1550, "nonNull": 1 },
   "apps/web/src/components/ChatView.tsx": { "lines": 4213, "nonNull": 1 },
   "apps/web/src/components/CommandPalette.tsx": { "lines": 3048 },
   "apps/web/src/components/CommandPaletteThemeItems.tsx": { "nonNull": 2 },
