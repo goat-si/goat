@@ -334,3 +334,13 @@ Each way, checked by those tests: a newer client against an older server: the ol
 
 Checks: typecheck @goat/web, @goat/server, @goat/contracts exit 0; lint clean on the changed files; the new and touched tests pass. PullRequestCodeTab.tsx 1454 (dev entry 1458).
 
+
+
+## Condition (a) for 54a5c51a58, written before its code
+
+(i) The fallback server answers only for repositories its own active projects have. The client assigns each project only to the environment that reported it (assignProjectsToEnvironments keys every candidate by project.environmentId; a repository moves to another environment only through a project that environment itself lists), and a list request carries project ids, never repository names: PullRequestService's listWorkspaceProjects iterates the server's own project list and filters it by the ids, so an id the server does not have matches nothing and reads nothing (the same boundary S4 set with hasProjectRepository: a repository is read only through a project of this server). Tests: the assignment never puts a project under an environment other than its own, and keeps an unreadable repository with its owner when no other environment has a project for it; a server list request naming a project id that server does not have reads no repository and lists nothing.
+
+(ii) A fallback server can be signed in to a different account, so lists that depend on the viewer would be that account's. GOAT's fix: the fallback is used only for views that do not depend on the viewer, involvement "all" with no author filter; for "reviewing", "authored" or an author filter the repository stays with its owning server, which reports its read error as today, so no list silently shows another account's review requests. Under "all", each row already names the environment it was read through (PullRequestListGroups.tsx:121, shown when more than one environment can list pull requests), and the detail panel opened from that row acts through that environment, whose account its permissions belong to. Upstream applies the fallback to every view; this is a GOAT deviation with its reason. Test: with involvement "reviewing" (and with an author filter) the unreadable repository is not reassigned; with "all" it is.
+
+Size of an error's listResult: upstream builds it only when no repository was readable, so its entries are always empty; it carries the viewers map, one provider summary per host and one error per unreadable repository. The largest is bounded by the server's project count (a request's projectIds are at most 100; without them, every project of that server). The measured size from a 500-repository fixture goes in this record with 54a5c51a58's commit.
+
