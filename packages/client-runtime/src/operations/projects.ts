@@ -5,6 +5,7 @@ import type {
   ProjectMutation,
   ProjectId,
   ServerConfig,
+  ServerSettings,
   SourceControlDiscoveryResult,
   SourceControlRepositoryInfo,
 } from "@goat/contracts";
@@ -141,11 +142,27 @@ export function getDefaultCloneUrl(
     : repository.sshUrl;
 }
 
+export type OfferedSourceControlProviders = ServerSettings["offeredSourceControlProviders"];
+
+/**
+ * Whether the add and publish project pickers offer a host. GOAT offers every host until the user
+ * turns one off; a server without the setting offers them all.
+ */
+export function isSourceControlProviderOffered(
+  offered: OfferedSourceControlProviders | undefined,
+  kind: SourceControlProviderKind,
+): boolean {
+  return offered?.[kind] ?? true;
+}
+
 export function sortAddProjectProviderSources(
   readiness: AddProjectRemoteSourceReadiness,
+  offered?: OfferedSourceControlProviders,
 ): ReadonlyArray<SourceControlProviderKind> {
   return Arr.sort(
-    ADD_PROJECT_REMOTE_PROVIDER_SOURCES,
+    ADD_PROJECT_REMOTE_PROVIDER_SOURCES.filter((source) =>
+      isSourceControlProviderOffered(offered, source),
+    ),
     Order.mapInput(
       Order.Struct({
         ready: Order.flip(Order.Boolean),
@@ -253,9 +270,11 @@ export interface NewProjectPublishTarget {
 
 export function getNewProjectPublishTargets(
   discovery: SourceControlDiscoveryResult | null,
+  offered?: OfferedSourceControlProviders,
 ): ReadonlyArray<NewProjectPublishTarget> {
   const readiness = buildAddProjectRemoteSourceReadiness(discovery);
   return sourceControlClients.definitions.flatMap((definition) => {
+    if (!isSourceControlProviderOffered(offered, definition.kind)) return [];
     if (!readiness(definition.kind).ready) return [];
     const provider = discovery?.sourceControlProviders.find(
       (candidate) => candidate.kind === definition.kind,

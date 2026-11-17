@@ -63,6 +63,8 @@ import {
   type ScopedMobileSettingsTarget,
 } from "./settings-scoped-server";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
+import { isSourceControlProviderOffered } from "@goat/client-runtime/operations/projects";
+import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { AgentWorkspaceTerminalSettings } from "./AgentWorkspaceTerminalSettings";
 import {
   MESSAGE_NAMED_SKILL_SETTINGS,
@@ -349,6 +351,12 @@ function ServerSettingsDetail(props: {
     (target) =>
       target.environment.serverConfig.environment.capabilities.threadRestartContinuation === true,
   );
+  // Older servers drop the patch, so their switches stay on and disabled.
+  const supportsOfferedHosts = targets.every(
+    (target) =>
+      target.environment.serverConfig.environment.capabilities.offeredSourceControlProviders ===
+      true,
+  );
   const supportsCodexSurvival = targets.every(
     (target) => target.environment.serverConfig.environment.capabilities.codexTurnSurvival === true,
   );
@@ -570,6 +578,38 @@ function ServerSettingsDetail(props: {
                       onValueChange={(value) => write({ removeAgentCreditsOnMerge: value })}
                     />
                   </SettingsSection>
+                  {projectSelected ? null : (
+                    <SettingsSection
+                      title="Project sources"
+                      footer="Hosts offered when adding or publishing a project."
+                    >
+                      {sourceControlClients.definitions.map((definition) => {
+                        const offered = displayTargets.map((target) =>
+                          isSourceControlProviderOffered(
+                            target.settings.offeredSourceControlProviders,
+                            definition.kind,
+                          ),
+                        );
+                        return (
+                          <SettingsSwitchRow
+                            key={definition.kind}
+                            label={definition.pickerLabel}
+                            value={
+                              offered.every((value) => value === offered[0])
+                                ? (offered[0] ?? null)
+                                : null
+                            }
+                            disabled={
+                              disabledFor("offeredSourceControlProviders") || !supportsOfferedHosts
+                            }
+                            onValueChange={(value) =>
+                              write({ offeredSourceControlProviders: { [definition.kind]: value } })
+                            }
+                          />
+                        );
+                      })}
+                    </SettingsSection>
+                  )}
                   <SettingsSection title="Default branch">
                     <SettingsSwitchRow
                       icon="arrow.down.circle"

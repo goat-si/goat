@@ -142,6 +142,7 @@ function useEnvironmentOptions(
         connectionErrorTraceId: runtime?.connectionErrorTraceId ?? null,
         supportsCloneTracking: config?.environment.capabilities.projectCloneTracking === true,
         ghqCloneLayout: config?.settings.ghqCloneLayout === true,
+        offeredSourceControlProviders: config?.settings.offeredSourceControlProviders,
       };
     });
     return Arr.sort(
@@ -372,24 +373,30 @@ export function AddProjectSourceScreen(props: { readonly environmentId?: string 
                 )
               }
             />
-            {(["url", ...sortAddProjectProviderSources(readiness)] as AddProjectRemoteSource[]).map(
-              (candidate) => (
-                <SourceControlRow
-                  key={candidate}
-                  source={candidate}
-                  selectedEnvironmentId={selectedEnvironment.environmentId}
-                  ready={canCloneProject && readiness(candidate).ready}
-                  hint={
-                    !canCloneProject
-                      ? "This connection cannot clone projects."
-                      : readiness(candidate).ready
-                        ? addProjectRemoteSourcePathHint(candidate)
-                        : (readiness(candidate).hint ?? "")
-                  }
-                  isFirst={false}
-                />
-              ),
-            )}
+            {(
+              [
+                "url",
+                ...sortAddProjectProviderSources(
+                  readiness,
+                  selectedEnvironment.offeredSourceControlProviders,
+                ),
+              ] as AddProjectRemoteSource[]
+            ).map((candidate) => (
+              <SourceControlRow
+                key={candidate}
+                source={candidate}
+                selectedEnvironmentId={selectedEnvironment.environmentId}
+                ready={canCloneProject && readiness(candidate).ready}
+                hint={
+                  !canCloneProject
+                    ? "This connection cannot clone projects."
+                    : readiness(candidate).ready
+                      ? addProjectRemoteSourcePathHint(candidate)
+                      : (readiness(candidate).hint ?? "")
+                }
+                isFirst={false}
+              />
+            ))}
           </ListSection>
           {discoveryState.isPending ? (
             <AppActivityIndicator colorClassName="accent-icon-muted" />
@@ -636,7 +643,10 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
           input: {},
         }),
   );
-  const publishTargets = getNewProjectPublishTargets(discoveryState.data);
+  const publishTargets = getNewProjectPublishTargets(
+    discoveryState.data,
+    environment?.offeredSourceControlProviders,
+  );
   const [name, setName] = useState("");
   const [publishes, setPublishes] = useState(false);
   const [publishKind, setPublishKind] = useState<SourceControlProviderKind | null>(null);

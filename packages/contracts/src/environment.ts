@@ -152,6 +152,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadAutoSettlementScope: Schema.optionalKey(Schema.Boolean),
   threadRestartContinuation: Schema.optionalKey(Schema.Boolean),
   codexTurnSurvival: Schema.optionalKey(Schema.Boolean),
+  /** Server stores `offeredSourceControlProviders`; older servers drop the patch, so clients disable the switches. */
+  offeredSourceControlProviders: Schema.optionalKey(Schema.Boolean),
   /** Server honors `codexAppServerIsolation` for new Codex threads. */
   codexAppServerIsolation: Schema.optionalKey(Schema.Boolean),
   projectSettingsOverrides: Schema.optionalKey(Schema.Boolean),

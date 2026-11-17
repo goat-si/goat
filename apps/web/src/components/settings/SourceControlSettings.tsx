@@ -1,6 +1,8 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { ChevronDownIcon } from "~/components/solar";
 import * as Duration from "effect/Duration";
+import { useAtomValue } from "@effect/atom-react";
+import { isSourceControlProviderOffered } from "@goat/client-runtime/operations/projects";
 import * as Option from "effect/Option";
 import { useState, type ReactNode } from "react";
 import type {
@@ -22,6 +24,8 @@ import { useSettingsScope } from "./SettingsScopeContext";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { cn } from "../../lib/utils";
 import { useEnvironmentQuery } from "../../state/query";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { sourceControlEnvironment } from "../../state/sourceControl";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -261,9 +265,16 @@ function itemSummary({
 
 function DiscoveryItemRow({
   item,
+  offered,
   children,
 }: {
   readonly item: VcsDiscoveryItem | SourceControlProviderDiscoveryItem;
+  /** A host's switch chooses whether the add and publish project pickers offer it. */
+  readonly offered?: {
+    readonly checked: boolean;
+    readonly disabled: boolean;
+    readonly onChange: (checked: boolean) => void;
+  };
   readonly children?: ReactNode;
 }) {
   const version = optionLabel(item.version);
@@ -328,7 +339,21 @@ function DiscoveryItemRow({
                 />
               </Button>
             ) : null}
-            {!isVcsNotReady(item) ? (
+            {offered ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Switch
+                      checked={offered.checked}
+                      disabled={offered.disabled}
+                      onCheckedChange={offered.onChange}
+                      aria-label={`Offer ${item.label} when adding or publishing a project`}
+                    />
+                  }
+                />
+                <TooltipPopup side="top">Offer when adding or publishing a project</TooltipPopup>
+              </Tooltip>
+            ) : !isVcsNotReady(item) ? (
               <Switch checked={enabled} disabled aria-label={`${item.label} availability`} />
             ) : null}
           </div>
@@ -524,6 +549,16 @@ export function SourceControlSettingsPanel() {
   const handleScan = () => {
     discovery.refresh();
   };
+  const offeredProviders = environment?.serverConfig?.settings.offeredSourceControlProviders;
+  // An older server drops the patch, so its switches stay on and disabled.
+  const offeredSupported =
+    environment?.serverConfig?.environment.capabilities.offeredSourceControlProviders === true;
+  const updateServerSettings = useAtomCommand(serverEnvironment.updateSettings, {
+    label: "save offered source control hosts",
+  });
+  const canUpdateServerSettings = useAtomValue(
+    serverEnvironment.updateSettings.permissionAtom(environmentId),
+  );
   const hostSettingsPanel = (item: SourceControlProviderDiscoveryItem) => {
     const definition = sourceControlClients.find(item.kind);
     if (!definition?.settings || environmentId === null) return undefined;
@@ -627,7 +662,23 @@ export function SourceControlSettingsPanel() {
               headerAction={hasVersionControlSystems ? null : scanButton}
             >
               {result.sourceControlProviders.map((item) => (
-                <DiscoveryItemRow key={`provider:${item.kind}`} item={item}>
+                <DiscoveryItemRow
+                  key={`provider:${item.kind}`}
+                  item={item}
+                  offered={{
+                    checked: isSourceControlProviderOffered(offeredProviders, item.kind),
+                    disabled: !offeredSupported || !canUpdateServerSettings,
+                    onChange: (checked) => {
+                      if (environmentId === null) return;
+                      void updateServerSettings({
+                        environmentId,
+                        input: {
+                          patch: { offeredSourceControlProviders: { [item.kind]: checked } },
+                        },
+                      });
+                    },
+                  }}
+                >
                   {hostSettingsPanel(item)}
                 </DiscoveryItemRow>
               ))}
