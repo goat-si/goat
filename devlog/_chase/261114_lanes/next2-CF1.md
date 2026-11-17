@@ -299,3 +299,18 @@ NOT RUN (second fix round): the phone captures; the VoiceOver escape on a device
 > The second fix round at bd3901fca9 is checked on origin (one commit on 43f14b9a9c, 6 files +46/-9) and its NEW review is running (Opus 5.5 high, task goat-next2-CF1-fix2-bd3901fc, with both earlier reports in its brief). CF1 stands by.
 
 CF1 stands by at bd3901fca9dc8ab57dd560874b06e37fa40a2050 for the review's verdict; nothing pushed to the lane branch since.
+
+## Merged
+
+lane CF1 merged into the integration branch at bd3901fca9 (#3660)
+
+## Coordinator answers, 10:29 (verbatim)
+
+> Coordinator to lane coordinator, 2026-11-17 10:29:46 UTC (quote verbatim in CF1's record, in card 10.027's CF1 row and in next2-pr-plan.md).
+> LANE CF1 IS MERGED INTO THE INTEGRATION BRANCH. The fresh narrow review of the second fix round (Opus 5.5 high) at bd3901fca9dc8ab57dd560874b06e37fa40a2050: APPROVE WITH NITS, nothing at P0 to P2; report /Users/jun/handoff-in/chase/next2-CF1-fix2-review-bd3901fc.md. With the first review (the two C4 rows hold) and the fix-round review (everything but the dismiss held), the lane has no open P0 to P2. I fast-forwarded chase/t3-261114-next2 from ed4268897e to bd3901fca9 (plain push; the base was an ancestor, so the merge is the lane's own tree). #3660's head is bd3901fca9.
+> For the records: CF1's record gets the line "lane CF1 merged into the integration branch at bd3901fca9 (#3660)"; the card row; the issues it fixes are commented when #3660 reaches dev, not now.
+> ONE FOLLOW-UP for CF1 (CF1F2-P3-1, small, on a new branch from bd3901fca9, to come in with the phone captures): GitActionProgressOverlay.tsx:68 passes onAccessibilityEscape in every phase, and the argument-free dismiss clears whatever result is stored, so a VoiceOver escape on thread B's "running" banner clears thread A's failure before anyone saw it (not worse than before this lane). Pass onAccessibilityEscape only when the phase is "success" or "error". One test. No rush; it rides with the captures.
+> FOR THE OTHER LANES of #3660 (S4, X1, N4, N12, N15b): the integration head is now bd3901fca9. Each lane merges it (a merge, no rebase) when it next reaches a READY or fix-round point, not mid-row; both-sides files the reviews saw: ThreadWorkspaceService.ts (N4, merges cleanly) and GitCommitSheet.tsx (N15b, merges cleanly; N15b keeps the sheet open until a commit succeeds and the merged sheet must still render GitActionFailure). N15b takes CF1's phone captures after that merge, under the one-heavy-job token: the missing-worktree banner (goat#3658), Usage dimming (goat#3652), the Create worktree refusal (goat#3557), the failure inside a Git sheet and on the thread screen with its close button (goat#3654), the review screen's failure card on iPhone and Android.
+> #3660's body: I add CF1's row and the Known limits lines it proposed (CF1 already added a Known limits section; I read the body before editing).
+
+The final review report is /Users/jun/handoff-in/chase/next2-CF1-fix2-review-bd3901fc.md (relayed in full to this lane). Its one P3 is the follow-up CF1F2-P3-1, on chase/t3-261114-next2-cf1b-a11y cut from bd3901fca9.
