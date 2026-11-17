@@ -537,7 +537,7 @@
   "apps/web/src/components/onboarding/WelcomeWizard.tsx": { "lines": 1654 },
   "apps/web/src/components/preview/PreviewView.tsx": { "lines": 1093, "nonNull": 1 },
   "apps/web/src/components/preview/browserAddressDraftStore.ts": { "nonNull": 1 },
-  "apps/web/src/components/pullRequest/PullRequestCodeTab.tsx": { "lines": 1458 },
+  "apps/web/src/components/pullRequest/PullRequestCodeTab.tsx": { "lines": 1427 },
   "apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx": { "lines": 1761 },
   "apps/web/src/components/pullRequest/PullRequestsPage.tsx": { "lines": 1555 },
   "apps/web/src/components/pullRequest/pullRequestDetail.logic.test.ts": { "lines": 1472 },

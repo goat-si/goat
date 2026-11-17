@@ -1,14 +1,13 @@
 import { useWordWrap } from "~/hooks/useWordWrap";
 import { reviewThreadsByPath } from "./pullRequestThreadsByPath";
 import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
-import type { CodeViewItem, DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
+import type { CodeViewItem, SelectedLineRange } from "@pierre/diffs";
 import type { CodeViewAnnotationArgs, CodeViewDiffItem } from "@pierre/diffs/react";
 import type {
   EnvironmentId,
   PullRequestDetailView,
   PullRequestDiffSide,
   PullRequestRef,
-  PullRequestReviewPosition,
   PullRequestReviewThread,
   PullRequestThreadCommentsResult,
 } from "@goat/contracts";
@@ -50,7 +49,6 @@ import { diffModel, NO_SLICES, type DiffSlice } from "./pullRequestDiffModel";
 import {
   PullRequestImageAnnotation,
   pullRequestImagePreviewUrl,
-  type PullRequestImagePreview,
 } from "./PullRequestImageAnnotation";
 import {
   buildFileDiffRenderKey,
@@ -119,45 +117,16 @@ import {
   pullRequestReviewKey,
   usePendingReviewComments,
   usePullRequestReviewStore,
-  type PendingReviewComment,
 } from "./pullRequestReviewStore";
-
-interface ReviewAnnotationGroup {
-  readonly threads: ReadonlyArray<PullRequestReviewThread>;
-  readonly pending: ReadonlyArray<PendingReviewComment>;
-  readonly draft: boolean;
-  readonly image?: PullRequestImagePreview;
-}
-
-type ReviewAnnotation = DiffLineAnnotation<ReviewAnnotationGroup>;
-
-const COMMIT_PAGE_SIZE = 10;
-
-const PULL_REQUEST_FILE_TREE_STORAGE_KEY = "goat.pullRequestFileTreeOpen";
-
-// Show host counts outside the shadow root; hunk totals are zero when hosts withhold hunks.
-const REPLACE_FILE_COUNTS_CSS = `
-[data-diffs-header] [data-additions-count],
-[data-diffs-header] [data-deletions-count] {
-  display: none !important;
-}`;
-
-interface MutableAnnotationGroup {
-  readonly side: PullRequestDiffSide;
-  readonly line: number;
-  readonly threads: PullRequestReviewThread[];
-  readonly pending: PendingReviewComment[];
-  draft: boolean;
-}
-
-interface DraftAnchor {
-  readonly fileKey: string;
-  readonly path: string;
-  readonly oldPath: string | null;
-  readonly position: PullRequestReviewPosition;
-  readonly startPosition?: PullRequestReviewPosition;
-  readonly range: SelectedLineRange;
-}
+import {
+  COMMIT_PAGE_SIZE,
+  PULL_REQUEST_FILE_TREE_STORAGE_KEY,
+  REPLACE_FILE_COUNTS_CSS,
+  type DraftAnchor,
+  type MutableAnnotationGroup,
+  type ReviewAnnotation,
+  type ReviewAnnotationGroup,
+} from "./pullRequestCodeTab.model";
 
 export interface PullRequestAgentSelectionInput {
   readonly comment: ReviewCommentContext;
