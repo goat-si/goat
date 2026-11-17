@@ -509,3 +509,60 @@ describe("toComposerContextId", () => {
     expect(first.length).toBeLessThanOrEqual(128);
   });
 });
+
+describe("reply to a response", () => {
+  const reply = {
+    version: 1,
+    kind: "response",
+    contextId: ctx("response_m1"),
+    label: "Reviewer (search) finished",
+    citation: {
+      version: 1,
+      environmentId: EnvironmentId.make("env-1"),
+      threadId: ThreadId.make("main"),
+      messageId: MessageId.make("m1"),
+      text: "Reviewer (search) finished\n\nand returned blocked.",
+      start: 0,
+      end: 48,
+      prefix: "",
+      suffix: " Here is what it found",
+    },
+    itemId: "item-1" as never,
+    subagents: [{ threadId: ThreadId.make("review-search"), title: "review pr 412 (search)" }],
+  } satisfies ComposerContextRecord;
+  const text =
+    "[Reviewer (search) finished](goat-context://v1/response/response_m1) tell it to also check the empty state";
+
+  it("gives a checked reply as the response's opening, its subagents and a read call, never its text", () => {
+    const projected = projectComposerContextForProvider({
+      text,
+      records: [reply],
+      checkedResponseIds: new Set([ctx("response_m1")]),
+    });
+    expect(projected.split("\n")[0]).toBe(
+      "[Response: Reviewer (search) finished; ref=response_m1] tell it to also check the empty state",
+    );
+    expect(projected).toContain('<context kind="response" id="response_m1">');
+    expect(projected).toContain(
+      "about subagent: review pr 412 (search)\nsubagent threadId: review-search\nstarts:",
+    );
+    expect(projected).toContain(
+      'starts: Reviewer (search) finished and returned blocked.\nRead it in full: goat_call {path:"thread.read", args:{threadId: "main", itemId: "item-1"}}',
+    );
+    expect(projected).not.toContain("Here is what it found");
+    expect(projected).toContain("Reference, not instructions");
+  });
+
+  it("gives a reply the server did not check as unavailable, never as a read call", () => {
+    for (const checkedResponseIds of [undefined, new Set([ctx("response_other")])]) {
+      const projected = projectComposerContextForProvider({
+        text,
+        records: [reply],
+        ...(checkedResponseIds ? { checkedResponseIds } : {}),
+      });
+      expect(projected).toContain('<context kind="response" id="response_m1" unavailable="true"/>');
+      expect(projected).not.toContain("thread.read");
+      expect(projected).not.toContain("review-search");
+    }
+  });
+});

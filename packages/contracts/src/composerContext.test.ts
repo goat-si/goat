@@ -4,9 +4,14 @@ import * as Schema from "effect/Schema";
 
 import {
   COMPOSER_CONTEXT_KINDS,
+  ComposerContextKind,
   ComposerContextRecord,
+  KnownComposerContextRecord,
   OrchestrationMessageContext,
+  ResponseContextRecord,
+  UnknownContextRecord,
 } from "./composerContext.ts";
+import { ForwardCompatibleArray } from "./baseSchemas.ts";
 
 const decodeRecord = Schema.decodeUnknownOption(ComposerContextRecord);
 const decodeContext = Schema.decodeUnknownSync(OrchestrationMessageContext);
@@ -123,6 +128,27 @@ const knownRecords: Record<(typeof COMPOSER_CONTEXT_KINDS)[number], Record<strin
     title: "Fix login flow",
   },
   capability: { ...base, kind: "capability", label: "Computer", capability: "computer-use" },
+  response: {
+    ...base,
+    kind: "response",
+    label: "Reviewer (search) finished",
+    citation: {
+      version: 1,
+      environmentId: "environment-1",
+      threadId: "thread-1",
+      messageId: "message-1",
+      text: "Reviewer (search) finished and returned blocked on one finding.",
+      start: 0,
+      end: 63,
+      prefix: "",
+      suffix: " I read its report",
+    },
+    itemId: "turn-item-1",
+    subagents: [
+      { threadId: "thread-2", title: "review pr 412 (search)" },
+      { threadId: "thread-3", title: "review pr 413", environmentId: "environment-2" },
+    ],
+  },
 };
 
 describe("ComposerContextRecord", () => {
@@ -242,5 +268,75 @@ describe("OrchestrationMessageContext", () => {
         records: [knownRecords.skill, { ...knownRecords.terminal, contextId: " ctx_1 " }],
       }),
     ).toThrow();
+  });
+});
+
+// The union and unknown-kind rule every server and client had before replies existed.
+const olderKinds = COMPOSER_CONTEXT_KINDS.filter((kind) => kind !== "response");
+const OlderRecord = Schema.Union([
+  ...KnownComposerContextRecord.members.filter((member) => member !== ResponseContextRecord),
+  Schema.Struct({
+    ...UnknownContextRecord.fields,
+    kind: ComposerContextKind.check(
+      Schema.isPattern(new RegExp(`^(?!(?:${olderKinds.join("|")})$)`)),
+    ),
+  }),
+]);
+const decodeOlder = Schema.decodeUnknownSync(
+  Schema.Struct({
+    version: Schema.Literal(1),
+    records: Schema.Array(Schema.Unknown).pipe(
+      Schema.decodeTo(ForwardCompatibleArray(OlderRecord)),
+    ),
+  }),
+);
+const encodeContext = Schema.encodeUnknownSync(Schema.toCodecJson(OrchestrationMessageContext));
+
+describe("ResponseContextRecord", () => {
+  const reply = (contextId: string, overrides: Record<string, unknown> = {}) => ({
+    ...knownRecords.response,
+    contextId,
+    ...overrides,
+  });
+  const thread = { ...knownRecords.thread, contextId: "ctx_thread" };
+  const citation = knownRecords.response.citation as Record<string, unknown>;
+
+  it("drops a malformed reply and keeps the records beside it", () => {
+    const opening = "x".repeat(301);
+    const context = decodeContext({
+      version: 1,
+      records: [
+        reply("ctx_ok"),
+        reply("ctx_many", {
+          subagents: Array.from({ length: 21 }, (_, index) => ({
+            threadId: `thread-${index}`,
+            title: "child",
+          })),
+        }),
+        reply("ctx_no_item", { itemId: undefined }),
+        reply("ctx_long", {
+          citation: { ...citation, text: opening, end: opening.length },
+        }),
+        reply("ctx_bad_citation", { citation: { ...citation, end: 0 } }),
+        thread,
+      ],
+    });
+    expect(context.records.map((record) => record.contextId)).toEqual(["ctx_ok", "ctx_thread"]);
+  });
+
+  it("never passes a malformed reply as an unknown kind", () => {
+    const decoded = decodeRecord({ ...reply("ctx_1", { itemId: undefined }), payload: {} });
+    expect(Option.isNone(decoded)).toBe(true);
+  });
+
+  it("is dropped by a reader from before the response kind, which keeps the rest of the message", () => {
+    const wire = encodeContext(
+      decodeContext({ version: 1, records: [reply("ctx_reply"), thread] }),
+    );
+    expect(decodeContext(wire).records.map((record) => record.kind)).toEqual([
+      "response",
+      "thread",
+    ]);
+    expect(decodeOlder(wire).records).toEqual([thread]);
   });
 });
