@@ -223,6 +223,65 @@ it.layer(
     }),
   );
 
+  it.effect("an agent's close of a terminal an open waits for is not undone by that open", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      const folder = yield* heldFolder;
+      const agent = yield* manager.agentOpen!({
+        threadId: "thread-1",
+        cwd: folder.other,
+        owner: "agent",
+        authorize: Effect.void,
+      });
+      const holder = yield* folder.hold(Effect.void);
+      yield* Deferred.await(folder.held);
+      const input = openInput({ terminalId: agent.terminalId, cwd: folder.cwd });
+      const opened = yield* Effect.exit(manager.open(input)).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* manager.agentMutate!({
+        threadId: "thread-1",
+        terminalId: agent.terminalId,
+        generation: agent.generation,
+        owner: "agent",
+        operation: "close",
+        authorize: Effect.void,
+      });
+      yield* Deferred.succeed(folder.release, undefined);
+      yield* Fiber.join(holder);
+      assert.isTrue(Exit.isFailure(yield* Fiber.join(opened)));
+      assert.deepEqual(
+        ptyAdapter.spawnInputs.map((spawned) => spawned.cwd),
+        [folder.other],
+      );
+    }),
+  );
+
+  it.effect("a settle that closes a terminal an open waits for leaves the open to start it", () =>
+    Effect.gen(function* () {
+      // Every shell is busy, so the settle's idle sweep closes nothing.
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        subprocessInspector: () =>
+          Effect.succeed({ hasRunningSubprocess: true, childCommand: null, processIds: [] }),
+      });
+      const folder = yield* heldFolder;
+      const first = yield* manager.open(openInput({ cwd: folder.cwd, stopOnSettle: true }));
+      const holder = yield* folder.hold(Effect.void);
+      yield* Deferred.await(folder.held);
+      const reopened = yield* manager
+        .open(openInput({ cwd: folder.cwd }))
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* manager.closeOnSettle({ threadId: "thread-1" });
+      yield* Deferred.succeed(folder.release, undefined);
+      yield* Fiber.join(holder);
+      const snapshot = yield* Fiber.join(reopened);
+      assert.isTrue(ptyAdapter.processes[0]?.killed);
+      assert.strictEqual(snapshot.status, "running");
+      assert.notStrictEqual(snapshot.pid, first.pid);
+      assert.strictEqual(ptyAdapter.spawnInputs.length, 2);
+    }),
+  );
+
   it.effect(
     "a newer open of the same terminal in another folder outlives an older one that waited",
     () =>
