@@ -54,7 +54,7 @@ export const readClaudeProcessTable = (runner: ProcessRunner["Service"]): Claude
       Effect.orElseSucceed(() => Option.none()),
     );
 
-export function claudeDescendants(
+function claudeDescendants(
   rows: ReadonlyArray<ClaudeProcessRow>,
   rootPids: ReadonlyArray<number>,
 ): ReadonlyArray<ClaudeProcessRow> {
@@ -85,7 +85,7 @@ function serverAndAncestors(rows: ReadonlyArray<ClaudeProcessRow>): ReadonlySet<
 }
 
 // A job leading its own group takes the processes it started since with it.
-export function killClaudeDescendant(row: ClaudeProcessRow) {
+function killClaudeDescendant(row: ClaudeProcessRow) {
   try {
     if (row.pgid === row.pid) signalProcessGroup(row.pid, "SIGKILL");
     else process.kill(row.pid, "SIGKILL");

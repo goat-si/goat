@@ -18,7 +18,7 @@ export function canApplyClaudeSelectionLive(
   );
 }
 
-export function claudeLiveSelectionFlagSettings(
+function claudeLiveSelectionFlagSettings(
   selection: CompiledClaudeModelSelection,
 ): ClaudeFlagSettings {
   return {
