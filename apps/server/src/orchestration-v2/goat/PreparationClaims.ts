@@ -158,8 +158,14 @@ export const layer = Layer.effect(
         );
       }),
       pending: Effect.fn("PreparationClaims.pending")(function* (threadId: ThreadId) {
-        yield* Effect.acquireRelease(lock.withLock(threadId, countPending(threadId, 1)), () =>
-          countPending(threadId, -1),
+        // The wait for the lock stays interruptible; the count and its release go in together.
+        yield* lock.withLock(
+          threadId,
+          Effect.uninterruptible(
+            countPending(threadId, 1).pipe(
+              Effect.andThen(Effect.addFinalizer(() => countPending(threadId, -1))),
+            ),
+          ),
         );
       }),
       // Untraced: read for every preparing run on each orphan check pass, which has its own span.
