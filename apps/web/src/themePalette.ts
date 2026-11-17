@@ -1294,7 +1294,17 @@ export function parseThemeFile(value: unknown): ThemeDefinition {
     throw new Error("Theme collections need a valid id and label.");
   }
 
-  const fallback = getDefaultThemeColors(appearance);
+  if (
+    value.canvas !== undefined &&
+    value.accent !== undefined &&
+    (!isThemeColor(value.canvas) || !isThemeColor(value.accent))
+  ) {
+    throw new Error("Theme canvas and accent must be literal CSS colors.");
+  }
+  const fallback =
+    typeof value.canvas === "string" && typeof value.accent === "string"
+      ? createVividThemeColors(appearance, value.canvas, value.accent)
+      : getDefaultThemeColors(appearance);
   const variants: Partial<Record<ThemeAppearance, ThemeColors>> = {};
   if (value.variants !== undefined) {
     if (!isRecord(value.variants)) throw new Error("Theme variants must be an object.");
