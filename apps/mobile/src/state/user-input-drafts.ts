@@ -1,15 +1,75 @@
 import type { EnvironmentId, RuntimeRequestId, ThreadId } from "@goat/contracts";
-import { userInputDraftKey } from "@goat/client-runtime/state/thread-requests";
+import {
+  seedUserInputDraftAnswers,
+  type ThreadUserInputQuestion,
+  userInputDraftKey,
+} from "@goat/client-runtime/state/thread-requests";
 import { appendAnswerToDraft } from "@goat/client-runtime/state/user-input-draft";
+import { Atom } from "effect/reactivity";
 
-import type { PendingUserInputDraftAnswer } from "../lib/threadActivity";
+import {
+  setPendingUserInputCustomAnswer,
+  togglePendingUserInputOptionSelection,
+  type PendingUserInputDraftAnswer,
+} from "../lib/threadActivity";
 import { scopedThreadKey } from "../lib/scopedEntities";
+import { appAtomRegistry } from "./atom-registry";
 import { questionAttachmentDraftKey, questionAttachmentDraftPrefix } from "./question-attachments";
 import {
   type ComposerDraft,
   mergeComposerDraftContentState,
   restoreMissingComposerFileReferences,
 } from "./use-composer-drafts";
+
+export const userInputDraftsByRequestKeyAtom = Atom.make<
+  Record<string, Record<string, PendingUserInputDraftAnswer>>
+>({}).pipe(Atom.keepAlive, Atom.withLabel("mobile:user-input-drafts"));
+
+// Writes start from the suggested answer the user was looking at.
+function seededDraft(
+  drafts: Record<string, PendingUserInputDraftAnswer> | undefined,
+  question: ThreadUserInputQuestion,
+): PendingUserInputDraftAnswer | undefined {
+  return seedUserInputDraftAnswers([question], drafts ?? {})[question.id];
+}
+
+export function setUserInputDraftOption(
+  requestKey: string,
+  question: ThreadUserInputQuestion,
+  value: string,
+): void {
+  const current = appAtomRegistry.get(userInputDraftsByRequestKeyAtom);
+  appAtomRegistry.set(userInputDraftsByRequestKeyAtom, {
+    ...current,
+    [requestKey]: {
+      ...current[requestKey],
+      [question.id]: togglePendingUserInputOptionSelection(
+        question,
+        seededDraft(current[requestKey], question),
+        value,
+      ),
+    },
+  });
+}
+
+export function setUserInputDraftCustomAnswer(
+  requestKey: string,
+  question: ThreadUserInputQuestion,
+  customAnswer: string,
+): void {
+  const current = appAtomRegistry.get(userInputDraftsByRequestKeyAtom);
+  appAtomRegistry.set(userInputDraftsByRequestKeyAtom, {
+    ...current,
+    [requestKey]: {
+      ...current[requestKey],
+      [question.id]: setPendingUserInputCustomAnswer(
+        question,
+        seededDraft(current[requestKey], question),
+        customAnswer,
+      ),
+    },
+  });
+}
 
 /** Question ids of `requestId` with a typed answer or a question draft, in answer order. */
 function questionIds(

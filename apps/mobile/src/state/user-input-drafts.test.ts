@@ -4,7 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { questionAttachmentDraftKey } from "./question-attachments";
-import { returnUnsentAnswersToThreadDraft } from "./unsent-question-answers";
+import { returnUnsentAnswersToThreadDraft } from "./user-input-drafts";
 import type { ComposerDraft } from "./use-composer-drafts";
 
 const environmentId = EnvironmentId.make("environment-1");
