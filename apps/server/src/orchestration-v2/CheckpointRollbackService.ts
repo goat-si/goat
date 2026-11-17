@@ -22,6 +22,7 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import type * as ServerConfig from "../config.ts";
 import type * as ServerSettings from "../serverSettings.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
+import { withCheckpointRestoreReservation } from "../workspace/checkpointRestoreReservation.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import {
   isCheckpointRestoreIsolated,
@@ -434,10 +435,16 @@ export const layer: Layer.Layer<
           // Storage cleanup removes worktrees under the same lease.
           const thread = yield* projections.getThread(input.threadId);
           const aside: { path: string | null } = { path: null };
-          yield* (
-            thread.worktreePath === null
+          const worktree = thread.worktreePath === null ? null : path.resolve(thread.worktreePath);
+          const rollback =
+            worktree === null
               ? execute(input, aside)
-              : withWorkspaceLease(path.resolve(thread.worktreePath), execute(input, aside))
+              : withWorkspaceLease(worktree, execute(input, aside));
+          // A file restore keeps turn starts out of every overlapping folder; a rewind touches no file.
+          yield* (
+            worktree === null || input.restoreFiles === false
+              ? rollback
+              : withCheckpointRestoreReservation(fileSystem, path, worktree, rollback)
           ).pipe(
             // A failure after the folder was moved aside says where its files are.
             Effect.tapError(() =>

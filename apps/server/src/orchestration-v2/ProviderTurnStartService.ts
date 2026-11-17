@@ -20,6 +20,7 @@ import { withAgentOom } from "./agentOomFailure.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import { makeDeliverySession } from "./goat/ProviderTurnDeliverySession.ts";
 import { makePrepareTurnWorkspace, workspaceRestoredItem } from "./goat/prepareTurnWorkspace.ts";
+import { makeTurnStartReservation } from "./goat/turnStartReservation.ts";
 import { makeProviderTurnHandoffRecovery } from "./goat/ProviderTurnHandoffRecovery.ts";
 import { refuseCodexAdmission } from "./goat/CodexTurnAdmission.ts";
 import { projectComposerContextForProvider } from "@goat/shared/composerContextReferences";
@@ -123,6 +124,7 @@ export const layer: Layer.Layer<
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const globalSkillsDir = (yield* ServerConfig.ServerConfig).globalSkillsDir;
     const prepareWorkspace = yield* makePrepareTurnWorkspace;
+    const reserveTurnStart = yield* makeTurnStartReservation;
     const projects = yield* ProjectService.ProjectService;
     const providerAuth = yield* ProviderAuthService.ProviderAuthService;
     const codexSurvivors = yield* Effect.serviceOption(CodexSurvivors.CodexSurvivors);
@@ -1425,12 +1427,9 @@ export const layer: Layer.Layer<
                 )?.activeAttemptId
               : undefined;
           let attaching = false;
-          return yield* start({
-            ...input,
-            onAttach: () => {
-              attaching = true;
-            },
-          }).pipe(
+          // A file restore overlapping the folder sends this start back to retry.
+          const startup = start({ ...input, onAttach: () => void (attaching = true) });
+          return yield* reserveTurnStart(input, startup).pipe(
             // A start that ends before its turn registers must not keep holding the process.
             Effect.ensuring(providerSessions.settleTurnStart(input)),
             Effect.catch((cause) =>
