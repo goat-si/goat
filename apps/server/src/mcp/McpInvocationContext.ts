@@ -17,6 +17,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type { PenServiceCaller } from "@goat/pen-protocol/service";
+import type { SessionEnd } from "../auth/SessionEndLatches.ts";
 import { formatThreadLink } from "@goat/shared/threadLinks";
 
 const ALL_MCP_CAPABILITIES = [
@@ -73,6 +74,8 @@ export interface McpInvocationScope {
   readonly reauthorize?: (
     required: ReadonlyArray<AuthEnvironmentScope>,
   ) => Effect.Effect<void, EnvironmentAuthorizationError>;
+  /** A client session's end; McpSessionCut stops this request's call when it comes. */
+  readonly sessionEnd?: SessionEnd;
   readonly environmentId: EnvironmentId;
   readonly capabilities: ReadonlySet<McpCapability>;
   readonly issuedAt: number;
