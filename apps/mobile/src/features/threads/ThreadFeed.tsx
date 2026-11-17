@@ -237,11 +237,7 @@ import { assetEnvironment, useAssetUrl, useRefreshAssetUrl } from "../../state/a
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { readEnvironmentScope, usePreparedConnection } from "../../state/session";
 import { projectEnvironment } from "../../state/projects";
-import {
-  needsWorkspaceBasenameLookup,
-  pickWorkspaceBasenameMatch,
-  WORKSPACE_BASENAME_LOOKUP_LIMIT,
-} from "@goat/client-runtime/workspace-basename-lookup";
+import { findFileLinkTarget } from "./fileLinkTarget";
 import { useLiveThreadLinkLabels, useContextChipIcons } from "../../state/entities";
 import { useThreadSelection } from "../../state/use-thread-selection";
 import { useEnvironmentQuery } from "../../state/query";
@@ -252,12 +248,7 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { ThreadWorkflowOpening, useWorkflowOpening } from "./thread-workflow-opening";
 import { useAtomCommand } from "../../state/use-atom-command";
-import {
-  fileRoutePathSegments,
-  resolveFileLinkPath,
-  resolveWorkspaceFilePath,
-  resolveWorkspaceRelativeFilePath,
-} from "../files/filePath";
+import { fileRoutePathSegments, resolveFileLinkPath } from "../files/filePath";
 import { AssistantForkButton } from "./AssistantForkButton";
 import { resolveUserMessageIntentBadge } from "./userMessageIntentBadge";
 import { fileChipClipboardPath, fileChipMenu, resolveFileChipTarget } from "./fileChipMenu";
@@ -2232,8 +2223,13 @@ export const ThreadFeed = memo(function ThreadFeed({
     if (presentation.kind === "file") {
       const path = resolveFileLinkPath(props.workspaceRoot, presentation.path);
       if (path === null) return;
-      const relativePath = resolveWorkspaceRelativeFilePath(props.workspaceRoot, path);
-      const openAt = (target: string) => {
+      void findFileLinkTarget({
+        environmentId: props.environmentId,
+        workspaceRoot: props.workspaceRoot,
+        linkPath: presentation.path,
+        path,
+        signal: request.signal,
+      }).then((target) => {
         if (request.signal.aborted) return;
         void Haptics.selectionAsync();
         navigation.navigate("ThreadFile", {
@@ -2242,58 +2238,7 @@ export const ThreadFeed = memo(function ThreadFeed({
           path: fileRoutePathSegments(target),
           ...(presentation.line ? { line: String(presentation.line) } : {}),
         });
-      };
-      if (
-        props.workspaceRoot &&
-        relativePath &&
-        !/[\\/]$/.test(presentation.path) &&
-        needsWorkspaceBasenameLookup(relativePath) &&
-        readEnvironmentScope(props.environmentId, AuthFilesystemReadScope)
-      ) {
-        const originalPath = resolveWorkspaceFilePath(props.workspaceRoot, relativePath);
-        void executeAtomQuery(
-          appAtomRegistry,
-          projectEnvironment.searchEntries({
-            environmentId: props.environmentId,
-            input: {
-              cwd: props.workspaceRoot,
-              query: relativePath,
-              kind: "file",
-              limit: WORKSPACE_BASENAME_LOOKUP_LIMIT,
-            },
-          }),
-          { signal: request.signal, reportFailure: false, reportDefect: false },
-        ).then(
-          (result) => {
-            const match =
-              result._tag === "Success"
-                ? pickWorkspaceBasenameMatch(relativePath, result.value.entries)
-                : null;
-            if (!match || match === relativePath) {
-              openAt(relativePath);
-              return;
-            }
-            if (request.signal.aborted) return;
-            void executeAtomQuery(
-              appAtomRegistry,
-              projectEnvironment.fileMetadata({
-                environmentId: props.environmentId,
-                input: { path: originalPath },
-              }),
-              { signal: request.signal, reportFailure: false, reportDefect: false },
-            ).then(
-              (metadata) =>
-                openAt(
-                  metadata._tag === "Success" && metadata.value?.kind !== "directory"
-                    ? match
-                    : relativePath,
-                ),
-              () => openAt(relativePath),
-            );
-          },
-          () => openAt(relativePath),
-        );
-      } else openAt(relativePath ?? path);
+      });
       return;
     }
 
