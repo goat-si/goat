@@ -230,3 +230,67 @@ GOAT's hunk (the same line on c995c5427a, the same after): before, line 38 `).to
 
 Not at-entry: packages/contracts/src/pullRequest.ts (993, unbudgeted) was moved out in 239649e7932 (pullRequest.ts:933-943 and :946-993 to pullRequestErrors.ts, verbatim, checked with diff; rpc.ts went from 2788 to 2787 and environmentHttp.ts from 996 to 992 by import lines only).
 
+
+
+## Coordinator 21:43:15 UTC, paragraphs A and B, verbatim
+
+> A. K2's RULE 3 REQUEST, row b3fdf2b10f: (1), (2) and (3) AUTHORISED; (4) stands under IV as you told K2. READ BY ME in this repository: git show b3fdf2b10f for gitHubPullRequestJson.test.ts (hunk -110,6 +110,7: pullRequestReview: null after isMinimized in remark), GitHubPullRequestApi.test.ts (hunk -351,6 +351,7: the same line in threadComments), and useCodeViewFileReveal.test.ts whole; and dev's gitHubPullRequestJsonTestFixtures.ts:62-76, GitHubPullRequestApi.testkit.ts:208-222 and useCodeViewFileReveal.test.ts:50-75.
+> - (1) and (2): one line each, pullRequestReview: null, in the two shared fixtures, exactly upstream's line in upstream's copies of those helpers. No assertion changes.
+> - (3): the case at :57 takes upstream's title and body verbatim (second = viewer(["b"]) with upstream's comment, second.items.add("a") before the flush, the same two expectations, then upstream's remount and cancel parts). The helper change upstream makes in the same file (the collapsed set and getItem returning { collapsed }) is authorised with it if the row needs it. Upstream's additions to the FIRST case stay out of that existing case, as K2 planned: new it blocks.
+> - Condition: K2 quotes this paragraph and the three upstream hunks in next3-K2.md before the commit.
+>
+> B. IV IS WIDENED, for every lane (relay it). The standing authorisation also covers, under the same three conditions (upstream's own copy changes the same way; both hunks quoted in the record before the commit; nothing else existing changes): (i) fixture, mock and helper lines in a test file or testkit, where upstream changes its own copy of that fixture or helper the same way; (ii) an existing case whose title and body become upstream's verbatim text of that same case. Still to me, with exact before and after: a deleted test or test file, a moved harness, a test with no upstream counterpart, and any case where GOAT's result differs from upstream's text by more than names. The review matches each one to upstream's hunk; a mismatch is a P2.
+
+## Coordinator 21:52:47 UTC, IV (iii), verbatim
+
+> IV gains one more mirrored-free case, for every lane (relay it): (iii) a test file that moves with the module it tests, where the commit is a rename and the only changed lines are import paths to the moved module, with TEST_TITLES updated in the same commit when the file is listed there. Titles, bodies, setup and expectations byte for byte; the review checks the rename with git show -M, and anything more is a P2. A harness moved out of a test file into a testkit still comes to me.
+
+## b3fdf2b10f: the authorised test hunks, upstream's and GOAT's
+
+(1) Upstream, gitHubPullRequestJson.test.ts (its remark helper):
+
+```diff
+@@ -110,6 +110,7 @@ const remark = ({ author, reactionGroups: groups, ...raw }: Json) => ({
+   lastEditedAt: null,
+   isMinimized: false,
+   url: "https://github.com/acme/web/pull/1#discussion",
++  pullRequestReview: null,
+   ...raw,
+```
+
+GOAT, packages/source-control-github/src/server/gitHubPullRequestJsonTestFixtures.ts (the same helper, moved there on dev):
+
+```diff
+   lastEditedAt: null,
+   isMinimized: false,
++  pullRequestReview: null,
+   url: "https://github.com/acme/web/pull/1#discussion",
+```
+
+(2) Upstream, GitHubPullRequestApi.test.ts (threadComments):
+
+```diff
+@@ -351,6 +351,7 @@ function threadComments(
+       lastEditedAt: null,
+       url: `https://github.com/acme/web/pull/7#discussion_${id}`,
+       isMinimized: false,
++      pullRequestReview: null,
+       reactionGroups: [],
+```
+
+GOAT, packages/source-control-github/src/server/GitHubPullRequestApi.testkit.ts:217 (the same helper on dev): the same added line after `isMinimized: false,`, before `reactionGroups: [],`. With (1) and (2), packages/source-control-github passes 434/434 (before them: 15 decode failures, since the regenerated ThreadComment schema requires the nullable key; `vp run generate` reproduces the generated file byte for byte).
+
+(3) Upstream, useCodeViewFileReveal.test.ts: the helper gains `const collapsed = new Set<string>();`, `collapsed,` and `getItem: (id: string) => (items.has(id) ? { collapsed: collapsed.has(id) } : undefined),`; the case "drops a pending reveal when its viewer detaches, and positions the next viewer on request" becomes "drops a pending reveal when another diff's viewer replaces it, but repositions a range a remount loses" with `const second = viewer(["b"]);` under the comment "Item ids carry the diff's scope, so another diff's viewer holds other ids.", `second.items.add("a");` before the flush, the same two expectations, then the remount and cancel parts; two new cases ("renders the destination file and expands context before positioning its range", "expands a patch-only file to an unchanged line before positioning it"); seven lines appended to the first case. GOAT: dev's file equals upstream's parent plus one GOAT case at the end ("keeps only the latest pending file request", kept unchanged). The commit takes upstream's helper change, upstream's retitled case verbatim and its two new cases verbatim; upstream's seven first-case lines go into a new case "positions a line range only once its folded file opens" (setup: viewer(["a"]), attach, request("a"), then upstream's seven lines verbatim); the first case itself is unchanged.
+
+(4) Under IV, quoted above (pullRequestNavigation.test.ts:38).
+
+## b3fdf2b10f: what landed and how it was checked
+
+Ported in GOAT's structure, with the row's new code in new modules (ruling (e)): `packages/shared/src/pullRequestAnchor.ts` (upstream verbatim, new subpath export); web `pullRequestLinkSubject.ts` (upstream's link subject and timeline match, kept out of pullRequestDetail.logic.ts), `usePullRequestDetailReveal.ts` (the panel's follow-link and one-host-read logic), `usePullRequestCodeLink.ts` (the Code tab's link target and reveal), `usePullRequestSummaryReveal.ts`, `holdLinkedNodeInView.ts` (upstream verbatim), `rightPanelPullRequestReveal.ts` (withoutReveal, the link merge, the settle), `pullRequestLinkedSelection.ts` (the page's URL-linked selection and the panel props); mobile `pullRequestLinkNavigation.ts` and `usePullRequestLinkReveal.ts`. The six verbatim move-outs before it: df050ab2e53, 574f17b15f3, 4ac1f97ad26, 2b994754591, efc31ab6e04, c666e67a29c (each checked byte for byte with diff against HEAD; lines freed: detail panel 37, Code tab 31, right panel store 33, GitHub JSON 10, route screen 76, Summary tab 64). Budget entries after the row, all at real length and at or below dev's: PullRequestDetailPanel.tsx 1794 (dev 1798), PullRequestCodeTab.tsx 1452 (1458), rightPanelStore.ts 1198 (1209), gitHubPullRequestJson.ts 1767 (1775), PullRequestRouteScreen.tsx 1307 (1358), PullRequestsPage.tsx 1554 (1555). Lines the move-outs removed and did not re-add: only import lines of names the moved code alone used (PullRequestDetail, resolvePullRequestReferenceHost, pullRequestMarkdownPlugins in the panel; DiffLineAnnotation, PullRequestImagePreview, PendingReviewComment, PullRequestReviewPosition in the Code tab; SymbolView, RelativeTime, Pressable, PullRequestAvatar, PullRequestDiffStats, PullRequestStatusMenu, PullRequestListEntry, PullRequestSummary, pullRequestStatus in the route screen; ChevronRightIcon, sectionCollapseAnchorScrollTop in the Summary tab), each now imported by the new module.
+
+GOAT deviations: (a) the reveal handle in useCodeViewFileReveal.ts accepts any object and narrows with a type guard before calling the code view's line methods, because GOAT's DiffFileTree test hands over a plain viewer (TypeScript's weak-type check rejected upstream's all-optional shape; the test stays unchanged). (b) GOAT's hook keeps its per-diff-scope reset. (c) upstream's openPullRequestLink.ts branch that opens a commit link in the workspace diff does not exist in GOAT, so only the reveal lines were ported, and upstream's two added cases in openPullRequestLink.browser.test.tsx (shift and alt on a commit link with a diff anchor) have no GOAT counterpart (that test file was removed on dev). (d) the mobile file route starts its first jump imperatively only for a diff link, whose file is known once the diff loads; other entries keep GOAT's native entry destination. (e) every new effect carries goat/react-effect-budget with upstream's reason (GOAT has no no-unreasoned-state-sync rule).
+
+Fail first, with the row's source swapped back to HEAD and the tests unchanged: useCodeViewFileReveal.test.ts 4 failed (the folded-file range, the two upstream cases, the retitled case); rightPanelStore.pullRequestReveal.test.ts 1 failed; PullRequestCodeTab.browser.test.tsx 2 failed (the paged link reveal, the commit link); PullRequestTimelineTab.browser.test.tsx 3 failed (the three linked kinds). New modules' tests (pullRequestAnchor, pullRequestLinkSubject, mobile pullRequestLinkNavigation, gitHubPullRequestJson.reviewUrl) fail by construction at HEAD (the module or the field is absent).
+
+Fresh checks on the row: `vp run --filter <pkg> typecheck` exit 0 for @goat/web, @goat/mobile, @goat/shared, @goat/source-control-github, @goat/contracts; `vp lint` on the changed files clean; `vp test run` on shared, the web units, apps/mobile/src/features/pull-requests and packages/source-control-github/src: 59 files, 778 tests passed; browser project on src/components/pullRequest, DiffFileTree, BranchToolbar.panel and BrowserDocumentFrame.shortcuts: 18 files, 96 tests passed. P1 rows owed: a web capture of a comment link, a diff link and a checks link revealing in the panel; mobile captures of a comment link opening Activity at the comment and a diff link opening the file at the lines.
+
