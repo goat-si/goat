@@ -529,3 +529,6 @@ N4's answers, by reading at 928b1c5485 (record only, no code):
   - Its readiness watcher resets on "restarted" (the upstream behaviour kept for P3-2), so when the restored shell shows its prompt, its forked writer types its command there. The restore's own run types its command too, so setup runs twice.
   - Its completion then follows the new shell: it settles with the exit code its own sentinel reports there, and its onOutputLine receives the new shell's output, both runs' lines.
   - This is the same as when a person restarts the setup terminal while setup waits behind an rc-file prompt: the run carries on into the replacement shell. It is consistent with P3-1, which ends only a run that was already using the old shell.
+
+Coordinator to lane coordinator (2026-11-17 17:02:01 UTC) (verbatim):
+SF1b IS MERGED by fast-forward: chase/t3-261114-next2 = 23d3a4696e0ea5c16f502764015cdef515561397 (its lane=quick run 44130593843 success on that head; my read). N4c's lane=quick run 44130588315 is also success on 928b1c5485; N4c waits only for its round 2 verdict. Tell N4 and N14 the new integration head: N14 merges 23d3a4696e (not d12958d037) at its one merge; N4c needs nothing now (its two files do not meet SF1b's three). #3660's pull request run restarts on the new head by itself.
