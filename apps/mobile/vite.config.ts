@@ -133,6 +133,7 @@ const reactTests = [
   "src/features/settings/SettingsDecisionInboxRouteScreen.test.tsx",
   "src/features/settings/SettingsGoatBotRouteScreen.test.tsx",
   "src/features/settings/SettingsMemoryRouteScreen.test.tsx",
+  "src/features/settings/SettingsMemoryRouteScreen.editSession.test.tsx",
   "src/features/threads/AgentMessageFold.test.tsx",
   "src/features/threads/HumanHandoffCard.test.tsx",
   "src/features/threads/SubagentRow.memory.test.tsx",
