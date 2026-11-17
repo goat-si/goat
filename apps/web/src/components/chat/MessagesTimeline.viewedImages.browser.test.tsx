@@ -4,7 +4,7 @@ import { describe, expect, it, onTestFinished, vi } from "vite-plus/test";
 
 import "~/index.css";
 
-import type MessagesTimeline from "./MessagesTimeline";
+import type { MessagesTimeline } from "./MessagesTimeline";
 import {
   CREATED_AT,
   ENVIRONMENT_ID,
