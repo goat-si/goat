@@ -1121,3 +1121,218 @@ ThreadTitleRegenerationService.test.ts and orchestratorMcp.test.ts: new cases on
 
 NOT RUN for row 8: a real client pass (P1 rows above); the web Sidebar and useThreadActionMenu browser suites (they run in check:changed before READY); a mutation that removes the disconnect check (that case would then hang to the project timeout, so I did not run it); a running older GOAT release (older peers are shown by schema decode cases).
 
+
+## Lane coordinator, row 9 claim ruled (records 20dfa95b595) and the trim adaptation
+
+The runtime.test.ts claim (:896-939 at c995c5427a, describe "executeAtomQuery", to state/runtime.executeAtomQuery.test.ts) was accepted under IV (vi). The trim adaptation was called sound, to be stated here, in the fork delta, and in READY.
+
+## Row 9 (c9f0caca1b): build notes and rule 3 (quoted before the commit)
+
+Prior art for the GOAT part. Upstream's retainedTerminalHistory (contracts/terminal.ts in c9f0caca1b) cuts by bytes only and moves forward to the next code point. GOAT's client trim (terminalOutput.ts trimBufferToBytes at c995c5427a, lines 109-137) also drops the rest of a control sequence that the cut lands in, using contracts' terminalSequenceStateAfter and terminalSequenceEnd. The same parser model restores a history log tail in Manager.history.test.ts ("restores a log tail that starts inside a control sequence without its remainder"). Once the server trims, the client gets only the tail and cannot see where a sequence began. So the shared helper is GOAT's whole function, and a server-side byte cut would bring back the bug GOAT fixed on the client. Fork delta entry `terminal-retained-history` in the server-half commit.
+
+Commits, in order:
+1. e0e43c15bf, claim 9 move-out: Manager.ts:409-424 plus blank :425 at c995c5427a (normalizeChildCommandName) to terminal/childCommandName.ts:1-16. The only changed text is `export`; diff of the ranges is empty. Manager.ts 3116 -> 3100 (16 freed). Entry 3118 -> 3100 (3116 after T1c). Manager.test.ts whole: 71 passed. Server typecheck exits 0.
+2. 0477e43092, runtime.test.ts move-out (IV (vi)): :896-938 plus blank :939 to state/runtime.executeAtomQuery.test.ts:9-51, and diff of the ranges is empty. The new file's other lines are its imports (1-8: @effect/vitest describe/expect/it; effect Cause, Effect, Latch; effect/reactivity Atom, AtomRegistry; blank; ./runtime.ts executeAtomQuery; blank). No import in runtime.test.ts became unused. Counts: 31 before; after, 29 + 2 = 31 with the same titles ("keeps concurrent query results correlated to their atoms", "settles when its caller aborts a waiting query"). 1276 -> 1232, entry 1232.
+3. Client and contract half (next commit): contracts terminal.ts gains retainedTerminalHistory (GOAT's whole trim) and TerminalAttachInput.maxHistoryBytes (optional Int >= 0). client-runtime terminal.ts sends maxHistoryBytes: DEFAULT_MAX_TERMINAL_BUFFER_BYTES on every attach and resubscribe, which is the bound applyTerminalAttachStreamEvent keeps by default; no web or mobile caller passes another bound (rg). terminalOutput.ts drops trimBufferToBytes and calls the shared helper. runtime.test.ts 1232 -> 1234 (entry 1234, cut 1276).
+4. Server half: new terminal/retainedAttachHistory.ts (retainedAttachListener: every event with a snapshot carries only retainedTerminalHistory(history, maxHistoryBytes); the input without the field passes the listener through). Manager.ts gets one import and wraps the two listeners in attachOutputStream: 3100 -> 3103 (entry 3103; 3116 after T1c). New test file terminal/Manager.retainedHistory.test.ts (Manager.test.ts is at its entry, per D4). The fork delta entry is in this commit.
+
+C4, each way:
+- Older client, newer server: no maxHistoryBytes, so the listener passes through and the full history is sent, as today.
+- Newer client, older server: the older TerminalAttachInput is a non-strict Struct and ignores the extra key, so the full history comes and the client trims it as today.
+- Reconnect during an attach: every resubscribe (resume: true) sends the same bound (runtime.test.ts's five mirrored expectations), and resync snapshots go through the same wrap (the publishPastOutputBudget step of upstream's test).
+- Negative cases: maxHistoryBytes 0 gives an empty history (new case "sends an empty history to a client that retains none"). A cut inside a multibyte character starts at the next code point (upstream's case, 名). A cut inside a control sequence starts after it (new case "starts a bounded snapshot after a control sequence its cut lands in"). A BOM at the cut is kept (terminalSession.test.ts, mirrored). Output events are never trimmed (upstream's case: full and bounded streams pull equal events after "after\n" and after exit). Stored data: none.
+
+Tests, failing first:
+- runtime.test.ts "terminal attach resubscribes with resume only after the stream replied" (mirrored) fails without the client change: AssertionError, expected {...(3)} to deeply equal {...(4)}.
+- terminalSession.test.ts "preserves a leading BOM in the retained snapshot tail" (mirrored) fails without the contracts helper: TypeError, retainedTerminalHistory is not a function.
+- Manager.retainedHistory.test.ts: all 3 fail without the server change ("deeply equal", 'aaaa\u001b]0;title\u0007tail' to be 'tail', 'kept on the server\n' to be ''). Mutation: the contracts helper without its sequence step fails the control-sequence case ('tle\u0007tail' to be 'tail').
+- With the change: client-runtime runtime.test.ts, terminalSession.test.ts and terminal.test.ts whole, 53 passed; Manager.retainedHistory.test.ts 3 passed. Typecheck exits 0 for contracts, client-runtime, web and mobile; the server typecheck and Manager suites are rerun at the server commit.
+- The new test file copies publishPastOutputBudget byte for byte from Manager.test.ts:66-82 (Manager.grid.test.ts has the same copy) and adds a small emitAndWait helper of its own. No helper is moved or shared.
+
+Exports changed: contracts gains retainedTerminalHistory, and TerminalAttachInput gains optional maxHistoryBytes. client-runtime: none (terminalOutput.ts's trimBufferToBytes was private). Server: new terminal/retainedAttachHistory.ts (retainedAttachListener) and terminal/childCommandName.ts (normalizeChildCommandName, was private).
+
+### Rule 3, IV mirrored: runtime.test.ts (five expectations, an import and const sent) and terminalSession.test.ts (assertions added to the BOM case)
+
+Upstream's hunks, c9f0caca1b:
+
+```diff
+diff --git a/packages/client-runtime/src/state/runtime.test.ts b/packages/client-runtime/src/state/runtime.test.ts
+index 456d13109e..40188b2f81 100644
+--- a/packages/client-runtime/src/state/runtime.test.ts
++++ b/packages/client-runtime/src/state/runtime.test.ts
+@@ -1,5 +1,6 @@
+ import { describe, expect, it } from "@effect/vitest";
+ import {
++  DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
+   EnvironmentId,
+   type FilesystemBrowseEntry,
+   ORCHESTRATION_V2_WS_METHODS,
+@@ -552,6 +553,7 @@ describe("environment query lifecycle", () => {
+         cwd: "/tmp/project",
+         restartIfNotRunning: true,
+       };
++      const sent = { ...input, maxHistoryBytes: DEFAULT_MAX_TERMINAL_BUFFER_BYTES };
+       const atoms = createTerminalEnvironmentAtoms(harness.runtime);
+       const registry = AtomRegistry.make();
+       const atom = atoms.attach({ environmentId: QUERY_ENVIRONMENT.environmentId, input });
+@@ -571,9 +573,9 @@ describe("environment query lifecycle", () => {
+         }),
+       );
+ 
+-      expect(yield* Queue.take(inputs)).toEqual(input);
++      expect(yield* Queue.take(inputs)).toEqual(sent);
+       yield* SubscriptionRef.set(harness.supervisorSession, Option.some({ ...firstSession }));
+-      expect(yield* Queue.take(inputs)).toEqual(input);
++      expect(yield* Queue.take(inputs)).toEqual(sent);
+       yield* Queue.offer(events, {
+         type: "closed",
+         threadId: input.threadId,
+@@ -582,10 +584,10 @@ describe("environment query lifecycle", () => {
+       yield* Deferred.await(received);
+ 
+       yield* SubscriptionRef.set(harness.supervisorSession, Option.some({ ...firstSession }));
+-      expect(yield* Queue.take(inputs)).toEqual({ ...input, resume: true });
++      expect(yield* Queue.take(inputs)).toEqual({ ...sent, resume: true });
+       // Catalog replacements rerun the same stream through followStream's switchMap.
+       yield* SubscriptionRef.update(harness.streamGeneration, (generation) => generation + 1);
+-      expect(yield* Queue.take(inputs)).toEqual({ ...input, resume: true });
++      expect(yield* Queue.take(inputs)).toEqual({ ...sent, resume: true });
+ 
+       unmount();
+       registry.dispose();
+@@ -597,7 +599,7 @@ describe("environment query lifecycle", () => {
+           remountedRegistry.dispose();
+         }),
+       );
+-      expect(yield* Queue.take(inputs)).toEqual(input);
++      expect(yield* Queue.take(inputs)).toEqual(sent);
+     }),
+   );
+ 
+diff --git a/packages/client-runtime/src/state/terminalSession.test.ts b/packages/client-runtime/src/state/terminalSession.test.ts
+index 4eef70e099..468b2ca8fd 100644
+--- a/packages/client-runtime/src/state/terminalSession.test.ts
++++ b/packages/client-runtime/src/state/terminalSession.test.ts
+@@ -1,6 +1,11 @@
+ import { describe, expect, it } from "vite-plus/test";
+ 
+-import { EnvironmentId, TerminalSessionSnapshot, ThreadId } from "@t3tools/contracts";
++import {
++  EnvironmentId,
++  retainedTerminalHistory,
++  TerminalSessionSnapshot,
++  ThreadId,
++} from "@t3tools/contracts";
+ 
+ import {
+   applyTerminalAttachStreamEvent,
+@@ -119,6 +124,14 @@ describe("terminal session reducers", () => {
+ 
+     expect(terminalOutputText(state.output)).toBe("\uFEFFtail");
+     expect(state.output.retainedBytes).toBe(7);
++    const serverTail = retainedTerminalHistory("discard﻿tail", 7);
++    expect(
++      applyTerminalAttachStreamEvent(
++        EMPTY_TERMINAL_BUFFER_STATE,
++        { type: "snapshot", snapshot: { ...BASE_SNAPSHOT, history: serverTail } },
++        7,
++      ),
++    ).toEqual(state);
+   });
+ 
+   it("trims whole Unicode code points from a partially retained chunk", () => {
+```
+
+GOAT's hunks. They are the same lines; only the package name differs (@goat/contracts). The runtime.test.ts line numbers differ because of 0477e43092's move.
+
+```diff
+diff --git a/packages/client-runtime/src/state/runtime.test.ts b/packages/client-runtime/src/state/runtime.test.ts
+index 9550e9e0f4..a1d56b277f 100644
+--- a/packages/client-runtime/src/state/runtime.test.ts
++++ b/packages/client-runtime/src/state/runtime.test.ts
+@@ -1,6 +1,7 @@
+ import type { QueryPersistence } from "./queryPersistence.ts";
+ import { describe, expect, it, vi } from "@effect/vitest";
+ import {
++  DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
+   EnvironmentId,
+   type PreviewEvent,
+   type TerminalAttachInput,
+@@ -292,6 +293,7 @@ describe("environment query lifecycle", () => {
+         cwd: "/tmp/project",
+         restartIfNotRunning: true,
+       };
++      const sent = { ...input, maxHistoryBytes: DEFAULT_MAX_TERMINAL_BUFFER_BYTES };
+       const atoms = createTerminalEnvironmentAtoms(harness.runtime);
+       const registry = AtomRegistry.make();
+       const atom = atoms.attach({ environmentId: QUERY_ENVIRONMENT.environmentId, input });
+@@ -311,9 +313,9 @@ describe("environment query lifecycle", () => {
+         }),
+       );
+ 
+-      expect(yield* Queue.take(inputs)).toEqual(input);
++      expect(yield* Queue.take(inputs)).toEqual(sent);
+       yield* SubscriptionRef.set(harness.supervisorSession, Option.some({ ...firstSession }));
+-      expect(yield* Queue.take(inputs)).toEqual(input);
++      expect(yield* Queue.take(inputs)).toEqual(sent);
+       yield* Queue.offer(events, {
+         type: "closed",
+         threadId: input.threadId,
+@@ -322,10 +324,10 @@ describe("environment query lifecycle", () => {
+       yield* Deferred.await(received);
+ 
+       yield* SubscriptionRef.set(harness.supervisorSession, Option.some({ ...firstSession }));
+-      expect(yield* Queue.take(inputs)).toEqual({ ...input, resume: true });
++      expect(yield* Queue.take(inputs)).toEqual({ ...sent, resume: true });
+       // Catalog replacements rerun the same stream through followStream's switchMap.
+       yield* SubscriptionRef.update(harness.streamGeneration, (generation) => generation + 1);
+-      expect(yield* Queue.take(inputs)).toEqual({ ...input, resume: true });
++      expect(yield* Queue.take(inputs)).toEqual({ ...sent, resume: true });
+ 
+       unmount();
+       registry.dispose();
+@@ -337,7 +339,7 @@ describe("environment query lifecycle", () => {
+           remountedRegistry.dispose();
+         }),
+       );
+-      expect(yield* Queue.take(inputs)).toEqual(input);
++      expect(yield* Queue.take(inputs)).toEqual(sent);
+     }),
+   );
+ 
+diff --git a/packages/client-runtime/src/state/terminalSession.test.ts b/packages/client-runtime/src/state/terminalSession.test.ts
+index a548eec7e6..7ad89d7d85 100644
+--- a/packages/client-runtime/src/state/terminalSession.test.ts
++++ b/packages/client-runtime/src/state/terminalSession.test.ts
+@@ -1,6 +1,11 @@
+ import { describe, expect, it } from "vite-plus/test";
+ 
+-import { EnvironmentId, TerminalSessionSnapshot, ThreadId } from "@goat/contracts";
++import {
++  EnvironmentId,
++  retainedTerminalHistory,
++  TerminalSessionSnapshot,
++  ThreadId,
++} from "@goat/contracts";
+ 
+ import {
+   applyTerminalAttachStreamEvent,
+@@ -120,6 +125,14 @@ describe("terminal session reducers", () => {
+ 
+     expect(terminalOutputText(state.output)).toBe("\uFEFFtail");
+     expect(state.output.retainedBytes).toBe(7);
++    const serverTail = retainedTerminalHistory("discard﻿tail", 7);
++    expect(
++      applyTerminalAttachStreamEvent(
++        EMPTY_TERMINAL_BUFFER_STATE,
++        { type: "snapshot", snapshot: { ...BASE_SNAPSHOT, history: serverTail } },
++        7,
++      ),
++    ).toEqual(state);
+   });
+ 
+   it("trims whole Unicode code points from a partially retained chunk", () => {
+```
+
+NOT RUN for row 9: a real slow-link attach measurement (upstream's 5,555 ms to 751 ms is not reproduced here); a running older GOAT server; a mobile native run (client-runtime covers the mobile path).
+
