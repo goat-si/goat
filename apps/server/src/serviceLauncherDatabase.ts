@@ -66,8 +66,10 @@ const CLONED_BACKUP_HEADROOM_FRACTION = 0.1;
 
 async function statDatabaseFiles(dbPath: string): Promise<ReadonlyArray<NodeFS.Stats>> {
   const stats: Array<NodeFS.Stats> = [];
+  const mainTarget = await restoreTarget(dbPath);
   for (const suffix of DB_FILE_SUFFIXES) {
-    const stat = await NodeFSP.stat(`${dbPath}${suffix}`).catch((cause: unknown) => {
+    const filePath = suffix === "" ? dbPath : `${mainTarget}${suffix}`;
+    const stat = await NodeFSP.stat(filePath).catch((cause: unknown) => {
       if (suffix !== "" && (cause as NodeJS.ErrnoException).code === "ENOENT") return undefined;
       throw cause;
     });
@@ -163,9 +165,11 @@ export async function backupDatabaseOnce(
   await NodeFSP.rm(stagingDir, { recursive: true, force: true });
   await NodeFSP.mkdir(stagingDir, { recursive: true, mode: 0o700 });
   try {
+    // SQLite keeps -wal and -shm beside the resolved database file, not beside a symlink to it.
+    const mainTarget = await restoreTarget(pending.dbPath);
     for (const suffix of DB_FILE_SUFFIXES) {
       signal.throwIfAborted();
-      const source = `${pending.dbPath}${suffix}`;
+      const source = suffix === "" ? pending.dbPath : `${mainTarget}${suffix}`;
       if (suffix !== "" && !(await pathExists(source))) continue;
       const destination = databaseBackupFile(stagingDir, suffix);
       await copyDatabaseFile(source, destination, signal);

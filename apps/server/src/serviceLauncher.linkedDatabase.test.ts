@@ -111,4 +111,19 @@ it.layer(NodeServices.layer)("rollback of a symlinked database", (it) => {
       assert.deepEqual(readEvents(databasePath), { integrity: "ok", payloads: ["seed", "served"] });
     }),
   );
+
+  it.effect("keeps writes the server left in the WAL beside the link's target", () =>
+    Effect.gen(function* () {
+      const { root, databasePath } = yield* makeLinkedDatabase;
+      const state = yield* runRolledBackUpdate({
+        root,
+        databasePath,
+        // Exiting without a close leaves the committed 'served' row only in the WAL.
+        activeOnStop: "process.exit(0);",
+        trial: "process.exit(1);",
+      });
+      assert.equal(state.update?.status, "rolled-back");
+      assert.deepEqual(readEvents(databasePath), { integrity: "ok", payloads: ["seed", "served"] });
+    }),
+  );
 });
