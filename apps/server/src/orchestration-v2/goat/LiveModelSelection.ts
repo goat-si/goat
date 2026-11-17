@@ -47,6 +47,8 @@ export const make = Effect.fn("LiveModelSelection.make")(function* () {
       const next = pending.get(threadId);
       if (next === undefined) {
         draining.delete(threadId);
+        // Warn again the next time the table fills, once it has drained.
+        if (draining.size === 0) warnedFull = false;
         return Effect.void;
       }
       pending.delete(threadId);

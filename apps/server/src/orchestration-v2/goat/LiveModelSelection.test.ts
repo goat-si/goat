@@ -14,6 +14,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ProjectionStore from "../ProjectionStore.ts";
@@ -126,5 +127,51 @@ it.effect("a call past its deadline or a failed call frees its thread for the ne
     yield* Deferred.await(calls[1]!);
     yield* handle(selectionChanged(thread, selection("high")));
     yield* Deferred.await(calls[2]!);
+  }).pipe(Effect.scoped),
+);
+
+// regression (review P3-7): past 256 threads a change is dropped and logged once per fill.
+it.effect("drops a change past 256 draining threads, warning once each time the table fills", () =>
+  Effect.gen(function* () {
+    const applied = new Set<string>();
+    const release = yield* Deferred.make<void>();
+    const allDone = yield* Deferred.make<void>();
+    let blocking = true;
+    const warnings: Array<string> = [];
+    const { handle } = yield* reactor((input) =>
+      Effect.sync(() => applied.add(String(input.providerThread.providerSessionId))).pipe(
+        Effect.andThen(blocking ? Deferred.await(release) : Effect.void),
+        Effect.andThen(
+          Effect.suspend(() =>
+            applied.size === 256 ? Deferred.succeed(allDone, undefined) : Effect.void,
+          ),
+        ),
+      ),
+    );
+    const fill = (prefix: string) =>
+      Effect.forEach(
+        Array.from({ length: 258 }, (_, index) => ThreadId.make(`${prefix}${index}`)),
+        (thread) => handle(selectionChanged(thread, selection("low"))),
+        { discard: true },
+      );
+    const capture = Logger.layer(
+      [
+        Logger.make(
+          ({ message }) =>
+            void warnings.push(String(Array.isArray(message) ? message[0] : message)),
+        ),
+      ],
+      { mergeWithExisting: false },
+    );
+    yield* fill("t").pipe(Effect.provide(capture));
+    assert.deepEqual(warnings, ["orchestration-v2.live-model-selection-full"]);
+    blocking = false;
+    yield* Deferred.succeed(release, undefined);
+    yield* Deferred.await(allDone);
+    yield* TestClock.adjust("1 millis");
+    assert.isFalse(applied.has("session:t256"));
+    assert.isFalse(applied.has("session:t257"));
+    yield* fill("u").pipe(Effect.provide(capture));
+    assert.lengthOf(warnings, 2);
   }).pipe(Effect.scoped),
 );
