@@ -362,3 +362,9 @@ Tests, no existing expectation changed: pullRequestList.logic.test.ts would exce
 
 Checks: typecheck @goat/web, @goat/server, @goat/contracts exit 0; lint clean on the changed files; apps/server/src/pullRequest, the compat test, apps/web/src/components/pullRequest and state/pullRequests.test.ts: 52 files 554 tests, then 37 files 321 tests passed after the last fixes. P1 rows owed: two environments with the same repository, one without host credentials: All lists it through the other with its environment label; Reviewing keeps the first's error.
 
+
+
+## Condition (c) for f3da8ff63b, written before its code
+
+An agent can resolve a GitHub review thread through a goat tool today: goat_pull_request_thread_resolve (agent surface "pull_request.thread_resolve", packages/contracts/src/agentSurface/entries/pull_request_writes.ts:97) calls PullRequestService.setThreadResolution, the same service method the web Resolve button uses, with the permission check at PullRequestService.ts:2144. GitLab overview threads join that path: GitLab's setThreadResolution resolves a discussion by its id whatever its position (GitLabPullRequestProvider.ts:649-659, setDiscussionResolution with discussionId = threadId), and an agent finds the overview thread's id in goat_pull_request_activity. One gap the port must close: that read builds its answer as `{ ...activity, ... }` and fits each list into the byte budget (apps/server/src/mcp/toolkits/pullRequests/handlers.ts:657-704), so a new overviewThreads list would pass through the spread unbudgeted; the row gives it its own budget slot and an overviewThreadsOmitted count. Tests: the activity read answers overview threads within its budget and counts the ones left out; an agent's resolve of an overview thread reaches GitLab's discussion resolution with that id (GitLab CLI mocked).
+
