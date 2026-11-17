@@ -104,7 +104,7 @@ Commit `807c3b78fcd3e5351320cf961bb2bf697cd9bb15`. The first goat-ci run (https:
 - Merge e03dfdb0bd of 308b3d11b8 (contains e80f5132e7), git's own, no conflicts.
 - goat-ci at 807c3b78fc: https://github.com/goat-si/goat/actions/runs/44088724466, workflow_dispatch lane all, conclusion success: 25 jobs success (goat-check, goat-typecheck, goat-test, goat-test-server 1/4 to 4/4, contracts, desktop, mobile, client-runtime, shared, packages, Windows, ssh, relay, build and the rest), 2 skipped by design, goat-ci-result success (13:44 UTC). The lane contains the integration head 308b3d11b8, so no merge was due at READY.
 
-## Open before READY
+## Still open after READY
 
 - Real-client passes: web Stop control through test-goat-app (dev server; token); mobile Stop loading and the C23 bootstrap timeout need a device check (own simulator; token).
 
