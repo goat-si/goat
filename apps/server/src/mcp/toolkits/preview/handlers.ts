@@ -215,10 +215,14 @@ const browserGuide = Effect.fn("PreviewToolkit.browserGuide")(function* (
 /** Stop reaches the page only where this server advertises serverBrowserStopLoading. */
 const requireStopLoading = Effect.serviceOption(ServerEnvironment.ServerEnvironment).pipe(
   Effect.flatMap((environment) =>
-    environment._tag === "Some" ? environment.value.getDescriptor : Effect.succeed(undefined),
+    environment._tag === "Some"
+      ? environment.value.getDescriptor.pipe(
+          Effect.map((descriptor) => descriptor.capabilities.serverBrowserStopLoading === true),
+        )
+      : Effect.succeed(false),
   ),
-  Effect.flatMap((descriptor) =>
-    descriptor?.capabilities.serverBrowserStopLoading === true
+  Effect.flatMap((advertised) =>
+    advertised
       ? Effect.void
       : Effect.fail(
           new OrchestratorMcpFailure({
