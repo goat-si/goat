@@ -103,11 +103,11 @@ describe("images the agent viewed in the mobile feed", () => {
   const paths = ["/repo/docs/sidebar.png", "/repo/docs/topbar.png"];
 
   it("shows them under their tool group, once each, while the turn runs", () => {
-    expect(viewedImages(false)).toEqual([{ after: "activity-group", paths }]);
+    expect(viewedImages(false)).toEqual([{ after: "work-toggle", paths }]);
   });
 
   it("keeps them inside a settled turn's fold until it is opened", () => {
     expect(viewedImages(true)).toEqual([]);
-    expect(viewedImages(true, new Set([runId]))).toEqual([{ after: "activity-group", paths }]);
+    expect(viewedImages(true, new Set([runId]))).toEqual([{ after: "work-toggle", paths }]);
   });
 });
