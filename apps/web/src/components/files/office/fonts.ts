@@ -8,6 +8,7 @@ import {
   resolveScriptFallbackFace,
   type BundledFontFace,
 } from "@betteroffice/fonts";
+import { callDeadlineMs, waitOutsideDeadline } from "./worker-rpc";
 
 // Every face loads from the app's own files, so no font request leaves the machine. The engines draw only with the
 // faces they are handed, never the system's, so CJK text needs the `@betteroffice/fonts-cjk` faces to show at all.
@@ -47,8 +48,30 @@ export function sheetFace(family: string, bold: boolean, italic: boolean) {
 
 /**
  * A bundled face's bytes. The font package caches them per worker, so a face loads once per open file; the browser's
- * caches, which every worker shares, serve the files to the next.
+ * caches, which every worker shares, serve the files to the next. A download pauses the call's deadline and has its
+ * own: CJK faces of 4 to 12 MB must not fail a preview on a slow link, and a stalled one must not hang it.
  */
 export function loadFace(face: BundledFontFace) {
-  return loadBundledFontBytes(face);
+  const bound =
+    callDeadlineMs + Math.ceil((face.byteLength / slowestFontLinkBytesPerSecond) * 1000);
+
+  return waitOutsideDeadline(
+    new Promise<ArrayBuffer>((resolve, reject) => {
+      const timer = setTimeout(
+        () =>
+          reject(
+            new Error(
+              "The fonts this document needs did not finish downloading. Check the connection, then open it again.",
+            ),
+          ),
+        bound,
+      );
+      loadBundledFontBytes(face)
+        .then(resolve, reject)
+        .finally(() => clearTimeout(timer));
+    }),
+  );
 }
+
+/** 256 kbit/s. */
+const slowestFontLinkBytesPerSecond = 32_000;

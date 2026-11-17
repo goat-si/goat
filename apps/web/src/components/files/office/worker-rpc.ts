@@ -19,6 +19,12 @@ type Request = {
 /** Withdraws a call whose caller aborted it. */
 type Cancel = { readonly cancel: number };
 
+/** The call waits on downloads with their own bound, such as fonts, so its deadline pauses until the wait ends. */
+type Wait = { readonly wait: number; readonly waiting: boolean };
+
+/** How long the worker may compute one call, apart from the waits it reports. */
+export const callDeadlineMs = 30_000;
+
 type Response =
   /** `transferred` lists the objects the reply moved, so a reply nobody waits for can close its bitmaps. */
   | {
@@ -61,6 +67,7 @@ type CallOptions = {
 type Pending = {
   readonly settle: (response: Response) => void;
   readonly reject: (error: Error) => void;
+  readonly wait: (waiting: boolean) => void;
 };
 
 /** The next call id, and why the worker stopped answering once it has. */
@@ -78,7 +85,13 @@ export function createWorkerClient<M extends Methods>(worker: Worker) {
     worker.terminate();
   };
 
-  worker.addEventListener("message", (event: MessageEvent<Response>) => {
+  worker.addEventListener("message", (event: MessageEvent<Response | Wait>) => {
+    if ("wait" in event.data) {
+      pending.get(event.data.wait)?.wait(event.data.waiting);
+
+      return;
+    }
+
     const call = pending.get(event.data.id);
 
     // A reply that crossed its call's cancel on the way: its bitmaps would hold their memory until collected.
@@ -113,17 +126,15 @@ export function createWorkerClient<M extends Methods>(worker: Worker) {
       const id = ++state.next;
 
       return new Promise<M[K]["output"]>((resolve, reject) => {
-        const timeout = setTimeout(
-          () =>
-            fail(
-              new WorkerClosedError(
-                "This document took too long to preview. Open it in another app.",
-              ),
+        const expire = () =>
+          fail(
+            new WorkerClosedError(
+              "This document took too long to preview. Open it in another app.",
             ),
-          30_000,
-        );
+          );
+        const deadline = { timer: setTimeout(expire, callDeadlineMs) };
         const abort = () => {
-          clearTimeout(timeout);
+          clearTimeout(deadline.timer);
           pending.delete(id);
           reject(new WorkerClosedError("The call was aborted"));
           worker.postMessage({ cancel: id } satisfies Cancel, []);
@@ -132,7 +143,7 @@ export function createWorkerClient<M extends Methods>(worker: Worker) {
         options.signal?.addEventListener("abort", abort, { once: true });
         pending.set(id, {
           settle: (response) => {
-            clearTimeout(timeout);
+            clearTimeout(deadline.timer);
             options.signal?.removeEventListener("abort", abort);
 
             if (!response.ok)
@@ -146,9 +157,13 @@ export function createWorkerClient<M extends Methods>(worker: Worker) {
             resolve(response.value as M[K]["output"]);
           },
           reject: (error) => {
-            clearTimeout(timeout);
+            clearTimeout(deadline.timer);
             options.signal?.removeEventListener("abort", abort);
             reject(error);
+          },
+          wait: (waiting) => {
+            clearTimeout(deadline.timer);
+            if (!waiting) deadline.timer = setTimeout(expire, callDeadlineMs);
           },
         });
         worker.postMessage({ id, method, key: options.key, input } satisfies Request, [
@@ -163,11 +178,43 @@ export function createWorkerClient<M extends Methods>(worker: Worker) {
   };
 }
 
-/** Whether a call runs, and which call it is, so its caller can abort it. */
+/** Whether a call runs, which call it is, so its caller can abort it, and how many bounded waits each call has open. */
 type ServerState = {
   running: boolean;
   current: { readonly id: number; readonly controller: AbortController } | undefined;
+  readonly waits: Map<number, number>;
 };
+
+/** This worker's server, which `waitOutsideDeadline` reports to. */
+const served: { state: ServerState | undefined } = { state: undefined };
+
+/**
+ * Awaits work that carries its own bound, such as a font download, while the window pauses the running call's deadline.
+ * Outside a served call, as in the window, it is the work itself.
+ */
+export async function waitOutsideDeadline<T>(work: Promise<T>): Promise<T> {
+  const state = served.state;
+  const id = state?.current?.id;
+
+  if (!state || id === undefined) return work;
+
+  const open = (state.waits.get(id) ?? 0) + 1;
+
+  state.waits.set(id, open);
+  if (open === 1) self.postMessage({ wait: id, waiting: true } satisfies Wait);
+
+  try {
+    return await work;
+  } finally {
+    const left = (state.waits.get(id) ?? 1) - 1;
+
+    if (left > 0) state.waits.set(id, left);
+    else {
+      state.waits.delete(id);
+      self.postMessage({ wait: id, waiting: false } satisfies Wait);
+    }
+  }
+}
 
 /**
  * The worker's end: runs calls one at a time, in order, letting messages through between them. A handler's signal
@@ -184,7 +231,9 @@ export function serveWorker<M extends Methods>(handlers: {
 }) {
   const queue: Request[] = [];
 
-  const state: ServerState = { running: false, current: undefined };
+  const state: ServerState = { running: false, current: undefined, waits: new Map() };
+
+  served.state = state;
 
   const reply = (response: Response, transfer: readonly Transferable[] = []) =>
     self.postMessage(response, { transfer: [...transfer] });
