@@ -37,6 +37,7 @@ import * as ProjectStore from "./ProjectStore.ts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import { makeNoticeFolderReplaced } from "./goat/noticeFolderReplaced.ts";
 import { makeSetAsideFolder, setAsideSentence } from "./goat/setAsideFolder.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 
@@ -149,6 +150,7 @@ export const layer: Layer.Layer<
     const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
     const setAside = yield* makeSetAsideFolder;
+    const noticeFolderReplaced = yield* makeNoticeFolderReplaced;
 
     const execute = Effect.fn("orchestrationV2.checkpointRollback.execute")(function* (
       input: {
@@ -276,6 +278,7 @@ export const layer: Layer.Layer<
             } else {
               yield* recreate;
             }
+            yield* noticeFolderReplaced(worktreePath);
           }
         }
       }

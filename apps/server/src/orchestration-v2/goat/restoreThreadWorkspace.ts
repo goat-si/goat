@@ -12,6 +12,7 @@ import { WorktreeSnapshotStore } from "../../worktreeSnapshots/WorktreeSnapshotS
 import { makeDiscardWorktree, makeRecreateMissingWorktree } from "./RecreateWorktree.ts";
 import { makeRestorePending, type RestorePendingState } from "./restorePending.ts";
 import { git, RestoreSnapshotError, verifyRestoredWorktree } from "./restoreSnapshot.ts";
+import { makeNoticeFolderReplaced } from "./noticeFolderReplaced.ts";
 import { makeSetAsideFolder } from "./setAsideFolder.ts";
 
 export { makeRestorePending } from "./restorePending.ts";
@@ -83,6 +84,7 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
   const setupScripts = yield* Effect.serviceOption(
     ProjectSetupScriptRunner.ProjectSetupScriptRunner,
   );
+  const noticeFolderReplaced = yield* makeNoticeFolderReplaced;
   const restore = Effect.fn("ThreadWorkspace.restoreFolder")(function* (input: RestoreInput) {
     const fail = (reason: ThreadWorkspaceRestoreFailure, detail: string) =>
       new ThreadWorkspaceRestoreError({ threadId: input.threadId, reason, detail });
@@ -133,6 +135,8 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
         });
     // A folder an earlier restore finished filling may hold work since; this attempt never removes it.
     const lenient = resumed && (state.snapshotSha === null || state.applied === true);
+    // Before setup, so only shells that predate the new folder are told.
+    yield* noticeFolderReplaced(input.worktreePath);
     const setup = yield* Effect.gen(function* () {
       const setup = Option.isNone(setupScripts)
         ? ({ status: "no-script" } as const)
