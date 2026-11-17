@@ -110,7 +110,7 @@ export const pullRequestEntries = {
     description:
       "List a thread’s linked pull requests with their last known host state and stack order from bottom to top.",
     guide:
-      "Omit threadId to read this thread. Register each pull request and stack layer with goat_pull_request_link immediately after creating it. These are stored snapshots, so the response does not fetch fresh host status.",
+      "Omit threadId to read this thread. Results come in pages of 50 in the order the pull requests were linked; pass nextCursor back as cursor until it is null. states keeps only pull requests whose last known state is listed, and one not read yet counts as open. Register each pull request and stack layer with goat_pull_request_link immediately after creating it. These are stored snapshots, so the response does not fetch fresh host status.",
     examples: [{ title: "List this thread's linked pull requests", args: {} }],
     effect: "read",
     hostRoutable: false,

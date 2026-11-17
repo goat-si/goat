@@ -16,6 +16,7 @@ import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import { backgroundWorkHoldsCompletion } from "@goat/shared/orchestrationV2PendingBackgroundWork";
+import { threadPullRequestUpdatedAtMs } from "@goat/shared/threadPullRequests";
 import { isSnoozed } from "../orchestration-v2/ThreadSettlementService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import {
@@ -181,15 +182,28 @@ function threadSnooze(
   };
 }
 
+const THREAD_PULL_REQUEST_PREVIEW_LIMIT = 5;
+
 function threadPullRequests(
   links: OrchestrationV2ThreadShell["pullRequests"],
   includeLinks = true,
-): Pick<OrchestratorMcpThreadListItem, "pullRequests" | "pullRequestCount"> {
+): Pick<
+  OrchestratorMcpThreadListItem,
+  "pullRequests" | "pullRequestCount" | "openPullRequestCount"
+> {
   const visible = visibleThreadPullRequests(links ?? []);
   if (!includeLinks) return { pullRequestCount: visible.length };
+  const open = visible.filter(
+    (link) => link.snapshot?.state !== "merged" && link.snapshot?.state !== "closed",
+  );
   return {
-    pullRequests: visible
-      .filter((link) => link.snapshot?.state !== "merged" && link.snapshot?.state !== "closed")
+    pullRequests: open
+      .toSorted(
+        (left, right) =>
+          Number(right.watch !== undefined) - Number(left.watch !== undefined) ||
+          threadPullRequestUpdatedAtMs(right) - threadPullRequestUpdatedAtMs(left),
+      )
+      .slice(0, THREAD_PULL_REQUEST_PREVIEW_LIMIT)
       .map((link) => ({
         host: normalizeThreadPullRequestKey(link).host,
         repository: link.repository,
@@ -201,6 +215,7 @@ function threadPullRequests(
         watchStartedAt: link.watch?.startedAt ?? null,
       })),
     pullRequestCount: visible.length,
+    openPullRequestCount: open.length,
   };
 }
 

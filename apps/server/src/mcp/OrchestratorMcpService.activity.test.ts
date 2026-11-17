@@ -237,14 +237,14 @@ it("readThread preserves caller access errors and prefers activity-run status ov
   }).pipe(Effect.provide(layer), Effect.runPromise);
 });
 
-it("readThread lists only open linked PRs with their watch state, and a later page only their count", async () => {
+it("readThread previews a few open linked PRs with their watch state, and a later page only their counts", async () => {
   const pullRequestLink = (number: number, state: "open" | "merged", watched: boolean) => ({
     host: "github.com",
     repository: "acme/web",
     number,
     url: `https://github.com/acme/web/pull/${number}`,
     source: "agent",
-    linkedAt: "2026-08-04T11:00:00.000Z",
+    linkedAt: `2026-08-04T11:0${number}:00.000Z`,
     snapshot: { state },
     stack: null,
     ...(watched
@@ -271,7 +271,11 @@ it("readThread lists only open linked PRs with their watch state, and a later pa
         instanceId: parentInstanceId,
         model: "gpt-5.4",
       }),
-      pullRequests: [pullRequestLink(1, "merged", false), pullRequestLink(2, "open", true)],
+      pullRequests: [
+        pullRequestLink(1, "merged", false),
+        pullRequestLink(2, "open", true),
+        ...[3, 4, 5, 6, 7, 8].map((number) => pullRequestLink(number, "open", false)),
+      ],
     },
     runs: [makeRun({ id: activeRunId, ordinal: 1, status: "running" })],
     visibleTurnItems: [],
@@ -317,15 +321,17 @@ it("readThread lists only open linked PRs with their watch state, and a later pa
     const result = yield* service.readThread(makeScope(), { threadId: parentThreadId });
     // Every page read must not repeat each linked PR, and an open PR shows whether it is watched.
     const listed = result.thread.pullRequests ?? [];
-    expect(listed.map((link) => link.number)).toEqual([2]);
+    // A thread with many open PRs previews a few, watched first, then newest.
+    expect(listed.map((link) => link.number)).toEqual([2, 8, 7, 6, 5]);
     expect(listed[0]).toMatchObject({ watching: true, watchStartedAt: "2026-08-04T11:30:00.000Z" });
-    expect(result.thread.pullRequestCount).toBe(2);
+    expect(result.thread.openPullRequestCount).toBe(7);
+    expect(result.thread.pullRequestCount).toBe(8);
     const laterPage = yield* service.readThread(makeScope(), {
       threadId: parentThreadId,
       afterPosition: 0,
     });
     expect(laterPage.thread.pullRequests).toBeUndefined();
-    expect(laterPage.thread.pullRequestCount).toBe(2);
+    expect(laterPage.thread.pullRequestCount).toBe(8);
   }).pipe(Effect.provide(layer), Effect.runPromise);
 });
 
