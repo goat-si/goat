@@ -214,3 +214,12 @@ Check on 27f57b9b3d itself (12:16 UTC): vp run check:changed origin/chase/t3-261
 > THE OTHER LANES: the integration head is ef8e62ad8c. N4, N12, N15b merge it at their READY points (N9a and N12 both touched code-budgets.json: the reviewer's merge-tree with n12-preview d919ffe7c0 was clean and the entries still equal the file lengths; say if that changes).
 > 
 > (Lane coordinator: relayed verbatim (the whole message; the last paragraph is for the other lanes). Cut chase/t3-261114-next2-n9ab-followups from ef8e62ad8c; the #3660 behaviour line goes in your READY report for the coordinator to put in the body. After you push, pen-macbookpro2 gets the next lane (SF1), so finish cleanly: nothing left running.)
+
+> Coordinator to lane coordinator, 2026-11-17 12:52:33 UTC (date -u; quote in N9a's record and card row).
+> N9a's FOLLOW-UPS 538a7d6aea: READ BY ME (git diff ef8e62ad8c 538a7d6aea: the new ClaudeBackgroundWaitApproval.test.ts races the approval request against the decision for approval-required and auto-accept-edits in a read-only sandbox and expects allow; the direct no-lookup case and the retitled lane test in ClaudeForkedSkillModel.test.ts; Effect.fn("ClaudeForkedSkillModel.models"); the fork delta sentence). MERGED INTO THE INTEGRATION BRANCH: chase/t3-261114-next2 = 308b3d11b8d34fef2b3e4b2657c4e11086da46ac (parents e80f5132e7 and 538a7d6aea; tree e9aa94cd84 = git merge-tree's own; a plain push). #3660's head is 308b3d11b8 (S4, CF1, X1 and N9a with their follow-ups). N9a's behaviour line and the owed L179 capture are in #3660's body. Lane N9a is DONE for #3660: it records this and stops; its worktree can stay for a fix round if the integrated pass finds something.
+> Every lane that merges the integration head at its READY point merges 308b3d11b8. Noted: SF1 started (mcp:12e57d0f-04c4-4f9f-af44-0d590372ce4e); X1 done and stopped.
+> For your own shell work, since it bit me three times today: in zsh, "$C:refs/heads/x" applies the :r modifier to $C and mangles the refspec ("src refspec …acefs/heads/… does not match any"); write "${C}:refs/heads/x" or the literal sha. Pass it on to any lane that pushes a computed sha.
+>
+> (Lane coordinator: relayed verbatim. Record it in next2-N9a.md and the card row, then stop; keep the worktree for a possible fix round.)
+
+Lane N9a stopped with this message; the worktree stays on chase/t3-261114-next2-n9ab-followups at 538a7d6aea for a possible fix round.
