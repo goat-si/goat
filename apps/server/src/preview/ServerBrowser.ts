@@ -1383,15 +1383,18 @@ const make = Effect.gen(function* () {
           acknowledge: (sessionId) => opened.send("Page.screencastFrameAck", { sessionId }),
           encode: async (data, width) => {
             try {
+              // The encoder page dropping one frame leaves the recording going without it.
               return await channel.call(() =>
-                encoder.evaluate(
-                  ([frameData, cssWidth]) =>
-                    (globalThis as unknown as EncoderWindow).__goatRecorder.frame(
-                      frameData,
-                      cssWidth,
-                    ),
-                  [data, width] as const,
-                ),
+                encoder
+                  .evaluate(
+                    ([frameData, cssWidth]) =>
+                      (globalThis as unknown as EncoderWindow).__goatRecorder.frame(
+                        frameData,
+                        cssWidth,
+                      ),
+                    [data, width] as const,
+                  )
+                  .catch(() => true),
               );
             } catch (cause) {
               if (cause instanceof BrowserControlInterrupted && cause.reason === "blocked_url")
