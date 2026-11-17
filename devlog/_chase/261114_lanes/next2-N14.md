@@ -414,3 +414,31 @@ PART 2, N14's two deviations on O28: BOTH ACCEPTED. (1) solar/nodes.ts stays (co
 
 (Lane coordinator: part 2 relayed verbatim; file the one gt catalog issue through --body-file and send the number; then READY.)
 
+
+### Coordinator to lane coordinator, 2026-11-17 16:08:00 UTC (relayed; verbatim)
+
+Coordinator to lane coordinator (2026-11-17 16:08:00 UTC), the 40-minute check.
+
+1. Integration branch chase/t3-261114-next2 = 3a254fa1a5bac7b0927930dd559fc0752796d2e2. It took N15bb (fast-forward to ce893ca4ea) and N12b (merge of 2c0e5563f3, tree = git merge-tree's own, no file changed on both sides). Tell N4c, SF1, N14 and N12 the new head; none needs to merge it before its review verdict.
+
+2. CI IS STARVED, by load: six lidge runners, all busy, five lane-all runs plus #3682's pull request run queued behind them (its goat-scope waited 13 minutes). RULE UNTIL I LIFT IT: a follow-up branch goes into the integration branch on goat-check, goat-typecheck, goat-test-changed, goat-build and its own packages' test jobs green on the exact head, plus my read (and the narrow review where I ordered one). I then cancel the rest of that branch's run. The full suites run on the integration head, which stays the gate for dev. No lane re-runs or re-dispatches a lane-all run without asking me; no lane polls a run in a long turn.
+
+6. N14: branch at 2a94ed4deb, run 44118636205 in progress. When it is READY, send it by thread.send with the head, the rows and commits, the rule 3 lines, the captures and its NOT RUN list; I start its fresh C4 review at once. It does not wait for its lane-all run to finish to report READY: check, typecheck and test-changed green are enough to start the review.
+
+(Lane coordinator: relayed verbatim. N14's READY at 2a94ed4deb has gone to the coordinator; its fresh C4 review starts on that head. Push nothing until its verdict. Do not poll run 44118636205 inside a long turn; end the turn; do not re-run or re-dispatch anything.)
+
+Run 44118636205 at the last look (16:09:18 UTC, before this message): 17 of 27 jobs done, none failed; goat-test-windows running; the rest queued. N14 stopped polling at this message.
+
+
+### Coordinator to lane coordinator, 2026-11-17 16:16:28 UTC (relayed; verbatim, the parts for N14)
+
+Coordinator to lane coordinator (2026-11-17 16:16:28 UTC), on N14's READY, N12c and your status notes. Relay each part to its lane.
+
+1. N14 at 2a94ed4deb: FRESH REVIEW STARTED in two parts, both new reviewers on the exact head: part A (task goat-next2-N14-A-2a94ed4d: L18's contract, the server check and the agent text, the capability gate, the lockfile, the Codex viewed-image change, the shared rules, the Decisions inbox rule, mobile) and part B (task goat-next2-N14-B-2a94ed4d: O1's card, L357, L373 with "goat <dir>", L376, L365's zero, the translations, O28's sites, every move-out explained line by line, budgets and rule 3 for the whole lane). N14 pushes nothing until both verdicts. Its record on the records branch (26fc7a13e7) is what the reviewers read the rulings from; it may push its local record copy to the records branch now (records only). I READ: the lane merges into 3a254fa1a5 with ONE conflict, oxlint-plugin-goat/code-budgets.json (the integration side lowered GitActionsControl.tsx and added PublishRepositoryDialog.tsx); N14 does not merge the integration head now; after the verdicts it merges it once, resolving that file to the real lengths, and checks that no MorphIcon site moved into PublishRepositoryDialog.tsx unswapped (the integration side moved the Publish dialog out of GitActionsControl.tsx; if O28 swapped a site there, the swap must follow the moved code).
+
+3. THE CI RULE, refined: a follow-up branch gets lane=quick from me (two jobs), never lane=all, while the pool is starved; its tests are the lane's local check:changed (or the beside files under the 12:07:55 rule) plus the reviewer's own runs; the full suites run on the integration head. Accordingly I CANCELLED the lane-all runs 44115576485 (SF1 410daab8e6: check, typecheck, build, mobile, desktop, contracts, client-runtime, shared, server 2/4 were green; test-changed had not started) and 44115010294 (N4c 4fa20e693f: check, typecheck, build, test-changed, desktop, mobile, contracts, client-runtime, shared were green). Neither lane re-dispatches. N14's lane-all run 44118636205 stays: that lane is wide and its web suite matters.
+
+(Lane coordinator: relayed verbatim. N14 may push its local record copy to the records branch now, its file and its 10.027 row only; no code push and no integration merge until both review verdicts.)
+
+N14's read-only check for the merge after the verdicts (16:17 UTC, git on origin/chase/t3-261114-next2 = 3a254fa1a5): GitActionsControl.tsx and PublishRepositoryDialog.tsx have no MorphIcon at e04442e66c, at 2a94ed4deb or at 3a254fa1a5, so O28 swapped nothing there and no swap has to follow the moved Publish dialog. `git grep -c MorphIcon` over apps/web/src lists the same 36 files with the same counts at e04442e66c and at 3a254fa1a5, and the importers of solar/nodes are the same, so the integration side added no site O28 has not swapped (2a94ed4deb has none). The code-budgets.json conflict is resolved at the merge, to the real lengths.
+
