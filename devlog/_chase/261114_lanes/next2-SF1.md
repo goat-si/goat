@@ -361,3 +361,46 @@ For #3660's body, SF1's rows are in: goat#3656, goat#3653, goat#3558, goat#3568,
 
 Merge order from here: N12c (quick run 44123436045 queued), N4c (review running), N14 (two reviews running), then #3682 to dev and the one dev merge.
 ----- END VERBATIM -----
+
+### Coordinator, 16:30:54 UTC (relayed by the lane coordinator, STEER)
+Lane coordinator to SF1 (STEER). From the coordinator's message, VERBATIM (quote in your record):
+
+----- BEGIN VERBATIM -----
+Coordinator to lane coordinator (2026-11-17 16:30:54 UTC). Three things happened; relay each part verbatim to its lane.
+
+A. #3682 IS MERGED to dev: squash d265257a044927ed15ff663ca96364a2413a8261 at 16:25:49Z, on goat-ci-result success at 52f3f8c6bf (node scripts/merge-pr.ts; read by me). goat#3674 is closed. THE ONE DEV MERGE IS DONE: chase/t3-261114-next2 = d12958d037c626f8cd4a5692b52b34ad5137cecf, built as: b574681d26 (SF1 in) -> 8c2813a7c4 (dev merged; six conflicts resolved by me: workspaceLease.ts and its two tests = dev's, ThreadWorkspaceService.ts = the branch's, setupTerminal.test.ts both cases, project-settings.md both sentences; on the merged tree apps/server tsc exit 0 and the nine terminal, lease and restore test files 132 passed) -> d12958d037 (N12c e79c46a7de merged on its green lane=quick run 44123436045). #3660 is MERGEABLE with dev again and its pull request run starts by itself. Tell every lane the new head.
+ - T1: go on T1b now, as ordered at 15:49:39: one issue, a branch from dev d265257a04, a DRAFT PR to dev; it merges after #3660. P3-4's reachability test first.
+ - N12: done. The desktop Stop row is re-walked in the second sitting.
+ - SF1: cut sf1b from d12958d037 (not b574681d26).
+ - N14: after both verdicts, merge d12958d037 once (code-budgets.json; useComposerSend.ts's import block where SF1 dropped the UnifiedSettings import and N14 dropped DraftSshDestination: both lines go; budgets to the merged real lengths: the SF1 reviewer measured useComposerSend.ts 1635 and ThreadFeed.tsx 3344).
+----- END VERBATIM -----
+
+For you: cut chase/t3-261114-next2-sf1b-followups from d12958d037 (git ls-remote confirms it), NOT b574681d26. If you already cut it from b574681d26 and pushed nothing, re-cut it from d12958d037 and carry your commits over (cherry-pick). If you already pushed it, stop and tell me before anything else.
+
+Reports go by origin.report; end your turn after each step that waits; do not poll.
+
+SF1b: re-cut from d12958d037 (the first cut had not been pushed), both commits cherry-picked; pushed 23d3a4696e at 16:50:18 UTC; check:changed 291 files 3678/3678.
+
+### Coordinator, 16:53:08 UTC (relayed by the lane coordinator)
+Lane coordinator to SF1. From the coordinator's message, VERBATIM (quote in your record):
+
+----- BEGIN VERBATIM -----
+Coordinator to lane coordinator (2026-11-17 16:53:08 UTC). Both READYs received; relay to each lane.
+
+2. SF1b at 23d3a4696e: I read the diff (endsTurn loses the provider-thread lookup and the context parameter and matches on run.providerInstanceId; one line in Orchestrator.ts; five guard tests). lane=quick dispatched (https://github.com/goat-si/goat/actions/runs/44130593843); I merge it when that is green. SF1 is done after that; its record is closed on the records branch.
+----- END VERBATIM -----
+
+Close your record now: push it to the records branch with the 16:30:54 and 16:53:08 messages quoted and the sf1b row (head 23d3a4696e, commits, checks, quick run 44130593843), your file and row only, plain fast-forward. Nothing more on any code branch. Do not watch the run; end your turn.
+
+## Follow-up SF1b (chase/t3-261114-next2-sf1b-followups), after the narrow review's two P3 (SF1R2-P3-A, SF1R2-P3-B)
+
+| item | value |
+| --- | --- |
+| branch head | 23d3a4696e0ea5c16f502764015cdef515561397 (git ls-remote 16:50:18 UTC), cut from the integration head d12958d037 (re-cut: a first cut from b574681d26 was never pushed; both commits cherry-picked) |
+| SF1R2-P3-A | 067bf01f40: endsTurn drops the provider-thread lookup and the context parameter and matches on run.providerInstanceId; one-line comment "Whether the refused change ends a blocking run: a mode change matches by the run's instance."; Orchestrator.ts one line, still 13528; no behaviour change, existing tests unchanged |
+| SF1R2-P3-B | 23d3a4696e: five guards (reviewer's probes 1 and 2): a turn on a non-switching session refused beside another instance's idle session, switching or not; a preparing, starting or waiting run with no provider thread refused when its instance's session would be released. Pass on b574681d26's sources too (5/5, sources restored, no diff): guards, not regressions |
+| checks | Orchestrator.activeTurnRefusals.test.ts 28/28; apps/server typecheck exit 0; vp run check:changed origin/chase/t3-261114-next2 (3 files since d12958d037) exit 0: format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget, typecheck (2 packages), test 291 files 3678/3678 |
+| CI | lane=quick run 44130593843 dispatched by the coordinator (https://github.com/goat-si/goat/actions/runs/44130593843); the coordinator merges SF1b when it is green. Not watched by SF1 |
+| diff from d12958d037 | 3 files, +106/-20 |
+
+Record closed 2026-11-17 by SF1 (anthropic/claude-opus-5-5 via the Codex harness in GOAT).
