@@ -182,6 +182,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/server/src/memory/MemoryApplicationLayers.ts`, `apps/server/src/server.ts`
 - 정책: 메모리 layer 조립(source read 바인딩, generation hold, worker, hub, sync, import, snapshot, toolkit)은 `makeMemoryApplicationLayers`에 있다. `server.ts`는 같은 자리에서 한 번 호출하고 `layerPersistence`, `layerRepositoryIdentityResolver`, `layerServerSettings`, `layerTextGeneration`을 넘긴 뒤 결과를 구조 분해해 기존 이름으로 export한다. 한 번만 호출해야 sync와 source read가 한 core를, worker와 sync가 한 hold를 공유한다. 이 네 layer는 모듈이 type으로 참조하도록 `export`가 붙어 있다. upstream이 `server.ts`를 바꾸면 upstream을 받고 호출, 구조 분해, `export` 네 개, `MemorySourceReadBinding` re-export를 다시 얹는다 (사이클 261023: `server.ts` +1005/−373 → +593/−376).
 
+### `mobile-sheet-header` 모바일 시트의 GOAT 헤더 모델
+
+- 커밋: #3700 (사이클 261114 next3, M3)
+- 경로: `apps/mobile/src/components/ui/Sheet.android.tsx`, `apps/mobile/src/features/threads/git/`, `apps/mobile/src/features/review/`, `apps/mobile/src/features/threads/ThreadSettingsSheet.tsx`, `apps/mobile/src/features/pull-requests/`
+- 정책: upstream 62647f4d24의 Android 시트 primitive(`FitSheet`, `KeyboardSheetBody`, `PaneSheet`, `SheetIntro`, `SheetPane`)는 GOAT가 받지 않은 헤더 모델(162f81fd05 adapt, faf9d7354c skip; 사이클 261106 행 296-297) 위에 있어 받지 않았다. GOAT는 네이티브 절반(Screens `t3-v5.0.0-t3.51`, `@expo/ui` RNHostView 패치)만 받았고, Android 기기 점검에서 Branches, Commit, Confirm, Review, 리뷰 댓글, Thread settings 시트가 끝 행까지 닿고 키보드가 입력 칸을 가리지 않았다. upstream이 이 시트들을 primitive 기준으로 바꾸면 GOAT 헤더 모델에 맞춰 기능 hunk만 옮긴다.
+
 ### `no-t3-import` T3 불러오기 제거
 
 - 커밋: `59d7fe1a6`
