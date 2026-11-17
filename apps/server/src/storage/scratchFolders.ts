@@ -38,11 +38,14 @@ const busy = (row: ScratchThreadRow) =>
   row.pendingRequest !== null ||
   (row.pendingTasks ?? 0) > 0;
 
-/** This server's threads that are not deleted and work in a folder or inside it; null if unread. */
-const scratchThreadsUsing = Effect.fn("scratchFolders.threadsUsing")(function* (
-  folder: string,
-  rules: PathRules,
-) {
+interface ScratchThread extends ScratchThreadRow {
+  /** The folder as recorded and as the filesystem resolves it. */
+  readonly bound: ReadonlyArray<string>;
+  readonly busy: boolean;
+}
+
+/** This server's threads that are not deleted and have a folder, each resolved once; null if unread. */
+const readScratchThreads = Effect.fn("scratchFolders.readThreads")(function* () {
   const sql = yield* SqlClient.SqlClient;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -59,22 +62,35 @@ const scratchThreadsUsing = Effect.fn("scratchFolders.threadsUsing")(function* (
     WHERE deleted_at IS NULL AND json_extract(payload_json, '$.worktreePath') IS NOT NULL
   `.pipe(Effect.orElseSucceed(() => null));
   if (rows === null) return null;
-  const real = (value: string) =>
-    fs.realPath(value).pipe(Effect.orElseSucceed(() => path.resolve(value)));
-  const targets = [path.resolve(folder), yield* real(folder)];
-  const users: Array<ScratchThreadRow & { readonly busy: boolean }> = [];
-  for (const row of rows) {
-    const bound = [path.resolve(row.path), yield* real(row.path)];
-    if (
+  return yield* Effect.forEach(rows, (row): Effect.Effect<ScratchThread> =>
+    fs.realPath(row.path).pipe(
+      Effect.orElseSucceed(() => path.resolve(row.path)),
+      Effect.map((real) => ({ ...row, bound: [path.resolve(row.path), real], busy: busy(row) })),
+    ),
+  );
+});
+
+/** The threads that work in folder or inside it. */
+const threadsUsing = Effect.fn("scratchFolders.threadsUsing")(function* (
+  folder: string,
+  threads: ReadonlyArray<ScratchThread>,
+  rules: PathRules,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const targets = [
+    path.resolve(folder),
+    yield* fs.realPath(folder).pipe(Effect.orElseSucceed(() => path.resolve(folder))),
+  ];
+  return threads
+    .filter((thread) =>
       targets.some((target) =>
-        bound.some(
+        thread.bound.some(
           (value) => samePath(value, target, rules) || isStrictlyInside(target, value, rules),
         ),
-      )
+      ),
     )
-      users.push({ ...row, busy: busy(row) });
-  }
-  return users.toSorted((left, right) => left.id.localeCompare(right.id));
+    .toSorted((left, right) => left.id.localeCompare(right.id));
 });
 
 /** Why a reviewed scratch folder must stay now: its threads changed or one started working. */
@@ -83,8 +99,9 @@ export const scratchReuseReason = Effect.fn("scratchFolders.reuseReason")(functi
   reviewed: ReadonlyArray<string>,
   rules: PathRules,
 ) {
-  const users = yield* scratchThreadsUsing(folder, rules);
-  if (users === null) return "this server's threads could not be read";
+  const threads = yield* readScratchThreads();
+  if (threads === null) return "this server's threads could not be read";
+  const users = yield* threadsUsing(folder, threads, rules);
   const working = users.find((user) => user.busy);
   if (working !== undefined) return "its thread is working in it now";
   if (users.map((user) => user.id).join("\n") !== reviewed.join("\n"))
@@ -150,17 +167,20 @@ export const scanScratchFolders = Effect.fn("scratchFolders.scan")(function* (sc
   const projectRoots = yield* Effect.forEach(projectRows, (row) =>
     fs.realPath(row.root).pipe(Effect.orElseSucceed(() => path.resolve(row.root))),
   );
+  // Read and resolved once per scan; removal reads them again under the folder's hold.
+  let threads: ReadonlyArray<ScratchThread> | null | undefined;
   for (const name of yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []))) {
     const folder = path.join(root, name);
     const stat = yield* lstatOf(folder);
     if (stat === null || !stat.isDirectory || stat.isLink) continue;
-    const users = yield* scratchThreadsUsing(folder, scan.rules);
-    if (users === null) {
+    threads ??= yield* readScratchThreads();
+    if (threads === null) {
       scan.notes.push(
         "This server's threads could not be read, so no No project folder is offered.",
       );
       return;
     }
+    const users = yield* threadsUsing(folder, threads, scan.rules);
     const working = users.find((user) => user.busy);
     const named = users[0];
     const projectInside = projectRoots.some(
@@ -189,7 +209,7 @@ export const scanScratchFolders = Effect.fn("scratchFolders.scan")(function* (sc
             ));
     const id = "orphan_folder:" + folder;
     const { decision, token, stamp } = yield* scan.stamped(id, folder, SCRATCH_MIN_AGE_MS, offered);
-    const threads = users.map((user) => user.id);
+    const threadIds = users.map((user) => user.id);
     scan.add(
       { kind: "orphan_folder", path: folder, label: path.join("No project", name), ...decision },
       {
@@ -198,9 +218,9 @@ export const scanScratchFolders = Effect.fn("scratchFolders.scan")(function* (sc
         identity: stat.identity,
         worktree: null,
         stamp,
-        scratchThreads: threads,
+        scratchThreads: threadIds,
       },
-      [stat.identity.dev, stat.identity.ino, ...token, ...threads],
+      [stat.identity.dev, stat.identity.ino, ...token, ...threadIds],
     );
     scan.measureLater(id, folder, decision.state === "removable" ? 1 : 3);
   }
