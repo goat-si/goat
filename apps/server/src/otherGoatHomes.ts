@@ -56,19 +56,22 @@ export const ownWorktreeRoots = Effect.fnUntraced(function* (input: {
   const real = (value: string) =>
     fs.realPath(value).pipe(Effect.orElseSucceed(() => path.resolve(value)));
   const ownBase = yield* real(input.baseDir);
+  // The caller passes realpath'd roots and gets them back as given; a link is judged by its target.
+  const roots = yield* Effect.forEach(input.roots, (root) =>
+    real(root).pipe(Effect.map((resolved) => ({ root, resolved }))),
+  );
   // A marker that cannot be checked counts as present: the narrower roots are the safe side.
   const copied = yield* fs
     .exists(path.join(ownBase, CHANNEL_STATE_COPY_MARKER_FILE_NAME))
     .pipe(Effect.orElseSucceed(() => true));
-  if (copied) {
-    return input.roots.filter((root) => inside(path, ownBase, root));
-  }
-  const others = yield* Effect.forEach(yield* localGoatHomes(), real);
-  return input.roots.filter(
-    (root) =>
-      inside(path, ownBase, root) ||
-      !others.some((other) => other !== ownBase && inside(path, other, root)),
-  );
+  const others = copied ? [] : yield* Effect.forEach(yield* localGoatHomes(), real);
+  return roots
+    .filter(
+      ({ resolved }) =>
+        inside(path, ownBase, resolved) ||
+        (!copied && !others.some((other) => other !== ownBase && inside(path, other, resolved))),
+    )
+    .map(({ root }) => root);
 });
 
 export interface OtherHomeBindings {
