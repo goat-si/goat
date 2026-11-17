@@ -10,6 +10,8 @@ import {
   type ServerConfig,
   WS_METHODS,
 } from "@goat/contracts";
+import * as NodeV8 from "node:v8";
+import * as NodeVM from "node:vm";
 import { expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import * as Clock from "effect/Clock";
@@ -518,4 +520,75 @@ it.effect(
         expect(h.registry.get(h.edit)).toBeNull();
       }),
     ),
+);
+/** Collects garbage inside this test only: the flag is switched off again before any other code runs. */
+const collectGarbage = Effect.sync(() => {
+  NodeV8.setFlagsFromString("--expose-gc");
+  const gc = NodeVM.runInNewContext("gc") as () => void;
+  NodeV8.setFlagsFromString("--no-expose-gc");
+  gc();
+});
+
+/** Answers every read request with reply and counts them. */
+const answerReads = Effect.fn(function* (
+  reads: Queue.Queue<Deferred.Deferred<MemoryItem>>,
+  reply: MemoryItem,
+) {
+  let count = 0;
+  yield* Queue.take(reads).pipe(
+    Effect.flatMap((request) => {
+      count++;
+      return Deferred.succeed(request, reply);
+    }),
+    Effect.forever,
+    Effect.forkScoped,
+  );
+  return () => count;
+});
+
+it.effect("the visible read and the draft's decision share one request, across a collection", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* openEdit(true);
+      yield* collectGarbage;
+      const requests = yield* answerReads(h.reads, otherRevision);
+      yield* Queue.offer(h.signals, signal("upsert"));
+      yield* waitFor(h.registry, h.edit, (text) => text === null);
+      yield* waitFor(
+        h.registry,
+        h.body,
+        (value) => Option.isSome(value) && value.value === otherRevision,
+      );
+      // One memory.read answers both the details on screen and the draft's decision.
+      expect(requests()).toBe(1);
+    }),
+  ),
+);
+
+it.effect("a read opened after a collection is the one the draft's decision is waiting on", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* harness();
+      h.registry.set(h.edit, {
+        text: "Synthetic memory",
+        memoryIds: [id],
+        expectedHeads: [revisionId(4)],
+      });
+      h.registry.set(h.edit, { text: "Synthetic memory, edited", memoryIds: [id] });
+      const seen = h.registry.get(h.exposure);
+      yield* Queue.offer(h.signals, signal("upsert"));
+      yield* waitFor(h.registry, h.exposure, (state) => state !== seen);
+      // Only the draft holds the read now, through its decision.
+      expect(h.registry.get(h.edit)).toBe("Synthetic memory, edited");
+      yield* collectGarbage;
+      const requests = yield* answerReads(h.reads, item);
+      const body = Atom.make((get) =>
+        Option.flatten(AsyncResult.value(get(h.memory.read(readTarget)))),
+      );
+      h.registry.mount(body);
+      yield* waitFor(h.registry, body, Option.isSome);
+      yield* waitFor(h.registry, h.edit, (text) => text === "Synthetic memory, edited");
+      expect(requests()).toBe(1);
+    }),
+  ),
 );
