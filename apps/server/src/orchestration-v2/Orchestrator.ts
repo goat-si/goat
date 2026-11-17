@@ -275,6 +275,7 @@ import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import { makeHumanHandoffs } from "./goat/HumanHandoffs.ts";
 import { makeThreadRecordDispatches } from "./goat/ThreadRecordDispatches.ts";
 import { makeStaleQuestionWakes } from "./goat/StaleQuestionWake.ts";
+import { releaseStopHolds } from "./goat/StopHoldRelease.ts";
 import { activeTurnRefusal } from "./goat/ActiveTurnRefusals.ts";
 import {
   makeEndNativeSubagentTrees,
@@ -12618,6 +12619,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       default:
         return yield* dispatchUnsupported(command);
     }
+    yield* releaseStopHolds({ projectionStore, command, events, emit: emit(events, command) }).pipe(
+      mapDispatchError(command),
+    );
     return {
       events: yield* Ref.get(events),
       effects: yield* Ref.get(effects),

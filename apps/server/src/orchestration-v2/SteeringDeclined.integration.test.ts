@@ -1,5 +1,12 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, MessageId, ProviderDriverKind } from "@goat/contracts";
+import {
+  CommandId,
+  MessageId,
+  type OrchestrationV2Run,
+  ProviderDriverKind,
+  type RunId,
+  type ThreadId,
+} from "@goat/contracts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -399,4 +406,435 @@ it.effect.each([
       }).pipe(Effect.provide(layer));
     }),
   ),
+);
+
+// goat#3653: what ends a Stop's hold before a late decline arrives, and what does not.
+type DeclineContext = {
+  readonly orchestrator: Orchestrator.OrchestratorV2["Service"];
+  readonly worker: EffectWorker.OrchestrationEffectWorkerV2["Service"];
+  readonly threadId: ThreadId;
+  readonly firstRunId: RunId;
+  /** Ends a run as interrupted and waits for the projection to record it. */
+  readonly endRun: (runId: RunId) => Effect.Effect<void>;
+  readonly started: ReadonlyArray<ProviderAdapter.ProviderAdapterV2TurnInput>;
+};
+
+const stopHolding = (context: DeclineContext, id: string, runId = context.firstRunId) =>
+  context.orchestrator
+    .dispatch({
+      type: "run.interrupt",
+      commandId: CommandId.make(id),
+      threadId: context.threadId,
+      runId,
+      holdQueue: true,
+    })
+    .pipe(Effect.asVoid, Effect.orDie);
+
+const continuation = (context: DeclineContext, id: string, runId = context.firstRunId) =>
+  ({
+    type: "message.dispatch",
+    commandId: CommandId.make(id),
+    threadId: context.threadId,
+    messageId: MessageId.make("message:" + id),
+    text: "Continue where you left off.",
+    attachments: [],
+    manualContinuationOfRunId: runId,
+    dispatchMode: { type: "start_immediately" },
+    createdBy: "user",
+    creationSource: "web",
+  }) as const;
+
+const queuedFollowUp = (projection: { readonly runs: ReadonlyArray<OrchestrationV2Run> }) =>
+  projection.runs.find((run) => run.userMessageId === MessageId.make("message:declined"));
+
+/** Ends a run as interrupted, as its provider would, and waits until the projection records it. */
+const endRunIn =
+  (
+    events: Queue.Queue<ProviderAdapter.ProviderAdapterV2Event>,
+    orchestrator: Orchestrator.OrchestratorV2["Service"],
+    threadId: ThreadId,
+  ) =>
+  (runId: RunId) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const projection = yield* orchestrator.getThreadProjection(threadId);
+        const run = projection.runs.find((candidate) => candidate.id === runId)!;
+        const turn = projection.providerTurns.findLast(
+          (candidate) => candidate.runAttemptId === run.activeAttemptId,
+        )!;
+        const ended = yield* orchestrator.streamDomainEvents.pipe(
+          Stream.filter(
+            (event) =>
+              event.type === "run.updated" &&
+              event.payload.id === runId &&
+              event.payload.status === "interrupted",
+          ),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
+        yield* Queue.offer(events, {
+          type: "turn.terminal",
+          driver,
+          providerThreadId: turn.providerThreadId,
+          providerTurnId: turn.id,
+          runOrdinal: run.ordinal,
+          status: "interrupted",
+          failure: null,
+          threadDisposition: "reusable",
+        });
+        yield* Fiber.join(ended);
+      }),
+    ).pipe(Effect.orDie);
+
+/** A holding Stop on an idle worker: the provider ends the turn itself, and this waits for it. */
+const stopAndEndIn =
+  (
+    orchestrator: Orchestrator.OrchestratorV2["Service"],
+    worker: EffectWorker.OrchestrationEffectWorkerV2["Service"],
+    threadId: ThreadId,
+  ) =>
+  (id: string, runId: RunId) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const ended = yield* orchestrator.streamDomainEvents.pipe(
+          Stream.filter(
+            (event) =>
+              event.type === "run.updated" &&
+              event.payload.id === runId &&
+              event.payload.status === "interrupted",
+          ),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
+        yield* orchestrator.dispatch({
+          type: "run.interrupt",
+          commandId: CommandId.make(id),
+          threadId,
+          runId,
+          holdQueue: true,
+        });
+        yield* worker.drain();
+        yield* Fiber.join(ended);
+      }),
+    ).pipe(Effect.orDie);
+
+/** Steers the first turn; before runs just before the provider declines that steer. */
+const declineAfter = <BeforeError, AfterError>(
+  name: string,
+  before: (context: DeclineContext) => Effect.Effect<void, BeforeError>,
+  after: (
+    context: DeclineContext & { readonly followUp: OrchestrationV2Run | undefined },
+  ) => Effect.Effect<void, AfterError>,
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      let beforeDecline: Effect.Effect<void> = Effect.void;
+      const { events, started, layer, startFirstTurn } = yield* nextTurnSelectionHarness(
+        "steering-declined-" + name,
+        false,
+        Effect.void,
+        false,
+        undefined,
+        true,
+        {},
+        undefined,
+        (turn) =>
+          Effect.suspend(() => beforeDecline).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new ProviderAdapter.ProviderAdapterSteerDeclinedError({
+                  driver,
+                  providerThreadId: turn.providerThread.id,
+                  providerTurnId: turn.providerTurnId,
+                }),
+              ),
+            ),
+          ),
+      );
+      return yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const threadId = yield* startFirstTurn;
+        const endRun = endRunIn(events, orchestrator, threadId);
+        const context: DeclineContext = {
+          orchestrator,
+          worker,
+          threadId,
+          firstRunId: started[0]!.runId,
+          endRun,
+          started,
+        };
+        beforeDecline = before(context).pipe(Effect.orDie);
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("steer"),
+          threadId,
+          messageId: MessageId.make("message:declined"),
+          text: "follow up",
+          attachments: [],
+          dispatchMode: { type: "steer_active", targetRunId: context.firstRunId },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* worker.drain();
+        const followUp = queuedFollowUp(yield* orchestrator.getThreadProjection(threadId));
+        return yield* after({ ...context, followUp });
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+it.effect(
+  "regression goat#3653: after Stop and Resume a late decline's follow-up is not held, runs once, and holds nothing behind it",
+  () =>
+    declineAfter(
+      "resume-then-decline",
+      (context) =>
+        Effect.gen(function* () {
+          yield* stopHolding(context, "stop");
+          yield* context.orchestrator
+            .dispatch({
+              type: "queue.resume",
+              commandId: CommandId.make("resume"),
+              threadId: context.threadId,
+            })
+            .pipe(Effect.orDie);
+        }),
+      (context) =>
+        Effect.gen(function* () {
+          const { worker } = context;
+          assert.notEqual(context.followUp?.queueHeld, true);
+          yield* context.orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("later"),
+            threadId: context.threadId,
+            messageId: MessageId.make("message:later"),
+            text: "later",
+            attachments: [],
+            dispatchMode: { type: "queue_after_active" },
+            createdBy: "agent",
+            creationSource: "server",
+          });
+          yield* worker.drain();
+          yield* context.orchestrator.resumeQueuedRuns;
+          yield* worker.drain();
+          const projection = yield* context.orchestrator.getThreadProjection(context.threadId);
+          const later = projection.runs.find(
+            (run) => run.userMessageId === MessageId.make("message:later"),
+          );
+          assert.notEqual(later?.queueHeld, true);
+          assert.deepEqual(
+            context.started.filter((turn) => turn.runId === context.followUp?.id).length,
+            1,
+          );
+        }),
+    ),
+);
+
+it.effect(
+  "regression goat#3653: after Stop and a continuation of the stopped run a late decline's follow-up is not held",
+  () =>
+    declineAfter(
+      "continue-then-decline",
+      (context) =>
+        Effect.gen(function* () {
+          yield* stopHolding(context, "stop");
+          yield* context.endRun(context.firstRunId);
+          yield* context.orchestrator
+            .dispatch(continuation(context, "continue"))
+            .pipe(Effect.orDie);
+        }),
+      (context) =>
+        Effect.sync(() => {
+          assert.equal(context.followUp?.status, "queued");
+          assert.notEqual(context.followUp?.queueHeld, true);
+        }),
+    ),
+);
+
+it.effect("a refused continuation leaves the Stop's hold, so a late decline is still held", () =>
+  declineAfter(
+    "refused-continuation",
+    (context) =>
+      Effect.gen(function* () {
+        yield* stopHolding(context, "stop");
+        // The stopped run has not ended, so it cannot be continued yet.
+        const refused = yield* Effect.flip(
+          context.orchestrator.dispatch(continuation(context, "continue-too-early")),
+        );
+        assert.include(String(refused.cause), "can no longer be resumed");
+      }),
+    (context) => Effect.sync(() => assert.equal(context.followUp?.queueHeld, true)),
+  ),
+);
+
+it.effect("sending one queued message now leaves the Stop's hold", () =>
+  declineAfter(
+    "send-now-then-decline",
+    (context) =>
+      Effect.gen(function* () {
+        yield* context.orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("queued"),
+          threadId: context.threadId,
+          messageId: MessageId.make("message:queued"),
+          text: "queued",
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* stopHolding(context, "stop");
+        yield* context.endRun(context.firstRunId);
+        const queued = (yield* context.orchestrator.getThreadProjection(
+          context.threadId,
+        )).runs.find((run) => run.userMessageId === MessageId.make("message:queued"))!;
+        assert.equal(queued.queueHeld, true);
+        yield* context.orchestrator
+          .dispatch({
+            type: "queued-run.start",
+            commandId: CommandId.make("send-now"),
+            threadId: context.threadId,
+            runId: queued.id,
+          })
+          .pipe(Effect.orDie);
+      }),
+    (context) => Effect.sync(() => assert.equal(context.followUp?.queueHeld, true)),
+  ),
+);
+
+it.effect(
+  "a send while stopped and a continuation of a later run leave the earlier run's hold",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer, startFirstTurn, started } =
+          yield* nextTurnSelectionHarness("stop-hold-other-run");
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const threadId = yield* startFirstTurn;
+          const stopAndEnd = stopAndEndIn(orchestrator, worker, threadId);
+          const firstRunId = started[0]!.runId;
+          const holds = (runId: RunId) =>
+            orchestrator
+              .getThreadProjection(threadId)
+              .pipe(
+                Effect.map((projection) =>
+                  projection.turnItems.some(
+                    (item) =>
+                      item.type === "run_interrupt_request" &&
+                      item.runId === runId &&
+                      item.holdsQueue === true,
+                  ),
+                ),
+              );
+          yield* stopAndEnd("stop", firstRunId);
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("send-while-stopped"),
+            threadId,
+            messageId: MessageId.make("message:second"),
+            text: "second",
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+            createdBy: "user",
+            creationSource: "web",
+          });
+          yield* worker.drain();
+          assert.isTrue(yield* holds(firstRunId));
+          const secondRunId = started[1]!.runId;
+          yield* stopAndEnd("stop-second", secondRunId);
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("continue-second"),
+            threadId,
+            messageId: MessageId.make("message:continue-second"),
+            text: "Continue where you left off.",
+            attachments: [],
+            manualContinuationOfRunId: secondRunId,
+            dispatchMode: { type: "start_immediately" },
+            createdBy: "user",
+            creationSource: "web",
+          });
+          assert.isFalse(yield* holds(secondRunId));
+          assert.isTrue(yield* holds(firstRunId));
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
+);
+
+it.effect(
+  "Resume and a continuation clear a hold once: nothing holding, or a receipt replay, writes nothing",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer, startFirstTurn, started } = yield* nextTurnSelectionHarness(
+          "stop-hold-release-events",
+        );
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const threadId = yield* startFirstTurn;
+          const runId = started[0]!.runId;
+          const releasedRuns = (result: Orchestrator.OrchestratorV2DispatchResult) =>
+            result.storedEvents.flatMap(({ event }) =>
+              event.type === "turn-item.updated" && event.payload.type === "run_interrupt_request"
+                ? [[event.payload.runId, "holdsQueue" in event.payload]]
+                : [],
+            );
+          const resume = (id: string) =>
+            orchestrator.dispatch({
+              type: "queue.resume",
+              commandId: CommandId.make(id),
+              threadId,
+            });
+          const stop = (id: string) =>
+            orchestrator.dispatch({
+              type: "run.interrupt",
+              commandId: CommandId.make(id),
+              threadId,
+              runId,
+              holdQueue: true,
+            });
+
+          assert.deepEqual(releasedRuns(yield* resume("resume-nothing-held")), []);
+          yield* stop("stop");
+          const resumed = yield* resume("resume");
+          assert.deepEqual(releasedRuns(resumed), [[runId, false]]);
+          const stored = (yield* orchestrator.getThreadProjection(threadId)).turnItems.find(
+            (item) => item.type === "run_interrupt_request" && item.runId === runId,
+          );
+          assert.isDefined(stored);
+          assert.isFalse("holdsQueue" in stored!);
+          assert.deepEqual(releasedRuns(yield* resume("resume-again")), []);
+          const replayedResume = yield* resume("resume");
+          assert.isTrue(replayedResume.replayed);
+          assert.deepEqual(replayedResume.storedEvents, resumed.storedEvents);
+
+          yield* stopAndEndIn(
+            orchestrator,
+            yield* EffectWorker.OrchestrationEffectWorkerV2,
+            threadId,
+          )("stop-again", runId);
+          const continueCommand = {
+            type: "message.dispatch",
+            commandId: CommandId.make("continue"),
+            threadId,
+            messageId: MessageId.make("message:continue"),
+            text: "Continue where you left off.",
+            attachments: [],
+            manualContinuationOfRunId: runId,
+            dispatchMode: { type: "start_immediately" },
+            createdBy: "user",
+            creationSource: "web",
+          } as const;
+          const continued = yield* orchestrator.dispatch(continueCommand);
+          assert.deepEqual(releasedRuns(continued), [[runId, false]]);
+          const replayedContinue = yield* orchestrator.dispatch(continueCommand);
+          assert.isTrue(replayedContinue.replayed);
+          assert.deepEqual(replayedContinue.storedEvents, continued.storedEvents);
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
 );
