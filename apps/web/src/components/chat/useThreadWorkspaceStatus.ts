@@ -39,6 +39,8 @@ export function useThreadWorkspaceStatus(
     mutationId: workspaceItemRefreshKey(needsAttention, itemCount),
     resourceKey: `thread-workspace-items:${threadRef?.environmentId}:${threadRef?.threadId}`,
     refresh: query.refresh,
+    // The status that just came back missing is current; refresh on the next item.
+    skipFirst: true,
   });
   return query;
 }
@@ -54,6 +56,6 @@ export function workspaceUnavailable(
 }
 
 /** Changes with the thread's items while the worktree needs attention; null once it is healthy. */
-export function workspaceItemRefreshKey(needsAttention: boolean, itemCount: number | null) {
+function workspaceItemRefreshKey(needsAttention: boolean, itemCount: number | null) {
   return needsAttention && itemCount !== null ? String(itemCount) : null;
 }
