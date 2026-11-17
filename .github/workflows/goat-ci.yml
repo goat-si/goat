@@ -76,6 +76,7 @@ jobs:
       server_files: ${{ steps.scope.outputs.server_files }}
       changed_tests: ${{ steps.scope.outputs.changed_tests }}
       changed_node_tests: ${{ steps.scope.outputs.changed_node_tests }}
+      changed_tests_netns: ${{ steps.scope.outputs.changed_tests_netns }}
       note: ${{ steps.scope.outputs.note }}
     steps:
       # The PR merge commit and its first parent (the base) are all the diff needs; the sources
@@ -325,14 +326,14 @@ jobs:
       # A full run hands it every test file no suite owns instead (goat-ci-scope.cjs withUnownedTests).
       # A selected file that no Vitest project collects fails here, so a quick run cannot pass
       # without running a test it chose. Every runner runs; the step exits with the last failure.
-      # Web browser tests run with loopback only. Server tests stay on the host: some check that
-      # folders above them are owned by root, which a user namespace shows as another user.
+      # A list with web browser tests runs with loopback only (goat-ci-scope.cjs wrapsChangedTests).
       - name: Test changed files
         if: matrix.task == 'test-changed'
         env:
           ALCHEMY_TEST_DEV: "true"
           CHANGED_TESTS: ${{ needs.scope.outputs.changed_tests }}
           CHANGED_NODE_TESTS: ${{ needs.scope.outputs.changed_node_tests }}
+          CHANGED_TESTS_NETNS: ${{ needs.scope.outputs.changed_tests_netns }}
           VITEST_PW_DEBUG: "1"
         run: |
           mapfile -t files < <(node -e 'for (const file of JSON.parse(process.env.CHANGED_TESTS || "[]")) console.log(file)')
@@ -351,9 +352,7 @@ jobs:
               process.exit(missing.length > 0 ? 1 : 0);
             ' || status=$?
             netns=()
-            if printf '%s\n' "${files[@]}" | grep -q '\.browser\.test\.'; then
-              netns=(bash .github/scripts/loopback-netns.sh)
-            fi
+            if [ "$CHANGED_TESTS_NETNS" = true ]; then netns=(bash .github/scripts/loopback-netns.sh); fi
             "${netns[@]}" vp test run "${files[@]}" || status=$?
           fi
           if [ "${#node_files[@]}" -gt 0 ]; then

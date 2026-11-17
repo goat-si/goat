@@ -3,6 +3,7 @@
 # runners share a host whose network changes make Chromium fail every pending request with
 # net::ERR_NETWORK_CHANGED (#3646); AppArmor there refuses plain unshare and allows bwrap.
 # Without bwrap, or when bwrap is refused, the command fails: it never runs on the host network.
+# Server tests stay unwrapped: their root-or-self ownership checks see host root as another user here.
 set -euo pipefail
 if [ "${RUNNER_ENVIRONMENT:-}" != self-hosted ]; then exec "$@"; fi
 if ! command -v bwrap >/dev/null; then

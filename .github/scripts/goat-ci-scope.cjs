@@ -748,6 +748,10 @@ function quickRun(changed, root) {
 
 const noChangedTests = () => ({ vitest: [], node: [] });
 
+/** test-changed runs its Vitest list with loopback only (loopback-netns.sh) when it holds web browser tests. */
+const wrapsChangedTests = (vitest) =>
+  vitest.some((file) => /\.browser\.test\.[cm]?[jt]sx?$/.test(file));
+
 /** A full run's test-changed: every test file no suite of the matrix runs. */
 function withUnownedTests(root, result) {
   const left = testsOutsideSuites(root, trackedTests(root)).sort();
@@ -940,6 +944,8 @@ async function main(env = process.env, fetchImpl = fetch) {
         JSON.stringify(result.changedTests.vitest) +
         "\nchanged_node_tests=" +
         JSON.stringify(result.changedTests.node) +
+        "\nchanged_tests_netns=" +
+        wrapsChangedTests(result.changedTests.vitest) +
         "\nnote=" +
         result.note +
         "\n",
@@ -974,6 +980,7 @@ module.exports = {
   matrixFor,
   laneRun,
   planRun,
+  wrapsChangedTests,
 };
 
 if (require.main === module) {

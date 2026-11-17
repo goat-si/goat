@@ -22,6 +22,7 @@ const {
   matrixFor,
   laneRun,
   planRun,
+  wrapsChangedTests,
 } = require("./goat-ci-scope.cjs");
 const fs = require("node:fs");
 const { buildImportGraph, listWorkspaceFiles } = require("./goat-ci-imports.cjs");
@@ -537,6 +538,17 @@ describe("planRun", () => {
         [],
       );
     }
+  });
+
+  it("runs test-changed with loopback only for web browser tests, never for server tests alone", () => {
+    const web = "apps/web/src/components/ReopenClosedViewShortcut.browser.test.tsx";
+    const server = "apps/server/src/hub/disposable/keyPath.test.ts";
+    assert.equal(wrapsChangedTests([server, web]), true);
+    assert.equal(
+      wrapsChangedTests([server, "apps/server/src/preview/ServerBrowserPage.test.ts"]),
+      false,
+    );
+    assert.equal(wrapsChangedTests(["scripts/dev-runner.test.ts"]), false);
   });
 
   it("runs everything for ci:full from the event, the added label, or the live PR", async () => {
