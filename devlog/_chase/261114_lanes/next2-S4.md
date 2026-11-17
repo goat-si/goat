@@ -378,3 +378,226 @@ READY sent at lane head `4c0eb424639bf6af93614a821b048bb8f2d5c11f`, records `5f6
 > (Lane coordinator: relayed verbatim; quote it in next2-S4.md (records branch only). This overrides my earlier note to merge b531d2511c now: do NOT merge or push to the lane branch until the verdict; if you already merged b531d2511c locally, keep it local and say so.)
 
 Before this note arrived, the lane had already merged `b531d2511c` (CF1F2-P3-1) locally, under the 10:39:09 instruction. The merge is `a1e390d03c`, git's own, with no conflicts, touching three mobile files the lane does not touch. It stays local, unpushed, until the verdict; the lane branch on origin stays at 4c0eb42463.
+
+## Merged
+
+lane S4 merged into the integration branch at a6992a0f36 (#3660)
+
+> Coordinator to lane coordinator, 2026-11-17 10:57:56 UTC (quote each part verbatim in the lane's record, in card 10.027 and in next2-pr-plan.md under "Coordinator answers").
+>
+> A. LANE S4 IS MERGED INTO THE INTEGRATION BRANCH. The fresh C4 review of the fix round (Opus 5.5 xhigh) at 4c0eb424639bf6af93614a821b048bb8f2d5c11f: APPROVE WITH NITS, nothing at P0 to P2; S4-P1-1 is closed: "I found no input a client controls that still decides the token"; requireProject unchanged; every error path fails closed (its own scratch run on Effect 4.1.3); the move-outs verbatim; the route gets the same PullRequestService instance. Report /Users/jun/handoff-in/chase/next2-S4-fix-review-4c0eb424.md (relay it to S4 in full). I merged 4c0eb42463 into chase/t3-261114-next2 as a6992a0f365ee41e3804fe1a736ecdd328985377 (parents b531d2511c and 4c0eb42463; the tree is git merge-tree's own result, 2492d40ef4, no conflict; plain push). THE INTEGRATION HEAD IS a6992a0f36. S4's local merge a1e390d03c is not needed: S4 resets nothing on origin; its next branch starts from a6992a0f36.
+>    Records: "lane S4 merged into the integration branch at a6992a0f36 (#3660)". goat#3657 and goat#3522 are commented and closed when #3660 reaches dev, not now.
+>    S4 FOLLOW-UP, one small branch from a6992a0f36 (like CF1's), test first where code changes:
+>    S4F-P3-2: sourceControlMediaResponse.ts:74-81: recover the WHOLE cause of the lookup (Effect.catchCause with the log inside), so any answer other than "yes" (a typed failure, a defect, a mixed cause) means a fetch WITHOUT the token and no PullRequestError reaches http.ts:583, whose tapError reads .reason._tag of another error type. An interruption must still interrupt (do not swallow it). One test: a lookup that dies, and one whose cause mixes a failure with a defect, each fetch without the Authorization header and answer as a normal media response.
+>    S4F-P3-1: "active project" means "not deleted": an archived project's repository still gets the token, exactly as requireProject already lets its pull requests be read. KEPT (one rule for both). Say so in the record and in the doc comment at PullRequestService.ts:204 and source-control-core driver.ts:22; add one matcher test row for an archived project (it counts).
+>    S4F-P3-3: every media request reads the whole project list, and a project with an SSH remote on an unrecognised host is probed through the hosting CLIs again for every image (failed probes are not cached). S4 files ONE issue with the path:line chain and a way to measure it (a pull request body with 30 images: how many project reads and CLI probes), number to me; no fix in this lane.
+>    Then S4 is done for #3660.
+>
+> (Lane coordinator: relayed verbatim; part A is yours. Discard nothing on origin; leave a1e390d03c local or delete that local branch state as you like, never push it. Follow-up branch: cut chase/t3-261114-next2-s4b-followups from a6992a0f36; S4F-P3-2 test first, S4F-P3-1 the matcher row and the two doc comments, S4F-P3-3 the issue; check:changed against origin/chase/t3-261114-next2; plain push of the new branch; report its head and the issue number. The review report follows in full.)
+>
+> ===== /Users/jun/handoff-in/chase/next2-S4-fix-review-4c0eb424.md =====
+> **APPROVE WITH NITS** 4c0eb424639bf6af93614a821b048bb8f2d5c11f
+>
+> `git ls-remote` showed `origin/chase/t3-261114-next2-s4-auth` at `4c0eb424639bf6af93614a821b048bb8f2d5c11f` both at the start and at the end of the review. The lane's own change is `bd3901fca9..4c0eb42463` (19 files).
+>
+> S4-P1-1 is closed. The server now decides from its own project list, at fetch time, whether the GitHub token may go. A repository the client names is only a candidate name, and the URL must address that same repository. I found no input a client controls that still decides the token. All findings are P3. The round does not touch the things the previous review cleared: the #3657 fix `ec3c14cab2`, the URL comparison (`gitHubMediaFetch.ts` is byte-identical to `13309271ae`), redirects, and caches.
+>
+> ## Findings
+>
+> **P3-1. "Active project" means "not deleted". An archived project still counts.**
+>
+> - **Where:** `PullRequestService.ts:693-701` reads `listWorkspaceProjects`. That list comes from `orchestration-v2/ProjectStore.ts:138`, which filters only on `deleted_at IS NULL`. The doc at `PullRequestService.ts:204` and at `source-control-core/src/server/driver.ts:22` says "active project".
+> - **Trigger:** a person archives a project after a URL was minted for its repository.
+> - **Consequence:**
+>   - That repository's media keeps getting the token.
+>   - An `orchestration:read` client gains nothing new: `requireProject` also counts archived projects, so the client can already read those pull requests.
+>   - The brief expects "archived loses the token". Nothing tests or documents that it does not.
+> - **Smallest fix:**
+>   - No code change: state in the record (and optionally at `:204`) that "active" means not deleted, archived included, as `requireProject` does.
+>   - If the coordinator wants archived projects excluded instead: filter `archivedAt == null` in `hasProjectRepository` only, and add one row to the matcher test.
+> - **Basis:** read.
+>
+> **P3-2. A typed failure mixed with a defect reaches the route's log line with the wrong type.**
+>
+> - **Where:**
+>   - `sourceControlMediaResponse.ts:74-81`.
+>   - `http.ts:577-593`; `cause.reason._tag` is read at `:583`.
+> - **Trigger:** the project lookup ends with a cause that holds a `PullRequestError` and a defect at the same time. The concurrent identity reads at `PullRequestService.ts:613-621` can produce one.
+> - **Consequence:**
+>   - In effect 4.1.3, `orElseSucceed` does not recover a cause that contains a defect, so `fetchMedia` never runs and no token goes out.
+>   - The route's `tapError` then reads `.reason._tag` on a `PullRequestError` and throws. The route ends with two defects, so the client gets the server's defect response, probably a 500 instead of a 502, and the log loses the real cause.
+>   - There is no credential consequence.
+> - **Smallest fix:** optional. Catch the whole cause at `:80` (`Effect.catchCause`, with the log inside). Then any lookup result other than "yes" means a fetch without the token, and no `PullRequestError` can reach `http.ts:583`.
+> - **Basis:**
+>   - Run: I copied the `:74-81` and `http.ts:577-593` chains unchanged into a scratch program on effect 4.1.3. The fetch was never reached, and the route failed with `Die+Die`.
+>   - Inferred: the 500 status.
+>
+> **P3-3. Every media request reads the whole project list.**
+>
+> - **Where:** `sourceControlMediaResponse.ts:74` → `PullRequestService.ts:693` → `readWorkspaceProjects` (`:595`), which includes `resolveRemoteHosts` (`:447-562`).
+> - **Trigger:** a pull request body or Code tab with many images. Each image request runs one full project read:
+>   - a SQLite list;
+>   - identity resolution for projects with no stored identity;
+>   - host placement.
+> - **Extra cost for one case:** a project with an SSH remote on a host no definition recognises is probed through the hosting CLIs with `requestedHost: github.com` (`:493`). Failed probes are not cached (`SourceControlProviderRegistry.ts:163`), so such a remote is probed again for every image.
+> - **Consequence:** one project read per image, run concurrently. I did not measure the cost. There is no security consequence.
+> - **Smallest fix:** none for this round. If profiles show the cost, share one read per host across requests for a few seconds, and accept that much staleness after a project is removed.
+> - **Basis:** read; the cost is inferred, not measured.
+>
+> ## What checks out
+>
+> **1. The attack is closed.**
+>
+> - **Path from mint to fetch:**
+>   - A client sends `cwd`, `url` and an optional `repository` (`contracts/assets.ts:60-64`, trimmed strings).
+>   - `ws.ts:2968` mints the URL and `AssetAccess.ts:862-873` signs the claims. Neither file changed in this round.
+>   - `http.ts:546-577` verifies the signature.
+>   - `sourceControlMediaResponse.ts:59-66` picks the candidate name: the claim's `repository`, or the `cwd` checkout's for an older client.
+>   - `:67-81` passes the name on only if `hasProjectRepository` answers true for `publicHost` (`github.com`).
+>   - `carriesCredential` (`gitHubMediaFetch.ts:48-63`) compares the URL's owner/name with that name again on every redirect hop (`:111`).
+> - **Inputs a client controls:**
+>   - The name and `cwd` only supply a candidate.
+>   - The URL must address the allowed repository.
+>   - Only `range` and `if-range` headers are forwarded (`sourceControlMediaResponse.ts:13`, `:53-57`).
+> - **No other route reaches the fetcher or the credential:**
+>   - `fetchMedia` has one production caller (`sourceControlMediaResponse.ts:82`), which only `http.ts:577` uses.
+>   - `layerAssetRoute` appears only at `server.ts:1022` and in `http.test.ts:542`.
+>   - The github.com credential is read only at `gitHubMediaFetch.ts:98`.
+>   - No MCP tool mints `github-media`.
+> - **Uploads keep their rule:**
+>   - `user-attachments` and legacy `/<o>/<r>/assets/<n>/<id>` paths carry the token whatever the name (`:54`).
+>   - The single sign-on render runs in the legacy path's own repository, or now in the repository the server allowed (`:84-87`, `:204`).
+>   - So a client can pull another repository's private upload only if it already knows the upload's random id. Coordinator ruling (e) accepted this, and this round leaves it unchanged.
+> - **Making a project match:**
+>   - Creating a project through `dispatchCommand` needs `orchestration:operate` (`RpcAuthorization.ts:70`), and `projectsMutate` has its own scopes (`:429-431`). `assets.createUrl` needs only `orchestration:read` (`:252`, `:418-427`).
+>   - A `cwd` pointing at a checkout the attacker controls still only yields a name, and that name must belong to an active project.
+> - **Name normalisation:**
+>   - `listsRepository` (`PullRequestService.ts:371-378`) compares lowercased names and an exact lowercased host, after the host filter at `:651`.
+>   - I ran the head's matcher and token rule together, copied verbatim. No token for:
+>     - `.git` suffix, `github.com/` prefix, trailing slash, padded name;
+>     - Kelvin-sign case folding: it passes the matcher but fails `REPOSITORY_PATTERN` at `gitHubMediaFetch.ts:61`;
+>     - a name that only a GitHub Enterprise project has;
+>     - a project's name paired with another repository's raw, dot-segment or `%2e%2e` URL;
+>     - another repository's LFS URL;
+>     - no name.
+>   - Token only for: a github.com project's own repository, in either letter case, its blob URL, its fork upstream, and uploads.
+> - **SSH and HTTPS remotes:** both go through the same host placement `requireProject` uses (`gitHubApiHostForRemote`, `gitHubRepositoryResolution.ts:166-175`). That placement comes from the user's own config, never from client input.
+> - **A fork whose upstream is the victim:** it counts only when a project here is that fork, which is the ruling.
+>
+> **2. `requireProject` is unchanged.** `listsRepository`'s body is the old inline predicate verbatim (`bd3901fca9:PullRequestService.ts:734`). It gets the same trimmed name and lowercased host (`:706-708`), and the diff has a single hunk there.
+>
+> **3. Every error path fails closed.** A scratch copy of the chain on effect 4.1.3 gave:
+>
+> - typed failure: fetch without the token;
+> - failure plus interrupt: fetch without the token;
+> - defect, interrupt, failure plus defect: no fetch at all;
+> - a lookup that never answers: still pending at 9 s under TestClock, and fetched without the token at 10 s.
+>
+> The service is a typed per-request requirement, and `server.ts:1022` is its only provider. If it were missing at runtime, `:70` would raise a defect before the fetch. The test's timeout uses TestClock (`sourceControlMediaCredential.test.ts:182-185`).
+>
+> **4. Timing and state.**
+>
+> - The project list is read on every fetch. Nothing caches the answer: `sharedProjectReads` (`:389`) is used only inside `withSharedProjectReads`, which this path does not use.
+> - Deletion takes effect at once (`ProjectStore.ts:138`; route test `:136-152`; matcher test `:326-329`). Archiving does not (P3-1). A project added later gains the token.
+> - RepositoryIdentityResolver's 15-minute cache (`RepositoryIdentityResolver.ts:22`) now sits in the decision path twice:
+>   - the older client's `cwd` name (`sourceControlMediaResponse.ts:62`);
+>   - identities of projects with no stored identity (`PullRequestService.ts:618-619`).
+> - A stale entry can keep the token for a repository that a still-existing project used up to 15 minutes ago. Removing the project still takes effect at once. The previous S4-P3-1 stands, narrower.
+>
+> **5. The HTTP route gets the same PullRequestService instance as the rest of the server.**
+>
+> - `provideRequest` builds its layer once, inside the middleware layer (effect 4.1.3 `http/HttpRouter.ts:1358-1375`).
+> - `Layer.build` forks the current memo map, and lookups fall through to the parent.
+> - Every site uses the one `layerPullRequestService` object (`server.ts:437`, `:680`, `:693`, `:704`, `:782`, `:792`, `:904`, `:1022`, `:1140`).
+> - Probe with the real `HttpRouter.serve`: one construction, and the runtime consumer, the sibling routes and the asset route's request all saw the same instance.
+> - Per request, it only adds `provideContext`.
+>
+> **6. The move-outs are verbatim, and the budgets are honest.**
+>
+> - A script compared each move-out commit's removed lines with its destination. The only differences are `export` prefixes, new import blocks, and `TurnItemId` dropped from a test import.
+> - Each budget entry equals the rule's `countLines` at every commit, and each ends below the lane's start:
+>   - `PullRequestService.ts`: 3759 → 3732;
+>   - `AssetAccess.test.ts`: 1673 → 1609;
+>   - `http.test.ts`: 1290 → 1280.
+> - Within the round, the fix raised the entries the move-outs had just set (3711, 1598, 1278), but each stays below the lane's starting value.
+> - `server.ts` stays at 1325. `ws.ts` and `AssetAccess.ts` are untouched.
+> - The non-test files (`pullRequestProviderErrors.ts` and the three testkits) have no non-null assertions and no casts to `any`.
+> - Every new export has an importer.
+>
+> **7. Tests.**
+>
+> - The route test covers:
+>   - the attack row in raw, github.com blob and LFS forms (`:118-134`);
+>   - another project's repository, then its removal (`:136-153`);
+>   - the older-client fallback (`:155-170`);
+>   - a lookup that fails and one that never answers (`:172-188`).
+> - By reading, each case would have sent the token on `13309271ae`, which passed the claim's or `cwd`'s name straight to the fetcher.
+> - The route test mocks the decision (`:67-76`). The real matcher is covered at `PullRequestForkListing.test.ts:302-330`.
+> - The pre-existing test files keep every `it`/`expect`/`assert` line:
+>   - `AssetAccess.test.ts`: 166;
+>   - `http.test.ts`: 211;
+>   - `sourceControlMediaResponse.test.ts`: 8;
+>   - `gitHubMediaFetch.test.ts`: 31, and untouched by this round.
+> - The rest of the diff in those files is provide lines, imports, two comments and moved fixtures. There are no sleeps, polling, per-test timeouts or retries.
+>
+> **8. The merge commit is git's own merge.** The tree of `4c0eb42463` (`2b8194b82a`) equals `git merge-tree` of its parents. CF1's patch-id is unchanged, and the two sides share no file.
+>
+> **9. Compatibility and what a person sees.**
+>
+> - An older client falls back to the `cwd` checkout's name, which must be an active project's. A newer client on an older server keeps the old behaviour, so P1 remains open on older servers.
+> - These honest cases still load:
+>   - a fork's upstream (`projectRepositories.ts:24-39`; matcher test);
+>   - a worktree thread: clients send `detail.workspaceRoot` and the PR's repository (`PullRequestMarkdown.tsx:41-47`, `PullRequestImageAnnotation.tsx:44-50`);
+>   - a remote environment: the environment that minted the URL decides from its own projects;
+>   - a pull request opened from another project's thread, when any active project uses that repository;
+>   - mobile pull-request media (`pullRequestMediaSource.ts:17-21`).
+> - Only the accepted B1 case loses images.
+>
+> **10. Merge state.** Clean everywhere; the next section has the details.
+>
+> ## Merge state
+>
+> - **Into `origin/chase/t3-261114-next2` (`b531d2511c`):** clean, no shared files.
+> - **Into `origin/dev` (`9835304ca7`):** clean, no shared files.
+> - **Sibling lanes:**
+>   - `-n4-worktree` (`957cea501d`) and `-n15b-mobile` (`8e4b30cdec`) share only `code-budgets.json`. Both merge cleanly and keep S4's three entries.
+>   - `-x1-ci` moved to `de982166fa` during the review. It shares no file and merges cleanly.
+>
+> NOT RUN:
+>
+> - The repository's tests and `check:changed`: no checkout has `node_modules`. The author's 227 passed and exit 0 are not reproduced.
+> - An end-to-end `assets.createUrl` against a running server.
+> - A live GitHub fetch.
+> - CI on this head.
+> - A real-client pass.
+> - The 500 status in P3-2, which is inferred.
+>
+> The fail-closed, memo-map and matcher results come from scratch programs on effect 4.1.3 with the head's code copied in unchanged. The scratch folder is `/tmp/s4-review-4c0eb424` (63 MB: effect 4.1.3 from npm, copies of head files, probe scripts). It is safe to delete.
+>
+> **APPROVE WITH NITS** 4c0eb424639bf6af93614a821b048bb8f2d5c11f
+>
+> ===== end of report =====
+
+The local merge `a1e390d03c` (lane plus b531d2511c) was never pushed and stays local, as the 10:57:56 relay allows.
+
+## Follow-ups (S4F, after the merge)
+
+Branch `chase/t3-261114-next2-s4b-followups`, head `e9e20d52bec41be15682d29ad6069242a4cc7f3f`, cut from `a6992a0f365ee41e3804fe1a736ecdd328985377`. Plain push.
+
+| finding | commit | result |
+| --- | --- | --- |
+| S4F-P3-2 | `48a6cb5a20` | sourceControlMediaResponse.ts catches the lookup's whole cause and logs it inside `Effect.catchCause`. A typed failure, a defect, a mixed cause or the timeout means a fetch without the token, and a normal media response. A cause holding an interruption is turned back into `Effect.interrupt`, so the request is still interrupted. |
+| S4F-P3-1 | `e9e20d52be` | kept: "active project" means not deleted, so an archived project's repository still gets the token, the same rule as requireProject. Doc comments at PullRequestService.ts:204 and source-control-core driver.ts:22 say so. The matcher test (PullRequestForkListing.test.ts) gains an archived project, `acme/docs`, which counts. The row pins existing behavior; no code changed. |
+| S4F-P3-3 | goat#3670 | issue filed with the path:line chain and a 30-image measurement: https://github.com/goat-si/goat/issues/3670. No fix in this lane. |
+
+S4F-P3-2 fail-first: sourceControlMediaCredential.test.ts before the fix: 2 failed | 6 passed: 'a project lookup that dies sends no GitHub token' (Error: lookup died) and 'a project lookup that fails and dies sends no GitHub token' (PullRequestOperationError ... down, plus the defect): the response died instead of fetching without the token. The interruption case passed before and after.
+
+The same test file gains "a project lookup that is interrupted interrupts the media request and sends nothing". It pins that the catch does not swallow an interruption, and passes before and after.
+
+Checks, fresh, at e9e20d52be:
+
+- `vp test run` of sourceControlMediaCredential.test.ts and sourceControlMediaResponse.test.ts: 10 passed. PullRequestForkListing.test.ts: 4 passed. The apps/server typecheck is clean.
+- `vp run check:changed origin/chase/t3-261114-next2`, 5 files since a6992a0f36: exit 0. Format, lint, knip 1/2 and 2/2, graphql, agent surface audit, context budget, typecheck of 18 packages and the tests beside the changes (67 files, 1148 passed) all pass. The exit code comes from a cached rerun that reported "Nothing changed since the last passing run".
+- Budgets: PullRequestService.ts stays at 3732 (one comment line edited in place); no other touched file has an entry.
+
+NOT RUN: ci:full; a real-client pass (no client code changed); the route's HTTP status in http.ts for a mixed cause, which the response no longer produces, so not run separately; a review of the follow-ups (the coordinator's call).
