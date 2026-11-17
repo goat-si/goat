@@ -139,6 +139,12 @@ export interface Fixture {
   readonly linkStatus?: "forbidden" | "failed";
   /** Home `ocx link revoke` refuses, so the link stays. */
   readonly revokeFails?: boolean;
+  /** Runs once Home `ocx link revoke` has removed the link, before it answers. */
+  readonly afterRevoke?: Effect.Effect<void>;
+  /** Runs while the move probes the target's host key, before anything changes. */
+  readonly duringProbe?: Effect.Effect<void>;
+  /** Runs while GOAT reads the key it pinned for the target, before anyone is asked. */
+  readonly duringPin?: Effect.Effect<void>;
   /** Home `ocx link routes` answers; absent answers as an OpenCodex without the command. */
   readonly routes?: (args: ReadonlyArray<string>) => OcxOutput;
   /** Home `ocx link routes` as a run that can fail or never finish; overrides routes. */
@@ -204,7 +210,8 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
       );
     }
     if (command === "probe")
-      return Effect.succeed(
+      return Effect.as(
+        fixture.duringProbe ?? Effect.void,
         json({ alias, fingerprint: offered, keyType: fixture.offeredKeyType ?? "ssh-ed25519" }),
       );
     if (group === "link" && command === "routes")
@@ -231,7 +238,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
       if (fixture.revokeFails) return Effect.succeed({ code: 1, stdout: "" });
       for (const [name, id] of links) if (id === args[3]) links.delete(name);
       revoked = true;
-      return Effect.succeed(json({ linkId: args[3] }));
+      return Effect.as(fixture.afterRevoke ?? Effect.void, json({ linkId: args[3] }));
     }
     return Effect.succeed(json({ linkId: args[3] }));
   };
@@ -410,7 +417,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
                       connect: { code: fixture.connectExit ?? 0, stdout: "" },
                     };
               }),
-            pinnedFingerprint: () => Effect.succeed(fixture.pin),
+            pinnedFingerprint: () => Effect.as(fixture.duringPin ?? Effect.void, fixture.pin),
             ensureDeviceRuntime: () => Effect.die("unused"),
             syncDevice: () => Effect.die("unused"),
             directAlias: () =>

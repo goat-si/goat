@@ -18,7 +18,9 @@ import {
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -50,6 +52,9 @@ export const SshDeviceAddInput = Schema.Struct({
   Schema.makeFilter((input) => (input.host === undefined) !== (input.address === undefined)),
 );
 export type SshDeviceAddInput = typeof SshDeviceAddInput.Type;
+/** The longest the hub registration after a desktop save may run; a cut call cannot stop it. */
+const HUB_REGISTRATION_TIMEOUT = Duration.seconds(30);
+
 const unsaved = {
   preflight: Schema.optional(SshPreflightReport),
   saved: Schema.Literal(false),
@@ -305,17 +310,40 @@ const make = Effect.gen(function* () {
               },
             );
           register = nodeRegistration;
-          const response = yield* broker
-            .invoke(
-              {
-                type: "add_ssh",
-                host: resolved.host,
-                ...(input.label ? { label: input.label } : {}),
-                addedBy,
-              },
-              10 * 60_000,
-            )
-            .pipe(
+          // The desktop already saved it; a hub failure is reported, not turned into a failed add.
+          // A child fiber stays interruptible, so its own limit ends it even though a cut cannot.
+          const registerSaved = () =>
+            nodeRegistration().pipe(
+              Effect.map(({ node }) => ({ saved: true as const, node })),
+              Effect.catchTags({
+                HubNodesError: (error) =>
+                  Effect.succeed({ saved: false as const, reason: error.message }),
+                OrchestratorMcpFailure: (error) =>
+                  Effect.succeed({ saved: false as const, reason: error.message }),
+              }),
+              Effect.timeoutOption(HUB_REGISTRATION_TIMEOUT),
+              Effect.map(
+                Option.getOrElse(() => ({
+                  saved: false as const,
+                  reason: `The hub did not finish registering ${alias} within ${Duration.toSeconds(HUB_REGISTRATION_TIMEOUT)} seconds; it stays saved on the desktop. Call this tool again to register it.`,
+                })),
+              ),
+              Effect.forkChild,
+              Effect.flatMap(Fiber.join),
+            );
+          // Once the desktop has answered, its save is registered on the hub even if the call is cut.
+          const settled = yield* Effect.uninterruptibleMask((restore) =>
+            restore(
+              broker.invoke(
+                {
+                  type: "add_ssh",
+                  host: alias,
+                  ...(input.label ? { label: input.label } : {}),
+                  addedBy,
+                },
+                10 * 60_000,
+              ),
+            ).pipe(
               Effect.catchTags({
                 ConnectionCatalogHostUnavailable: () => Effect.succeed(null),
                 ConnectionCatalogHostDetached: () =>
@@ -335,27 +363,25 @@ const make = Effect.gen(function* () {
                     }),
                   ),
               }),
-            );
-          if (response?.type === "add_ssh") {
-            // The desktop already saved it; a hub failure is reported, not turned into a failed add.
-            const hubResult = yield* nodeRegistration().pipe(
-              Effect.map(({ node }) => ({ saved: true as const, node })),
-              Effect.catchTags({
-                HubNodesError: (error) =>
-                  Effect.succeed({ saved: false as const, reason: error.message }),
-                OrchestratorMcpFailure: (error) =>
-                  Effect.succeed({ saved: false as const, reason: error.message }),
-              }),
-            );
+              Effect.flatMap(
+                Effect.fnUntraced(function* (answer) {
+                  if (answer?.type !== "add_ssh") return { kind: "other" as const, answer };
+                  return { kind: "saved" as const, answer, hub: yield* registerSaved() };
+                }),
+              ),
+            ),
+          );
+          if (settled.kind === "saved") {
             return {
               outcome: "connected" as const,
               preflight,
-              connection: response.connection,
-              created: response.created,
-              hub: hubResult,
+              connection: settled.answer.connection,
+              created: settled.answer.created,
+              hub: settled.hub,
               desktopCatalog: "saved" as const,
             };
           }
+          const response = settled.answer;
           if (response !== null)
             return yield* new OrchestratorMcpFailure({
               code:
