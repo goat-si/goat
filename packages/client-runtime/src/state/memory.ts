@@ -533,7 +533,10 @@ export function createMemoryEnvironmentAtoms<R, E>(
           }
           // An edited draft is the person's text: it stays while this device re-scans the same
           // revision. An untouched one is the body, hidden like the read-only view.
-          if (seen === "rescanning" && draft.text !== draft.start.text) return draft.text;
+          if (seen === "rescanning" && draft.text !== draft.start.text) {
+            get.set(stored, { ...draft, exposure: current });
+            return draft.text;
+          }
         }
         // Purge the retained text, rather than only hiding it from the view.
         get.set(stored, null);

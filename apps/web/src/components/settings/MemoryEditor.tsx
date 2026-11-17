@@ -82,7 +82,8 @@ export function useMemoryEditSession({
   ) {
     setStart(null);
     setSeeded(false);
-    if (canWrite && draftLost && gap !== "forgotten" && gap !== "unavailable")
+    // Only an edit the person changed loses anything; an untouched one closes quietly.
+    if (canWrite && draftLost && edited !== "no" && gap !== "forgotten" && gap !== "unavailable")
       setNotice(
         "Edit closed because this memory is no longer the version you started from. Your unsaved text was not kept.",
       );
@@ -113,6 +114,8 @@ export function useMemoryEditSession({
     },
     editorEvents: {
       edited: edited !== "no",
+      // An untouched editor shows the body, so it is masked like the read-only view during a reread.
+      masked: own !== "save" && gap === "changed" && edited === "no",
       onTextChange: (text: string) =>
         setEdited((previous) =>
           previous === "kept" || item?.status !== "active"
@@ -169,6 +172,7 @@ export function MemoryEditor({
   scope = DEFAULT_MEMORY_SCOPE,
   scopeLabel,
   edited = true,
+  masked = false,
   onTextChange,
   onSaveStart,
   onSaveSettled,
@@ -183,6 +187,8 @@ export function MemoryEditor({
   scopeLabel?: string;
   /** An existing memory can be saved only once the draft differs from it. */
   edited?: boolean;
+  /** Hides the text while a reread decides whether an untouched edit still stands. */
+  masked?: boolean;
   onTextChange?: (text: string) => void;
   onSaveStart?: () => void;
   onSaveSettled?: (accepted: boolean) => void;
@@ -237,6 +243,7 @@ export function MemoryEditor({
         event.preventDefault();
         if (
           busy ||
+          masked ||
           !edited ||
           !text?.trim() ||
           !registry.get(memoryEnvironment.upsert.permissionAtom(environmentId))
@@ -279,15 +286,15 @@ export function MemoryEditor({
       <p>Save to: {scopeLabel ?? memoryScopeLabel(start?.scope ?? scope)}</p>
       <Textarea
         aria-label="Memory text"
-        value={text ?? ""}
-        disabled={busy || operationId !== null}
+        value={masked ? "" : (text ?? "")}
+        disabled={masked || busy || operationId !== null}
         onChange={(event) => {
           setText({ text: event.currentTarget.value, memoryIds: start ? [id] : [] });
           onTextChange?.(event.currentTarget.value);
         }}
       />
       {error ? <p role="alert">{error}</p> : null}
-      <Button type="submit" size="sm" disabled={busy || !edited || !text?.trim()}>
+      <Button type="submit" size="sm" disabled={busy || masked || !edited || !text?.trim()}>
         {operationId ? "Retry memory request" : "Save memory"}
       </Button>
       <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={onClose}>
