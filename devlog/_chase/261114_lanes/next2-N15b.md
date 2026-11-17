@@ -1,6 +1,6 @@
 # N15b mobile parity (lane record)
 
-Lane branch: `chase/t3-261114-next2-n15b-mobile`. Head at this record: `661675656f7ce0ad21bb0de6ed9dc8ece09faf37`, cut from the integration branch `chase/t3-261114-next2` at `ed4268897e3183341694f27e488232572d5c5151` (draft PR #3660). Host juns-MacBook-Pro (shared). C4 rows: O12 (L184, lockfile importer) and L420 (new server setting). Plain push, no force.
+Lane branch: `chase/t3-261114-next2-n15b-mobile`. Head at this record: `d8dd40a1663`, cut from the integration branch `chase/t3-261114-next2` at `ed4268897e3183341694f27e488232572d5c5151` (draft PR #3660). Host juns-MacBook-Pro (shared). C4 rows: O12 (L184, lockfile importer) and L420 (new server setting). Plain push, no force.
 
 ## Rows and commits
 
