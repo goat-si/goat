@@ -320,7 +320,7 @@ export const make = Effect.gen(function* () {
             wake: {
               text: wake.text,
               notification: wake.notification,
-              messageId: pullRequestWakeMessageId(target.link, uuid, wake.checksOn),
+              messageId: pullRequestWakeMessageId(target.link, uuid, wake.checksOn, next === null),
             },
           }),
       ...(note === undefined ? {} : { note }),

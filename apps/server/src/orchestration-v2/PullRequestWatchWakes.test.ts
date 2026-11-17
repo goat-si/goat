@@ -455,6 +455,49 @@ describe("pull request watch wakes", () => {
       expect(texts.join("\n")).toContain("The branch now conflicts with dev.");
     }).pipe(Effect.provide(layerTest)),
   );
+  it.effect.each(["closed", "comment-limit"] as const)(
+    "a re-watch takes back the %s notice the last watch queued, and a review comment read in the ending pass reaches the agent after a re-watch",
+    (ending) =>
+      Effect.gen(function* () {
+        const name = `rewatch-${ending}`;
+        const { orchestrator, threadId, link, watch } = yield* watchWithQueuedWake(name);
+        const remark = "- Review comment from alice on src/app.ts: please rename this.";
+        yield* orchestrator.dispatch({
+          type: "thread.pull-request-watch.sync",
+          commandId: CommandId.make(`pr-wakes-${name}-end`),
+          threadId,
+          ...key,
+          startedAt: watch.startedAt,
+          watch: null,
+          ...(ending === "closed" ? { dropQueuedWakes: true as const } : { endedWatch: watch }),
+          wake: {
+            messageId: pullRequestWakeMessageId(link, `${name}-end`, undefined, true),
+            text:
+              ending === "closed"
+                ? "Pull request #7 was closed, so GOAT stopped watching it."
+                : `Update on pull request #7 (${url}), which GOAT is watching for you:\n${remark}\n\nGOAT stopped watching after 10 comment-only updates in a row.`,
+            notification: { ...notification, outcome: "updated", summary: "#7: stopped watching" },
+          },
+        });
+        yield* orchestrator.dispatch({
+          type: "thread.pull-request.watch",
+          commandId: CommandId.make(`pr-wakes-${name}-rewatch`),
+          threadId,
+          ...key,
+          watching: true,
+        });
+        const { runs, messages } = yield* orchestrator.getThreadRecords(threadId, [
+          "runs",
+          "messages",
+        ]);
+        const queued = runs
+          .filter((run) => run.status === "queued")
+          .map((run) => messages.find((message) => message.id === run.userMessageId)?.text ?? "")
+          .join("\n");
+        expect(queued).not.toContain("stopped watching");
+        if (ending === "comment-limit") expect(queued).toContain(remark);
+      }).pipe(Effect.provide(layerTest)),
+  );
 });
 
 const second = { ...key, number: 8 };

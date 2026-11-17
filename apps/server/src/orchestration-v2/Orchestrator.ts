@@ -194,7 +194,7 @@ import {
   pullRequestWatchNote,
   takeHeldPullRequestContext,
 } from "./goat/PullRequestDigest.ts";
-import { pullRequestWakeMuted, pullRequestWakesEnd } from "./goat/PullRequestWatchWakes.ts";
+import { pullRequestWakeMuted } from "./goat/PullRequestWatchWakes.ts";
 import {
   cancelledBeforeStart,
   continuationFailedBeforePrompt,
@@ -2669,7 +2669,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
-  const { dropQueuedPullRequestWakes } = makePullRequestWakeDrops({
+  const { dropQueuedPullRequestWakes, settleQueuedPullRequestWakes } = makePullRequestWakeDrops({
     projectionStore,
     emit,
     dispatchQueuedRunCancel: (command, events) => dispatchQueuedRunCancel(command, events),
@@ -12370,7 +12370,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.pull-request.unlink":
       case "thread.pull-request-link.sync":
         yield* dispatchThreadMutation(command, events, effects);
-        if (pullRequestWakesEnd(command)) yield* dropQueuedPullRequestWakes(command, events);
+        yield* settleQueuedPullRequestWakes(command, events);
         break;
       case "thread.pull-request-watch.sync":
         yield* dispatchPullRequestWatchSync(command, events, effects);

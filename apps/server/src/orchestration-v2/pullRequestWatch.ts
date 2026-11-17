@@ -13,6 +13,25 @@ import * as DateTime from "effect/DateTime";
 
 /** Bounds consecutive comment-only wakes to stop bot reply loops; check, conflict, or push news resets it. */
 export const PULL_REQUEST_WATCH_WAKE_LIMIT = 10;
+const EXHAUSTED_LINE = `GOAT stopped watching after ${PULL_REQUEST_WATCH_WAKE_LIMIT} comment-only updates in a row.`;
+// The close and unreadable endings the reactor writes carry no news of their own.
+const BARE_ENDING =
+  /^(Pull request #\d+ .*was closed, so GOAT stopped watching it\.|GOAT stopped watching pull request #\d+ )/u;
+
+/**
+ * The ending wake a watch left queued, as a new watch on the pull request tells it: a comment-limit
+ * ending keeps its news with the watching close instead of its stop line, and a bare close or
+ * unreadable ending has nothing left to tell (undefined).
+ */
+export function resumedWakeText(text: string): string | undefined {
+  const lines = text.split("\n");
+  const stop = lines.findIndex((line) => line.startsWith(EXHAUSTED_LINE));
+  if (stop !== -1) return lines.with(stop, watchingClosing()).join("\n");
+  return BARE_ENDING.test(text) ? undefined : text;
+}
+
+const watchingClosing = () =>
+  `Look into each item and act on it as your task requires. This PR stays linked and watched, so do not link, watch, or list it again. End your turn when you are done, and GOAT wakes you on the next change. When you hand the work back to the user, call ${goatCallText("pull_request.unwatch")} first so the thread returns to their inbox.`;
 /** How long a head may go without any check before the agent is told none reported. */
 export const PULL_REQUEST_WATCH_NO_CHECKS_MS = 15 * 60_000;
 const LISTED_ITEMS = 10;
@@ -543,8 +562,8 @@ function pullRequestWatchMessage(input: {
     ...changes.flatMap((change) => changeLines(change, context)),
     "",
     exhausted
-      ? `GOAT stopped watching after ${PULL_REQUEST_WATCH_WAKE_LIMIT} comment-only updates in a row. Call ${goatCallText("pull_request.watch")} to watch it again.`
-      : `Look into each item and act on it as your task requires. This PR stays linked and watched, so do not link, watch, or list it again. End your turn when you are done, and GOAT wakes you on the next change. When you hand the work back to the user, call ${goatCallText("pull_request.unwatch")} first so the thread returns to their inbox.`,
+      ? `${EXHAUSTED_LINE} Call ${goatCallText("pull_request.watch")} to watch it again.`
+      : watchingClosing(),
   ].join("\n");
   const failed = changes.some(
     (change) =>

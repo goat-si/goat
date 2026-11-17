@@ -31,10 +31,18 @@ import {
   heldContextLine,
   keptAfterPass,
   mergeHeldContext,
+  resumedWakeText,
   withHeldContext,
 } from "../pullRequestWatch.ts";
-import { foldNotice, isNoticeMessage, parseNotices, renderDigest } from "../TurnDigest.ts";
 import {
+  foldNotice,
+  isNoticeMessage,
+  type Notice,
+  parseNotices,
+  renderDigest,
+} from "../TurnDigest.ts";
+import {
+  isPullRequestEndingWake,
   pullRequestHeldNoticeId,
   pullRequestWakeChecksHead,
   pullRequestWakePrefix,
@@ -113,9 +121,9 @@ export function takeHeldPullRequestContext(input: {
 }
 
 /**
- * Removes a pull request's wakes from the turns still queued: every one when its watch stopped or
- * its pull request merged or closed, or, given its new head, only the check results of other
- * heads. A queued turn left with nothing is cancelled; a digest keeps its other notices.
+ * Removes a pull request's wakes from queued turns: all when its watch stopped or it merged or
+ * closed; given a new head, other heads' check results; on `resumed` (a new watch), only the
+ * ending wake, as resumedWakeText tells it. A turn left empty is cancelled; a digest keeps the rest.
  */
 export const dropQueuedPullRequestWakes = Effect.fn("PullRequestDigest.dropQueuedWakes")(function* <
   E,
@@ -140,7 +148,7 @@ export const dropQueuedPullRequestWakes = Effect.fn("PullRequestDigest.dropQueue
   write: (
     change: { readonly cancel: RunId } | { readonly update: DigestEvent },
   ) => Effect.Effect<void, E3, R3>,
-  headSha?: string,
+  headSha?: string | { readonly resumed: true },
 ) {
   const { thread, runs } = yield* records;
   const normalized = normalizeThreadPullRequestKey(key);
@@ -150,19 +158,26 @@ export const dropQueuedPullRequestWakes = Effect.fn("PullRequestDigest.dropQueue
       threadPullRequestKeysEqual(candidate, normalized),
     ) ?? normalized;
   const prefix = pullRequestWakePrefix(link);
-  const stale = (id: string) => {
-    if (!id.startsWith(prefix)) return false;
-    if (headSha === undefined) return true;
-    const ranOn = pullRequestWakeChecksHead(id, prefix);
-    return ranOn !== null && ranOn !== headSha;
+  const current = (notice: Notice): Notice | undefined => {
+    if (!notice.id.startsWith(prefix)) return notice;
+    if (typeof headSha === "object") {
+      if (!isPullRequestEndingWake(notice.id, prefix)) return notice;
+      const text = resumedWakeText(notice.text);
+      if (text === undefined) return undefined;
+      return text === notice.text ? notice : { id: notice.id, text };
+    }
+    if (headSha === undefined) return undefined;
+    const ranOn = pullRequestWakeChecksHead(notice.id, prefix);
+    return ranOn !== null && ranOn !== headSha ? undefined : notice;
   };
   for (const run of runs) {
     if (run.status !== "queued") continue;
     const message = yield* messageOf(run.id);
     if (message === undefined) continue;
     const notices = parseNotices(message.id, message.text);
-    const kept = notices.filter((notice) => !stale(notice.id));
-    if (kept.length === notices.length) continue;
+    const kept = notices.flatMap((notice) => current(notice) ?? []);
+    if (kept.length === notices.length && kept.every((notice, index) => notice === notices[index]))
+      continue;
     if (kept.length === 0) {
       yield* write({ cancel: run.id });
       continue;
