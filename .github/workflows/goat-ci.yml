@@ -349,13 +349,10 @@ jobs:
           cd apps/web
           file=src/components/ReopenClosedViewShortcut.browser.test.tsx
           probe "browser test file, host network" vp test run --project browser "$file"
-          inside_log="$RUNNER_TEMP/bwrap-browser.log"
-          probe "browser test file inside bwrap" bwrap --unshare-user --unshare-net --dev-bind / / --proc /proc bash -c 'set -o pipefail; echo "inside: $(id)"; ip -br link; ip -br addr; vp test run --project browser "$1" 2>&1 | tee "$2"' bwrap-probe "$file" "$inside_log"
-          echo "::group::Chromium net::ERR_ lines inside bwrap"
-          grep 'net::ERR_' "$inside_log" || echo "none"
-          echo "::endgroup::"
+          probe "browser test file in the namespace, runner uid" unshare --user --map-root-user --net sh -c "ip link set lo up && exec unshare --user --map-user=$uid --map-group=$gid vp test run --project browser $file"
+          probe "browser test file in the namespace, mapped root" unshare --user --map-root-user --net sh -c "ip link set lo up && exec vp test run --project browser $file"
           printf '%s\n' "${results[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
-          printf '%s\n' "${results[@]}" | grep -q '^browser test file inside bwrap: exit 0$'
+          printf '%s\n' "${results[@]}" | grep -q '^browser test file in the namespace, runner uid: exit 0$'
 
       # web stays here. The other suites are their own matrix tasks so a
       # slow server shard does not block them. `check` above is still the aggregate.
