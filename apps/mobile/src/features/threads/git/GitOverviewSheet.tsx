@@ -49,7 +49,7 @@ import { useSelectedThreadGitState } from "../../../state/use-selected-thread-gi
 import { useSelectedThreadWorktree } from "../../../state/use-selected-thread-worktree";
 import { vcsEnvironment } from "../../../state/vcs";
 import { resolveGitOverviewReviewNavigationAction } from "./git-overview-navigation";
-import { menuItemIconName, statusSummary } from "./gitSheetComponents";
+import { GitActionFailure, menuItemIconName, statusSummary } from "./gitSheetComponents";
 import {
   LinkedPullRequestRow,
   linkedPullRequestKey,
@@ -280,6 +280,7 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
         ) : undefined
       }
     >
+      <GitActionFailure />
       <ListSection>
         {sheetMenuItems.map(({ item, disabledReason }) => (
           <ListRow

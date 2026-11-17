@@ -17,6 +17,7 @@ import { useSelectedThreadGitActions } from "../../../state/use-selected-thread-
 import { useSelectedThreadGitState } from "../../../state/use-selected-thread-git-state";
 import { useSelectedThreadWorktree } from "../../../state/use-selected-thread-worktree";
 import { vcsEnvironment } from "../../../state/vcs";
+import { GitActionFailure } from "./gitSheetComponents";
 
 type GitCommitSheetProps = StaticScreenProps<{
   readonly environmentId: string;
@@ -104,6 +105,7 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
           contentContainerClassName="px-5 pt-4 pb-6 gap-5"
           contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
         >
+          <GitActionFailure />
           {isDefaultRef ? (
             <Text className="text-sm text-warning-foreground">
               You’re on the default branch. You can create a new branch when committing.

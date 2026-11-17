@@ -1,6 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
-import { describeThreadWorkspaceRestore, type EnvironmentId, type ThreadId } from "@goat/contracts";
+import {
+  describeThreadWorkspaceRecovery,
+  describeThreadWorkspaceRestore,
+  type EnvironmentId,
+  type ThreadId,
+} from "@goat/contracts";
 import { useState } from "react";
 import { View } from "react-native";
 
@@ -60,20 +65,19 @@ export function ThreadWorkspaceBanner({
     );
     appAtomRegistry.refresh(query);
   };
-  const [title, body] = setupOnly
-    ? [
-        "This worktree was recreated, but its setup did not finish.",
-        "GOAT runs setup again before the next turn. You can also run it now.",
-      ]
-    : status.state === "cleaned"
+  const recovery =
+    status.state === "cleaned" || status.state === "missing"
+      ? describeThreadWorkspaceRecovery({ ...status, state: status.state })
+      : null;
+  const [title, body] =
+    setupOnly || recovery === null
       ? [
-          "This worktree was cleaned up to save space.",
-          "Restore brings back its files from the snapshot taken before cleanup. Sending a message restores it too.",
+          "This worktree was recreated, but its setup did not finish.",
+          "GOAT runs setup again before the next turn. You can also run it now.",
         ]
-      : [
-          "This worktree's folder is missing.",
-          `Recreate rebuilds it from ${status.branch ?? "its branch"}. Sending a message does the same.`,
-        ];
+      : status.state === "cleaned"
+        ? ["This worktree was cleaned up to save space.", recovery.body]
+        : ["This worktree's folder is missing.", recovery.body];
   return (
     <View className="mx-4 mb-3 gap-2 rounded-[20px] border border-border bg-card-alt p-4">
       <Text className="font-goat-medium text-sm text-foreground">{title}</Text>
@@ -83,12 +87,14 @@ export function ThreadWorkspaceBanner({
           {error} Start in a new worktree to keep working; the branch and any snapshot stay.
         </Text>
       ) : null}
-      <Button
-        label={setupOnly ? "Run setup now" : status.state === "cleaned" ? "Restore" : "Recreate"}
-        loading={busy === "restore"}
-        disabled={busy !== null}
-        onPress={() => void run("restore")}
-      />
+      {recovery === null || recovery.inPlace ? (
+        <Button
+          label={setupOnly ? "Run setup now" : status.state === "cleaned" ? "Restore" : "Recreate"}
+          loading={busy === "restore"}
+          disabled={busy !== null}
+          onPress={() => void run("restore")}
+        />
+      ) : null}
       {setupOnly ? null : (
         <Button
           label="Start in a new worktree"
