@@ -23,6 +23,102 @@ import { makePullRequestSetup } from "./pullRequestSetup.ts";
 const threadId = ThreadId.make("thread-pull-request");
 const projectId = ProjectId.make("project-pull-request");
 
+/**
+ * A pull request's setup in a reused worktree that another thread's work holds, for a thread
+ * bound as given; the setup's open waits for the folder, then runs again.
+ */
+const pullRequestSetupWhileHeld = (bound: string | null) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const { join } = yield* Path.Path;
+    const base = yield* fs.realPath(
+      yield* fs.makeTempDirectoryScoped({ prefix: "goat-pr-setup-" }),
+    );
+    const repo = join(base, "repo");
+    const worktreePath = join(base, "pr-worktree");
+    yield* fs.makeDirectory(repo);
+    yield* fs.makeDirectory(worktreePath);
+    const pty = new FakePtyAdapter();
+    const terminals = yield* TerminalManager.makeWithOptions({
+      logsDir: join(base, "terminal-logs"),
+      ptyAdapter: pty,
+      processKillGraceMs: 1,
+      threadWorktree: { current: () => Effect.succeedSome(bound) },
+    });
+    const project = {
+      id: projectId,
+      title: "Pull request",
+      workspaceRoot: repo,
+      scripts: [
+        {
+          id: "setup",
+          name: "Setup",
+          command: "true",
+          icon: "configure",
+          runOnWorktreeCreate: true,
+          stopOnSettle: false,
+          async: true,
+        },
+      ],
+    };
+    const projects = Layer.succeed(ProjectService.ProjectService, {
+      getById: () => Effect.succeedSome(project),
+      getByWorkspaceRoot: () => Effect.succeedSome(project),
+    } as unknown as ProjectService.ProjectService["Service"]);
+    const setup = yield* makePullRequestSetup.pipe(
+      Effect.provide(
+        Layer.effect(
+          ProjectSetupScriptRunner.ProjectSetupScriptRunner,
+          ProjectSetupScriptRunner.make,
+        ).pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              projects,
+              // A shell that shows its prompt once open.
+              Layer.succeed(TerminalManager.TerminalManager, {
+                ...terminals,
+                open: (input) =>
+                  terminals
+                    .open(input)
+                    .pipe(
+                      Effect.tap(() =>
+                        Effect.sync(() => pty.processes.at(-1)?.emitData("$ \x1b[?2004h")),
+                      ),
+                    ),
+              }),
+              Layer.mock(ProjectionStore.ProjectionStoreV2)({
+                getThreadShell: () => Effect.succeed(null),
+              }),
+              GoatProjectFileLoader.layer,
+            ),
+          ),
+        ),
+      ),
+    );
+    // Another thread's work holds the reused worktree when the setup opens its terminal.
+    const held = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const holder = yield* withWorkspaceLease(
+      worktreePath,
+      Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release))),
+    ).pipe(Effect.forkChild);
+    yield* Deferred.await(held);
+    const ran = yield* setup(
+      { cwd: repo, reference: "1", mode: "worktree", threadId },
+      worktreePath,
+    ).pipe(Effect.forkChild({ startImmediately: true }));
+    return {
+      pty,
+      terminals,
+      worktreePath,
+      /** Lets the other thread's work end, then waits for the setup. */
+      finish: Deferred.succeed(release, undefined).pipe(
+        Effect.andThen(Fiber.join(holder)),
+        Effect.andThen(Fiber.join(ran)),
+      ),
+    };
+  });
+
 // goat#3694: a pull request's setup runs in a reused worktree before the thread is bound to it.
 it.layer(
   Layer.mergeAll(
@@ -38,87 +134,34 @@ it.layer(
     ["while the thread is still bound to another worktree", "/elsewhere"],
   ] as const)("a pull request setup that waited for its reused worktree runs %s", ([, bound]) =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const { join } = yield* Path.Path;
-      const base = yield* fs.realPath(
-        yield* fs.makeTempDirectoryScoped({ prefix: "goat-pr-setup-" }),
+      const { pty, worktreePath, finish } = yield* pullRequestSetupWhileHeld(bound);
+      yield* finish;
+      assert.deepEqual(
+        pty.spawnInputs.map((input) => input.cwd),
+        [worktreePath],
       );
-      const repo = join(base, "repo");
-      const worktreePath = join(base, "pr-worktree");
-      yield* fs.makeDirectory(repo);
-      yield* fs.makeDirectory(worktreePath);
-      const pty = new FakePtyAdapter();
-      const terminals = yield* TerminalManager.makeWithOptions({
-        logsDir: join(base, "terminal-logs"),
-        ptyAdapter: pty,
-        processKillGraceMs: 1,
-        threadWorktree: { current: () => Effect.succeedSome(bound) },
-      });
-      const project = {
-        id: projectId,
-        title: "Pull request",
-        workspaceRoot: repo,
-        scripts: [
-          {
-            id: "setup",
-            name: "Setup",
-            command: "true",
-            icon: "configure",
-            runOnWorktreeCreate: true,
-            stopOnSettle: false,
-            async: true,
-          },
-        ],
-      };
-      const projects = Layer.succeed(ProjectService.ProjectService, {
-        getById: () => Effect.succeedSome(project),
-        getByWorkspaceRoot: () => Effect.succeedSome(project),
-      } as unknown as ProjectService.ProjectService["Service"]);
-      const setup = yield* makePullRequestSetup.pipe(
-        Effect.provide(
-          Layer.effect(
-            ProjectSetupScriptRunner.ProjectSetupScriptRunner,
-            ProjectSetupScriptRunner.make,
-          ).pipe(
-            Layer.provide(
-              Layer.mergeAll(
-                projects,
-                // A shell that shows its prompt once open.
-                Layer.succeed(TerminalManager.TerminalManager, {
-                  ...terminals,
-                  open: (input) =>
-                    terminals
-                      .open(input)
-                      .pipe(
-                        Effect.tap(() =>
-                          Effect.sync(() => pty.processes.at(-1)?.emitData("$ \x1b[?2004h")),
-                        ),
-                      ),
-                }),
-                Layer.mock(ProjectionStore.ProjectionStoreV2)({
-                  getThreadShell: () => Effect.succeed(null),
-                }),
-                GoatProjectFileLoader.layer,
-              ),
-            ),
-          ),
-        ),
-      );
-      // Another thread's work holds the reused worktree when the setup opens its terminal.
-      const held = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      const holder = yield* withWorkspaceLease(
-        worktreePath,
-        Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release))),
-      ).pipe(Effect.forkChild);
-      yield* Deferred.await(held);
-      const ran = yield* setup(
-        { cwd: repo, reference: "1", mode: "worktree", threadId },
-        worktreePath,
+    }),
+  );
+
+  it.effect("a person's open beside a waiting setup is still refused when the thread moved", () =>
+    Effect.gen(function* () {
+      const { pty, terminals, worktreePath, finish } =
+        yield* pullRequestSetupWhileHeld("/elsewhere");
+      // Started on its own fiber while the setup's open is in flight, as a client's request is.
+      const person = yield* Effect.flip(
+        terminals.open({
+          threadId,
+          terminalId: "person",
+          cwd: worktreePath,
+          worktreePath,
+          cols: 80,
+          rows: 24,
+        }),
       ).pipe(Effect.forkChild({ startImmediately: true }));
-      yield* Deferred.succeed(release, undefined);
-      yield* Fiber.join(holder);
-      yield* Fiber.join(ran);
+      yield* finish;
+      const error = yield* Fiber.join(person);
+      assert.strictEqual(error._tag, "TerminalCwdStatError");
+      if (error._tag === "TerminalCwdStatError") assert.strictEqual(error.cwd, worktreePath);
       assert.deepEqual(
         pty.spawnInputs.map((input) => input.cwd),
         [worktreePath],
