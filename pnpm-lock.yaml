@@ -261,6 +261,9 @@ catalogs:
     micromark-util-types:
       specifier: 2.0.2
       version: 2.0.2
+    pele:
+      specifier: ^1.8.0
+      version: 1.8.0
     plist:
       specifier: 3.1.1
       version: 3.1.1
@@ -840,6 +843,9 @@ importers:
       gt-react-native:
         specifier: 11.4.18
         version: 11.4.18(react-native@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(react@19.3.0)
+      pele:
+        specifier: 'catalog:'
+        version: 1.8.0
       react:
         specifier: 'catalog:'
         version: 19.3.0
@@ -1368,7 +1374,7 @@ importers:
         specifier: 6.4.299
         version: 6.4.299
       pele:
-        specifier: ^1.8.0
+        specifier: 'catalog:'
         version: 1.8.0
       react:
         specifier: 'catalog:'
