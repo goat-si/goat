@@ -337,3 +337,29 @@ NOT RUN: VoiceOver on a device; ci:full; a review of this commit.
 > 3. The token order on juns-MacBook-Pro is yours to run; N15a still waits.
 
 follow-up CF1F2-P3-1 merged into the integration branch at b531d2511c (#3660). CF1 is done for #3660 apart from N15b's phone captures, which are uploaded to #3660 and listed here when they exist.
+
+## Coordinator answers, 10:59 (verbatim)
+
+> Coordinator to lane coordinator, 2026-11-17 10:59:31 UTC (quote verbatim in CF1's and N15b's records).
+> 1. CF1-P3-5 on the phone (the review screen's failure card is not reached after Push or Commit & push, because confirming returns to the thread screen, where the banner shows the failure): no person loses the message, so this does not reopen the lane. But code nobody can reach must not ship. CF1 (idle on pen-macmini, light work beside W1) answers from the code which Git actions of the review screen's menu KEEP the review screen open when they fail (Pull, Commit alone, create pull request, any other). If at least one does: keep the card, the record names those actions and says the others show on the thread banner; one Known limits line for #3660. If NONE does: remove the card in a small follow-up commit on a new branch from the integration head a6992a0f36 (the nine lines of ecb68160e3 and nothing else; its capture owed is then dropped from the list), with check:changed against the integration head. Either way the answer comes to me with path:line; I read a removal's diff myself and merge it.
+> 2. N15b's captures: noted. The NOT captured ones stay owed with their reasons as written (goat#3658's outside-folder banner needs a seeded database; goat#3652 was not uploaded because the screens show real spend; VoiceOver has no Simulator). For goat#3652: a capture from the Replay provider's usage or with figures blurred is fine if N15b can stage a provider update; otherwise it stays owed to the next pass. N15b's hand-resolved hunk in apps/mobile/vite.config.ts (the jsdom list, both sides' lines kept) goes into its record with both sides and the result, as you asked.
+> 3. goat#3496 (the iOS workspace root header hard-codes "Settings" at WorkspaceRootScreen.tsx:60 and :157, and Stack.tsx:270): agreed that it is its own i18n fix across every tab title. N15b adds its finding (the cause with path:line and the capture) to goat#3496 as a comment; the row stays in the plan for a later lane. goat#3495: N15b says where it stands in its next report.
+> 4. The token order on juns-MacBook-Pro (N12's merge and check:changed, then N15b's Android emulator) is fine.
+
+## CF1-P3-5: which review-screen Git actions keep the screen open (read at the integration head a6992a0f36)
+
+The review screen's Git menu (useReviewHeaderPresentation.tsx:44-52) is `threadGitMenuDefinition` (ThreadGitControls.tsx:532-583) with four items. One is a disabled status line. "Review changes" opens the review itself. "More" opens the GitOverview sheet (:255-262), which renders its own GitActionFailure. The fourth is one quick action (:549-558), `runQuickAction` (:222-235), whose kind comes from `resolveQuickAction` (packages/client-runtime/src/state/gitActions.ts:114-240). The review screen passes `onPull` and `onRunAction` straight to the selected-thread Git actions (useReviewHeaderPresentation.tsx:50-51), which show a failure through `runSelectedThreadGitMutation` and navigate nowhere.
+
+These keep the review screen open, so their failure shows in its card:
+- Pull (`run_pull`, gitActions.ts:213-218): `onPull()` runs in place (ThreadGitControls.tsx:228-230).
+- Commit alone (`run_action` "commit", gitActions.ts:151-152): never confirmable (ThreadGitControls.tsx:188-192), so `onRunAction` runs in place (:219).
+- Off the default branch, every publish runs in place, because `requiresDefaultBranchConfirmation` is false there (gitActions.ts:316): "Commit & push" with an open pull request (`commit_push`, :154-155), "Commit, push & PR" (`commit_push_pr`, :157-161), "Push" with an open pull request (`push`, :188-194, :220-227), and "Push & create PR" (`create_pr`, :196-201, :229-234).
+
+These leave the review screen, so their failure shows on the thread screen's banner (or in a sheet's card):
+- On the default branch, "Commit & push" and "Push" (both `commit_push` there, gitActions.ts:154-155, :192, :225) open the GitConfirm sheet (ThreadGitControls.tsx:198-216). Confirming replaces it with the thread screen before the action runs (GitConfirmSheet.tsx:70, :88), so the failure shows on the thread banner.
+- "View PR" (`open_pr`) opens a URL; its failures are dialogs (ThreadGitControls.tsx:175-184), not Git results.
+- "More" opens the GitOverview sheet, whose own card shows its actions' failures.
+
+Answer: at least one action keeps the screen open, so the card stays (ecb68160e3, ReviewSheet.tsx). No removal branch was cut. Known limits line added to #3660's body (body re-read just before writing; nothing else changed): "Phone review screen (CF1, goat#3654): its failure card shows a failed Pull, Commit, or push or pull request off the default branch, which run in place. A push confirmed on the default branch goes through the confirm sheet back to the thread screen, so its failure shows on the thread screen's banner instead." The review card's capture stays owed (N15b): a failed Pull or Commit from the review screen's menu off the default branch.
+
+Note for the coordinator: #3660's Known limits line "a VoiceOver escape on another thread's running banner clears it" no longer holds since b531d2511c (merged), which passes the escape only for success and error banners. I left it, because it is the coordinator's text.
