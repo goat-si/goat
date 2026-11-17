@@ -431,7 +431,6 @@
   "apps/server/src/serverSettings.test.ts": { "lines": 3135 },
   "apps/server/src/serverSettings.ts": { "lines": 2248 },
   "apps/server/src/serviceLauncher.test.ts": { "lines": 1568 },
-  "apps/server/src/serviceLauncher.ts": { "lines": 1086 },
   "apps/server/src/sshRemote/SshDeviceAdd.ts": { "nonNull": 1 },
   "apps/server/src/sshRemote/SshHostSetup.test.ts": { "lines": 1864 },
   "apps/server/src/sshRemote/SshHostSetup.ts": { "lines": 1563, "nonNull": 12 },
