@@ -388,3 +388,31 @@ Checks: typecheck web, mobile, server, contracts, source-control-gitlab, source-
 
 Web and desktop start a thread from a pull request through the PR dialog (PullRequestThreadDialog) and the detail panel's actions, and carry the link through the draft. Mobile starts one through Work on PR, which already attaches the review to the chat it opens and links it there; the draft-carried link is a web-store change, so mobile does not carry checkoutPullRequest, and the user guide's mobile sentence (Work on PR opens a chat with the review attached) stays true.
 
+
+
+## Coordinator 22:45:36 UTC, verbatim
+
+> FOR EVERY LANE (relay it): before a push, every changed test file runs whole, with no -t filter; and for a row that changes when or whether something wakes, notifies or holds a thread, the test files of that subsystem run whole as well. A -t run is for iteration and is named as such in the record.
+>
+> Quote it in next3-K2.md. Also from the same message, for your folder: M3's O24 hunks in apps/mobile/src/features/pull-requests/ now follow M3's device sweep (only sheets that fail it); O22's stay as ruled.
+
+The -t runs in this record were iteration only: the code-tab "stale selected commit" case while placing the Viewed case (8cbc95923a) and the stored-link "malformed" case while finding the right scenario (479ee74135). Every changed test file ran whole before READY (below).
+
+## The one integration-head merge
+
+09b4d64624eea8646a8258a7937a5e3f3309e9f6 (f3da8ff63b, K2's last row before it) merged with origin/chase/t3-261114-next3 at 259883c788bb32d5601023932e07f879bde9af60 (K7 not in yet; T1c and K10's shared pre-commit in) gives 735ba22fb978ac08be555266eb2fb553db8d06af. git reported a clean merge ("Merge made by the 'ort' strategy", 15 files changed, no conflicts; code-budgets.json merged without a conflict). It came before 479ee74135, the one row that writes into useComposerSend.ts, as ruled.
+
+## 479ee74135: a thread started from a pull request links it (C4 stored draft), what landed
+
+Decision 1 as accepted: PersistedDraftThreadState.checkoutPullRequest is Schema.optionalKey(Schema.Unknown); readStoredCheckoutPullRequest (composerDraftCheckoutPullRequest.ts) accepts only two strings each 1 to 4096 characters and drops anything else; the writer writes only the typed { url, branch } (partialize spreads the typed session field); no version bump; the fork delta has the deviation (010_fork_delta.md, pr-checkout-draft). The rest is upstream's behaviour in GOAT's shape: the PR dialog and both checkout handoffs (PullRequestDetailPanel.tsx and usePullRequestActions.ts, through one markDraftCheckoutPullRequest helper) put the pull request on the checkout draft; the first successful send links it to the new thread when the draft is still on the checkout branch (useLinkCheckoutPullRequest.ts, called from useComposerSend.ts, so ChatView.tsx is unchanged: GOAT deviation from upstream's ChatView callback). Upstream's other change in those handoffs is ported too: the task goes on the checkout draft (pointed), not the draft opened before the checkout.
+
+Fail first, the stored-draft condition: composerDraftStore.storedLink.browser.test.ts (a browser test, since the attachment check reads real localStorage, which the unit environment does not share with the persist storage) has another tab store a malformed link after this tab's first write; this tab's next write keeps it (writes merge with what is stored); with upstream's typed schema the strict whole-storage read fails and the saved image reads as unsaved (AssertionError: expected [] to deeply equal [ 'img-1' ]); with Unknown it passes, the other tab's draft keeps its prompt in storage, and rehydrating drops only the bad link. A first version of that test (malformed value seeded before hydration) passed with both schemas, because this tab's first write replaced the hydrated draft; it was not counted. Upstream's unit cases (link after the live branch sync reverts, no link after a branch move, cleared or project change drops it, persisted value and pre-field drafts restore) are in composerDraftStore.checkoutPullRequest.test.ts (sibling, the main test file is at its entry); they fail at dev by construction (the field and options are absent).
+
+Each way: old drafts read by the new code restore unchanged (the pre-field case); new drafts read by an older client: the older client's lenient normalizer drops the key and its strict schema ignores it, so it never links and a later write of that draft removes the key (best effort, as accepted); a draft whose stored link fails to decode keeps its prompt and the other drafts' saved images (the browser case).
+
+Condition (d), per client: written in this record before the row (web and desktop carry the link; mobile's Work on PR already attaches the review to its chat and does not use the web draft store; the user guide stays true).
+
+Move-out before it: 1929140282 (composerDraftStore.ts :771-796 at c995c5427a, terminalContextDedupKey and normalizeTerminalContextForThread to composerDraftTerminalContexts.ts, verbatim; both gain an export; the store drops the normalizeTerminalContextText import only the moved code used; frees 24). Entries after the row: composerDraftStore.ts 4332 (dev 4336), useComposerSend.ts 1544 (entry 1540 after K10's pre-commit; 4 of the 25 allotted), PullRequestDetailPanel.tsx 1798 (dev 1798).
+
+Checks: typecheck @goat/web exit 0; lint clean; composerDraftStore.test.ts, composerDraftStore.checkoutPullRequest.test.ts, apps/web/src/components/chat, apps/web/src/components/pullRequest: 219 files 1490 tests; browser: the stored-link test, src/components/pullRequest, ChatView.browser: 16 files 74 tests; PullRequestThreadDialog.test.ts 1; useComposerSend question and redirect browser tests 9; all passed, each file whole. devlog/_chase/scan.sh --delta: no new finding. P1 rows owed: start a thread from a pull request (dialog and Work on PR in the panel), send once, the thread shows the PR linked; switch the draft's branch before sending, no link.
+
