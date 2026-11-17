@@ -415,7 +415,7 @@
   "apps/server/src/provider/providerMaintenanceRunner.test.ts": { "lines": 1004 },
   "apps/server/src/provider/userInputAttachments.test.ts": { "lines": 1128 },
   "apps/server/src/pullRequest/PullRequestService.test.ts": { "lines": 4958 },
-  "apps/server/src/pullRequest/PullRequestService.ts": { "lines": 3759, "nonNull": 7 },
+  "apps/server/src/pullRequest/PullRequestService.ts": { "lines": 3711, "nonNull": 7 },
   "apps/server/src/pullRequest/pullRequestReviewGuideNormalize.ts": { "nonNull": 2 },
   "apps/server/src/remoteReports/RemoteDispatchCoordinator.test.ts": { "lines": 1844 },
   "apps/server/src/remoteReports/RemoteDispatchCoordinator.ts": { "lines": 1261 },
