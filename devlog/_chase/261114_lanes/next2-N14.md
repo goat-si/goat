@@ -631,7 +631,7 @@ After the verdict: if it has no P0 to P2 and run 44150775263 is green on db856aa
 
 - A queued or scheduled send that fires after the holding thread was deleted reaches the agent as unavailable.
 - A multi-model fan-out or a plan follow-up sends a reply's reference to threads that do not hold the response; those threads see the reply as unavailable (the agent gets an unavailable marker, no read instruction).
-- Reply is not offered on a response a fork or side chat shows from a thread the client no longer holds (deleted or archived), nor from a live holder the client does not list.
+- Reply is not offered on a response a fork or side chat shows from a thread GOAT can't find on the client: a deleted or archived source (N14b: a live source outside the shell window now arrives through the fork's family read).
 
 
 ## N14b, the follow-up after the merge (branch chase/t3-261114-next2-n14b-followups, cut from df1a69dfd2)
@@ -658,3 +658,48 @@ The "Carried to next3" entry for N14F-P3-2 is withdrawn by the coordinator at 19
 ### (iii) the stash shape, written before its code
 
 The smaller shape is "the restore waits for the family read". In useComposerStash.ts restoreStashEntry, after the existing verify await and before the existing check that the composer is still open (:186-191), one call awaits a new composerReply.tsx helper. It returns at once when the entry holds no reply, when the composer target is not a thread, or when the client already holds the reply's holding thread. Otherwise it waits on threadFamilies.familyAtom(target) through the existing waitForAtomValue until threadFamilyRead says the read is no longer pending (the same 5-second limit waitForThreadShell uses). If the read is still out at the limit, the restore returns without taking the entry, exactly like the existing thread-switch abort: the entry stays in the stash and nothing is lost. When the read settles, the restore goes on as today, and restoreStashedReply judges with the rows the family brought. A live source now restores the reply. A deleted or archived source, which no family read returns, drops the reply as before. About 15 lines of production code: 2 in useComposerStash.ts, about 13 in composerReply.tsx. The other shape, taking the entry only once the rule can answer, needs the same wait plus a second path that leaves the entry and tells the person why, so it is larger.
+
+### Coordinator, 19:50 UTC (relayed by the lane coordinator; verbatim, the N14b part)
+
+Coordinator to lane coordinator (19:50 UTC): three rulings (your 19:4x mobile report and your N14b RULE 3 request; the turn that should have answered the request failed at the provider).
+
+3. N14b.
+- RULE 3 AUTHORISED for the three changes to redirectSend in useComposerSend.redirect.browser.test.tsx exactly as you wrote them (:11 the two optional fields, :67 "...options.sendContext", :144 "...options.input"). Conditions: the two existing cases keep their bodies byte for byte and pass; the record quotes both fail-first lines from /tmp/n14/n14b-fail-i-iv.txt. N14's call, no round trip: if Partial<Parameters<typeof import("./useComposerSend").useComposerSend>[0]> types "input" without a new cast in the cases, use it; otherwise Record<string, unknown> stays.
+- FIX PLAN APPROVED: draftReplyTo(target) in composerReply.tsx for the reads at :707-708 and :1178-1179; sentTo at :709; replyTo in the plan follow-up's buildMessageContext (:856). Conditions: useComposerSend.ts stays at 1635; no non-null assertion and no cast to reach activeThreadRef; the record says what the gate does when the draft target is a string and there is no active thread (a new-thread draft), and that must be today's behaviour.
+- CHOICE: a next3 row, no move-out in N14b. Before N14 the follow-up carried no reply at all; the loss needs a FAILED plan follow-up with a reply attached, and the chip is visibly gone; the fix is a snapshot field plus a writer (restorePlanFollowUpComposer, ChatView.logic.ts:1148, and its call at useComposerSend.ts:867), which with a move-out of that file is larger than a P3 follow-up. The row carries: :852 clears replyTo, the restore has no reply field, the steps. (iv)'s record states this limit in one sentence.
+- Then (iii) as you planned, the stash-shape paragraph before any code.
+
+(Lane coordinator: commit the authorised redirectSend change under its conditions, then the fix as approved, then (iii) with the stash-shape paragraph before any code. Local commits only; push nothing. The lane coordinator writes the next3 row for the failed plan follow-up into next2-pr-plan.md.)
+
+### N14b commits (local, on df1a69dfd2; nothing pushed)
+
+| Item | Commits | What a person sees (web and desktop; mobile has no Reply and no change) |
+| --- | --- | --- |
+| (ii) call-site cases | 0a866c7c3b test | No visible change. |
+| (v) nit | b96b5f4d87 test | No visible change. |
+| (iii) fork source outside the shell window | c455d13b6f test (fails first), c2184c2203 test (server contract), e61764b373 fix | In a fork of an older settled thread, Reply now shows on the rows the fork inherits once the source arrives through the fork's family read. The refusal now reads "Can't find the response this replies to: GOAT can't find the thread that held it here. It may have been deleted or archived. …", and the guide clause in docs/user/composer.md says Reply shows "only while GOAT can find that thread: not after it was deleted or archived". |
+| (iii) the stash | 1be3b56057 test (fails first), e3da60bf13 fix | Restoring a stashed reply in such a fork waits for the family read. If the read is still out after 5 s, the entry stays in the stash and the toast "Still loading the thread this prompt replies to" says to restore it again. |
+| (i) queued-message edit | 435429ab56 test (with (iv); rule 3 authorised 19:50), 38e5190faf fix | Saving a queued-message edit whose reply names a thread GOAT can't find is refused with the same toast; the edit stays open with its reply card. |
+| (iv) plan follow-up | 435429ab56 test, cd34e3ea8e fix | No visible change: the reply sent as a plan follow-up now reaches the agent with its record (a context line and a read line) where before it went with the link text only. |
+| type fix | 584eb2ccbf test | The new cases typecheck (a branded context id; the family read's result type). |
+
+Surfaces: entry points are the web Reply action, the composer send and queued-message edit, the stash menu and the thread route. There are no settings, no MCP tools or agent surface entries (agent surface audit and context budget pass unchanged in check:changed), and no contract or stored data change: the family read is the existing getThreadFamily RPC the route already uses for unlisted threads. Desktop is the same bundle. Mobile: no Reply action, unchanged.
+
+Rule 3 (authorised 19:50): redirectSend in useComposerSend.redirect.browser.test.tsx (SF1's file, on the integration branch, not yet on dev) gains exactly the three changes requested: :11 the options type gains `input?` and `sendContext?` (Record<string, unknown>; Partial<Parameters<…>[0]> would need full useQueuedRunEdit and LatestProposedPlanState objects or a cast in the cases, so it was not used), :67 `...options.sendContext,`, :144 `...options.input,`. `git diff df1a69dfd2 HEAD` on the file shows the two existing cases unchanged byte for byte; both pass (7/7 in the file).
+
+Fail-first, at 0a866c7c3b + the test commit (/tmp/n14/n14b-fail-i-iv.txt, 19:39:53 UTC, repeated at commit time 19:49:12 UTC):
+- (i): `AssertionError: expected "vi.fn()" to not be called at all, but actually been called 1 times` (saveEdit ran with the reply).
+- (iv): `AssertionError: expected [] to deep equally contain ObjectContaining{…}` (the follow-up went out with no context at all).
+- (iii) route, at b96b5f4d87 + c455d13b6f (19:45:35 UTC): `AssertionError: expected [] to deeply equal [ 'fresh-fork' ]` (no family read for the fork); the negative case passes.
+- (iii) stash, at 1be3b56057 (19:48:32 UTC): `TypeError: stashedReplyCanBeJudged is not a function` in the three new cases (the stash had no wait); the four existing cases pass.
+- c2184c2203 (the server's family read of a fork returns its live source, and neither its deleted or archived siblings nor an archived source) passes before and after: it pins the server half the client fix relies on, so it is a characterisation, not a fail-first.
+
+The gate with a string draft target and no active thread (a new-thread draft): `sentTo` is `activeThreadRef`, which is null, and refuseReplyWhoseHolderIsGone returns false for a null target (composerReply.tsx, `target === null`), so the holder check is skipped: today's behaviour, where a string target skipped it. The server-capability half of the gate is unchanged. A new-thread draft can't hold a reply anyway: Reply targets the composer beside a timeline row, and restoreStashedReply returns for a string target. No non-null assertion or cast reaches activeThreadRef. useComposerSend.ts is 1635 lines (wc -l) at 38e5190faf and at HEAD.
+
+(iv)'s limit: if a plan follow-up with a reply fails to send, the text comes back but the reply card does not (:852 clears replyTo and restorePlanFollowUpComposer has no reply field); this is a next3 row.
+
+What an archived source does: the fork's family read only returns active threads (ThreadFamilyLookup.ts:27, location "active"; c2184c2203 pins it), so an archived source never arrives. Reply stays hidden on rows inherited from it, a draft or queued edit replying to it is refused with the toast, and a stashed reply to it is left out once the read settles. The server's walk still admits an archived ancestor (unchanged).
+
+Checks on 584eb2ccbf (date -u 19:50-19:52 UTC): vp run typecheck 42/42; node scripts/goat-rename.ts --check: 0 residue; vp run check:changed origin/chase/t3-261114-next2 (head df1a69dfd2, ls-remote): format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget, typecheck (3 packages) pass, test 9 files, 2023 tests, 0 failed; beside files: web 10 files 84 tests (ThreadRouteView, ThreadRouteView.forkFamily, TimelineAssistantReply, composerReply, stashFailedSend, composerReplyTarget, useComposerSend.redirect, ComposerStashMenu, useComposerSend.question, ChatView.ssh), server 2 files 14 tests (ResponseContextCheck, ThreadFamilyLookup), 0 failed.
+
+NOT RUN: a real-client pass of a fork of a thread outside the 25-thread window (it needs 26 settled threads in a dev database; the route test and the server family case cover the two halves, and the narrow review reads them); captures of the reworded toast and the stash toast (text changes only); CI (the coordinator dispatches lane=quick after the push); desktop build; mobile (no change).
