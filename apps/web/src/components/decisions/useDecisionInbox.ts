@@ -44,6 +44,29 @@ function answersKey(item: Extract<DecisionItem, { kind: "user_input" }>) {
   return userInputDraftKey(item.ref.environmentId, item.ref.threadId, item.request.requestId);
 }
 
+/** The form sends its seeded map; a suggested answer nobody touched is not the person's answer. */
+function withoutUntouchedSuggestions(
+  item: Extract<DecisionItem, { kind: "user_input" }>,
+  answers: QuestionDrafts,
+  shown: QuestionDrafts,
+): QuestionDrafts {
+  return Object.fromEntries(
+    Object.entries(answers).filter(([questionId, answer]) => {
+      if (Object.hasOwn(shown, questionId)) return true;
+      const suggestion = item.request.questions.find(
+        (question) => question.id === questionId,
+      )?.initialAnswer;
+      const keys = Object.keys(answer);
+      return !(
+        suggestion !== undefined &&
+        keys.length === 1 &&
+        keys[0] === "customAnswer" &&
+        answer.customAnswer === suggestion
+      );
+    }),
+  );
+}
+
 export function useDecisionInbox() {
   const snapshot = useAtomValue(decisionInbox.itemsAtom);
   const [skippedIds, setSkippedIds] = useState<string[]>([]);
@@ -86,15 +109,19 @@ export function useDecisionInbox() {
 
   function setAnswers(id: string, answers: QuestionDrafts) {
     if (current?.id === id) setActiveId(id);
-    setLocalDrafts((previous) => ({ ...previous, [id]: answers }));
+    const item = snapshot.items.find((candidate) => candidate.id === id);
+    const edited =
+      item?.kind === "user_input"
+        ? withoutUntouchedSuggestions(item, answers, drafts[id] ?? {})
+        : answers;
+    setLocalDrafts((previous) => ({ ...previous, [id]: edited }));
     // Per question, so the composer's answers to the other questions stay; Stop returns them all
     // to the thread's draft through the one shared rule.
-    const item = snapshot.items.find((candidate) => candidate.id === id);
     if (item?.kind !== "user_input") return;
     const key = answersKey(item);
     usePendingUserInputAnswers.setState((previous) => ({
       ...previous,
-      [key]: { ...previous[key], ...answers },
+      [key]: { ...previous[key], ...edited },
     }));
   }
 

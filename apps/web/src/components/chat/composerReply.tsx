@@ -66,6 +66,54 @@ export function refuseReplyTheServerDrops(
   return true;
 }
 
+/**
+ * Whether a reply to a response `holderThreadId` holds may go from `threadId`: its own responses
+ * always; another thread's only while the client holds that thread's live shell. A deleted or
+ * archived thread's shell is gone, and no agent could be sent to read it.
+ */
+export function replyHolderIsHeld(
+  threadId: ThreadId,
+  holderThreadId: ThreadId,
+  holderShell: Pick<EnvironmentThreadShell, "deletedAt"> | null,
+): boolean {
+  return holderThreadId === threadId || (holderShell !== null && holderShell.deletedAt == null);
+}
+
+const readHolderShell = (environmentId: EnvironmentId, threadId: ThreadId) =>
+  readThreadShell(scopeThreadRef(environmentId, threadId));
+
+/** A draft reply whose response's thread the client no longer holds is refused with a sentence. */
+export function refuseReplyWhoseHolderIsGone(
+  replyTo: ResponseContextRecord | null,
+  target: ComposerThreadTarget,
+): boolean {
+  if (!replyTo || typeof target === "string") return false;
+  const { citation } = replyTo;
+  const holderShell = readHolderShell(citation.environmentId, citation.threadId);
+  if (replyHolderIsHeld(target.threadId, citation.threadId, holderShell)) return false;
+  toastManager.add(
+    stackedThreadToast({
+      type: "warning",
+      title: "The response this replies to is gone",
+      description:
+        "The thread that held it was deleted or archived. Cancel the reply above the composer and send again.",
+    }),
+  );
+  return true;
+}
+
+/** The send gate: a draft reply the agent could not read is refused with its sentence. */
+export function refuseReplyThatGoesUnread(
+  replyTo: ResponseContextRecord | null,
+  environmentId: EnvironmentId,
+  target: ComposerThreadTarget,
+): boolean {
+  return (
+    refuseReplyTheServerDrops(replyTo, environmentId) ||
+    refuseReplyWhoseHolderIsGone(replyTo, target)
+  );
+}
+
 /** Whether a thread shows `threadId`'s history: it is that thread or descends from it by run forks. */
 function showsHistoryOf(
   target: { environmentId: EnvironmentId; threadId: ThreadId },
@@ -97,7 +145,12 @@ export function restoreStashedReply(
   const { citation } = reply;
   if (
     citation.environmentId !== target.environmentId ||
-    !showsHistoryOf(target, citation.threadId)
+    !showsHistoryOf(target, citation.threadId) ||
+    !replyHolderIsHeld(
+      target.threadId,
+      citation.threadId,
+      readHolderShell(citation.environmentId, citation.threadId),
+    )
   ) {
     return;
   }

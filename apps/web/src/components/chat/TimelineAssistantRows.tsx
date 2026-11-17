@@ -13,7 +13,7 @@ import { captureAssistantMessageOpening } from "~/lib/assistantTextSelection";
 import { responseContextRecord } from "~/lib/composerContextRecords";
 import { readResponseSubagents } from "~/state/responseSubagents";
 import { stackedThreadToast, toastManager } from "../ui/toast";
-import { useReplyToResponseAvailable } from "./composerReply";
+import { replyHolderIsHeld, useReplyToResponseAvailable } from "./composerReply";
 import { replyFromTimeline } from "./composerReplyTarget";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
@@ -243,9 +243,15 @@ function AssistantReplyButton({
     threadRef && sourceThreadId !== threadRef.threadId
       ? scopeThreadRef(threadRef.environmentId, sourceThreadId)
       : null;
-  // No agent can read a deleted thread, so a reply to a row inherited from one would go unread.
-  const sourceDeleted = useThreadShell(inheritedFrom)?.deletedAt != null;
-  if (!threadRef || !available || sourceDeleted || !message.text.trim()) return null;
+  const holderShell = useThreadShell(inheritedFrom);
+  if (
+    !threadRef ||
+    !available ||
+    !replyHolderIsHeld(threadRef.threadId, sourceThreadId, holderShell) ||
+    !message.text.trim()
+  ) {
+    return null;
+  }
 
   const reply = (button: HTMLButtonElement) => {
     // The meta row can sit below trailing tool rows, so the message may be virtualized away.
