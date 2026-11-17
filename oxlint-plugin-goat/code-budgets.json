@@ -423,7 +423,7 @@
   "apps/server/src/remoteReports/RemoteReportService.test.ts": { "lines": 1117 },
   "apps/server/src/resourceTelemetry/NativeTelemetryClient.ts": { "lines": 1127, "nonNull": 2 },
   "apps/server/src/resourceTelemetry/ResourceTelemetryHistory.ts": { "nonNull": 2 },
-  "apps/server/src/scheduledTasks/ScheduledTaskService.ts": { "lines": 2264 },
+  "apps/server/src/scheduledTasks/ScheduledTaskService.ts": { "lines": 2256 },
   "apps/server/src/scheduledTasks/ScheduledTaskService.webhook.test.ts": { "lines": 1893 },
   "apps/server/src/scheduledTasks/webhookDedupe.ts": { "nonNull": 2 },
   "apps/server/src/scheduledTasks/webhookTemplate.ts": { "nonNull": 1 },

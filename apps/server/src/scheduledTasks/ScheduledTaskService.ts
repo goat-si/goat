@@ -64,7 +64,6 @@ import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { makeDueHint } from "./dueTaskHint.ts";
-import { unboundFirstRunThreads } from "./firstRunBinding.ts";
 import { isMissedFixedTimeRun, isSameSchedule, iso, nextRunAt } from "./Schedule.ts";
 import {
   acceptImmediateWebhookDedupe,
@@ -553,7 +552,7 @@ export const layer = Layer.effect(
     // A thread deleted before the binding landed already ran its task cleanup, so apply that
     // cleanup here; a later deletion finds the binding. An unconfirmed lookup keeps the binding.
     const bindThread = Effect.fn("ScheduledTaskService.bindThread")(
-      function* (task: Pick<ScheduledTask, "id" | "createdAt" | "projectId">, threadId: ThreadId) {
+      function* (task: ScheduledTask, threadId: ThreadId) {
         yield* sql`
           UPDATE scheduled_tasks SET thread_id = ${threadId}
           WHERE task_id = ${task.id} AND created_at = ${task.createdAt}
@@ -951,13 +950,6 @@ export const layer = Layer.effect(
     });
 
     yield* scheduledRuns.reconcile;
-    // A stop or a failed write between a first run's launch and its bind left these unbound.
-    const unbound = yield* unboundFirstRunThreads(sql).pipe(
-      Effect.catchCause((cause) =>
-        Effect.as(Effect.logWarning("Could not find unbound scheduled tasks.", cause), []),
-      ),
-    );
-    for (const { task, threadId } of unbound) yield* bindThread(task, threadId);
 
     yield* scheduler.register("scheduled-tasks", runDueTasks());
 
