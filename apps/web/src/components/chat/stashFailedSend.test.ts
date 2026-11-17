@@ -1,4 +1,12 @@
-import { EnvironmentId } from "@goat/contracts";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
+import {
+  type ComposerContextId,
+  EnvironmentId,
+  MessageId,
+  type ResponseContextRecord,
+  ThreadId,
+  TurnItemId,
+} from "@goat/contracts";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { ComposerSendSnapshot } from "../ChatView.logic";
@@ -17,6 +25,8 @@ vi.mock("../../lib/imageCompression", () => ({
 
 import { usePromptStashStore } from "../../promptStashStore";
 import { keepFailedSendInStash } from "./stashFailedSend";
+import { useComposerDraftStore } from "../../composerDraftStore";
+import { restoreStashedReply } from "./composerReply";
 
 const environmentId = EnvironmentId.make("environment-1");
 const image = {
@@ -48,6 +58,8 @@ function snapshot(messageText: string): ComposerSendSnapshot {
     threadContexts: [],
     previewTabs: [],
     messageText,
+    replyTo: null,
+    draftText: messageText,
   };
 }
 
@@ -99,5 +111,49 @@ describe("keepFailedSendInStash", () => {
     expect(toast).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Stashed images did not attach" }),
     );
+  });
+});
+
+describe("a failed send that replied to a response", () => {
+  it("keeps the reply in the stash and puts it back above the composer on restore", async () => {
+    const threadRef = scopeThreadRef(environmentId, ThreadId.make("reply-thread"));
+    const reply: ResponseContextRecord = {
+      version: 1,
+      kind: "response",
+      contextId: "response_m1" as ComposerContextId,
+      label: "The fix is in",
+      citation: {
+        version: 1,
+        environmentId,
+        threadId: threadRef.threadId,
+        messageId: MessageId.make("m1"),
+        text: "The fix is in",
+        start: 0,
+        end: 13,
+        prefix: "",
+        suffix: "",
+      },
+      itemId: TurnItemId.make("item-1"),
+    };
+    const sent = "[The fix is in](goat-context://v1/response/response_m1) check the empty state";
+    await keepFailedSendInStash({
+      snapshot: {
+        ...snapshot(sent),
+        images: [],
+        files: [],
+        attachments: [],
+        replyTo: reply,
+        draftText: "check the empty state",
+      },
+      environmentId,
+      interrupted: false,
+    });
+
+    const [entry] = usePromptStashStore.getState().entries;
+    expect(entry?.prompt).toBe("check the empty state");
+    expect(entry?.records).toContainEqual(reply);
+
+    restoreStashedReply(entry?.records ?? [], threadRef);
+    expect(useComposerDraftStore.getState().getComposerDraft(threadRef)?.replyTo).toEqual(reply);
   });
 });
