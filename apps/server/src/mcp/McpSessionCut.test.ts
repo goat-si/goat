@@ -20,6 +20,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -86,12 +87,14 @@ const makeProbe = Effect.all({
   gate: Deferred.make<void>(),
   stopped: Deferred.make<void>(),
   landed: Ref.make<ReadonlyArray<string>>([]),
+  arrived: Queue.unbounded<string>(),
 });
 type Probe = Effect.Success<typeof makeProbe>;
 const gated = <A>(probe: Probe, name: string, value: A) =>
   Effect.gen(function* () {
     if (name.startsWith("gated")) {
       yield* Deferred.succeed(probe.admitted, undefined);
+      yield* Queue.offer(probe.arrived, name);
       yield* Deferred.await(probe.gate);
     }
     yield* Ref.update(probe.landed, (landed) => [...landed, name]);
@@ -290,6 +293,57 @@ it.effect.each(["revoked by the command line", "Pen-bound and its row is deleted
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 +it.effect(
+  "Revoke others keeps a kept Pen session's running call and cuts a revoked one's, and settling the revoked id again changes nothing",
+  () =>
+    Effect.gen(function* () {
+      const check = yield* makeCheckProbe;
+      const probe = yield* makeProbe;
+      const { running } = yield* makeServerAndCli(check.wrap);
+      yield* Effect.gen(function* () {
+        const auth = yield* EnvironmentAuth.EnvironmentAuth;
+        const store = yield* SessionStore.SessionStore;
+        const revoked = yield* signIn;
+        const pen = yield* store.issue({
+          subject: "mcp-client",
+          method: "bearer-access-token",
+          scopes: mcpClientScopes("full-access"),
+          runtimeModeCeiling: "full-access",
+          principalKind: "outside_client",
+          penBinding: {
+            meshId: peer.meshId,
+            nodeId: peer.nodeId,
+            signPub: peer.signPub,
+            noisePub: peer.noisePub,
+          },
+        });
+        const kept = yield* authenticate(auth, pen.token, penConnection(peer).context);
+        const keptCall = yield* call(kept, "goat_project_create", create("gated-kept")).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        const revokedCall = yield* call(
+          revoked.scope,
+          "goat_project_create",
+          create("gated-revoked"),
+        ).pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Queue.take(probe.arrived);
+        yield* Queue.take(probe.arrived);
+        // A durable check snapshots both ids before the press and settles the revoked one again.
+        yield* check.pass(revoked.revokeOthers);
+        expect(yield* check.next).toBe("read");
+        yield* Deferred.succeed(probe.gate, undefined);
+        const keptResult = yield* Fiber.join(keptCall);
+        const revokedResult = yield* Fiber.join(revokedCall);
+        expect(yield* Ref.get(probe.landed)).toEqual(["gated-kept"]);
+        expect(textOf(keptResult)).not.toContain(CUT);
+        expect(textOf(revokedResult)).toContain(CUT);
+      }).pipe(
+        Effect.provide(served(probe).pipe(Layer.provideMerge(layerAuthOver(running)))),
+        Effect.scoped,
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
   "a request verified before its session is revoked never runs, even after a second removal of 10,001 others",
   () =>
     Effect.gen(function* () {
