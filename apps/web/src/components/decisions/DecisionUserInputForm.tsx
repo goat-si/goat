@@ -11,6 +11,10 @@ import {
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { PendingUserInputQuestionBody } from "../chat/PendingUserInputQuestionBody";
+import {
+  countQuestionAttachments,
+  questionAttachmentDraftId,
+} from "../../questionAttachmentDrafts";
 
 type QuestionDrafts = Record<string, PendingUserInputDraftAnswer>;
 
@@ -47,7 +51,16 @@ export function DecisionUserInputForm({
           const command = sideChatCommandOverAnswer({
             answer: seeded[question.id]?.customAnswer ?? "",
             sideChatAvailable: sideChatAvailable && onSideChat !== undefined,
-            hasAttachmentsOrContext: false,
+            // Files added to this question from the composer make "/side ..." an answer there too.
+            hasAttachmentsOrContext:
+              countQuestionAttachments([
+                questionAttachmentDraftId(
+                  item.ref.environmentId,
+                  item.ref.threadId,
+                  item.request.requestId,
+                  question.id,
+                ),
+              ]) > 0,
           });
           if (command === null) continue;
           // As in the composer: the question stays pending and the command leaves the answer.
