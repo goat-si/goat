@@ -131,9 +131,11 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { vcsEnvironment } from "../../state/vcs";
 import type { ComposerSendInput } from "./useComposerSend.input";
 import {
+  checkoutBranchOverride,
   draftHasNonPromptContent,
   liveAttachmentCapabilities,
   readEnvironmentPresentation,
+  saveSettingsBeforeRedirect,
   showMultipleModelsNeedGitThread,
 } from "./useComposerSend.helpers";
 import { keepFailedSendInStash } from "./stashFailedSend";
@@ -1175,6 +1177,15 @@ export function useComposerSend(input: ComposerSendInput) {
       );
       return;
     }
+    let savedSettings: Promise<AtomCommandResult<void, unknown>> | undefined;
+    const persistSendSettings = () =>
+      (savedSettings ??= persistThreadSettingsForNextTurn({
+        threadId: threadIdForSend,
+        createdAt: messageCreatedAt,
+        ...checkoutBranchOverride(localCheckoutBranchMismatch),
+        runtimeMode,
+        interactionMode: sendInteractionMode,
+      }));
     // A message sent while approvals are pending redirects the agent. They are declined only
     // here, after everything above has accepted the send, so local commands and rejected
     // drafts leave them alone. After navigating away during an upload, the shown approvals
@@ -1255,6 +1266,19 @@ export function useComposerSend(input: ComposerSendInput) {
           clearComposerDraftContent(composerDraftTarget);
           composerRef.current?.resetCursorState();
         }
+        return;
+      }
+      const refusal = await saveSettingsBeforeRedirect(
+        isServerThread &&
+          runtimeMode !== activeThread.runtimeMode &&
+          !changedBeforeDecline &&
+          !approvalResponding,
+        persistSendSettings,
+      );
+      if (refusal !== null) {
+        sendInFlightRef.current = false;
+        setThreadError(threadIdForSend, refusal);
+        setDockedDraftHeroThreadKey((key) => (key === activeThreadKey ? null : key));
         return;
       }
       const declined =
@@ -1395,15 +1419,7 @@ export function useComposerSend(input: ComposerSendInput) {
     let failure: AtomCommandResult<unknown, unknown> | null = null;
 
     if (failure === null && isServerThread) {
-      const settingsResult = await persistThreadSettingsForNextTurn({
-        threadId: threadIdForSend,
-        createdAt: messageCreatedAt,
-        ...(localCheckoutBranchMismatch
-          ? { branch: localCheckoutBranchMismatch.currentBranch }
-          : {}),
-        runtimeMode,
-        interactionMode: sendInteractionMode,
-      });
+      const settingsResult = await persistSendSettings();
       if (settingsResult._tag === "Failure") {
         failure = settingsResult;
       }

@@ -1,4 +1,8 @@
 import type { EnvironmentId } from "@goat/contracts";
+import {
+  squashAtomCommandFailure,
+  type AtomCommandResult,
+} from "@goat/client-runtime/state/runtime";
 
 import {
   type ComposerThreadTarget,
@@ -39,6 +43,21 @@ export function liveAttachmentCapabilities(
   };
 }
 
+/**
+ * The redirect's settings, saved before it declines pending approvals: a mode change the server
+ * refuses during the turn then declines nothing. The refusal's text, or null once saved or not needed.
+ */
+export async function saveSettingsBeforeRedirect(
+  changesMode: boolean,
+  save: () => Promise<AtomCommandResult<void, unknown>>,
+): Promise<string | null> {
+  if (!changesMode) return null;
+  const result = await save();
+  if (result._tag === "Success") return null;
+  const error = squashAtomCommandFailure(result);
+  return error instanceof Error ? error.message : "Failed to send message.";
+}
+
 /** Why a multiple-model send needs a new thread in a Git project. */
 export function showMultipleModelsNeedGitThread() {
   toastManager.add(
@@ -50,3 +69,7 @@ export function showMultipleModelsNeedGitThread() {
     }),
   );
 }
+
+/** The branch a send saves when the local checkout moved off the thread's branch. */
+export const checkoutBranchOverride = (mismatch: { readonly currentBranch: string } | null) =>
+  mismatch ? { branch: mismatch.currentBranch } : {};
