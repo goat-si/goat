@@ -162,6 +162,7 @@ import { appAtomRegistry } from "./atom-registry";
 import { environmentSession } from "./session";
 import { dispatchingQueuedMessageIdAtom, editingQueuedMessageIdsAtom } from "./use-thread-outbox";
 import { createThreadOutboxDelivery } from "./threadOutboxDelivery";
+import { queuedMessageWaitReasonsAtom } from "./threadOutboxWaitReasons";
 
 const message = (overrides: Partial<QueuedThreadMessage> = {}): QueuedThreadMessage => ({
   environmentId: EnvironmentId.make("secondary"),
@@ -600,5 +601,40 @@ describe("compaction before a queued send", () => {
     expect(state.start).toHaveBeenCalledOnce();
     expect(state.start.mock.calls[0]?.[0].input).toMatchObject(compactTurn);
     expect(remaining()).toEqual([queued]);
+  });
+});
+
+describe("a mode change the server refuses while a turn runs", () => {
+  it("regression goat#3558: the row shows the server's reason while refused and loses it when the message goes out", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    using _realTimers = { [Symbol.dispose]: () => vi.useRealTimers() };
+    setOperateGrant("secondary", true);
+    const queued = message({ runtimeMode: "approval-required" });
+    await state.manager.enqueue(queued);
+    const refusal =
+      "This thread has a turn running, and changing its permission mode would end it. Wait for the turn to finish, or press Stop first.";
+    state.runtime.mockResolvedValueOnce(AsyncResult.failure(Cause.fail(new Error(refusal))));
+    const reason = () => appAtomRegistry.get(queuedMessageWaitReasonsAtom)[queued.messageId];
+
+    await runDrain();
+    expect(state.start).not.toHaveBeenCalled();
+    expect(remaining()).toEqual([queued]);
+    expect(reason()).toBe(refusal);
+
+    // The outbox's existing backoff (1, 2, 4, 8, 16 s, then every 16 s) retries the same command
+    // id; once the turn has ended the server takes the mode change and the message goes out.
+    const delivered = Promise.withResolvers<void>();
+    const release = appAtomRegistry.subscribe(dispatchingQueuedMessageIdAtom, (id) => {
+      if (id === null) delivered.resolve();
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await delivered.promise.finally(release);
+    expect(state.runtime.mock.calls.map(([call]) => call.input.commandId)).toEqual([
+      "command:runtime-mode",
+      "command:runtime-mode",
+    ]);
+    expect(state.start).toHaveBeenCalledOnce();
+    expect(remaining()).toEqual([]);
+    expect(reason()).toBeUndefined();
   });
 });

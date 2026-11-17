@@ -167,6 +167,7 @@ import { markdownFileEmbedLabel, resolveMarkdownMediaPreview } from "../../lib/m
 import { attachmentVideoPreviewSource } from "../../lib/videoPreviewSource";
 import { CopyTextButton } from "./CopyTextButton";
 import { UserMessageCopyButton } from "./UserMessageCopyButton";
+import { PendingMessageWaitReason } from "./PendingMessageWaitReason";
 import { getReviewSectionIdForCheckpoint } from "../review/reviewModel";
 import { setReviewSelectedSectionId } from "../review/reviewState";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
@@ -1568,6 +1569,9 @@ function renderFeedEntry(
                 />
               ) : null}
             </View>
+          ) : null}
+          {entry.pendingMessage && !entry.acknowledged ? (
+            <PendingMessageWaitReason messageId={entry.pendingMessage.messageId} />
           ) : null}
         </Animated.View>
       );

@@ -67,6 +67,11 @@ import {
 import { environmentThreadShells, threadEnvironment, threadFamilies } from "./threads";
 import { composerDraftsAtom } from "./use-composer-drafts";
 import { editingQueuedMessageIdsAtom, retryingQueuedMessageIdsAtom } from "./use-thread-outbox";
+import {
+  queuedMessageWaitReasonsAtom,
+  setQueuedMessageWaitReason,
+  settingsRefusalReason,
+} from "./threadOutboxWaitReasons";
 
 interface ThreadOutboxRetry {
   readonly attempt: number;
@@ -109,6 +114,7 @@ export function createThreadOutboxDelivery(): {
   };
 
   const clearRetry = (messageId: MessageId): void => {
+    setQueuedMessageWaitReason(messageId, null);
     const retry = retries.get(messageId);
     if (retry === undefined) return;
     clearTimeout(retry.timer);
@@ -204,6 +210,7 @@ export function createThreadOutboxDelivery(): {
       });
       if (AsyncResult.isFailure(runtimeResult)) {
         reportCommandFailure(queuedMessage, runtimeResult, "settings-sync");
+        setQueuedMessageWaitReason(queuedMessage.messageId, settingsRefusalReason(runtimeResult));
         return false;
       }
     }
@@ -221,6 +228,10 @@ export function createThreadOutboxDelivery(): {
       });
       if (AsyncResult.isFailure(interactionResult)) {
         reportCommandFailure(queuedMessage, interactionResult, "settings-sync");
+        setQueuedMessageWaitReason(
+          queuedMessage.messageId,
+          settingsRefusalReason(interactionResult),
+        );
         return false;
       }
     }
@@ -811,6 +822,7 @@ export function createThreadOutboxDelivery(): {
       for (const retry of retries.values()) clearTimeout(retry.timer);
       retries.clear();
       appAtomRegistry.set(retryingQueuedMessageIdsAtom, {});
+      appAtomRegistry.set(queuedMessageWaitReasonsAtom, {});
       for (const blocked of blockedRecoveries.values()) blocked.unsubscribe();
       blockedRecoveries.clear();
       for (const release of familyMounts.values()) release();

@@ -6,9 +6,9 @@ const PROVIDER_SELECTION_BUSY =
 const WORKTREE_CHANGE_BUSY =
   "This thread has a turn running, and moving it to another worktree would end it. Wait for the turn to finish, or press Stop, then try again.";
 
-/** Agent- and client-visible: why an access mode change waits for the running turn. */
+/** Agent- and client-visible: why a permission mode change waits for the running turn. */
 const RUNTIME_MODE_BUSY =
-  "This thread has a turn running, and changing its access mode would end it. Wait for the turn to finish, or press Stop first.";
+  "This thread has a turn running, and changing its permission mode would end it. Wait for the turn to finish, or press Stop first.";
 
 /**
  * The refusal for a change during an active run, or undefined when it ends no turn. Only releasing

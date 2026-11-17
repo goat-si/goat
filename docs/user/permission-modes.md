@@ -26,6 +26,11 @@ Providers enforce permissions differently. Some read-only actions can proceed in
 including OpenCode and Antigravity, fall back to asking. On Grok, commands its review blocks come
 to you for approval. On fx, prompts it still sends also come to you.
 
+Some providers, including Codex and Antigravity, change mode inside a running turn. Others
+cannot, so on them GOAT keeps a mode change until the turn ends or you press **Stop**: a
+message you send with another mode stays in the composer with the reason on the web and desktop,
+and the phone sends it once the turn ends.
+
 Muse Code offers only **Supervised** and **Full access**. A Muse thread already set to another mode
 runs in **Supervised**.
 

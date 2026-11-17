@@ -412,7 +412,7 @@ it.effect.each([
           threadId,
           commandId,
           dispatch,
-          "This thread has a turn running, and changing its access mode would end it.",
+          "This thread has a turn running, and changing its permission mode would end it.",
         );
         const { runs } = yield* projections.getThreadRecords(threadId, ["runs"]);
         assert.equal(runs.find((run) => run.id === runId)?.status, "running");
@@ -448,7 +448,7 @@ const completeSeededTurn = (threadId: ThreadId, runId: RunId) =>
 it.effect.each([
   { refusal: "provider switch", text: "this provider change would end it" },
   { refusal: "worktree change", text: "moving it to another worktree would end it" },
-  { refusal: "runtime mode change", text: "changing its access mode would end it" },
+  { refusal: "runtime mode change", text: "changing its permission mode would end it" },
 ] as const)(
   "a $refusal refused during a turn records no receipt, and the same command id succeeds once the turn ends",
   ({ refusal, text }) =>
