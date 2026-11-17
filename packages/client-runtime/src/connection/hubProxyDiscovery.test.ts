@@ -141,6 +141,10 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
   readonly holdNodes?: boolean;
   /** Why the device behind the hub was last refused; "permission" unless set. */
   readonly deviceFailure?: "authentication" | "permission";
+  /** Sends the same node list this many times per subscription. */
+  readonly repeatLists?: number;
+  /** Every subscription after the first answers with a node list that no longer has the device. */
+  readonly dropNodeOnResubscribe?: boolean;
   /** Credential reads and writes that fail before the store answers again. */
   readonly failStoreReads?: number;
   readonly failStoreWrites?: number;
@@ -231,6 +235,11 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
             Stream.unwrap(
               Effect.gen(function* () {
                 subscriptions++;
+                const lists = Array.from({ length: options.repeatLists ?? 1 }, () =>
+                  options.dropNodeOnResubscribe === true && subscriptions > 1
+                    ? { ...snapshot, nodes: [] }
+                    : snapshot,
+                );
                 yield* Deferred.succeed(subscribed, undefined);
                 return subscriptions <= (options.failSubscriptions ?? 0)
                   ? Stream.fail(
@@ -239,9 +248,9 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
                     )
                   : (options.holdNodes
                       ? Stream.fromEffect(Deferred.await(nodesReleased)).pipe(
-                          Stream.flatMap(() => Stream.make(snapshot)),
+                          Stream.flatMap(() => Stream.fromIterable(lists)),
                         )
-                      : Stream.make(snapshot)
+                      : Stream.fromIterable(lists)
                     ).pipe(Stream.concat(Stream.never));
               }),
             ),
@@ -540,6 +549,64 @@ describe("hub proxy discovery coordinator", () => {
         );
         yield* TestClock.adjust("1 millis");
         expect(h.retried).toEqual([NODE]);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "each confirmed node list retries a refused device at most once, also when the same list repeats (#3583)",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeConnectedDiscovery({
+          blockedDevice: true,
+          holdNodes: true,
+          deviceFailure: "authentication",
+          repeatLists: 3,
+        });
+        yield* Deferred.await(h.subscribed);
+        // The lists arrive from a timer: adjust returns once every reconcile they woke has settled.
+        yield* Effect.forkChild(
+          Effect.sleep("1 millis").pipe(
+            Effect.andThen(Deferred.succeed(h.nodesReleased, undefined)),
+          ),
+        );
+        yield* TestClock.adjust("1 millis");
+        expect(h.retried).toEqual([NODE, NODE, NODE]);
+        expect(h.counts().subscriptions).toBe(1);
+        expect(yield* Deferred.isDone(h.removed)).toBe(false);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "after a refusal, a confirmed node list that no longer has a device still removes its route (#3583)",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeConnectedDiscovery({
+          blockedDevice: true,
+          dropNodeOnResubscribe: true,
+        });
+        yield* Deferred.await(h.deviceRetried);
+        // Refused from a timer: adjust returns once everything the refusal woke has settled.
+        yield* Effect.forkChild(
+          Effect.sleep("1 millis").pipe(
+            Effect.andThen(
+              SubscriptionRef.set(h.supervisor.state, {
+                ...AVAILABLE_CONNECTION_STATE,
+                phase: "blocked",
+                lastFailure: new ConnectionBlockedError({
+                  reason: "authentication",
+                  detail: "Hub did not accept this device.",
+                }),
+              }),
+            ),
+          ),
+        );
+        yield* TestClock.adjust("1 millis");
+        expect(yield* Deferred.isDone(h.removed)).toBe(false);
+        yield* SubscriptionRef.set(h.supervisor.state, {
+          ...AVAILABLE_CONNECTION_STATE,
+          phase: "connected" as const,
+        });
+        expect(yield* Deferred.await(h.removed)).toBe("hub:hub:node");
       }).pipe(Effect.scoped),
   );
 
