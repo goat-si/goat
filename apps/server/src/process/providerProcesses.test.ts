@@ -125,6 +125,69 @@ describe.runIf(HostProcess.Platform.defaultValue() === "linux")("ProviderProcess
     ),
   );
 
+  it.live("takes the process group of a recorded CLI that still leads it", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const directory = NodePath.join(config.stateDir, "provider-processes");
+      NodeFS.mkdirSync(directory, { recursive: true });
+      const deadOwner = yield* ownedProcess;
+      // A group leader standing in for the CLI, and a child in its group standing in for an MCP server.
+      const leader = NodeChildProcess.spawn("/bin/sh", ["-c", 'sleep 600 & echo "$!"; wait'], {
+        detached: true,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const leaderExited = new Promise<void>((resolve) => leader.once("exit", () => resolve()));
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          try {
+            process.kill(-(leader.pid ?? 0), "SIGKILL");
+          } catch {}
+        }),
+      );
+      const memberPid = Number(
+        yield* Effect.promise(
+          () =>
+            new Promise<string>((resolve) =>
+              leader.stdout.once("data", (chunk: Buffer) => resolve(chunk.toString())),
+            ),
+        ),
+      );
+      const leaderPid = leader.pid;
+      assert(leaderPid !== undefined);
+      const controller = AcpSessionRuntime.makePosixProcessTreeController("linux");
+      const boot = NodeFS.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+      const leaderIdentity = controller.identity(leaderPid);
+      assert(leaderIdentity !== undefined);
+      NodeFS.writeFileSync(
+        NodePath.join(directory, "group.json"),
+        JSON.stringify({
+          version: 1,
+          instanceId: "group",
+          hostname: NodeOS.hostname(),
+          stateDir: config.stateDir,
+          owner: { pid: deadOwner.pid, startTime: deadOwner.startTime },
+          processes: [
+            { pid: leaderPid, startTime: `${boot}:${leaderIdentity.startTime}`, pgid: leaderPid },
+          ],
+        }),
+      );
+      yield* deadOwner.stop;
+
+      yield* Layer.build(ProviderProcesses.layer);
+      yield* Effect.promise(() => leaderExited);
+      const member = controller.identity(memberPid);
+      expect(member === undefined || AcpSessionRuntime.posixProcessIsZombie(member)).toBe(true);
+    }).pipe(
+      Effect.scoped,
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provide(
+        ServerConfig.layerTest(process.cwd(), { prefix: "goat-restart-ownership-" }).pipe(
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
   it.live("signals nothing for records it cannot trust and refuses a pid it did not spawn", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;

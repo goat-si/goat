@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
+import { signalProcessGroup } from "@goat/provider-core/server/processGroup";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -148,10 +149,15 @@ export const make = Effect.fn("ProviderProcesses.make")(function* (
     let survived = false;
     for (const survivor of record.processes) {
       if (protectedPids.has(survivor.pid) || !matches(survivor)) continue;
-      // Never infer ownership from argv, executable names, or group membership.
-      // As in the ACP controller, starttime blocks reuse between observations.
-      // Node has no pidfd_send_signal, so the final read-to-signal race remains.
-      yield* tryQuietly(() => controller.signalProcess(survivor.pid, "SIGKILL"));
+      // Never infer ownership from argv or executable names. Start time blocks pid reuse and is
+      // read again right before the signal (Node has no pidfd_send_signal, so that race remains).
+      // A CLI still leading the group it was recorded with takes its MCP servers with it.
+      yield* tryQuietly(() => {
+        if (!matches(survivor)) return;
+        if (survivor.pgid === survivor.pid && survivor.pgid > 1 && survivor.pgid !== owner.pgid)
+          signalProcessGroup(survivor.pgid, "SIGKILL");
+        else controller.signalProcess(survivor.pid, "SIGKILL");
+      });
       for (let attempt = 0; matches(survivor) && !survived; attempt++) {
         survived = attempt === 100;
         if (!survived) yield* Effect.sleep("10 millis");
