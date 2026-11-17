@@ -180,6 +180,7 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "browser",
     "browser",
   ),
+  preview_stop: tool(["Stop", "Stopping", "Stopped", "the preview page"], "browser", "browser"),
   preview_dialog: tool(
     ["Respond", "Responding", "Responded", "to a preview browser dialog"],
     "browser",
@@ -818,6 +819,7 @@ export const GOAT_MCP_CANONICAL_TOOL_ALIASES: Readonly<Record<string, string>> =
   goat_preview_recording_start: "preview_recording_start",
   goat_preview_recording_stop: "preview_recording_stop",
   goat_preview_reload: "preview_reload",
+  goat_preview_stop: "preview_stop",
   goat_preview_resize: "preview_resize",
   goat_preview_scroll: "preview_scroll",
   goat_preview_select: "preview_select",

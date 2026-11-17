@@ -216,6 +216,19 @@ const PreviewReloadTool = Tool.make(agentSurfaceRegistry["preview.reload"].name,
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.reload"]));
 
+const PreviewStopTool = Tool.make(agentSurfaceRegistry["preview.stop"].name, {
+  description: agentSurfaceRegistry["preview.stop"].description,
+  parameters: PreviewAutomationTabTargetInput,
+  success: Schema.Struct({
+    ...PreviewAutomationStatus.fields,
+    next: Schema.optional(Schema.String),
+    ...safetyFields,
+  }),
+  failure: PreviewToolFailure,
+  failureMode: "return",
+  dependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.stop"]));
+
 const PreviewResizeTool = Tool.make(agentSurfaceRegistry["preview.resize"].name, {
   description: agentSurfaceRegistry["preview.resize"].description,
   parameters: PreviewAutomationResizeInput,
@@ -472,6 +485,7 @@ export const PreviewToolkit = Toolkit.make(
   PreviewBackTool,
   PreviewForwardTool,
   PreviewReloadTool,
+  PreviewStopTool,
   PreviewResizeTool,
   PreviewSetAppearanceTool,
   PreviewSnapshotTool,
@@ -511,6 +525,7 @@ export const PreviewStandardToolkit = Toolkit.make(
   PreviewBackTool,
   PreviewForwardTool,
   PreviewReloadTool,
+  PreviewStopTool,
   PreviewResizeTool,
   PreviewSetAppearanceTool,
   PreviewClickTool,

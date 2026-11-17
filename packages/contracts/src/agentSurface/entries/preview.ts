@@ -725,6 +725,31 @@ export const previewEntries = {
     humanSteps: [],
     annotations: { title: "Reload browser preview", idempotentHint: false, openWorldHint: true },
   }),
+  "preview.stop": entry({
+    resource: "preview",
+    verb: "stop",
+    name: "preview_stop",
+    toolkit: "preview",
+    summary: "Stop a loading browser page",
+    description:
+      "Stop loading a browser tab, as its Stop button does. The tab keeps what it has loaded and reports its status.",
+    guide:
+      "This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it, and a server that does not advertise Stop refuses without sending anything. A tab that is not loading is left as it is. The result is the tab's status after the stop.",
+    effect: "write",
+    capability: "none",
+    capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Stopping a tab that has stopped changes nothing; inspect preview.status after an uncertain outcome.",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "Stop loading browser preview",
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  }),
   "preview.logs": entry({
     resource: "preview",
     verb: "logs",

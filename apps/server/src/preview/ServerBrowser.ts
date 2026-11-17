@@ -1891,6 +1891,9 @@ const make = Effect.gen(function* () {
           assertDestination: (url) => blockedTabs.assertTab(tab, request.runId, url),
           channelFor: (destination) => actionGate(destination).channel,
         });
+      case "stopLoading":
+        await stopLoading.stop(tab, tab.cdp);
+        return statusWithTitle(tab, request.agentSessionId);
       case "navigate": {
         const navigateInput = input as PreviewAutomationNavigateInput;
         const destination = resolveNavigationUrl(navigateInput);

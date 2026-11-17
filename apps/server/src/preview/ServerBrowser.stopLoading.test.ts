@@ -204,3 +204,42 @@ it.effect("Stop on a committed page that is still loading reports the page it sh
     }),
   ).pipe(Effect.provide(layer)),
 );
+
+it.effect("an agent's Stop ends its tab's load through the same stop a person's Stop uses", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* ServerBrowser.ServerBrowser;
+      const broker = yield* Broker.PreviewAutomationBroker;
+      yield* Effect.yieldNow;
+      heldGoto = null;
+      const opened = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "open",
+        input: { reuseExistingTab: false, show: false },
+      });
+      const tabId = PreviewTabId.make(opened.tabId!);
+      const context = pages.at(-1)!;
+      context.page.emit("request", navigationRequest(context.page, "https://example.com/slow"));
+      const status = broker.invoke<PreviewAutomationStatus>({
+        scope,
+        tabId,
+        operation: "status",
+        input: {},
+      });
+      expect((yield* status).loading).toBe(true);
+
+      const stopped = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        tabId,
+        operation: "stopLoading",
+        input: {},
+      });
+
+      const stops = context.sessions.flatMap((session) =>
+        session.send.mock.calls.filter(([method]) => method === "Page.stopLoading"),
+      );
+      expect(stops).toHaveLength(1);
+      expect(stopped).toMatchObject({ tabId, loading: false });
+    }),
+  ).pipe(Effect.provide(layer)),
+);
