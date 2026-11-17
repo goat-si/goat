@@ -1,4 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
+import { listedToolName } from "@goat/contracts/agentSurface/resolve";
 
 import {
   CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS,
@@ -67,6 +69,34 @@ describe("Claude approval of GOAT tools", () => {
       });
       expect(decide("background.wait", readOnlySandbox).called).toBe("allow");
     }
+  });
+
+  it("still asks in Plan mode before every other GOAT tool, directly or through goat_call", () => {
+    for (const entry of Object.values(agentSurfaceRegistry)) {
+      const tool = listedToolName(entry);
+      if (tool === "goat_background_wait") continue;
+      expect(decide(tool, false, { read: true, write: true, source: true }), tool).toEqual({
+        direct: "ask",
+        called: "ask",
+      });
+    }
+  });
+
+  // The callback judges the path only; the server decodes args against the wait's own schema.
+  it("waves a goat_call through only when every name it carries is the background wait", () => {
+    const decision = (toolInput: object) =>
+      claudeGoatToolDecision({
+        toolName: GOAT_CALL,
+        toolInput,
+        readOnlySandbox: false,
+        memory: undefined,
+      });
+    expect(decision({ path: "background.wait", args: { taskIds: ["t"], extra: true } })).toBe(
+      "allow",
+    );
+    expect(decision({ path: "background.wait", name: "goat_background_wait" })).toBe("allow");
+    expect(decision({ path: "background.wait", name: "thread.send" })).toBe("ask");
+    expect(decision({ path: "background.wait", tool: "goat_task_create" })).toBe("ask");
   });
 
   it("judges a goat_call spelled as MCP's {name, arguments}, or tool and input, as {path, args}", () => {
