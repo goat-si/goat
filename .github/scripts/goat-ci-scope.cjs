@@ -51,7 +51,7 @@ const AFFECTED_LABEL = "ci:affected";
 const SERVER_LABEL = "ci:server";
 const MEMORY_LABEL = "ci:memory";
 const WINDOWS_LABEL = "ci:windows";
-const LANES = ["all", "server", "memory-growth", "windows", "quick"];
+const LANES = ["all", "server", "memory-growth", "windows", "quick", "netns-probe"];
 /**
  * Platform-sensitive tests the Windows job runs, as path prefixes. Each is both a Vitest filter for
  * the job and a trigger: a pull request changing a file under one selects test-windows.
@@ -185,7 +185,7 @@ const TASKS = [
   "test-server",
 ];
 /** Matrix order: the quick run's test job follows the checks. */
-const MATRIX_ORDER = ["check", "typecheck", CHANGED_TESTS_TASK, ...TASKS.slice(2)];
+const MATRIX_ORDER = ["check", "typecheck", CHANGED_TESTS_TASK, ...TASKS.slice(2), "probe-netns"];
 /**
  * Tasks that run on hosted ubuntu-24.04 even when the lidge pool is on. Most are minutes of plain
  * Node work with no browsers, native headers or need for many cores, kept off the queue behind
@@ -685,6 +685,15 @@ function laneRun(lane) {
       full: false,
       tasks: ["check", "typecheck"],
       reasons: reasons(["check", "typecheck"], why),
+      server: fullServer(why),
+    };
+  }
+  // Branch-only goat#3646 probe, not for merge.
+  if (lane === "netns-probe") {
+    return {
+      full: false,
+      tasks: ["probe-netns"],
+      reasons: reasons(["probe-netns"], why),
       server: fullServer(why),
     };
   }
