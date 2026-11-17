@@ -10,8 +10,6 @@ import {
   DEFAULT_BROWSER_PROFILE_ID,
   INCOGNITO_BROWSER_PROFILE_ID,
   FILL_PREVIEW_VIEWPORT,
-  type PreviewAnnotationPayload,
-  type ScopedThreadRef,
   DEFAULT_PREVIEW_ZOOM_FACTOR,
   PREVIEW_ZOOM_LEVELS,
   type PreviewAdjustInput,
@@ -103,17 +101,7 @@ import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { observeResize } from "~/lib/observeResize";
 import { focusPreviewWebview } from "./focusPreviewWebview";
-
-interface Props {
-  threadRef: ScopedThreadRef;
-  tabId?: string | null;
-  configuredUrls?: ReadonlyArray<string> | undefined;
-  visible: boolean;
-  onSendAnnotation?: (
-    annotation: PreviewAnnotationPayload,
-    image: ComposerImageAttachment | null,
-  ) => void;
-}
+import type { PreviewViewProps } from "./previewViewProps";
 
 export function PreviewView({
   threadRef,
@@ -121,7 +109,7 @@ export function PreviewView({
   configuredUrls,
   visible,
   onSendAnnotation,
-}: Props) {
+}: PreviewViewProps) {
   const threadKey = scopedThreadKey(threadRef);
   const surfaces = useRightPanelStore((state) => state.byThreadKey[threadKey]?.surfaces);
   const [focusUrlNonce, setFocusUrlNonce] = useState<number | undefined>(undefined);

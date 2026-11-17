@@ -5,7 +5,6 @@ import {
   previewStreamModifiers,
   type PreviewStreamClient,
   type PreviewStreamControl,
-  type PreviewStreamDownload,
   type PreviewStreamFileChooser,
   uploadPreviewStreamFiles,
   type PreviewStreamInput,
@@ -39,6 +38,7 @@ import { CommandBlock } from "~/components/CommandBlock";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { toastManager } from "~/components/ui/toast";
+import { offerDownload } from "./serverBrowserDownload";
 import { BrowserPagePrompt } from "./BrowserPagePrompt";
 import { cn } from "~/lib/utils";
 import { usePreviewTabAgentDriven } from "~/previewStateStore";
@@ -134,23 +134,6 @@ async function copyPageText(text: string) {
       },
     });
   }
-}
-
-function offerDownload(download: PreviewStreamDownload) {
-  const id = toastManager.add({
-    type: "info",
-    title: `Downloaded ${download.fileName}`,
-    actionProps: {
-      children: "Save",
-      onClick: () => {
-        toastManager.close(id);
-        const anchor = document.createElement("a");
-        anchor.href = download.url;
-        anchor.download = download.fileName;
-        anchor.click();
-      },
-    },
-  });
 }
 
 export function ServerBrowserSurface(props: {
