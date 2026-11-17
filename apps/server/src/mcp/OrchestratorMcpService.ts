@@ -16,7 +16,6 @@ import {
   OrchestratorMcpCapabilitiesResult,
   type OrchestratorMcpCreatedThread,
   type OrchestratorMcpThreadTimelineItem,
-  type OrchestratorMcpModelOption,
   type OrchestratorMcpDelegateTaskInput,
   type OrchestratorMcpDelegateTaskResult,
   OrchestratorMcpFailure,
@@ -44,7 +43,7 @@ import {
 } from "@goat/contracts";
 import { derive } from "@goat/provider-core/server/IdAllocator";
 import { latestProviderTurnForAttempt } from "@goat/contracts";
-import { getProviderOptionCurrentValue, withLegacyUltracodeEffort } from "@goat/shared/model";
+import { withLegacyUltracodeEffort } from "@goat/shared/model";
 import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
 import { withTurnCapabilities } from "@goat/shared/turnCapabilities";
 import * as Clock from "effect/Clock";
@@ -81,7 +80,7 @@ import { forceModeRefusal, forceStopRemoteTask } from "../remoteReports/remoteTa
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { cloudTaskForRun } from "./cloudTaskView.ts";
 import { hostFailure } from "./hostFailure.ts";
-import { listCapabilityModels } from "./OrchestratorMcpCapabilities.ts";
+import { capabilityModelOption, listCapabilityModels } from "./OrchestratorMcpCapabilities.ts";
 import { providerConstraints, providerForCaller } from "./ProviderConstraints.ts";
 import { overrideOptionSelections } from "./modelOptionOverrides.ts";
 import { advertisedModel } from "./ModelSelectionValidation.ts";
@@ -254,17 +253,6 @@ function agentStopReason(reason: string | undefined): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/** Option ids and allowed values are all a delegating agent needs; labels are UI copy. */
-function capabilityModelOption(descriptor: ProviderOptionDescriptor): OrchestratorMcpModelOption {
-  const defaultValue = getProviderOptionCurrentValue(descriptor);
-  return {
-    id: descriptor.id,
-    values:
-      descriptor.type === "boolean" ? [false, true] : descriptor.options.map((choice) => choice.id),
-    ...(defaultValue === undefined ? {} : { default: defaultValue }),
-  };
 }
 
 /** Reads a remote host's advertised options in either the current or the older descriptor shape. */
