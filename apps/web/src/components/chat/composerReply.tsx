@@ -94,9 +94,9 @@ export function refuseReplyWhoseHolderIsGone(
   toastManager.add(
     stackedThreadToast({
       type: "warning",
-      title: "The response this replies to is gone",
+      title: "Can't find the response this replies to",
       description:
-        "The thread that held it was deleted or archived. Cancel the reply above the composer and send again.",
+        "GOAT can't find the thread that held it here. It may have been deleted or archived. Cancel the reply above the composer and send again.",
     }),
   );
   return true;

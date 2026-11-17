@@ -240,7 +240,7 @@ it("a draft reply whose holding thread the client does not hold starts no turn a
 
   expect(redirect.calls).toEqual([]);
   expect(state.toast).toHaveBeenCalledWith(
-    expect.objectContaining({ title: "The response this replies to is gone" }),
+    expect.objectContaining({ title: "Can't find the response this replies to" }),
   );
 });
 
