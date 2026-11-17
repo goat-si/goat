@@ -2283,15 +2283,27 @@ it.effect(
       }).pipe(Effect.provide(hold.layer));
     }),
 );
-it.effect.each(["another run", "an archived destination"] as const)(
+// A read-only prepare keeps the run and its grant but changes the evidence key, so only the
+// key check refuses it: returning the captured entry unchecked shows read_write.
+it.effect.each([
+  "another run",
+  "an archived destination",
+  "a read-only prepare in the same run",
+] as const)(
   "a prepare during a run row read that changes its memory access evidence (%s) shows none",
   (change) =>
     Effect.gen(function* () {
       const hold = yield* makeMemoryReadHold;
       yield* Effect.gen(function* () {
         const archived = change === "an archived destination";
+        const sameRun = change !== "another run";
+        const readOnly = change === "a read-only prepare in the same run";
         const run = yield* openMemoryRun(
-          archived ? "memory-evidence-archive" : "memory-evidence-run",
+          readOnly
+            ? "memory-evidence-read-only"
+            : archived
+              ? "memory-evidence-archive"
+              : "memory-evidence-run",
         );
         const { sink, ids, manager, threadId, now } = run;
         const store = yield* ProjectionStore.ProjectionStoreV2;
@@ -2312,11 +2324,13 @@ it.effect.each(["another run", "an archived destination"] as const)(
         yield* manager.prepareMcpSession!({
           threadId,
           providerInstanceId: modelSelection.instanceId,
-          runId: archived ? run.runId : RunId.make("memory-evidence-other-run"),
-          delegatedTaskId: archived ? run.taskId : NodeId.make("memory-evidence-other-task"),
+          runId: sameRun ? run.runId : RunId.make("memory-evidence-other-run"),
+          delegatedTaskId: sameRun ? run.taskId : NodeId.make("memory-evidence-other-task"),
           memoryGrantCeiling: "read_write",
+          ...(readOnly ? { readOnly: true } : {}),
         });
-        // Unarchived again: only the stored prepare's destinationUsable still differs.
+        // Unarchived again. The credential prepared while archived carries grant none, so this row
+        // proves that such a credential shows no access after unarchive, with or without the key.
         if (archived) yield* archive(null);
         yield* hold.release;
         assert.isUndefined((yield* Fiber.join(read)).currentMemoryAccess);
