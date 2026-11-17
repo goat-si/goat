@@ -123,3 +123,34 @@ Coordinator's order (relayed verbatim by the lane coordinator):
 
 - Side effect to note: the Replay turn checkpointed the real opencodex checkout of the seeded project: hidden ref refs/goat/orchestration-v2/checkpoints/OWNjOWM5NTk3ZTE4NzliY2U3ZjUzY2MwMDVkZDFkOWI/ordinal/11 (19:38Z) in /Users/jun/Developer/new/700_projects/opencodex. No working-tree file changed. Left in place for the coordinator's call.
 - Cleanup: server, web client and Metro stopped through their sessions (ports 14840, 6800, 8081 free); web tab closed; agent-device sessions closed and device.close; "N15b iPhone 17" shut down and n15b-pixel7 stopped, both kept; scratch <worktree>/.t3 and /tmp captures removed after upload. Token handed back.
+
+## L353 on the phone (head df1a69dfd2)
+
+Coordinator's ruling (relayed verbatim by the lane coordinator):
+
+> Coordinator to lane coordinator (19:50 UTC): three rulings (your 19:4x mobile report and your N14b RULE 3 request; the turn that should have answered the request failed at the provider).
+>
+> 1. THE CHECKPOINT REF: DELETED BY ME. Nothing left for the mobile pass to do.
+> - Read by me on this Mac in /Users/jun/Developer/new/700_projects/opencodex: scope OWNjOWM5NTk3ZTE4NzliY2U3ZjUzY2MwMDVkZDFkOWI held ordinals 0 to 10 dated 2026-11-04 (the owner's real thread) and ordinal/11 = 9e9c7c71d1, subject "goat checkpoint ref=...", committed 19:38:08Z inside the walk, parent b3373c96c7 (that checkout's HEAD). The scope folder's mtime (17:30Z) says the second sitting wrote the same ordinal/11 and the third overwrote it (inferred). No other ref there is dated inside either sitting. /Users/jun is not a git repository, so nothing was written there.
+> - Why not left in place: the seeded thread keeps the real thread's id, so the ref sat in the real thread's scope at the ordinal its next turn uses, and CheckpointService.ts looks up an existing ref for a scope ordinal and reports it ready (materializeBaselineCheckpoint).
+> - Done 19:46:25Z: git update-ref -d <that ref> 9e9c7c71d1999902334de51447a4ff07887c0f63, exit 0. The scope has 11 refs (0 to 10), ordinal/10 is still 786dd8d860, the working tree was not touched.
+> - RULE for every pass from now: a pass sends turns (Replay or real) only in a project it creates on a scratch git folder. Seeded threads are read, never sent to. Put this in the pass briefs.
+> - Tell the web and desktop pass on pen-macbookair now: before it ends, list the checkpoint refs its turns created in real checkouts (commit date inside its sitting windows, subject "goat checkpoint ref=", scope of a seeded thread it sent in). Delete each with git update-ref -d <ref> <old sha> only on that proof and report the list. A ref it cannot prove stays and comes to me.
+> - File ONE issue (maintainer tooling, not this pull request) and add a next3 row: a dev server seeded from live data keeps live thread ids, so a turn in a seeded thread writes checkpoint refs into the real repository under the live thread's scope.
+>
+> 2. L353 ON THE PHONE: one 20-minute attempt now, in parallel with the gate.
+> - The mobile pass creates a scratch git folder with one small PNG as its project (rule above). Replay cannot view an image, so ONE real Codex turn on the cheapest Codex model in provider.list is authorised ("open this image and answer with one word"); a second turn only if the first did not view it. AGENTS.md allows a real provider when the row depends on that provider's behaviour.
+> - Capture the group's thumbnails (two a row) on iOS and Android, upload to #3660, update the results file. Report the model and the turn count.
+> - This is not a new gate: if it is still NOT RUN when the full run and the final review finish, I decide then with the web row for L353 in hand, and the body says NOT RUN.
+
+- Tree df1a69dfd24a5a8ffd825a463cb587694e0dfb5a (worktree HEAD). Mac juns-MacBook-Pro, heavy-job token 19:49:02Z to 19:57Z. iOS "N15b iPhone 17" (001CF105), Android n15b-pixel7 (emulator-5554). Fresh unseeded dev server (no seeded thread, so none sent to) on 14840 from <worktree>/.t3, without --watch; Metro 8081.
+- Project: a NEW scratch git folder /private/tmp/p1m4-repo (README.md, red-square.png 64x64), added from the iPhone's Add project > Local folder. The only turn ran there.
+- Real provider: Codex, model gpt-6-luna ("GPT-6-Luna", the cheapest Codex model in provider.list), reasoning Low, service tier Standard (the picker's default was Fast and was switched off). ONE turn, sent from the iPhone at 19:53:18Z: "Open red-square.png in this folder with your image viewing tool (view_image) and answer with one word: its color." It ran rg to find the file, then view_image {"path":"/private/tmp/p1m4-repo/red-square.png"} (turn item dynamic_tool, viewedImagePath set), answered "Red", worked 9.9 s. No second turn. Cost: not shown in the client and no usage recorded on the run.
+- Start 19:49:02Z, walking ended 19:56:00Z, cleanup 19:56:52Z (date -u).
+
+| row | lane | iOS | Android | evidence (df1a69dfd2) | captures |
+| --- | --- | --- | --- | --- | --- |
+| L353 viewed-image thumbnails on the phone | N14 | PASS WITH NOTE | PASS WITH NOTE | Thread "Red Square Image Color", "Worked for 9.9s" expanded: under the "Ran 1 command and read 1 file" tool group the viewed image stays visible as a thumbnail (the red square) with its file name red-square.png, then the answer "Red". Note: one image only, so the two-a-row grid is not shown (it needs two or more viewed images in one group). | [iOS](https://raw.githubusercontent.com/goat-si/goat/37644ba2e859259fa5d8ae50257e7be424f7fbe0/3660/p1m4-l353-ios-thumbnails.png), [Android](https://raw.githubusercontent.com/goat-si/goat/37644ba2e859259fa5d8ae50257e7be424f7fbe0/3660/p1m4-l353-android-thumbnails.png) |
+
+- Supersedes the third sitting's L353 NOT RUN line above.
+- Cleanup: server and Metro stopped through their sessions (ports 14840 and 8081 free); agent-device sessions closed and device.close; "N15b iPhone 17" shut down and n15b-pixel7 stopped, both kept; the scratch git folder /private/tmp/p1m4-repo (with its own checkpoint refs), <worktree>/.t3 and /tmp captures removed after upload. No real checkout was touched. Token handed back.
