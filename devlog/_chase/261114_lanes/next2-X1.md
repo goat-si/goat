@@ -292,3 +292,45 @@ NOT RUN: a real runner without bwrap or with a refusing profile (stubs only); a 
 
 Issue filed (body through --body-file): https://github.com/goat-si/goat/issues/3677, "ci: scripts/install-windows.test.ts runs nowhere in CI (Windows-only, not in WINDOWS_SUITES)". Not fixed in this lane (a TF1 row). The lane branch stays at f8c3a1897b until the verdict of goat-next2-X1-fix-f8c3a189.
 
+
+
+## Follow-ups after the APPROVE WITH NITS of f8c3a1897b (branch chase/t3-261114-next2-x1b-followups)
+
+> Coordinator to lane coordinator, 2026-11-17 12:33:55 UTC (date -u; quote verbatim in X1's record and the card row).
+> THE NEW REVIEW of X1's fix round at f8c3a1897b8c79f898ce0c9c940884b4380c53c1 IS "APPROVE WITH NITS" (Opus 5.5 xhigh; nothing at P0 to P2). Both earlier blockers are closed with the reviewer's own evidence: the mixed selection (planRun for the keyPath plus web case: only the web browser file wrapped; the extracted step under bash 5.2 -e with stubs: every case ends on the right side with the right exit), and the Linux proof (it read run 44073635721's logs: 23 task jobs and goat-ci-result SUCCESS on that sha; test-changed 126 Vitest files, 125 passed and 1 skipped, 10 node files 225/225; goat-test inside the namespace 987 files, 10,966 tests, 0 ERR_NETWORK_CHANGED, the namespace shown by Chromium's own ERR_INTERNET_DISCONNECTED on outside hosts; test-server on the host with the three ownership files passing). Rule 3 clean (+38/-0, asserts 203 to 210). The workflow guard exits 0. Clean against dev at both of its heads.
+> X1 IS MERGED INTO THE INTEGRATION BRANCH: chase/t3-261114-next2 fast-forwarded e9e20d52be -> f8c3a1897b (a plain push; e9e20d52be was its ancestor). #3660's head is f8c3a1897b. I added two Known limits lines to #3660's body (X1's ci:affected text, and the server Chromium files still on the host network).
+> FOLLOW-UPS, one small branch chase/t3-261114-next2-x1b-followups cut from f8c3a1897b, like S4's:
+> - X1F-P3-1 (goat-ci.yml:360-364): if changed_tests_netns is set but is not a JSON array, the two mapfile lines swallow node's failure: "not json" runs NO Vitest file and exits 0; "null" wraps nothing; a netns file missing from the list skips the collection check. Not reachable today (goat-ci-scope.cjs:948-949 always writes an array) but it is a hole in "fail closed". Fix as the reviewer says: do the split in one plain node command that checks Array.isArray and that every netns file is in the list, writes the two lists to files under $RUNNER_TEMP, with || { echo "::error::…"; exit 1; }, then mapfile from the files. Add the three cases (not json, null, a stray file) to the step reproduction and say so in the record.
+> - X1F-P3-2 (loopback-netns.sh:14 against :15): the pre-check runs bwrap with the EXACT flags of the real call, ending in true, so a refused PID namespace or /proc mount also gets the ::error:: line.
+> - X1F-N2: structure/ci.md:28 and goat-ci.yml:316 say "web browser tests" where the test task wraps the whole @goat/web suite (unit, browser, renders); goat-ci.yml:329 "Every runner runs" means Vitest and node:test. Reword.
+> - X1F-N1: goat-ci-scope.test.cjs is at 999 of 1000 lines. If the follow-up needs a new scope test, the planRun tests the lane added move to their own file first (a move of the lane's own tests; if any test that exists on dev would have to move, send me file:line first).
+> - The reviewer could not run: the wrapped half of test-changed on a real runner at this head (the list was [] in the lane=all run). The earlier proof run 44062651705 covered it before the split; the follow-up's ONE goat-ci run should be a quick run on a throwaway commit or a workflow_dispatch whose selection holds a web browser file, so the wrapped half runs once with the final flags (--unshare-pid). Say how you made the selection hold one.
+> Then scope tests, the workflow guard, check:changed against origin/chase/t3-261114-next2, a plain push, report the head; I read it myself and merge it (no new review task unless it goes beyond these).
+> FOR THE OTHER LANES: the integration head is f8c3a1897b. N4, N12 and N15b merge it at their READY points (X1 touches only CI files and structure/ci.md, none of theirs). N9a does NOT merge or push while its review runs; after the verdict.
+
+Head: `031f92753b` on `chase/t3-261114-next2-x1b-followups` (cut from f8c3a1897b, one commit, 3 files: goat-ci.yml, loopback-netns.sh, structure/ci.md).
+
+- X1F-P3-1: test-changed splits its list in one plain `node -e` that parses `CHANGED_TESTS` and `CHANGED_TESTS_NETNS`, requires `Array.isArray` and every netns file inside the list, writes `netns` and `host` under `$RUNNER_TEMP/changed-tests-split`, and ends in `|| { echo "::error::goat-scope changed_tests_netns is not a list of the changed test files"; exit 1; }`; `mapfile` reads the two files. The missing-output check stays before it.
+- X1F-P3-2: loopback-netns.sh keeps the flags in one array, `flags=(--unshare-user --unshare-net --unshare-pid --die-with-parent --dev-bind / / --proc /proc)`, and runs `bwrap "${flags[@]}" true` as the pre-check before `exec bwrap "${flags[@]}" "$@"`.
+- X1F-N2: goat-ci.yml's Test comment and structure/ci.md say the whole `@goat/web` suite (unit, browser and render tests) runs in the namespace; the test-changed comment says Vitest and node:test both run, and names the three bad netns outputs that fail the step.
+- X1F-N1: no scope test was needed (goat-ci-scope.cjs and its test are unchanged), so nothing moved.
+
+Checks on 031f92753b:
+
+- `node --test .github/scripts/goat-ci-scope.test.cjs`: tests 73, pass 73, fail 0 (run on the follow-up tree alone).
+- Workflow guard: exit 0.
+- `vp run check:changed origin/chase/t3-261114-next2`: `3 files since f8c3a1897b8c`, `CHECK_EXIT=0` (format, agent surface audit, agent context budget, typecheck pass; knip and tests skipped: no code changed).
+- Step reproduction, f8c3a1897b's step against 031f92753b's (extracted from goat-ci.yml; /bin/bash -e with a mapfile shim; stub vp and bwrap; env -i):
+
+| case | f8c3a1897b | 031f92753b |
+| --- | --- | --- |
+| changed_tests_netns = `not json` | no Vitest file ran, exit 0 | `::error::goat-scope changed_tests_netns is not a list of the changed test files`, exit 1 |
+| changed_tests_netns = `null` | the whole list ran on the host, exit 0 | the same ::error::, exit 1 |
+| a netns file outside the list | the stray file ran inside, outside the collection check, exit 0 | the same ::error::, exit 1 |
+
+  And on 031f92753b, every earlier case: mixed (keyPath and the scripts file on the host, the web file inside after `PRECHECK` with the full flags), server only (host, no bwrap), web only (inside), web fails and host passes (both ran, exit 1), host fails and web passes (both ran, exit 1), RUNNER_ENVIRONMENT unset with bwrap (inside), unset without bwrap (::error:: bwrap is missing, exit 1), bwrap refused (::error:: "bwrap cannot create its user, network and PID namespaces with /proc", exit 1), a bwrap that refuses only `--unshare-pid` (the same ::error::, exit 1; f8c3a1897b's wrapper printed only bwrap's own "Creating new namespace failed", exit 1), github-hosted (host), output missing (::error::, exit 1).
+
+The ONE goat-ci run: https://github.com/goat-si/goat/actions/runs/44084858759, a workflow_dispatch of the throwaway branch `chase/t3-261114-next2-x1b-probe` at `1bb6179285`: 031f92753b plus one commit that adds a dispatch lane `x1b-probe` (LANES, the workflow's options, and `laneRun` returning test-changed with `.github/scripts/x1b-probe.json`), which is how the selection holds a web browser file. The list: `apps/web/src/components/ReopenClosedViewShortcut.browser.test.tsx`, `apps/server/src/hub/disposable/keyPath.test.ts`, `scripts/lib/goat-rename/rules-meta.test.ts`, node `.github/scripts/goat-ci-scope.test.cjs`. The step code is 031f92753b's.
+
+- goat-test-changed, job 134046753589, lidge-goat-03: `3 changed Vitest files`; the host run `Test Files 2 passed (2)`, 72 tests (rules-meta 60, keyPath 12: keyPath passes only outside the user namespace, so it ran on the host); then the run through loopback-netns.sh `Test Files 1 passed (1)` (the web browser file, 8 tests; no ::error::, so the pre-check with the full flags, `--unshare-pid` and `--die-with-parent` included, passed on a real lidge runner); `1 changed node:test files`, tests 73, pass 73. "Test changed files" and "Check for leaked temp files" succeeded.
+
