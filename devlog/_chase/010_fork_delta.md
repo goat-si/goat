@@ -140,6 +140,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/server/src/mcp/LaunchWatchService.ts`, `launchWatch.ts`, `HostThreadsMcpService.ts`, `toolkits/{project,ssh,orchestrator}`
 - 정책: GOAT 전용 상태 파일, 마이그레이션 없음. upstream을 받고 launch 등록, send re-arm, watch 도구를 다시 얹는다.
 
+### `legacy-sidebar-shortcuts` Projects(legacy) 사이드바의 단축키 문맥
+
+- 커밋: #3660 (L365, upstream facd190640)
+- 경로: `apps/web/src/components/LegacySidebar.tsx`, `apps/web/src/components/sidebar/threadJumpHints.ts`
+- 정책: upstream에 없는 GOAT의 legacy 사이드바도 main 사이드바처럼 `threadShortcutContext`로 단축키 문맥을 만들어, 사용자 키 바인딩의 `when`이 previewFocus·previewOpen·isWeb·isDesktop을 같은 값으로 읽는다. 기본 바인딩은 영향이 없다. 남는 차이 하나: legacy의 점프 라벨 표(`LegacySidebar.tsx:3631` `buildThreadJumpLabelMap`)는 터미널 열림 상태(`:3502` `routeTerminalOpen`)를 읽으므로, 터미널이 열릴 때 legacy 사이드바는 여전히 한 번 다시 그린다. main 사이드바는 upstream처럼 다시 그리지 않는다. upstream이 사이드바 단축키를 바꾸면 main 사이드바를 받고 legacy에 같은 문맥 호출을 다시 얹는다.
+
 ### `link-thread-maximize` 링크로 시작한 스레드 최대화
 
 - 커밋: `ef4748eb7`
@@ -230,6 +236,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 커밋: #5 #10 #6
 - 경로: `apps/server/src/remoteReports`, `apps/server/src/orchestration-v2/goat/RemoteDelegatedTasks.ts`, `apps/server/src/mcp/goat/RemoteTaskTargets.ts`, `apps/server/src/mcp/toolkits/{remoteReport,ssh}`, `apps/server/src/persistence/Migrations/*_{RemoteReports,RemoteDispatches}*`, `packages/contracts/src/remoteReports.ts`
 - 정책: GOAT 전용. RemoteReports·RemoteDispatches 마이그레이션은 다시 실행해도 안전하게 써서(`IF NOT EXISTS`) upstream이 그 id를 가져가면 옮길 수 있다. upstream의 SSH·MCP 변경은 받고 출발지 보고, 원격 위임, 첨부 전달을 다시 얹는다. `OrchestratorMcpService`의 원격·클라우드 위임 판정(`authorizeRemoteWrite`, `preflightCloudLaunch`, `resolveRemoteTarget` 등)은 `mcp/goat/RemoteTaskTargets.ts`의 factory에 있고 서비스는 호출 한 번만 둔다(#915).
+
+### `reply-to-response` 응답에 답하기(Reply)
+
+- 커밋: #3660 (L18, upstream c0f85e7f79)
+- 경로: `apps/web/src/components/chat/{composerReplyTarget.ts,composerReply.tsx,TimelineAssistantRows.tsx,ChatComposer.tsx}`, `apps/server/src/orchestration-v2/{ResponseContextCheck,BuiltInSkillText}.ts`, `apps/server/src/environment/ServerEnvironment.ts`, `packages/contracts/src/composerContext.ts`
+- 정책: 세 가지가 upstream과 다르다. (1) upstream은 ChatView가 composer handle로 Reply를 넘기지만, GOAT는 `ChatView.tsx`를 건드리지 않고 `composerReplyTarget.ts:11`의 레지스트리(composer form 요소를 키로 한 handle WeakMap)로 클릭한 메시지와 같은 열의 composer를 찾는다. 같은 스레드가 두 열에 열려 있어도 맞는 composer로 간다. (2) 서버 검사는 GOAT 전용이다. 클라이언트가 만든 응답 레코드를 믿지 않고, 받는 스레드나 그 스레드가 이력을 물려받은 스레드(run fork 사슬 전체, side chat 부모 포함, 삭제된 스레드 제외)의 이 서버 assistant 메시지일 때만 `thread.read` 줄을 준다(`ResponseContextCheck.ts`). 그 밖은 unavailable로 보낸다. 웹은 서버가 `capabilities.replyToResponse`를 알릴 때만 Reply를 보인다. (3) `subagents[].environmentId`(`composerContext.ts:294`)는 upstream 스키마대로 남기지만 GOAT는 채우지 않고, 서버는 이 값이 있는 subagent를 버린다. upstream이 이 파일들을 바꾸면 받고 레지스트리 호출, 서버 검사 호출, capability 게이트를 다시 얹는다.
 
 ### `repo-hygiene` 저장소 루트 정리
 
