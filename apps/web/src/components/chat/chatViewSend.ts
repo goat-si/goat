@@ -41,8 +41,8 @@ import {
   type ComposerSendSnapshot,
   readFileAsDataUrl,
   prepareRevertedMessageAttachments,
-  waitForRevertedMessage,
 } from "../ChatView.logic";
+import { waitForRevertedMessage } from "../threadRewindWait";
 import { readPreparedConnection } from "../../state/session";
 import { recallableComposerPrompt } from "./composerPromptHistory";
 import { notifyDirectAnnotationAttached } from "./composerSendNotices";
