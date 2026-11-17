@@ -165,3 +165,68 @@ Prior art and source: GitHub's GraphQL reference (https://docs.github.com/en/gra
 
 Entries: every in-app click on a pull request link goes through `useOpenChangeRequestLink` (apps/web/src/lib/openPullRequestLink.ts:38), which calls `openPullRequest` with the clicked `url` (:82); the port passes it on as `revealUrl` there, so all its callers get the jump: chat markdown (ChatMarkdown.tsx:155), the timeline, composer, sidebar rows, thread details, branch toolbar and git actions (through `useOpenPrLink`), the HTML document frame (BrowserDocumentFrame.tsx:46), and DESKTOP: links the OS hands to the app (deep links and external-link hand-offs) reach `DesktopWebLinkCoordinator` (apps/web/src/components/desktop/DesktopWebLinkCoordinator.tsx:26, :93), which calls the same `useOpenChangeRequestLink` with a plain click. When a link opens the `/pull-requests` page without a panel ref, the page's selection carries the url (upstream's PullRequestsPage.tsx and _chat.pull-requests.tsx hunks). The command palette (CommandPalette.tsx:519-537) and the other `openPullRequest` callers (PullRequestsPage list rows, reopenClosedView, useThreadLinkedPullRequest, useRightPanelActions, RightPanelSurfaceContent) open a pull request by itself, not a link with an anchor, so they have nothing to reveal; the palette never opens a pasted link. Mobile reaches the reveal through `useOpenPullRequest` and `pullRequestNavigation` (upstream's mobile hunks).
 
+
+
+## Coordinator, run 1817 (2026-11-17 21:38:37 UTC), sections I, III, IV, V and the notes for K2, verbatim
+
+> I. #3696 MERGED; INTEGRATION HEAD c995c5427a
+> - The fresh C4 review of #3696 at b7672aa5f8 was APPROVE WITH NITS (six P3, no P0 to P2; report /Users/jun/handoff-in/chase/pr3696-T1b-review-b7672aa5.md). MERGED BY ME 21:29:00 UTC, dev = 8c59f73519663bdb1fff3346d1caedf06083ddf7 (goat-ci-result success on the head, run 44173778052). goat#3694 closed with it.
+> - chase/t3-261114-next3 fast-forwarded to dev 8c59f73519 (this is the one dev merge), then K10's shared pre-commit 2bc2e7761b merged by me after a line-by-line read (useComposerSend.ts:301-407 at a608046c51 equals useComposerSend.ssh.ts:54-160 byte for byte; the builder, the wrapper and the two call sites read). chase/t3-261114-next3 = c995c5427accaaa92dadac50ec756c35f4b92034 (parents 8c59f73519 and 2bc2e7761b; plain push). One wording nit for K10's own lane, no new commit on the pre-commit: the new file's doc comment says "rebuilt each render as before" while it is built per call.
+> - Every lane with no code commit runs git merge --ff-only origin/chase/t3-261114-next3 before its first commit and reports the sha. K2, which is coding, keeps its plan: one merge of the integration head after K7 lands, and it does not write into useComposerSend.ts before that merge.
+>
+> III. SHARED AT-ENTRY FILES (your list of 22:0x)
+> The pre-commit branch stays the tool for one case only: two lanes need the SAME block moved, or a lane needs room in a file before the lane that frees it lands. For the rest, a claims table:
+> 1. On card 10.028 keep one table "at-entry move-outs": file, lane, the block as path:line range at c995c5427a, the new module, lines freed. A lane writes its row BEFORE it cuts the block. You refuse a row that overlaps another lane's range and bring an overlap you cannot settle to me.
+> 2. Every lane nets zero or less in each at-entry file by its own commits (its move-out frees at least what its rows add). No lane leaves a file longer than its entry at the cut.
+> 3. code-budgets.json conflicts at a lane's merge of the integration head are settled by countLines of the merged file, never by a number above the entry at 8c59f73519.
+> 4. Same-basename entries in your list are settled by the records: K7 means packages/client-runtime/src/state/server.ts (and apps/server/src/server.ts only for rows 10 and 11, which leave K7, see VI) and apps/server/src/terminal/Manager.ts.
+> 5. Order of landing for the meeting points: K7 first in packages/contracts and packages/client-runtime (as ruled); K1's Orchestrator.ts, orchestrationV2.ts and orchestratorMcp.ts move-outs are K1's own blocks (dispatchPullRequestWatchSync, the watch.sync struct, OrchestratorMcpThreadPullRequest) and K7 and K10 claim other blocks; MessagesTimeline.tsx, MessagesTimeline.logic.ts, ThreadFeed.tsx, thread-work-log.tsx and ThreadDetailScreen.tsx: K10 before M3's O22 (M3 D3); apps/mobile/src/features/pull-requests/: K2 before M3 (M3 D7).
+>
+> IV. RULE 3, ONE STANDING AUTHORISATION
+> Rule 3 stays: no existing test expectation changes without my word. To stop one round trip per line, my word is given in advance for the MIRRORED case only, when all three hold: (1) the upstream commit being ported changes the same assertion in upstream's own copy of that test in the same way; (2) the lane quotes both hunks, upstream's and GOAT's, before and after, in its record BEFORE the commit; (3) the commit changes no other existing expectation. The fresh review checks every one; one it cannot match to upstream's hunk is a P2. Everything else still comes to me with exact before and after: GOAT-own tests with no upstream counterpart, deleted or retitled tests, moved harnesses, and anything a lane is unsure of.
+>
+> V. CAPS, PLACEMENT, T1c
+> - Coding lanes at once: seven, K4 included (K2, K7, K1, K10, M3, K4, and K5). Fresh reviews at once: two, unchanged. No further lane starts without a plan ruled by me.
+> - K5 starts now only on a Mac that host.status placement shows with at most one lane and no warning or critical pressure; the Air is not doubled up (it went critical under one lane in next). Otherwise K5 takes the slot of the first lane that reaches READY. Tell me the host.
+> - T1c, a new small branch by T1's thread on pen-macmini: chase/t3-261114-next3-t1c-lease-pins from c995c5427a, tests and one budget entry only, no production line. Content, from the #3696 review: P3-1 an idle subprocessInspector in ThreadWorkspaceService.setupLockOrder.test.ts's makeWithOptions (as Manager.leaseOrder.test.ts has), so the three setup cases stop reading the host's real ps; P3-2 the probe as a case: the holder's open starts a shell while a person's restart waits, the restart returns the setup's pid, nothing is killed, one spawn; P3-3 an overtaken request that would start a fresh shell in a worktree its thread left is refused as moved and spawns nothing; P3-5 a first attempt in a free folder starts and never calls current; P3-4 RULED: the guard at terminalLeaseOrder.ts:75 STAYS. A close is the last word to the request that was waiting; a later open by someone else was a new request and was served; the waiting request is owed only the truth about the terminal now, the terminal if one is there and "Unknown terminal" if not, and it never starts a shell that a person closed and housekeeping then removed. Same answer as dev. Two cases pin it: close then newer open then rerun returns the newer terminal; close, newer open, idle close, rerun answers Unknown terminal and spawns nothing. P3-6: code-budgets.json Manager.ts 3118 becomes 3116; the corrected wording of the exit row (true only for a request nothing overtook), the close row (it also covers GOAT's own closes: a cancelled launch and observed checks) and one Limits sentence (a setup whose thread was rebound while its open waited still runs in the old folder) go into T1c's commit message and its record; I add a comment on #3696 when T1c is in. Each new case must fail under its mutation from the review (the lane runs the mutation and records the result). I read T1c and merge it without a fresh review if it is test-only. T1c lands before K4's goat#3681 and goat#3690 commits; pen-macmini carries T1 and K4 with one heavy job at a time, then T3.
+>
+> FROM M3's SECTION, FOR YOU (verbatim): "D7: M3 ports the pull-requests folder's hunks of O22 and O24 ITSELF, after K2 has merged into the integration head; the folder passes from K2 to M3 at that merge. The Legend upgrade and the Screens sheets never land with that folder left on the old workarounds. K2 is told now that its folder work must be complete at its READY."
+>
+> LANE COORDINATOR, FOR K2, on your rule 3 request for b3fdf2b10f (report 2): your request crossed the coordinator's new standing authorisation IV above. My reading, which the fresh review will check: (4) pullRequestNavigation.test.ts:38 is a mirrored assertion change and falls under IV once both hunks (upstream's and GOAT's, before and after) are quoted in next3-K2.md before the commit. (1) and (2) are mirrored but are fixture SETUP lines in shared testkit files, and IV speaks of assertions, so I have forwarded them to the coordinator for the word together with (3), which retitles and rewrites a test and is outside IV by its own terms ("deleted or retitled tests"). Commit (4) when you reach it; hold b3fdf2b10f's commit for (1) to (3) only, and work on in your order meanwhile if it does not depend on that row. Quote I, III, IV, V in your record. You keep your plan: one merge of the integration head after K7 lands, nothing into useComposerSend.ts before that merge. Write your row in the "at-entry move-outs" table on card 10.028 before you cut any block of an at-entry file (send it to me through goat_origin_report if you cannot push the card).
+
+## Rule 3 under IV: b3fdf2b10f, apps/mobile/src/features/pull-requests/pullRequestNavigation.test.ts:38 (mirrored)
+
+Upstream's hunk (b3fdf2b10f, upstream's copy of the same test, same assertion):
+
+```diff
+@@ -34,7 +34,13 @@ describe("native PR entry points", () => {
+         context,
+         projects,
+       ),
+-    ).toEqual({ ...context, host: "github.com", repository: "org/repo", number: 12 });
++    ).toEqual({
++      ...context,
++      host: "github.com",
++      repository: "org/repo",
++      number: 12,
++      navigationUrl: "https://github.com/org/repo/pull/12/files#diff",
++    });
+```
+
+GOAT's hunk (the same line on c995c5427a, the same after): before, line 38 `).toEqual({ ...context, host: "github.com", repository: "org/repo", number: 12 });`; after, the seven lines above with `navigationUrl: "https://github.com/org/repo/pull/12/files#diff"`. The commit changes no other existing expectation in that file. The link `/pull/12/files#diff` names the Code tab (parsePullRequestAnchor returns `{ kind: "code" }`), so the destination now carries the link for the screen to follow.
+
+## Rule 3 items still with the coordinator for b3fdf2b10f
+
+(1) gitHubPullRequestJsonTestFixtures.ts:71 `pullRequestReview: null` (fixture setup, mirrors upstream's remark helper); (2) GitHubPullRequestApi.testkit.ts:217 `pullRequestReview: null` (fixture setup, mirrors upstream's threadComments in its GitHubPullRequestApi.test.ts); (3) useCodeViewFileReveal.test.ts:57-71, retitled and rewritten as upstream does. The row's commit waits for these; exact before and after are in report 2 (sequence 2).
+
+## At-entry move-outs K2 claims (sent to the lane coordinator for card 10.028; ranges at a608046c51, which equals c995c5427a for these files unless noted)
+
+| file (entry) | block | new module | lines freed | row |
+|---|---|---|---|---|
+| apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx (1798) | :173-210 resolvePullRequestReference, pullRequestMarkdownContext, pullRequestStackReference | pullRequestDetailReferences.ts | about 34 net | b3fdf2b10f |
+| packages/source-control-github/src/server/gitHubPullRequestJson.ts (1775) | :1670-1679 toFileViewedState | gitHubFileViewedState.ts | about 9 net | b3fdf2b10f |
+| apps/mobile/src/features/pull-requests/PullRequestRouteScreen.tsx (1358) | :124-188 PullRequestIdentity (to confirm) | PullRequestIdentity.tsx | about 60 | b3fdf2b10f |
+| PullRequestCodeTab.tsx, PullRequestsPage.tsx, rightPanelStore.ts | to be sent before the cut | | | b3fdf2b10f |
+
+Not at-entry: packages/contracts/src/pullRequest.ts (993, unbudgeted) was moved out in 239649e7932 (pullRequest.ts:933-943 and :946-993 to pullRequestErrors.ts, verbatim, checked with diff; rpc.ts went from 2788 to 2787 and environmentHttp.ts from 996 to 992 by import lines only).
+
