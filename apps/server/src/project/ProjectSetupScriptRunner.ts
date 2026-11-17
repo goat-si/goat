@@ -72,6 +72,11 @@ export interface ProjectSetupScriptRunnerInput {
   readonly observeCompletion?: {
     readonly onOutputLine?: (line: string) => Effect.Effect<void>;
   };
+  /**
+   * Starts the script in a new shell even when this terminal already runs one: a restored worktree
+   * is a new folder at the old path, and a live shell there still sits in the removed one.
+   */
+  readonly freshShell?: boolean;
 }
 
 export class ProjectSetupScriptOperationError extends Schema.TaggedError<ProjectSetupScriptOperationError>()(
@@ -157,6 +162,9 @@ const BRACKETED_PASTE_ON = "\x1b[?2004h";
 const BRACKETED_PASTE_OFF = "\x1b[?2004l";
 // Longer than one subprocess poll plus its ps timeout, so a startup prompt is seen as busy first.
 const SHELL_QUIET_FALLBACK = "3 seconds";
+// The terminal manager's own size for a terminal opened without one.
+const FRESH_SHELL_COLS = 120;
+const FRESH_SHELL_ROWS = 30;
 
 function lineEditorReading(text: string, previous: boolean): boolean {
   const on = text.lastIndexOf(BRACKETED_PASTE_ON);
@@ -463,6 +471,30 @@ export const make = Effect.gen(function* () {
       // Before client attachment, truecolor probes wait for terminal replies nobody can send.
       COLORTERM: "",
     };
+    const shellEnv = { ...env, NO_COLOR: "1", FORCE_COLOR: "0" };
+    // Restarted before the watchers subscribe, so the old shell's end settles nothing of this run;
+    // a prompt the new shell printed before them is covered by the readiness watcher's quiet fallback.
+    if (input.freshShell === true)
+      yield* terminalManager
+        .restart({
+          threadId: input.threadId,
+          terminalId,
+          cwd,
+          worktreePath: threadWorktreePath,
+          cols: FRESH_SHELL_COLS,
+          rows: FRESH_SHELL_ROWS,
+          env: shellEnv,
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProjectSetupScriptOperationError({
+                ...errorContext,
+                operation: "openTerminal",
+                cause,
+              }),
+          ),
+        );
     const observe = input.observeCompletion;
     const completionToken = observe ? (yield* random.uuidV4()).replaceAll("-", "") : null;
     const echoedWrapperLines: string[] = [];
@@ -491,7 +523,7 @@ export const make = Effect.gen(function* () {
           stopOnSettle: script.stopOnSettle ?? false,
           cwd,
           worktreePath: threadWorktreePath,
-          env: { ...env, NO_COLOR: "1", FORCE_COLOR: "0" },
+          env: shellEnv,
         })
         .pipe(
           Effect.andThen(() =>
