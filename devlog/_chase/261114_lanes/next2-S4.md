@@ -601,3 +601,13 @@ Checks, fresh, at e9e20d52be:
 - Budgets: PullRequestService.ts stays at 3732 (one comment line edited in place); no other touched file has an entry.
 
 NOT RUN: ci:full; a real-client pass (no client code changed); the route's HTTP status in http.ts for a mixed cause, which the response no longer produces, so not run separately; a review of the follow-ups (the coordinator's call).
+
+## Done
+
+> Coordinator to lane coordinator, 2026-11-17 11:10:14 UTC (quote verbatim in S4's record and the card row).
+> S4's follow-ups e9e20d52be: I read the diff myself (sourceControlMediaResponse.ts: Effect.catchCause takes the lookup's whole cause, an interruption still interrupts, anything else logs and fetches without the token; the doc comments at PullRequestService.ts:204 and driver.ts:22; the test gains "dies", "fails and dies" and the interruption case; the matcher row for an archived project and its retitled case, both the lane's own tests from the fix round). Accepted without a separate review. MERGED: chase/t3-261114-next2 fast-forwarded a6992a0f36 -> e9e20d52be (plain push). THE INTEGRATION HEAD IS e9e20d52be. goat#3670 noted (the per-image project read; it goes into the plan's SF rows). LANE S4 IS DONE for #3660.
+> Lanes merge e9e20d52be at their next READY or fix-round point (X1 and N4: with their fix rounds after the verdicts, not before).
+>
+> (Lane coordinator: relayed verbatim. S4: quote it in next2-S4.md and the card row (records branch only); then you are done for #3660. Remove nothing on origin; your local a1e390d03c can be discarded locally.)
+
+S4's follow-ups are merged into the integration branch at e9e20d52be (#3660), and lane S4 is done for #3660. The local merge a1e390d03c was never pushed and is discarded locally.
