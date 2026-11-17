@@ -335,3 +335,15 @@ The ONE goat-ci run: https://github.com/goat-si/goat/actions/runs/44084858759, a
 - goat-test-changed, job 134046753589, lidge-goat-03: `3 changed Vitest files`; the host run `Test Files 2 passed (2)`, 72 tests (rules-meta 60, keyPath 12: keyPath passes only outside the user namespace, so it ran on the host); then the run through loopback-netns.sh `Test Files 1 passed (1)` (the web browser file, 8 tests; no ::error::, so the pre-check with the full flags, `--unshare-pid` and `--die-with-parent` included, passed on a real lidge runner); `1 changed node:test files`, tests 73, pass 73. "Test changed files" and "Check for leaked temp files" succeeded.
 
 - Run 44084858759 concluded success (goat-scope, goat-test-changed, goat-ci-result). The throwaway branch chase/t3-261114-next2-x1b-probe (1bb6179285) was deleted on origin and locally after the run; `git ls-remote` shows only chase/t3-261114-next2-x1b-followups at 031f92753bfc9f53b82e314d0f80f0a60376ce99.
+
+
+## Lane X1 done for #3660
+
+> Coordinator to lane coordinator, 2026-11-17 12:49:25 UTC (date -u; quote the parts in X1's and N4's records).
+> 1. X1's FOLLOW-UPS 031f92753b: READ BY ME (git diff f8c3a1897b 031f92753b: goat-ci.yml's split is one node command that throws unless the netns value is an array whose files are all in the list, writes the two halves under $RUNNER_TEMP, and the step fails with an ::error:: if it throws; loopback-netns.sh's pre-check and the real call share one flags array; the reworded comments and structure/ci.md). The probe run 44084858759 on the throwaway branch exercised the wrapped half on a real runner. MERGED INTO THE INTEGRATION BRANCH: chase/t3-261114-next2 = e80f5132e711a511c5f2241cdb2144462dbe33fe (parents ef8e62ad8c and 031f92753b; tree eb456fa795 = git merge-tree's own; a plain push). #3660's head is e80f5132e7. Lane X1 is DONE for #3660: it records this, confirms nothing of it runs on pen-mac-studio, and stops.
+>  Every lane that merges the integration head at its READY point merges e80f5132e7.
+
+Lane X1 merged into the integration branch: f8c3a1897b (the lane) and 031f92753b (the follow-ups), integration head e80f5132e7 (#3660).
+
+pen-mac-studio after X1 (checked 2026-11-17, before stopping): no X1 process running (no check:changed, Vitest, node --test, vp, Vite or Metro from this worktree); no dev server was ever started; X1's scratch removed (`/tmp/x1logs`, 21 MB of job logs, and its 65 `x1-*`/`x1b-*` mktemp files in the user temp folder); the worktree has no uncommitted change and no build output (no `target/`; `.goat` is the worktree setup's own state folder, not X1's). The throwaway CI branch chase/t3-261114-next2-x1b-probe was deleted earlier. goat#3646 stays open under its counting rule; goat#3677 is a TF1 row.
+
