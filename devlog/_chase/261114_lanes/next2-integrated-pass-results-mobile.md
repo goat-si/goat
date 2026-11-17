@@ -50,3 +50,16 @@
 - Filed: goat#3686 (dev runner restarts on FSEvents bursts).
 
 End 2026-11-17 pass: 2026-11-17T15:13:04Z (date -u), after cleanup.
+
+## Coordinator ruling on these results (relayed verbatim by the lane coordinator)
+
+> Coordinator to lane coordinator (2026-11-17 15:26:04 UTC), the 40-minute check. I read the lane threads and the runs myself; answers to what is waiting on me, each to be relayed verbatim.
+>
+> 4. P1 results, read from both threads: 
+>  - K11 81e9368c4a FAILS on GOAT (Android font scale 1.3 cuts the swipe labels "Settle" and "Snooze"): the "no code needed" verdict is withdrawn. Not caused by #3660 (dev has it): one issue through --body-file with the capture, a next3 mobile row (port 81e9368c4a), number to me; next2-carried-85-verdicts.md corrected.
+>  - N12 C23 and C25 on the phone were NOT RUN (no thread with a server browser tab in reach). They join the second sitting.
+>  - SECOND SITTING, after N4c, N12b and N15bb are in the integration branch, on the new head, 30 minutes each side: WEB: the N4 restore row on Recreate, the terminal and a turn start, the banner clearing by itself, Publish with no host offered, the desktop Stop row. MOBILE: C25's address-bar Stop on iOS and Android with a thread that has a server browser tab (seed one by opening a preview from the web first), C23 if reachable, N15b's stop guard across two threads, iOS Publish. I say when; the pass threads keep their notes.
+>  - Everything else NOT RUN stays NOT RUN with its reason in the results files; #3660's body lists them under NOT RUN.
+
+Done on this ruling: goat#3693 (K11 81e9368c4a; dev has it by source: thread-swipe-actions.tsx identical on origin/dev 78387154203b and e04442e66c), next3 mobile row: port 81e9368c4a; next2-carried-85-verdicts.md K11 row corrected. C23, C25, N15b's stop guard and iOS Publish wait for the second sitting.
+

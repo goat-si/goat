@@ -44,7 +44,7 @@ a48d7c6cd0, 22910ffdd2, 058d953646, 79daf43c1c; e93f6ea361 then ff1eead6f4; 67fd
 
 ## K11 native checks, no code: into P1's mobile pass (simulators and emulators; a row that truly needs a physical device keeps its issue and says so)
 
-81e9368c4a, 11f61a5327, fd64128014, b85a21e240, 01200aaf8e (the capture; the title cap stays deferred), 9c5b6f3d77, 96aa40ebcd, 0465d4a87d, 7179113617, 095611d1b5, 9a35ab0afe, ca6e09c3e1. 7fb54eb051 waits on its predecessor 35bda28117 (native secret input): port both in N15a's follow-up or skip both; N15a says which after reading it.
+81e9368c4a (withdrawn 2026-11-17 by the coordinator: FAILS on GOAT, Android font scale 1.3 clips the swipe labels; dev has it; port it in next3 mobile, goat#3693), 11f61a5327, fd64128014, b85a21e240, 01200aaf8e (the capture; the title cap stays deferred), 9c5b6f3d77, 96aa40ebcd, 0465d4a87d, 7179113617, 095611d1b5, 9a35ab0afe, ca6e09c3e1. 7fb54eb051 waits on its predecessor 35bda28117 (native secret input): port both in N15a's follow-up or skip both; N15a says which after reading it.
 
 ## Waits on the owner
 
