@@ -481,3 +481,11 @@ Upstream's other server.test.ts hunks in this commit (import reorder of serverUp
 
 The mirrored hunk takes server.test.ts from 1411 to 1419, and its entry is 1411. Freeing room means moving existing tests, which is the coordinator's call.
 
+
+
+### Budget question, options with corrected ranges at c995c5427a (lane coordinator's correction, checked with `git show c995c5427a:...server.test.ts`)
+
+- A: describe("accepted server update recovery") is server.test.ts:228-382 (155 lines). It does not include :384-434, the top-level makeConfigPersistenceHarness that "server state projection" (:436-1329) uses and that stays. My report's ":228-443, 216 lines" was wrong.
+- B: describe("provider setup commands") is server.test.ts:1331-1411 (81 lines). My report's ":1339-1419" was my worktree's numbers with the +8 hunk applied.
+- Row 4's uncommitted work is held in a local stash ("k7-row4-wip") on top of ebbba8c7f0, so row 5's commit carries only row 5.
+
