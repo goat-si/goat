@@ -201,7 +201,7 @@ type CredentialRef = PullRequestRef & { readonly [credentialNamespace]?: string 
 export class PullRequestService extends Context.Service<
   PullRequestService,
   {
-    /** Whether `repository` on `host` is the origin or upstream of an active project. */
+    /** Whether `repository` on `host` is a project's origin or upstream; archived ones count. */
     readonly hasProjectRepository: (input: {
       readonly host: string;
       readonly repository: string;
