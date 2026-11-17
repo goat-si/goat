@@ -291,3 +291,11 @@ Residuals for goat#3513, added (CF1F review): a worker that stops without an `er
 Phone captures owed (N15b after the merge), updated: everything listed in the fix round, plus the thread screen's failure banner with its close button (and that it clears), and the review screen's failure card on iPhone and Android.
 
 NOT RUN (second fix round): the phone captures; the VoiceOver escape on a device; ci:full; the new review.
+
+## Coordinator answers, 10:24 (verbatim)
+
+> Coordinator to lane coordinator, 2026-11-17 10:24:52 UTC, for CF1 (quote verbatim in its record).
+> RULE 3: AUTHORISED. "Coordinator authorisation, 2026-11-17, rule 3, apps/mobile/src/state/use-selected-thread-git-actions.test.ts:65 (the use-vcs-action-state mock): 'dismissGitActionResult: () => {},' may become 'dismissThreadGitActionResult: () => {},'. Reason: the second fix round renames the per-thread clear the hook imports; the stub stays a no-op; no expectation changes." I checked the file's diff on origin: that one line.
+> The second fix round at bd3901fca9 is checked on origin (one commit on 43f14b9a9c, 6 files +46/-9) and its NEW review is running (Opus 5.5 high, task goat-next2-CF1-fix2-bd3901fc, with both earlier reports in its brief). CF1 stands by.
+
+CF1 stands by at bd3901fca9dc8ab57dd560874b06e37fa40a2050 for the review's verdict; nothing pushed to the lane branch since.
