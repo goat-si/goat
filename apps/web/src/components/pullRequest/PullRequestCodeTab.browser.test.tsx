@@ -11,6 +11,8 @@ import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
+import { __setClientSettingsForTests } from "../../hooks/useSettings";
+import { DEFAULT_CLIENT_SETTINGS } from "@goat/contracts/settings";
 
 const { diffAtom, pagedDiffAtom, imageDiffAtom } = await vi.hoisted(async () => {
   const { AsyncResult, Atom } = await import("effect/reactivity");
@@ -71,7 +73,14 @@ const mocks = vi.hoisted(() => ({
   image: false,
   assetResources: [] as unknown[],
   diffCommits: [] as Array<string | undefined>,
+  viewedPaths: null as ReadonlySet<string> | null,
+  viewedListeners: new Set<() => void>(),
 }));
+
+function deliverViewedPaths(paths: ReadonlySet<string> | null) {
+  mocks.viewedPaths = paths;
+  for (const listener of mocks.viewedListeners) listener();
+}
 
 vi.mock(import("~/assets/assetUrls"), async (original) => ({
   ...(await original()),
@@ -88,6 +97,27 @@ vi.mock(import("~/state/use-atom-command"), async (original) => ({
   ...(await original()),
   useAtomCommand: (() => vi.fn()) as never,
 }));
+vi.mock(import("./usePullRequestFilesViewed"), async () => {
+  const { useSyncExternalStore } = await import("react");
+  const subscribe = (listener: () => void) => {
+    mocks.viewedListeners.add(listener);
+    return () => mocks.viewedListeners.delete(listener);
+  };
+  return {
+    usePullRequestFilesViewed: () => {
+      const viewedPaths = useSyncExternalStore(subscribe, () => mocks.viewedPaths);
+      return {
+        enabled: viewedPaths !== null,
+        isViewed: (path: string) => viewedPaths?.has(path) === true,
+        isStale: () => false,
+        setViewed: () => {},
+        truncated: false,
+        error: null,
+        refresh: () => {},
+      };
+    },
+  };
+});
 vi.mock(import("~/state/pullRequests"), async (original) => {
   const actual = await original();
   return {
@@ -163,6 +193,8 @@ function setup(paged = false, image = false) {
   mocks.image = image;
   mocks.assetResources = [];
   mocks.diffCommits = [];
+  mocks.viewedPaths = null;
+  mocks.viewedListeners.clear();
 }
 
 const tab = (
@@ -368,4 +400,29 @@ it("answers a commit's diff link only once that commit's diff is shown", async (
   expect(settled).not.toHaveBeenCalled();
   await screen.rerender(linked(url, settled, null, oid, withCommit));
   await vi.waitFor(() => expect(settled).toHaveBeenCalledWith(url));
+});
+
+// Last: it leaves client settings hydrated, which the paged cases above do not expect.
+// regression: a Viewed answer that lands after a link reveals a file must not fold it
+it("keeps a revealed file open when its Viewed mark loads afterwards", async () => {
+  setup();
+  __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, diffFilesCollapsed: false });
+  using _preferences = {
+    [Symbol.dispose]() {
+      __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
+    },
+  };
+  mocks.viewedPaths = new Set();
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(tab(0, { path: "a.ts", nonce: 1 }), { container });
+  await expect.element(screen.getByText("three()", { exact: true })).toBeVisible();
+
+  deliverViewedPaths(new Set(["a.ts"]));
+  await expect.element(screen.getByRole("checkbox", { name: "Viewed" })).toBeChecked();
+
+  await expect
+    .element(screen.getByRole("button", { name: "Collapse diff" }))
+    .toHaveAttribute("aria-expanded", "true");
+  await expect.element(screen.getByText("three()", { exact: true })).toBeVisible();
 });
