@@ -451,7 +451,7 @@
   "apps/server/src/usage/usageAggregation.ts": { "nonNull": 2 },
   "apps/server/src/usage/usageTranscriptReader.ts": { "nonNull": 5 },
   "apps/server/src/vcs/GitVcsDriver.test.ts": { "lines": 1781 },
-  "apps/server/src/vcs/GitVcsDriver.ts": { "lines": 1765, "nonNull": 4 },
+  "apps/server/src/vcs/GitVcsDriver.ts": { "lines": 1710, "nonNull": 4 },
   "apps/server/src/vcs/GitVcsDriverCore.test.ts": { "lines": 6275 },
   "apps/server/src/vcs/GitVcsDriverCore.ts": { "lines": 5400, "nonNull": 6 },
   "apps/server/src/vcs/VcsStatusBroadcaster.test.ts": { "lines": 1018 },
