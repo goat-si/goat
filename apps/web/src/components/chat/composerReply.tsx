@@ -1,5 +1,6 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
+import { threadFamilyRead } from "@goat/client-runtime/state/threads";
 import type {
   ComposerContextRecord,
   EnvironmentId,
@@ -23,6 +24,8 @@ import {
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { readThreadShell, useServerConfigs } from "../../state/entities";
 import { environmentServerConfigsAtom } from "../../state/server";
+import { threadFamilies } from "../../state/threads";
+import { waitForAtomValue } from "../../state/waitForAtomValue";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
 
@@ -164,6 +167,37 @@ export function restoreStashedReply(
   const store = useComposerDraftStore.getState();
   if (store.getComposerDraft(target)?.replyTo) return;
   store.setReplyTo(target, reply);
+}
+
+/**
+ * Whether the stash may restore `records` now: false only while the family read that may bring a
+ * stashed reply's thread (a fork's older settled source) is still out, so the entry stays put.
+ */
+export async function stashedReplyCanBeJudged(
+  records: ReadonlyArray<ComposerContextRecord>,
+  target: ComposerThreadTarget,
+): Promise<boolean> {
+  const reply = records.find(isResponseContextRecord);
+  if (!reply || typeof target === "string" || reply.citation.threadId === target.threadId) {
+    return true;
+  }
+  if (readHolderShell(reply.citation.environmentId, reply.citation.threadId) !== null) return true;
+  const settled = await waitForAtomValue({
+    registry: appAtomRegistry,
+    atom: threadFamilies.familyAtom(target.environmentId, target.threadId),
+    predicate: (read) => threadFamilyRead(read) === "settled",
+    timeoutMs: 5_000,
+  });
+  if (!settled) {
+    toastManager.add(
+      stackedThreadToast({
+        type: "info",
+        title: "Still loading the thread this prompt replies to",
+        description: "The prompt stays in the stash. Restore it again in a moment.",
+      }),
+    );
+  }
+  return settled;
 }
 
 /** The banner above the composer while a draft replies to a response, with its way out. */
