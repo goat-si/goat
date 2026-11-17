@@ -15,6 +15,7 @@ vi.mock("react-native", () => ({
 vi.mock("../../lib/useUniwindTheme", () => ({ useUniwindTheme: () => ({}) }));
 vi.mock("../../lib/mobileTheme", () => ({ flattenThemeColor: () => "#000" }));
 vi.mock("./PlainSecretTextInput", () => ({ PlainSecretTextInput: state.plain }));
+vi.mock("./SecretRevealButton", () => ({ SecretRevealButton: () => null }));
 
 const props = {
   accessibilityLabel: "API key",
