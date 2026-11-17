@@ -6,12 +6,9 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 import {
   ChannelWorkerObservation,
-  NodeId,
-  RunId,
   RuntimeRequestId,
   ThreadId,
   RuntimeMode,
-  RemoteReportDeliveryMode,
   RemoteReportKind,
   RemoteOriginReportsWaitResult,
   OrchestratorMcpFailure,
@@ -69,7 +66,7 @@ import {
   remoteTaskQuestionNotice,
 } from "./reportFrame.ts";
 import { storeInboxReport } from "./RemoteReportInbox.ts";
-import { recordRemoteFollowUp, type RemoteFollowUp } from "./remoteTaskFollowUp.ts";
+import { recordRemoteFollowUp } from "./remoteTaskFollowUp.ts";
 import { dispatchMonitorMessage } from "./remoteMonitorMessage.ts";
 import { persistThreadObservation, threadKnownRun } from "./remoteThreadObservation.ts";
 import {
@@ -85,6 +82,11 @@ import {
   publicRow,
 } from "./remoteDispatchModel.ts";
 export { RemoteDispatchError, type RemoteDispatchRecord, dispatchView };
+import type {
+  RemoteDispatchCoordinatorShape,
+  RemoteLaunchInput,
+} from "./RemoteDispatchCoordinatorService.ts";
+export type { RemoteDispatchCoordinatorShape, RemoteLaunchInput };
 
 type Row = RemoteDispatchRow.RemoteDispatchRow;
 
@@ -101,91 +103,10 @@ const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
 const MISSING_RUN_GRACE_MS = 300_000;
 /** What the launcher is told about one relayed send, and whether it is woken for it. */
 type RelayOutcome = { readonly wake: boolean; readonly text: string };
-export interface RemoteLaunchInput {
-  readonly kind: "thread" | "task";
-  readonly originThreadId: ThreadId;
-  readonly delivery: typeof RemoteReportDeliveryMode.Type;
-  readonly launch: SshRemoteDispatch.SshLaunchInput;
-  readonly task?: { readonly taskId: NodeId; readonly parentRunId: RunId };
-  /** A durable caller identity (a channel child-work record) keys the row for launch retries. */
-  readonly correlationId?: string | undefined;
-}
+
 export class RemoteDispatchCoordinator extends Context.Service<
   RemoteDispatchCoordinator,
-  {
-    readonly launch: <E, R>(
-      input: RemoteLaunchInput,
-      beforeLaunch: Effect.Effect<void, E, R>,
-    ) => Effect.Effect<
-      {
-        correlationId: string;
-        launch: SshRemoteDispatch.SshLaunchResult;
-        reportsSupported: boolean;
-      },
-      RemoteDispatchError | SshRemoteDispatch.SshRemoteDispatchError | E,
-      R
-    >;
-    readonly cancel: <E, R>(
-      id: string,
-      authorize: Effect.Effect<RuntimeMode, E, R>,
-    ) => Effect.Effect<
-      "cancel_requested" | "cancelled" | "already_settled",
-      RemoteDispatchError | SshRemoteDispatch.SshRemoteDispatchError | E,
-      R
-    >;
-    readonly get: (id: string) => Effect.Effect<RemoteDispatchRecord | null, RemoteDispatchError>;
-    readonly listForOrigin: (
-      id: ThreadId,
-      limit?: number,
-    ) => Effect.Effect<ReadonlyArray<RemoteDispatchRecord>, RemoteDispatchError>;
-    /** Every dispatch of these remoteThreadKey values, newest first. */
-    readonly listForRemoteThreads: (
-      keys: ReadonlyArray<string>,
-    ) => Effect.Effect<ReadonlyArray<RemoteDispatchRecord>, RemoteDispatchError>;
-    /** Every origin's dispatches, most recently updated first. */
-    readonly listRecent: (
-      limit: number,
-    ) => Effect.Effect<ReadonlyArray<RemoteDispatchRecord>, RemoteDispatchError>;
-    /** The task owner remains available after completion, including for sends from other threads. */
-    readonly taskOrigin: (
-      host: string,
-      threadId: string,
-    ) => Effect.Effect<ThreadId | null, RemoteDispatchError>;
-    readonly isTaskThread: (
-      host: string,
-      threadId: string,
-    ) => Effect.Effect<boolean, RemoteDispatchError>;
-    readonly resume: (host: string, threadId: string) => Effect.Effect<void, RemoteDispatchError>;
-    /** A send that starts a run on the thread of one of the caller's finished remote tasks. */
-    readonly followUp: RemoteFollowUp;
-    /** Stops following dismissable thread dispatches without contacting their host. */
-    readonly dismiss: (
-      selector: DismissSelector,
-    ) => Effect.Effect<ReadonlyArray<RemoteDispatchRecord>, RemoteDispatchError>;
-    readonly claimDelete: (input: {
-      readonly originThreadId: ThreadId;
-      readonly host: string;
-      readonly remoteThreadId: string;
-      readonly requestKey: string;
-    }) => Effect.Effect<
-      | { readonly _tag: "missing" }
-      | { readonly _tag: "reports" }
-      | { readonly _tag: "state"; readonly state: string }
-      | { readonly _tag: "other_key" }
-      | { readonly _tag: "claimed"; readonly correlationId: string; readonly readKey: string },
-      RemoteDispatchError
-    >;
-    readonly clearDelete: (
-      correlationId: string,
-      requestKey: string,
-    ) => Effect.Effect<void, RemoteDispatchError>;
-    /**
-     * One pass settling lost thread launches with their destinations (rebound or fenced), then
-     * asking hosts of threads lost to an outage whether they answer again. The coordinator runs it
-     * on its own schedule; an inconclusive row is asked again after a backoff.
-     */
-    readonly resolveLostLaunches: Effect.Effect<void>;
-  }
+  RemoteDispatchCoordinatorShape
 >()("goat/remoteReports/RemoteDispatchCoordinator") {}
 
 const terminal = (status: string) =>
