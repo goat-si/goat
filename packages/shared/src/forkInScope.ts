@@ -3,9 +3,9 @@ import type * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
 
 /**
- * Effect.forkIn as Effect 4.0 ran it. Effect 4.1 forks nothing into a closed scope and returns a
- * fiber interrupted unrun, so the work's own cleanup never runs. Here it starts detached and is
- * interrupted at once: its finalizers run, and uninterruptible work finishes.
+ * Effect.forkIn as Effect 4.0 ran it with startImmediately. Effect 4.1 forks nothing into a closed
+ * scope and returns a fiber interrupted unrun, so the work's own cleanup never runs. Here it starts
+ * detached and is interrupted at once: its finalizers run, and uninterruptible work finishes.
  */
 export const forkInScope =
   (
