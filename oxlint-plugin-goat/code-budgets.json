@@ -541,7 +541,7 @@
   "apps/web/src/components/pullRequest/PullRequestDetailPanel.tsx": { "lines": 1794 },
   "apps/web/src/components/pullRequest/PullRequestsPage.tsx": { "lines": 1555 },
   "apps/web/src/components/pullRequest/pullRequestDetail.logic.test.ts": { "lines": 1472 },
-  "apps/web/src/components/pullRequest/pullRequestDetail.logic.ts": { "lines": 1343, "nonNull": 2 },
+  "apps/web/src/components/pullRequest/pullRequestDetail.logic.ts": { "lines": 1315, "nonNull": 2 },
   "apps/web/src/components/pullRequest/pullRequestFileOrder.logic.ts": { "nonNull": 3 },
   "apps/web/src/components/pullRequest/pullRequestMarkdown.logic.ts": { "nonNull": 1 },
   "apps/web/src/components/settings/AddProviderInstanceDialog.tsx": { "nonNull": 1 },
