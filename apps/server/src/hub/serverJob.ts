@@ -10,13 +10,14 @@ import * as Semaphore from "effect/Semaphore";
  * the started body (its own timeouts and closing `serviceScope` still do); `stopped` says the caller
  * left, so the body finishes what is under way and starts nothing new.
  */
-export const runAsServerJob = <A, E, R>(
+// Untraced: the OpenCodexSync.run and HubMembership.move spans already trace each job.
+export const runAsServerJob = Effect.fnUntraced(function* <A, E, R>(
   permit: Semaphore.Semaphore,
   serviceScope: Scope.Scope,
   job: string,
   body: (stopped: Effect.Effect<boolean>) => Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> =>
-  Effect.uninterruptibleMask((restore) =>
+) {
+  return yield* Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
       let stopped = false;
       yield* restore(Semaphore.take(permit, 1));
@@ -39,3 +40,4 @@ export const runAsServerJob = <A, E, R>(
       );
     }),
   );
+});
