@@ -718,3 +718,76 @@ Orchestrator.ts 13541 -> 13537. The move-out freed 7 lines and the fix used 3. I
 
 check:changed and the gate (item 7, after N3, now with mobile typecheck and the tests that read run_interrupt_request: apps/mobile threadActivityIcons.test.ts and client-runtime threadExecution, threadHistoryMerge and threads-sync tests); full CI; real-client passes; live Pi and OmO; live Cursor.
 
+## Part 2 item 7: merge of the post-N3 integration head (19a0127f5b)
+
+### Coordinator texts (verbatim)
+
+#### Decision, 04:25 UTC
+
+> Coordinator decision, 2026-11-17 04:25 UTC, lane N9b part 2, ITEM 7: GO. Lane N3 is merged; the integration head is 24aa0d5f70a7080483897996a13eabf62af0dbc6 (chase/t3-261114-next; Effect 4.1.3, dev through 229ae283d3). N9b part 2 stands at 5f857339c8 (fix round 2 READY). O23 stays out of #3519 (goat#3632) and is not touched. Now, on chase/t3-261114-n9b2-providers, in the fix-round worktree on pen-macmini:
+> 1. Merge origin/chase/t3-261114-next at 24aa0d5f70 (a merge, not a rebase). The trial merges conflict only in oxlint-plugin-goat/code-budgets.json: every entry at the merged file's real length by countLines; Orchestrator.ts and contracts orchestrationV2.ts (4478, at its entry) need a verbatim move-out first if the merge or the adaptation adds a line.
+> 2. Adapt to Effect 4.1.3 until typecheck is 0 in server, shared, contracts, web and mobile. Known points from the N3 reviews: NodeServices-only provisions at AcpMockRuntime.testkit.ts:51 and in packages/provider-pi status.test.ts (NodeCrypto); command.args.includes in status.test.ts:203-217 (args may now be Redacted); Effect.ignore at SteeringDeclined.integration.test.ts:272 and :319 with forkScoped at :138 and :374; catchIf, orElseSucceed and forkScoped in packages/provider-pi status.ts:231-241 (the scoped second probe: does it still start, and is it still interrupted with the check); forkChild followed by TestClock.adjust in status.test.ts:375-377; Effect.orElseSucceed in TextGeneration.ts and the registry reads in textGenerationCapability.ts. Any test whose harness must change beyond an import or a provide line is a rule 3 request to me with the exact before and after; no expectation changes. Apply lane N3's audits to the lane's own production code: forks into a closed scope (startImmediately, uninterruptible), typed recoveries over a mixed cause, crypto, and the capture, yield on a database read, object-identity comparison shape. For goat#3491's hold: the steer follow-up reads stopReachedRun and the interrupt request item across yields: say whether any of it compares identity or assumes no turn between the read and the write under the per-thread dispatch lock.
+> 3. Checks (item 7 as extended): goat-rename --check; format; lint; typecheck server, shared, contracts, web, MOBILE; the lane's focused suites (provider-pi status and prompt ACK files, provider-cursor, provider-acp, SteeringDeclined and the steering suites, TextGeneration and the installation gate, the contract tests, web modelSelection and SettingsPanels files, mobile threadActivityIcons, client-runtime threadExecution, threadHistoryMerge and threads-sync); then check:changed against 24aa0d5f70 on pen-macmini. Known failures cited by issue (goat#3363, goat#3418, goat#3416).
+> 4. Plain push; records; READY with the head. N7 part 2 merges into the integration branch BEFORE you: when I send you the head that contains it, merge the integration branch once more (both lanes edit the top of dispatchMessage in Orchestrator.ts: keep both sides; the reviewer computed 13528 lines for the combined file after your round 2: the entry is the real length), rerun the focused orchestration files and typecheck, push, and say so. Then ONE narrow fresh review covers your round 2's two code items, the adaptation and both merges.
+
+#### Budget rule and the moved integration head, 04:45 UTC
+
+> Coordinator answer, 2026-11-17 04:45 UTC, the budget rule after a merge of the integration head (lane N7 part 2 asked; it applies to N9b part 2 as well): THE CHILD'S READING IS RIGHT, no move-out is needed for the four entries, and my 04:25 sentence was badly worded. The rule, stated exactly, the same as the dev-merge rule of 02:58 UTC: after merging the integration head, an entry is the merged file's real length by countLines when (1) every line the merged file has beyond the integration side is the lane's own line as it stood at the lane's reviewed head (the merged file is byte-identical to the lane head's file, or it is git's automatic merge of the two sides), and (2) the entry is at or below dev's entry. A verbatim move-out FIRST is required only when lines written NOW (an adaptation to Effect 4.1, a hand resolution) would land in a file that is at its entry, or when the entry would pass dev's. I checked the four here: ProjectionStore.ts 8823 (integration 8744, dev 8836), ThreadManagementService.ts 2196 (2195, 2201), ScheduledTasksSettings.tsx 1747 (1737, 1750), the mobile SettingsScheduledTasksRouteScreen.tsx 1181 (1178, 1202): each is the lane head's reviewed entry and below dev's. Quote this paragraph in the record beside the entries; the narrow review verifies both conditions per file.
+> ALSO, the integration head has moved once more, by three small commits: chase/t3-261114-next = f848a4dcd2ecb457d7cb15d801771709c6afd094 (fast-forward from 24aa0d5f70, verified on origin): lane N3's test-only follow-up (653864850b a verbatim testkit move, 823ffe7d2f one added row and a reworded comment in ProviderSessionManager.test.ts, entry 5906 to 5903) and a docs note (f848a4dcd2, docs/internals/effect-services.md "Reads under the database connection lock"). N7 part 2 and N9b part 2: merge origin/chase/t3-261114-next at f848a4dcd2 before your push (N7: once more on top of your local 76a43a3eec; it touches only that test file, a new testkit, the docs page and one budget line), say that the result is git's own merge, and run check:changed against f848a4dcd2. Read that docs section: it names the shape to look for in your own production code.
+
+### Commits
+
+| Commit | What |
+| --- | --- |
+| a87d9d0c117a2fc3bc6b05381a4b5c2e73c29e16 | refactor(contracts): verbatim move of isOlderSettledThreadShell to orchestrationV2OlderSettled.ts, re-exported from orchestrationV2.ts (the now-unused DateTime import goes) |
+| 1b6bddb80b672024a41fdefb06e899af5a752afc | merge of origin/chase/t3-261114-next at 24aa0d5f70 (conflict only in code-budgets.json) |
+| 19a0127f5b0c45d571e3331d741351a19caa5caa | merge of origin/chase/t3-261114-next at f848a4dcd2, git's own merge (no conflict) |
+
+Plain fast-forward push 5f857339c8..19a0127f5b. The head contains f848a4dcd2.
+
+### Budgets after the merges (the 04:45 rule)
+
+| File | Head entry = real (countLines) | Integration entry | Dev entry | Merged file |
+| --- | --- | --- | --- | --- |
+| apps/server/src/orchestration-v2/Adapters/AcpAdapterV2.test.ts | 8452 | 8629 | 8987 | git's automatic merge; beyond the integration side only the lane's reviewed lines |
+| apps/web/src/components/settings/SettingsPanels.tsx | 1574 | 1573 | 1713 | git's automatic merge: integration's file plus the lane's one reviewed L408 line |
+| apps/server/src/orchestration-v2/Orchestrator.ts | 13537 | 13555 | 13908 | git's automatic merge; the lane's round 2 entry |
+| packages/contracts/src/orchestrationV2.ts | 4463 | 4476 | 4478 | git's automatic merge after the move-out a87d9d0c11 |
+
+Only code-budgets.json was resolved by hand. The integration branch had lowered the contracts entry to 4476, while the lane's holdsQueue field makes the lane's file 4478. Following the 04:25 wording, I opened with the verbatim move-out a87d9d0c11 before the 04:45 answer arrived. Under the 04:45 rule it was not required: the two extra lines are the lane's own reviewed lines, and 4478 is dev's entry. It only lowers the file (4478 -> 4463) and changes no behaviour. contracts typecheck 0; orchestrationV2ThreadFields and client-runtime olderSettledThreads tests 19 passed. Every other entry in code-budgets.json equals its file's real length (scripted countLines check over every lines entry: 0 differences).
+
+### Effect 4.1.3 adaptation
+
+No code change was needed. After `vp i` (effect 4.1.3 installed), typecheck is 0 in packages/contracts, packages/shared, apps/server, apps/web, apps/mobile, packages/provider-pi, packages/provider-cursor, packages/provider-acp and packages/client-runtime. No harness or expectation changed, so there is no rule 3 request. The listed points:
+- AcpMockRuntime.testkit.ts:51 and provider-pi status.test.ts provide NodeServices.layer only. The bundle build and the status probes need no Crypto service: ACP files 919 tests with provider-pi, provider-cursor and provider-acp, all passing (below).
+- status.test.ts:203-217: ChildProcess args are now `string | Redacted<string>` (effect process/CommandLine.ts:60). The probe flags are plain strings, so includes finds them; a Redacted value never equals a flag. The tests' exact matrices (["version","rpc","rpc","auth"], and exactly one rpc probe carrying both flags) pass.
+- Effect.ignore (SteeringDeclined :272, :319) and Effect.orElseSucceed (TextGeneration.ts, provider-pi status.ts): same failure-only semantics in 4.1.3; 4.1.3 adds only an "Unhandled" log option to ignore.
+- forkScoped (SteeringDeclined :138, :374; provider-pi status.ts:241) and forkChild (status.test.ts:375-377): fork options and defaults are unchanged between 4.0.5 and 4.1.3 (startImmediately optional, default off; internal/effect.ts forkUnsafe). The scoped text generation listing still starts when the check's fiber yields and is interrupted with the check's scope. If that scope closes first, an unstarted listing is never spawned, as before. The status test that forks the check and adjusts the TestClock passes.
+- catchIf (status.ts:231-236) recovers only PiRpcError read and exit failures; orElseSucceed only typed failures. Defects pass through, so there is no recovery over a mixed cause.
+- textGenerationCapability.ts registry and snapshot reads are in-memory and have no error channel. TextGeneration.ts's capable() recovers only getSettings's typed failure.
+- Crypto: the lane's production code uses none.
+- "Reads under the database connection lock" (docs/internals/effect-services.md): the lane's production code has no capture, yield on a read, then identity comparison shape. TextGeneration.ts's one identity check (modelSelection === input.modelSelection) asks whether the resolver returned its own input. No read is compared, and a fresh object at worst copies an equal selection.
+- goat#3491 hold: stopReachedRun, runInterruptRequest and markStoppedRun compare fields (item.type, holdsQueue === true), never identity. The read and the write run inside one command under the per-thread dispatch lock. Another fiber may run during the database read's scheduler turn, but no command for the same thread can commit between them. markStoppedRun also checks the command's own pending events first.
+
+### Checks (pen-macmini, Node 26.12.1, after the merges)
+
+- node scripts/goat-rename.ts --check: 0 (0 lines with T3 residue).
+- Typecheck as above: all 0.
+- Focused suites, all passing:
+  - provider-pi, provider-cursor and provider-acp src plus AcpAdapterV2 (+Compaction, Form, Updates), AcpClosedSessionStop, AcpPermissionGrants and AcpPromptInactivity: 88 files, 919 passed, 1 skipped (omo.live).
+  - The steering suites, SteeringDeclined, ThreadStop, ThreadManagementService, RestartContinuation, delegatedForceStop and CloudIngress, TextGeneration and the installation gate, the contracts tests (interruptRequest, server, orchestrationV2ThreadFields), the shared serverSettings tests, client-runtime threadExecution, threadHistoryMerge, threads-sync and olderSettledThreads, web modelSelection (3 files) and SettingsPanels.logic: 27 files, 531 passed.
+  - Mobile threadActivityIcons: 4 passed.
+  - Web browser SettingsPanels.restore and SourceControlWritingSettings: 5 passed.
+- `vp run check:changed f848a4dcd2` (34 files since f848a4dcd2ec), GATE_EXIT 1:
+  - Passed: goat-rename, format, graphql, lint, agent context budget, agent surface audit (no change to docs/internals/agent-surface-audit.md), knip 1/2 and 2/2, typecheck (39 packages).
+  - vp test (371 files): 1 failed | 369 passed | 1 skipped (16 failed | 6968 passed | 1 skipped tests). The one failing file is apps/server/src/textGeneration/GrokTextGeneration.test.ts, "exec: node: not found" from its fake grok launcher. That is the known goat#3425 (node only on an nvm PATH on this Mac). It fails identically on the integration head f848a4dcd2 alone (detached checkout, one case, same error) and the lane does not touch provider-grok, provider-acp or that test.
+  - An earlier run against 24aa0d5f70 was stopped by me (its own session) when the integration head moved; it does not count.
+
+### Still to come
+
+N7 part 2 merges into the integration branch first. When the coordinator sends that head: merge it once more (keep both sides at the top of dispatchMessage; the entry is the real length, about 13528), rerun the focused orchestration files and typecheck, push, and report.
+
+### NOT RUN (item 7)
+
+Full CI; real-client passes (#3519); live Pi, OmO and Cursor; the merge of the head that contains N7 part 2.
+
