@@ -58,13 +58,14 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
   const runCommitAction = async (featureBranch: boolean) => {
     if (!canWriteSourceControl || (featureBranch && !canChangeThreadBranch)) return;
     const commitMessage = dialogCommitMessage.trim();
-    navigation.goBack();
-    await gitActions.onRunSelectedThreadGitAction({
+    // The sheet and its typed message stay until the commit succeeds; a failure shows here.
+    const result = await gitActions.onRunSelectedThreadGitAction({
       action: "commit",
       featureBranch,
       ...(commitMessage ? { commitMessage } : {}),
       ...(!allSelected ? { filePaths: selectedFiles.map((file) => file.path) } : {}),
     });
+    if (result !== null && navigation.isFocused()) navigation.goBack();
   };
 
   const android = Platform.OS === "android";
