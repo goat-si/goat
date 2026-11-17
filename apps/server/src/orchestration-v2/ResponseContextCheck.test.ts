@@ -10,6 +10,7 @@ import {
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import { describe, expect } from "vite-plus/test";
 
@@ -159,6 +160,26 @@ const providerText = (record: ComposerContextRecord, threadId: ThreadId | null =
 
 const UNAVAILABLE = '<context kind="response" id="response_m1" unavailable="true"/>';
 
+const providerTextWith = (layer: Layer.Layer<never>) =>
+  builtInSkillProviderText(Option.none(), {
+    message: {
+      threadId: main,
+      text: "[Reviewer finished](goat-context://v1/response/response_m1) check the empty state too",
+      context: { records: [reply()] },
+    },
+    driver: "codex",
+    project: Effect.succeed(null),
+  }).pipe(Effect.provide(layer));
+
+const capturedLogs = () => {
+  const logs: Array<string> = [];
+  const layer = Logger.layer(
+    [Logger.make(({ message }) => void logs.push(JSON.stringify(message)))],
+    { mergeWithExisting: false },
+  );
+  return { logs, layer };
+};
+
 describe("a reply to a response, checked by the server before an agent reads it", () => {
   it.effect("tells the agent to read an assistant message of the receiving thread", () =>
     Effect.gen(function* () {
@@ -289,6 +310,27 @@ describe("a reply to a response, checked by the server before an agent reads it"
       const text = yield* providerText(reply(), null);
       expect(text).toContain(UNAVAILABLE);
       expect(text).not.toContain("thread.read");
+    }),
+  );
+
+  it.effect("warns, naming the missing service and the thread, when it cannot check a reply", () =>
+    Effect.gen(function* () {
+      for (const [present, missingService] of [
+        [store, "ServerEnvironmentIdentity"],
+        [identity, "ProjectionStoreV2"],
+      ] as const) {
+        const captured = capturedLogs();
+        const text = yield* providerTextWith(Layer.mergeAll(present, captured.layer));
+        expect(text).toContain(UNAVAILABLE);
+        expect(captured.logs).toHaveLength(1);
+        expect(captured.logs[0]).toContain(missingService);
+        expect(captured.logs[0]).toContain('"main"');
+        expect(captured.logs[0]).not.toContain("check the empty state");
+      }
+      const captured = capturedLogs();
+      const text = yield* providerTextWith(Layer.mergeAll(store, identity, captured.layer));
+      expect(text).toContain("thread.read");
+      expect(captured.logs).toEqual([]);
     }),
   );
 });
