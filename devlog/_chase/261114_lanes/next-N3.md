@@ -2380,6 +2380,26 @@ Checks on d1177ac841 (pen-mac-studio, one heavy job at a time): dev's seven file
 
 NOT RUN: a full CI run (ci:full) on d1177ac841; the real-client passes; the three skipped cases in check:changed were not inspected one by one.
 
+### The integration head is d1177ac841 (verbatim)
+
+> Coordinator to lane coordinator, 2026-11-17 07:28:27 UTC (appended to next-N3-coordinator-rulings.md under "Second dev merge: the integration head is d1177ac841"; quote verbatim).
+>
+> 1. SECOND DEV MERGE: chase/t3-261114-next is fast-forwarded to d1177ac841803665bf3f31b22f11b323d4a6870b (plain push from af18ef2f8c; #3519's head, MERGEABLE again). I did this before the review verdict, to start the full run now (pull request run 44038808221, ci:full, queued at 07:27:08Z); the gate before leaving draft is unchanged. I checked myself: the merge commit 79fcc2408d differs from git merge-tree's tree in exactly McpHttpServer.ts and code-budgets.json; McpHttpServer.ts differs from af18ef2f8c's by two lines (the import at :1 and the wrap at :724); the test commits change imports, provide lines and the two authorised lines only. The fresh narrow C4 review (Opus 5.5 xhigh, task goat-pr3519-dev2-merge-d1177ac8) is running on questions (a) to (g): the latches on 4.1.3, the wrapper order and InsideGuardedCall, every removal path, the four audits, the test commits, budgets, the fork delta. Thread A: write the records line "the second dev merge d1177ac841 merged into the integration branch at d1177ac841 (#3519)" in next-N3.md, then stand by in lane N3's worktree for the review's findings; no push to any code branch until I send them. One thing for A's record now: its 2(c) names two removal paths that do not hold authorityLock (markDisconnected, SessionStore.ts:584-610, and the cloud withdrawal fence, CloudSessionFence.ts:24), the same on dev: say in the record whether a cut that runs outside the lock can interleave with a verify that is admitting a call for the same session (admission recorded at :913-916 before cutFences is read at :917), with the order that makes it safe or the window if there is one. If there is a window, it is dev's, and it becomes an issue, not a fix here; tell me which.
+
+- Integration: the second dev merge d1177ac841 merged into the integration branch at d1177ac841 (#3519). chase/t3-261114-next was fast-forwarded from af18ef2f8c to d1177ac841803665bf3f31b22f11b323d4a6870b (verified on origin with git ls-remote).
+
+### A cut outside authorityLock against an admission for the same session
+
+No window, and no issue to file. admitMcpCall (SessionStore.ts:903-921) never takes authorityLock on any path, so the lock plays no part in admission even for the locked removals; what makes it safe is the verify fence and the order of steps, which is the same for markDisconnected (:584-610) and the cloud withdrawal fence (CloudSessionFence.ts:24, through emitRemoved :388) as for a revoke.
+
+A removal is two steps in one fiber: U, the Ref.update in removeGrants (:359-375) that drops the grant and writes cutFences[session] = the new removal count; then C, sessionEnds.cut (:377). An admission is, in one fiber: B, beginVerify (:418-428), which records startedAt = the removal count and registers the verify ticket; the verify; Ad, sessionEnds.admit (:913-916); F, the cutFences read (:917); then endVerify (:429-439, the release of acquireUseRelease, so after F). Each step is a synchronous Ref operation or Effect.sync, so two fibers interleave only between steps, and on Effect 4.1 the scheduler may yield between any two of them; the cases cover every order:
+
+- C after Ad: cut finds the admission, marks it removed and interrupts its calls (SessionEndLatches.ts:36-38); a call that starts later is refused at run (:60).
+- C before Ad, and B before U: U wrote the fence while the verify was registered, and neededFences keeps a fence newer than the oldest running verify (:336-341, applied at :373-374 and again only in endVerify, which runs after F), so F reads cutFences[session] = removal count > startedAt and marks the admission removed (:917).
+- U before B: the verify itself refuses. A revoke or a deleted row fails verifyToken's row read (UnknownSessionTokenError or the revoked error); markDisconnected cuts ("removed") only when the row it read is revoked or gone (:600-607), so that verify also fails on the row; the cloud fence sets pending (CloudSessionFence.ts:23) before it invalidates (:24), and admitMcpCall runs cloudFence.guard (:910) after B, which refuses while pending.
+
+markDisconnected's own database read (:600) sits before U, so it only decides between "expired" (no cut, by design) and "removed"; it does not open a gap between U and C. The cases are dev's #3612 code unchanged by the merge; dev's tests that drive them pass on 4.1.3 ("a session revoked after its request's verify read the row, before it finished, never runs", "a call whose session was revoked before it started is cut without running", and the cloud fence case in SessionStore.sessionEnd.test.ts).
+
 ## NOT RUN
 
 - NOT RUN: relay PostgreSQL fixture on pen-mac-studio (`node infra/relay/scripts/test-postgres.ts check`: "pg_ctl: could not start server"). It is proven by the full CI runs: "Connect auth PostgreSQL boundaries" and the relay tests.
