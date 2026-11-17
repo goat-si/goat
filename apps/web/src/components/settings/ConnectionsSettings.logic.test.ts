@@ -6,6 +6,7 @@ import {
   selectHubPhoneQrTarget,
   applyWslEnableSelection,
   resolveTailscaleServeBaseUrl,
+  revokeOthersToast,
   selectQrEndpointOption,
   togglePairingScopeSelection,
 } from "./ConnectionsSettings.logic";
@@ -599,4 +600,68 @@ it("does not apply coherent evidence from a different saved SSH route to this ro
   });
   expect(result.tone).toBe("error");
   expect(result.text).toContain("did not respond");
+});
+
+describe("revokeOthersToast reads what the server kept, never the list on screen", () => {
+  const asker = "Ask someone who can see the authorized clients on this computer";
+  it.each([
+    {
+      label:
+        "a caller who cannot see the list (write access without read access) is not sent below",
+      result: { revokedCount: 2, kept: { desktop: 1, pen: 0 } },
+      listShown: false,
+      title: "Revoked 2 clients",
+      description: `Kept 1 session signed in with the desktop app's built-in credential. ${asker} to revoke it if you do not recognise it.`,
+    },
+    {
+      label: "a stale list missed a Pen session kept since",
+      result: { revokedCount: 1, kept: { desktop: 0, pen: 1 } },
+      listShown: true,
+      title: "Revoked 1 other client",
+      description: "Kept 1 Pen session. Revoke it below if you do not recognise it.",
+    },
+    {
+      label: "both kinds were kept and the list is shown",
+      result: { revokedCount: 3, kept: { desktop: 1, pen: 2 } },
+      listShown: true,
+      title: "Revoked 3 clients",
+      description:
+        "Kept 1 session signed in with the desktop app's built-in credential and 2 Pen sessions. Revoke them one by one below if you do not recognise them.",
+    },
+    {
+      label: "both kinds were kept and the list is not shown",
+      result: { revokedCount: 3, kept: { desktop: 1, pen: 2 } },
+      listShown: false,
+      title: "Revoked 3 clients",
+      description: `Kept 1 session signed in with the desktop app's built-in credential and 2 Pen sessions. ${asker} to revoke them if you do not recognise them.`,
+    },
+    {
+      label: "nothing was kept",
+      result: { revokedCount: 1, kept: { desktop: 0, pen: 0 } },
+      listShown: false,
+      title: "Revoked 1 other client",
+      description: "Other paired clients will need a new pairing link before reconnecting.",
+    },
+    {
+      label: "an older server did not say what it kept, and the list is shown",
+      result: { revokedCount: 4 },
+      listShown: true,
+      title: "Revoked 4 clients",
+      description:
+        "Revoke others may keep sessions signed in with the desktop app's built-in credential and Pen members' sessions. Check the list below for what is still signed in.",
+    },
+    {
+      label: "an older server did not say what it kept, and the list is not shown",
+      result: { revokedCount: 4 },
+      listShown: false,
+      title: "Revoked 4 clients",
+      description: `Revoke others may keep sessions signed in with the desktop app's built-in credential and Pen members' sessions. ${asker} what is still signed in.`,
+    },
+  ])("$label", ({ result, listShown, title, description }) => {
+    expect(revokeOthersToast(result, { listShown })).toEqual({
+      type: "success",
+      title,
+      description,
+    });
+  });
 });

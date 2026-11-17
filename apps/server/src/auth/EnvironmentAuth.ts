@@ -10,6 +10,7 @@ import {
   EnvironmentAuthorizationError,
   AuthStandardClientScopes,
   type AuthAccessTokenResult,
+  type AuthOtherClientSessionsRevokeResult,
   type AuthBrowserSessionResult,
   type AuthClientMetadata,
   type AuthClientSession,
@@ -220,7 +221,7 @@ export class EnvironmentAuth extends Context.Service<
     ) => Effect.Effect<boolean, ServerAuthInternalError>;
     readonly revokeOtherSessionsExcept: (
       sessionId: AuthSessionId,
-    ) => Effect.Effect<number, ServerAuthInternalError>;
+    ) => Effect.Effect<AuthOtherClientSessionsRevokeResult, ServerAuthInternalError>;
     readonly listClientSessions: (
       currentSessionId: AuthSessionId,
     ) => Effect.Effect<ReadonlyArray<AuthClientSession>, ServerAuthInternalError>;
@@ -230,7 +231,7 @@ export class EnvironmentAuth extends Context.Service<
     ) => Effect.Effect<boolean, ServerAuthForbiddenOperationError | ServerAuthInternalError>;
     readonly revokeOtherClientSessions: (
       currentSessionId: AuthSessionId,
-    ) => Effect.Effect<number, ServerAuthInternalError>;
+    ) => Effect.Effect<AuthOtherClientSessionsRevokeResult, ServerAuthInternalError>;
     readonly authenticateHttpRequest: (
       request: HttpServerRequest.HttpServerRequest,
     ) => Effect.Effect<AuthenticatedSession, ServerAuthCredentialError | ServerAuthInternalError>;
