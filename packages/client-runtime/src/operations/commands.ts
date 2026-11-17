@@ -176,6 +176,8 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
   readonly bootstrap?: StartThreadBootstrap;
   readonly sourceProposedPlan?: { readonly threadId: ThreadId; readonly planId: PlanId };
   readonly dispatchMode?: "auto" | "queue" | "steer" | "restart" | "start";
+  /** Defaults to true. Callers with their own retry queue opt out so a dead socket fails fast. */
+  readonly resendAfterSocketLoss?: boolean;
 }
 
 export interface InterruptThreadTurnInput extends ThreadCommandInput {
@@ -701,7 +703,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
 
   const requestedMode = input.dispatchMode ?? "auto";
   if (requestedMode === "start") {
-    return yield* dispatchMessage({
+    return yield* dispatchMessage(input.resendAfterSocketLoss !== false, {
       type: "message.dispatch",
       commandId,
       createdBy: "user",
@@ -768,7 +770,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
   const shouldSendTitleSeed =
     input.titleSeed !== undefined &&
     (serverResolvesCommandContext || projection?.messages.length === 0);
-  return yield* dispatchMessage({
+  return yield* dispatchMessage(input.resendAfterSocketLoss !== false, {
     type: "message.dispatch",
     commandId,
     createdBy: "user",

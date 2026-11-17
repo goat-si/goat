@@ -675,7 +675,7 @@
   "packages/client-runtime/src/goatBot/rows.ts": { "nonNull": 4 },
   "packages/client-runtime/src/memoryImportWorkflow.ts": { "nonNull": 4 },
   "packages/client-runtime/src/notes/line-diff.ts": { "nonNull": 9 },
-  "packages/client-runtime/src/operations/commands.ts": { "lines": 1168, "nonNull": 1 },
+  "packages/client-runtime/src/operations/commands.ts": { "lines": 1170, "nonNull": 1 },
   "packages/client-runtime/src/platform/shellCacheEncoding.ts": { "nonNull": 1 },
   "packages/client-runtime/src/pullRequestMarkdown.ts": { "nonNull": 5 },
   "packages/client-runtime/src/remotePerformance.bench.ts": { "nonNull": 3 },
