@@ -404,3 +404,5 @@ Close your record now: push it to the records branch with the 16:30:54 and 16:53
 | diff from d12958d037 | 3 files, +106/-20 |
 
 Record closed 2026-11-17 by SF1 (anthropic/claude-opus-5-5 via the Codex harness in GOAT).
+
+After close: #3660 squash-merged to dev at 20:27:10 UTC (dev 42bf8633ce); SF1 and SF1b content is in dev (no diff between 23d3a4696e and dev in the lane files checked: ActiveTurnRefusals.ts and its test, RemoteDispatchCoordinator.ts, resume-thread.ts, useComposerResume.ts); goat#3581 stays open for next3.
