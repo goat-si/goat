@@ -115,6 +115,8 @@ export const makeMove = (deps: MoveDeps) =>
     scope: McpInvocationScope,
     input: HubDeviceMoveInput,
     person?: HubPerson,
+    /** True once the caller stopped waiting; the move then never starts changing routing. */
+    stopped: Effect.Effect<boolean> = Effect.succeed(false),
   ) {
     const { fromAlias: from, toAlias: to } = input;
     if (from === to) return yield* invalid("fromAlias and toAlias must name different aliases.");
@@ -240,9 +242,16 @@ export const makeMove = (deps: MoveDeps) =>
         offered.fingerprint,
         fromEnvironment,
       );
+      // A move whose caller is gone asks no one and changes nothing. One already changing routing
+      // is not interrupted by its caller leaving, but a later failure or a shutdown can still leave
+      // the device in no hub. Each check sits right before a side effect.
+      const refused = () =>
+        stop("Move stopped before changing anything: its caller stopped waiting.");
+      if (yield* stopped) return refused();
       if (input.decisionId !== undefined) yield* deps.approved(caller, input.decisionId, binding);
       else {
         const pin = yield* deps.ocx.pinnedFingerprint(to, offered.keyType);
+        if (yield* stopped) return refused();
         if (pin !== offered.fingerprint || !caller.owner) {
           const reason =
             pin !== offered.fingerprint
@@ -263,7 +272,12 @@ export const makeMove = (deps: MoveDeps) =>
           });
         }
       }
+      if (yield* stopped) return refused();
       yield* deps.audit(caller, to, "started", input.decisionId);
+      if (yield* stopped) {
+        yield* deps.audit(caller, to, "failed", input.decisionId);
+        return refused();
+      }
       mutating = true;
       if (record !== undefined) {
         const failure = yield* deps.leaveDevice(from, record.id, fromCaller.connection, steps);

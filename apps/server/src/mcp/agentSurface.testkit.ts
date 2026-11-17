@@ -425,6 +425,17 @@ const serveVia = <PA, PE, PR>(transportServices: Layer.Layer<PA, PE, PR>) =>
     const http = yield* HttpClient.HttpClient;
     const sessions = new Map<string, string>();
     let nextId = 0;
+    const requestHeaders = (caller: string) => {
+      const session = sessions.get(caller);
+      return {
+        ...headersOf[caller],
+        accept: "application/json, text/event-stream",
+        authorization: `Bearer ${caller}.token`,
+        ...(session === undefined
+          ? {}
+          : { "mcp-session-id": session, "mcp-protocol-version": "2025-06-18" }),
+      };
+    };
     const post = Effect.fn(function* (
       caller: string,
       method: string,
@@ -435,14 +446,7 @@ const serveVia = <PA, PE, PR>(transportServices: Layer.Layer<PA, PE, PR>) =>
       const id = ++nextId;
       const session = sessions.get(caller);
       const response = yield* http.post("/mcp", {
-        headers: {
-          ...headersOf[caller],
-          accept: "application/json, text/event-stream",
-          authorization: `Bearer ${caller}.token`,
-          ...(session === undefined
-            ? {}
-            : { "mcp-session-id": session, "mcp-protocol-version": "2025-06-18" }),
-        },
+        headers: requestHeaders(caller),
         body: HttpBody.text(
           rewrite(encodeJson({ jsonrpc: "2.0", id, method, params })),
           "application/json",
@@ -507,6 +511,23 @@ const serveVia = <PA, PE, PR>(transportServices: Layer.Layer<PA, PE, PR>) =>
         };
         return page._meta;
       }),
+      /** A JSON-RPC notification as the caller, such as notifications/cancelled. */
+      notify: (caller: string, method: string, params: object) =>
+        ensureSession(caller).pipe(
+          Effect.andThen(
+            http.post("/mcp", {
+              headers: requestHeaders(caller),
+              body: HttpBody.text(
+                encodeJson({ jsonrpc: "2.0", method, params }),
+                "application/json",
+              ),
+            }),
+          ),
+          Effect.orDie,
+          Effect.asVoid,
+        ),
+      /** The id the caller's next request carries, once its session exists. */
+      nextRequestId: () => nextId + 1,
     };
   });
 
