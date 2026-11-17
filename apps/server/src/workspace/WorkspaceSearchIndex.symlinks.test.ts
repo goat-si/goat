@@ -4,10 +4,12 @@ import { afterEach, expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { vi } from "vite-plus/test";
 
@@ -61,7 +63,11 @@ function fakeSymlinkFinder(
       ok: true as const,
       value: { isScanning: false },
     }),
-    watch: (callback: (events: ReadonlyArray<WatchEvent>) => void) => {
+    // fff's watch waits on the picker lock on the JS thread.
+    watch: () => {
+      throw new Error("watch must not run on the JS thread");
+    },
+    watchAsync: async (callback: (events: ReadonlyArray<WatchEvent>) => void) => {
       if (watchFailures > 0) {
         watchFailures -= 1;
         return { ok: false as const, error: "File system watcher is not ready" };
@@ -261,4 +267,105 @@ it.effect("finds symlinks in folders past the first page of the index", () =>
       ]);
     }),
   ).pipe(Effect.provide(testLayer)),
+);
+
+// watchAsync failing either way leaves the scan unwatched: kept 2 s, and the next read subscribes again.
+it.effect.each(["answers not-ok", "rejects"] as const)(
+  "a watcher subscription that %s falls back to the short reuse and is retried",
+  (failure) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        if ((yield* HostProcess.Platform) === "win32") return;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-symlink-retry-" });
+        yield* fileSystem.writeFileString(path.join(cwd, "a.ts"), "");
+        yield* fileSystem.symlink("a.ts", path.join(cwd, "link.ts"));
+        const subscriptions: Array<string> = [];
+        const directorySearch = vi.fn(async () => ({
+          ok: true as const,
+          value: { items: [], totalMatched: 0 },
+        }));
+        const finder = {
+          destroy: vi.fn(),
+          waitForIndexReady: vi.fn(async () => ({ ok: true as const, value: true })),
+          getScanProgressAsync: async () => ({ ok: true as const, value: { isScanning: false } }),
+          watchAsync: async () => {
+            subscriptions.push(subscriptions.length === 0 ? failure : "ok");
+            if (subscriptions.length > 1) return { ok: true as const, value: () => undefined };
+            if (failure === "rejects") throw new Error("watcher thread gone");
+            return { ok: false as const, error: "File system watcher is not ready" };
+          },
+          directorySearchAsync: directorySearch,
+          mixedSearchAsync: async () => ({
+            ok: true as const,
+            value: { items: [], totalMatched: 0 },
+          }),
+        } as unknown as FileFinder;
+        vi.spyOn(FileFinder, "create").mockReturnValueOnce({ ok: true, value: finder });
+
+        const searchIndex = yield* WorkspaceSearchIndex.make(cwd);
+        expect(yield* listedPaths(searchIndex)).toEqual(["link.ts"]);
+        expect(yield* listedPaths(searchIndex)).toEqual(["link.ts"]);
+        expect(directorySearch).toHaveBeenCalledTimes(1);
+        yield* TestClock.adjust("3 seconds");
+        expect(yield* listedPaths(searchIndex)).toEqual(["link.ts"]);
+        yield* TestClock.adjust("1 minute");
+        expect(yield* listedPaths(searchIndex)).toEqual(["link.ts"]);
+
+        expect(subscriptions).toEqual([failure, "ok"]);
+        // The second scan was watched, so it is kept.
+        expect(directorySearch).toHaveBeenCalledTimes(2);
+      }),
+    ).pipe(Effect.provide(testLayer)),
+);
+
+// fff answers a subscription made on a finder destroyed meanwhile with not-ok and keeps no
+// handler (its watchAsync checks the handle after the native call); the index leaves it at that.
+it.effect("an index closed while its watcher subscription is pending keeps no watcher", () =>
+  Effect.gen(function* () {
+    if ((yield* HostProcess.Platform) === "win32") return;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-symlink-close-" });
+    yield* fileSystem.writeFileString(path.join(cwd, "a.ts"), "");
+    let alive = true;
+    const handlers: Array<unknown> = [];
+    let answer: (() => void) | undefined;
+    const asked = yield* Deferred.make<void>();
+    const finder = {
+      destroy: vi.fn(() => {
+        alive = false;
+      }),
+      waitForIndexReady: vi.fn(async () => ({ ok: true as const, value: true })),
+      getScanProgressAsync: async () => ({ ok: true as const, value: { isScanning: false } }),
+      watchAsync: (callback: unknown) => {
+        Deferred.doneUnsafe(asked, Effect.void);
+        return new Promise((resolve) => {
+          answer = () => {
+            if (!alive) return resolve({ ok: false as const, error: "File finder destroyed" });
+            handlers.push(callback);
+            resolve({ ok: true as const, value: () => undefined });
+          };
+        });
+      },
+      directorySearchAsync: async () => ({
+        ok: true as const,
+        value: { items: [], totalMatched: 0 },
+      }),
+      mixedSearchAsync: async () => ({ ok: true as const, value: { items: [], totalMatched: 0 } }),
+    } as unknown as FileFinder;
+    vi.spyOn(FileFinder, "create").mockReturnValueOnce({ ok: true, value: finder });
+
+    const scope = yield* Scope.make();
+    const searchIndex = yield* WorkspaceSearchIndex.make(cwd).pipe(Scope.provide(scope));
+    const listing = yield* listedPaths(searchIndex).pipe(Effect.forkChild);
+    yield* Deferred.await(asked);
+    yield* Scope.close(scope, Exit.void);
+    answer?.();
+    yield* Fiber.interrupt(listing);
+
+    expect(finder.destroy).toHaveBeenCalledTimes(1);
+    expect(handlers).toEqual([]);
+  }).pipe(Effect.scoped, Effect.provide(testLayer)),
 );
