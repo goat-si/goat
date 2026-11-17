@@ -2,7 +2,7 @@
 // also runs in every worker, including one evaluated from a string, and NODE_OPTIONS carries it
 // into child Node processes. registerHooks covers import and require; dlopen is wrapped because
 // an addon loaded by path never passes through resolve.
-export const BUNDLE_SELF_CHECK_RESOLVE_HOOK = `const { realpathSync } = require("node:fs");
+export const BUNDLE_SELF_CHECK_RESOLVE_HOOK = `const { existsSync, realpathSync } = require("node:fs");
 const { registerHooks } = require("node:module");
 const { fileURLToPath, pathToFileURL } = require("node:url");
 
@@ -41,8 +41,10 @@ registerHooks({
 const dlopen = process.dlopen;
 process.dlopen = function (module, filename, ...rest) {
   const url = canonical(filename);
-  // A missing file fails in dlopen itself with its usual error.
-  if (url !== undefined && !inside(url)) throw escaped(filename, url, "ERR_DLOPEN_FAILED");
+  // A missing file fails in dlopen itself with its usual error; an existing one must prove it is inside.
+  if (url === undefined ? existsSync(filename) : !inside(url)) {
+    throw escaped(filename, url ?? filename, "ERR_DLOPEN_FAILED");
+  }
   return dlopen.call(this, module, filename, ...rest);
 };
 `;

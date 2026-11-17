@@ -862,7 +862,7 @@
   "scripts/agent-surface/eval/run.ts": { "nonNull": 4 },
   "scripts/agent-surface/smoke.ts": { "nonNull": 3 },
   "scripts/build-desktop-artifact.test.ts": { "lines": 3017 },
-  "scripts/build-desktop-artifact.ts": { "lines": 4822, "nonNull": 6 },
+  "scripts/build-desktop-artifact.ts": { "lines": 4782, "nonNull": 6 },
   "scripts/goat-workflow-guard.test.ts": { "lines": 1134 },
   "scripts/knip-schemas.ts": { "nonNull": 1 },
   "scripts/lib/cached-tests.ts": { "nonNull": 1 },
