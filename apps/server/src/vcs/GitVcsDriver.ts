@@ -49,6 +49,7 @@ import {
   type MaterializeWorkspaceSnapshotInput,
 } from "./GitWorkspaceSnapshotMaterialize.ts";
 import { makeListAuthoredPaths } from "./checkpointAuthoredPaths.ts";
+import { restoreCheckpointFiles } from "./checkpointSkipWorktreeRestore.ts";
 import { chunkPathsForGitCheckIgnore } from "./gitCheckIgnoreChunks.ts";
 import { parseGitRemoteVerboseOutput } from "./gitRemoteParsing.ts";
 
@@ -1518,20 +1519,8 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       });
       // An empty index and checkpoint have nothing for git restore's pathspec to match.
       if (tracked.stdout.length > 0) {
-        yield* execute({
-          operation,
-          cwd: input.cwd,
-          args: [
-            ...longPaths,
-            "restore",
-            "--source",
-            commitOid,
-            "--worktree",
-            "--staged",
-            "--",
-            ".",
-          ],
-        });
+        const restoreInput = { execute, vcsProcess, operation, cwd: input.cwd, commitOid };
+        yield* restoreCheckpointFiles({ ...restoreInput, longPaths });
       }
       // Restoring away the last tracked file can remove a nested workspace directory.
       const recreateWorkspace = fileSystem.makeDirectory(input.cwd, { recursive: true }).pipe(
