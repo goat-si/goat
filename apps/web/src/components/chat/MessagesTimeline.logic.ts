@@ -61,6 +61,15 @@ import {
 } from "@goat/contracts";
 import type { TimelineLatestRun } from "./timelineLatestRun";
 export type { TimelineLatestRun } from "./timelineLatestRun";
+import {
+  lastResponseBoundaryIndex,
+  responseBoundaryRunId,
+  timelineEntryEnd,
+  timelineEntryIsCompaction,
+  timelineEntryIsSteer,
+  timelineEntryStartsResponse,
+} from "./timelineResponseBoundary";
+export { timelineEntryStartsResponse } from "./timelineResponseBoundary";
 import { deriveUnsettledRunId, timelineIsWorking } from "./timelineLiveRun";
 import {
   resolveGoatMcpItemCall,
@@ -913,41 +922,6 @@ function timelineEntryFoldRunId(entry: TimelineEntry, runlessKey: RunId | null):
     return entry.projectedItem.item.runId ?? runlessKey;
   }
   return null;
-}
-
-function timelineEntryIsSteer(entry: TimelineEntry): boolean {
-  return (
-    entry.kind === "message" &&
-    entry.message.role === "user" &&
-    (entry.message.inputIntent === "steer" ||
-      entry.message.inputIntent === "promoted_queued_to_steer")
-  );
-}
-
-export function timelineEntryStartsResponse(entry: TimelineEntry): boolean {
-  return (
-    (entry.kind === "message" && entry.message.role === "user" && !timelineEntryIsSteer(entry)) ||
-    (entry.kind === "work" && entry.entry.itemType === "notification")
-  );
-}
-
-function timelineEntryEnd(entry: TimelineEntry): string {
-  return entry.kind === "message" ? entry.message.updatedAt : entry.createdAt;
-}
-
-function timelineEntryIsCompaction(entry: TimelineEntry): boolean {
-  return entry.kind === "work" && entry.entry.sourceActivityKind === "context-compaction";
-}
-
-function responseBoundaryRunId(entry: TimelineEntry): RunId | null {
-  if (entry.kind === "message") return entry.message.runId ?? null;
-  if (entry.kind === "work") return entry.entry.runId ?? null;
-  return null;
-}
-
-// Group promptless restarts under the initiating prompt until settled.
-function lastResponseBoundaryIndex(timelineEntries: ReadonlyArray<TimelineEntry>): number {
-  return timelineEntries.findLastIndex(timelineEntryStartsResponse);
 }
 
 function deriveActiveVisualResponseRunIds(input: {
