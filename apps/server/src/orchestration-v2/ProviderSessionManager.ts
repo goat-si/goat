@@ -6,7 +6,8 @@ import {
 import { needsAttached, sessionScopedArtifactThreadId } from "./sessionScopedArtifactThreadId.ts";
 import { goatMcpServersFor, nativeSubagentLimiter } from "./goatSessionConfig.ts";
 import { repairSchedule } from "../retryJitter.ts";
-import { makeMemoryProviderAuthority } from "./MemoryProviderAuthority.ts";
+import { makeMemoryProviderAuthority, prepareEvidence } from "./MemoryProviderAuthority.ts";
+import { delegatedTaskWillWake } from "./delegatedTaskWake.ts";
 import { isReleasedRuntimeRequest } from "./ReleasedRuntimeRequest.ts";
 import * as CodexRoute from "../provider/CodexRouteService.ts";
 import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapterInfrastructure.ts";
@@ -16,9 +17,6 @@ import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
   isOrchestrationV2WorkActive,
   type AuthEnvironmentScope,
-  type OrchestrationV2AppThread,
-  type OrchestrationV2Run,
-  type OrchestrationV2Subagent,
   type RunId,
   OrchestrationV2DomainEvent,
   OrchestrationV2ProviderSession,
@@ -126,6 +124,7 @@ const WORKING_RUN_STATUSES: ReadonlySet<string> = new Set([
   "waiting",
 ]);
 
+export { delegatedTaskWillWake } from "./delegatedTaskWake.ts";
 export {
   ProviderSessionActivityError,
   ProviderSessionCloseError,
@@ -135,30 +134,6 @@ export {
   ProviderSessionReleaseError,
   ProviderSessionReleaseReason,
 } from "./ProviderSessionManagerErrors.ts";
-
-/** Matches planDelegatedCompletionDelivery: true while a delegated task's result still wakes the thread. */
-export const delegatedTaskWillWake = (records: {
-  readonly thread: Pick<OrchestrationV2AppThread, "archivedAt" | "deletedAt">;
-  readonly runs: ReadonlyArray<Pick<OrchestrationV2Run, "id" | "delegatedCompletion">>;
-  readonly subagents: ReadonlyArray<
-    Pick<OrchestrationV2Subagent, "origin" | "status" | "runId" | "completionDelivery">
-  >;
-}): boolean =>
-  records.thread.archivedAt === null &&
-  records.thread.deletedAt === null &&
-  records.subagents.some((task) => {
-    const run = records.runs.find((candidate) => candidate.id === task.runId);
-    const delivery = task.completionDelivery?.state;
-    return (
-      task.origin === "app_owned" &&
-      isOrchestrationV2WorkActive(task.status) &&
-      run !== undefined &&
-      (run.delegatedCompletion?.disposition ?? "open") === "open" &&
-      delivery !== "acknowledged" &&
-      delivery !== "delivered" &&
-      delivery !== "disposed"
-    );
-  });
 
 export class ProviderSessionManagerV2 extends Context.Service<
   ProviderSessionManagerV2,
@@ -2474,6 +2449,7 @@ export const layerWithOptions = (
               prepared.providerSessionId === undefined
             )
               return undefined;
+            const evidence = prepareEvidence(prepared);
             const entry = (yield* Ref.get(sessions)).get(sessionKey(prepared.providerSessionId));
             if (
               entry?.runtime.instanceId !== providerInstanceId ||
@@ -2483,9 +2459,10 @@ export const layerWithOptions = (
             // Use execution's current authority, including registry expiry and
             // revocation, rather than reconstructing it from prepare metadata.
             const policy = yield* currentMemoryPolicy(threadId);
-            if (policy.grant === "none" || memoryPrepareInputs.get(threadId) !== prepared)
+            const latest = memoryPrepareInputs.get(threadId);
+            if (policy.grant === "none" || !latest || prepareEvidence(latest) !== evidence)
               return undefined;
-            return { ...prepared, currentMemoryGrant: policy.grant };
+            return { ...latest, currentMemoryGrant: policy.grant };
           }),
         mcpCredentialRotations: Option.isSome(admission)
           ? admission.value.rotations
