@@ -72,7 +72,9 @@ import { dispatchMonitorMessage } from "./remoteMonitorMessage.ts";
 import { persistThreadObservation, threadKnownRun } from "./remoteThreadObservation.ts";
 import {
   clearUnreachable,
+  DRAIN_LOST_TRACK_AFTER,
   isUnreachable,
+  notifyDrainLostTrack,
   notifyTaskOutage,
   recordUnreachable,
 } from "./remoteDispatchOutage.ts";
@@ -689,6 +691,7 @@ const make = Effect.gen(function* () {
     let backoff = 5_000;
     let hostFailures = 0;
     let outageNotified = false;
+    let failedPasses: { count: number; since: string } | undefined;
     const grace = makeRefusalGrace(deleteIntentHeld(id));
     while (true) {
       const keepDraining = yield* Effect.gen(function* () {
@@ -843,6 +846,7 @@ const make = Effect.gen(function* () {
         } else backoff = 5_000;
         return true;
       }).pipe(
+        Effect.tap(() => Effect.sync(() => (failedPasses = undefined))),
         Effect.catchCause((cause) => {
           if (Cause.hasInterrupts(cause)) return Effect.failCause(cause);
           // A transport or SQL cause can carry private arguments. Log only a fixed category.
@@ -850,6 +854,20 @@ const make = Effect.gen(function* () {
             yield* Effect.logWarning("Remote report drain failed; retrying.", {
               correlationId: id,
             });
+            failedPasses = {
+              count: (failedPasses?.count ?? 0) + 1,
+              since: failedPasses?.since ?? (yield* now),
+            };
+            const { count, since } = failedPasses;
+            if (count === DRAIN_LOST_TRACK_AFTER)
+              yield* load(id).pipe(
+                Effect.flatMap((lost) =>
+                  lost?.state === "running"
+                    ? taskEffect(notifyDrainLostTrack(publicRow(lost), since))
+                    : Effect.void,
+                ),
+                Effect.ignoreCause({ log: true }),
+              );
             // A retry leaves updated_at alone, so a failing row does not stay on top of the list.
             yield* owned(
               id,
