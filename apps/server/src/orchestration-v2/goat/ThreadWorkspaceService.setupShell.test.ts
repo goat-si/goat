@@ -164,17 +164,16 @@ const withSetupShell = <A, E, R>(
               (options.openRequested === undefined
                 ? Effect.void
                 : Deferred.succeed(options.openRequested, undefined)
-              )
-                .pipe(Effect.andThen(terminals.open(input)))
-                .pipe(
-                  Effect.tap(() =>
-                    Effect.sync(() => {
-                      if (options.stuckFirstShell === true && latest() === 0) return;
-                      events.push(`prompt ${latest()}`);
-                      pty.processes.at(-1)?.emitData("$ \x1b[?2004h");
-                    }),
-                  ),
+              ).pipe(
+                Effect.andThen(terminals.open(input)),
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    if (options.stuckFirstShell === true && latest() === 0) return;
+                    events.push(`prompt ${latest()}`);
+                    pty.processes.at(-1)?.emitData("$ \x1b[?2004h");
+                  }),
                 ),
+              ),
             write: (input) =>
               terminals.write(input).pipe(
                 Effect.tap(() =>
