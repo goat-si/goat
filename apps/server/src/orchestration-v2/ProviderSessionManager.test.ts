@@ -1,5 +1,10 @@
 import { registerCodexLoadKeyCheck } from "./ProviderSessionLoadKey.testkit.ts";
 import {
+  makeThreadCreatedEvent,
+  readPreparedRunDto,
+} from "./test/ProviderSessionManagerMemoryDto.testkit.ts";
+export { makeThreadCreatedEvent } from "./test/ProviderSessionManagerMemoryDto.testkit.ts";
+import {
   makeProviderThread,
   emptyState,
   modelSelection,
@@ -37,7 +42,6 @@ import { channelDispatcherIdleServices } from "../channels/testkit/channelDispat
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as ChannelBotProfiles from "../channels/ChannelBotProfiles.ts";
 import * as ChannelLedger from "../channels/ChannelLedger.ts";
-import * as Receipts from "./CommandReceiptStore.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -55,7 +59,6 @@ import { AgentScope } from "@goat/shared/AgentScope";
 import {
   RunId,
   OrchestratorMcpFailure,
-  type OrchestrationV2Run,
   CommandId,
   MessageId,
   TurnItemId,
@@ -67,7 +70,6 @@ import {
   ScheduledTaskId,
   NodeId,
   type OrchestrationV2ThreadProjection,
-  type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderThread,
   type Project,
@@ -81,7 +83,6 @@ import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Statement from "effect/sql/Statement";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -134,58 +135,6 @@ import {
   unimplemented,
 } from "./test/ProviderSessionManagerHarness.testkit.ts";
 export { layerTest } from "./test/ProviderSessionManagerHarness.testkit.ts";
-export function makeThreadCreatedEvent(input: {
-  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
-  readonly threadId: ThreadId;
-  readonly now: DateTime.Utc;
-  readonly projectId?: ProjectId;
-  readonly delegatedBy?: ThreadId;
-}) {
-  return Effect.gen(function* () {
-    const projectId =
-      input.projectId ??
-      (yield* input.idAllocator.allocate.project({
-        fixtureName: "provider-session-manager",
-      }));
-    const thread: OrchestrationV2AppThread = {
-      createdBy: "user",
-      creationSource: "web",
-      id: input.threadId,
-      projectId,
-      title: "Provider session manager",
-      providerInstanceId: modelSelection.instanceId,
-      modelSelection,
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      branch: null,
-      worktreePath: null,
-      activeProviderThreadId: null,
-      lineage:
-        input.delegatedBy === undefined
-          ? { parentThreadId: null, relationshipToParent: null, rootThreadId: input.threadId }
-          : {
-              parentThreadId: input.delegatedBy,
-              relationshipToParent: "subagent",
-              rootThreadId: input.delegatedBy,
-            },
-      forkedFrom: null,
-      createdAt: input.now,
-      updatedAt: input.now,
-      archivedAt: null,
-      settledOverride: null,
-      settledAt: null,
-      lastVisitedAt: null,
-      deletedAt: null,
-    };
-    return {
-      id: yield* input.idAllocator.allocate.event({ threadId: input.threadId }),
-      type: "thread.created" as const,
-      threadId: input.threadId,
-      occurredAt: input.now,
-      payload: thread,
-    };
-  });
-}
 // A Codex native subagent's provider thread is owned by its child app thread
 // but reachable from the parent's projection through the subagent record.
 const makeNativeChildFixture = Effect.fnUntraced(function* () {
@@ -1882,84 +1831,6 @@ it.effect("ProviderSessionManagerV2 duplicate detach preserves replacement MCP c
     );
   }),
 );
-// Exercise the real DTO decorator with the manager under test and committed
-// destination state. Only the run fixture and unrelated transport ports are synthetic.
-const readPreparedRunDto = Effect.fnUntraced(function* (
-  threadId: ThreadId,
-  runId: RunId,
-  delegatedTaskId: NodeId,
-  pastRunCount = 0,
-) {
-  const store = yield* ProjectionStore.ProjectionStoreV2;
-  const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
-  const settings = yield* ServerSettings.ServerSettingsService;
-  const committed = yield* Effect.serviceOption(ServerSettings.MemoryProviderCommittedPolicy);
-  if (Option.isNone(committed)) return yield* Effect.die("test requires committed memory policy");
-  const projection = yield* store.getThreadProjection(threadId);
-  const run: OrchestrationV2Run = {
-    id: runId,
-    delegatedTaskId,
-    threadId,
-    ordinal: 1,
-    providerInstanceId: modelSelection.instanceId,
-    modelSelection,
-    providerThreadId: null,
-    userMessageId: MessageId.make("reattach-message"),
-    rootNodeId: null,
-    activeAttemptId: null,
-    status: "completed",
-    requestedAt: projection.thread.createdAt,
-    startedAt: null,
-    completedAt: null,
-    checkpointId: null,
-    contextHandoffId: null,
-    memoryGrantCeiling: "read_write",
-  };
-  const runs = [
-    ...Array.from({ length: pastRunCount }, (_, index) => ({
-      ...run,
-      id: RunId.make(`historical-run-${index}`),
-      ordinal: index + 2,
-    })),
-    run,
-  ];
-  let threadReads = 0;
-  const countThreadReads: Statement.Transformer = (statement) => {
-    const [query] = statement.compile();
-    if (query.includes("SELECT payload_json FROM orchestration_v2_projection_threads")) {
-      threadReads++;
-    }
-    return Effect.succeed(statement);
-  };
-  return yield* Effect.gen(function* () {
-    const threads = yield* ThreadManagement.ThreadManagementService;
-    const records = yield* threads.getThreadRecords(threadId, ["runs"]);
-    if (pastRunCount > 0) {
-      assert.equal(threadReads, 1);
-      for (const historical of records.runs.slice(0, -1)) {
-        assert.notProperty(historical, "currentMemoryAccess");
-      }
-    }
-    return records.runs.at(-1)!;
-  }).pipe(
-    Effect.provide(
-      ThreadManagement.layer.pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            Layer.succeed(ProviderSessionManager.ProviderSessionManagerV2, manager),
-            Layer.succeed(ServerSettings.ServerSettingsService, settings),
-            Layer.succeed(ServerSettings.MemoryProviderCommittedPolicy, committed.value),
-            Layer.mock(Receipts.CommandReceiptStoreV2)({}),
-            Layer.mock(Orchestrator.OrchestratorV2)({
-              getThreadRecords: () => Effect.succeed({ ...projection, runs }),
-            }),
-          ),
-        ),
-      ),
-    ),
-    Effect.provideService(Statement.CurrentTransformer, countThreadReads),
-  );
-});
 it.effect(
   "ProviderSessionManagerV2 keeps a thread's MCP credential stable across detach and re-attach on a shared session",
   () =>
