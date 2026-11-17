@@ -1,4 +1,10 @@
-import type { ComposerContextRecord, EnvironmentId, ResponseContextRecord } from "@goat/contracts";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
+import type {
+  ComposerContextRecord,
+  EnvironmentId,
+  ResponseContextRecord,
+  ThreadId,
+} from "@goat/contracts";
 import { assistantCitationLabel } from "@goat/shared/assistantCitations";
 import { useNavigate } from "@tanstack/react-router";
 
@@ -14,7 +20,7 @@ import {
   formatInlineContextReference,
 } from "../../lib/composerContextReferences";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
-import { useServerConfigs } from "../../state/entities";
+import { readThreadShell, useServerConfigs } from "../../state/entities";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
@@ -59,7 +65,25 @@ export function refuseReplyTheServerDrops(
   return true;
 }
 
-/** A stashed reply returns only in the thread that holds its response, and a pending one wins. */
+/** Whether a thread shows `threadId`'s history: it is that thread or descends from it by run forks. */
+function showsHistoryOf(
+  target: { environmentId: EnvironmentId; threadId: ThreadId },
+  threadId: ThreadId,
+) {
+  const seen = new Set<ThreadId>();
+  for (let current: ThreadId | null = target.threadId; current !== null && !seen.has(current);) {
+    if (current === threadId) return true;
+    seen.add(current);
+    const forkedFrom = readThreadShell(scopeThreadRef(target.environmentId, current))?.forkedFrom;
+    current = forkedFrom?.type === "run" ? forkedFrom.threadId : null;
+  }
+  return false;
+}
+
+/**
+ * A stashed reply returns only in a thread that shows its response (the thread that holds it, or
+ * a side chat or fork of it), and a pending one wins.
+ */
 export function restoreStashedReply(
   records: ReadonlyArray<ComposerContextRecord>,
   target: ComposerThreadTarget,
@@ -67,7 +91,10 @@ export function restoreStashedReply(
   const reply = records.find(isResponseContextRecord);
   if (!reply || typeof target === "string") return;
   const { citation } = reply;
-  if (citation.threadId !== target.threadId || citation.environmentId !== target.environmentId) {
+  if (
+    citation.environmentId !== target.environmentId ||
+    !showsHistoryOf(target, citation.threadId)
+  ) {
     return;
   }
   const store = useComposerDraftStore.getState();

@@ -1,5 +1,5 @@
 import { shouldPreserveAssistantLineBreaks } from "@goat/shared/markdownPipeline";
-import { type RunId, type TurnItemId } from "@goat/contracts";
+import { type RunId, type ThreadId, type TurnItemId } from "@goat/contracts";
 import {
   assistantReplyStatusBadge,
   canForkProjectedAssistantItem,
@@ -206,7 +206,11 @@ function AssistantMessageMeta({
         <AssistantForkButton projectedItem={projectedItem} />
       ) : null}
       {!message.streaming && projectedItem ? (
-        <AssistantReplyButton message={message} itemId={projectedItem.sourceItemId} />
+        <AssistantReplyButton
+          message={message}
+          sourceThreadId={projectedItem.sourceThreadId}
+          itemId={projectedItem.sourceItemId}
+        />
       ) : null}
       {!message.streaming && (
         <Tooltip>
@@ -222,7 +226,16 @@ function AssistantMessageMeta({
   );
 }
 
-function AssistantReplyButton({ message, itemId }: { message: ChatMessage; itemId: TurnItemId }) {
+function AssistantReplyButton({
+  message,
+  sourceThreadId,
+  itemId,
+}: {
+  message: ChatMessage;
+  /** The thread that holds the response; a side chat or fork inherits its source's rows. */
+  sourceThreadId: ThreadId;
+  itemId: TurnItemId;
+}) {
   const { threadRef } = use(TimelineRowCtx);
   const available = useReplyToResponseAvailable(threadRef?.environmentId ?? null);
   if (!threadRef || !available || !message.text.trim()) return null;
@@ -242,9 +255,17 @@ function AssistantReplyButton({ message, itemId }: { message: ChatMessage; itemI
     const outcome = replyFromTimeline(
       button,
       responseContextRecord({
-        citation: { version: 1, ...threadRef, messageId: message.id, ...opening },
+        citation: {
+          version: 1,
+          environmentId: threadRef.environmentId,
+          threadId: sourceThreadId,
+          messageId: message.id,
+          ...opening,
+        },
         itemId,
-        subagents: readResponseSubagents(threadRef, itemId),
+        // The server keeps only subagents the holding thread ran, as this thread's projection lists.
+        subagents:
+          sourceThreadId === threadRef.threadId ? readResponseSubagents(threadRef, itemId) : [],
       }),
     );
     if (outcome === "replying") return;

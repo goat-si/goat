@@ -17,11 +17,16 @@ export interface CheckedResponseContexts {
 const isResponse = (record: ComposerContextRecord): record is ResponseContextRecord =>
   record.kind === "response" && "citation" in record;
 
+type StoredThread = Effect.Success<ReturnType<ProjectionStoreV2Shape["getThread"]>>;
+
+const runForkSource = (thread: StoredThread): ThreadId | null =>
+  thread.forkedFrom?.type === "run" ? thread.forkedFrom.threadId : null;
+
 /**
- * A reply names a response by ids its client chose. An agent is told to read it only when the
- * item is an assistant message of the receiving thread, or of the thread that thread shows its
- * history from, on this server. Subagents stay only when that thread ran them here. Every other
- * response record is left unchecked, which the provider text shows as unavailable.
+ * A reply names a response by ids its client chose. An agent reads it only when the item is an
+ * assistant message of the receiving thread or a thread it shows history from (its side-chat
+ * parent, every run fork up), on this server, with subagents that thread ran here. Every other
+ * response record stays unchecked, which the provider text shows as unavailable.
  */
 export const checkResponseContexts = Effect.fn("ResponseContextCheck.check")(function* (input: {
   readonly environmentId: EnvironmentId;
@@ -33,10 +38,18 @@ export const checkResponseContexts = Effect.fn("ResponseContextCheck.check")(fun
   if (!input.records.some(isResponse)) {
     return { records: input.records, checkedResponseIds } satisfies CheckedResponseContexts;
   }
-  const thread = yield* input.store.getThread(input.threadId);
   const readable = new Set<ThreadId>([input.threadId]);
-  if (thread.sideChatOf) readable.add(thread.sideChatOf);
-  if (thread.forkedFrom?.type === "run") readable.add(thread.forkedFrom.threadId);
+  const walked = new Set<ThreadId>([input.threadId]);
+  let thread: StoredThread | null = yield* input.store.getThread(input.threadId);
+  // Inherited rows keep the id of the thread that holds them, however many forks up it is.
+  while (thread !== null) {
+    if (thread.sideChatOf) readable.add(thread.sideChatOf);
+    const source = runForkSource(thread);
+    if (source === null || walked.has(source)) break;
+    walked.add(source);
+    readable.add(source);
+    thread = yield* input.store.getThread(source).pipe(Effect.catch(() => Effect.succeed(null)));
+  }
 
   const records: ComposerContextRecord[] = [];
   for (const record of input.records) {
