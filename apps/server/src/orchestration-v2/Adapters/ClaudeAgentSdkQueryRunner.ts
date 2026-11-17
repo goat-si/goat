@@ -18,6 +18,7 @@ import * as NodeChildProcess from "node:child_process";
 import { spawnClaudeProcessGroup, spawnClaudeWindowsProcess } from "./ClaudeProcessSpawn.ts";
 import { makeClaudeDescendantSampler, readClaudeProcessTable } from "./ClaudeDescendants.ts";
 import * as ProcessRunner from "../../processRunner.ts";
+import * as ProviderProcesses from "../../process/providerProcesses.ts";
 import { lastClaudeTranscriptModel } from "./ClaudeForkedSkillModel.ts";
 import { AgentScope, nodeChildAgentProcess } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -480,6 +481,7 @@ export const layerQueryRunner: Layer.Layer<
     const path = yield* Path.Path;
     const { native: nativeEventLogger } = yield* ProviderEventLoggers.ProviderEventLoggers;
     const agentScope = yield* AgentScope;
+    const providerProcesses = yield* ProviderProcesses.ProviderProcesses;
     const platform = yield* HostProcess.Platform;
     const runFork = Effect.runForkWith(yield* Effect.context<never>());
     const descendants = yield* makeClaudeDescendantSampler({
@@ -552,6 +554,7 @@ export const layerQueryRunner: Layer.Layer<
                   stopScope,
                   appendStderr,
                   stderrDone,
+                  providerProcesses.register,
                 );
                 if (unit === undefined && child.pid !== undefined) {
                   const tracker = descendants.track(child.pid);
