@@ -1,0 +1,100 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { assert, it } from "@effect/vitest";
+import { ProjectId, ProviderInstanceId, ScheduledTaskId, ThreadId } from "@goat/contracts";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
+
+import * as EventSink from "../orchestration-v2/EventSink.ts";
+import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
+import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
+import * as Scheduler from "../scheduling/Scheduler.ts";
+import * as SecretRequests from "../secrets/SecretRequests.ts";
+import { layerSink, syntheticLaunch } from "./ScheduledRunFixture.testkit.ts";
+import * as ScheduledTaskService from "./ScheduledTaskService.ts";
+
+const input = {
+  id: ScheduledTaskId.make("task:review-probe"),
+  title: "Triage",
+  prompt: "Triage new issues",
+  enabled: true,
+  schedule: { type: "interval", everyMs: 60_000 },
+  projectId: ProjectId.make("project:test"),
+  workspaceStrategy: { type: "root" },
+  modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+  runtimeMode: "full-access",
+  interactionMode: "default",
+} as const;
+
+const serverLifetime = (launched: Ref.Ref<ReadonlyArray<ThreadId>>, deleted: Ref.Ref<ReadonlyArray<ThreadId>>) => {
+  const launchLayer = Layer.unwrap(
+    Effect.gen(function* () {
+      const launch = syntheticLaunch(yield* EventSink.EventSinkV2);
+      return Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+        launch: (request) =>
+          Effect.gen(function* () {
+            const result = yield* launch(request).pipe(Effect.orDie);
+            yield* Ref.update(launched, (all) => [...all, result.threadId]);
+            return result;
+          }),
+      });
+    }),
+  ).pipe(Layer.provide(layerSink));
+  return ScheduledTaskService.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        launchLayer,
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadShell: (threadId: ThreadId) =>
+            Ref.update(deleted, (all) => [...all, ("CALLED:" + threadId) as ThreadId]).pipe(Effect.andThen(Ref.get(deleted))).pipe(
+              Effect.map((all) => ({ deletedAt: all.includes(threadId) ? "2026-11-01T00:00:00.000Z" : null }) as never),
+            ),
+          sendToThread: (send) => Effect.succeed({ run: { id: "run:sent", threadId: send.threadId } } as never),
+        }),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+          namedProjectsRoot: "/projects",
+          isScratchProject: () => Effect.succeed(false),
+        }),
+        NodeCrypto.layer,
+        Layer.succeed(Scheduler.Scheduler, { register: () => Effect.void }),
+      ),
+    ),
+  );
+};
+
+const taskRow = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const rows = yield* sql<{ thread_id: string | null; thread_mode: string }>`
+    SELECT thread_id, thread_mode FROM scheduled_tasks WHERE task_id = ${input.id}`;
+  return rows[0] ?? null;
+});
+
+it.effect.each([false, true])("REVIEW PROBE: a new_thread task switched to continue, then a restart (first thread deleted: %s)", (deleteFirst) =>
+  Effect.gen(function* () {
+    const launched = yield* Ref.make<ReadonlyArray<ThreadId>>([]);
+    const deleted = yield* Ref.make<ReadonlyArray<ThreadId>>([]);
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      yield* service.upsert({ ...input, threadMode: "new_thread" });
+      yield* service.runNow({ id: input.id });
+      yield* TestClock.adjust("1 second");
+      yield* service.runNow({ id: input.id });
+      yield* service.upsert({ ...input, threadMode: "continue" });
+    }).pipe(Effect.provide(serverLifetime(launched, deleted)));
+    const [first, second] = yield* Ref.get(launched);
+    const beforeRestart = yield* taskRow;
+    if (deleteFirst) yield* Ref.set(deleted, [first!, second!]);
+    yield* Effect.gen(function* () {
+      yield* ScheduledTaskService.ScheduledTaskService;
+    }).pipe(Effect.provide(serverLifetime(launched, deleted)));
+    const afterRestart = yield* taskRow; const runs = yield* (yield* SqlClient.SqlClient)`SELECT firing_id, thread_id, requested_at, message_id FROM scheduled_task_runs`;
+    assert.fail("PROBE " + JSON.stringify({ deleteFirst, first, second, beforeRestart, afterRestart, runs, deletedLog: yield* Ref.get(deleted) }));
+    assert.isTrue(true);
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
