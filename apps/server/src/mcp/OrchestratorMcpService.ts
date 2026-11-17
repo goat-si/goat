@@ -2775,92 +2775,101 @@ const make = Effect.gen(function* () {
         ),
       );
       const runtimeMode = admitted.runtimeMode;
-      const result = yield* threadManagement
-        .dispatch({
-          type: "delegated_task.request",
-          ...(input.role === undefined ? {} : { role: input.role }),
-          parentModelSelection: parentRun.modelSelection,
-          memoryGrantCeiling,
-          createdBy: "agent",
-          creationSource: "mcp",
-          commandId,
-          parentThreadId: scope.thread.threadId,
-          parentRunId: parentRun.id,
-          parentNodeId: parentRun.rootNodeId,
-          task: Profiles.childBrief(admitted, scope.thread.threadId, taskPrompt(input)),
-          ...(input.title === undefined ? {} : { title: input.title }),
-          modelSelection: target.modelSelection,
-          runtimeMode,
-          interactionMode,
-          ...(workspaceStrategy === undefined ? {} : { workspaceStrategy }),
-          // Async delegations wake the parent on every child terminal; wait
-          // delegations deliver through the blocking tool call, so a wake is
-          // only needed if the parent settled first (timeout, disconnect).
-          completionWake: input.mode === "wait" ? "settled_only" : "always",
-        })
-        .pipe(
-          Effect.onError(() =>
-            admitted.enabled
-              ? permissions.release(commandId, true).pipe(Effect.ignore)
-              : Effect.void,
-          ),
-          // Commit certainty from the receipt, not from the dispatch error: an accepted
-          // receipt means the work exists and keeps its slot; a rejected or absent receipt
-          // means the command never ran, so the reservation goes back. An unreadable
-          // receipt proves nothing, so the slot stays rather than double-spend.
-          Effect.onError(() =>
-            commandReceipts._tag === "None"
-              ? Effect.void
-              : commandReceipts.value.getByCommandId(commandId).pipe(
-                  Effect.flatMap((receipt) =>
-                    Option.isSome(receipt) && receipt.value.status === "accepted"
-                      ? Effect.void
-                      : releaseChildWork(channelChildWork, admission),
+      // The child's run is about to be prepared from before it commits until its preparation is
+      // scheduled, so the orphan check leaves it alone on every path through this block.
+      const parentNodeId = parentRun.rootNodeId;
+      const taskId = yield* Effect.gen(function* () {
+        if (workspaceStrategy !== undefined)
+          yield* threadLaunch.preparationPending(derive.delegatedTaskThread({ commandId }));
+        const result = yield* threadManagement
+          .dispatch({
+            type: "delegated_task.request",
+            ...(input.role === undefined ? {} : { role: input.role }),
+            parentModelSelection: parentRun.modelSelection,
+            memoryGrantCeiling,
+            createdBy: "agent",
+            creationSource: "mcp",
+            commandId,
+            parentThreadId: scope.thread.threadId,
+            parentRunId: parentRun.id,
+            parentNodeId,
+            task: Profiles.childBrief(admitted, scope.thread.threadId, taskPrompt(input)),
+            ...(input.title === undefined ? {} : { title: input.title }),
+            modelSelection: target.modelSelection,
+            runtimeMode,
+            interactionMode,
+            ...(workspaceStrategy === undefined ? {} : { workspaceStrategy }),
+            // Async delegations wake the parent on every child terminal; wait
+            // delegations deliver through the blocking tool call, so a wake is
+            // only needed if the parent settled first (timeout, disconnect).
+            completionWake: input.mode === "wait" ? "settled_only" : "always",
+          })
+          .pipe(
+            Effect.onError(() =>
+              admitted.enabled
+                ? permissions.release(commandId, true).pipe(Effect.ignore)
+                : Effect.void,
+            ),
+            // Commit certainty from the receipt, not from the dispatch error: an accepted
+            // receipt means the work exists and keeps its slot; a rejected or absent receipt
+            // means the command never ran, so the reservation goes back. An unreadable
+            // receipt proves nothing, so the slot stays rather than double-spend.
+            Effect.onError(() =>
+              commandReceipts._tag === "None"
+                ? Effect.void
+                : commandReceipts.value.getByCommandId(commandId).pipe(
+                    Effect.flatMap((receipt) =>
+                      Option.isSome(receipt) && receipt.value.status === "accepted"
+                        ? Effect.void
+                        : releaseChildWork(channelChildWork, admission),
+                    ),
+                    Effect.ignore,
                   ),
-                  Effect.ignore,
-                ),
-          ),
-          Effect.mapError((error) =>
-            error._tag === "ThreadManagementProviderInstanceDisabledError"
-              ? threadManagementFailure(error)
-              : failure(
-                  "orchestration_error",
-                  `Unable to create delegated task: ${errorMessage(error)}`,
-                ),
-          ),
-          // The claim holds the launch in flight until the delegation commits.
-          (dispatch) => Effect.andThen(claimLaunch, dispatch),
-          Effect.scoped,
+            ),
+            Effect.mapError((error) =>
+              error._tag === "ThreadManagementProviderInstanceDisabledError"
+                ? threadManagementFailure(error)
+                : failure(
+                    "orchestration_error",
+                    `Unable to create delegated task: ${errorMessage(error)}`,
+                  ),
+            ),
+            // The claim holds the launch in flight until the delegation commits.
+            (dispatch) => Effect.andThen(claimLaunch, dispatch),
+            Effect.scoped,
+          );
+        if (admitted.enabled) yield* permissions.complete(commandId);
+        const taskEvent = result.storedEvents.find(
+          (stored) =>
+            stored.event.type === "subagent.updated" && stored.event.payload.origin === "app_owned",
         );
-      if (admitted.enabled) yield* permissions.complete(commandId);
-      const taskEvent = result.storedEvents.find(
-        (stored) =>
-          stored.event.type === "subagent.updated" && stored.event.payload.origin === "app_owned",
-      );
-      if (taskEvent?.event.type !== "subagent.updated") {
-        return yield* failure(
-          "orchestration_error",
-          "Delegated task command did not produce a task projection.",
+        if (taskEvent?.event.type !== "subagent.updated") {
+          return yield* failure(
+            "orchestration_error",
+            "Delegated task command did not produce a task projection.",
+          );
+        }
+        const taskId = taskEvent.event.payload.id;
+        const childThreadId = taskEvent.event.payload.childThreadId;
+        if (childThreadId !== null)
+          yield* bindChildWork(channelChildWork, admission, { threadId: childThreadId });
+        const childRunEvent = result.storedEvents.find(
+          (stored) =>
+            stored.event.type === "run.created" && stored.event.threadId === childThreadId,
         );
-      }
-      const taskId = taskEvent.event.payload.id;
-      const childThreadId = taskEvent.event.payload.childThreadId;
-      if (childThreadId !== null)
-        yield* bindChildWork(channelChildWork, admission, { threadId: childThreadId });
-      const childRunEvent = result.storedEvents.find(
-        (stored) => stored.event.type === "run.created" && stored.event.threadId === childThreadId,
-      );
-      if (
-        childThreadId !== null &&
-        childRunEvent?.event.type === "run.created" &&
-        childRunEvent.event.payload.workspacePreparation !== undefined
-      ) {
-        yield* threadLaunch.prepareRun({
-          commandId,
-          threadId: childThreadId,
-          runId: childRunEvent.event.payload.id,
-        });
-      }
+        if (
+          childThreadId !== null &&
+          childRunEvent?.event.type === "run.created" &&
+          childRunEvent.event.payload.workspacePreparation !== undefined
+        ) {
+          yield* threadLaunch.prepareRun({
+            commandId,
+            threadId: childThreadId,
+            runId: childRunEvent.event.payload.id,
+          });
+        }
+        return taskId;
+      }).pipe(Effect.scoped);
       return yield* finishTaskWait(scope, taskId, key, input);
     }),
     taskStatus: Effect.fn("OrchestratorMcpService.taskStatus")(function* (callerScope, taskId) {

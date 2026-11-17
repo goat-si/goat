@@ -8,25 +8,61 @@ import * as Ref from "effect/Ref";
 import type * as ThreadManagement from "../ThreadManagementService.ts";
 import { PreparationClaims, layer as layerClaims } from "./PreparationClaims.ts";
 
-/** The real claims, reporting each refused claim once the attempt has returned. */
+export interface ClaimOutcome {
+  readonly runId: RunId;
+  /** Whether the preparation ran under the claim. */
+  readonly ran: boolean;
+}
+
+/** The real claims, reporting what preparations and the orphan check did with them. */
 export const makeClaimProbe = Effect.gen(function* () {
+  const attempts = yield* Queue.unbounded<RunId>();
+  const outcomes = yield* Queue.unbounded<ClaimOutcome>();
   const refusals = yield* Queue.unbounded<RunId>();
+  const tries = yield* Queue.unbounded<RunId>();
   return {
     layer: Layer.effect(
       PreparationClaims,
       Effect.gen(function* () {
         const real = yield* PreparationClaims;
         return PreparationClaims.of({
-          whileClaimed: (runId, body) =>
+          ...real,
+          whileClaimed: (runId, body, queued) =>
+            Effect.gen(function* () {
+              const ran = yield* Ref.make(false);
+              yield* Queue.offer(attempts, runId);
+              yield* real
+                .whileClaimed(runId, Effect.andThen(Ref.set(ran, true), body), queued)
+                .pipe(
+                  Effect.ensuring(
+                    Effect.flatMap(Ref.get(ran), (value) =>
+                      Queue.offer(outcomes, { runId, ran: value }),
+                    ),
+                  ),
+                );
+            }),
+          tryClaim: (runId, body) =>
             real
-              .whileClaimed(runId, body)
+              .tryClaim(runId, body)
               .pipe(
-                Effect.tap((claimed) => (claimed ? Effect.void : Queue.offer(refusals, runId))),
+                Effect.tap((claimed) =>
+                  Effect.andThen(
+                    claimed ? Effect.void : Queue.offer(refusals, runId),
+                    Queue.offer(tries, runId),
+                  ),
+                ),
               ),
         });
       }),
     ).pipe(Layer.provide(layerClaims)),
+    /** A preparation has asked for the run's claim (it may be waiting for it). */
+    attempted: Queue.take(attempts),
+    /** A preparation's claim ended, and whether it ran. */
+    outcome: Queue.take(outcomes),
+    /** The orphan check found the run's claim held. */
     refused: Queue.take(refusals),
+    /** The orphan check's attempt on a run has ended, its work under the claim included. */
+    tried: Queue.take(tries),
   };
 });
 

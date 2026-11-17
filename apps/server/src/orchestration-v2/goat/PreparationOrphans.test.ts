@@ -3,7 +3,9 @@ import {
   CommandId,
   GitCommandError,
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+  ThreadId,
 } from "@goat/contracts";
+import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -20,6 +22,7 @@ import * as ThreadManagement from "../ThreadManagementService.ts";
 import { preparationSettled } from "../testkit/preparationSettled.ts";
 import { makeHarness, project } from "../testkit/ThreadLaunchHarness.ts";
 import { launchInput } from "../testkit/threadLaunchInput.ts";
+import { PreparationClaims } from "./PreparationClaims.ts";
 import { makeClaimProbe, makeLaunchHold } from "./PreparationClaims.testkit.ts";
 import {
   NOT_STARTED_MESSAGE,
@@ -59,10 +62,12 @@ it.effect(
       assert.deepEqual(
         plan.map((row) => row.detail),
         [
-          "SEARCH runs USING INDEX orchestration_v2_projection_runs_recovery_idx (status=?)",
-          "CORRELATED SCALAR SUBQUERY 1",
-          "SEARCH item USING INDEX orchestration_v2_projection_turn_items_run_ordinal_idx (run_id=?)",
+          "MATERIALIZE oldest",
+          "SEARCH orchestration_v2_projection_runs USING INDEX orchestration_v2_projection_runs_recovery_idx (status=?)",
           "USE TEMP B-TREE FOR ORDER BY",
+          "SCAN oldest",
+          "CORRELATED SCALAR SUBQUERY 2",
+          "SEARCH item USING INDEX orchestration_v2_projection_turn_items_run_ordinal_idx (run_id=?)",
         ],
       );
     }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
@@ -271,7 +276,7 @@ it.effect("a run retried and stuck again is failed again", () =>
 );
 
 it.effect(
-  "a launch interrupted after it reserved its preparation and before it forked leaves no claim, so the check fails the run and Retry prepares it",
+  "a launch held between its commit and its scheduling for ten grace periods is not failed, and prepares the run when it goes on",
   () =>
     Effect.gen(function* () {
       const probe = yield* makeOrphanProbe;
@@ -279,23 +284,139 @@ it.effect(
       const harness = makeHarness({ launchThreads: hold.wrap });
       yield* Effect.gen(function* () {
         const launches = yield* ThreadLaunch.ThreadLaunchService;
-        const { input, threadId, runId } = yield* orphanRun("interrupted-launch");
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        yield* hold.arm;
+        const launch = yield* launches
+          .launch(
+            launchInput({
+              command: "command:held-launch",
+              thread: "thread:held-launch",
+              message: "Later",
+            }),
+          )
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* hold.held;
+        const threadId = ThreadId.make("thread:held-launch");
+        const runId = (yield* threads.getThreadProjection(threadId)).runs[0]!.id;
+        for (let pass = 1; pass <= 30; pass++) assert.equal(yield* probe.pass, "read");
+        assert.equal(yield* runStatus(threadId, runId), "preparing");
+        assert.equal(yield* probe.failCount, 0);
+
+        yield* hold.resume;
+        yield* Fiber.join(launch);
+        yield* released(threadId, "command:held-launch");
+      }).pipe(Effect.provide(withCheck(harness, probe)));
+    }),
+);
+
+it.effect(
+  "a launch cut between its commit and its scheduling leaves the run unowned, so the check fails it within the usual window after the cut and Retry prepares it",
+  () =>
+    Effect.gen(function* () {
+      const probe = yield* makeOrphanProbe;
+      const hold = yield* makeLaunchHold;
+      const harness = makeHarness({ launchThreads: hold.wrap });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const claims = yield* PreparationClaims;
+        const { input, threadId, runId } = yield* orphanRun("cut-launch");
         yield* hold.arm;
         const launch = yield* launches
           .launch(input)
           .pipe(Effect.forkChild({ startImmediately: true }));
         yield* hold.held;
+        const preparing = runStatus(threadId, runId).pipe(
+          Effect.map((status) => assert.equal(status, "preparing")),
+        );
+        // Past the grace period while the launch owns the run.
+        for (let pass = 1; pass <= 4; pass++) {
+          assert.equal(yield* probe.pass, "read");
+          yield* preparing;
+        }
         yield* Fiber.interrupt(launch);
+        assert.isFalse(yield* claims.isPending(threadId));
 
-        yield* passesBeforeGrace(probe, Effect.void);
+        // Passes 5, 6 and 7 find it unowned; the eighth, four minutes after the cut, fails it.
+        yield* passesBeforeGrace(probe, preparing);
         assert.equal(yield* probe.pass, "read");
         assert.equal(yield* probe.failed, runId);
         yield* launches.retryPreparation({
-          commandId: CommandId.make("command:interrupted-launch:retry"),
+          commandId: CommandId.make("command:cut-launch:retry"),
           threadId,
           runId,
         });
-        yield* released(threadId, "command:interrupted-launch:retry");
+        yield* released(threadId, "command:cut-launch:retry");
+      }).pipe(Effect.provide(withCheck(harness, probe)));
+    }),
+);
+
+it.effect(
+  "a Retry made while the check still holds the run's claim after failing it waits for the claim and prepares the run",
+  () =>
+    Effect.gen(function* () {
+      const probe = yield* makeOrphanProbe;
+      const claims = yield* makeClaimProbe;
+      const harness = makeHarness({ claims: claims.layer });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const { threadId, runId } = yield* orphanRun("retry-under-check");
+        const held = yield* probe.holdAfterFail;
+        yield* passesBeforeGrace(probe, Effect.void);
+        assert.equal(yield* probe.pass, "read");
+        yield* held.committed;
+
+        // Returns once the Retry's preparation is in line for the claim the check still holds.
+        yield* launches.retryPreparation({
+          commandId: CommandId.make("command:retry-under-check:retry"),
+          threadId,
+          runId,
+        });
+        yield* held.release;
+        assert.deepEqual(yield* claims.outcome, { runId, ran: true });
+        yield* released(threadId, "command:retry-under-check:retry");
+      }).pipe(Effect.provide(withCheck(harness, probe)));
+    }),
+);
+
+it.effect(
+  "a run failed and retried between the check's read and its claim is not failed on that read, and gets a full grace period",
+  () =>
+    Effect.gen(function* () {
+      const probe = yield* makeOrphanProbe;
+      const claims = yield* makeClaimProbe;
+      const harness = makeHarness({ claims: claims.layer });
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const { threadId, runId } = yield* orphanRun("changed-under-read");
+        const preparing = runStatus(threadId, runId).pipe(
+          Effect.map((status) => assert.equal(status, "preparing")),
+        );
+        yield* passesBeforeGrace(probe, preparing);
+        // The fourth pass reads the run as due, then waits before claiming it.
+        const goOn = yield* probe.holdPass;
+        // Meanwhile its preparation fails and a Retry, cut before its own preparation, brings it back.
+        yield* threads.dispatch({
+          type: "prepared-run.fail",
+          commandId: CommandId.make("command:changed-under-read:fail"),
+          threadId,
+          runId,
+          failure: makeProviderFailure({ message: "Git could not reach the remote." }),
+        });
+        yield* threads.dispatch({
+          type: "prepared-run.retry",
+          commandId: CommandId.make("command:changed-under-read:retry"),
+          threadId,
+          runId,
+        });
+        yield* goOn;
+        yield* claims.tried;
+        assert.equal(yield* probe.failCount, 0);
+        yield* preparing;
+
+        // Its new stretch of "preparing" counts from the next pass.
+        yield* passesBeforeGrace(probe, preparing);
+        assert.equal(yield* probe.pass, "read");
+        assert.equal(yield* probe.failed, runId);
       }).pipe(Effect.provide(withCheck(harness, probe)));
     }),
 );

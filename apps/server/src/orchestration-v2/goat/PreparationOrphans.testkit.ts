@@ -1,4 +1,5 @@
 import { CommandId, MessageId, type ThreadId, type RunId } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
@@ -84,6 +85,21 @@ export const makeOrphanProbe = Effect.gen(function* () {
   const started = yield* Ref.make(0);
   const reads = yield* Queue.unbounded<PassOutcome>();
   const fails = yield* Queue.unbounded<RunId>();
+  // When set, the next read that succeeds reports itself and waits here before the pass goes on.
+  const readGate = yield* Ref.make<Deferred.Deferred<void> | undefined>(undefined);
+  const readHeld = yield* Queue.unbounded<void>();
+  // When set, the check waits here after its next fail is committed, still holding the claim.
+  const failGate = yield* Ref.make<Deferred.Deferred<void> | undefined>(undefined);
+  const failCommitted = yield* Queue.unbounded<void>();
+  const waitAt = (
+    gate: Ref.Ref<Deferred.Deferred<void> | undefined>,
+    reached: Effect.Effect<void>,
+  ) =>
+    Ref.getAndSet(gate, undefined).pipe(
+      Effect.flatMap((held) =>
+        held === undefined ? Effect.void : Effect.andThen(reached, Deferred.await(held)),
+      ),
+    );
   const wrapRead = (read: PreparationOrphans.SuspectRead): PreparationOrphans.SuspectRead =>
     Ref.update(started, (count) => count + 1).pipe(
       Effect.andThen(Ref.get(mode)),
@@ -100,7 +116,10 @@ export const makeOrphanProbe = Effect.gen(function* () {
           return Queue.offer(reads, outcome).pipe(
             Effect.andThen(Effect.die(new Error("unexpected read defect"))),
           );
-        return read.pipe(Effect.tap(() => Queue.offer(reads, outcome)));
+        return read.pipe(
+          Effect.tap(() => waitAt(readGate, Queue.offer(readHeld, undefined))),
+          Effect.tap(() => Queue.offer(reads, outcome)),
+        );
       }),
     );
   const layerThreads = Layer.effect(
@@ -115,22 +134,50 @@ export const makeOrphanProbe = Effect.gen(function* () {
             .pipe(
               Effect.tap(() =>
                 command.type === "prepared-run.fail"
-                  ? Queue.offer(fails, command.runId)
+                  ? waitAt(failGate, Queue.offer(failCommitted, undefined)).pipe(
+                      Effect.andThen(Queue.offer(fails, command.runId)),
+                    )
                   : Effect.void,
               ),
             ),
       });
     }),
   );
+  const gate = (ref: Ref.Ref<Deferred.Deferred<void> | undefined>) =>
+    Effect.gen(function* () {
+      const held = yield* Deferred.make<void>();
+      yield* Ref.set(ref, held);
+      return Deferred.succeed(held, undefined).pipe(Effect.asVoid);
+    });
   return {
     mode,
     /** The check, reading threads and claims from the layer it is given. */
-    layer: PreparationOrphans.layerWithRead(wrapRead).pipe(Layer.provide(layerThreads)),
+    layer: PreparationOrphans.layerWith({ suspects: wrapRead, run: (read) => read }).pipe(
+      Layer.provide(layerThreads),
+    ),
     /** Advances one interval; how that pass's read ended, or "none" if no pass ran. */
     pass: Effect.gen(function* () {
       yield* TestClock.adjust(PreparationOrphans.PASS_INTERVAL);
       if ((yield* Ref.getAndSet(started, 0)) === 0) return "none" as const;
       return yield* Queue.take(reads);
+    }),
+    /**
+     * Advances one interval and holds that pass between its read and anything it does with it.
+     * Returns the effect that lets the pass go on.
+     */
+    holdPass: Effect.gen(function* () {
+      const release = yield* gate(readGate);
+      yield* TestClock.adjust(PreparationOrphans.PASS_INTERVAL);
+      yield* Queue.take(readHeld);
+      return release.pipe(Effect.andThen(Queue.take(reads)), Effect.asVoid);
+    }),
+    /**
+     * Makes the check wait, holding the run's claim, once its next fail is committed. The first
+     * effect returned waits until it is; the second lets the check go on.
+     */
+    holdAfterFail: Effect.gen(function* () {
+      const release = yield* gate(failGate);
+      return { committed: Queue.take(failCommitted), release };
     }),
     /** The run of the next fail the check dispatched, once that dispatch returned. */
     failed: Queue.take(fails),

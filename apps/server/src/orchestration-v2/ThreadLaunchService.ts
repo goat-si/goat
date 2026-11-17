@@ -79,7 +79,7 @@ import {
 } from "./preparationLog.ts";
 import { confirmLaunchStep, type LaunchConfirm } from "./goat/LaunchConfirm.ts";
 import { classifyPreparationFailure } from "./goat/PreparationFailure.ts";
-import { PreparationClaims } from "./goat/PreparationClaims.ts";
+import { PreparationClaims, forkClaimed } from "./goat/PreparationClaims.ts";
 import { makeLaunchCommandSlots } from "./goat/launchCommandSlots.ts";
 import {
   preparationRunStopped,
@@ -255,6 +255,8 @@ export class ThreadLaunchService extends Context.Service<
       | ThreadManagement.ThreadManagementProviderInstanceDisabledError
     >;
     readonly prepareRun: (input: ThreadLaunchPreparationInput) => Effect.Effect<void>;
+    /** Marks the thread's run as about to be prepared, for a caller that commits it elsewhere. */
+    readonly preparationPending: (threadId: ThreadId) => Effect.Effect<void, never, Scope.Scope>;
   }
 >()("goat/orchestration-v2/ThreadLaunchService") {}
 
@@ -1029,12 +1031,11 @@ const make = Effect.gen(function* () {
       ),
     );
     // The claim is the fiber's first step and the read above runs under it, so the orphan check and
-    // another preparation of this run exclude this one, and a fiber that never runs claims nothing.
-    yield* (runId === null ? preparation : claims.whileClaimed(runId, preparation)).pipe(
-      Effect.ignoreCause,
-      Effect.ensuring(releasePreparation(input.commandId)),
-      Effect.forkIn(preparationScope),
-    );
+    // another preparation of this run exclude this one.
+    yield* forkClaimed(claims, runId, preparation, {
+      scope: preparationScope,
+      finally: releasePreparation(input.commandId),
+    });
   });
 
   /**
@@ -1266,6 +1267,7 @@ const make = Effect.gen(function* () {
         const threadId =
           claimed.storedEvents.find((stored) => stored.event.type.startsWith("thread."))?.event
             .threadId ?? candidateThreadId;
+        yield* claims.pending(threadId);
         if (project.id !== input.projectId) {
           return yield* mapError(input, "resolve-project", threadId)("Project identity changed.");
         }
@@ -1377,7 +1379,7 @@ const make = Effect.gen(function* () {
               : messageWasAlreadyAccepted,
           ...(messageSequence === undefined ? {} : { sequence: messageSequence }),
         };
-      });
+      }).pipe(Effect.scoped);
     },
   );
 
@@ -1404,6 +1406,7 @@ const make = Effect.gen(function* () {
   const retryPreparation: ThreadLaunchService["Service"]["retryPreparation"] = Effect.fn(
     "ThreadLaunchService.retryPreparation",
   )(function* (input) {
+    yield* claims.pending(input.threadId);
     const dispatched = yield* threads.dispatch({
       type: "prepared-run.retry",
       commandId: input.commandId,
@@ -1412,7 +1415,7 @@ const make = Effect.gen(function* () {
     });
     yield* prepareRun(input);
     return dispatched;
-  });
+  }, Effect.scoped);
 
   const scheduleRunPreparation = Effect.fn("ThreadLaunchService.scheduleRunPreparation")(function* (
     input: ThreadLaunchPreparationInput,
@@ -1464,6 +1467,7 @@ const make = Effect.gen(function* () {
     checkWorktreeBase,
     retryPreparation,
     prepareRun,
+    preparationPending: claims.pending,
   });
 });
 

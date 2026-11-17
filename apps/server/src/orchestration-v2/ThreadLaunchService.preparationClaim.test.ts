@@ -4,15 +4,9 @@ import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 
 import { makeClaimProbe, makeLaunchHold } from "./goat/PreparationClaims.testkit.ts";
-import {
-  makeOrphanProbe,
-  orphanRun,
-  released,
-  runStatus,
-} from "./goat/PreparationOrphans.testkit.ts";
+import { orphanRun, released, runStatus } from "./goat/PreparationOrphans.testkit.ts";
 import { preparationSettled } from "./testkit/preparationSettled.ts";
 import { makeHarness, project } from "./testkit/ThreadLaunchHarness.ts";
 import { launchInput } from "./testkit/threadLaunchInput.ts";
@@ -78,26 +72,30 @@ it.effect(
         });
         yield* Deferred.await(retryEntered);
 
+        // Returns once the replay's preparation is in line behind the Retry's.
         const replayed = yield* launches.launch(input);
         assert.isTrue(replayed.resumed);
         const outcome = yield* Effect.raceFirst(
-          claims.refused.pipe(Effect.as("left to the Retry")),
           Deferred.await(preparedAgain).pipe(Effect.as("prepared again")),
+          Effect.gen(function* () {
+            yield* Deferred.succeed(allowRetry, undefined);
+            // The launch's own preparation, the Retry's, then the replay's, which finds the run
+            // no longer preparing.
+            for (let ended = 1; ended <= 3; ended++) yield* claims.outcome;
+            return "prepared once" as const;
+          }),
         );
-        assert.equal(outcome, "left to the Retry");
-
-        yield* Deferred.succeed(allowRetry, undefined);
+        assert.equal(outcome, "prepared once");
         yield* released(launched.threadId, "command:replayed-launch:retry");
         assert.equal(worktrees, 1);
       }).pipe(Effect.provide(harness.layer));
     }),
 );
 
-it.effect.each(["the orphan check", "a fail command"] as const)(
-  "a run failed by %s while a launch was about to prepare it is not then prepared by that launch",
-  (failer) =>
+it.effect(
+  "a run failed while a launch was about to prepare it is not then prepared by that launch",
+  () =>
     Effect.gen(function* () {
-      const probe = yield* makeOrphanProbe;
       const hold = yield* makeLaunchHold;
       const harness = makeHarness({ launchThreads: hold.wrap });
       yield* Effect.gen(function* () {
@@ -105,23 +103,18 @@ it.effect.each(["the orphan check", "a fail command"] as const)(
         const threads = yield* ThreadManagement.ThreadManagementService;
         const { input, threadId, runId } = yield* orphanRun("late-launch");
         yield* hold.arm;
-        // A launch resumed for the run: held after its read finds it preparing.
+        // A launch resumed for the run (root strategy): held after its read finds it preparing.
         const launch = yield* launches
           .launch(input)
           .pipe(Effect.forkChild({ startImmediately: true }));
         yield* hold.held;
-        if (failer === "a fail command") {
-          yield* threads.dispatch({
-            type: "prepared-run.fail",
-            commandId: CommandId.make("command:late-launch:fail"),
-            threadId,
-            runId,
-            failure: makeProviderFailure({ message: "Preparation was stopped." }),
-          });
-        } else {
-          for (let pass = 1; pass <= 4; pass++) assert.equal(yield* probe.pass, "read");
-          assert.equal(yield* probe.failed, runId);
-        }
+        yield* threads.dispatch({
+          type: "prepared-run.fail",
+          commandId: CommandId.make("command:late-launch:fail"),
+          threadId,
+          runId,
+          failure: makeProviderFailure({ message: "Preparation was stopped." }),
+        });
         assert.equal(yield* runStatus(threadId, runId), "failed");
 
         yield* hold.resume;
@@ -129,10 +122,6 @@ it.effect.each(["the orphan check", "a fail command"] as const)(
         assert.equal(yield* hold.next, "read again");
         assert.deepEqual(yield* hold.releases, []);
         assert.equal(yield* runStatus(threadId, runId), "failed");
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(harness.layer, probe.layer.pipe(Layer.provide(harness.layer))),
-        ),
-      );
+      }).pipe(Effect.provide(harness.layer));
     }),
 );
