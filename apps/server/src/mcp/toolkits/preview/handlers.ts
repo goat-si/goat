@@ -416,7 +416,7 @@ const handlers = {
   preview_reload: McpToolAccess.actsAsCaller((input) =>
     invokeTargeted<PreviewAutomationStatus>("reload", input, input.timeoutMs),
   ),
-  preview_stop: McpToolAccess.actsAsCaller((input) =>
+  goat_preview_stop: McpToolAccess.actsAsCaller((input) =>
     requireStopLoading.pipe(
       Effect.andThen(invokeTargeted<PreviewAutomationStatus>("stopLoading", input)),
     ),

@@ -91,7 +91,6 @@ const OFF_GRAMMAR_NAMES = [
   "preview_set_appearance",
   "preview_snapshot",
   "preview_status",
-  "preview_stop",
   "preview_type",
   "preview_upload",
   "preview_wait_for",

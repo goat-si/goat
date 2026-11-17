@@ -728,7 +728,7 @@ export const previewEntries = {
   "preview.stop": entry({
     resource: "preview",
     verb: "stop",
-    name: "preview_stop",
+    name: "goat_preview_stop",
     toolkit: "preview",
     summary: "Stop a loading browser page",
     description:
