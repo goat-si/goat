@@ -122,6 +122,7 @@ import {
   type MarkdownFileLinkMeta,
 } from "../markdown-links";
 import { markdownFileEditorTarget, resolveMarkdownFileHostPath } from "../markdownFileHostPath";
+import { normalizeMarkdownLinkHrefKey } from "./chatMarkdownLinkHref";
 import { isMarkdownFileLinkLabel } from "@goat/shared/markdownLinks";
 import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
@@ -256,15 +257,6 @@ export interface ChatMarkdownContextReference {
 }
 const EMPTY_MARKDOWN_SKILLS: ReadonlyArray<ServerProviderSkill> = [];
 const EMPTY_REMARK_PLUGINS: NonNullable<ReactMarkdownOptions["remarkPlugins"]> = [];
-const WINDOWS_DRIVE_PATH_REGEX = /^[A-Za-z]:[\\/]/;
-
-function normalizeMarkdownLinkHrefKey(href: string): string {
-  const normalizedHref = normalizeMarkdownLinkDestination(href);
-  const rewrittenHref = rewriteMarkdownFileUriHref(normalizedHref) ?? normalizedHref;
-  return WINDOWS_DRIVE_PATH_REGEX.test(rewrittenHref)
-    ? rewrittenHref.replaceAll("\\", "/")
-    : rewrittenHref;
-}
 
 // Heading ids are added after sanitizing, which would prefix them a second time.
 const CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS = [
