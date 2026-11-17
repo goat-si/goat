@@ -5,6 +5,7 @@ import { View } from "react-native";
 import { AppText as Text } from "../../../components/ui/AppText";
 import { Button } from "../../../components/ui/Button";
 import { useGitActionResultNotification } from "../../../state/use-vcs-action-state";
+import { useThreadSelection } from "../../../state/use-thread-selection";
 
 export function SheetActionButton(props: {
   readonly icon: ComponentProps<typeof SymbolView>["name"];
@@ -20,9 +21,14 @@ export function SheetActionButton(props: {
   );
 }
 
-/** A failed Git action's message inside the sheet, which covers the thread screen's banner. */
+/** A failed Git action's message for the selected thread, inside a screen that covers its banner. */
 export function GitActionFailure() {
-  const { result, dismiss } = useGitActionResultNotification();
+  const { selectedThread } = useThreadSelection();
+  const { result, dismiss } = useGitActionResultNotification(
+    selectedThread === null
+      ? null
+      : { environmentId: selectedThread.environmentId, threadId: selectedThread.id },
+  );
   if (result?.type !== "error") return null;
   return (
     <View

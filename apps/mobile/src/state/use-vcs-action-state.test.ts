@@ -6,6 +6,7 @@ vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: Parameters<typeof appAtomRegistry.get>[0]) => appAtomRegistry.get(atom),
 }));
 vi.mock("./vcs", () => ({ vcsActionManager: {} }));
+vi.mock("./use-thread-selection", () => ({ useThreadSelection: () => ({ selectedThread: null }) }));
 
 import {
   dismissGitActionResult,
@@ -13,17 +14,22 @@ import {
   useGitActionResultNotification,
 } from "./use-vcs-action-state";
 
-const shown = () => useGitActionResultNotification().result?.type ?? null;
+const threadA = { environmentId: "environment-1", threadId: "thread-a" };
+const threadB = { environmentId: "environment-1", threadId: "thread-b" };
+const shown = (thread = threadA) => useGitActionResultNotification(thread).result?.type ?? null;
 
 it("keeps a failed Git action's message until the person dismisses it, and clears a success after 5 seconds", () => {
   vi.useFakeTimers();
   try {
-    showGitActionResult({ type: "error", title: "Git action failed", description: "Refused." });
+    showGitActionResult(
+      { type: "error", title: "Git action failed", description: "Refused." },
+      threadA,
+    );
     vi.advanceTimersByTime(60_000);
     const failure = shown();
     dismissGitActionResult();
     const dismissed = shown();
-    showGitActionResult({ type: "success", title: "Pushed" });
+    showGitActionResult({ type: "success", title: "Pushed" }, threadA);
     const success = shown();
     vi.advanceTimersByTime(5_000);
 
@@ -31,4 +37,17 @@ it("keeps a failed Git action's message until the person dismisses it, and clear
   } finally {
     vi.useRealTimers();
   }
+});
+
+it("shows a thread's failure only on that thread, which another thread's new action leaves in place", () => {
+  showGitActionResult(
+    { type: "error", title: "Git action failed", description: "Refused." },
+    threadA,
+  );
+  const onB = shown(threadB);
+  dismissGitActionResult(threadB);
+  const onAAfterB = shown(threadA);
+  dismissGitActionResult(threadA);
+
+  expect([onB, onAAfterB, shown(threadA)]).toEqual([null, "error", null]);
 });

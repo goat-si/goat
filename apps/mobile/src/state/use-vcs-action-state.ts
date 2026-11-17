@@ -5,6 +5,7 @@ import { Atom } from "effect/reactivity";
 import { useSyncExternalStore } from "react";
 
 import { appAtomRegistry } from "./atom-registry";
+import { useThreadSelection } from "./use-thread-selection";
 import { vcsActionManager } from "./vcs";
 
 export function useVcsActionState(target: VcsActionTarget): VcsActionState {
@@ -18,22 +19,39 @@ export interface GitActionResultNotification {
   readonly prUrl?: string;
 }
 
+/** The thread a Git action ran for, which alone shows its result. */
+export interface GitActionThread {
+  readonly environmentId: string;
+  readonly threadId: string;
+}
+
 const RESULT_DISMISS_MS = 5_000;
 
-const gitActionResultAtom = Atom.make<GitActionResultNotification | null>(null).pipe(
+type ShownResult = {
+  readonly result: GitActionResultNotification;
+  readonly thread: GitActionThread;
+};
+
+const gitActionResultAtom = Atom.make<ShownResult | null>(null).pipe(
   Atom.keepAlive,
   Atom.withLabel("mobile:git-action-result"),
 );
 let dismissTimer: ReturnType<typeof setTimeout> | null = null;
 
-function broadcast(result: GitActionResultNotification | null): void {
-  appAtomRegistry.set(gitActionResultAtom, result);
+function broadcast(shown: ShownResult | null): void {
+  appAtomRegistry.set(gitActionResultAtom, shown);
 }
 
-export function showGitActionResult(result: GitActionResultNotification): void {
+const sameThread = (a: GitActionThread, b: GitActionThread) =>
+  a.environmentId === b.environmentId && a.threadId === b.threadId;
+
+export function showGitActionResult(
+  result: GitActionResultNotification,
+  thread: GitActionThread,
+): void {
   if (dismissTimer) clearTimeout(dismissTimer);
   dismissTimer = null;
-  broadcast(result);
+  broadcast({ result, thread });
   // A failure stays until dismissed: the person may be in a Git sheet that covers the banner.
   if (result.type === "error") return;
   dismissTimer = setTimeout(() => {
@@ -42,18 +60,24 @@ export function showGitActionResult(result: GitActionResultNotification): void {
   }, RESULT_DISMISS_MS);
 }
 
-export function dismissGitActionResult(): void {
+/** Clears the result; with a thread, only when the result is that thread's. */
+export function dismissGitActionResult(thread?: GitActionThread): void {
+  const shown = appAtomRegistry.get(gitActionResultAtom);
+  if (thread !== undefined && (shown === null || !sameThread(shown.thread, thread))) return;
   if (dismissTimer) clearTimeout(dismissTimer);
   dismissTimer = null;
   broadcast(null);
 }
 
-export function useGitActionResultNotification(): {
+/** The latest Git action result when it belongs to this thread; another thread's stays for that thread. */
+export function useGitActionResultNotification(thread: GitActionThread | null): {
   readonly result: GitActionResultNotification | null;
   readonly dismiss: () => void;
 } {
-  const result = useAtomValue(gitActionResultAtom);
-  return { result, dismiss: dismissGitActionResult };
+  const shown = useAtomValue(gitActionResultAtom);
+  const result =
+    shown !== null && thread !== null && sameThread(shown.thread, thread) ? shown.result : null;
+  return { result, dismiss: () => dismissGitActionResult() };
 }
 
 export type GitActionProgressPhase = "idle" | "running" | "success" | "error";
@@ -80,9 +104,15 @@ function formatElapsedSeconds(ms: number | null, nowMs: number): string | null {
   return `Running for ${elapsed}s`;
 }
 
+/** Progress of the selected thread's Git action in this checkout. */
 export function useGitActionProgress(target: VcsActionTarget): GitActionProgress {
   const actionState = useVcsActionState(target);
-  const { result } = useGitActionResultNotification();
+  const { selectedThread } = useThreadSelection();
+  const { result } = useGitActionResultNotification(
+    selectedThread === null
+      ? null
+      : { environmentId: selectedThread.environmentId, threadId: selectedThread.id },
+  );
 
   // Only a running action shows elapsed time, so only it subscribes to the second tick.
   const nowMs = useSyncExternalStore(

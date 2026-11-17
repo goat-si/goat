@@ -40,6 +40,11 @@ function refreshFailureMessage(cause: Cause.Cause<unknown>): string {
   return error instanceof Error ? error.message : "Failed to refresh git status.";
 }
 
+const resultThread = (thread: EnvironmentThreadShell) => ({
+  environmentId: thread.environmentId,
+  threadId: thread.id,
+});
+
 /**
  * The server refuses to move a thread with a running turn to another worktree, so the phone checks first: a refused
  * move would leave the new folder and branch behind. The same rule as the web's isWorktreeChangeBlocked.
@@ -208,8 +213,8 @@ export function useSelectedThreadGitActions() {
         cwd: selectedThreadCwd,
       };
       setPendingConnectionError(null);
-      // The previous action's failure stays until dismissed; a new action replaces it.
-      dismissGitActionResult();
+      // This thread's previous failure stays until dismissed or replaced; another thread's stays.
+      dismissGitActionResult(resultThread(selectedThread));
       const run = () =>
         execute({
           thread: selectedThread,
@@ -224,7 +229,10 @@ export function useSelectedThreadGitActions() {
         const error = Cause.squash(result.cause);
         const message = error instanceof Error ? error.message : "Git action failed.";
         setPendingConnectionError(message);
-        showGitActionResult({ type: "error", title: "Git action failed", description: message });
+        showGitActionResult(
+          { type: "error", title: "Git action failed", description: message },
+          resultThread(selectedThread),
+        );
         return null;
       }
       return result.value;
@@ -234,7 +242,12 @@ export function useSelectedThreadGitActions() {
 
   const refreshSelectedThreadBranches =
     useCallback(async (): Promise<ReadonlyArray<VcsRef> | null> => {
-      if (branchTarget.environmentId === null || branchTarget.cwd === null) return null;
+      if (
+        selectedThread === null ||
+        branchTarget.environmentId === null ||
+        branchTarget.cwd === null
+      )
+        return null;
       const result = await readRefs({
         environmentId: branchTarget.environmentId,
         input: { cwd: branchTarget.cwd, limit: 100, refresh: true },
@@ -243,14 +256,17 @@ export function useSelectedThreadGitActions() {
         const error = Cause.squash(result.cause);
         const message = error instanceof Error ? error.message : "Failed to refresh branches.";
         setPendingConnectionError(message);
-        showGitActionResult({ type: "error", title: "Git action failed", description: message });
+        showGitActionResult(
+          { type: "error", title: "Git action failed", description: message },
+          resultThread(selectedThread),
+        );
         return null;
       }
       setPendingConnectionError(null);
       return dedupeRemoteBranchesWithLocalMatches(result.value.refs).filter(
         (branch) => !branch.isRemote,
       );
-    }, [branchTarget, readRefs]);
+    }, [branchTarget, readRefs, selectedThread]);
 
   const syncSelectedThreadBranchState = useCallback(
     async (input: {
@@ -391,13 +407,16 @@ export function useSelectedThreadGitActions() {
           return result;
         }
         await refreshSelectedThreadGitStatus({ quiet: true, cwd });
-        showGitActionResult({
-          type: "success",
-          title:
-            result.value.status === "skipped_up_to_date"
-              ? "Already up to date"
-              : `Pulled latest on ${result.value.refName}`,
-        });
+        showGitActionResult(
+          {
+            type: "success",
+            title:
+              result.value.status === "skipped_up_to_date"
+                ? "Already up to date"
+                : `Pulled latest on ${result.value.refName}`,
+          },
+          resultThread(thread),
+        );
         return result;
       },
     );
@@ -437,13 +456,16 @@ export function useSelectedThreadGitActions() {
           } else {
             await refreshSelectedThreadGitStatus({ quiet: true, cwd });
           }
-          showGitActionResult({
-            type: "success",
-            title: result.value.toast.title,
-            description: result.value.toast.description,
-            prUrl:
-              result.value.toast.cta.kind === "open_pr" ? result.value.toast.cta.url : undefined,
-          });
+          showGitActionResult(
+            {
+              type: "success",
+              title: result.value.toast.title,
+              description: result.value.toast.description,
+              prUrl:
+                result.value.toast.cta.kind === "open_pr" ? result.value.toast.cta.url : undefined,
+            },
+            resultThread(thread),
+          );
           return result;
         },
         { managedExternally: true, changesThreadBranch: input.featureBranch === true },
