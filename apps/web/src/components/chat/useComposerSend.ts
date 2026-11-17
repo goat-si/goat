@@ -106,15 +106,11 @@ import {
 } from "./chatViewSend";
 import { notifyDirectAnnotationAttached } from "./composerSendNotices";
 import type { UnifiedSettings } from "@goat/contracts";
-import type { DraftSshDestination } from "../../composerDraftStore";
 import { NO_PROVIDER_MODEL_SELECTION } from "../../providerInstances";
 import type { SavedSshWorktreeOption } from "../../lib/sshWorktree";
-import type { SshThreadOpenPorts } from "../../lib/sshWorktreeSubmission";
-import type { SshWorktreeSubmissionPorts } from "../../lib/sshWorktreeSubmission";
 import { environmentCatalog } from "../../connection/catalog";
 import { environmentThreadDetails } from "../../state/threads";
 import { findSavedSshWorktreeOption } from "../../lib/sshWorktree";
-import { isDraftContentUnchanged } from "../ChatView.logic";
 import { openSshThread } from "../../lib/sshWorktreeSubmission";
 import { parseSideChatCommand } from "../sideChat/sideChat.logic";
 import { readThreadShell } from "../../state/entities";
@@ -127,8 +123,8 @@ import { sshWorktreeSendBlockReason } from "../../lib/sshWorktree";
 import { submitSshWorktree } from "../../lib/sshWorktreeSubmission";
 import { sshStartedNotOpenedToast } from "./sshStartedNotOpenedToast";
 import { queueSideChatQuestion, startSideChatOverAnswer } from "../sideChat/sideChatFromComposer";
-import { waitForThreadShell } from "../../state/entities";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { sshComposerPorts, type SshComposerPorts } from "./sshComposerPorts";
 import { vcsEnvironment } from "../../state/vcs";
 import type { ComposerSendInput } from "./useComposerSend.input";
 import { draftHasNonPromptContent, readEnvironmentPresentation } from "./useComposerSend.helpers";
@@ -296,75 +292,24 @@ export function useComposerSend(input: ComposerSendInput) {
     respondingRequestIdsRef.current = respondingRequestIds;
   }, [pendingApprovals, respondingRequestIds]);
 
-  const makeSshThreadOpenPorts = (
-    savedDestination: DraftSshDestination,
-    automaticRouteKey: string | null,
-  ): SshThreadOpenPorts => ({
-    reconnect: async (savedEnvironmentId) => {
-      const catalog = appAtomRegistry.get(environmentCatalog.catalogValueAtom);
-      const option = findSavedSshWorktreeOption(
-        savedSshWorktreeOptions(catalog.entries, window.desktopBridge !== undefined),
-        savedDestination,
-      );
-      if (
-        !catalog.isReady ||
-        !option ||
-        option.disabledReason ||
-        savedEnvironmentId !== savedDestination.environmentId
-      ) {
-        throw new Error("This saved SSH connection is unavailable. Check Settings → Connections.");
-      }
-      const result = await retryEnvironment(savedEnvironmentId);
-      if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-    },
-    waitForShell: waitForThreadShell,
-    navigate: async (remoteRef) => {
-      if (automaticRouteKey !== null && currentRouteThreadKeyRef.current !== automaticRouteKey) {
-        throw new Error("The remote thread started. Use Open thread when ready.");
-      }
-      await navigate({
-        to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(remoteRef),
-        replace: true,
-      });
-    },
-  });
-  const makeSshSubmissionPorts = (
-    capturedDraftId: DraftId,
-    submittedContentSnapshot: string,
-    savedDestination: DraftSshDestination,
-    capturedRouteThreadKey: string,
-    onDispatchBegan: () => void,
-  ): SshWorktreeSubmissionPorts => {
-    return {
-      ...makeSshThreadOpenPorts(savedDestination, capturedRouteThreadKey),
-      launch: async (target) => {
-        onDispatchBegan();
-        const result = await launchSshWorkspace(target);
-        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-        return result.value;
-      },
-      // Always re-read by captured ID, including after route changes or remounts.
-      isSubmittedDraftContentUnchanged: () =>
-        isDraftContentUnchanged(
-          submittedContentSnapshot,
-          useComposerDraftStore.getState().getComposerDraft(capturedDraftId),
-        ),
-      // Called synchronously after an unchanged-content comparison and successful navigation.
-      deleteSubmittedDraft: () => clearDraftThread(capturedDraftId),
-      // Called when navigation did not happen (timeout, route changed, identity mismatch): the draft
-      // session stays so its route stays mounted. Called only when content still matches the
-      // snapshot; remove it through the existing selector alias, never the displayed target.
-      emptySubmittedDraftContent: () => {
-        clearComposerDraftContent(capturedDraftId); // ChatView.tsx:1833 → composerDraftStore.ts:4186
-        if (currentRouteThreadKeyRef.current === capturedRouteThreadKey) {
-          promptRef.current = "";
-          composerRef.current?.resetCursorState();
-        }
-      },
-    };
-  };
-  const showSshStartedNotOpened = sshStartedNotOpenedToast(makeSshThreadOpenPorts);
+  // Built when a send runs, as the inline factories were: the ports read refs, which render must not.
+  const sshPorts = () =>
+    sshComposerPorts({
+      navigate,
+      launchSshWorkspace,
+      retryEnvironment,
+      clearDraftThread,
+      clearComposerDraftContent,
+      currentRouteThreadKeyRef,
+      composerRef,
+      promptRef,
+    });
+  const makeSshThreadOpenPorts: SshComposerPorts["makeSshThreadOpenPorts"] = (...args) =>
+    sshPorts().makeSshThreadOpenPorts(...args);
+  const makeSshSubmissionPorts: SshComposerPorts["makeSshSubmissionPorts"] = (...args) =>
+    sshPorts().makeSshSubmissionPorts(...args);
+  const showSshStartedNotOpened: ReturnType<typeof sshStartedNotOpenedToast> = (...args) =>
+    sshStartedNotOpenedToast(makeSshThreadOpenPorts)(...args);
   const continueThreadOnSsh = async (
     selected: SavedSshWorktreeOption,
     instructions: string,
