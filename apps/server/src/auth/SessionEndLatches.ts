@@ -1,7 +1,8 @@
 /**
- * Calls running on an MCP client session's authority, cut when SessionStore removes the session's
- * live grant (a revoke or a deleted row). The cut runs inside that removal, so it has interrupted
- * every such call before it returns. Expiry never cuts: a call admitted before it runs to its end.
+ * Admissions of MCP requests on client sessions. Each request's admission is recorded inside the
+ * verify that accepted it and lives until the request ends. A removal of the session's grant (a
+ * revoke or a deleted row) marks every admission of that session, registered or not, and interrupts
+ * the calls running under it, inside the removal itself. Expiry never cuts.
  */
 import type { AuthSessionId } from "@goat/contracts";
 import * as Cause from "effect/Cause";
@@ -15,81 +16,71 @@ export interface SessionEnd {
    * caller interrupting the run interrupts the work too.
    */
   readonly run: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<Option.Option<A>, E, R>;
+  /** Ends the admission when its request ends. */
+  readonly release: Effect.Effect<void>;
 }
 
-interface Guarded {
-  readonly fiber: Fiber.Fiber<unknown, unknown>;
-  cut: boolean;
+interface Admission {
+  removed: boolean;
+  readonly calls: Set<Fiber.Fiber<unknown, unknown>>;
 }
-
-/** Sessions removed before their call registered; the window is one request's verify. */
-const REMEMBERED_REMOVALS = 10_000;
 
 export const make = () => {
-  // One entry per call in flight; each call removes its own entry when it ends.
-  const guarded = new Map<AuthSessionId, Set<Guarded>>();
-  // Insertion-ordered and capped: a call registers right after its request verified the session.
-  const removed = new Set<AuthSessionId>();
-  const isRemoved = (sessionId: AuthSessionId) => Effect.sync(() => removed.has(sessionId));
+  // One entry per request in flight; each request releases its own when it ends.
+  const admissions = new Map<AuthSessionId, Set<Admission>>();
 
-  /** Called by SessionStore right after it removed these grants. */
+  /** Called by SessionStore right after it removed these grants for a revoke or a deleted row. */
   const cut = (sessionIds: ReadonlyArray<AuthSessionId>) =>
     Effect.sync(() => {
-      for (const sessionId of sessionIds) {
-        removed.delete(sessionId);
-        removed.add(sessionId);
-        const calls = guarded.get(sessionId);
-        if (calls === undefined) continue;
-        guarded.delete(sessionId);
-        for (const call of calls) {
-          call.cut = true;
-          call.fiber.interruptUnsafe();
+      for (const sessionId of sessionIds)
+        for (const admission of admissions.get(sessionId) ?? []) {
+          admission.removed = true;
+          for (const fiber of admission.calls) fiber.interruptUnsafe();
         }
-      }
-      // Evicted after the loop and never from this removal, so none of its ids is forgotten.
-      const current = new Set(sessionIds);
-      for (const oldest of removed) {
-        if (removed.size <= REMEMBERED_REMOVALS || current.has(oldest)) break;
-        removed.delete(oldest);
-      }
     });
 
-  const sessionEnd = (sessionId: AuthSessionId): SessionEnd => ({
-    // Untraced: it wraps every MCP tool call, which already has its own span.
-    run: Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
-      return yield* Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          const fiber = yield* Effect.forkChild(effect);
-          const call: Guarded = { fiber, cut: false };
-          // Registered before removals are read: a removal either finds this call or is remembered.
-          guarded.set(sessionId, (guarded.get(sessionId) ?? new Set()).add(call));
-          return yield* Effect.gen(function* () {
-            const exit = (yield* isRemoved(sessionId))
-              ? undefined
-              : yield* restore(Fiber.await(fiber)).pipe(
-                  Effect.onInterrupt(() => Fiber.interrupt(fiber)),
-                );
-            if (exit === undefined) {
-              call.cut = true;
-              yield* Fiber.interrupt(fiber);
-              return Option.none();
-            }
-            if (call.cut && exit._tag === "Failure" && Cause.hasInterrupts(exit.cause))
-              return Option.none();
-            return Option.some(yield* exit);
-          }).pipe(
-            Effect.ensuring(
-              Effect.sync(() => {
-                const calls = guarded.get(sessionId);
-                calls?.delete(call);
-                if (calls?.size === 0) guarded.delete(sessionId);
-              }),
-            ),
-          );
-        }),
-      );
-    }),
-  });
+  /** Records a request's admission; `markRemoved` is for a removal the verify fence saw first. */
+  const admit = (sessionId: AuthSessionId) => {
+    const admission: Admission = { removed: false, calls: new Set() };
+    admissions.set(sessionId, (admissions.get(sessionId) ?? new Set()).add(admission));
+    const sessionEnd: SessionEnd = {
+      release: Effect.sync(() => {
+        const current = admissions.get(sessionId);
+        current?.delete(admission);
+        if (current?.size === 0) admissions.delete(sessionId);
+      }),
+      // Untraced: it wraps every MCP tool call, which already has its own span.
+      run: Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
+        return yield* Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const fiber = yield* Effect.forkChild(effect);
+            // Added before the mark is read: a removal either finds this call or already marked it.
+            admission.calls.add(fiber);
+            return yield* Effect.gen(function* () {
+              const exit = admission.removed
+                ? undefined
+                : yield* restore(Fiber.await(fiber)).pipe(
+                    Effect.onInterrupt(() => Fiber.interrupt(fiber)),
+                  );
+              if (exit === undefined) {
+                yield* Fiber.interrupt(fiber);
+                return Option.none();
+              }
+              if (admission.removed && exit._tag === "Failure" && Cause.hasInterrupts(exit.cause))
+                return Option.none();
+              return Option.some(yield* exit);
+            }).pipe(Effect.ensuring(Effect.sync(() => admission.calls.delete(fiber))));
+          }),
+        );
+      }),
+    };
+    return {
+      sessionEnd,
+      markRemoved: () => {
+        admission.removed = true;
+      },
+    };
+  };
 
-  return { cut, sessionEnd };
+  return { cut, admit };
 };

@@ -27,6 +27,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import { HttpServerRequest } from "effect/http";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -576,6 +577,16 @@ export const layerMcpClientAuthenticator = Layer.effect(
       authenticate: Effect.fn("McpHttpServer.McpClientAuthenticator.authenticate")(
         function (request) {
           return environmentAuth.authenticateMcpClient(request).pipe(
+            // The admission lives until this request ends: its scope closes after the response.
+            Effect.tap(({ sessionEnd }) =>
+              sessionEnd === undefined
+                ? Effect.void
+                : Effect.flatMap(Effect.serviceOption(Scope.Scope), (scope) =>
+                    Option.isSome(scope)
+                      ? Scope.addFinalizer(scope.value, sessionEnd.release)
+                      : Effect.void,
+                  ),
+            ),
             Effect.flatMap((client) =>
               Clock.currentTimeMillis.pipe(
                 Effect.map((issuedAt): McpInvocationContext.McpInvocationScope => ({

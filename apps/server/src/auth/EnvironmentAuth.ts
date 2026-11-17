@@ -972,36 +972,36 @@ export const make = Effect.gen(function* () {
   const authenticateMcpClient: EnvironmentAuth["Service"]["authenticateMcpClient"] = (request) => {
     const token = parseBearerToken(request);
     if (token === null) return Effect.fail(new ServerAuthMissingCredentialError({}));
-    return sessions.verify(token, connectionOf(request)).pipe(
+    return sessions.admitMcpCall(token, connectionOf(request)).pipe(
       mapSessionVerificationErrors,
-      Effect.flatMap((session) =>
+      Effect.flatMap(({ session, sessionEnd }) =>
         session.subject === MCP_CLIENT_SUBJECT && session.method === "bearer-access-token"
           ? sessions.markUsed(session.sessionId).pipe(
-              Effect.andThen(sessions.sessionEnd(session.sessionId)),
-              Effect.map(
-                (sessionEnd) =>
-                  ({
-                    sessionId: session.sessionId,
-                    label: session.client.label ?? "MCP client",
-                    access: session.scopes.includes(AuthOrchestrationOperateScope)
-                      ? (session.runtimeModeCeiling ?? "approval-required")
-                      : "read-only",
-                    grantedScopes: session.scopes,
-                    ...(session.childSetupPurpose
-                      ? { childSetupPurpose: session.childSetupPurpose }
-                      : {}),
-                    reauthorize: reauthorizeSession(sessions, session.sessionId),
-                    sessionEnd,
-                    approvals:
-                      session.scopes.includes(AuthOrchestrationOperateScope) &&
-                      session.scopes.includes(AuthOrchestrationApproveScope),
-                  }) satisfies McpClientSession,
-              ),
+              Effect.as({
+                sessionId: session.sessionId,
+                label: session.client.label ?? "MCP client",
+                access: session.scopes.includes(AuthOrchestrationOperateScope)
+                  ? (session.runtimeModeCeiling ?? "approval-required")
+                  : "read-only",
+                grantedScopes: session.scopes,
+                ...(session.childSetupPurpose
+                  ? { childSetupPurpose: session.childSetupPurpose }
+                  : {}),
+                reauthorize: reauthorizeSession(sessions, session.sessionId),
+                sessionEnd,
+                approvals:
+                  session.scopes.includes(AuthOrchestrationOperateScope) &&
+                  session.scopes.includes(AuthOrchestrationApproveScope),
+              } satisfies McpClientSession),
             )
-          : Effect.fail(
-              new ServerAuthInvalidCredentialError({
-                diagnostic: "Only MCP client sessions are accepted here.",
-              }),
+          : sessionEnd.release.pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new ServerAuthInvalidCredentialError({
+                    diagnostic: "Only MCP client sessions are accepted here.",
+                  }),
+                ),
+              ),
             ),
       ),
       Effect.withSpan("EnvironmentAuth.authenticateMcpClient"),
