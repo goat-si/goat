@@ -1,0 +1,280 @@
+import { setupSshComposer, state } from "~/test/sshComposerFixture";
+import { useLayoutEffect, useRef } from "react";
+import { expect, it, vi } from "vite-plus/test";
+
+/**
+ * A server thread with one pending command approval and a send that redirects the agent: the
+ * composer shows the approval, so a send declines it before the message goes out.
+ */
+async function redirectSend(
+  fixture: Awaited<ReturnType<typeof setupSshComposer>>,
+  options: { readonly composerMode: "full-access" | "approval-required"; readonly refuse: boolean; readonly edit?: unknown; readonly draftTarget?: unknown },
+) {
+  const { EnvironmentId, ProjectId, RuntimeRequestId, ThreadId, ProviderInstanceId } =
+    await import("@goat/contracts");
+  const { AsyncResult } = await import("effect/reactivity");
+  const Cause = await import("effect/Cause");
+  const { makeThreadFixture } = await import("~/test-fixtures");
+  const { AppAtomRegistryProvider } = await import("~/rpc/atomRegistry");
+  const { readEnvironmentScope } = await import("~/state/session");
+  const { useComposerSend } = await import("./useComposerSend");
+  const environmentId = EnvironmentId.make("redirect-env");
+  const threadId = ThreadId.make("redirect-thread");
+  const requestId = RuntimeRequestId.make("redirect-approval");
+  const target = { environmentId, threadId };
+  const refusal =
+    "This thread has a turn running, and changing its permission mode would end it. Wait for the turn to finish, or press Stop first.";
+  const calls: Array<string> = [];
+  const errors: Array<string | null> = [];
+  vi.mocked(readEnvironmentScope).mockReturnValue(true);
+  state.normal.mockImplementation(async () => {
+    calls.push("startTurn");
+    return AsyncResult.success({ sequence: 1 });
+  });
+  const persist = vi.fn(async (input: { readonly runtimeMode: string }) => {
+    calls.push("settings:" + input.runtimeMode);
+    return options.refuse
+      ? AsyncResult.failure(Cause.fail(new Error(refusal)))
+      : AsyncResult.success(undefined);
+  });
+  const respond = vi.fn(async (_requestId: string, decision: string) => {
+    calls.push("approval:" + decision);
+    return AsyncResult.success(undefined);
+  });
+  const modelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" };
+  let send!: () => Promise<void>;
+  const promptRef = { current: "Stop that and list the files instead." };
+  function Probe() {
+    const composerRef = useRef({
+      getSendContext: () => ({
+        providerAvailable: true,
+        multipleModelSelections: null,
+        images: [],
+        files: [],
+        terminalContexts: [],
+        previewAnnotations: [],
+        reviewComments: [],
+        threadContexts: [],
+        previewTabs: [],
+        selectedProvider: "codex",
+        selectedModel: modelSelection.model,
+        selectedProviderModels: [],
+        selectedPromptEffort: null,
+        selectedModelSelection: modelSelection,
+        interactionMode: "default",
+        interactionModeEnabled: false,
+        shownPendingApprovalIds: [requestId],
+        answeringPendingUserInput: false,
+      }),
+      validateProviderInput: () => true,
+      hasPendingAttachments: () => false,
+      resetCursorState: () => {},
+    });
+    const input = {
+      environmentId,
+      routeThreadRef: target,
+      activeThreadRef: target,
+      activeThread: makeThreadFixture({ id: threadId, runtimeMode: "full-access" }),
+      activeThreadKey: "redirect",
+      activeProject: { id: ProjectId.make("project"), environmentId, cwd: "/repo" },
+      routeThreadKey: "redirect",
+      currentRouteThreadKeyRef: { current: "redirect" },
+      composerDraftTarget: options.draftTarget ?? target,
+      promptRef,
+      composerRef,
+      composerImagesRef: { current: [] },
+      composerFilesRef: { current: [] },
+      composerTerminalContextsRef: { current: [] },
+      feedbackUploadsInFlightRef: { current: new Set() },
+      queuedRunEdit: options.edit ?? { isEditing: false },
+      isServerThread: true,
+      isLocalDraftThread: false,
+      isCloudThread: false,
+      draftId: null,
+      draftThread: null,
+      phase: "running",
+      runtimeMode: options.composerMode,
+      sendEnvMode: "local",
+      localCheckoutBranchMismatch: null,
+      providerInstanceEntries: [],
+      cloudState: { composerBlockReason: null },
+      activeEnvironmentUnavailable: false,
+      isSendBusy: false,
+      isConnecting: false,
+      needsLoadBalancing: false,
+      usageLimitsOffered: false,
+      pendingApprovals: [
+        {
+          requestId,
+          requestKind: "command",
+          createdAt: "2026-11-17T00:00:00.000Z",
+          responseCapability: "live",
+        },
+      ],
+      respondingRequestIds: [],
+      activePendingProgress: null,
+      onRespondToApproval: respond,
+      persistThreadSettingsForNextTurn: persist,
+      setThreadError: (_threadId: unknown, error: string | null) => errors.push(error),
+      setDockedDraftHeroThreadKey: () => {},
+      setOptimisticUserMessages: () => {},
+      optimisticBlobPreviews: { track: () => {}, release: () => {} },
+      beginLocalDispatch: () => {},
+      resetLocalDispatch: () => {},
+      beginWorktreeSetup: () => {},
+      anchorNewTurn: () => {},
+      clearUsageLimitsFor: () => {},
+      readPendingEnvironmentChange: () => null,
+      refreshBeforeSend: () => null,
+      setKeepFullHistory: () => {},
+      setSetupQueueSendThreadKey: () => {},
+      captureDraftHeroComposerRect: () => {},
+      acknowledgeActiveThreadWoke: () => {},
+      setFeedbackSubmissionsByThreadKey: () => {},
+      handleInteractionModeChange: () => {},
+      handleNewThreadInActiveProject: () => {},
+      openUsageLimits: () => false,
+      keepFullHistory: false,
+      resumeCompactionTokens: null,
+      sendQueuesBehindSetup: false,
+      isDraftHeroState: false,
+      startFromOrigin: false,
+      activeThreadBranch: null,
+      activeMessageCount: 1,
+      isGitRepo: false,
+    } as unknown as Parameters<typeof useComposerSend>[0];
+    const currentSend = useComposerSend(input).onSend;
+    useLayoutEffect(() => {
+      send = () => currentSend();
+    });
+    return null;
+  }
+  await fixture.rerender(
+    <AppAtomRegistryProvider>
+      <Probe />
+    </AppAtomRegistryProvider>,
+  );
+  return { calls, errors, refusal, promptRef, send: () => send() };
+}
+
+
+async function draftReply(holder: string) {
+  const { EnvironmentId, ThreadId, MessageId, TurnItemId } = await import("@goat/contracts");
+  const { useComposerDraftStore } = await import("~/composerDraftStore");
+  const environmentId = EnvironmentId.make("redirect-env");
+  const reply = {
+    version: 1,
+    kind: "response",
+    contextId: "response_m9",
+    label: "An answer",
+    citation: {
+      version: 1,
+      environmentId,
+      threadId: ThreadId.make(holder),
+      messageId: MessageId.make("m9"),
+      text: "An answer",
+      start: 0,
+      end: 9,
+      prefix: "",
+      suffix: "",
+    },
+    itemId: TurnItemId.make("item-9"),
+  } as never;
+  useComposerDraftStore
+    .getState()
+    .setReplyTo({ environmentId, threadId: ThreadId.make("redirect-thread") }, reply);
+  return environmentId;
+}
+
+async function serverChecksReplies(environmentId: unknown) {
+  const { appAtomRegistry } = await import("~/rpc/atomRegistry");
+  const { environmentServerConfigsAtom } = await import("~/state/server");
+  const mocked = vi.mocked(appAtomRegistry.get);
+  const prior = mocked.getMockImplementation()!;
+  const configs = new Map([[environmentId, { environment: { capabilities: { replyToResponse: true } } }]]);
+  mocked.mockImplementation(((atom: unknown) =>
+    atom === environmentServerConfigsAtom ? configs : prior(atom as never)) as never);
+  return { [Symbol.dispose]: () => mocked.mockImplementation(prior) };
+}
+
+it("review: a draft reply to a server without replyToResponse starts no turn", async () => {
+  await using fixture = await setupSshComposer();
+  state.toast.mockReset();
+  const redirect = await redirectSend(fixture, { composerMode: "full-access", refuse: false });
+  await draftReply("redirect-thread");
+  await redirect.send();
+  expect(redirect.calls).toEqual([]);
+  expect(state.toast).toHaveBeenCalledWith(
+    expect.objectContaining({ title: "This machine's server can't take replies" }),
+  );
+});
+
+it("review: a draft reply whose holder the client does not hold starts no turn", async () => {
+  await using fixture = await setupSshComposer();
+  state.toast.mockReset();
+  const redirect = await redirectSend(fixture, { composerMode: "full-access", refuse: false });
+  const environmentId = await draftReply("holder-thread");
+  using _configs = await serverChecksReplies(environmentId);
+  await redirect.send();
+  expect(redirect.calls).toEqual([]);
+  expect(state.toast).toHaveBeenCalledWith(
+    expect.objectContaining({ title: "The response this replies to is gone" }),
+  );
+});
+
+it("review: a draft reply whose holder the client holds starts the turn", async () => {
+  await using fixture = await setupSshComposer();
+  state.toast.mockReset();
+  const { readThreadShell } = await import("~/state/entities");
+  const redirect = await redirectSend(fixture, { composerMode: "full-access", refuse: false });
+  const environmentId = await draftReply("holder-thread");
+  using _configs = await serverChecksReplies(environmentId);
+  using _shell = vi.mocked(readThreadShell).mockImplementation(
+    ((ref: { threadId: string }) => (ref.threadId === "holder-thread" ? { deletedAt: null } : null)) as never,
+  );
+  await redirect.send();
+  expect(redirect.calls).toEqual(["approval:decline", "settings:full-access", "startTurn"]);
+  expect(state.toast).not.toHaveBeenCalled();
+});
+
+it("review: a queued-message edit whose reply names a gone holder is saved with that reply", async () => {
+  await using fixture = await setupSshComposer();
+  state.toast.mockReset();
+  const { DraftId, useComposerDraftStore } = await import("~/composerDraftStore");
+  const { EnvironmentId, ThreadId, MessageId, TurnItemId } = await import("@goat/contracts");
+  const environmentId = EnvironmentId.make("redirect-env");
+  const editDraft = DraftId.make("queued-edit:redirect-env:redirect-thread:run-1");
+  const saveEdit = vi.fn(async () => {});
+  const redirect = await redirectSend(fixture, {
+    composerMode: "full-access",
+    refuse: false,
+    edit: { isEditing: true, saveEdit },
+    draftTarget: editDraft,
+  });
+  useComposerDraftStore.getState().setReplyTo(editDraft, {
+    version: 1,
+    kind: "response",
+    contextId: "response_m9",
+    label: "An answer",
+    citation: {
+      version: 1,
+      environmentId,
+      threadId: ThreadId.make("holder-thread"),
+      messageId: MessageId.make("m9"),
+      text: "An answer",
+      start: 0,
+      end: 9,
+      prefix: "",
+      suffix: "",
+    },
+    itemId: TurnItemId.make("item-9"),
+  } as never);
+  expect(useComposerDraftStore.getState().getComposerDraft(editDraft)?.replyTo?.citation.threadId).toBe("holder-thread");
+  using _configs = await serverChecksReplies(environmentId);
+  await redirect.send();
+  expect(state.toast).not.toHaveBeenCalled();
+  expect(saveEdit).toHaveBeenCalledWith(
+    expect.objectContaining({ replyTo: expect.objectContaining({ contextId: "response_m9" }) }),
+    expect.anything(),
+  );
+});
