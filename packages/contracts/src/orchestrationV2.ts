@@ -378,6 +378,8 @@ export const OrchestrationV2StreamingCapabilities = Schema.Struct({
 export type OrchestrationV2StreamingCapabilities = typeof OrchestrationV2StreamingCapabilities.Type;
 
 export * from "./providerCapabilityParts.ts";
+export * from "./assistantMessagePhase.ts";
+import { AssistantMessagePhase } from "./assistantMessagePhase.ts";
 import {
   OrchestrationV2ToolCapabilities,
   OrchestrationV2ApprovalCapabilities,
@@ -1575,6 +1577,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("assistant_message"),
+    phase: ForwardCompatibleOptional(AssistantMessagePhase),
     messageId: MessageId,
     channel: ForwardCompatibleOptional(ChannelMessageMeta),
     text: Schema.String,
@@ -2454,6 +2457,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("assistant_message"),
+    phase: ForwardCompatibleOptional(AssistantMessagePhase),
     messageId: MessageId,
     channel: ForwardCompatibleOptional(ChannelMessageMeta),
     text: Schema.String,

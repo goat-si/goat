@@ -105,6 +105,7 @@ export function useTimelineDisplay(
 export function entriesShownForToolCallVisibility(
   input: ToolCallVisibilityInput,
   isWorking: boolean,
+  retainedReplyEntryIds: (entries: ReadonlyArray<TimelineEntry>) => ReadonlySet<string>,
 ): ReadonlyArray<TimelineEntry> {
   const visibility = input.toolCallVisibility ?? "showAll";
   const entries = input.timelineEntries;
@@ -122,6 +123,7 @@ export function entriesShownForToolCallVisibility(
   const answeringFrom = answering ? lastResponseBoundaryIndex(entries) + 1 : entries.length;
   const terminalIds = deriveTerminalAssistantMessageIds(entries);
   const steerAnswerIds = deriveInFlightSteerAnswerIds(entries);
+  const retainedReplyIds = retainedReplyEntryIds(entries);
   return entries.filter((entry, index) => {
     if (entry.kind !== "message") return workShownAsFinalAnswerOnly(entry);
     const { message } = entry;
@@ -129,6 +131,7 @@ export function entriesShownForToolCallVisibility(
       message.role !== "assistant" ||
       message.id === input.revealedMessageId ||
       steerAnswerIds.has(message.id) ||
+      retainedReplyIds.has(entry.id) ||
       (terminalIds.has(message.id) &&
         index < answeringFrom &&
         (answeringRunId === null || message.runId !== answeringRunId))

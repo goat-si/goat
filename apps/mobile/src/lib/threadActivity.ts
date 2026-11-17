@@ -91,6 +91,7 @@ import * as DateTime from "effect/DateTime";
 import { groupAdjacentActivities } from "./threadActivityGroups";
 import {
   activityGroupForVisibility,
+  answersBeforeSteers,
   DEFAULT_THREAD_FEED_DISPLAY,
   liveAnswerPreview,
   type ThreadFeedDisplay,
@@ -829,6 +830,7 @@ function deriveThreadFeedRunFolds(
   feedFailedRunIds: ReadonlySet<RunId>,
 ): ReadonlyMap<string, ThreadFeedRunFold> {
   const terminalAssistantMessageIdByRun = new Map<RunId, string>();
+  const retainedAnswerIds = answersBeforeSteers(feed);
   const interruptedRunIds = new Set<RunId>();
   const failedRunIds = new Set(feedFailedRunIds);
   const promptIndexByRunId = new Map<RunId, number>();
@@ -928,6 +930,7 @@ function deriveThreadFeedRunFolds(
         .filter(
           (entry) =>
             entry.id !== terminalAssistantId &&
+            !(entry.type === "message" && retainedAnswerIds.has(entry.message.id)) &&
             entry.type !== "html-render" &&
             entry.type !== "mcp-app" &&
             entry.id !== visibleCompactionId &&

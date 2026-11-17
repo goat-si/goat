@@ -69,6 +69,26 @@ function isSteerMessage(message: ThreadFeedMessage): boolean {
   );
 }
 
+/** Replies the provider marked final that a steer then followed; they stay shown. */
+export function answersBeforeSteers(feed: ReadonlyArray<ThreadFeedEntry>): ReadonlySet<MessageId> {
+  const ids = new Set<MessageId>();
+  let previous: ThreadFeedEntry | undefined;
+  for (const entry of feed) {
+    if (
+      entry.type === "message" &&
+      isSteerMessage(entry.message) &&
+      previous?.type === "message" &&
+      previous.message.role === "assistant" &&
+      previous.message.projectedItem?.item.type === "assistant_message" &&
+      previous.message.projectedItem.item.phase === "final_answer"
+    ) {
+      ids.add(previous.message.id);
+    }
+    previous = entry;
+  }
+  return ids;
+}
+
 function startsResponse(entry: ThreadFeedEntry): boolean {
   return (
     (entry.type === "message" && entry.message.role === "user" && !isSteerMessage(entry.message)) ||
@@ -86,7 +106,7 @@ export function zenAnswerMessageIds(
 ): ReadonlySet<MessageId> {
   const replies: Array<{ readonly message: ThreadFeedMessage; readonly index: number }> = [];
   const lastReplyByResponse = new Map<string, MessageId>();
-  const steerAnswers = new Set<MessageId>();
+  const steerAnswers = new Set(answersBeforeSteers(feed));
   let userMessages = 0;
   let awaitingReply = false;
   let candidate: MessageId | null = null;
