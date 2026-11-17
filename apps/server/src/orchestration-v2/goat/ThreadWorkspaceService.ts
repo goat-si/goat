@@ -119,6 +119,8 @@ const make = Effect.gen(function* () {
       worktreePath,
       branch,
       snapshot,
+      // The same check restoreInPlace and the send check make, so the banner offers what they allow.
+      recreatable: yield* isManagedWorktreePath(worktreePath),
     } as const;
   });
 
