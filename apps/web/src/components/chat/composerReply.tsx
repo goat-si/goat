@@ -141,7 +141,7 @@ function showsHistoryOf(
 
 /**
  * A stashed reply returns only in a thread that shows its response (the thread that holds it, or
- * a side chat or fork of it), and a pending one wins.
+ * a side chat or fork of it), and a pending one wins. The send gate judges whether it may go.
  */
 export function restoreStashedReply(
   records: ReadonlyArray<ComposerContextRecord>,
@@ -152,12 +152,7 @@ export function restoreStashedReply(
   const { citation } = reply;
   if (
     citation.environmentId !== target.environmentId ||
-    !showsHistoryOf(target, citation.threadId) ||
-    !replyHolderIsHeld(
-      target.threadId,
-      citation.threadId,
-      readHolderShell(citation.environmentId, citation.threadId),
-    )
+    !showsHistoryOf(target, citation.threadId)
   ) {
     return;
   }
