@@ -12,7 +12,9 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
 import * as ProviderProcesses from "./providerProcesses.ts";
@@ -240,6 +242,68 @@ it.effect("a Linux host without a boot id starts without reaping", () =>
     });
     expect(service).toEqual({ hasOtherLiveOwner: false });
     expect(NodeFS.existsSync(NodePath.join(config.stateDir, "provider-processes"))).toBe(false);
+  }).pipe(
+    Effect.scoped,
+    Effect.provideService(HostProcess.Platform, "linux"),
+    Effect.provide(
+      ServerConfig.layerTest(process.cwd(), { prefix: "goat-restart-ownership-" }).pipe(
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
+  ),
+);
+
+// regression (review P3-4): survivors that never die cost startup about a second in all,
+// signalled first and then awaited together.
+it.effect("unkillable survivors of two dead servers delay startup once, not once each", () =>
+  Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
+    const directory = NodePath.join(config.stateDir, "provider-processes");
+    NodeFS.mkdirSync(directory, { recursive: true });
+    const bootIdPath = NodePath.join(config.stateDir, "boot-id");
+    NodeFS.writeFileSync(bootIdPath, "boot\n");
+    const signalled: Array<number> = [];
+    // Every pid reads back with the same start time, so recorded survivors stay alive.
+    const controller: AcpSessionRuntime.AcpPosixProcessTreeController = {
+      childPidsOf: () => [],
+      childrenOf: () => [],
+      identity: (pid) => ({
+        executable: undefined,
+        pid,
+        ppid: 0,
+        pgid: 0,
+        sid: 0,
+        startTime: "alive",
+      }),
+      snapshot: () => [],
+      signalProcess: (pid) => void signalled.push(pid),
+    };
+    for (const [name, pid] of [
+      ["first", 5001],
+      ["second", 5002],
+    ] as const)
+      NodeFS.writeFileSync(
+        NodePath.join(directory, `${name}.json`),
+        JSON.stringify({
+          version: 1,
+          instanceId: name,
+          hostname: NodeOS.hostname(),
+          stateDir: config.stateDir,
+          owner: { pid: 4242, startTime: "boot:gone" },
+          processes: [{ pid, startTime: "boot:alive", pgid: 0 }],
+        }),
+      );
+    const starting = yield* ProviderProcesses.make({ bootIdPath, controller }).pipe(
+      Effect.forkChild,
+    );
+    yield* TestClock.adjust("1 second");
+    yield* Fiber.join(starting);
+    expect(signalled.toSorted()).toEqual([5001, 5002]);
+    expect(
+      NodeFS.readdirSync(directory)
+        .filter((file) => file.startsWith("first") || file.startsWith("second"))
+        .toSorted(),
+    ).toEqual(["first.json", "second.json"]);
   }).pipe(
     Effect.scoped,
     Effect.provideService(HostProcess.Platform, "linux"),

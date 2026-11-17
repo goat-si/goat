@@ -56,14 +56,18 @@ const LINUX_BOOT_ID = "/proc/sys/kernel/random/boot_id";
  * skipped, never fatal, when the host cannot identify processes.
  */
 export const make = Effect.fn("ProviderProcesses.make")(function* (
-  options: { readonly bootIdPath?: string } = {},
+  options: {
+    readonly bootIdPath?: string;
+    readonly controller?: AcpSessionRuntime.AcpPosixProcessTreeController;
+  } = {},
 ) {
   const platform = yield* HostProcess.Platform;
   if (platform !== "linux") return ProviderProcesses.defaultValue();
   const { stateDir } = yield* ServerConfig.ServerConfig;
   const directory = NodePath.join(stateDir, "provider-processes");
   const hostname = NodeOS.hostname();
-  const controller = AcpSessionRuntime.makePosixProcessTreeController(platform);
+  const controller =
+    options.controller ?? AcpSessionRuntime.makePosixProcessTreeController(platform);
   const boot = yield* Effect.try(() => {
     const id = NodeFS.readFileSync(options.bootIdPath ?? LINUX_BOOT_ID, "utf8").trim();
     NodeFS.mkdirSync(directory, { recursive: true });
@@ -130,6 +134,11 @@ export const make = Effect.fn("ProviderProcesses.make")(function* (
   const files = yield* Effect.try(() => NodeFS.readdirSync(directory)).pipe(
     Effect.orElseSucceed((): ReadonlyArray<string> => []),
   );
+  const reaped: Array<{
+    readonly file: string;
+    readonly recordPath: string;
+    readonly survivors: ReadonlyArray<typeof ProcessIdentity.Type>;
+  }> = [];
   for (const file of files) {
     const pending = file.endsWith(".json.pending");
     if (!file.endsWith(".json") && !pending) continue;
@@ -146,9 +155,10 @@ export const make = Effect.fn("ProviderProcesses.make")(function* (
       yield* tryQuietly(() => NodeFS.rmSync(recordPath, { force: true }));
       continue;
     }
-    let survived = false;
-    for (const survivor of record.processes) {
-      if (protectedPids.has(survivor.pid) || !matches(survivor)) continue;
+    const survivors = record.processes.filter(
+      (survivor) => !protectedPids.has(survivor.pid) && matches(survivor),
+    );
+    for (const survivor of survivors) {
       // Never infer ownership from argv or executable names. Start time blocks pid reuse and is
       // read again right before the signal (Node has no pidfd_send_signal, so that race remains).
       // A CLI still leading the group it was recorded with takes its MCP servers with it.
@@ -158,14 +168,18 @@ export const make = Effect.fn("ProviderProcesses.make")(function* (
           signalProcessGroup(survivor.pgid, "SIGKILL");
         else controller.signalProcess(survivor.pid, "SIGKILL");
       });
-      for (let attempt = 0; matches(survivor) && !survived; attempt++) {
-        survived = attempt === 100;
-        if (!survived) yield* Effect.sleep("10 millis");
-      }
     }
+    reaped.push({ file, recordPath, survivors });
+  }
+  // Every survivor was signalled first, so unkillable CLIs cost startup about a second in all.
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (!reaped.some(({ survivors }) => survivors.some(matches))) break;
+    yield* Effect.sleep("10 millis");
+  }
+  for (const { file, recordPath, survivors } of reaped) {
     // Like a failed slice stop, an unkillable CLI must not keep the server down;
     // its record stays so the next start retries.
-    if (survived) {
+    if (survivors.some(matches)) {
       yield* Effect.logWarning("Could not stop a provider left by a previous server", { file });
       continue;
     }
