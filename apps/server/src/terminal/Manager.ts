@@ -33,6 +33,7 @@ import {
 export { BoundedTerminalHistory } from "./BoundedTerminalHistory.ts";
 
 import { makeTerminalLeaseOrder, type TerminalLeaseBusy } from "./terminalLeaseOrder.ts";
+import { refuseMovedWorktree, TerminalThreadWorktree } from "./TerminalThreadWorktree.ts";
 import {
   DEFAULT_TERMINAL_ID,
   DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
@@ -41,7 +42,7 @@ import {
   TerminalCwdNotFoundError,
   TerminalCwdStatError,
   TerminalError,
-  type OrchestratorMcpFailure,
+  OrchestratorMcpFailure,
   TerminalHistoryError,
   TerminalNotRunningError,
   TerminalProviderInstanceNotFoundError,
@@ -745,6 +746,7 @@ interface TerminalManagerOptions {
     Record<string, string>,
     TerminalProviderInstanceNotFoundError | TerminalProviderEnvironmentError
   >;
+  threadWorktree?: TerminalThreadWorktree["Service"];
 }
 
 export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
@@ -823,6 +825,7 @@ export const make = Effect.fn("TerminalManager.make")(function* (
     registerTerminalProcesses: portDiscovery.registerTerminalProcesses,
     unregisterTerminal: portDiscovery.unregisterTerminal,
     resolveProviderInstanceEnvironment,
+    threadWorktree: yield* TerminalThreadWorktree,
   });
 });
 
@@ -1938,6 +1941,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     const closedEventSequence = Option.isSome(session) ? session.value.eventSequence + 1 : 0;
 
     yield* authorize;
+    yield* supersede(threadId, terminalId);
     if (Option.isSome(session)) {
       yield* stopProcess(session.value, authorize);
       resetAgentTerminal(session.value);
@@ -2186,7 +2190,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     ),
   );
 
-  const { tryTerminalLease, withThreadLockAndLease } = makeTerminalLeaseOrder({
+  const { attempt, supersede, tryTerminalLease, withThreadLockAndLease } = makeTerminalLeaseOrder({
     resolve: (cwd) => path.resolve(cwd),
     withThreadLock,
   });
@@ -2340,15 +2344,45 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     return liveSession;
   });
 
-  const openLocked = (input: TerminalOpenInput) =>
-    tryTerminalLease(input.worktreePath ?? input.cwd, openWithWorkspaceLease(input)).pipe(
-      Effect.map(snapshot),
+  /** A person's request that waited must not start a shell in a worktree its thread has left. */
+  const stillBound = (input: TerminalOpenInput) =>
+    Effect.flatMap(attempt, (run) =>
+      run === "rerun" && options.threadWorktree !== undefined
+        ? refuseMovedWorktree(options.threadWorktree, (folder) => path.resolve(folder), input)
+        : Effect.void,
+    );
+
+  /** What a request overtaken while it waited returns: the terminal as it is now. */
+  const currentOr = <B, E>(
+    input: { readonly threadId: string; readonly terminalId: string },
+    gone: Effect.Effect<B, E>,
+  ): Effect.Effect<TerminalSessionSnapshot | B, E> =>
+    Effect.flatMap(
+      getSession(input.threadId, input.terminalId),
+      (session): Effect.Effect<TerminalSessionSnapshot | B, E> =>
+        Option.isSome(session) ? Effect.succeed(snapshot(session.value)) : gone,
+    );
+
+  const notFound = (input: { readonly threadId: string; readonly terminalId: string }) =>
+    Effect.fail(
+      new TerminalSessionLookupError({ threadId: input.threadId, terminalId: input.terminalId }),
+    );
+
+  const openLocked = <B, E>(input: TerminalOpenInput, gone: Effect.Effect<B, E>) =>
+    tryTerminalLease(
+      input,
+      input.worktreePath ?? input.cwd,
+      stillBound(input).pipe(Effect.andThen(openWithWorkspaceLease(input)), Effect.map(snapshot)),
+      currentOr(input, gone),
     );
 
   const open: TerminalManager["Service"]["open"] = (input) =>
     withThreadLockAndLease(
       input.threadId,
-      resolveLaunchInputEnvironment(input).pipe(Effect.flatMap(openLocked)),
+      input.terminalId,
+      resolveLaunchInputEnvironment(input).pipe(
+        Effect.flatMap((resolved) => openLocked(resolved, notFound(resolved))),
+      ),
     );
 
   const getShell = Effect.fn("terminal.getShell")(function* (input: TerminalObserveInput) {
@@ -2380,7 +2414,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         terminalId,
         cwd: input.cwd,
       });
-      return yield* Effect.uninterruptible(openLocked(resolvedInput));
+      return yield* Effect.uninterruptible(openLocked(resolvedInput, Effect.succeed(null)));
     }
 
     const session = existing.value;
@@ -2393,7 +2427,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         terminalId,
         cwd: input.cwd,
       });
-      return yield* Effect.uninterruptible(openLocked(resolvedInput));
+      return yield* Effect.uninterruptible(openLocked(resolvedInput, Effect.succeed(null)));
     }
 
     if (
@@ -2520,7 +2554,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       return stop;
     }).pipe(
       Effect.onError(() => Effect.sync(stop)),
-      (effect) => withThreadLockAndLease(input.threadId, effect),
+      (effect) => withThreadLockAndLease(input.threadId, input.terminalId, effect),
     );
   };
 
@@ -2895,11 +2929,17 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const restart: TerminalManager["Service"]["restart"] = (input) =>
     withThreadLockAndLease(
       input.threadId,
+      input.terminalId,
       resolveLaunchInputEnvironment(input).pipe(
         Effect.flatMap((resolved) =>
           tryTerminalLease(
+            resolved,
             resolved.worktreePath ?? resolved.cwd,
-            restartResolved(resolved).pipe(Effect.map(snapshot)),
+            stillBound(resolved).pipe(
+              Effect.andThen(restartResolved(resolved)),
+              Effect.map(snapshot),
+            ),
+            currentOr(resolved, notFound(resolved)),
           ),
         ),
       ),
@@ -2914,6 +2954,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           return;
         }
 
+        yield* supersede(input.threadId);
         const threadSessions = yield* sessionsForThread(input.threadId);
         yield* Effect.forEach(
           threadSessions,
@@ -3001,11 +3042,16 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   });
 
   const agentOperations = makeAgentTerminalOperations({
-    withThreadLock: withThreadLockAndLease,
+    withThreadLock: (threadId, effect) => withThreadLockAndLease(threadId, undefined, effect),
     sessionsForThread,
     requireSession,
     open: (input) =>
-      tryTerminalLease(input.cwd, openWithWorkspaceLease(input, input.owner, input.authorize)),
+      tryTerminalLease(
+        input,
+        input.cwd,
+        openWithWorkspaceLease(input, input.owner, input.authorize),
+        notFound(input),
+      ),
     mutate: Effect.fn("terminal.agentMutateLocked")(function* (
       session: TerminalSessionState,
       input: AgentTerminalMutateInput,
@@ -3021,6 +3067,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           return yield* clearLocked(input, input.owner, input.authorize);
         case "restart":
           yield* tryTerminalLease(
+            input,
             session.worktreePath ?? session.cwd,
             restartResolved(
               {
@@ -3034,6 +3081,12 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
               },
               input.owner,
               input.authorize,
+            ),
+            Effect.fail(
+              new OrchestratorMcpFailure({
+                code: "conflict",
+                message: "The terminal changed while this operation waited.",
+              }),
             ),
           );
           return;

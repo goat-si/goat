@@ -344,7 +344,8 @@ the worktree automatically, and the thread notes what came back and what did not
 files or changes that were never committed. **Start in a new worktree** continues on a new branch
 started from the thread's branch; the saved snapshot remains available for manual recovery. If a
 restore stops before its setup script finishes, the banner says so and offers **Run setup now**;
-the next turn also runs it.
+the next turn also runs it. While a worktree's setup script runs, new terminals in that thread open
+when it finishes.
 
 Snapshots live in the project repository under `refs/goat/snapshots/<thread>/<time>` and are kept
 for 30 days by default; change the retention period in **Settings → Storage**. Snapshots of

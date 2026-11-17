@@ -197,11 +197,10 @@ const waitForForeignClaim = <A, E, R>(
   );
 
 /**
- * Lets effect, run for the holder of a folder's lease, take that same folder's lease without
- * waiting on itself: a restore holds a worktree's lease and runs its setup script, whose terminal
- * asks for it. A reentrant section takes no permit and no claim; only the holder's own do. Only
- * withWorkspaceLease and tryEnterWorkspaceLease reenter: a plain try stays Busy. A reentrant
- * section must not outlive the holder's call, whose release waits for it without a bound.
+ * Lets work run for a folder's lease holder take that lease without waiting on itself, as a
+ * restore's setup terminal does; it takes no permit or claim. Only withWorkspaceLease and
+ * tryEnterWorkspaceLease reenter. A reentrant section must not outlive the holder's call, whose
+ * release waits for it without a bound.
  */
 export const reuseHeldWorkspaceLease = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.provideService(effect, ReuseHeldLease, true);

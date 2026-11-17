@@ -68,7 +68,7 @@ import { heartbeat, HeartbeatWebSocket } from "./wsHeartbeat.ts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentHttpApi, type RepositoryIdentity } from "@goat/contracts";
+import { EnvironmentHttpApi, type RepositoryIdentity, ThreadId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
@@ -99,6 +99,7 @@ import * as ProviderInstallationGate from "./provider/ProviderInstallationGate.t
 import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceRegistryHydration.ts";
 import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
+import * as TerminalThreadWorktree from "./terminal/TerminalThreadWorktree.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
@@ -510,12 +511,35 @@ const layerCheckpointStore = CheckpointStore.layer.pipe(Layer.provide(layerVcsDr
 
 const layerPortScanner = PortScanner.layer.pipe(Layer.provide(ProcessRunner.layer));
 
+// Where a thread works now, for terminal requests that waited; the manager never reads projections.
+const layerTerminalThreadWorktree = Layer.effect(
+  TerminalThreadWorktree.TerminalThreadWorktree,
+  Effect.gen(function* () {
+    const projection = yield* ProjectionStoreV2.ProjectionStoreV2;
+    return TerminalThreadWorktree.TerminalThreadWorktree.of({
+      current: Effect.fn("TerminalThreadWorktree.current")(function* (threadId: string) {
+        const shell = yield* projection
+          .getThreadShell(ThreadId.make(threadId))
+          .pipe(
+            Effect.mapError(
+              (cause) => new TerminalThreadWorktree.TerminalThreadWorktreeError({ cause }),
+            ),
+          );
+        return shell === null || shell.deletedAt !== null
+          ? Option.none<string | null>()
+          : Option.some(shell.worktreePath);
+      }),
+    });
+  }),
+).pipe(Layer.provide(ProjectionStoreV2.layer));
+
 const layerTerminal = TerminalManager.layer(
   ProviderInstanceRegistryHydration.deriveProviderInstanceConfigMap,
 ).pipe(
   Layer.provide(layerPtyAdapter),
   Layer.provide(layerPortScanner),
   Layer.provide(layerNativeTelemetry),
+  Layer.provide(layerTerminalThreadWorktree),
 );
 
 const layerPreview = Layer.empty.pipe(
