@@ -131,13 +131,16 @@ import {
 } from "./claudeWorkflowProgress.ts";
 import { isWorkspaceImagePreviewPath } from "@goat/shared/filePreview";
 import { mcpToolResultWithRawImages } from "@goat/shared/toolOutput";
+import {
+  canApplyClaudeSelectionLive,
+  claudeLiveSelectionFlagSettings,
+} from "./ClaudeLiveSelection.ts";
 import { normalizeClaudeTurnTokenUsage } from "../../provider/ClaudeTurnTokenUsage.ts";
 import { toMcpElicitationResponse } from "../../provider/CodexMcpElicitation.ts";
 import {
   type CanUseTool,
   type ElicitationRequest,
   type ElicitationResult,
-  type EffortLevel,
   type ForkSessionOptions,
   resolveSettings as resolveClaudeSettings,
   type Options as ClaudeQueryOptions,
@@ -302,7 +305,6 @@ import {
   isProviderAdapterRollbackThreadError,
   queryRunnerError,
   encodeClaudeJson,
-  type ClaudeFlagSettings,
   claudeProcessExitFailure,
 } from "./ClaudeAgentSdkQueryRunner.ts";
 export {
@@ -520,27 +522,6 @@ export const ClaudeProviderCapabilitiesV2 = {
     enforcement: "native",
   },
 } satisfies OrchestrationV2ProviderCapabilities;
-
-/** Thinking requires a new process. Clearing effort also requires one to reload user settings instead of model defaults. */
-function canApplyClaudeSelectionLive(
-  live: CompiledClaudeModelSelection,
-  next: CompiledClaudeModelSelection,
-): boolean {
-  return (
-    live.settings.alwaysThinkingEnabled === next.settings.alwaysThinkingEnabled &&
-    (next.effort !== undefined || live.effort === undefined)
-  );
-}
-
-function claudeLiveSelectionFlagSettings(
-  selection: CompiledClaudeModelSelection,
-): ClaudeFlagSettings {
-  return {
-    ...(selection.effort === undefined ? {} : { effortLevel: selection.effort as EffortLevel }),
-    fastMode: selection.settings.fastMode ?? null,
-    ultracode: selection.settings.ultracode ?? null,
-  };
-}
 
 // A delegated child is its own SDK session, so Claude Code gives it the main-conversation cache
 // TTL. When the user sets Claude's subagentPromptCacheTtl, the child follows it like a native
