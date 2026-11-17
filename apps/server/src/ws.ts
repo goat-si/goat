@@ -304,6 +304,7 @@ import * as SourceControlStarPrompt from "./sourceControl/SourceControlStarPromp
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import { storageRpcHandlers } from "./storage/storageRpc.ts";
+import { terminalWorkspaceRpcHandlers } from "./terminal/terminalWorkspaceRpc.ts";
 import { heldTurnRpcHandlers } from "./orchestration-v2/goat/HeldTurnRpc.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
@@ -3137,14 +3138,11 @@ export const layerWsRpc = (
           vcsProvisioning.initRepository(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
         [WS_METHODS.reviewGetDiffPreview]: (input) => review.getDiffPreview(input),
         [WS_METHODS.reviewGetDiffFileContents]: (input) => review.getDiffFileContents(input),
-        [WS_METHODS.terminalOpen]: (input) => terminalManager.open(input),
-        [WS_METHODS.terminalAttach]: (input, metadata) =>
-          terminalManager.attachOutputStream(input, terminalViewerId(metadata)),
+        ...(yield* terminalWorkspaceRpcHandlers(terminalViewerId)),
         [WS_METHODS.terminalWrite]: (input) => terminalManager.write(input),
         [WS_METHODS.terminalResize]: (input, metadata) =>
           terminalManager.resize(input, terminalViewerId(metadata)),
         [WS_METHODS.terminalClear]: (input) => terminalManager.clear(input),
-        [WS_METHODS.terminalRestart]: (input) => terminalManager.restart(input),
         [WS_METHODS.terminalClose]: (input) => terminalManager.close(input),
         [WS_METHODS.terminalObserve]: (input) =>
           terminalOutputStream(
