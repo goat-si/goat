@@ -76,6 +76,19 @@ const makeLayerRoutes = (capture: (auth: EnvironmentAuth.EnvironmentAuth["Servic
     Layer.provide(NodeServices.layer),
   );
 
+/** One /mcp request's authentication; its admission ends with the request. */
+const authenticateOnce = (
+  auth: EnvironmentAuth.EnvironmentAuth["Service"],
+  authorization: string,
+) =>
+  Effect.scoped(
+    auth.authenticateMcpClient(
+      onMainListener(
+        onMainListener(HttpServerRequest.fromWeb(at("/mcp", { headers: { authorization } }))),
+      ),
+    ),
+  );
+
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const ORIGIN = "https://box.example.ts.net";
 const REDIRECT = "http://localhost/callback";
@@ -348,15 +361,7 @@ it.live("signs in with a pairing code and issues a token only /mcp accepts", () 
       expect((yield* exchange(verifier)).status).toBe(400);
 
       for (const scheme of ["Bearer", "bearer", "bEaReR"]) {
-        const client = yield* auth.authenticateMcpClient(
-          onMainListener(
-            onMainListener(
-              HttpServerRequest.fromWeb(
-                at("/mcp", { headers: { authorization: `${scheme} ${token.access_token}` } }),
-              ),
-            ),
-          ),
-        );
+        const client = yield* authenticateOnce(auth, `${scheme} ${token.access_token}`);
         expect(client).toMatchObject({ label: "Claude Code", access: "auto" });
       }
 
@@ -427,15 +432,7 @@ it.live("signs in a hosted agent with an https callback that asked for a client 
       );
       expect(tokenResponse.status).toBe(200);
       const token = (yield* json<unknown>(tokenResponse)) as { access_token: string };
-      const signedIn = yield* auth.authenticateMcpClient(
-        onMainListener(
-          onMainListener(
-            HttpServerRequest.fromWeb(
-              at("/mcp", { headers: { authorization: `Bearer ${token.access_token}` } }),
-            ),
-          ),
-        ),
-      );
+      const signedIn = yield* authenticateOnce(auth, `Bearer ${token.access_token}`);
       expect(signedIn).toMatchObject({ label: "Hosted bot", access: "approval-required" });
     }),
   ),
@@ -542,14 +539,9 @@ it.live(
           ),
         ).pipe(Effect.flatMap(json<{ access_token: string; scope: string }>));
         expect(readOnlyToken.scope).toBe("orchestration:read");
-        const readOnlyClient = yield* auth.authenticateMcpClient(
-          onMainListener(
-            onMainListener(
-              HttpServerRequest.fromWeb(
-                at("/mcp", { headers: { authorization: `Bearer ${readOnlyToken.access_token}` } }),
-              ),
-            ),
-          ),
+        const readOnlyClient = yield* authenticateOnce(
+          auth,
+          `Bearer ${readOnlyToken.access_token}`,
         );
         expect(readOnlyClient.access).toBe("read-only");
       }),
@@ -677,16 +669,7 @@ it.effect("grants approvals only to issued clients with operate and approve, and
         label: "Grok Bot",
         runtimeModeCeiling: "approval-required",
       });
-    const authenticate = (token: string) =>
-      auth.authenticateMcpClient(
-        onMainListener(
-          onMainListener(
-            HttpServerRequest.fromWeb(
-              at("/mcp", { headers: { authorization: `Bearer ${token}` } }),
-            ),
-          ),
-        ),
-      );
+    const authenticate = (token: string) => authenticateOnce(auth, `Bearer ${token}`);
 
     const approver = yield* issue([
       "orchestration:read",
@@ -754,15 +737,7 @@ it.live.each([
         expect(token.scope.split(" ").filter((scope) => scope.startsWith("memory:"))).toEqual([
           ...memoryScopes,
         ]);
-        const client = yield* auth.authenticateMcpClient(
-          onMainListener(
-            onMainListener(
-              HttpServerRequest.fromWeb(
-                at("/mcp", { headers: { authorization: `Bearer ${token.access_token}` } }),
-              ),
-            ),
-          ),
-        );
+        const client = yield* authenticateOnce(auth, `Bearer ${token.access_token}`);
         expect(client.grantedScopes?.filter((scope) => scope.startsWith("memory:"))).toEqual([
           ...memoryScopes,
         ]);

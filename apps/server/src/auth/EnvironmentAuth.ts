@@ -40,6 +40,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -251,7 +252,11 @@ export class EnvironmentAuth extends Context.Service<
     ) => Effect.Effect<string, ServerAuthInternalError>;
     readonly authenticateMcpClient: (
       request: HttpServerRequest.HttpServerRequest,
-    ) => Effect.Effect<McpClientSession, ServerAuthCredentialError | ServerAuthInternalError>;
+    ) => Effect.Effect<
+      McpClientSession,
+      ServerAuthCredentialError | ServerAuthInternalError,
+      Scope.Scope
+    >;
     readonly issueMcpClientSession: (input: {
       readonly label: string;
       readonly access: AuthMcpClientAccess;
@@ -994,14 +999,10 @@ export const make = Effect.gen(function* () {
                   session.scopes.includes(AuthOrchestrationApproveScope),
               } satisfies McpClientSession),
             )
-          : sessionEnd.release.pipe(
-              Effect.andThen(
-                Effect.fail(
-                  new ServerAuthInvalidCredentialError({
-                    diagnostic: "Only MCP client sessions are accepted here.",
-                  }),
-                ),
-              ),
+          : Effect.fail(
+              new ServerAuthInvalidCredentialError({
+                diagnostic: "Only MCP client sessions are accepted here.",
+              }),
             ),
       ),
       Effect.withSpan("EnvironmentAuth.authenticateMcpClient"),

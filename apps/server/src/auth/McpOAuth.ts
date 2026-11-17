@@ -576,17 +576,14 @@ export const layerMcpClientAuthenticator = Layer.effect(
     return McpHttpServer.McpClientAuthenticator.of({
       authenticate: Effect.fn("McpHttpServer.McpClientAuthenticator.authenticate")(
         function (request) {
-          return environmentAuth.authenticateMcpClient(request).pipe(
-            // The admission lives until this request ends: its scope closes after the response.
-            Effect.tap(({ sessionEnd }) =>
-              sessionEnd === undefined
-                ? Effect.void
-                : Effect.flatMap(Effect.serviceOption(Scope.Scope), (scope) =>
-                    Option.isSome(scope)
-                      ? Scope.addFinalizer(scope.value, sessionEnd.release)
-                      : Effect.void,
-                  ),
-            ),
+          // The admission lives until this request ends; every HTTP request runs in its own scope.
+          return Effect.flatMap(Effect.serviceOption(Scope.Scope), (scope) =>
+            Option.isSome(scope)
+              ? environmentAuth
+                  .authenticateMcpClient(request)
+                  .pipe(Effect.provideService(Scope.Scope, scope.value))
+              : Effect.die(new Error("MCP client authentication must run in its request's scope.")),
+          ).pipe(
             Effect.flatMap((client) =>
               Clock.currentTimeMillis.pipe(
                 Effect.map((issuedAt): McpInvocationContext.McpInvocationScope => ({

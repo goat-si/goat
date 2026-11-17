@@ -29,6 +29,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import type * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -203,14 +204,15 @@ export class SessionStore extends Context.Service<
     /**
      * `verify` for one MCP request, recording its admission inside the verify fence: a removal of
      * the session's grant (a revoke or a deleted row) cuts the request's calls, expiry never does.
-     * The caller releases the admission when the request ends.
+     * The admission is released when the request's scope closes, on every exit.
      */
     readonly admitMcpCall: (
       token: string,
       connection: ConnectionContext | undefined,
     ) => Effect.Effect<
       { readonly session: VerifiedSession; readonly sessionEnd: SessionEndLatches.SessionEnd },
-      SessionCredentialError
+      SessionCredentialError,
+      Scope.Scope
     >;
     /** The MCP requests admitted and not yet ended; for diagnostics and tests. */
     readonly admissionsInFlight: () => Effect.Effect<number>;
@@ -898,7 +900,11 @@ export const make = Effect.gen(function* () {
           const session = yield* verifyToken(token, startedAt);
           yield* cloudFence.guard(session);
           yield* admitBinding(session, connection);
-          const admitted = sessionEnds.admit(session.sessionId);
+          // Recorded and bound to the request's scope in one step, so no exit can skip the release.
+          const admitted = yield* Effect.acquireRelease(
+            Effect.sync(() => sessionEnds.admit(session.sessionId)),
+            (admission) => admission.sessionEnd.release,
+          );
           const fenced = (yield* Ref.get(activeScopes)).cutFences.get(session.sessionId);
           if (fenced !== undefined && fenced > startedAt) admitted.markRemoved();
           return { session, sessionEnd: admitted.sessionEnd };
