@@ -442,3 +442,20 @@ Coordinator to lane coordinator (2026-11-17 16:16:28 UTC), on N14's READY, N12c 
 
 N14's read-only check for the merge after the verdicts (16:17 UTC, git on origin/chase/t3-261114-next2 = 3a254fa1a5): GitActionsControl.tsx and PublishRepositoryDialog.tsx have no MorphIcon at e04442e66c, at 2a94ed4deb or at 3a254fa1a5, so O28 swapped nothing there and no swap has to follow the moved Publish dialog. `git grep -c MorphIcon` over apps/web/src lists the same 36 files with the same counts at e04442e66c and at 3a254fa1a5, and the importers of solar/nodes are the same, so the integration side added no site O28 has not swapped (2a94ed4deb has none). The code-budgets.json conflict is resolved at the merge, to the real lengths.
 
+
+### Lane coordinator, after 16:23:51 UTC (verbatim)
+
+NEW INTEGRATION HEAD. chase/t3-261114-next2 = b574681d2603c7db8ba51c226ddc830053e80226 (SF1 merged by the coordinator at 16:23:51 UTC; parents 3a254fa1a5 and 410daab8e6). Do not merge it now; nothing else changes for you. Coordinator's merge order from here: N12c (quick run 44123436045 queued), N4c (review running), N14 (two reviews running), then #3682 to dev and the one dev merge. No reply needed; end your turn. At your post-verdict merge of the integration head, also expect SF1's changes (useComposerSend.ts and ThreadFeed.tsx budgets among them).
+
+### Coordinator to lane coordinator, 2026-11-17 16:30:54 UTC (relayed; verbatim)
+
+Coordinator to lane coordinator (2026-11-17 16:30:54 UTC). Three things happened; relay each part verbatim to its lane.
+
+A. #3682 IS MERGED to dev: squash d265257a044927ed15ff663ca96364a2413a8261 at 16:25:49Z, on goat-ci-result success at 52f3f8c6bf (node scripts/merge-pr.ts; read by me). goat#3674 is closed. THE ONE DEV MERGE IS DONE: chase/t3-261114-next2 = d12958d037c626f8cd4a5692b52b34ad5137cecf, built as: b574681d26 (SF1 in) -> 8c2813a7c4 (dev merged; six conflicts resolved by me: workspaceLease.ts and its two tests = dev's, ThreadWorkspaceService.ts = the branch's, setupTerminal.test.ts both cases, project-settings.md both sentences; on the merged tree apps/server tsc exit 0 and the nine terminal, lease and restore test files 132 passed) -> d12958d037 (N12c e79c46a7de merged on its green lane=quick run 44123436045). #3660 is MERGEABLE with dev again and its pull request run starts by itself. Tell every lane the new head.
+ - T1: go on T1b now, as ordered at 15:49:39: one issue, a branch from dev d265257a04, a DRAFT PR to dev; it merges after #3660. P3-4's reachability test first.
+ - N12: done. The desktop Stop row is re-walked in the second sitting.
+ - SF1: cut sf1b from d12958d037 (not b574681d26).
+ - N14: after both verdicts, merge d12958d037 once (code-budgets.json; useComposerSend.ts's import block where SF1 dropped the UnifiedSettings import and N14 dropped DraftSshDestination: both lines go; budgets to the merged real lengths: the SF1 reviewer measured useComposerSend.ts 1635 and ThreadFeed.tsx 3344).
+
+(Lane coordinator: for N14, the N14 bullet. Nothing now; after both verdicts, the one merge of d12958d037 as described.)
+
