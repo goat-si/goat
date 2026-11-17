@@ -630,7 +630,7 @@
   "apps/web/src/onboarding/useProjectScans.ts": { "nonNull": 1 },
   "apps/web/src/openVsxThemes.ts": { "nonNull": 3 },
   "apps/web/src/rightPanelStore.test.ts": { "lines": 1223 },
-  "apps/web/src/rightPanelStore.ts": { "lines": 1209, "nonNull": 2 },
+  "apps/web/src/rightPanelStore.ts": { "lines": 1176, "nonNull": 2 },
   "apps/web/src/session-logic.test.ts": { "lines": 1748 },
   "apps/web/src/session-logic.ts": { "lines": 1038, "nonNull": 4 },
   "apps/web/src/sidebarProjectGrouping.ts": { "nonNull": 1 },
