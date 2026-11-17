@@ -532,3 +532,39 @@ N4's answers, by reading at 928b1c5485 (record only, no code):
 
 Coordinator to lane coordinator (2026-11-17 17:02:01 UTC) (verbatim):
 SF1b IS MERGED by fast-forward: chase/t3-261114-next2 = 23d3a4696e0ea5c16f502764015cdef515561397 (its lane=quick run 44130593843 success on that head; my read). N4c's lane=quick run 44130588315 is also success on 928b1c5485; N4c waits only for its round 2 verdict. Tell N4 and N14 the new integration head: N14 merges 23d3a4696e (not d12958d037) at its one merge; N4c needs nothing now (its two files do not meet SF1b's three). #3660's pull request run restarts on the new head by itself.
+
+## N4d: a restore's setup run supersedes earlier runs (branch chase/t3-261114-next2-n4d-setup-supersede, from 0be6f7c7f4)
+
+Coordinator to lane coordinator (2026-11-17 17:15:15 UTC) (verbatim):
+N4c ROUND 2 VERDICT: APPROVE WITH NITS 928b1c54854c3cef75853c7823eb8deaa068c271, no P0 to P2. N4c IS MERGED: chase/t3-261114-next2 = 0be6f7c7f4e5906bafca00a09d74f308528381e7 (parents 23d3a4696e and 928b1c5485; tree = git merge-tree's own). The report is saved as /Users/jun/handoff-in/chase/next2-N4c-r2-review-928b1c54.md (16,971 bytes); give N4 the whole file. Tell every lane the new head (N14 merges 0be6f7c7f4 at its one merge). I dispatched a lane=all run on the integration head: https://github.com/goat-si/goat/actions/runs/44134917351 ; nobody watches it but me. Relay each part verbatim.
+
+A. To N4. Round 1's blocker is closed (the seven setup-shell cases passed twice on a Mac whose ps output is over the cap; the earlier-run case rests on the restart rule, not on closeIdle); your two deviations were RIGHT (the contract requires cols and rows and nothing reads a live size; the readiness reset is pinned by upstream's test, which does need the write). One new P3, and I want it fixed now as a small follow-up, chase/t3-261114-next2-n4d-setup-supersede from 0be6f7c7f4:
+ N4CR2-P3-1: the limit you stated for item 3 is wider than "setup runs twice". With a SYNC setup and an earlier run that has not typed yet (the unanswered rc-file prompt), the earlier run can become ready first, type, exit 0 and closeIdle the shell while the restore's own run has not typed; the restore then fails with "Setup script exited with no exit code" and, when it was not a resume, removes the folder it just recreated (restoreThreadWorkspace.ts:152-160, :187). The reviewer's probe B shows it at the head and with the parent's runner (events ["silent 0","prompt 1","command 1"], closedIdle ["setup-setup"], both PTYs killed, the folder gone); the real-shell timing is inferred (shells without a line-editor signal). A retry works. FIX, test first (probe B is in /tmp/n4c-review-928b1c54/probes/ThreadWorkspaceService.n4cProbe.final.test.ts): a fresh-shell run supersedes earlier runs of the same terminal that have NOT typed yet: the runner bumps a per-terminal counter before it restarts; a writer whose counter is stale abandons its run (it writes nothing and its completion settles with no exit code); a person's restart bumps nothing, so ProjectSetupScriptRunner.test.ts:204 passes unchanged. The counter map must be bounded (an entry lives only while a run of that terminal is alive). Also close the one window the reviewer named: "written" is set only after write returns (:594-600); set it so a restart landing between the two cannot leave the run waiting for a sentinel that went into the killed shell, or say why it cannot. Then the same checks as before (setupShell, setupTerminal, setupLockOrder, the runner's own tests, check:changed), a plain push, NO dispatch, the head to me by thread.send: I dispatch lane=quick and read the diff; if it is as small as described there is no third review. 45 minutes.
+ For #3660's known limits (N4's record): a person's restart of the setup terminal during a tracked async launch now ends that setup stage as "exited with no exit code" instead of leaving it running on the new shell's output; an observed check ends with a null exit code instead of waiting for its timeout.
+
+The whole round-2 report and probe B are on the records branch at bd62760ed0, under devlog/_chase/261114_lanes/N4c-review2/.
+
+Commit cee19f4d19, one commit (ProjectSetupScriptRunner.ts plus a case in ThreadWorkspaceService.setupShell.test.ts):
+
+- **The rule.** runForThread keeps pendingRuns: generation and alive count by thread and terminal.
+  - A run registers just before it forks its writer, after its open succeeded, and captures the generation.
+  - A fresh-shell run bumps the generation of an existing entry before its restart. With no entry there is no earlier run to supersede, and nothing is created.
+  - The writer compares generations once its readiness fires. A stale run abandons: it writes nothing, and observed.abandon settles its completion with no exit code.
+  - A person's restart goes through TerminalManager.restart, not the runner, so it bumps nothing. Upstream's ProjectSetupScriptRunner.test.ts:204 passes unchanged, inside the src/project run below.
+- **Bounded.** The entry is deleted when its last waiting run's writer ends (Effect.ensuring(release) on the forked writer, after the write or the abandon). A run that fails before it forks never registered.
+- **The window.** markWritten now runs before the write, not after. A restart that lands between the two settles the run with no exit code instead of leaving it waiting for a sentinel that went into the killed shell. The command itself still lands where the write goes: in the old shell if the write held the thread lock first, otherwise in the new one. In the second case a restore's fresh run has bumped the generation, but the writer passed its check before the restart, a race of a few steps under the thread lock that I left as is.
+- **Test, failing first.** ThreadWorkspaceService.setupShell.test.ts "a restore's setup run supersedes an earlier run that has not typed yet".
+  - Setup: the first fake shell shows no prompt, and the fixture's subprocess inspector reports its pid busy (a startup child, as with an rc-file prompt). The test waits for that "activity" event from the terminal manager (an event, not a sleep), so the earlier run is held at its prompt. Then it moves the folder and runs a sync restore.
+  - Before the fix: "ThreadWorkspaceRestoreError: Couldn't restore the thread's workspace (setup-failed): Setup script "Setup" exited with no exit code." This is probe B's outcome, made deterministic.
+  - After the fix: the restore succeeds, the folder exists, the earlier run settles null, only "prompt 1", "command 1" were typed (once, by the restore's run), the earlier run's onOutputLine got nothing, and the first PTY got no writes.
+- **Checks.**
+  - setupShell, setupTerminal, setupLockOrder, ThreadWorkspaceService.terminal, Manager.leaseOrder and src/project: 31 files, 304 tests passed.
+  - check:changed: below.
+
+Known limits for #3660 (the coordinator's lines, recorded):
+
+- A person's restart of the setup terminal during a tracked async launch now ends that setup stage as "exited with no exit code", instead of leaving it running on the new shell's output.
+- An observed check ends with a null exit code instead of waiting for its timeout.
+- **check:changed at cee19f4d19** (origin/chase/t3-261114-next2 = 0be6f7c7f4; 2 files): exit 0. Format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget and typecheck (2 packages) pass; test (41 files, 559 tests) passes. Pushed plainly; no goat-ci dispatched.
+
+NOT RUN: a real shell (FakePtyAdapter; the real-shell timing of the old failure is the reviewer's inference), Linux and Windows, a real client.
