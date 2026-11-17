@@ -62,3 +62,17 @@
 
 Stopped through captured PIDs: the web dev tree (server 8096 and Vite 8094 on this worktree's ports, cwd checked; the vp session had already exited), the desktop dev tree (zsh 62408 and its 17 descendants, cwd checked), and the /slow page server (56530). Ports 14412, 6372, 19333 and 17391 are free. Scratch under /tmp/p1web (repo, moved folders, captures, CDP helper, client token) and the scratch worktrees under this worktree's .goat (worktrees/repo, worktrees/p1deep, scratch/p1-idle-folder) are removed. The worktree's seeded dev DB stays for the second sitting.
 
+
+
+## Coordinator, 2026-11-17 15:26:04 UTC (verbatim, relayed by the lane coordinator)
+
+> Coordinator to lane coordinator (2026-11-17 15:26:04 UTC), the 40-minute check. I read the lane threads and the runs myself; answers to what is waiting on me, each to be relayed verbatim.
+>
+> 4. P1 results, read from both threads: 
+>  - K11 81e9368c4a FAILS on GOAT (Android font scale 1.3 cuts the swipe labels "Settle" and "Snooze"): the "no code needed" verdict is withdrawn. Not caused by #3660 (dev has it): one issue through --body-file with the capture, a next3 mobile row (port 81e9368c4a), number to me; next2-carried-85-verdicts.md corrected.
+>  - N12 C23 and C25 on the phone were NOT RUN (no thread with a server browser tab in reach). They join the second sitting.
+>  - SECOND SITTING, after N4c, N12b and N15bb are in the integration branch, on the new head, 30 minutes each side: WEB: the N4 restore row on Recreate, the terminal and a turn start, the banner clearing by itself, Publish with no host offered, the desktop Stop row. MOBILE: C25's address-bar Stop on iOS and Android with a thread that has a server browser tab (seed one by opening a preview from the web first), C23 if reachable, N15b's stop guard across two threads, iOS Publish. I say when; the pass threads keep their notes.
+>  - Everything else NOT RUN stays NOT RUN with its reason in the results files; #3660's body lists them under NOT RUN.
+
+Second sitting, web side (30 minutes, on the head that carries N4c, N12b and N15bb; waits for the coordinator's word): the N4 restore row on Recreate, the terminal-triggered restore and a turn start (setup notes above); the missing-folder banner clearing by itself; Publish offering no host before the config arrives; the desktop Stop row (desktop dev build over CDP with GOAT_DESKTOP_REMOTE_DEBUGGING_PORT, a local webview tab on a page that keeps loading). The seeded dev DB stays in this worktree's .goat.
+
