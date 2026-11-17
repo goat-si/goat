@@ -1739,6 +1739,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     eventType: "started" | "restarted",
     authorize: Effect.Effect<void, E> = Effect.void,
   ): Effect.fn.Return<void, E> {
+    yield* supersede(session.threadId, session.terminalId);
     yield* stopProcess(session, authorize);
     yield* Effect.annotateCurrentSpan({
       "terminal.thread_id": session.threadId,
@@ -2929,6 +2930,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           ),
         ),
       ),
+      true,
     );
 
   const close: TerminalManager["Service"]["close"] = (input) =>

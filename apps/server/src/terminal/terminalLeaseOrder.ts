@@ -29,6 +29,7 @@ const Attempt = Context.Reference<TerminalAttempt>("goat/terminal/terminalLeaseO
 interface WaitingRequest {
   /** Undefined for an agent's open, whose terminal id is new each run. */
   readonly terminalId: string | undefined;
+  readonly restart: boolean;
   overtaken: boolean;
 }
 
@@ -60,11 +61,16 @@ export const makeTerminalLeaseOrder = (options: {
   /**
    * Under the thread lock, by whatever opens, restarts or closes a terminal (all of the thread's
    * without terminalId): requests still waiting for it must not undo that when they run again.
+   * An open that only reused a running shell leaves waiting restarts to run.
    */
-  const supersede = (threadId: string, terminalId?: string) =>
+  const supersede = (threadId: string, terminalId?: string, restartsToo = true) =>
     Effect.sync(() => {
       for (const request of waiting.get(threadId) ?? [])
-        if (terminalId === undefined || request.terminalId === terminalId) request.overtaken = true;
+        if (
+          (terminalId === undefined || request.terminalId === terminalId) &&
+          (restartsToo || !request.restart)
+        )
+          request.overtaken = true;
     });
 
   const attempt = Effect.withFiber((fiber) => Effect.succeed(fiber.getRef(Attempt)));
@@ -86,7 +92,9 @@ export const makeTerminalLeaseOrder = (options: {
             cwd,
             tryEnterWorkspaceLease(
               options.resolve(cwd),
-              effect.pipe(Effect.tap(() => supersede(terminal.threadId, terminal.terminalId))),
+              effect.pipe(
+                Effect.tap(() => supersede(terminal.threadId, terminal.terminalId, false)),
+              ),
             ),
           ).pipe(
             Effect.flatMap(
@@ -106,8 +114,9 @@ export const makeTerminalLeaseOrder = (options: {
     threadId: string,
     terminalId: string | undefined,
     effect: Effect.Effect<A, E | TerminalLeaseBusy, R>,
+    restart = false,
   ): Effect.Effect<A, E | TerminalCwdStatError, R> => {
-    const request: WaitingRequest = { terminalId, overtaken: false };
+    const request: WaitingRequest = { terminalId, restart, overtaken: false };
     const join = Effect.sync(() => {
       const requests = waiting.get(threadId) ?? new Set<WaitingRequest>();
       waiting.set(threadId, requests.add(request));
