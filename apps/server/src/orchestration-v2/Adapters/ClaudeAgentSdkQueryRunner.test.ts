@@ -692,9 +692,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("Claude CLI pro
       const leftoverStopped = new Promise<void>((resolve) => alive.once("close", () => resolve()));
       alive.resume();
 
-      yield* openFakeCli(cli).pipe(Effect.provide(realQueryRunner));
+      // The runner layer owns the poll, so it stays open until the CLI has exited, as in the server.
+      yield* openFakeCli(cli);
       yield* Effect.promise(() => leftoverStopped);
-    }),
+    }).pipe(Effect.provide(realQueryRunner)),
   );
 
   // The boot deadline is for a CLI that hangs; one that exits is reported by its exit.

@@ -119,6 +119,10 @@ export const makeClaudeDescendantSampler = Effect.fn("ClaudeDescendantSampler.ma
     const live = new Set<(rows: ReadonlyArray<ClaudeProcessRow>) => void>();
     let polling: Fiber.Fiber<unknown> | undefined;
     let warned = false;
+    // The poll never outlives the layer that owns it, even while a CLI is still tracked.
+    yield* Effect.addFinalizer(() =>
+      Effect.suspend(() => (polling === undefined ? Effect.void : Fiber.interrupt(polling))),
+    );
     const readTable = input.readTable.pipe(
       Effect.tap((table) =>
         Option.isNone(table) && !warned

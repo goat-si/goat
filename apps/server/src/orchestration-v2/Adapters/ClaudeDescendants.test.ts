@@ -109,3 +109,14 @@ it.effect("forgets a job a whole table no longer lists", () =>
     assert.deepEqual(state.killed, []);
   }),
 );
+
+// regression (review P3-6): the poll is the owning layer's, so it stops with that layer.
+it.effect("stops sampling when its layer closes", () =>
+  Effect.gen(function* () {
+    const { state, sampler } = fakeTable([]);
+    yield* Effect.scoped(Effect.map(sampler, ({ track }) => track(100)));
+    const afterClose = state.reads;
+    yield* TestClock.adjust("10 seconds");
+    assert.equal(state.reads, afterClose);
+  }),
+);
