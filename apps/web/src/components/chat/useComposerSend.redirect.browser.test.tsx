@@ -176,3 +176,86 @@ it("a redirect that keeps the mode declines, then sends, as before", async () =>
 
   expect(redirect.calls).toEqual(["approval:decline", "settings:full-access", "startTurn"]);
 });
+
+async function draftReply(holder: string) {
+  const { EnvironmentId, ThreadId, MessageId, TurnItemId } = await import("@goat/contracts");
+  const { useComposerDraftStore } = await import("~/composerDraftStore");
+  const environmentId = EnvironmentId.make("redirect-env");
+  useComposerDraftStore.getState().setReplyTo(
+    { environmentId, threadId: ThreadId.make("redirect-thread") },
+    {
+      version: 1,
+      kind: "response",
+      contextId: "response_m9",
+      label: "An answer",
+      citation: {
+        version: 1,
+        environmentId,
+        threadId: ThreadId.make(holder),
+        messageId: MessageId.make("m9"),
+        text: "An answer",
+        start: 0,
+        end: 9,
+        prefix: "",
+        suffix: "",
+      },
+      itemId: TurnItemId.make("item-9"),
+    },
+  );
+  return environmentId;
+}
+
+async function serverTakesReplies(environmentId: unknown) {
+  const { appAtomRegistry } = await import("~/rpc/atomRegistry");
+  const { environmentServerConfigsAtom } = await import("~/state/server");
+  const get = vi.mocked(appAtomRegistry.get);
+  const prior = get.getMockImplementation()!;
+  const configs = new Map([
+    [environmentId, { environment: { capabilities: { replyToResponse: true } } }],
+  ]);
+  get.mockImplementation(((atom: unknown) =>
+    atom === environmentServerConfigsAtom ? configs : prior(atom as never)) as never);
+  return { [Symbol.dispose]: () => get.mockImplementation(prior) };
+}
+
+it("a draft reply to a server without replyToResponse starts no turn and says why", async () => {
+  await using fixture = await setupSshComposer();
+  const redirect = await redirectSend(fixture, { composerMode: "full-access", refuse: false });
+  await draftReply("redirect-thread");
+
+  await redirect.send();
+
+  expect(redirect.calls).toEqual([]);
+  expect(state.toast).toHaveBeenCalledWith(
+    expect.objectContaining({ title: "This machine's server can't take replies" }),
+  );
+});
+
+it("a draft reply whose holding thread the client does not hold starts no turn and says why", async () => {
+  await using fixture = await setupSshComposer();
+  const redirect = await redirectSend(fixture, { composerMode: "full-access", refuse: false });
+  using _server = await serverTakesReplies(await draftReply("holder-thread"));
+
+  await redirect.send();
+
+  expect(redirect.calls).toEqual([]);
+  expect(state.toast).toHaveBeenCalledWith(
+    expect.objectContaining({ title: "The response this replies to is gone" }),
+  );
+});
+
+it("a draft reply whose holding thread the client holds starts the turn", async () => {
+  await using fixture = await setupSshComposer();
+  const { readThreadShell } = await import("~/state/entities");
+  const redirect = await redirectSend(fixture, { composerMode: "full-access", refuse: false });
+  using _server = await serverTakesReplies(await draftReply("holder-thread"));
+  using _shell = vi
+    .mocked(readThreadShell)
+    .mockImplementation(((ref: { threadId: string }) =>
+      ref.threadId === "holder-thread" ? { deletedAt: null } : null) as never);
+
+  await redirect.send();
+
+  expect(redirect.calls).toEqual(["approval:decline", "settings:full-access", "startTurn"]);
+  expect(state.toast).not.toHaveBeenCalled();
+});
