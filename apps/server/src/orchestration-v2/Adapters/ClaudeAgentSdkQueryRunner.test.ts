@@ -32,6 +32,7 @@ import {
   layerQueryRunner,
 } from "./ClaudeAdapterV2.ts";
 import { spawnClaudeProcessGroup } from "./ClaudeProcessSpawn.ts";
+import { claudeProcessExitFailure } from "./ClaudeQueryRunnerErrors.ts";
 
 vi.mock("@anthropic-ai/claude-agent-sdk", { spy: true });
 
@@ -251,6 +252,7 @@ it.effect("reopens a stalled MCP registration before delivering the resumed prom
         if (typeof prompt === "string") throw new Error("Expected streaming input");
         prompts.push(prompt);
         return {
+          initializationResult: async () => ({}),
           setMcpServers: prompts.length === 1 ? firstRegistration : secondRegistration,
           close: prompts.length === 1 ? firstClose : secondClose,
           [Symbol.asyncDispose]: async () => {
@@ -325,6 +327,7 @@ it.effect.each([true, false])("only retries after confirmed process exit: %s", (
           cleanupProgress.resolve("retry");
         }
         return {
+          initializationResult: async () => ({}),
           setMcpServers: () => {
             registrationStarted.resolve();
             return first
@@ -375,6 +378,7 @@ it.effect("stops retrying MCP registration after two timeouts and reports the ca
       const querySpy = vi.spyOn(ClaudeSdk, "query").mockImplementation(() => {
         const started = querySpy.mock.calls.length === 1 ? firstRegistration : secondRegistration;
         return {
+          initializationResult: async () => ({}),
           setMcpServers: () => {
             started.resolve();
             return new Promise<ClaudeSdk.McpSetServersResult>(() => {});
@@ -414,6 +418,7 @@ it.effect("a failed open keeps its typed error when the query's disposal also fa
       const querySpy = vi.spyOn(ClaudeSdk, "query").mockImplementation(() => {
         const started = registrations[querySpy.mock.calls.length - 1];
         return {
+          initializationResult: async () => ({}),
           setMcpServers: () => {
             started?.resolve();
             return new Promise<ClaudeSdk.McpSetServersResult>(() => {});
@@ -449,6 +454,7 @@ it.effect("cancels a stalled registration without retrying or retaining its prom
       const querySpy = vi.spyOn(ClaudeSdk, "query").mockImplementation(
         () =>
           ({
+            initializationResult: async () => ({}),
             setMcpServers: () => {
               registrationStarted.resolve();
               return new Promise<ClaudeSdk.McpSetServersResult>(() => {});
@@ -479,6 +485,7 @@ it.effect("does not reuse a fresh session ID after MCP registration times out", 
       const querySpy = vi.spyOn(ClaudeSdk, "query").mockImplementation(
         () =>
           ({
+            initializationResult: async () => ({}),
             setMcpServers: () => {
               registrationStarted.resolve();
               return new Promise<ClaudeSdk.McpSetServersResult>(() => {});
@@ -502,6 +509,55 @@ it.effect("does not reuse a fresh session ID after MCP registration times out", 
       assert.equal(result._tag, "Failure");
       assert.equal(querySpy.mock.calls.length, 1);
       assert.equal(disposed.mock.calls.length, 1);
+    }).pipe(Effect.provide(realQueryRunner)),
+  ),
+);
+
+it.effect.each([
+  ["opens after a slow CLI boot", "120 seconds", true],
+  ["times out a CLI that never boots", "5 minutes", false],
+] as const)("%s", ([, bootWait, boots]) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const waiting = Promise.withResolvers<void>();
+      const booted = Promise.withResolvers<void>();
+      const querySpy = vi.spyOn(ClaudeSdk, "query").mockImplementation(
+        () =>
+          ({
+            initializationResult: () => {
+              waiting.resolve();
+              return booted.promise;
+            },
+            // The CLI answers control requests only after it has booted.
+            setMcpServers: async () => {
+              waiting.resolve();
+              await booted.promise;
+              return { added: ["t3-code"], removed: [], errors: {} };
+            },
+            close: vi.fn(),
+            [Symbol.asyncDispose]: async () => {},
+          }) as unknown as ClaudeSdk.Query,
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(() => querySpy.mockRestore()));
+      const runner = yield* ClaudeAgentSdkQueryRunner;
+      const { resume, ...options } = resumedMcpQueryInput.options;
+      const opening = yield* runner
+        .open({ ...resumedMcpQueryInput, options: { ...options, sessionId: resume } })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Effect.promise(() => waiting.promise);
+      yield* TestClock.adjust(bootWait);
+      if (boots) booted.resolve();
+      const result = yield* Fiber.join(opening);
+
+      assert.equal(result._tag, boots ? "Success" : "Failure");
+      if (result._tag === "Success") yield* result.success.close;
+      else
+        assert.equal(
+          makeProviderFailure({
+            cause: { _tag: "ProviderAdapterTurnStartError", cause: result.failure },
+          }).message,
+          "Claude timed out while starting up. Retry the turn; if it keeps failing, check Claude and the server logs.",
+        );
     }).pipe(Effect.provide(realQueryRunner)),
   ),
 );
@@ -576,6 +632,26 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("Claude CLI pro
       yield* Effect.promise(() => leftoverStopped);
       assert.strictEqual(yield* Deferred.await(stopped), "t3code-claude-test.scope");
     }),
+  );
+
+  // The boot deadline is for a CLI that hangs; one that exits is reported by its exit.
+  it.effect("a CLI that exits during boot reports its exit, not a start-up timeout", () =>
+    Effect.gen(function* () {
+      const cli = fakeClaudeCli("exit 3");
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => NodeFS.rmSync(NodePath.dirname(cli), { recursive: true, force: true })),
+      );
+      const runner = yield* ClaudeAgentSdkQueryRunner;
+      const session = yield* runner.open({
+        ...resumedMcpQueryInput,
+        options: { ...resumedMcpQueryInput.options, pathToClaudeCodeExecutable: cli },
+      });
+      const exit = yield* Stream.runDrain(session.messages).pipe(Effect.exit);
+
+      assert.isTrue(Exit.isFailure(exit));
+      if (Exit.isSuccess(exit)) return;
+      assert.equal(claudeProcessExitFailure(exit.cause)?.code, "process_exited_nonzero");
+    }).pipe(Effect.provide(realQueryRunner)),
   );
 
   const rootRefusal =
