@@ -2047,6 +2047,8 @@ export const OrchestrationV2PendingRuntimeRequestSummary = Schema.Struct({
   createdAt: Schema.DateTimeUtc,
   /** False for async questions the run keeps working past. Absent from older servers. */
   blocking: Schema.optional(Schema.Boolean),
+  /** Secret and handoff cards: only the user can answer them, never a coordinating agent. */
+  userOnly: Schema.optional(Schema.Boolean),
   /** Set when the request is a waiting human handoff; older servers omit it. */
   handoff: Schema.optionalKey(Schema.Struct({ kind: HandoffKind, title: Schema.String })),
 });
