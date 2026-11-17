@@ -258,3 +258,24 @@ it.effect("the holder's release waits for a reentrant section still running, the
     assert.isTrue(yield* free(cwd));
   }),
 );
+
+it.effect("a fiber forked during a hold enters only after the holder ends unless marked", () =>
+  Effect.gen(function* () {
+    const cwd = "/lease-reentry/opt-in";
+    const events: Array<string> = [];
+    const child = yield* withWorkspaceLease(
+      cwd,
+      Effect.gen(function* () {
+        // Runs until it waits; it would enter at once if reentry were not opt-in.
+        const forked = yield* withWorkspaceLease(
+          cwd,
+          Effect.sync(() => events.push("child entered")),
+        ).pipe(Effect.forkChild({ startImmediately: true }));
+        events.push("holder end");
+        return forked;
+      }),
+    );
+    yield* Fiber.join(child);
+    assert.deepEqual(events, ["holder end", "child entered"]);
+  }),
+);

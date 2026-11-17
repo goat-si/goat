@@ -248,3 +248,19 @@ it.live.each([
       }).pipe(Effect.provide(ThreadWorkspace.layer.pipe(Layer.provideMerge(layer)))),
     ),
 );
+
+it.live("restoring a missing worktree recreates it and runs setup in it", () =>
+  withSetupProject({ async: false }, ({ worktreePath, pty, git, layer }) =>
+    Effect.gen(function* () {
+      NodeFS.rmSync(worktreePath, { recursive: true, force: true });
+      const service = yield* ThreadWorkspace.ThreadWorkspaceService;
+      const result = yield* service.restore({ threadId, mode: "restore" });
+      assert.strictEqual(result.setupScript, "started");
+      assert.strictEqual(git(worktreePath, "branch", "--show-current"), "feature");
+      assert.deepEqual(
+        pty.spawnInputs.map((input) => input.cwd),
+        [worktreePath],
+      );
+    }).pipe(Effect.provide(ThreadWorkspace.layer.pipe(Layer.provideMerge(layer)))),
+  ),
+);
