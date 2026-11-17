@@ -37,7 +37,7 @@ export function deriveThreadPendingBackgroundTasks(projection: ThreadStructure |
       providerThreads: projection.providerThreads.map((thread) => ({
         ...thread,
         pendingBackgroundTasks: thread.pendingBackgroundTasks?.filter(
-          (task) => !foregroundTaskIds.has(task.taskId),
+          (task) => !foregroundTaskIds.has(task.nativeItemId ?? task.taskId),
         ),
       })),
       turnItems: projection.turnItems.filter(

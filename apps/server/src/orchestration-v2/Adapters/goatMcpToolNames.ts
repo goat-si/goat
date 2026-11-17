@@ -81,6 +81,8 @@ export const CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = (
 ).map((path) => claude(listed(path)));
 
 const CLAUDE_GOAT_CALL = claude(listed("surface.call"));
+// It only marks the caller's own tasks as awaited; Claude Plan mode asks before any other write.
+const CLAUDE_BACKGROUND_WAIT = claude(listed("background.wait"));
 
 /**
  * The Claude name of the tool a call runs: for goat_call, the tool its path names, so approval
@@ -120,10 +122,10 @@ export const claudeGoatCallMemoryTool = (toolName: string, toolInput: unknown) =
   claudeGoatMemoryTool(claudeGoatCallTarget(toolName, toolInput));
 
 /**
- * What Claude does with a GOAT tool call its allowedTools did not settle. allowedTools is fixed
- * when the query opens, so this judges with live authority: goat_call by the tool its path names,
- * a memory tool by this credential's grants (memory is read only for memory tools), and in a
- * read-only sandbox the reads allowedTools would have preapproved. Anything else asks a person.
+ * What Claude does with a GOAT tool call its allowedTools did not settle, judged live: goat_call
+ * by the tool its path names, memory by this credential's grants (read only for memory tools),
+ * goat_background_wait always, and in a read-only sandbox the reads allowedTools preapproves.
+ * Anything else asks a person.
  */
 export const claudeGoatToolDecision = (input: {
   readonly toolName: string;
@@ -143,6 +145,7 @@ export const claudeGoatToolDecision = (input: {
     )
       return "deny";
   }
+  if (target === CLAUDE_BACKGROUND_WAIT) return "allow";
   if (!input.readOnlySandbox) return "ask";
   const preapprovedRead =
     (memoryTool !== undefined && CLAUDE_MEMORY_READ_TOOLS.includes(memoryTool)) ||
