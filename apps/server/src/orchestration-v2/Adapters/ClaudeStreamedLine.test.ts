@@ -32,8 +32,7 @@ vi.mock("effect/Queue", async (importOriginal) => {
   };
 });
 
-// regression: upstream #35037 a long reply line showed nothing until it ended
-it.effect("streams a long line every 50 ms before it ends", () =>
+const startReply = (attempt: string) =>
   Effect.gen(function* () {
     const harness = yield* makeWakeHarnessWithOptions();
     yield* harness.runtime.startTurn(
@@ -41,7 +40,7 @@ it.effect("streams a long line every 50 ms before it ends", () =>
         threadId: harness.threadId,
         providerThread: harness.providerThread,
         now: yield* DateTime.now,
-        attemptId: RunAttemptId.make("long-line-attempt"),
+        attemptId: RunAttemptId.make(attempt),
         text: "Write one long paragraph",
         attachments: [],
       }),
@@ -56,20 +55,53 @@ it.effect("streams a long line every 50 ms before it ends", () =>
           uuid: "stream-frame",
         }),
       );
-    const delta = (text: string) =>
-      stream({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } });
-    const replies = () =>
-      harness.events.flatMap((event) =>
-        event.type === "turn_item.updated" && event.turnItem.type === "assistant_message"
-          ? [event.turnItem]
-          : [],
-      );
     yield* stream({ type: "message_start", message: { id: "long-message" } });
     yield* stream({
       type: "content_block_start",
       index: 0,
       content_block: { type: "text", text: "" },
     });
+    const replies = () =>
+      harness.events.flatMap((event) =>
+        event.type === "turn_item.updated" && event.turnItem.type === "assistant_message"
+          ? [[event.turnItem.text, event.turnItem.streaming] as const]
+          : [],
+      );
+    return {
+      replies,
+      delta: (text: string) =>
+        stream({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } }),
+      // The block stops, then Claude's snapshot of it and the turn's result follow.
+      finish: (text: string) =>
+        Effect.gen(function* () {
+          yield* stream({ type: "content_block_stop", index: 0 });
+          yield* Queue.offer(
+            harness.sdkMessages,
+            claudeSdkFrame({
+              type: "assistant",
+              uuid: "long-snapshot",
+              session_id: WAKE_NATIVE_SESSION,
+              parent_tool_use_id: null,
+              message: {
+                id: "long-message",
+                model: "claude-sonnet-4-6",
+                content: [{ type: "text", text }],
+              },
+            }),
+          );
+          yield* Queue.offer(
+            harness.sdkMessages,
+            makeResultFrame({ uuid: "long-result", result: "" }),
+          );
+          yield* Queue.take(harness.terminalReceipts);
+        }),
+    };
+  });
+
+// regression: upstream #35037 a long reply line showed nothing until it ended
+it.effect("streams a long line every 50 ms before it ends", () =>
+  Effect.gen(function* () {
+    const { replies, delta, finish } = yield* startReply("long-line");
     yield* delta("A long line");
     yield* TestClock.adjust("49 millis");
     yield* delta(" keeps going");
@@ -77,33 +109,41 @@ it.effect("streams a long line every 50 ms before it ends", () =>
 
     yield* TestClock.adjust("1 millis");
     yield* delta(" without a break");
-    assert.deepEqual(
-      replies().map((item) => [item.text, item.streaming]),
-      [["A long line keeps going without a break", true]],
-    );
+    assert.deepEqual(replies(), [["A long line keeps going without a break", true]]);
     yield* delta(" and ends.");
     assert.equal(replies().length, 1);
 
-    yield* stream({ type: "content_block_stop", index: 0 });
-    yield* Queue.offer(
-      harness.sdkMessages,
-      claudeSdkFrame({
-        type: "assistant",
-        uuid: "long-snapshot",
-        session_id: WAKE_NATIVE_SESSION,
-        parent_tool_use_id: null,
-        message: {
-          id: "long-message",
-          model: "claude-sonnet-4-6",
-          content: [{ type: "text", text: "A long line keeps going without a break and ends." }],
-        },
-      }),
-    );
-    yield* Queue.offer(harness.sdkMessages, makeResultFrame({ uuid: "long-result", result: "" }));
-    yield* Queue.take(harness.terminalReceipts);
-    const last = replies().at(-1);
-    assert.equal(last?.text, "A long line keeps going without a break and ends.");
-    assert.isFalse(last?.streaming);
-    assert.equal(last?.status, "completed");
+    yield* finish("A long line keeps going without a break and ends.");
+    assert.deepEqual(replies().at(-1), [
+      "A long line keeps going without a break and ends.",
+      false,
+    ]);
+  }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
+);
+
+it.effect("publishes a line that ends within 50 ms once, complete", () =>
+  Effect.gen(function* () {
+    const { replies, delta, finish } = yield* startReply("short-line");
+    yield* delta("Short");
+    yield* TestClock.adjust("10 millis");
+    yield* delta(" reply.");
+    yield* finish("Short reply.");
+    assert.deepEqual(replies(), [["Short reply.", false]]);
+  }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
+);
+
+it.effect("keeps the text that arrived after the last partial publish when the block ends", () =>
+  Effect.gen(function* () {
+    const { replies, delta, finish } = yield* startReply("between-publishes");
+    yield* delta("Part one");
+    yield* TestClock.adjust("50 millis");
+    yield* delta(" two");
+    yield* TestClock.adjust("20 millis");
+    yield* delta(" three");
+    yield* finish("Part one two three");
+    assert.deepEqual(replies(), [
+      ["Part one two", true],
+      ["Part one two three", false],
+    ]);
   }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
 );
