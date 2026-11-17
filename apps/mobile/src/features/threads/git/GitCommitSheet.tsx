@@ -3,7 +3,7 @@ import { ScreenContent } from "../../../components/ui/ScreenContent";
 import { Button } from "../../../components/ui/Button";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { useState } from "react";
-import { Platform, Pressable, ScrollView, useWindowDimensions, View } from "react-native";
+import { Platform, Pressable, ScrollView, View } from "react-native";
 import { formatDiffCount } from "@goat/client-runtime/diff-count";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -27,7 +27,6 @@ type GitCommitSheetProps = StaticScreenProps<{
 export function GitCommitSheet(_props: GitCommitSheetProps) {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const { height: windowHeight } = useWindowDimensions();
   const { selectedThread } = useThreadSelection();
   const { selectedThreadCwd } = useSelectedThreadWorktree();
   const gitState = useSelectedThreadGitState();
@@ -59,13 +58,14 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
   const runCommitAction = async (featureBranch: boolean) => {
     if (!canWriteSourceControl || (featureBranch && !canChangeThreadBranch)) return;
     const commitMessage = dialogCommitMessage.trim();
-    navigation.goBack();
-    await gitActions.onRunSelectedThreadGitAction({
+    // The sheet and its typed message stay until the commit succeeds; a failure shows here.
+    const result = await gitActions.onRunSelectedThreadGitAction({
       action: "commit",
       featureBranch,
       ...(commitMessage ? { commitMessage } : {}),
       ...(!allSelected ? { filePaths: selectedFiles.map((file) => file.path) } : {}),
     });
+    if (result !== null && navigation.isFocused()) navigation.goBack();
   };
 
   const android = Platform.OS === "android";
@@ -82,22 +82,16 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
   return (
     // Material sheet drags follow the first nested-scrolling native view, and the inline
     // header's Compose button is one, so Android renders content first and reverses the column.
-    <View
-      collapsable={false}
-      className="bg-sheet ios:flex-1 android:flex-col-reverse"
-      style={android ? { maxHeight: windowHeight * 0.92 } : undefined}
-    >
-      {android ? (
-        <NativeStackScreenOptions
-          options={{ sheetCornerRadius: 28, sheetAllowedDetents: "fitToContents" }}
-        />
-      ) : null}
+    // Android keeps the route's fixed detents: a fitToContents sheet does not grow for a
+    // failure card that appears while it is open, and the buttons end up below the screen.
+    <View collapsable={false} className="flex-1 bg-sheet android:flex-col-reverse">
+      {android ? <NativeStackScreenOptions options={{ sheetCornerRadius: 28 }} /> : null}
       {android ? null : header}
-      <ScreenContent fitToContents>
+      <ScreenContent>
         <ScrollView
           nestedScrollEnabled
           contentInsetAdjustmentBehavior="automatic"
-          className="android:shrink android:grow-0 ios:flex-1"
+          className="flex-1"
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
           automaticallyAdjustKeyboardInsets

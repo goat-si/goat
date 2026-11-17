@@ -298,6 +298,7 @@ export const make = Effect.gen(function* () {
       storageUsage: true,
       threadAutoSettlementScope: true,
       threadRestartContinuation: true,
+      offeredSourceControlProviders: true,
       ...(codexAppServerIsolationAvailable(codexTransport)
         ? { codexTurnSurvival: true, codexAppServerIsolation: true }
         : {}),
