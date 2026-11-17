@@ -327,3 +327,157 @@ K10 changed ChatMarkdown.tsx (findWorkspaceFileMatch :652-674 and nearby, 1679 -
 - d78a28f0e9 row 2 (de21fbcff3), as described above; the mirrored testkit hunks were quoted in records 727f898ed3 before the commit.
 - a37c72ff48 row 3 (00f617db4e): rpc/client.ts resubscribes on the same session after a stream transport failure or a chunk decode defect (no onDefect), at 1 s doubling to 30 s, or the caller's retryExpectedFailureAfter. It logs once per failed stream; the finite thread search keeps waiting for the next session. GOAT addition: an "Unknown request tag: <method>" answer from an older server also keeps waiting (new hubNodes.ts isUnknownRequestTagError). The whole client-runtime suite before the guard turned up the GOAT-only computerUseReadiness.test.ts case "keeps the status query and setting refresh working on older servers without retrying" failing (6 subscriptions instead of 1); with the guard it passes unchanged, and no expectation was touched. New tests: rpc/client.streamRecovery.test.ts (6: upstream's three, all failing on the base; one log per failed stream with at most one stream open; a pending retry does not resubscribe a replaced session; the older-server case, which fails with the guard removed) and state/runtime.streamRecovery.test.ts (upstream's finite-search guard, passing before and after). Upstream's added clock-advance line in an existing client.test.ts case is not taken; the new replaced-session case covers it. Whole client-runtime suite after: 313 files, 4013 tests, exit 0. rpc/client.ts 772 -> 816 (no budget entry, under 1000).
 
+
+
+## Row 4 (a74ee4cc7c), in progress, not committed
+
+- ebbba8c7f0 move-out, claim 3: state/server.ts:107-365 -> state/serverUpdate.ts:19-277. The only changed text is the export keyword on SERVER_UPDATE_RESUME_TIMEOUT. server.ts 1776 -> 1527.
+- Row 4 working tree (uncommitted): rpc/client.ts exports currentSession, splits requestGuarded into requestInSession (keeps the EnvironmentRpc.request span) and runStreamGuarded into runStreamInSession; serverUpdate.ts gains acceptedAt in matchesServerUpdateResumeEvent, the foreign-outcome check in validateServerUpdateReadyEvent, and readAcceptingReady (the 5 s baseline read, on the session the request rides); server.ts sends the boot-service update on the accepting session (1527 -> 1564, the lane nets -212 against 1776). New state/server.updateResume.test.ts: upstream's four "launcher update resume" cases plus its foreign-rollback check as a case of its own. Three of them fail on the base, and the other two are guards.
+- Existing case broken by the change, as upstream's was: server.test.ts "accepted server update recovery" (5 boot-service rows; one times out in the new 5 s baseline read, because its lifecycle mock replays no ready before the request).
+
+### Rule 3, IV(i) mirrored, and (iv)'s precondition holds for this block
+
+GOAT's describe("accepted server update recovery") block is byte for byte upstream's at a74ee4cc7c^ (`diff` of the two 155-line blocks: empty). It becomes upstream's block at a74ee4cc7c, and the two hunks are identical (`cmp` of the two diffs: same). Upstream's own copy:
+
+```diff
+@@ -254,22 +258,37 @@ describe("accepted server update recovery", () => {
+           capabilities: { serverSelfUpdate: method, serverSelfUpdateProgress: true },
+         },
+       } as ServerConfig;
++      const ready = (serverVersion: string) =>
++        ({
++          version: 1,
++          sequence: 1,
++          type: "ready",
++          payload: { at: "2026-09-01T00:00:00.000Z", environment: { serverVersion } },
++        }) as Parameters<typeof matchesServerUpdateReadyEvent>[1];
++      let requested = false;
+       const client = {
+         [WS_METHODS.subscribeServerConfig]: () => Stream.never,
++        // Before the request, a boot-service update reads the accepting server's ready.
+         [WS_METHODS.subscribeServerLifecycle]: () =>
+-          Stream.fromEffect(Deferred.succeed(observing, undefined)).pipe(
+-            Stream.drain,
+-            Stream.concat(Stream.fromQueue(readyEvents)),
+-            Stream.tap((event) =>
+-              event.payload.environment.serverVersion === "0.0.30"
+-                ? Deferred.succeed(oldReadyObserved, undefined)
+-                : Effect.void,
+-            ),
+-          ),
++          requested
++            ? Stream.fromEffect(Deferred.succeed(observing, undefined)).pipe(
++                Stream.drain,
++                Stream.concat(Stream.fromQueue(readyEvents)),
++                Stream.tap((event) =>
++                  event.payload.environment.serverVersion === "0.0.30"
++                    ? Deferred.succeed(oldReadyObserved, undefined)
++                    : Effect.void,
++                ),
++              )
++            : Stream.make(ready("0.0.30")).pipe(Stream.concat(Stream.never)),
+         [WS_METHODS.serverUpdateServerWithProgress]: () =>
+-          (loss === "no_progress"
+-            ? Stream.empty
+-            : Stream.make({ type: "progress" as const, stage: "downloading" as const })
++          Stream.unwrap(
++            Effect.sync(() => {
++              requested = true;
++              return loss === "no_progress"
++                ? Stream.empty
++                : Stream.make({ type: "progress" as const, stage: "downloading" as const });
++            }),
+           ).pipe(
+             Stream.concat(
+               Stream.fromEffect(
+@@ -363,13 +382,6 @@ describe("accepted server update recovery", () => {
+         status: "running",
+         stage: "resuming",
+       });
+-      const ready = (serverVersion: string) =>
+-        ({
+-          version: 1,
+-          sequence: 1,
+-          type: "ready",
+-          payload: { at: "2026-09-01T00:00:00.000Z", environment: { serverVersion } },
+-        }) as Parameters<typeof matchesServerUpdateReadyEvent>[1];
+       yield* Queue.offer(readyEvents, ready("0.0.30"));
+       yield* Deferred.await(oldReadyObserved);
+       expect(registry.get(serverUpdateStateAtom(TARGET.environmentId))).toMatchObject({
+```
+
+GOAT's copy, the same change:
+
+```diff
+@@ -251,22 +251,37 @@ describe("accepted server update recovery", () => {
+           capabilities: { serverSelfUpdate: method, serverSelfUpdateProgress: true },
+         },
+       } as ServerConfig;
++      const ready = (serverVersion: string) =>
++        ({
++          version: 1,
++          sequence: 1,
++          type: "ready",
++          payload: { at: "2026-09-01T00:00:00.000Z", environment: { serverVersion } },
++        }) as Parameters<typeof matchesServerUpdateReadyEvent>[1];
++      let requested = false;
+       const client = {
+         [WS_METHODS.subscribeServerConfig]: () => Stream.never,
++        // Before the request, a boot-service update reads the accepting server's ready.
+         [WS_METHODS.subscribeServerLifecycle]: () =>
+-          Stream.fromEffect(Deferred.succeed(observing, undefined)).pipe(
+-            Stream.drain,
+-            Stream.concat(Stream.fromQueue(readyEvents)),
+-            Stream.tap((event) =>
+-              event.payload.environment.serverVersion === "0.0.30"
+-                ? Deferred.succeed(oldReadyObserved, undefined)
+-                : Effect.void,
+-            ),
+-          ),
++          requested
++            ? Stream.fromEffect(Deferred.succeed(observing, undefined)).pipe(
++                Stream.drain,
++                Stream.concat(Stream.fromQueue(readyEvents)),
++                Stream.tap((event) =>
++                  event.payload.environment.serverVersion === "0.0.30"
++                    ? Deferred.succeed(oldReadyObserved, undefined)
++                    : Effect.void,
++                ),
++              )
++            : Stream.make(ready("0.0.30")).pipe(Stream.concat(Stream.never)),
+         [WS_METHODS.serverUpdateServerWithProgress]: () =>
+-          (loss === "no_progress"
+-            ? Stream.empty
+-            : Stream.make({ type: "progress" as const, stage: "downloading" as const })
++          Stream.unwrap(
++            Effect.sync(() => {
++              requested = true;
++              return loss === "no_progress"
++                ? Stream.empty
++                : Stream.make({ type: "progress" as const, stage: "downloading" as const });
++            }),
+           ).pipe(
+             Stream.concat(
+               Stream.fromEffect(
+@@ -360,13 +375,6 @@ describe("accepted server update recovery", () => {
+         status: "running",
+         stage: "resuming",
+       });
+-      const ready = (serverVersion: string) =>
+-        ({
+-          version: 1,
+-          sequence: 1,
+-          type: "ready",
+-          payload: { at: "2026-09-01T00:00:00.000Z", environment: { serverVersion } },
+-        }) as Parameters<typeof matchesServerUpdateReadyEvent>[1];
+       yield* Queue.offer(readyEvents, ready("0.0.30"));
+       yield* Deferred.await(oldReadyObserved);
+       expect(registry.get(serverUpdateStateAtom(TARGET.environmentId))).toMatchObject({
+```
+
+Upstream's other server.test.ts hunks in this commit (import reorder of serverUpdateStateAtom, the foreign-rollback assertions in "server state projection", the new "launcher update resume" describe) are not applied to server.test.ts: the last two live in the new server.updateResume.test.ts as new cases.
+
+### Budget question sent to the coordinator
+
+The mirrored hunk takes server.test.ts from 1411 to 1419, and its entry is 1411. Freeing room means moving existing tests, which is the coordinator's call.
+
