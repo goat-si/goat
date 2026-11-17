@@ -6,7 +6,7 @@ import * as Schema from "effect/Schema";
 // Prepared server bytecode from prepare-server-compile-cache.cjs is one file per loaded server
 // chunk plus its manifest. It has its own budget so the payload budget keeps catching loose files.
 const PREPARED_SERVER_CACHE_DIR = "server-compile-cache";
-export const PREPARED_SERVER_CACHE_FILE_LIMIT = 64;
+export const PREPARED_SERVER_CACHE_FILE_LIMIT = 96;
 
 const PreparedServerCacheManifest = Schema.fromJsonString(
   Schema.Struct({ entries: Schema.Array(Schema.Struct({ file: Schema.String })) }),

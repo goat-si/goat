@@ -65,7 +65,11 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("Windows payload fil
             directories: keys.slice(0, 1),
             detail: `holds ${keys[0]}, which is not a regular file`,
           },
-          { entries: overBudget, files: overBudget, detail: "contains 65 files" },
+          {
+            entries: overBudget,
+            files: overBudget,
+            detail: `contains ${String(PREPARED_SERVER_CACHE_FILE_LIMIT + 1)} files`,
+          },
         ];
         for (const testCase of cases) {
           const packagedAppDir = yield* makePayload(testCase);
