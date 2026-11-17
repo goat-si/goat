@@ -190,7 +190,7 @@ NOT RUN: any CI run of the fix round (11:00:49: none until the round is complete
 
 Coordinator, 2026-11-17 11:08:30 UTC, item 3 (as relayed): dev moved to 6f872e6b2d (#3662 9835304ca7, #3668 6f872e6b2d); no lane merges dev now.
 
-- `.github/scripts/goat-ci-scope.cjs` changes on both sides. dev adds one `WINDOWS_SUITES` entry, `"scripts/build-desktop-artifact.selfcheck"` (after `"scripts/build-computer-use-helper"`, :75 at the merge base 3ecea04f19); X1 changes `LANES`-free areas only (`withUnownedTests`, `loopbackTests`, the `changed_tests_netns` output, the `trackedTests` import). Keep both. `git merge-tree --write-tree HEAD origin/dev` on the local fix-round head 6ab397e58f against dev 6f872e6b2d: a clean tree (8b835dfd7b), no conflict. The merged file is 992 lines (cap 1000).
+- `.github/scripts/goat-ci-scope.cjs` changes on both sides. dev adds one `WINDOWS_SUITES` entry, `"scripts/build-desktop-artifact.selfcheck"` (after `"scripts/build-computer-use-helper"`, :75 at the merge base 3ecea04f19); X1's changes are elsewhere in the file (`withUnownedTests`, `loopbackTests`, the `changed_tests_netns` output, the `trackedTests` import). Keep both. `git merge-tree --write-tree HEAD origin/dev` on the local fix-round head 6ab397e58f against dev 6f872e6b2d: a clean tree (8b835dfd7b), no conflict. The merged file is 992 lines (cap 1000).
 - dev changes no line of goat-ci.yml, goat-ci-scope.test.cjs or scripts/lib/changed-tests.ts.
 - dev's new `scripts/build-desktop-artifact.selfcheck.test.ts` is a scripts test no suite owns, so after goat#3493 every full run's test-changed runs it with no list to edit; test-windows keeps running it through the new WINDOWS_SUITES entry.
 
