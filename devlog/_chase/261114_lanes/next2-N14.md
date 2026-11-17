@@ -841,3 +841,7 @@ Record corrections (N14B2-P3-2):
 - Teardown: the run interrupted, the CLI session signed out, the tab closed, the dev server stopped from its session; ports 8673 and 16713 free; the worktree clean. The dev home (.goat/n14b-home, gitignored) and /tmp/n14b-scratch are left in place (small).
 
 NOT RUN: desktop (the same web bundle); mobile (no change); goat-ci on ef9a768a62 (the coordinator dispatches); a check:changed run that includes browser files beyond the focused ones.
+
+### (e) The pull request
+
+Draft pull request https://github.com/goat-si/goat/pull/3699 into dev from chase/t3-261114-next2-n14b-followups, head ef9a768a629599664c0b0dd97544a0ce500aeac0 (ls-remote), opened 20:57 UTC with gh pr create --draft --body-file; title "fix(web): Reply works in forks of older threads; queued edits and plan follow-ups check replies"; seven captures embedded through scripts/pr-assets.ts upload 3699 --patch-body (assets commit 86e0b60587 on pr-assets); linked with goat pull_request.link, not watched. Checks at 20:57:45 UTC: pull request run 44174675104 pending (goat-scope, goat-screenshot-gate pending); the body-edit run 44174746903 skipped its jobs as an ignored event.
