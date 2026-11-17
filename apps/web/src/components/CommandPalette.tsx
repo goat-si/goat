@@ -163,7 +163,6 @@ import {
   isUnsupportedWindowsProjectPath,
   resolveProjectPathForDispatch,
 } from "../lib/projectPaths";
-import { onOpenCommandPalette } from "../commandPaletteBus";
 import { useSidebarActivityToggle } from "./sidebar/SidebarViewToggles";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
@@ -230,6 +229,7 @@ import { childSearchEscape, useChildSearchEscape } from "./CommandPalette.escape
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteDialog } from "./CommandPaletteDialog";
+import { useCommandPaletteOpenRequests } from "./useCommandPaletteOpenRequests";
 import { captureBrowseSelection, type PendingInputSelection } from "./CommandPaletteSelection";
 import {
   selectCommandPaletteClientSettings,
@@ -394,25 +394,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
     toggleMode,
     usagePageOpen,
   ]);
-  useEffect(
-    () =>
-      onOpenCommandPalette((detail) => {
-        if (detail.open === "new-thread-in") {
-          openNewThreadIn();
-        } else if (detail.open === "add-project") {
-          openAddProject();
-        } else if (detail.query !== undefined) {
-          dispatch({
-            _tag: "OpenSearch",
-            query: detail.query,
-            ...(detail.linkedThreads ? { linkedThreads: detail.linkedThreads } : {}),
-          });
-        } else {
-          setOpen(true);
-        }
-      }),
-    [openAddProject, openNewThreadIn, setOpen],
-  );
+  useCommandPaletteOpenRequests(dispatch, openAddProject, openNewThreadIn, setOpen);
   return (
     <ComposerHandleContext value={composerHandleRef}>
       <ThreadContextDragGhost />
@@ -1012,6 +994,9 @@ function OpenCommandPaletteDialog(props: {
   const newProjectsRootFor = (environmentId: EnvironmentId | null): string | null =>
     environments.find((environment) => environment.environmentId === environmentId)?.serverConfig
       ?.newProjectsRoot ?? null;
+  const offerSettingsFor = (environmentId: EnvironmentId | null) =>
+    environments.find((environment) => environment.environmentId === environmentId)?.serverConfig
+      ?.settings;
 
   const startNewProject = (
     environmentId: EnvironmentId,
@@ -1069,7 +1054,7 @@ function OpenCommandPaletteDialog(props: {
 
     const orderedSources: ReadonlyArray<AddProjectRemoteSource> = [
       "url",
-      ...sortAddProjectProviderSources(readinessBySource),
+      ...sortAddProjectProviderSources(readinessBySource, offerSettingsFor(environmentId)),
     ];
 
     for (const source of orderedSources) {
@@ -2010,7 +1995,12 @@ function OpenCommandPaletteDialog(props: {
   };
 
   const newProjectPublishTargets =
-    newProjectFlow === null ? [] : getNewProjectPublishTargets(sourceControlDiscovery.data ?? null);
+    newProjectFlow === null
+      ? []
+      : getNewProjectPublishTargets(
+          sourceControlDiscovery.data ?? null,
+          offerSettingsFor(newProjectFlow.environmentId),
+        );
   const newProjectPublishTarget = getNewProjectPublishTarget(
     newProjectPublishTargets,
     newProjectPublishKind,

@@ -52,3 +52,17 @@ export function handoffSkillOffset(
         skillMentionsFrom: promptText.length - userText.slice(inlineContextLength).trimEnd().length,
       };
 }
+
+export function appendClaudeUserText(message: SDKUserMessage, text: string): SDKUserMessage {
+  const content = message.message.content;
+  return {
+    ...message,
+    message: {
+      ...message.message,
+      content: [
+        ...(typeof content === "string" ? [{ type: "text" as const, text: content }] : content),
+        { type: "text" as const, text },
+      ],
+    },
+  };
+}

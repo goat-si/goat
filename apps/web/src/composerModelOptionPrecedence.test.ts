@@ -1,7 +1,7 @@
 import { ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
 import { createModelSelection } from "@goat/shared/model";
 import { describe, expect, it } from "vite-plus/test";
-import { deriveEffectiveComposerModelState } from "./composerDraftStore";
+import { deriveEffectiveComposerModelState } from "./composerModelState";
 import { getComposerProviderState } from "./components/chat/composerProviderState";
 import { provider, settingsWithProviderInstances } from "./modelSelection.testkit";
 

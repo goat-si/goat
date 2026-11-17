@@ -4,6 +4,7 @@ import {
   MessageId,
   OrchestrationMessageContext,
   ThreadId,
+  TurnItemId,
   type PreviewAnnotationPayload,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
@@ -25,6 +26,7 @@ import {
   pullRequestContextKindLabel,
   resolveUserMessageContext,
   selectedMessageContextFragment,
+  responseContextRecord,
   reviewCommentContextRecord,
   terminalContextRecord,
   terminalContextReference,
@@ -461,5 +463,37 @@ describe("selectedMessageContextFragment", () => {
 
     expect(fragment).toContain(review.contextId);
     expect(fragment).not.toContain(terminal.contextId);
+  });
+});
+
+describe("the record behind a reply", () => {
+  const citation = {
+    version: 1 as const,
+    environmentId: EnvironmentId.make("environment-local"),
+    threadId: ThreadId.make("thread-1"),
+    messageId: MessageId.make("m1"),
+    text: "x".repeat(100),
+    start: 0,
+    end: 100,
+    prefix: "",
+    suffix: "",
+  };
+
+  it("is one record per response, labelled by its opening, with at most twenty subagents", () => {
+    const subagents = Array.from({ length: 25 }, (_, index) => ({
+      threadId: ThreadId.make(`child-${index}`),
+      title: `child ${index}`,
+    }));
+    const first = responseContextRecord({ citation, itemId: TurnItemId.make("item-1"), subagents });
+    const again = responseContextRecord({
+      citation,
+      itemId: TurnItemId.make("item-1"),
+      subagents: [],
+    });
+    expect(first.contextId).toBe(again.contextId);
+    expect(first.label).toBe("x".repeat(64));
+    expect(first.subagents).toHaveLength(20);
+    expect(again).not.toHaveProperty("subagents");
+    expect(decodeMessageContext({ version: 1, records: [first] }).records).toHaveLength(1);
   });
 });

@@ -17,6 +17,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import type { BrowserContext, Page } from "playwright-core";
 import { expect, vi } from "vite-plus/test";
 
@@ -209,6 +210,64 @@ it.live(
         });
         expect(title).toBe("evaluated");
         yield* broker.invoke<PreviewAutomationLogs>({ scope, tabId, operation: "logs", input: {} });
+      }),
+    ).pipe(Effect.provide(layer)),
+);
+it.effect(
+  "a viewer attaches within two seconds and streams live frames while its opening still waits for Chromium",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const browser = yield* ServerBrowser.ServerBrowser;
+        const broker = yield* Broker.PreviewAutomationBroker;
+        yield* Effect.yieldNow;
+        const opened = yield* broker.invoke<PreviewAutomationStatus>({
+          scope,
+          operation: "open",
+          input: { reuseExistingTab: false, show: false },
+        });
+        const tabId = PreviewTabId.make(opened.tabId!);
+        const context = contexts.at(-1)!;
+        const drawn = Promise.withResolvers<Record<string, unknown>>();
+        yield* Effect.addFinalizer(() => Effect.sync(() => drawn.resolve({ data: "" })));
+        const stillRequested = yield* Deferred.make<void>();
+        const viewerSessions: Array<ReturnType<typeof makeSession>> = [];
+        context.newCDPSession = async () => {
+          const session = makeSession();
+          const answer = session.send.getMockImplementation()!;
+          session.send.mockImplementation((method, input) => {
+            if (method !== "Page.captureScreenshot") return answer(method, input);
+            Deferred.doneUnsafe(stillRequested, Effect.void);
+            return drawn.promise;
+          });
+          viewerSessions.push(session);
+          return session;
+        };
+        const attaching = yield* browser
+          .attachViewer({
+            threadId: scope.thread.threadId,
+            tabId,
+            canOperate: false,
+            maxWidth: 1280,
+            maxHeight: 800,
+            quality: 70,
+          })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(stillRequested);
+        expect(attaching.pollUnsafe()).toBeUndefined();
+        yield* TestClock.adjust("2 seconds");
+        // The still keeps waiting for Chromium; the viewer stops waiting for it.
+        expect(attaching.pollUnsafe()?._tag).toBe("Success");
+        const viewer = yield* Fiber.join(attaching);
+        viewerSessions.at(-1)!.emit("Page.screencastFrame", {
+          data: Buffer.from("live").toString("base64"),
+          sessionId: 1,
+        });
+        const frame = yield* Stream.fromQueue(viewer.output).pipe(
+          Stream.filter((output) => output._tag === "frame"),
+          Stream.runHead,
+        );
+        expect(frame).toMatchObject({ value: { data: Buffer.from("live") } });
       }),
     ).pipe(Effect.provide(layer)),
 );

@@ -47,15 +47,21 @@ import {
   webSearchPatternsFromClaudeTool,
   webSearchResultsFromClaudeOutput,
 } from "./ClaudeToolFrames.ts";
-import { handoffSkillOffset, makeClaudeUserMessage } from "./ClaudeUserMessage.ts";
+import {
+  appendClaudeUserText,
+  handoffSkillOffset,
+  makeClaudeUserMessage,
+} from "./ClaudeUserMessage.ts";
+import { claudeMcpProxyBypassEnvironment } from "./claudeMcpProxyBypass.ts";
 import { CLAUDE_QUERY_ENDED_BEFORE_TURN_DETAIL } from "../PromptRefusal.ts";
 import { interruptUnlessClosed } from "./ClaudeStopTeardown.ts";
 import {
   claudePendingBackgroundTask,
   mergeClaudeBackgroundTasks,
   parseClaudeBackgroundTaskEntry,
-  claudeBackgroundDetails,
+  makeClaudeTaskLaunches,
 } from "./ClaudeBackgroundTasks.ts";
+import { claudeForkedSkillModels } from "./ClaudeForkedSkillModel.ts";
 import {
   claudeCompactionOutcome,
   readToolSearchSetting,
@@ -749,6 +755,7 @@ export const CLAUDE_GOAT_MCP_TOOL_WILDCARD = "mcp__goat__*";
 const CLAUDE_CUA_MCP_TOOL_PREFIX = `mcp__${McpProviderSession.CUA_MCP_SERVER_NAME}__`;
 const CLAUDE_CUA_MCP_TOOL_WILDCARD = `${CLAUDE_CUA_MCP_TOOL_PREFIX}*`;
 
+export { claudeMcpProxyBypassEnvironment };
 export {
   CLAUDE_MEMORY_READ_TOOLS,
   CLAUDE_MEMORY_WRITE_TOOLS,
@@ -772,29 +779,6 @@ export const CLAUDE_GOAT_MCP_TOOL_TIMEOUT_MS = 65 * 60 * 1_000;
 //
 // The header carries the credential itself: the query runner sends
 // `mcpServers` over the CLI's stdin, never its argv or environment.
-
-// Claude Code sends HTTP MCP traffic through any configured HTTPS_PROXY, including
-// one set in the user's Claude settings.json, and it does so even for loopback URLs.
-// Proxies cannot reach this server's local endpoint (an intercepting CONNECT proxy
-// answers 405), so the goat server would silently fail to attach. Exempting the
-// endpoint host keeps the user's proxy for everything else. A NO_PROXY set in
-// Claude's own settings env still wins over the process environment.
-export function claudeMcpProxyBypassEnvironment(
-  endpoint: string,
-  environment: NodeJS.ProcessEnv | undefined,
-): Readonly<Record<string, string>> {
-  const host = new URL(endpoint).hostname.replace(/^\[(.*)\]$/u, "$1");
-  const existing = environment?.NO_PROXY ?? environment?.no_proxy ?? "";
-  const entries = existing
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-  if (entries.includes("*") || entries.includes(host)) return {};
-  const value = [...entries, host].join(",");
-  return environment?.no_proxy === undefined
-    ? { NO_PROXY: value }
-    : { NO_PROXY: value, no_proxy: value };
-}
 
 export function claudeMcpQueryOverrides(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
@@ -853,20 +837,6 @@ export function claudeMcpQueryOverrides(input: {
       ...McpProviderSession.goatSdkServers(session.goatMcpServers),
     },
     mcpEnvironment: claudeMcpProxyBypassEnvironment(session.endpoint, input.environment),
-  };
-}
-
-function appendClaudeUserText(message: SDKUserMessage, text: string): SDKUserMessage {
-  const content = message.message.content;
-  return {
-    ...message,
-    message: {
-      ...message.message,
-      content: [
-        ...(typeof content === "string" ? [{ type: "text" as const, text: content }] : content),
-        { type: "text" as const, text },
-      ],
-    },
   };
 }
 
@@ -3267,6 +3237,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const lastKnownOpaqueTasks = yield* Ref.make(
           new Map<string, OrchestrationV2PendingBackgroundTask>(),
         );
+        const taskLaunches = makeClaudeTaskLaunches();
         const claudeMonitors = yield* Ref.make<{
           readonly calls: ReadonlySet<string>;
           readonly tasks: ReadonlyMap<
@@ -7008,7 +6979,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 task.nativeThreadId === input.nativeThreadId && !listedTaskIds.has(taskId),
             );
             for (const entry of roster) {
-              const task = parseClaudeBackgroundTaskEntry(entry, monitorTasks);
+              const task = parseClaudeBackgroundTaskEntry(entry, monitorTasks, taskLaunches);
               if (task !== null) {
                 nextTasks.push(task);
               }
@@ -7016,9 +6987,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             yield* replacePendingBackgroundTasks(input.nativeThreadId, nextTasks);
             rosterChanged = true;
           } else if (message.type === "system" && message.subtype === "task_started") {
-            if (!isClaudeNonSubagentTask(message) || message.is_backgrounded === false) {
-              return false;
-            }
+            if (!isClaudeNonSubagentTask(message)) return false;
+            const launch = taskLaunches.remember(
+              message.task_id,
+              message.tool_use_id,
+              message.tool_use_id === undefined || input.activeContext === null
+                ? undefined
+                : findToolCall(input.activeContext, message.tool_use_id),
+            );
+            if (message.is_backgrounded === false) return false;
             yield* upsertPendingBackgroundTask(input.nativeThreadId, {
               ...claudePendingBackgroundTask({
                 taskId: message.task_id,
@@ -7032,15 +7009,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   typeof message.description === "string" ? message.description : undefined,
                 parentTaskId: Reflect.get(message, "parent_task_id"),
               }),
-              ...claudeBackgroundDetails(
-                message.tool_use_id === undefined || input.activeContext === null
-                  ? undefined
-                  : findToolCall(input.activeContext, message.tool_use_id),
-              ),
+              ...launch,
             });
             rosterChanged = true;
           } else if (message.type === "system" && message.subtype === "task_notification") {
             yield* endClaudeMonitorTasks((taskId) => taskId === message.task_id);
+            taskLaunches.forget(message.task_id);
             const removed = yield* clearPendingBackgroundTask(
               input.nativeThreadId,
               message.task_id,
@@ -7315,7 +7289,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           yield* trackClaudeGoal({ nativeThreadId: liveQuery.nativeThreadId, context, message });
 
           if (message.type === "stream_event" && !message.parent_tool_use_id) {
-            for (const update of context.textProjector.stream(message.event))
+            const nowMillis = yield* Clock.currentTimeMillis;
+            for (const update of context.textProjector.stream(message.event, nowMillis))
               yield* emitAssistantTextArtifacts({ context, ...update });
             const event = message.event;
             const reasoning = context.reasoning;
@@ -8351,6 +8326,23 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               next.delete(context.providerTurnId);
               return next;
             });
+            const lookupModel = queryRunner.subagentModel;
+            for (const update of yield* claudeForkedSkillModels({
+              taskIds: context.subagentsByTaskId.keys(),
+              registered: Ref.get(sessionSubagentsByTaskId),
+              canonical: (model) => canonicalClaudeSubagentModel(modelCatalog, model),
+              lookup:
+                lookupModel &&
+                ((taskId) =>
+                  lookupModel({
+                    sessionId: liveQuery.nativeThreadId,
+                    agentId: taskId,
+                    dir: context.input.runtimePolicy.cwd,
+                    threadId: context.input.threadId,
+                    providerSessionId: session.id,
+                  })),
+            }))
+              yield* updateClaudeSubagentNode({ context, ...update });
             if (!isClaudeProviderContinuationTurn(context.input)) {
               yield* markAbsorbedWake(liveQuery.nativeThreadId);
             }

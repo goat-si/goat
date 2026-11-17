@@ -1,4 +1,12 @@
-import { EnvironmentId } from "@goat/contracts";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
+import {
+  type ComposerContextId,
+  EnvironmentId,
+  MessageId,
+  type ResponseContextRecord,
+  ThreadId,
+  TurnItemId,
+} from "@goat/contracts";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { ComposerSendSnapshot } from "../ChatView.logic";
@@ -17,6 +25,10 @@ vi.mock("../../lib/imageCompression", () => ({
 
 import { usePromptStashStore } from "../../promptStashStore";
 import { keepFailedSendInStash } from "./stashFailedSend";
+import { useComposerDraftStore } from "../../composerDraftStore";
+import { restoreStashedReply } from "./composerReply";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { environmentThreadShells } from "../../state/threads";
 
 const environmentId = EnvironmentId.make("environment-1");
 const image = {
@@ -48,6 +60,8 @@ function snapshot(messageText: string): ComposerSendSnapshot {
     threadContexts: [],
     previewTabs: [],
     messageText,
+    replyTo: null,
+    draftText: messageText,
   };
 }
 
@@ -101,3 +115,103 @@ describe("keepFailedSendInStash", () => {
     );
   });
 });
+
+describe("a failed send that replied to a response", () => {
+  it("keeps the reply in the stash and puts it back above the composer on restore", async () => {
+    const threadRef = scopeThreadRef(environmentId, ThreadId.make("reply-thread"));
+    const reply: ResponseContextRecord = {
+      version: 1,
+      kind: "response",
+      contextId: "response_m1" as ComposerContextId,
+      label: "The fix is in",
+      citation: {
+        version: 1,
+        environmentId,
+        threadId: threadRef.threadId,
+        messageId: MessageId.make("m1"),
+        text: "The fix is in",
+        start: 0,
+        end: 13,
+        prefix: "",
+        suffix: "",
+      },
+      itemId: TurnItemId.make("item-1"),
+    };
+    const sent = "[The fix is in](goat-context://v1/response/response_m1) check the empty state";
+    await keepFailedSendInStash({
+      snapshot: {
+        ...snapshot(sent),
+        images: [],
+        files: [],
+        attachments: [],
+        replyTo: reply,
+        draftText: "check the empty state",
+      },
+      environmentId,
+      interrupted: false,
+    });
+
+    const [entry] = usePromptStashStore.getState().entries;
+    expect(entry?.prompt).toBe("check the empty state");
+    expect(entry?.records).toContainEqual(reply);
+
+    restoreStashedReply(entry?.records ?? [], threadRef);
+    expect(useComposerDraftStore.getState().getComposerDraft(threadRef)?.replyTo).toEqual(reply);
+  });
+
+  it("puts a reply back in a side chat when the response is its parent's", () => {
+    using shells = sideChatOfParent({ parentLive: true });
+    restoreStashedReply([shells.reply], shells.sideChat);
+    expect(useComposerDraftStore.getState().getComposerDraft(shells.sideChat)?.replyTo).toEqual(
+      shells.reply,
+    );
+  });
+
+  it("leaves a reply out when the client no longer holds the thread that held its response", () => {
+    using shells = sideChatOfParent({ parentLive: false });
+    restoreStashedReply([shells.reply], shells.sideChat);
+    expect(
+      useComposerDraftStore.getState().getComposerDraft(shells.sideChat)?.replyTo ?? null,
+    ).toBeNull();
+  });
+});
+
+// A side chat forked from a parent that holds the response; a deleted or archived parent's shell
+// is not held by the client at all.
+function sideChatOfParent(options: { readonly parentLive: boolean }) {
+  const parent = ThreadId.make(`reply-parent-${options.parentLive}`);
+  const sideChat = scopeThreadRef(
+    environmentId,
+    ThreadId.make(`reply-side-chat-${options.parentLive}`),
+  );
+  const sideChatShell = { forkedFrom: { type: "run", threadId: parent, runId: "run-1" } };
+  const get = appAtomRegistry.get.bind(appAtomRegistry);
+  const spy = vi
+    .spyOn(appAtomRegistry, "get")
+    .mockImplementation(((atom: unknown) =>
+      atom === environmentThreadShells.threadShellAtom(sideChat)
+        ? sideChatShell
+        : options.parentLive &&
+            atom === environmentThreadShells.threadShellAtom(scopeThreadRef(environmentId, parent))
+          ? { id: parent, deletedAt: null }
+          : get(atom as never)) as typeof appAtomRegistry.get);
+  const reply: ResponseContextRecord = {
+    version: 1,
+    kind: "response",
+    contextId: "response_m2" as ComposerContextId,
+    label: "The parent's answer",
+    citation: {
+      version: 1,
+      environmentId,
+      threadId: parent,
+      messageId: MessageId.make("m2"),
+      text: "The parent's answer",
+      start: 0,
+      end: 19,
+      prefix: "",
+      suffix: "",
+    },
+    itemId: TurnItemId.make("item-2"),
+  };
+  return { sideChat, reply, [Symbol.dispose]: () => spy.mockRestore() };
+}

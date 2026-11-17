@@ -34,6 +34,7 @@ export const makeWakeHarnessWithOptions = (options?: {
   ) => Effect.Effect<boolean, ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerError>;
   readonly environment?: NodeJS.ProcessEnv;
   readonly subagentLaunchToolUseId?: string;
+  readonly subagentModel?: string;
   readonly nativeSessionId?: string;
   readonly settings?: ClaudeSettings;
   readonly modelCatalog?: Effect.Effect<ClaudeModelCatalog>;
@@ -166,6 +167,7 @@ export const makeWakeHarnessWithOptions = (options?: {
           }),
         forkSession: options?.forkSession ?? (() => Effect.die("unused forkSession")),
         subagentLaunchToolUseId: () => Effect.succeed(options?.subagentLaunchToolUseId ?? null),
+        subagentModel: () => Effect.succeed(options?.subagentModel ?? null),
         assertComplete: Effect.void,
       },
     });

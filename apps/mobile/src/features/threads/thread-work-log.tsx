@@ -66,7 +66,7 @@ import {
   computerUseRun,
   hasComputerUseHistory,
 } from "@goat/client-runtime/work-log/computer-use";
-import { ReplCodeText } from "./ReplCodeText";
+import { commandCodeText, ReplCodeText } from "./ReplCodeText";
 import { threadComputerUseEntry } from "./threadComputerUseEntry";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -1196,7 +1196,7 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
               props.renderReasoning(reasoning.text)
             ) : call ? (
               [
-                call.command,
+                commandCodeText(call.command, props.themeAppearance),
                 ...(call.args ?? []).map(([key, value]) =>
                   key === "code" &&
                   shownItem.type === "dynamic_tool" &&

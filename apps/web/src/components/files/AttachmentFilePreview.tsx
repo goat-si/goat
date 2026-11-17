@@ -16,14 +16,17 @@ import {
   TrashIcon as Trash2Icon,
   TextWrapIcon as WrapTextIcon,
   XIcon,
+  CheckIcon,
+  CodeIcon,
+  CopyIcon,
+  EyeIcon,
+  TableIcon,
 } from "~/components/solar";
-import { Check, Code as Code2, Copy, Eye, Table as Table2 } from "~/components/solar/nodes";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import { useAssetUrlRefresh } from "~/assets/assetUrls";
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { maskMarkdownFrontmatter } from "@goat/shared/markdownFrontmatter";
-import { MorphIcon } from "~/components/MorphIcon";
 import { MediaImagePreview } from "~/components/media/MediaImagePreview";
 import { MediaVideoPlayer } from "~/components/media/MediaVideoPlayer";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -409,10 +412,13 @@ export function AttachmentFilePreview(props: {
             pressed={rendered}
             onPress={() => setRendered((value) => !value)}
           >
-            <MorphIcon
-              className="size-3.5"
-              icon={rendered ? Code2 : renderedMode === "table" ? Table2 : Eye}
-            />
+            {rendered ? (
+              <CodeIcon className="size-3.5" />
+            ) : renderedMode === "table" ? (
+              <TableIcon className="size-3.5" />
+            ) : (
+              <EyeIcon className="size-3.5" />
+            )}
           </FileSurfaceAction>
         ) : null}
         {showsRawText ? (
@@ -452,7 +458,7 @@ export function AttachmentFilePreview(props: {
                 );
             }}
           >
-            <MorphIcon className="size-3.5" icon={isCopied ? Check : Copy} />
+            {isCopied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
           </FileSurfaceAction>
         ) : null}
         {url ? (

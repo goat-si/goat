@@ -1,4 +1,5 @@
 import {
+  describeThreadWorkspaceRecovery,
   describeThreadWorkspaceRestore,
   type ScopedThreadRef,
   type ThreadWorkspaceStatus,
@@ -75,21 +76,19 @@ export function ThreadWorkspaceBanner({
       () => failed("Could not restore the worktree."),
     );
   };
-  const branch = status.branch ?? "its branch";
-  const [title, body] = setupOnly
-    ? [
-        "This worktree was recreated, but its setup did not finish.",
-        "GOAT runs setup again before the next turn. You can also run it now.",
-      ]
-    : status.state === "cleaned"
+  const recovery =
+    status.state === "cleaned" || status.state === "missing"
+      ? describeThreadWorkspaceRecovery({ ...status, state: status.state })
+      : null;
+  const [title, body] =
+    setupOnly || recovery === null
       ? [
-          "This thread's worktree was cleaned up to save space.",
-          "Restore brings back its files from the snapshot taken before cleanup. Sending a message restores it too.",
+          "This worktree was recreated, but its setup did not finish.",
+          "GOAT runs setup again before the next turn. You can also run it now.",
         ]
-      : [
-          "This thread's worktree folder is missing.",
-          `Recreate rebuilds it from ${branch}. Sending a message does the same.`,
-        ];
+      : status.state === "cleaned"
+        ? ["This thread's worktree was cleaned up to save space.", recovery.body]
+        : ["This thread's worktree folder is missing.", recovery.body];
   const primary = setupOnly
     ? pending === "restore"
       ? "Running setup…"
@@ -110,9 +109,16 @@ export function ThreadWorkspaceBanner({
           </div>
         )}
       </div>
-      <Button size="xs" variant="ghost" disabled={pending !== null} onClick={() => run("restore")}>
-        {primary}
-      </Button>
+      {(recovery === null || recovery.inPlace) && (
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={pending !== null}
+          onClick={() => run("restore")}
+        >
+          {primary}
+        </Button>
+      )}
       {!setupOnly && (
         <Button size="xs" variant="ghost" disabled={pending !== null} onClick={() => run("fresh")}>
           {pending === "fresh" ? "Starting…" : "Start in a new worktree"}

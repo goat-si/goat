@@ -44,6 +44,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `.github/workflows/goat-ci.yml`, `.vite-hooks/`, `packages/ssh/src/tunnel.*.test.ts`, `.github/scripts/pr-screenshot-gate.*`, `.github/pull_request_template.md`
 - 정책: GOAT CI는 goat-ci 하나이고(신뢰 실행은 EPYC, fork PR은 hosted ubuntu-24.04), upstream workflow는 goat-si/goat에서 모두 비활성이다. GOAT에 쓸모없는 새 upstream workflow는 머지에서 빼고 사이클 카드에 적는다 (`mobile-android-apk.yml`, 사이클 261013). `tunnel.test.ts`는 여러 파일로 나뉘었다. PR 템플릿의 Screenshots 섹션은 goat-ci의 `screenshot-gate` 태스크와 짝이므로, upstream 템플릿 변경을 받을 때 그 섹션을 다시 얹는다. 사이클 261021: upstream lint 규칙(#22000 `prefer-effect-fn`, #22187 `require-disposable-render`, 테스트 시간 규칙)은 `goat/*` 이름으로 받고 `goat-rename`의 `LINT_RULE_IDS`에 더한다. 그 전부터 있던 GOAT 위반 파일은 `vite.config.ts`의 `PREFER_EFFECT_FN_BACKLOG`·`DISPOSABLE_RENDER_BACKLOG`에 두고 하나씩 옮기며 뺀다. 새 파일은 더하지 않는다. 사이클 261026: upstream이 Effect language-service 규칙 22개를 error로 올렸다(#25074-#25099). 그 전부터 어긴 GOAT 파일은 `tsconfig.base.json`의 `goat-effect-backlog` 블록(규칙마다 override 하나, `suggestion`)에, 주석 4줄 제한(#21514)과 `no-inline-schema-compile` error 승격을 어긴 파일은 `oxlint-plugin-goat/backlogs.json`(`warn`)에, React effect 수는 `scripts/effect-budget.json`에 둔다. 규칙은 같다: 고치면 빼고, 새 파일은 더하지 않는다.
 
+### `claude-adapter` Claude 어댑터 포트의 모양 차이
+
+- 커밋: #3660 (사이클 261114 next2, lane N9a)
+- 경로: `apps/server/src/orchestration-v2/Adapters/{ClaudeAdapterV2,ClaudeAgentSdkQueryRunner,goatMcpToolNames,ClaudeForkedSkillModel,ClaudeAssistantText,ClaudeBackgroundTasks}.ts`
+- 정책: upstream의 Claude 어댑터 변경은 받되, 아래 네 곳은 GOAT 모양으로 옮긴다. (1) `subagentModel`은 GOAT의 `ClaudeAgentSdkQueryRunnerShape`에서 optional이다. upstream에서는 required다. 실제 runner는 `satisfies Required<ClaudeAgentSdkQueryRunnerShape>`로 만들어 빠뜨리면 컴파일이 막는다. 그래서 테스트 fake에 `subagentModel: () => Effect.succeed(null)`을 넣는 upstream 테스트는 그대로 들어오고, 넣지 않은 GOAT fake도 그대로 둔다. forked skill 모델 조회는 `ClaudeForkedSkillModel.ts`에 있다. (2) Plan 모드에서, 그리고 Supervised나 auto-accept-edits의 read-only sandbox에서 `goat_background_wait`를 묻지 않는 일은 upstream처럼 `Tool.Readonly`로 하지 않고 `goatMcpToolNames.ts`의 `claudeGoatToolDecision`이 맡는다. GOAT는 readOnlyHint를 registry의 effect에서 만들고 이 도구는 write이기 때문이다. read-only sandbox에서 묻지 않는 것은 upstream이 이 도구를 read-only 사전 승인 목록에 둔 것과 같다(coordinator 판정, 2026-11-17 12:41:08). upstream이 이 도구의 annotation을 바꿔도 registry는 그대로 둔다. (3) 스트리밍 답의 긴 줄은 upstream의 `assistantDeltas` coalescer 대신 GOAT의 `ClaudeAssistantText.ts` projector가 text delta마다 Effect clock으로 50 ms를 재서 내보낸다. 타이머 fiber가 없어서 block 완료와 경쟁하지 않는다. (4) 백그라운드 작업의 `nativeItemId`는 upstream의 `toolUseIdsByTaskId` Ref 대신 `ClaudeBackgroundTasks.ts`의 `makeClaudeTaskLaunches`가 세션마다 64개까지 기억하고, `command`와 `startedAt`도 같이 채운다. upstream 웹의 `backgroundWorkNowItem`은 GOAT에 없어서 옮기지 않았다.
+
 ### `cli-home` CLI `goat`와 `~/.goat`
 
 - 커밋: `ddb93f2b5` `d85eb9aff`
@@ -134,11 +140,23 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/server/src/mcp/LaunchWatchService.ts`, `launchWatch.ts`, `HostThreadsMcpService.ts`, `toolkits/{project,ssh,orchestrator}`
 - 정책: GOAT 전용 상태 파일, 마이그레이션 없음. upstream을 받고 launch 등록, send re-arm, watch 도구를 다시 얹는다.
 
+### `legacy-sidebar-shortcuts` Projects(legacy) 사이드바의 단축키 문맥
+
+- 커밋: #3660 (L365, upstream facd190640)
+- 경로: `apps/web/src/components/LegacySidebar.tsx`, `apps/web/src/components/sidebar/threadJumpHints.ts`
+- 정책: upstream에 없는 GOAT의 legacy 사이드바도 main 사이드바처럼 `threadShortcutContext`로 단축키 문맥을 만들어, 사용자 키 바인딩의 `when`이 previewFocus·previewOpen·isWeb·isDesktop을 같은 값으로 읽는다. 기본 바인딩은 영향이 없다. 남는 차이 하나: legacy의 점프 라벨 표(`LegacySidebar.tsx:3631` `buildThreadJumpLabelMap`)는 터미널 열림 상태(`:3502` `routeTerminalOpen`)를 읽으므로, 터미널이 열릴 때 legacy 사이드바는 여전히 한 번 다시 그린다. main 사이드바는 upstream처럼 다시 그리지 않는다. upstream이 사이드바 단축키를 바꾸면 main 사이드바를 받고 legacy에 같은 문맥 호출을 다시 얹는다.
+
 ### `link-thread-maximize` 링크로 시작한 스레드 최대화
 
 - 커밋: `ef4748eb7`
 - 경로: `apps/web/src/components`
 - 정책: upstream 우선, GOAT 동작만 다시 얹는다.
+
+### `mcp-auth-middleware` /mcp 인증 middleware는 GOAT 파일에
+
+- 커밋: #3519 (사이클 261114 다음 PR, lane N3)
+- 경로: `apps/server/src/mcp/McpAuthMiddleware.ts`, `apps/server/src/mcp/McpHttpServer.ts`
+- 정책: lane N3의 verbatim move-out c412c55e14가 upstream의 /mcp 인증 middleware(`mcpResourceMetadataUrl`부터 `layerMcpAuthMiddleware`까지, `unauthorized`와 `makeMcpAuthMiddleware` 포함)를 `McpHttpServer.ts`에서 GOAT 전용 파일 `McpAuthMiddleware.ts`로 옮겼다(파일 예산). upstream 93cbca3fcbd는 이것을 `McpHttpServer.ts`의 :98(`unauthorized`), :234(`makeMcpAuthMiddleware`), :288(`layerMcpAuthMiddleware`)에, dev 522970fddb는 :215, :274, :352에 둔다. upstream이 /mcp 자격 증명 검사를 바꾸면 받은 뒤 그 hunk를 `McpAuthMiddleware.ts`(:19 `mcpResourceMetadataUrl`, :25 `unauthorized`, :84 `makeMcpAuthMiddleware`, :162 `layerMcpAuthMiddleware`)에 옮겨 적용한다. 이 middleware가 세션 cut(`guardedToolRegistration`)이 읽는 요청의 `McpInvocationContext`를 넣는다(:156). 빠뜨리거나 다른 값을 넣으면 cut이 그 요청의 세션 끝을 보지 못한다.
 
 ### `mcp-names` MCP 이름 `goat_*`
 
@@ -150,7 +168,7 @@ G13 `goat-copy`, G14 `launch-watch`.
 
 - 커밋: #3519 (사이클 261114 다음 PR, lane N3)
 - 경로: `apps/server/src/mcp/McpHttpServer.ts`, `apps/server/src/mcp/registrationContext.ts`
-- 정책: 권한 가드다. Effect 4.1의 `McpServer`는 호출의 서비스를 도구가 등록 때 잡은 서비스 위에 합친다. 4.0.5에서는 반대로 등록 때 값이 이겼다. 그대로 두면 호출자가 넣은 서비스가 서버가 만든 identity, scope, 권한 한도를 덮을 수 있다. GOAT 파일 `registrationContext.ts`가 등록 때 서버의 서비스를 잡고(`captureRegistrationContext`, 호출마다 달라지는 Effect의 `callKeys`는 뺀다) 각 호출에서 그 값이 이기게 한다(`withRegistrationContext`). upstream 파일 `McpHttpServer.ts`에서는 import 한 줄(:131), :485의 capture, :516의 wrap만 GOAT 차이다. upstream이 이 파일을 바꾸면 받은 뒤 그 세 줄을 다시 얹는다. 빠뜨리면 테스트(`mcp/toolkits/retryKeys.test.ts`, `toolkits/project/handlers.goatclaw.test.ts`)만 잡는다. dev #3612의 `guardedToolRegistration`(:729, `withListedNames`)은 가장 바깥 wrapper로 남아야 한다. 그래야 `withRegistrationContext`가 등록 때 서비스를 덮기 전에 이 호출의 `McpInvocationContext`와 세션 끝을 읽는다.
+- 정책: 권한 가드다. Effect 4.1의 `McpServer`는 호출의 서비스를 도구가 등록 때 잡은 서비스 위에 합친다. 4.0.5에서는 반대로 등록 때 값이 이겼다. 그대로 두면 호출자가 넣은 서비스가 서버가 만든 identity, scope, 권한 한도를 덮을 수 있다. GOAT 파일 `registrationContext.ts`가 등록 때 서버의 서비스를 잡고(`captureRegistrationContext`, 호출마다 달라지는 Effect의 `callKeys`는 뺀다) 각 호출에서 그 값이 이기게 한다(`withRegistrationContext`). upstream 파일 `McpHttpServer.ts`에서는 import 한 줄(:126), :480의 capture, :511의 wrap만 GOAT 차이다. upstream이 이 파일을 바꾸면 받은 뒤 그 세 줄을 다시 얹는다. 빠뜨리면 테스트(`mcp/toolkits/retryKeys.test.ts`, `toolkits/project/handlers.goatclaw.test.ts`)만 잡는다. dev #3612의 `guardedToolRegistration`(:724, `withListedNames`)은 가장 바깥 wrapper로 남아야 한다. 그래야 `withRegistrationContext`가 등록 때 서비스를 덮기 전에 이 호출의 `McpInvocationContext`와 세션 끝을 읽는다.
 
 ### `memory-access-evidence` 메모리 접근 증거는 내용 키로 비교 (Effect 4.1)
 
@@ -219,6 +237,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/server/src/remoteReports`, `apps/server/src/orchestration-v2/goat/RemoteDelegatedTasks.ts`, `apps/server/src/mcp/goat/RemoteTaskTargets.ts`, `apps/server/src/mcp/toolkits/{remoteReport,ssh}`, `apps/server/src/persistence/Migrations/*_{RemoteReports,RemoteDispatches}*`, `packages/contracts/src/remoteReports.ts`
 - 정책: GOAT 전용. RemoteReports·RemoteDispatches 마이그레이션은 다시 실행해도 안전하게 써서(`IF NOT EXISTS`) upstream이 그 id를 가져가면 옮길 수 있다. upstream의 SSH·MCP 변경은 받고 출발지 보고, 원격 위임, 첨부 전달을 다시 얹는다. `OrchestratorMcpService`의 원격·클라우드 위임 판정(`authorizeRemoteWrite`, `preflightCloudLaunch`, `resolveRemoteTarget` 등)은 `mcp/goat/RemoteTaskTargets.ts`의 factory에 있고 서비스는 호출 한 번만 둔다(#915).
 
+### `reply-to-response` 응답에 답하기(Reply)
+
+- 커밋: #3660 (L18, upstream c0f85e7f79)
+- 경로: `apps/web/src/components/chat/{composerReplyTarget.ts,composerReply.tsx,TimelineAssistantRows.tsx,ChatComposer.tsx}`, `apps/server/src/orchestration-v2/{ResponseContextCheck,BuiltInSkillText}.ts`, `apps/server/src/environment/ServerEnvironment.ts`, `packages/contracts/src/composerContext.ts`
+- 정책: 세 가지가 upstream과 다르다. (1) upstream은 ChatView가 composer handle로 Reply를 넘기지만, GOAT는 `ChatView.tsx`를 건드리지 않고 `composerReplyTarget.ts:11`의 레지스트리(composer form 요소를 키로 한 handle WeakMap)로 클릭한 메시지와 같은 열의 composer를 찾는다. 같은 스레드가 두 열에 열려 있어도 맞는 composer로 간다. (2) 서버 검사는 GOAT 전용이다. 클라이언트가 만든 응답 레코드를 믿지 않고, 받는 스레드나 그 스레드가 이력을 물려받은 스레드(run fork 사슬 전체, 포크된 side chat의 부모 포함, 삭제된 스레드 제외)의 이 서버 assistant 메시지일 때만 `thread.read` 줄을 준다(`ResponseContextCheck.ts`). 그 밖은 unavailable로 보낸다. 웹은 서버가 `capabilities.replyToResponse`를 알릴 때만 Reply를 보인다. (3) `subagents[].environmentId`(`composerContext.ts:294`)는 upstream 스키마대로 남기지만 GOAT는 채우지 않고, 서버는 이 값이 있는 subagent를 버린다. upstream이 이 파일들을 바꾸면 받고 레지스트리 호출, 서버 검사 호출, capability 게이트를 다시 얹는다.
+
 ### `repo-hygiene` 저장소 루트 정리
 
 - 커밋: #661
@@ -234,7 +258,7 @@ G13 `goat-copy`, G14 `launch-watch`.
 ### `screen-code` 화면 코드 실행 `goat_screen_run`
 
 - 경로: `apps/server/src/preview/{ServerBrowser,ServerBrowserPage,ServerBrowserStream,SessionControl,DesktopBrowserChannel}.ts`, `apps/server/src/mcp/{McpHttpServer,McpInvocationContext,McpSessionRegistry,PreviewAutomationBroker}.ts`, `apps/server/src/orchestration-v2/RunExecutionService.ts`, `packages/contracts/src/{previewAutomation,composerContext,desktopBrowser}.ts`, `packages/provider-core/src/server/orchestrationInstructions.ts`, `packages/provider-core/package.json`, `packages/provider-pi/src/server/adapter.ts`, `packages/client-runtime/src/{providerSkills.ts,preview/serverBrowserStream.ts}`, `packages/shared/src/{composerContextLegacySend,composerContextReferences}.ts`, `apps/web/src/browser/{ServerBrowserSurface.tsx,browserPointerStore.ts,ElectronBrowserHost.tsx}`, `apps/web/src/components/preview/AgentBrowserCursor.tsx`, `apps/web/src/components/chat/{ChatComposer.tsx,useComposerSend.ts,useComposerMenuItems.ts,useComposerContextImport.ts,UserMessageContextChips.tsx,ComposerCommandMenu.tsx,chatViewSend.ts}`, `apps/web/src/components/{composerContextPresentation.tsx,contextPresentationRegistry.ts,ChatView.logic.ts}`, `apps/web/src/composerDraftStore.ts`, `apps/web/src/lib/composerContextRecords.ts`, `apps/desktop/src/preview/{PickPreload,RecordingCursor,Manager,DesktopBrowserHost}.ts`, `apps/mobile/src/features/browser/preview-stream.browser.ts`, `scripts/{smoke-cli-archive,build-cli-archive}.ts`
-- 정책: GOAT 전용. 로직은 GOAT 모듈에 둔다: `apps/server/src/screenCode`, `apps/server/src/mcp/toolkits/screen`, `apps/server/src/preview/{ServerBrowserScreen,ServerBrowserHistory}.ts`, `apps/server/src/orchestration-v2/{ScreenSkills,ScreenCodeSkillInstall,Adapters/CodexTurnSkills}.ts`, `packages/contracts/src/{screenCode,previewAutomationScreen}.ts`, `packages/provider-core/src/server/builtinSkills/{screenCode,screenCodeRuntime,screenCodeSkillFiles}.ts`, `packages/provider-pi/src/server/{screenSkillGate,turnGates}.ts`, `apps/desktop/src/preview/CursorStateOrdering.ts`, `apps/web/src/browser/browserPointerOrdering.ts`, `apps/web/src/components/preview/{cursorMotion,useAgentCursorMotion}.ts`, `apps/web/src/lib/previewTabDraft.ts`. upstream 파일에는 import, 호출 한 번, 등록, 객체 필드, union 멤버, 케이스 하나만 둔다. upstream이 이 파일을 바꾸면 upstream을 받고 그 훅만 다시 얹는다. upstream 선언은 제자리에 원래 모양으로 둔다(`ServerBrowser.ts`의 `ServerTab` 등 interface 다섯, `McpHttpServer.ts`의 `unauthorized`·`normalizeMcpHttpResponse`, `previewAutomation.ts`의 client·connection id와 screenshot struct). `previewAutomationScreen.ts`는 `previewAutomation.ts`를 import하지 않는다(`contracts-rpc-leaves`와 같은 TDZ 사이클). `goat/no-raw-mcp-registration` 때문에 `goat_screen_run` 등록은 `McpHttpServer.ts`의 세 줄로 남고, 도구 서술자와 handler는 `toolkits/screen/mcpTool.ts`에 있다. 일부러 남긴 차이: `AgentBrowserCursor.tsx`는 ADR-0023 D17 커서 모션 때문에 upstream의 `transition-[opacity,transform]`과 클릭 `animate-status-ping`을 뺐다. `ipc.ts`·`preload.ts`의 `DesktopPreviewPointerEvent`는 `DesktopPreviewCursorEvent`가 됐다. `cua-driver` 영역의 provider·adapter 경로도 같은 방식의 screen-code 훅(`carriesScreenCodeSkill`, `skills` 필드)을 싣는다.
+- 정책: GOAT 전용. 로직은 GOAT 모듈에 둔다: `apps/server/src/screenCode`, `apps/server/src/mcp/toolkits/screen`, `apps/server/src/preview/{ServerBrowserScreen,ServerBrowserHistory}.ts`, `apps/server/src/orchestration-v2/{ScreenSkills,ScreenCodeSkillInstall,Adapters/CodexTurnSkills}.ts`, `packages/contracts/src/{screenCode,previewAutomationScreen}.ts`, `packages/provider-core/src/server/builtinSkills/{screenCode,screenCodeRuntime,screenCodeSkillFiles}.ts`, `packages/provider-pi/src/server/{screenSkillGate,turnGates}.ts`, `apps/desktop/src/preview/CursorStateOrdering.ts`, `apps/web/src/browser/browserPointerOrdering.ts`, `apps/web/src/components/preview/{cursorMotion,useAgentCursorMotion}.ts`, `apps/web/src/lib/previewTabDraft.ts`. upstream 파일에는 import, 호출 한 번, 등록, 객체 필드, union 멤버, 케이스 하나만 둔다. upstream이 이 파일을 바꾸면 upstream을 받고 그 훅만 다시 얹는다. upstream 선언은 제자리에 원래 모양으로 둔다(`ServerBrowser.ts`의 `ServerTab` 등 interface 다섯, `previewAutomation.ts`의 client·connection id와 screenshot struct). `McpHttpServer.ts`에 있던 `unauthorized`와 `normalizeMcpHttpResponse` 호출은 /mcp 인증 middleware와 함께 `McpAuthMiddleware.ts`로 옮겨졌다(`mcp-auth-middleware`). `previewAutomationScreen.ts`는 `previewAutomation.ts`를 import하지 않는다(`contracts-rpc-leaves`와 같은 TDZ 사이클). `goat/no-raw-mcp-registration` 때문에 `goat_screen_run` 등록은 `McpHttpServer.ts`의 세 줄로 남고, 도구 서술자와 handler는 `toolkits/screen/mcpTool.ts`에 있다. 일부러 남긴 차이: `AgentBrowserCursor.tsx`는 ADR-0023 D17 커서 모션 때문에 upstream의 `transition-[opacity,transform]`과 클릭 `animate-status-ping`을 뺐다. `ipc.ts`·`preload.ts`의 `DesktopPreviewPointerEvent`는 `DesktopPreviewCursorEvent`가 됐다. `cua-driver` 영역의 provider·adapter 경로도 같은 방식의 screen-code 훅(`carriesScreenCodeSkill`, `skills` 필드)을 싣는다.
 
 ### `server-activity` 서버 activity와 마이그레이션 61
 

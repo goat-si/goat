@@ -1656,7 +1656,7 @@ it.effect("only the controlling viewer's copy and cut keys reach its clipboard",
   ).pipe(Effect.provide(layer)),
 );
 
-it.live("a busy frame does not hold a copy key back", () =>
+it.effect("a busy frame does not hold a copy key back", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const { browser, tabId } = yield* ready;

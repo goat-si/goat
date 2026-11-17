@@ -38,6 +38,30 @@ const makeGuest = ({
 };
 
 describe("preview guest input", () => {
+  it("stops the guest's navigation without stopping its embedder window", async () => {
+    let guestLoading = true;
+    let embedderLoading = true;
+    const guest = {
+      stop: () => {
+        guestLoading = false;
+      },
+    };
+    const debuggee = {
+      sendCommand: async () => {
+        embedderLoading = false;
+        return {};
+      },
+    };
+    await sendPageCommand(
+      guest as unknown as Electron.WebContents,
+      debuggee as unknown as Electron.Debugger,
+      "Page.stopLoading",
+      {},
+    );
+    expect(guestLoading).toBe(false);
+    expect(embedderLoading).toBe(true);
+  });
+
   it("regression: forwards every syllable of Korean text to a focused guest", async () => {
     const guest = makeGuest({ focused: true });
     await guest.send("Input.insertText", { text: "오늘 날씨" });

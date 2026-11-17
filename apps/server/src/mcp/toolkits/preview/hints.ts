@@ -37,6 +37,7 @@ const actions = new Set([
   "back",
   "forward",
   "reload",
+  "stopLoading",
 ]);
 export const previewHints = (
   operation: PreviewAutomationOperation,

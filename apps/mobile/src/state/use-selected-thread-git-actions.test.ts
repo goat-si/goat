@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
     environmentId: "environment",
     branch: "main",
     worktreePath: null as string | null,
+    runtime: null as { status: string; activeRunId: string | null } | null,
   },
   commits: 0,
   pushes: 0,
@@ -61,6 +62,7 @@ vi.mock("./use-remote-environment-registry", () => ({
 vi.mock("./use-vcs-action-state", () => ({
   showGitActionResult: (result: { type: string; description?: string }) =>
     state.results.push(result),
+  dismissThreadGitActionResult: () => {},
 }));
 vi.mock("../lib/uuid", () => ({ uuidv4: () => "action" }));
 vi.mock("./threads", () => ({
@@ -134,6 +136,7 @@ describe("thread Git mutation permissions", () => {
     state.worktrees = [];
     state.thread.branch = "main";
     state.thread.worktreePath = null;
+    state.thread.runtime = null;
     state.commits = 0;
     state.pushes = 0;
     state.metadataRequests = [];
@@ -159,6 +162,46 @@ describe("thread Git mutation permissions", () => {
       expect(state.thread.branch).toBe(canOperate ? "feature/task" : "main");
     },
   );
+
+  it.each([
+    ["running", { status: "running", activeRunId: "run" }],
+    ["waiting on a question", { status: "waiting", activeRunId: "run" }],
+    ["starting", { status: "starting", activeRunId: "run" }],
+  ])(
+    "refuses Create worktree while a turn is %s, before creating a folder or branch",
+    async (_, runtime) => {
+      state.scopes.add(AuthOrchestrationOperateScope);
+      state.thread.runtime = runtime;
+      const result = await useSelectedThreadGitActions().onCreateSelectedThreadWorktree({
+        baseBranch: "main",
+        newBranch: "feature/task",
+      });
+      expect([result, state.worktrees, state.metadataRequests, state.results]).toEqual([
+        null,
+        [],
+        [],
+        [
+          {
+            type: "error",
+            title: "Git action failed",
+            description:
+              "This thread has a turn running, and moving it to another worktree would end it. Wait for the turn to finish, or press Stop, then try again.",
+          },
+        ],
+      ]);
+    },
+  );
+
+  it("creates the worktree once the turn has ended", async () => {
+    state.scopes.add(AuthOrchestrationOperateScope);
+    state.thread.runtime = { status: "completed", activeRunId: null };
+    const result = await useSelectedThreadGitActions().onCreateSelectedThreadWorktree({
+      baseBranch: "main",
+      newBranch: "feature/task",
+    });
+    expect(result).toEqual({ worktree: { path: "/repo-worktree", refName: "feature/task" } });
+    expect(state.worktrees).toEqual(["/repo-worktree"]);
+  });
 
   it("keeps ordinary commits and pushes available without task permission", async () => {
     const actions = useSelectedThreadGitActions();

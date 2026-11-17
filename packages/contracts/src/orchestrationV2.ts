@@ -47,6 +47,11 @@ export * from "./orchestrationV2ThreadFields.ts";
 import { OrchestrationV2SubscribeThreadInput } from "./orchestrationV2ThreadSubscription.ts";
 export * from "./orchestrationV2ThreadSubscription.ts";
 import {
+  OrchestrationV2StopHeldTurnInput,
+  OrchestrationV2StopHeldTurnResult,
+} from "./orchestrationV2HeldTurn.ts";
+export * from "./orchestrationV2HeldTurn.ts";
+import {
   OrchestrationV2ReviewContinueCommand,
   ReviewLedgerEntry,
   ReviewLedgerEntryInput,
@@ -1026,6 +1031,8 @@ const PendingBackgroundTaskFields = {
   description: Schema.optional(TrimmedNonEmptyString),
   /** The subagent task that started this work and waits on it. */
   parentTaskId: Schema.optional(TrimmedNonEmptyString),
+  /** Native id of the turn item that started this work, when it is not `taskId`. */
+  nativeItemId: Schema.optional(TrimmedNonEmptyString),
   /**
    * The agent declared it resumes when this work ends, so the thread holds like it does for a
    * subagent. Only the agent knows whether a command is a wait or a dev server it left running.
@@ -4152,38 +4159,6 @@ export class OrchestrationV2ForceStopThreadError extends Schema.TaggedError<Orch
     return this.reason === "superseded"
       ? "A new turn started, so nothing was force stopped."
       : "Failed to force stop the agent.";
-  }
-}
-
-/** Stops the Codex turn no run owns that holds the thread's next start; it must be the one shown. */
-export const OrchestrationV2StopHeldTurnInput = Schema.Struct({
-  threadId: ThreadId,
-  nativeTurnId: TrimmedNonEmptyString,
-});
-export type OrchestrationV2StopHeldTurnInput = typeof OrchestrationV2StopHeldTurnInput.Type;
-
-export const OrchestrationV2StopHeldTurnResult = Schema.Struct({
-  /**
-   * `stopped`: the turn ended; the message starts unless another Codex turn still holds the
-   * thread, which the thread then names. `stopping`: Codex took the stop but
-   * has not reported the end yet; the message starts when it does. `none`: that turn no longer
-   * holds the thread as a turn no run owns, so nothing was stopped.
-   */
-  outcome: Schema.Literals(["stopped", "stopping", "none"]),
-});
-export type OrchestrationV2StopHeldTurnResult = typeof OrchestrationV2StopHeldTurnResult.Type;
-
-export class OrchestrationV2StopHeldTurnError extends Schema.TaggedError<OrchestrationV2StopHeldTurnError>()(
-  "OrchestrationV2StopHeldTurnError",
-  {
-    threadId: ThreadId,
-    /** Why, in words a person can act on. */
-    detail: Schema.optional(Schema.String),
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return this.detail ?? "Could not stop the Codex turn this message waits for.";
   }
 }
 

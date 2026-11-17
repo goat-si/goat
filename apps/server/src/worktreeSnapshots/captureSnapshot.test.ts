@@ -125,22 +125,37 @@ it.layer(layer)("worktree snapshots", (it) => {
       assert.match(error.detail, /intent-to-add/);
     }),
   );
-  it.effect("refuses assume-unchanged files and in-progress operations", () =>
+  it.effect.each(["--assume-unchanged", "--skip-worktree"] as const)(
+    "captures a file flagged %s while it matches the index and refuses it once edited",
+    (flag) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "snapshot-repo-" });
+        yield* git(cwd, ["init", "-q"]);
+        yield* fs.writeFileString(path.join(cwd, "a"), "base");
+        yield* git(cwd, ["add", "a"]);
+        yield* git(cwd, ["commit", "-qm", "base"]);
+        yield* git(cwd, ["update-index", flag, "a"]);
+        yield* captureWorktreeSnapshot({ cwd, threadId: "test", now: 0 });
+        // Git status and the snapshot's own add both skip the file, so its edit would be lost.
+        yield* fs.writeFileString(path.join(cwd, "a"), "hidden edit");
+        const error = yield* Effect.flip(
+          captureWorktreeSnapshot({ cwd, threadId: "test", now: 0 }),
+        );
+        assert.match(error.detail, /hidden from git status \(a\)/);
+      }),
+  );
+  it.effect("refuses in-progress operations", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "snapshot-repo-" });
       yield* git(cwd, ["init", "-q"]);
-      yield* fs.writeFileString(path.join(cwd, "a"), "base");
-      yield* git(cwd, ["add", "a"]);
-      yield* git(cwd, ["commit", "-qm", "base"]);
-      yield* git(cwd, ["update-index", "--assume-unchanged", "a"]);
-      const first = yield* Effect.flip(captureWorktreeSnapshot({ cwd, threadId: "test", now: 0 }));
-      assert.match(first.detail, /assume-unchanged/);
-      yield* git(cwd, ["update-index", "--no-assume-unchanged", "a"]);
+      yield* git(cwd, ["commit", "--allow-empty", "-qm", "base"]);
       yield* fs.writeFileString(path.join(cwd, ".git", "MERGE_HEAD"), "in progress");
-      const second = yield* Effect.flip(captureWorktreeSnapshot({ cwd, threadId: "test", now: 0 }));
-      assert.match(second.detail, /operation in progress/);
+      const error = yield* Effect.flip(captureWorktreeSnapshot({ cwd, threadId: "test", now: 0 }));
+      assert.match(error.detail, /operation in progress/);
     }),
   );
 });

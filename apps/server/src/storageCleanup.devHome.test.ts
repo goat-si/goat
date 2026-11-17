@@ -30,7 +30,7 @@ it.live.each([
         const customFolder = yield* fs.realPath(
           yield* fs.makeTempDirectoryScoped({ prefix: "cleanup-real-worktrees-" }),
         );
-        const realWorktree = `${customFolder}/seeded`;
+        const realWorktree = `${customFolder}/repo/seeded`;
         yield* fixture.command(fixture.repo, ["worktree", "add", "-b", "seeded", realWorktree]);
         fixture.setSettings({ worktreesDirectory: customFolder });
         fixture.setThreads([

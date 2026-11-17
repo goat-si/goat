@@ -70,6 +70,7 @@ export function claudeBackgroundDetails(
 export function parseClaudeBackgroundTaskEntry(
   entry: unknown,
   monitorTasks: ReadonlyMap<string, unknown>,
+  launches: ClaudeTaskLaunches,
 ): OrchestrationV2PendingBackgroundTask | null {
   if (entry === null || typeof entry !== "object") {
     return null;
@@ -84,11 +85,53 @@ export function parseClaudeBackgroundTaskEntry(
     return null;
   }
   const description = Reflect.get(entry, "description");
-  return claudePendingBackgroundTask({
-    taskId,
-    taskType,
-    startedByMonitor: monitorTasks.has(taskId),
-    description: typeof description === "string" ? description : undefined,
-    parentTaskId: Reflect.get(entry, "parent_task_id"),
-  });
+  return {
+    ...claudePendingBackgroundTask({
+      taskId,
+      taskType,
+      startedByMonitor: monitorTasks.has(taskId),
+      description: typeof description === "string" ? description : undefined,
+      parentTaskId: Reflect.get(entry, "parent_task_id"),
+    }),
+    ...launches.get(taskId),
+  };
+}
+
+/** The call that started a task, which a roster entry naming only the task id leaves out. */
+interface ClaudeTaskLaunch {
+  readonly nativeItemId: string;
+  readonly command?: string;
+  readonly startedAt?: string;
+}
+
+const MAX_REMEMBERED_LAUNCHES = 64;
+
+export type ClaudeTaskLaunches = ReturnType<typeof makeClaudeTaskLaunches>;
+
+/**
+ * One session's task launches. A foreground command can move to the background later, so every
+ * launch is kept, the oldest dropped first; a task on the roster keeps its fields through the merge.
+ */
+export function makeClaudeTaskLaunches() {
+  const launches = new Map<string, ClaudeTaskLaunch>();
+  return {
+    get: (taskId: string) => launches.get(taskId),
+    remember(
+      taskId: string,
+      toolUseId: string | undefined,
+      call: Parameters<typeof claudeBackgroundDetails>[0],
+    ): ClaudeTaskLaunch | undefined {
+      const nativeItemId = toolUseId?.trim();
+      if (!nativeItemId) return undefined;
+      const launch = { nativeItemId, ...claudeBackgroundDetails(call) };
+      launches.delete(taskId);
+      launches.set(taskId, launch);
+      for (const oldest of launches.keys()) {
+        if (launches.size <= MAX_REMEMBERED_LAUNCHES) break;
+        launches.delete(oldest);
+      }
+      return launch;
+    },
+    forget: (taskId: string) => launches.delete(taskId),
+  };
 }

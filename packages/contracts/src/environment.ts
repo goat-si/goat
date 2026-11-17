@@ -152,6 +152,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadAutoSettlementScope: Schema.optionalKey(Schema.Boolean),
   threadRestartContinuation: Schema.optionalKey(Schema.Boolean),
   codexTurnSurvival: Schema.optionalKey(Schema.Boolean),
+  /** Server stores `offeredSourceControlProviders`; older servers drop the patch, so clients disable the switches. */
+  offeredSourceControlProviders: Schema.optionalKey(Schema.Boolean),
   /** Server honors `codexAppServerIsolation` for new Codex threads. */
   codexAppServerIsolation: Schema.optionalKey(Schema.Boolean),
   projectSettingsOverrides: Schema.optionalKey(Schema.Boolean),
@@ -228,6 +230,11 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   commandOutputStreaming: Schema.optionalKey(Schema.Boolean),
   /** Hosts headless Chromium tabs streamed over /api/preview-stream for clients without a local runtime. */
   serverBrowser: Schema.optionalKey(Schema.Boolean),
+  /** Server checks `response` context records before an agent reads one. Older servers drop
+      them, so clients offer Reply to a response only when this is true. */
+  replyToResponse: Schema.optionalKey(Schema.Boolean),
+  /** Server browser viewers' stopLoading input cancels a loading page; older servers ignore it. */
+  serverBrowserStopLoading: Schema.optionalKey(Schema.Boolean),
   /** Server exposes the bounded SSH runtime activity probe. */
   sshActivity: Schema.optionalKey(Schema.Boolean),
   /** Server proxies its nodes' APIs below `/hub/nodes` for clients holding `hub:proxy`. */

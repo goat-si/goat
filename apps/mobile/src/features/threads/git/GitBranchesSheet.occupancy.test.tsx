@@ -29,7 +29,10 @@ vi.mock("../../../components/ui/AppText", () => ({
   AppText: ({ children }: { children: ReactNode }) => <span>{children}</span>,
   AppTextInput: () => null,
 }));
-vi.mock("./gitSheetComponents", () => ({ SheetActionButton: () => null }));
+vi.mock("./gitSheetComponents", () => ({
+  GitActionFailure: () => null,
+  SheetActionButton: () => null,
+}));
 vi.mock("../../../state/entities", () => ({}));
 vi.mock("../../../state/threads", () => ({}));
 vi.mock("../../../state/use-thread-selection", () => ({

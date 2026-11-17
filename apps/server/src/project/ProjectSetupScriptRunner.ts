@@ -72,6 +72,11 @@ export interface ProjectSetupScriptRunnerInput {
   readonly observeCompletion?: {
     readonly onOutputLine?: (line: string) => Effect.Effect<void>;
   };
+  /**
+   * Starts the script in a new shell even when this terminal already runs one: a restored worktree
+   * is a new folder at the old path, and a live shell there still sits in the removed one.
+   */
+  readonly freshShell?: boolean;
 }
 
 export class ProjectSetupScriptOperationError extends Schema.TaggedError<ProjectSetupScriptOperationError>()(
@@ -157,6 +162,10 @@ const BRACKETED_PASTE_ON = "\x1b[?2004h";
 const BRACKETED_PASTE_OFF = "\x1b[?2004l";
 // Longer than one subprocess poll plus its ps timeout, so a startup prompt is seen as busy first.
 const SHELL_QUIET_FALLBACK = "3 seconds";
+// The restart contract requires a size; these are the terminal manager's own defaults, and the open
+// that follows keeps the size an attached viewer sets.
+const FRESH_SHELL_COLS = 120;
+const FRESH_SHELL_ROWS = 30;
 
 function lineEditorReading(text: string, previous: boolean): boolean {
   const on = text.lastIndexOf(BRACKETED_PASTE_ON);
@@ -214,6 +223,8 @@ export const make = Effect.gen(function* () {
   const resolveSetupProjectScripts = yield* makeSetupScriptResolver;
   const random = yield* SecureRandom.SecureRandom;
   const serviceScope = yield* Effect.scope;
+  // Runs of a terminal still waiting to type, by thread and terminal; an entry lives while one does.
+  const pendingRuns = new Map<string, { generation: number; alive: number }>();
 
   const observeTerminalCompletion = Effect.fn("ProjectSetupScriptRunner.observeTerminalCompletion")(
     function* (input: {
@@ -224,6 +235,8 @@ export const make = Effect.gen(function* () {
       /** The shell echoes typed input; lines ending with these are the wrapper, not output. */
       readonly echoedWrapperLines: ReadonlyArray<string>;
       readonly onOutputLine: ((line: string) => Effect.Effect<void>) | undefined;
+      /** Whether a fresh-shell run has superseded this one. */
+      readonly superseded: () => boolean;
     }) {
       const startedAtMs = yield* Clock.currentTimeMillis;
       const done = yield* Deferred.make<ProjectSetupScriptCompletion>();
@@ -231,6 +244,8 @@ export const make = Effect.gen(function* () {
       const promptReturned = yield* Deferred.make<void>();
       let lineBuffer = "";
       let settled = false;
+      let written = false;
+      let replaced = false;
 
       const settle = (exitCode: number | null) =>
         Effect.suspend(() => {
@@ -268,6 +283,7 @@ export const make = Effect.gen(function* () {
           return Effect.void;
         }
         if (event.type === "output") {
+          if (replaced) return Effect.void;
           lineBuffer += event.data;
           // Bare CR redraws progress in place; split redraws instead of growing one line.
           const lines = lineBuffer.split(/\r\n|\r|\n/);
@@ -286,7 +302,10 @@ export const make = Effect.gen(function* () {
             ),
           );
         }
-        if (event.type === "exited" || event.type === "closed") {
+        // A restart ends a run whose command was already typed, or one a fresh-shell run superseded;
+        // the new shell's output is not its.
+        if (event.type === "restarted" && (written || input.superseded())) replaced = true;
+        if (event.type === "exited" || event.type === "closed" || replaced) {
           return settle(null).pipe(Effect.andThen(Deferred.succeed(promptReturned, undefined)));
         }
         return Effect.void;
@@ -306,12 +325,16 @@ export const make = Effect.gen(function* () {
       const abandon = settle(null).pipe(
         Effect.andThen(Deferred.succeed(promptReturned, undefined)),
       );
-      return { completion, unsubscribe, flushPartialLine, abandon };
+      const markWritten = Effect.sync(() => {
+        written = true;
+      });
+      return { completion, unsubscribe, flushPartialLine, abandon, markWritten };
     },
   );
 
   // Input typed during shell startup can be read by an rc-file prompt (fnm, nvm) instead of the
-  // shell, which loses the command. Subscribe before the terminal opens so no activity is missed.
+  // shell, which loses the command. Subscribe before the open (after a fresh shell's restart) so no
+  // activity of the shell this run types into is missed.
   const watchShellReadiness = Effect.fn("ProjectSetupScriptRunner.watchShellReadiness")(
     function* (input: {
       readonly threadId: string;
@@ -329,6 +352,8 @@ export const make = Effect.gen(function* () {
         }
         activity += 1;
         // A new shell process starts idle; the manager resets its subprocess state without an event.
+        // A run still waiting for its prompt carries on into a restarted shell (a person restarting
+        // the setup terminal past a stuck rc-file prompt still gets setup).
         if (event.type === "started" || event.type === "restarted") {
           busy = false;
           reading = false;
@@ -463,10 +488,52 @@ export const make = Effect.gen(function* () {
       // Before client attachment, truecolor probes wait for terminal replies nobody can send.
       COLORTERM: "",
     };
+    const shellEnv = { ...env, NO_COLOR: "1", FORCE_COLOR: "0" };
+    const runKey = `${input.threadId}\u0000${terminalId}`;
+    // A fresh shell supersedes earlier runs that have not typed: in the new shell they could finish
+    // first and close it before this run types. A person's restart supersedes nothing.
+    if (input.freshShell === true) {
+      const earlier = pendingRuns.get(runKey);
+      if (earlier !== undefined) earlier.generation += 1;
+    }
+    // Restarted before the watchers subscribe, so the old shell's end settles nothing of this run;
+    // a prompt the new shell printed before them is covered by the readiness watcher's quiet fallback.
+    if (input.freshShell === true)
+      yield* terminalManager
+        .restart({
+          threadId: input.threadId,
+          terminalId,
+          cwd,
+          worktreePath: threadWorktreePath,
+          cols: FRESH_SHELL_COLS,
+          rows: FRESH_SHELL_ROWS,
+          env: shellEnv,
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProjectSetupScriptOperationError({
+                ...errorContext,
+                operation: "openTerminal",
+                cause,
+              }),
+          ),
+        );
     const observe = input.observeCompletion;
     const completionToken = observe ? (yield* random.uuidV4()).replaceAll("-", "") : null;
+    // Registered before the open: an open that waits for a folder a restore holds comes back with the
+    // restore's shell, and a fresh run's restart must supersede it too.
+    const pending = pendingRuns.get(runKey) ?? { generation: 0, alive: 0 };
+    pendingRuns.set(runKey, pending);
+    pending.alive += 1;
+    const generation = pending.generation;
+    const release = Effect.sync(() => {
+      pending.alive -= 1;
+      if (pending.alive === 0) pendingRuns.delete(runKey);
+    });
     const echoedWrapperLines: string[] = [];
-    // Subscribe before opening so neither startup activity nor the sentinel can race the listeners.
+    // Subscribe before the open (after a fresh shell's restart) so neither the shell's startup
+    // activity nor the sentinel can race the listeners.
     const observed =
       observe && completionToken
         ? yield* observeTerminalCompletion({
@@ -476,6 +543,7 @@ export const make = Effect.gen(function* () {
             sentinelPattern: completionSentinelPattern(completionToken),
             echoedWrapperLines,
             onOutputLine: observe.onOutputLine,
+            superseded: () => pending.generation !== generation,
           })
         : undefined;
     const readiness = yield* watchShellReadiness({
@@ -491,7 +559,7 @@ export const make = Effect.gen(function* () {
           stopOnSettle: script.stopOnSettle ?? false,
           cwd,
           worktreePath: threadWorktreePath,
-          env: { ...env, NO_COLOR: "1", FORCE_COLOR: "0" },
+          env: shellEnv,
         })
         .pipe(
           Effect.andThen(() =>
@@ -532,7 +600,7 @@ export const make = Effect.gen(function* () {
         Effect.sync(() => {
           observed?.unsubscribe();
           readiness.unsubscribe();
-        }),
+        }).pipe(Effect.andThen(release)),
       ),
     );
 
@@ -546,11 +614,18 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((shell) =>
         shell === "exited" || commandLine === null
           ? Effect.void
-          : terminalManager.write({
-              threadId: input.threadId,
-              terminalId,
-              data: projectScriptTerminalInput(commandLine),
-            }),
+          : pending.generation !== generation
+            ? (observed?.abandon ?? Effect.void)
+            : // Marked first: a restart before the write lands must not leave this run waiting.
+              (observed?.markWritten ?? Effect.void).pipe(
+                Effect.andThen(
+                  terminalManager.write({
+                    threadId: input.threadId,
+                    terminalId,
+                    data: projectScriptTerminalInput(commandLine),
+                  }),
+                ),
+              ),
       ),
       Effect.catchCause((cause) =>
         Effect.logWarning("project script command was not written", {
@@ -560,6 +635,7 @@ export const make = Effect.gen(function* () {
         }).pipe(Effect.andThen(observed?.abandon ?? Effect.void)),
       ),
       Effect.ensuring(Effect.sync(() => readiness.unsubscribe())),
+      Effect.ensuring(release),
       Effect.forkIn(serviceScope),
     );
 

@@ -128,7 +128,7 @@ export function abandonedWorktreeBlocker(
 const failure = (code: OrchestratorMcpFailure["code"], message: string) =>
   new OrchestratorMcpFailure({ code, message });
 
-const BUSY_STATUSES: ReadonlySet<string> = new Set([
+export const WORKTREE_BUSY_STATUSES: ReadonlySet<string> = new Set([
   "preparing",
   "queued",
   "starting",
@@ -140,7 +140,7 @@ const BUSY_STATUSES: ReadonlySet<string> = new Set([
 export function worktreeThreadBusy(thread: OrchestrationV2ThreadShell, nowMs: number): boolean {
   return (
     thread.activeRunId !== null ||
-    BUSY_STATUSES.has(thread.status) ||
+    WORKTREE_BUSY_STATUSES.has(thread.status) ||
     thread.pendingRuntimeRequest !== null ||
     (thread.pendingBackgroundTasks?.length ?? 0) > 0 ||
     threadHasQueuedTurnStart(thread, nowMs)

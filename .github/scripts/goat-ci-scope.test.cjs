@@ -22,6 +22,7 @@ const {
   matrixFor,
   laneRun,
   planRun,
+  webBrowserTests,
 } = require("./goat-ci-scope.cjs");
 const fs = require("node:fs");
 const { buildImportGraph, listWorkspaceFiles } = require("./goat-ci-imports.cjs");
@@ -515,6 +516,43 @@ describe("planRun", () => {
     assert.deepEqual((await run("quick")).tasks, ["check", "typecheck"]);
     assert.equal((await run(undefined)).full, true);
     assert.equal((await run("nonsense")).full, true);
+  });
+
+  it("gives every full run, manual or ci:full, the test files no suite owns as test-changed (#3493)", async () => {
+    const env = { GITHUB_EVENT_NAME: "workflow_dispatch", INPUT_LANE: "all" };
+    const manual = await planRun({ env, payload: {}, root, fetchImpl: labels([]) });
+    for (const result of [manual, await plan(pr(), labels([FULL_LABEL]))]) {
+      assert.ok(result.tasks.includes("test-changed"));
+      const { vitest, node } = result.changedTests;
+      for (const file of [
+        "scripts/lib/goat-rename/rules-meta.test.ts",
+        "scripts/dev-runner.test.ts",
+        "apps/marketing/src/lib/userDocs.test.ts",
+        "packages/provider-testing/src/replayWorkspace.test.ts",
+      ])
+        assert.ok(vitest.includes(file), file);
+      for (const name of ["check-nightly-release", "goat-ci-rerun-republish", "relay-state-output"])
+        assert.ok(node.includes(".github/scripts/" + name + ".test.cjs"), name);
+      assert.deepEqual(
+        vitest.filter((file) => /^(?:apps\/web|packages\/ssh)\//.test(file)),
+        [],
+      );
+    }
+  });
+
+  it("runs only the web browser files of a selection inside the namespace, never a server test beside them", async () => {
+    const web = "apps/web/src/components/ReopenClosedViewShortcut.browser.test.tsx";
+    const mixed = await plan(pr(), labels([]), [
+      "apps/server/src/hub/disposable/keyPath.ts",
+      "apps/web/src/components/ReopenClosedViewShortcut.tsx",
+    ]);
+    assert.ok(mixed.changedTests.vitest.includes("apps/server/src/hub/disposable/keyPath.test.ts"));
+    assert.deepEqual(webBrowserTests(mixed.changedTests.vitest), [web]);
+    const mobile = "apps/mobile/src/features/devices/device-stream.browser.test.ts";
+    assert.deepEqual(
+      webBrowserTests([mobile, "apps/server/src/preview/ServerBrowserPage.test.ts"]),
+      [],
+    );
   });
 
   it("runs everything for ci:full from the event, the added label, or the live PR", async () => {

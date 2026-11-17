@@ -1,7 +1,6 @@
+import { KeyboardIcon } from "~/components/solar";
 import { useAtomValue } from "@effect/atom-react";
 
-import { MorphIcon } from "~/components/MorphIcon";
-import { Keyboard } from "~/components/solar/nodes";
 import { Button } from "~/components/ui/button";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "~/components/ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
@@ -63,7 +62,7 @@ export function FileShortcutsHelp() {
             />
           }
         >
-          <MorphIcon className="size-3.5" icon={Keyboard} />
+          <KeyboardIcon className="size-3.5" />
         </TooltipTrigger>
         <TooltipPopup>Keyboard shortcuts</TooltipPopup>
       </Tooltip>

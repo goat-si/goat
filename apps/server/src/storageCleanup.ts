@@ -55,12 +55,18 @@ import { forkParked } from "./serverActivation.ts";
 import * as Settings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "./worktreesDirectory.ts";
+import { isManagedWorktreeLocation } from "./worktreesDirectory.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import { removeLinkedWorktree } from "./vcs/worktreeRemoval.ts";
 import { makeSubmoduleRemoval } from "./storageCleanupSubmodules.ts";
 import { makeNestedWorktrees } from "./storageNestedWorktrees.ts";
 import { makeWorktreeRemovalGate } from "./storageCleanupRemoval.ts";
-import { rankWorktrees, retentionReason } from "./storageCleanupRetention.ts";
+import {
+  rankWorktrees,
+  retentionReason,
+  storageCleanupActivityAt,
+} from "./storageCleanupRetention.ts";
+export { storageCleanupActivityAt } from "./storageCleanupRetention.ts";
 import { makeWorktreeCleanupRun, removalSettingsChanged } from "./storageCleanupRun.ts";
 import { isSshProvisionedRuntime } from "./worktreeSnapshots/isSshProvisionedRuntime.ts";
 import { WorktreeCleanupPreviewState } from "./worktreeSnapshots/WorktreeCleanupPreviewState.ts";
@@ -146,19 +152,6 @@ function heldForLimitRecovery(
   )
     return false;
   return settings.autoResumeLimitedThreads || (settings.snoozeLimitedThreads && resetMs > now);
-}
-
-/** PR metadata refreshes must not reset the inactivity clock. */
-export function storageCleanupActivityAt(thread: OrchestrationV2ThreadShell): number {
-  return Math.max(
-    ...[
-      thread.createdAt,
-      thread.latestUserMessageAt,
-      thread.latestRunRequestedAt,
-      thread.latestRunStartedAt,
-      thread.latestRunCompletedAt,
-    ].flatMap((value) => (value == null ? [] : [DateTime.toEpochMillis(value)])),
-  );
 }
 
 /** Only a complete subagent chain within this worktree shares ownership. */
@@ -704,12 +697,18 @@ const make = Effect.gen(function* () {
           return keep("worktree is a symbolic link");
         if (!roots.some((root) => inside(root, realPath)))
           return keep("outside the managed worktree folder");
+        if (!roots.some((root) => isManagedWorktreeLocation(root, realPath, path)))
+          return keep(
+            "GOAT can only restore worktrees at <worktrees folder>/<repository>/<name>, and this one is elsewhere",
+          );
         const otherHome = otherHomeReason(path, otherBindings, realPath);
         if (otherHome !== null) return keep(otherHome);
         if (yield* containsProjectRoot(worktreePaths, [project, ...snapshot.projects]))
           return keep("contains a project checkout");
-        if ((yield* fs.stat(path.join(worktreePath, ".git"))).type !== "File")
-          return keep("not a linked worktree");
+        const gitLink = yield* fs
+          .stat(path.join(worktreePath, ".git"))
+          .pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.undefined));
+        if (gitLink?.type !== "File") return keep("not a linked worktree");
         if (yield* branchChanged(worktreePath, thread.branch))
           return keep("repository or branch changed");
         const changes = yield* localChangesReason(worktreePath, settings);
