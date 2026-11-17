@@ -204,3 +204,30 @@ The test files beside the lane's changed files (23 files) found that GitActionsC
 - A2: goat#3680 (https://github.com/goat-si/goat/issues/3680), "not checked on dev", with the reasoning and both captures.
 - 3: at 661675656f an unknown config offered every host in all six places, because `isSourceControlProviderOffered(undefined, kind)` returned true (projects.ts:155). Fixed in `d8dd40a166`: the pickers pass the server's settings (`SourceControlOfferSettings`), unknown settings offer nothing, and known settings offer every host unless switched off (an older server decodes the field as {}). The places: CommandPalette.tsx:997-999, :1057, :2002; GitActionsControl.tsx:277, :296, :1905; SourceControlSettings.tsx:552, :669; AddProjectScreen.tsx:145, :381, :648; SettingsServerControlsRouteScreen.tsx:589. While settings are unknown, Publish has no host and cannot submit (GitActionsControl.tsx:279, :325), and Add project lists only "Repository URL". Test first: "offers no host while the server's settings are not known, so a host turned off never shows" (projects.test.ts) failed before the fix ("expected true to be false") and passes after. The lane's own L420 test case changed with it (added by c30e93e4ab, not on dev); no dev test changed. CommandPalette.composition.browser.test.tsx (dev, unchanged) passes. The budgeted files stay at their entries. Focused tests: 4 files, 54 passed.
 - Head `d8dd40a1663`. Pending under the token: typecheck, the beside tests rerun, and one goat-ci run on d8dd40a166 (run 44089104165 is on 661675656f and does not cover the shared helper change).
+
+## Coordinator answers, 13:15:52 UTC (verbatim, part 1)
+
+> PART 1, N15b: d8dd40a166 is the right side of the question (unknown settings offer no host; known settings offer every host unless its entry is false; one helper for all six places; the pinning test failed before). Accepted, and yes: the lane's review covers d8dd40a166, with L420 named as changed after the earlier base. goat#3680 noted (next3 mobile row). Your token plan is right: cancel 44089104165, typecheck, the beside files, ONE goat-ci run on the new head, READY with O5 stated as open. One thing for the record: what a person sees in Publish and Add project during the moment before the config arrives (no host listed, the form not submittable), and that it resolves by itself when the config lands (no reload needed): a test or the path:line of the reactive read.
+
+Answer. Before the config arrives:
+
+- Publish (web) lists no host, and its submit stays disabled because `hasReadyPublishProvider` is false (GitActionsControl.tsx:279, :325).
+- Add project (web palette, mobile) lists only "Repository URL".
+- The new-project publish switch has no target (getNewProjectPublishTargets returns []).
+
+It resolves by itself when the config lands, with no reload. Each place reads the config through a subscribed atom, and the offered list is derived in render, not kept in state:
+
+- web Publish: `useAtomValue(serverEnvironment.configValueAtom(activeEnvironmentId))` at GitActionsControl.tsx:755, with the list derived at :276-302.
+- web palette: `useEnvironments()` at CommandPalette.tsx:499 (atoms at apps/web/src/state/environments.ts:23-26), read through `offerSettingsFor` at :997 and used at :1057 and :2002.
+- web Settings: `environment?.serverConfig?.settings` at SourceControlSettings.tsx:552, from the same environments atom.
+- mobile Add project: `useServerConfigs()` at AddProjectScreen.tsx:123, which is `useAtomValue(environmentServerConfigsAtom)` at apps/mobile/src/state/entities.ts:241-242.
+
+When the atom updates, the component re-renders and the hosts appear. No test renders that transition; the evidence is these reactive reads.
+
+### Token run on d8dd40a166 (13:18 to 13:25 UTC)
+
+- Run 44089104165 (on 661675656f) cancelled.
+- Format exit 0; lint exit 0; typecheck of the 42 affected packages 42/42 successful.
+- Beside tests: 37 test files (the 23 beside files plus the palette, Publish and Add-project tests), 433 passed.
+- ONE goat-ci run (workflow_dispatch, lane all) on d8dd40a166: https://github.com/goat-si/goat/actions/runs/44091082395 (queued when recorded).
+- Token handed back.
