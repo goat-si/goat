@@ -900,8 +900,8 @@ const make = Effect.gen(function* () {
               .withLock(
                 id,
                 Effect.gen(function* () {
-                  if (owners.get(id) !== owner) return;
-                  if ((yield* load(id))?.state !== "running") owners.delete(id);
+                  if (owners.get(id) !== owner || (yield* load(id))?.state === "running") return;
+                  if (owners.get(id) === owner) owners.delete(id);
                 }),
               )
               .pipe(Effect.ignoreCause({ log: true })),
