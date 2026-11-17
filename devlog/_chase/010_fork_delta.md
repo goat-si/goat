@@ -225,6 +225,11 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: upstream `apps/server/src/peer`, `packages/contracts/src/peerLink.ts`, `apps/server/src/persistence/Migrations/070_PeerLinks.ts`, `071_PeerLinkFence.ts`, `072_WaitingLinkRequestIndex.ts`
 - 정책: upstream의 peer link store, `environmentId` 라우팅, `delegated_task.remote.*` 이벤트 모델은 받지 않는다. GOAT fleet는 `LinkedHosts`, `HubNodes`, `SshRemoteDispatch`의 `host` 라우팅, `RemoteDelegatedTasks`가 정본이다. upstream 070-072(PeerLinks, PeerLinkFence, WaitingLinkRequestIndex)는 GOAT도 같은 이름과 id로 등록해 스키마만 둔다. 071·072는 upstream처럼 다시 실행해도 안전하다 (사이클 261114). 모델 검색, reconnect/history, @ picker, Copy thread 같은 독립 개선은 GOAT 코드에 adapt한다.
 
+### `pr-checkout-draft` PR에서 시작한 초안의 링크 저장
+
+- 경로: `apps/web/src/composerDraftStore.ts`, `apps/web/src/composerDraftCheckoutPullRequest.ts`
+- 정책: upstream 479ee74135는 초안의 `checkoutPullRequest`를 `{ url, branch }` 구조로 저장 스키마에 넣지만, GOAT는 `Schema.Unknown`으로 두고 `readStoredCheckoutPullRequest`만 읽는다(두 문자열, 각 4096자 이하, 그 밖은 버림). GOAT의 첨부 확인은 저장소 전체를 엄격하게 디코딩하므로, 다른 탭이 쓴 잘못된 값 하나가 모든 초안의 저장 이미지를 저장 안 된 것으로 만들기 때문이다. 쓰는 쪽은 여전히 타입 값만 쓴다. upstream의 이 필드 변경을 받을 때 이 형태를 유지한다.
+
 ### `pr-event-feeds` 감시 PR의 GitHub 이벤트 피드
 
 - 커밋: #3519 (사이클 261114 다음 PR, lane N16)

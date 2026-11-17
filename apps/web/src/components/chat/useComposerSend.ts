@@ -70,6 +70,7 @@ import { threadEnvironment } from "../../state/threads";
 import { runMobileComposerTransition } from "./draftHeroTransition";
 import { useClientSettingsHydrated, useEnvironmentSettings } from "../../hooks/useSettings";
 import { useSendWithRouting } from "./useSendWithRouting";
+import { useLinkCheckoutPullRequest } from "./useLinkCheckoutPullRequest";
 import {
   approvalRedirectNotice,
   expiredTerminalContextToast,
@@ -231,6 +232,7 @@ export function useComposerSend(input: ComposerSendInput) {
   const clearDraftThread = useComposerDraftStore((store) => store.clearDraftThread);
   const clientSettingsHydrated = useClientSettingsHydrated();
   const planModeEnabled = useEnvironmentSettings(environmentId, selectPlanModeEnabled);
+  const checkoutLink = useLinkCheckoutPullRequest(environmentId);
   const startThreadTurn = useOrchestrationCommand(threadEnvironment.startTurn, {
     reportFailure: false,
   });
@@ -1358,6 +1360,7 @@ export function useComposerSend(input: ComposerSendInput) {
           ? scopeThreadRef(environmentId, threadIdForSend)
           : null;
       if (backgroundThreadRef) beginBackgroundDraftSubmissionByRef(backgroundThreadRef);
+      const checkoutPullRequestUrl = isLocalDraftThread ? checkoutLink.read(draftId) : null;
       const startPromise = startThreadTurn({
         environmentId,
         input: {
@@ -1408,6 +1411,7 @@ export function useComposerSend(input: ComposerSendInput) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        checkoutLink.link(scopeThreadRef(environmentId, threadIdForSend), checkoutPullRequestUrl);
         setKeepFullHistory(routeThreadKey, false);
         clearUsageLimitsFor(routeThreadKey);
         if (turnUsesAttachmentUploads) {

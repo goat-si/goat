@@ -48,6 +48,7 @@ import {
   useState,
 } from "react";
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
+import { markDraftCheckoutPullRequest } from "./pullRequestCheckoutDraft";
 import { type PullRequestDetailTab, useRightPanelStore } from "~/rightPanelStore";
 import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
@@ -839,10 +840,10 @@ export function PullRequestDetailPanel({
       worktreePath: prepared.value.worktreePath,
       envMode: prepared.value.worktreePath === null ? "local" : "worktree",
     }).then(
-      (session) => session !== null,
-      () => false,
+      (session) => session,
+      () => null,
     );
-    if (!pointed) {
+    if (pointed === null) {
       setHandoff(null);
       // Sending after failed rebinding would use the previous checkout.
       toastManager.update(toastId, {
@@ -852,6 +853,7 @@ export function PullRequestDetailPanel({
       });
       return;
     }
+    markDraftCheckoutPullRequest(pointed.draftId, prepared.value);
     setHandoff(null);
     if (task === null) {
       toastManager.update(
@@ -869,7 +871,9 @@ export function PullRequestDetailPanel({
       );
       return;
     }
-    await openThreadWithTask(projectRef, task, opened);
+    // The task goes on the checkout draft: if the user typed into `opened` while the
+    // checkout ran, that is no longer the draft the user is looking at.
+    await openThreadWithTask(projectRef, task, pointed);
     toastManager.update(
       toastId,
       prepared.value.isOnPullRequestHead

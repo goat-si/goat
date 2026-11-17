@@ -32,6 +32,7 @@ import { useProjects } from "~/state/entities";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
+import { markDraftCheckoutPullRequest } from "./pullRequestCheckoutDraft";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { usePreparePullRequestThreadAction } from "~/lib/sourceControlActions";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
@@ -387,14 +388,14 @@ export function usePullRequestHandoffs({
       worktreePath: prepared.value.worktreePath,
       envMode: prepared.value.worktreePath === null ? "local" : "worktree",
     }).then(
-      (session) => session !== null,
-      () => false,
+      (session) => session,
+      () => null,
     );
     if (cancelled) {
       setHandoff(null);
       return;
     }
-    if (!pointed) {
+    if (pointed === null) {
       setHandoff(null);
       toastManager.update(toastId, {
         type: "error",
@@ -403,6 +404,7 @@ export function usePullRequestHandoffs({
       });
       return;
     }
+    markDraftCheckoutPullRequest(pointed.draftId, prepared.value);
     setHandoff(null);
     if (task === null) {
       toastManager.update(
@@ -420,7 +422,9 @@ export function usePullRequestHandoffs({
       );
       return;
     }
-    await openThreadWithTask(projectRef, task, opened);
+    // The task goes on the checkout draft: if the user typed into `opened` while the
+    // checkout ran, that is no longer the draft the user is looking at.
+    await openThreadWithTask(projectRef, task, pointed);
     toastManager.update(
       toastId,
       prepared.value.isOnPullRequestHead
