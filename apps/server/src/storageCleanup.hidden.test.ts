@@ -1,0 +1,63 @@
+import { expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import { cleanupFixture, runCleanupTest } from "./storageCleanup.testkit.ts";
+
+// Git status skips assume-unchanged and skip-worktree files, so only the snapshot step sees them.
+it.live.each(["--assume-unchanged", "--skip-worktree"] as const)(
+  "keeps tracked edits that git status hides (%s)",
+  (flag) =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const { service, fs, worktree, command } = yield* cleanupFixture();
+        yield* command(worktree, ["update-index", flag, "tracked.txt"]);
+        yield* fs.writeFileString(`${worktree}/tracked.txt`, "hidden edit\n");
+        expect((yield* service.runNow).entries[0]).toMatchObject({
+          outcome: "kept",
+          reason: expect.stringContaining("hidden from git status (tracked.txt)"),
+        });
+        expect(yield* fs.readFileString(`${worktree}/tracked.txt`)).toBe("hidden edit\n");
+      }),
+    ),
+);
+
+it.live("removes worktrees whose flagged files are unchanged or outside a sparse checkout", () =>
+  runCleanupTest(
+    Effect.gen(function* () {
+      const { service, fs, worktree, command } = yield* cleanupFixture();
+      yield* command(worktree, ["update-index", "--skip-worktree", "tracked.txt"]);
+      yield* fs.remove(`${worktree}/tracked.txt`);
+      yield* command(worktree, ["update-index", "--assume-unchanged", ".gitignore"]);
+      expect((yield* service.runNow).entries[0]).toMatchObject({ outcome: "removed" });
+    }),
+  ),
+);
+
+it.live.each([
+  ["missing", "symlink"],
+  ["tracked.txt", "symlink"],
+  ["missing", "file"],
+  ["tracked.txt", "file"],
+] as const)("compares flagged tracked symlinks by target (%s as a %s)", ([target, kind]) =>
+  runCleanupTest(
+    Effect.gen(function* () {
+      const { service, fs, worktree, command, repo } = yield* cleanupFixture();
+      yield* fs.symlink("tracked.txt", `${worktree}/link`);
+      yield* command(worktree, ["add", "link"]);
+      yield* command(worktree, ["commit", "-m", "link"]);
+      // Shipped, so only the flagged link decides whether cleanup may remove the worktree.
+      yield* command(repo, ["merge", "--ff-only", "feature"]);
+      yield* command(worktree, ["update-index", "--assume-unchanged", "link"]);
+      yield* fs.remove(`${worktree}/link`);
+      // Without core.symlinks, Git checks a link out as a regular file holding its target.
+      if (kind === "file") {
+        yield* command(worktree, ["config", "core.symlinks", "false"]);
+        yield* fs.writeFileString(`${worktree}/link`, target);
+      } else yield* fs.symlink(target, `${worktree}/link`);
+      expect((yield* service.runNow).entries[0]).toMatchObject(
+        target === "missing"
+          ? { outcome: "kept", reason: expect.stringContaining("(link)") }
+          : { outcome: "removed" },
+      );
+    }),
+  ),
+);
