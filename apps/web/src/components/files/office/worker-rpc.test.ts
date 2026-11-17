@@ -84,6 +84,25 @@ describe("the per-call deadline", () => {
     }
   });
 
+  it("times out a call queued behind a font download 30 seconds after the download ends", async () => {
+    vi.useFakeTimers();
+    try {
+      const { worker, client, outcome, id } = open();
+      worker.answer({ wait: id, waiting: true });
+      const queued = settle(client.call("open", undefined));
+      await vi.advanceTimersByTimeAsync(120_000);
+      worker.answer({ wait: id, waiting: false });
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(await queued).toEqual({
+        failed: "This document took too long to preview. Open it in another app.",
+      });
+      expect(await outcome).toEqual(await queued);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps a later call paused while a download that an aborted call started is still open", async () => {
     vi.useFakeTimers();
     try {

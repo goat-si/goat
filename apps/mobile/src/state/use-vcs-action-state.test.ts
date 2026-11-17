@@ -10,6 +10,7 @@ vi.mock("./use-thread-selection", () => ({ useThreadSelection: () => ({ selected
 
 import {
   dismissGitActionResult,
+  dismissThreadGitActionResult,
   showGitActionResult,
   useGitActionResultNotification,
 } from "./use-vcs-action-state";
@@ -45,9 +46,20 @@ it("shows a thread's failure only on that thread, which another thread's new act
     threadA,
   );
   const onB = shown(threadB);
-  dismissGitActionResult(threadB);
+  dismissThreadGitActionResult(threadB);
   const onAAfterB = shown(threadA);
-  dismissGitActionResult(threadA);
+  dismissThreadGitActionResult(threadA);
 
   expect([onB, onAAfterB, shown(threadA)]).toEqual([null, "error", null]);
+});
+
+it("clears a failure when its banner's dismiss is called as an event handler, with the event", () => {
+  showGitActionResult(
+    { type: "error", title: "Git action failed", description: "Refused." },
+    threadA,
+  );
+  const onDismiss: (event: unknown) => void = dismissGitActionResult;
+  onDismiss({ nativeEvent: {} });
+
+  expect(shown(threadA)).toBeNull();
 });

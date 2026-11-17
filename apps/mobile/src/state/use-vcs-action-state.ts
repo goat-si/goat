@@ -60,13 +60,17 @@ export function showGitActionResult(
   }, RESULT_DISMISS_MS);
 }
 
-/** Clears the result; with a thread, only when the result is that thread's. */
-export function dismissGitActionResult(thread?: GitActionThread): void {
-  const shown = appAtomRegistry.get(gitActionResultAtom);
-  if (thread !== undefined && (shown === null || !sameThread(shown.thread, thread))) return;
+/** Clears the shown result. Takes no argument: banners pass it as an event handler. */
+export function dismissGitActionResult(): void {
   if (dismissTimer) clearTimeout(dismissTimer);
   dismissTimer = null;
   broadcast(null);
+}
+
+/** Clears the shown result only when it is this thread's. */
+export function dismissThreadGitActionResult(thread: GitActionThread): void {
+  const shown = appAtomRegistry.get(gitActionResultAtom);
+  if (shown !== null && sameThread(shown.thread, thread)) dismissGitActionResult();
 }
 
 /** The latest Git action result when it belongs to this thread; another thread's stays for that thread. */

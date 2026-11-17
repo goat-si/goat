@@ -31,7 +31,7 @@ import {
   setPendingConnectionError,
 } from "./use-remote-environment-registry";
 import { useAtomCommand } from "./use-atom-command";
-import { dismissGitActionResult, showGitActionResult } from "./use-vcs-action-state";
+import { dismissThreadGitActionResult, showGitActionResult } from "./use-vcs-action-state";
 import { useThreadSelection } from "./use-thread-selection";
 import { useSelectedThreadWorktree } from "./use-selected-thread-worktree";
 
@@ -214,7 +214,7 @@ export function useSelectedThreadGitActions() {
       };
       setPendingConnectionError(null);
       // This thread's previous failure stays until dismissed or replaced; another thread's stays.
-      dismissGitActionResult(resultThread(selectedThread));
+      dismissThreadGitActionResult(resultThread(selectedThread));
       const run = () =>
         execute({
           thread: selectedThread,

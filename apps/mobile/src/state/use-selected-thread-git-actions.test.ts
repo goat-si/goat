@@ -62,7 +62,7 @@ vi.mock("./use-remote-environment-registry", () => ({
 vi.mock("./use-vcs-action-state", () => ({
   showGitActionResult: (result: { type: string; description?: string }) =>
     state.results.push(result),
-  dismissGitActionResult: () => {},
+  dismissThreadGitActionResult: () => {},
 }));
 vi.mock("../lib/uuid", () => ({ uuidv4: () => "action" }));
 vi.mock("./threads", () => ({
