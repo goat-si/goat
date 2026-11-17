@@ -95,10 +95,19 @@ const withSetupProject = <A, E, R>(
       ],
     };
     const pty = new FakePtyAdapter();
+    const dispatched: Array<{ readonly type: string; readonly worktreePath?: unknown }> = [];
+    // The thread's worktree as the projection would show it after a rebind.
+    const currentWorktree = () => {
+      const rebound = dispatched.findLast((command) => typeof command.worktreePath === "string");
+      return typeof rebound?.worktreePath === "string" ? rebound.worktreePath : worktreePath;
+    };
     const terminals = yield* TerminalManager.makeWithOptions({
       logsDir: NodePath.join(root, "terminal-logs"),
       ptyAdapter: pty,
       processKillGraceMs: 1,
+      threadWorktree: {
+        current: () => Effect.suspend(() => Effect.succeedSome(currentWorktree())),
+      },
     });
     const projects = Layer.succeed(ProjectService.ProjectService, {
       getById: () => Effect.succeedSome(project),
@@ -144,7 +153,6 @@ const withSetupProject = <A, E, R>(
         ),
       ),
     );
-    const dispatched: Array<{ readonly type: string; readonly worktreePath?: unknown }> = [];
     const layer = Layer.mergeAll(
       projects,
       setupRunner,
@@ -281,4 +289,46 @@ it.live.each([
   ["beforeSentinel", "agent open"],
 ] as const)("a restore paused %s and a person's terminal %s both finish", ([window, person]) =>
   restoreWhileAPersonAsks(window, person),
+);
+
+it.live(
+  "a terminal a person opens during Start in a new worktree's setup starts nothing in the old one",
+  () =>
+    Effect.gen(function* () {
+      const reached = yield* Deferred.make<void>();
+      const go = yield* Deferred.make<void>();
+      const gate = Deferred.succeed(reached, undefined).pipe(Effect.andThen(Deferred.await(go)));
+      yield* withSetupProject(
+        { async: false, gates: { beforeSentinel: gate } },
+        ({ worktreePath, pty, terminals, layer }) =>
+          Effect.gen(function* () {
+            const service = yield* ThreadWorkspace.ThreadWorkspaceService;
+            const fresh = yield* service
+              .restore({ threadId, mode: "fresh" })
+              .pipe(Effect.forkChild);
+            yield* Deferred.await(reached);
+            // The person's client still names the thread's old worktree, which the start holds.
+            const person = yield* Effect.flip(
+              terminals.open({
+                threadId,
+                terminalId: "person",
+                cwd: worktreePath,
+                worktreePath,
+                cols: 80,
+                rows: 24,
+              }),
+            ).pipe(Effect.forkChild({ startImmediately: true }));
+            yield* Deferred.succeed(go, undefined);
+            const restored = yield* Fiber.join(fresh);
+            const error = yield* Fiber.join(person);
+            assert.strictEqual(error._tag, "TerminalCwdStatError");
+            if (error._tag === "TerminalCwdStatError") assert.strictEqual(error.cwd, worktreePath);
+            assert.notStrictEqual(restored.worktreePath, worktreePath);
+            assert.deepEqual(
+              pty.spawnInputs.map((input) => input.cwd),
+              [restored.worktreePath],
+            );
+          }).pipe(Effect.provide(ThreadWorkspace.layer.pipe(Layer.provideMerge(layer)))),
+      );
+    }),
 );
