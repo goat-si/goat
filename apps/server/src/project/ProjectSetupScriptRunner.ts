@@ -223,6 +223,8 @@ export const make = Effect.gen(function* () {
   const resolveSetupProjectScripts = yield* makeSetupScriptResolver;
   const random = yield* SecureRandom.SecureRandom;
   const serviceScope = yield* Effect.scope;
+  // Runs of a terminal still waiting to type, by thread and terminal; an entry lives while one does.
+  const pendingRuns = new Map<string, { generation: number; alive: number }>();
 
   const observeTerminalCompletion = Effect.fn("ProjectSetupScriptRunner.observeTerminalCompletion")(
     function* (input: {
@@ -484,6 +486,13 @@ export const make = Effect.gen(function* () {
       COLORTERM: "",
     };
     const shellEnv = { ...env, NO_COLOR: "1", FORCE_COLOR: "0" };
+    const runKey = `${input.threadId}\u0000${terminalId}`;
+    // A fresh shell supersedes earlier runs that have not typed: in the new shell they could finish
+    // first and close it before this run types. A person's restart supersedes nothing.
+    if (input.freshShell === true) {
+      const earlier = pendingRuns.get(runKey);
+      if (earlier !== undefined) earlier.generation += 1;
+    }
     // Restarted before the watchers subscribe, so the old shell's end settles nothing of this run;
     // a prompt the new shell printed before them is covered by the readiness watcher's quiet fallback.
     if (input.freshShell === true)
@@ -583,6 +592,14 @@ export const make = Effect.gen(function* () {
 
     // Return once the terminal exists so callers can show it while a startup prompt waits.
     // PowerShell and cmd have no line-editor signal.
+    const pending = pendingRuns.get(runKey) ?? { generation: 0, alive: 0 };
+    pendingRuns.set(runKey, pending);
+    pending.alive += 1;
+    const generation = pending.generation;
+    const release = Effect.sync(() => {
+      pending.alive -= 1;
+      if (pending.alive === 0) pendingRuns.delete(runKey);
+    });
     yield* (
       completionShell === "powershell" || completionShell === null
         ? Effect.succeed("ready" as const)
@@ -591,13 +608,18 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((shell) =>
         shell === "exited" || commandLine === null
           ? Effect.void
-          : terminalManager
-              .write({
-                threadId: input.threadId,
-                terminalId,
-                data: projectScriptTerminalInput(commandLine),
-              })
-              .pipe(Effect.andThen(observed?.markWritten ?? Effect.void)),
+          : pending.generation !== generation
+            ? (observed?.abandon ?? Effect.void)
+            : // Marked first: a restart before the write lands must not leave this run waiting.
+              (observed?.markWritten ?? Effect.void).pipe(
+                Effect.andThen(
+                  terminalManager.write({
+                    threadId: input.threadId,
+                    terminalId,
+                    data: projectScriptTerminalInput(commandLine),
+                  }),
+                ),
+              ),
       ),
       Effect.catchCause((cause) =>
         Effect.logWarning("project script command was not written", {
@@ -607,6 +629,7 @@ export const make = Effect.gen(function* () {
         }).pipe(Effect.andThen(observed?.abandon ?? Effect.void)),
       ),
       Effect.ensuring(Effect.sync(() => readiness.unsubscribe())),
+      Effect.ensuring(release),
       Effect.forkIn(serviceScope),
     );
 

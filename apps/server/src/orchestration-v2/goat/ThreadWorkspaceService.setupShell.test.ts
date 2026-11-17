@@ -35,6 +35,8 @@ import * as ThreadWorkspace from "./ThreadWorkspaceService.ts";
 const threadId = ThreadId.make("thread-setup-shell");
 const projectId = ProjectId.make("project-setup-shell");
 const SENTINEL = /__GOAT_SETUP_DONE__[a-f0-9_]+:/;
+/** FakePtyAdapter numbers its processes from 9000. */
+const FIRST_PTY_PID = 9000;
 
 type Services =
   | ProjectService.ProjectService
@@ -47,7 +49,11 @@ type Services =
 // from an earlier run still has its shell in the removed folder. Real TerminalManager and setup
 // runner on a fake PTY; it.live because the restore and the fixtures run git as a subprocess.
 const withSetupShell = <A, E, R>(
-  options: { readonly async: boolean },
+  options: {
+    readonly async: boolean;
+    /** The first shell shows no prompt and runs a startup child (an rc-file prompt). */
+    readonly stuckFirstShell?: boolean;
+  },
   body: (fixture: {
     readonly repo: string;
     readonly worktreePath: string;
@@ -61,6 +67,7 @@ const withSetupShell = <A, E, R>(
     readonly firstCommand: Deferred.Deferred<void>;
     /** Done once a command was written to the second PTY. */
     readonly secondCommand: Deferred.Deferred<void>;
+    readonly terminals: TerminalManager.TerminalManager["Service"];
     readonly git: (cwd: string, ...args: string[]) => string;
     readonly layer: Layer.Layer<
       Services,
@@ -116,6 +123,17 @@ const withSetupShell = <A, E, R>(
     const terminals = yield* TerminalManager.makeWithOptions({
       // No process table: an idle check must not depend on the host's processes.
       processTable: Effect.succeed([]),
+      ...(options.stuckFirstShell === true
+        ? {
+            subprocessPollIntervalMs: 50,
+            subprocessInspector: (pid: number) =>
+              Effect.succeed({
+                hasRunningSubprocess: pid === FIRST_PTY_PID,
+                childCommand: pid === FIRST_PTY_PID ? "fnm" : null,
+                processIds: [],
+              }),
+          }
+        : {}),
       logsDir: NodePath.join(root, "terminal-logs"),
       ptyAdapter: pty,
       processKillGraceMs: 1,
@@ -139,6 +157,7 @@ const withSetupShell = <A, E, R>(
               terminals.open(input).pipe(
                 Effect.tap(() =>
                   Effect.sync(() => {
+                    if (options.stuckFirstShell === true && latest() === 0) return;
                     events.push(`prompt ${latest()}`);
                     pty.processes.at(-1)?.emitData("$ \x1b[?2004h");
                   }),
@@ -196,6 +215,7 @@ const withSetupShell = <A, E, R>(
       finishFrom,
       firstCommand,
       secondCommand,
+      terminals,
       git,
       layer,
     });
@@ -357,6 +377,41 @@ it.live("a restart ends an earlier setup run that is still going, with the new s
       assert.isFalse(pty.processes[1]?.killed);
       assert.deepEqual(lines, []);
       assert.isFalse(yield* pending.marked(worktreePath));
+    }).pipe(provideAll(fixture.layer)),
+  ),
+);
+
+// The earlier run waits behind an rc-file prompt when a restore replaces its shell. It must not
+// type into the restored shell: there it could finish first and close the shell before the restore's
+// own run typed, failing the restore and removing the folder it had just recreated.
+it.live("a restore's setup run supersedes an earlier run that has not typed yet", () =>
+  withSetupShell({ async: false, stuckFirstShell: true }, (fixture) =>
+    Effect.gen(function* () {
+      const { worktreePath, pty, events, terminals } = fixture;
+      const busy = yield* Deferred.make<void>();
+      const unsubscribe = yield* terminals.subscribe((event) =>
+        event.type === "activity" && event.hasRunningSubprocess
+          ? Deferred.succeed(busy, undefined).pipe(Effect.asVoid)
+          : Effect.void,
+      );
+      const lines: Array<string> = [];
+      const earlier = yield* earlierSetup(worktreePath, lines);
+      const earlierCompletion = yield* (
+        earlier.status === "started" && earlier.completion !== undefined
+          ? earlier.completion
+          : Effect.die("no completion")
+      ).pipe(Effect.forkChild);
+      // The first shell is busy with its startup prompt, so the earlier run keeps waiting.
+      yield* Deferred.await(busy);
+      unsubscribe();
+      removeFolder("moved", fixture);
+      yield* restoreThrough("recreate", worktreePath);
+      assert.isTrue(NodeFS.existsSync(NodePath.join(worktreePath, ".git")));
+      assert.strictEqual((yield* Fiber.join(earlierCompletion)).exitCode, null);
+      // Only the restore's run typed, once, into the restored shell.
+      assert.deepEqual(events, ["prompt 1", "command 1"]);
+      assert.deepEqual(lines, []);
+      assert.strictEqual(pty.processes[0]?.writes.length, 0);
     }).pipe(provideAll(fixture.layer)),
   ),
 );
