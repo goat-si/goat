@@ -83,6 +83,11 @@ it("reads the family of a fork whose source the client does not hold, until the 
   await expect.element(screen.getByText("chat view")).toBeVisible();
 
   expect(held.mounted).toEqual([FORK]);
+  // The read brings the source; the mount stays while the fork is open.
+  held.shells.set(SOURCE, shell(SOURCE));
+  await screen.rerender(route(FORK));
+  await expect.element(screen.getByText("chat view")).toBeVisible();
+  expect(held.released).toEqual([]);
   await screen.rerender(route(newer[0]!.id));
   await expect.element(screen.getByText("chat view")).toBeVisible();
   expect(held.released).toEqual([FORK]);
