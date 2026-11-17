@@ -692,12 +692,12 @@ function laneRun(lane) {
       server: fullServer(why),
     };
   }
-  // Branch-only goat#3646 probe, not for merge: runs goat-test alone.
+  // Branch-only goat#3646 probe, not for merge.
   if (lane === "netns-probe") {
     return {
       full: false,
-      tasks: ["test"],
-      reasons: reasons(["test"], why),
+      tasks: ["probe-netns"],
+      reasons: reasons(["probe-netns"], why),
       server: fullServer(why),
     };
   }
