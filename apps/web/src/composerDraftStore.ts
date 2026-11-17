@@ -66,8 +66,11 @@ import {
 import {
   type TerminalContextDraft,
   migrateLegacyTerminalContextPlaceholders,
-  normalizeTerminalContextText,
 } from "./lib/terminalContext";
+import {
+  normalizeTerminalContextForThread,
+  terminalContextDedupKey,
+} from "./composerDraftTerminalContexts";
 import {
   appendInlineContextReference,
   type ComposerContextReference,
@@ -766,33 +769,6 @@ export function composerFileMatchesReattachMarker(
     videoMimeType(marker) !== null &&
     videoMimeType(file) !== null
   );
-}
-
-function terminalContextDedupKey(context: TerminalContextDraft): string {
-  return `${context.terminalId}\u0000${context.lineStart}\u0000${context.lineEnd}`;
-}
-
-function normalizeTerminalContextForThread(
-  threadId: ThreadId,
-  context: TerminalContextDraft,
-): TerminalContextDraft | null {
-  const terminalId = context.terminalId.trim();
-  const terminalLabel = context.terminalLabel.trim();
-  if (terminalId.length === 0 || terminalLabel.length === 0) {
-    return null;
-  }
-  const lineStart = Math.max(1, Math.floor(context.lineStart));
-  const lineEnd = Math.max(lineStart, Math.floor(context.lineEnd));
-  return {
-    ...context,
-    id: toComposerContextId(context.id),
-    threadId,
-    terminalId,
-    terminalLabel,
-    lineStart,
-    lineEnd,
-    text: normalizeTerminalContextText(context.text),
-  };
 }
 
 function normalizeTerminalContextsForThread(
