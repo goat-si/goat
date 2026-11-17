@@ -80,7 +80,7 @@
   "apps/mobile/src/features/threads/McpAppWebView.tsx": { "nonNull": 1 },
   "apps/mobile/src/features/threads/NewTaskDraftScreen.tsx": { "lines": 1143 },
   "apps/mobile/src/features/threads/ThreadArrangementSheet.tsx": { "nonNull": 3 },
-  "apps/mobile/src/features/threads/ThreadComposer.tsx": { "lines": 1124 },
+  "apps/mobile/src/features/threads/ThreadComposer.tsx": { "lines": 1126 },
   "apps/mobile/src/features/threads/ThreadDetailScreen.tsx": { "lines": 1815 },
   "apps/mobile/src/features/threads/ThreadFeed.tsx": { "lines": 3388, "nonNull": 6 },
   "apps/mobile/src/features/threads/ThreadMarkdownImage.tsx": { "nonNull": 1 },

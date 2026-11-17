@@ -287,6 +287,8 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   const stripAttachments = composerStripAttachments(draftAttachments);
   const stop = useComposerStopGuard({
     canStop: props.canStopThread,
+    runId: props.selectedThread.runtime?.activeRunId ?? null,
+    owner: composerOwnerKey,
     canOperateThread: props.canOperateThread,
     onStop: props.onStopThread,
   });

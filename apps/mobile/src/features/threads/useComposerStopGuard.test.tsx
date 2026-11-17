@@ -13,13 +13,21 @@ function setup() {
   const report = (guard: Guard) => {
     latest.guard = guard;
   };
-  function Harness(props: { canStop: boolean; report: (guard: Guard) => void }) {
-    props.report(useComposerStopGuard({ canStop: props.canStop, canOperateThread: true, onStop }));
+  function Harness(props: {
+    canStop: boolean;
+    runId: string | null;
+    owner: string;
+    report: (guard: Guard) => void;
+  }) {
+    const { canStop, runId, owner } = props;
+    props.report(useComposerStopGuard({ canStop, runId, owner, canOperateThread: true, onStop }));
     return null;
   }
   const root = createRoot(document.createElement("div"));
-  const render = (canStop: boolean) =>
-    act(() => root.render(<Harness canStop={canStop} report={report} />));
+  const render = (canStop: boolean, runId: string | null = "run-a", owner = "thread-1") =>
+    act(() =>
+      root.render(<Harness canStop={canStop} runId={runId} owner={owner} report={report} />),
+    );
   render(true);
   return {
     onStop,
@@ -54,4 +62,24 @@ it("Stop can be tapped again when a stop never lands", () => {
   act(() => screen.guard().stop());
   expect(screen.onStop).toHaveBeenCalledTimes(2);
   vi.useRealTimers();
+});
+
+it("a new run's Stop is live at once after Stop was tapped on the previous run", () => {
+  using screen = setup();
+  act(() => screen.guard().stop());
+  screen.render(true, "run-b");
+  expect(screen.guard()).toMatchObject({
+    showStop: true,
+    stopDisabled: false,
+    stopLabel: "Stop agent",
+  });
+});
+
+it("a stop tapped in one thread does not carry over when the composer shows another thread", () => {
+  using screen = setup();
+  act(() => screen.guard().stop());
+  screen.render(false, null, "thread-2");
+  expect(screen.guard()).toMatchObject({ showStop: false, replacementBlocked: false });
+  screen.render(true, "run-c", "thread-2");
+  expect(screen.guard()).toMatchObject({ stopDisabled: false, stopLabel: "Stop agent" });
 });
