@@ -43,6 +43,10 @@ export function newPullRequestWatch(
     ...(ended?.checksAwaitedSince !== undefined && {
       checksAwaitedSince: ended.checksAwaitedSince,
     }),
+    // A first watch records what is already there; watching again resumes the ended one's state.
+    ...(ended === undefined
+      ? { awaitingBaseline: "all" as const }
+      : ended.awaitingBaseline !== undefined && { awaitingBaseline: ended.awaitingBaseline }),
     remarksThrough: startedAt,
     remarkIds: [],
     wakes: 0,

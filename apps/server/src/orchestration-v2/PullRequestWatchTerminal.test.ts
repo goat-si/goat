@@ -293,6 +293,8 @@ describe("a watch on a pull request that merged or closed", () => {
     Effect.gen(function* () {
       const { host, reactor, link, records, orchestrator, threadId } =
         yield* watchedThread("other-actor");
+      yield* reactor.sweep;
+      yield* TestClock.adjust("10 minutes");
       yield* Ref.set(host, openAt("aaaa111", [failed("lint")]));
       yield* reactor.sweep;
       // Without a host fingerprint, a quiet pull request is read again after ten minutes.

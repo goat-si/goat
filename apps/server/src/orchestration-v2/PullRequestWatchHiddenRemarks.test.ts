@@ -229,7 +229,7 @@ describe("pull request watch hidden remarks", () => {
       yield* reactor.sweep;
       const { messages } = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
       expect(messages.map((message) => message.notification?.summary)).toEqual([
-        "#7: checks failed, new comments",
+        "#7: new comments",
       ]);
     }).pipe(Effect.provide(layerTest)),
   );

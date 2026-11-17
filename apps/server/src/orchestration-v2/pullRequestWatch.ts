@@ -117,8 +117,11 @@ export function evaluatePullRequestWatch(
     if (mode === "react") changes.push(change);
     else if (mode === "keep_as_context") held.push(change);
   };
+  // A read without a head says nothing about pushes, so it keeps the last known one.
   const headSha = detail.headSha ?? watch.headSha;
-  const headMoved = headSha !== watch.headSha;
+  const headMoved = watch.headSha !== null && headSha !== watch.headSha;
+  const checksBaseline = watch.awaitingBaseline !== undefined && !headMoved;
+  const checksMode = (mode: PullRequestWatchWakeMode) => (checksBaseline ? "ignore" : mode);
 
   // Hosts can return no checks on read failure; preserve prior state.
   let failedChecks = headMoved ? [] : watch.failedChecks;
@@ -147,7 +150,10 @@ export function evaluatePullRequestWatch(
   const announced = new Set(awaitingApproval);
   const newlyAwaiting = awaiting.filter((check) => !announced.has(approvalKey(check)));
   if (newlyAwaiting.length > 0) {
-    sort({ kind: "checks-awaiting-approval", checks: newlyAwaiting }, policy.checksFailed);
+    sort(
+      { kind: "checks-awaiting-approval", checks: newlyAwaiting },
+      checksMode(policy.checksFailed),
+    );
   }
   awaitingApproval = [...new Set([...awaitingApproval, ...newlyAwaiting.map(approvalKey)])].slice(
     -PULL_REQUEST_WATCH_APPROVAL_LIMIT,
@@ -159,7 +165,7 @@ export function evaluatePullRequestWatch(
     const failed = checks.filter(isFailedCheck);
     const newlyFailed = failed.filter((check) => !failedChecks.includes(check.name));
     if (newlyFailed.length > 0) {
-      sort({ kind: "checks-failed", failed: newlyFailed }, policy.checksFailed);
+      sort({ kind: "checks-failed", failed: newlyFailed }, checksMode(policy.checksFailed));
     }
     failedChecks = failed.map((check) => check.name);
 
@@ -190,7 +196,7 @@ export function evaluatePullRequestWatch(
     if (passedNow && (!passed || gateGrew)) {
       sort(
         { kind: "checks-passed", count: gate.length, required: required.length > 0 },
-        policy.checksPassed,
+        checksMode(policy.checksPassed),
       );
       owedChecks =
         required.length > 0
@@ -199,7 +205,10 @@ export function evaluatePullRequestWatch(
               .map((check) => check.name)
           : [];
     } else if (settled && owed.length > 0) {
-      sort({ kind: "checks-passed", count: checks.length, required: false }, policy.checksPassed);
+      sort(
+        { kind: "checks-passed", count: checks.length, required: false },
+        checksMode(policy.checksPassed),
+      );
       owedChecks = [];
     }
     passed = passedNow;
@@ -212,9 +221,10 @@ export function evaluatePullRequestWatch(
   // repository runs no checks at all, nothing waits.
   let checksAwaitedSince = watch.checksAwaitedSince;
   if (detail.capabilities.checksAlwaysReport === true) {
-    const awaitedBefore = headMoved
-      ? DateTime.formatIso(DateTime.makeUnsafe(context.now))
-      : (watch.checksAwaitedSince ?? null);
+    const awaitedBefore =
+      headMoved || watch.awaitingBaseline === "all"
+        ? DateTime.formatIso(DateTime.makeUnsafe(context.now))
+        : (watch.checksAwaitedSince ?? null);
     checksAwaitedSince = checks.length > 0 ? null : awaitedBefore;
     const awaitedMs =
       checksAwaitedSince === null ? 0 : context.now - Date.parse(checksAwaitedSince);
@@ -257,7 +267,10 @@ export function evaluatePullRequestWatch(
     const idle =
       policy.conflictMaxIdleDays !== null &&
       context.now - context.threadActiveAt > policy.conflictMaxIdleDays * DAY_MS;
-    sort({ kind: "conflicting" }, idle ? "ignore" : policy.conflicts);
+    sort(
+      { kind: "conflicting" },
+      idle || watch.awaitingBaseline === "all" ? "ignore" : policy.conflicts,
+    );
   }
   // "unknown" is a host still computing after a push; only a clean answer clears a conflict.
   const conflicting =
@@ -302,6 +315,11 @@ export function evaluatePullRequestWatch(
       mergeQueueRemovalId,
       wakes,
       ...(watch.automatic === true ? { automatic: true } : {}),
+      // Only a read that cannot be trusted to show the checks leaves the baseline to the next one.
+      ...(checksBaseline &&
+        (unread || (detail.headSha === undefined && checks.length === 0)) && {
+          awaitingBaseline: "checks" as const,
+        }),
       checksAwaitedSince,
     },
     exhausted: commentsOnly && wakes >= PULL_REQUEST_WATCH_WAKE_LIMIT,
