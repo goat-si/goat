@@ -819,13 +819,18 @@ threads on an environment through its MCP server. See
 
 On the host, **Settings → Connections** lets authorized administrators create
 pairing links and revoke client sessions. Revoking an unused link prevents new
-pairings; revoke a device's session to remove its existing access.
+pairings; revoke a device's session to remove its existing access. An MCP request
+that session still has in progress stops at once.
+
 `goat auth session revoke <id>` does the same from the command line: the session
-is refused at once, and a running server closes its open connections within
-about 5 seconds. An MCP request still in progress is cut at the same moment: the
-agent sees the call fail and has to sign in again. Work the request had already
-handed to the server, such as a turn it started, keeps running. More commands are
-listed by `goat auth --help`.
+is refused at once, and a running server closes its open connections and stops
+its MCP requests in progress within about 5 seconds. A command-line revoke of a
+session that has already expired does not stop a request still running on it;
+**Revoke others** in Settings does.
+
+An agent whose request was stopped sees the call fail and has to sign in again.
+Work the request had already handed to the server, such as a turn it started,
+keeps running. More commands are listed by `goat auth --help`.
 
 A session with an open connection stays listed after its access credential
 expires. **Settings → Connections** shows which sessions are connected;
