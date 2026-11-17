@@ -18,7 +18,6 @@ import {
   AuthSourceControlWriteScope,
   type EnvironmentId,
   type PullRequestAction,
-  type PullRequestDetail,
   type PullRequestMergeMethod,
   type PullRequestListEntry,
   type PullRequestUpdateMethod,
@@ -110,7 +109,11 @@ import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import type { PullRequestAgentSelectionInput } from "./PullRequestCodeTab";
 import { openOnHostLabel } from "./pullRequestLinkContextMenu";
 import { PullRequestMarkdownContext } from "./PullRequestMarkdown";
-import { pullRequestMarkdownPlugins } from "./pullRequestMarkdown.logic";
+import {
+  pullRequestMarkdownContext,
+  pullRequestStackReference,
+  resolvePullRequestReference,
+} from "./pullRequestDetailReferences";
 import { PullRequestComposer } from "./PullRequestComposer";
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
@@ -133,7 +136,6 @@ import {
   PULL_REQUEST_MERGE_METHOD_LABELS,
   checkoutFailureDescription,
   readableFailure,
-  resolvePullRequestReferenceHost,
   resolvePullRequestPrimaryControl,
   allowsSinglePullRequestMerge,
   canDeletePullRequestBranch,
@@ -169,45 +171,6 @@ const TABS: ReadonlyArray<{ value: PullRequestDetailTab; label: string }> = [
 // Defer the diff viewer's worker pool until Code is approached.
 const loadCodeTab = () => import("./PullRequestCodeTab");
 const PullRequestCodeTab = lazy(loadCodeTab);
-
-function resolvePullRequestReference(
-  requestedReference: PullRequestRef,
-  repositoryIdentity: Parameters<typeof resolvePullRequestReferenceHost>[1],
-  supportsThreadPullRequests: boolean,
-): PullRequestRef {
-  return supportsThreadPullRequests
-    ? resolvePullRequestReferenceHost(requestedReference, repositoryIdentity)
-    : {
-        projectId: requestedReference.projectId,
-        repository: requestedReference.repository,
-        number: requestedReference.number,
-      };
-}
-
-function pullRequestMarkdownContext(
-  detail: Pick<PullRequestDetail, "provider" | "url" | "repository"> | null,
-  threadRef: ScopedThreadRef | null,
-) {
-  return {
-    remarkPlugins: pullRequestMarkdownPlugins(detail),
-    lineBreaks: sourceControlClients.find(detail?.provider ?? "")?.hardLineBreaks ?? false,
-    threadRef,
-    repository: detail?.repository ?? null,
-  };
-}
-
-function pullRequestStackReference(
-  detail: Pick<PullRequestDetail, "url" | "capabilities"> | null,
-  reference: PullRequestRef,
-  supportsThreadPullRequests: boolean,
-) {
-  return detail === null || detail.capabilities.stacks !== true || !supportsThreadPullRequests
-    ? null
-    : {
-        ...reference,
-        host: reference.host ?? sourceControlClients.parseChangeRequestUrl(detail.url)?.link.host,
-      };
-}
 
 export function PullRequestDetailPanel({
   environmentId,
