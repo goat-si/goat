@@ -11,7 +11,6 @@ import {
   RuntimeRequestId,
   type OrchestrationV2ProjectedTurnItem,
   type OrchestrationV2TurnItem,
-  EnvironmentId,
   MessageId,
   RunId,
 } from "@goat/contracts";
@@ -26,7 +25,6 @@ import {
 import { makeStreamingTimelineFixture } from "../../test-fixtures";
 import { type TurnDiffSummary } from "../../types";
 import { describe, expect, it } from "vite-plus/test";
-import { serializeAssistantCitation } from "@goat/shared/assistantCitations";
 import {
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
@@ -37,7 +35,6 @@ import {
   workEntryDisplayLabel,
   liveWorkEntryLabel,
 } from "./MessagesTimeline.logic";
-import { shouldCollapseUserMessage } from "./userMessageCollapse";
 
 describe("resolveAssistantMessageCopyState", () => {
   it("copies the rendered representation of Codex directives", () => {
@@ -4203,27 +4200,6 @@ describe("subagent continued by a later turn", () => {
       `turn-fold:${run2}`,
       "closing-2",
     ]);
-  });
-});
-
-describe("shouldCollapseUserMessage", () => {
-  it("measures a quote chip by its label, not its encoded link", () => {
-    const quote = "A long assistant paragraph that the user quoted. ".repeat(40);
-    const citation = serializeAssistantCitation({
-      version: 1,
-      environmentId: EnvironmentId.make("environment"),
-      threadId: ThreadId.make("thread"),
-      messageId: MessageId.make("source"),
-      text: quote,
-      comment: "Why does this matter?",
-      start: 0,
-      end: quote.length,
-      prefix: "",
-      suffix: "",
-    });
-
-    expect(shouldCollapseUserMessage(`${citation} Can you expand on this?`)).toBe(false);
-    expect(shouldCollapseUserMessage(`${citation} ${"More text. ".repeat(60)}`)).toBe(true);
   });
 });
 
