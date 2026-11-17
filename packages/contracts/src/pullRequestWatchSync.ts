@@ -8,6 +8,11 @@ const watchSyncFields = {
   ...ThreadPullRequestKey.fields,
   startedAt: IsoDateTime,
   watch: Schema.NullOr(ThreadPullRequestWatch),
+  /**
+   * The watch's checksPending when this read started. A push that clears it during the read makes
+   * the read's answer describe the old head, so the cleared answer stays.
+   */
+  checksPendingBefore: Schema.optional(Schema.Boolean),
   /** With `watch: null`, the state the ended watch keeps instead of its last saved one. */
   endedWatch: Schema.optional(ThreadPullRequestWatch),
   /** The pull request merged or closed: wakes this watch queued and that have not started are dropped. */
@@ -38,4 +43,14 @@ export const ThreadPullRequestWatchSyncCommand = Schema.Struct({
    * and the whole command is refused if any of them ended or was muted during the read.
    */
   others: Schema.optional(Schema.Array(Schema.Struct(watchSyncFields))),
+});
+
+/**
+ * After a push, the thread's watches forget whether their checks were running, since the push can
+ * start new ones. Applied to the watches as they are then, so no earlier read overwrites them.
+ */
+export const ThreadPullRequestWatchChecksReopenCommand = Schema.Struct({
+  type: Schema.Literal("thread.pull-request-watch.checks-reopen"),
+  commandId: CommandId,
+  threadId: ThreadId,
 });

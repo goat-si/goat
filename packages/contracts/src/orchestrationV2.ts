@@ -118,7 +118,10 @@ import {
   ThreadPullRequestSnapshot,
   ThreadPullRequestStack,
 } from "./threadPullRequest.ts";
-import { ThreadPullRequestWatchSyncCommand } from "./pullRequestWatchSync.ts";
+import {
+  ThreadPullRequestWatchChecksReopenCommand,
+  ThreadPullRequestWatchSyncCommand,
+} from "./pullRequestWatchSync.ts";
 import {
   ProviderApprovalDecision,
   ProviderApprovalFullAccessOverride,
@@ -3574,6 +3577,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
   }),
 
   ThreadPullRequestWatchSyncCommand,
+  ThreadPullRequestWatchChecksReopenCommand,
   Schema.Struct({
     type: Schema.Literal("checkpoint.rollback.fail"),
     commandId: CommandId,

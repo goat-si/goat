@@ -188,6 +188,7 @@ import {
   makePullRequestAutoWatch,
   newPullRequestWatch,
   syncedPullRequestWatch,
+  withoutChecksAnswer,
 } from "./goat/PullRequestAutoWatch.ts";
 import { takeHeldPullRequestContext } from "./goat/PullRequestDigest.ts";
 import { makePullRequestWatchSync } from "./goat/PullRequestWatchSync.ts";
@@ -2662,6 +2663,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.pull-request-link.sync"
           | "thread.pull-request.watch"
           | "thread.pull-request-watch.sync"
+          | "thread.pull-request-watch.checks-reopen"
           | "thread.pull-request.sync"
           | "thread.title.regeneration.complete"
           | "thread.runtime-mode.set"
@@ -3450,6 +3452,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             updatedAt: command.type === "thread.pull-request-link.sync" ? thread.updatedAt : now,
           };
         }
+        case "thread.pull-request-watch.checks-reopen": {
+          const linked = threadPullRequestsOf(thread);
+          if (!linked.some((link) => link.watch?.checksPending !== undefined)) return thread;
+          return {
+            ...thread,
+            pullRequests: linked.map((link) =>
+              link.watch?.checksPending === undefined
+                ? link
+                : { ...link, watch: withoutChecksAnswer(link.watch) },
+            ),
+          };
+        }
         case "thread.pull-request.watch":
         case "thread.pull-request-watch.sync": {
           const key = normalizeThreadPullRequestKey(command);
@@ -3490,7 +3504,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   ? undefined
                   : // Whether the watch is automatic is the thread's call, not the reader's: a
                     // watch_pull_request that landed during the read keeps its watch explicit.
-                    syncedPullRequestWatch(existing.watch, command.watch)
+                    syncedPullRequestWatch(
+                      existing.watch,
+                      command.watch,
+                      command.checksPendingBefore,
+                    )
                 : existing.watch
               : !command.watching
                 ? undefined
@@ -3571,6 +3589,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           };
       }
     })();
+    if (command.type === "thread.pull-request-watch.checks-reopen" && updatedThread === thread)
+      return;
     if (
       command.type === "thread.pull-request-link.sync" ||
       command.type === "thread.pull-request-watch.sync"
@@ -3625,6 +3645,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         case "thread.pull-request.unlink":
         case "thread.pull-request.watch":
         case "thread.pull-request.sync":
+        case "thread.pull-request-watch.checks-reopen":
           return "thread.pull-request-synced" as const;
         case "thread.runtime-mode.set":
           return "thread.runtime-mode-updated" as const;
@@ -12307,6 +12328,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.pull-request-watch.sync":
         yield* dispatchPullRequestWatchSync(command, events, effects);
         break;
+      case "thread.pull-request-watch.checks-reopen":
+        yield* dispatchThreadMutation(command, events, effects);
+        break;
       case "thread.guest-share.open":
       case "thread.guest-share.redeem":
       case "thread.guest-share.close":
@@ -12657,6 +12681,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.type === "delegated_task.remote.progress" ||
           command.type === "delegated_task.remote.result" ||
           command.type === "thread.background-work.settle" ||
+          // A read can answer a watch again before a push's reopen lands; nothing is left to clear.
+          command.type === "thread.pull-request-watch.checks-reopen" ||
           command.type === "thread.interrupt.unresponsive" ||
           command.type === "thread.stop" ||
           command.type === "subagent.stop" ||
