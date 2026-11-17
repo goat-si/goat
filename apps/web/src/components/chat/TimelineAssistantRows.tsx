@@ -1,4 +1,5 @@
 import { shouldPreserveAssistantLineBreaks } from "@goat/shared/markdownPipeline";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { type RunId, type ThreadId, type TurnItemId } from "@goat/contracts";
 import {
   assistantReplyStatusBadge,
@@ -238,7 +239,13 @@ function AssistantReplyButton({
 }) {
   const { threadRef } = use(TimelineRowCtx);
   const available = useReplyToResponseAvailable(threadRef?.environmentId ?? null);
-  if (!threadRef || !available || !message.text.trim()) return null;
+  const inheritedFrom =
+    threadRef && sourceThreadId !== threadRef.threadId
+      ? scopeThreadRef(threadRef.environmentId, sourceThreadId)
+      : null;
+  // No agent can read a deleted thread, so a reply to a row inherited from one would go unread.
+  const sourceDeleted = useThreadShell(inheritedFrom)?.deletedAt != null;
+  if (!threadRef || !available || sourceDeleted || !message.text.trim()) return null;
 
   const reply = (button: HTMLButtonElement) => {
     // The meta row can sit below trailing tool rows, so the message may be virtualized away.

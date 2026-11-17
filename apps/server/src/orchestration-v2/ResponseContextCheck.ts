@@ -24,9 +24,9 @@ const runForkSource = (thread: StoredThread): ThreadId | null =>
 
 /**
  * A reply names a response by ids its client chose. An agent reads it only when the item is an
- * assistant message of the receiving thread or a thread it shows history from (its side-chat
- * parent, every run fork up), on this server, with subagents that thread ran here. Every other
- * response record stays unchecked, which the provider text shows as unavailable.
+ * assistant message of the receiving thread or a thread it shows history from (every run fork
+ * up, side-chat parents included), on this server, with subagents that thread ran here. Every
+ * other response record stays unchecked, which the provider text shows as unavailable.
  */
 export const checkResponseContexts = Effect.fn("ResponseContextCheck.check")(function* (input: {
   readonly environmentId: EnvironmentId;
@@ -41,14 +41,14 @@ export const checkResponseContexts = Effect.fn("ResponseContextCheck.check")(fun
   const readable = new Set<ThreadId>([input.threadId]);
   const walked = new Set<ThreadId>([input.threadId]);
   let thread: StoredThread | null = yield* input.store.getThread(input.threadId);
-  // Inherited rows keep the id of the thread that holds them, however many forks up it is.
+  // A side chat is a run fork too. Inherited rows keep the id of the thread that holds them, at any
+  // depth; a deleted thread is never named (thread.read refuses it), what it inherited still is.
   while (thread !== null) {
-    if (thread.sideChatOf) readable.add(thread.sideChatOf);
     const source = runForkSource(thread);
     if (source === null || walked.has(source)) break;
     walked.add(source);
-    readable.add(source);
     thread = yield* input.store.getThread(source).pipe(Effect.catch(() => Effect.succeed(null)));
+    if (thread !== null && thread.deletedAt === null) readable.add(source);
   }
 
   const records: ComposerContextRecord[] = [];
