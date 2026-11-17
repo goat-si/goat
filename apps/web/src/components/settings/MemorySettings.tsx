@@ -782,7 +782,7 @@ function ScopedMemoryRecords({
   );
 }
 
-function MemoryDetails({
+export function MemoryDetails({
   target,
   environmentId,
   memorySpaceId,
