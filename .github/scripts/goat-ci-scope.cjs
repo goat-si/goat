@@ -63,6 +63,7 @@ const WINDOWS_SUITES = [
   "apps/server/src/runtimeRelaunch",
   "apps/server/src/cli/updateServerRestart",
   "apps/server/src/terminal/nodePtyNativeKill",
+  "apps/server/src/otherGoatHomes",
   "packages/shared/src/cuaDriver",
   "packages/shared/src/computerUse",
   "packages/shared/src/path",
