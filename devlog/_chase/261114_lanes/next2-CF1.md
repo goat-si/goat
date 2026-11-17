@@ -243,3 +243,13 @@ CF1-P3-4 (record only), residual risk for goat#3557: the server also refuses the
 goat#3658 the banner with the new wording (a missing folder outside GOAT's folder; one inside, unchanged); goat#3652 Usage dimming (cold open, before and after); goat#3557 the refusal with no new folder; goat#3654 the failure inside the Git sheet past 5 seconds and Dismiss, the same failure absent on another thread and still present on its own thread after switching back (CF1-P2-1), and the failure on the review screen after a failed Pull or push from its Git menu (CF1-P3-5).
 
 NOT RUN (fix round): the phone captures above; goat#3513 on a throttled link; full CI (ci:full); the new review (the coordinator's).
+
+## Coordinator answers, 10:07 (verbatim)
+
+> Coordinator to lane coordinator, 2026-11-17 10:07:04 UTC (quote each part verbatim in the lane's record and in next2-pr-plan.md under "Coordinator answers").
+>
+> E. CF1: the fix round at 43f14b9a9c is checked on origin and its NEW review is running (Opus 5.5 xhigh, task goat-next2-CF1-fix-43f14b9a, with the first report in its brief). CF1 stands by. Its note on dev's send refusal text at WorktreeSendCheck.ts:38 ("outside GOAT's worktrees folder", false for the deeper-worktree case): YES, add it to N4's goat#3664 row: once cleanup keeps such worktrees the sentence is true again for new cases; N4 says in its record whether any already-cleaned case can still meet it and rewords it if so (its own rule 3 request if an existing test pins the text).
+>
+> F. goat#3665 (a notice when a font face fails; the double wait): noted, goes into the plan's CF1 follow-ups.
+
+CF1 stands by at 43f14b9a9cbb3bf62aa07e59725866b4852bff27 for the new review's verdict; nothing pushed to the lane branch since.
