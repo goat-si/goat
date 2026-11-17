@@ -37,7 +37,7 @@ export interface MemoryExposure {
   readonly ready: boolean;
   readonly connection: object | null;
   readonly epoch: object;
-  readonly versions: HashMap.HashMap<MemoryId, object>;
+  readonly versions: HashMap.HashMap<MemoryId, symbol>;
   readonly forgotten: ReadonlySet<MemoryId>;
   readonly forgetGeneration: object;
 }
@@ -61,7 +61,8 @@ export function applyMemoryChange(
   if (signal.kind === "reset") {
     return { ...state, ready: true, epoch: {}, versions: HashMap.empty() };
   }
-  const versions = HashMap.set(state.versions, signal.memoryId, {});
+  // A fresh symbol per signal: HashMap.set keeps a structurally equal value, so {} never changes.
+  const versions = HashMap.set(state.versions, signal.memoryId, Symbol("memory version"));
   // The factory ledger already contains forget IDs. Standalone reducer callers
   // get an immutable snapshot without copying on ordinary upserts/invalidation.
   const forgotten =
