@@ -69,12 +69,8 @@ import {
   OrchestrationV2ThreadTranscript,
 } from "./orchestrationV2.ts";
 import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
-import {
-  PullRequestDiffInput,
-  PullRequestDiffResult,
-  PullRequestOperationError,
-  PullRequestUnavailableError,
-} from "./pullRequest.ts";
+import { PullRequestDiffInput, PullRequestDiffResult } from "./pullRequest.ts";
+import { PullRequestOperationError, PullRequestUnavailableError } from "./pullRequestErrors.ts";
 import {
   RelayCloudEnvironmentHealthRequest,
   RelayCloudMintCredentialRequest,

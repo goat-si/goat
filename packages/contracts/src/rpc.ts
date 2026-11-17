@@ -253,7 +253,6 @@ import {
   PullRequestListStatsResult,
   PullRequestFilterOptions,
   PullRequestFilterOptionsInput,
-  PullRequestOperationError,
   PullRequestReactionInput,
   PullRequestRef,
   PullRequestRoutingResult,
@@ -273,9 +272,9 @@ import {
   PullRequestThreadCommentsResult,
   PullRequestThreadReplyInput,
   PullRequestThreadResolutionInput,
-  PullRequestUnavailableError,
   PullRequestUpdateInput,
 } from "./pullRequest.ts";
+import { PullRequestOperationError, PullRequestUnavailableError } from "./pullRequestErrors.ts";
 import {
   RelayClientInstallFailedError,
   RelayClientInstallProgressEventSchema,
