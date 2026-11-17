@@ -62,42 +62,12 @@ import * as StreamDiagnostics from "./threadStreamDiagnostics.ts";
 import { threadStreamFailureMessage } from "./threadTextAppends.ts";
 import { makeThreadRequestsResolvedAnnouncer } from "./threadRequests.ts";
 import { EMPTY_ENVIRONMENT_THREAD_STATE, type EnvironmentThreadState } from "./threadState.ts";
-
-function formatHistoryError(error: unknown): string {
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message;
-  }
-  return "Could not load earlier activity.";
-}
-
-interface ThreadResumeSnapshot {
-  readonly state: EnvironmentThreadState;
-  readonly sequence: number;
-  readonly persisted: boolean;
-  readonly acceptsBoundedSnapshots?: boolean;
-}
-
-interface ThreadResumeCache {
-  snapshot: ThreadResumeSnapshot | undefined;
-  owner: object | undefined;
-}
-
-function matchesThreadSnapshot(
-  current: ThreadResumeSnapshot,
-  projection: OrchestrationV2ThreadProjection | null,
-  sequence: number,
-  history: Pick<ThreadHistoryMeta, "historyCursor" | "hasMoreHistory" | "latestLocalTurnOrdinal">,
-): boolean {
-  if (current.sequence !== sequence || Option.getOrNull(current.state.data) !== projection)
-    return false;
-  const currentHistory = current.state.history;
-  return (
-    currentHistory.historyCursor === history.historyCursor &&
-    currentHistory.hasMoreHistory === history.hasMoreHistory &&
-    (!(history.hasMoreHistory || history.historyCursor !== null) ||
-      currentHistory.latestLocalTurnOrdinal === history.latestLocalTurnOrdinal)
-  );
-}
+import {
+  formatHistoryError,
+  matchesThreadSnapshot,
+  type ThreadResumeCache,
+  type ThreadResumeSnapshot,
+} from "./threadResumeCache.ts";
 
 export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make")(function* (
   threadId: ThreadIdType,
