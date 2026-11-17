@@ -1,0 +1,416 @@
+# next2 lane N14: web timeline and shell
+
+Lane thread on pen-mac-studio (juns-Mac-Studio.local), worktree chase-t3-261114-next2-n-d6302652bf8abf89, branch chase/t3-261114-next2-n14-web, cut from origin/chase/t3-261114-next2 = ef8e62ad8c65da0afb5d1741aaf17f511e4fe65f (verified 2026-11-17 12:46:35 UTC, .goat/setup-done present). Lead: claude-opus-5-5 through the Codex harness in GOAT.
+
+## Row list and its source
+
+next-pr-plan.md is not in git (card 10.025:94 points to /Users/jun/handoff-in/chase/next-pr-plan.md on the lane coordinator's Mac). Its N14 part and the rulings it refers to, as relayed by the lane coordinator at 12:55 UTC, verbatim:
+
+> --- next-pr-plan.md, section 13 ---
+> ### 13. N14 Web timeline and shell. Size L. Part early.
+> - Rows: L17 1a8ecc64b7 quote cards (O1), then L18 c0f85e7f79 the citation context kind, then L357 a9f2d7d5f4; L29 66ec37079a rest, the other-link guard (C3); L373 f419698aea; L376 46015ec958; L365 facd190640; L353 5b11efe5df viewed images across surfaces, then 330b9f4840 and 250d372e51, which it unblocks; L461 0f13d2ccbd remove icon morphing (O28), last.
+> - Decisions: O1 A; L18 C4 with an older-client decode test; C3 A with no hosted thread URLs; L373 decision B; O28 A (removes the morphicons dependency across about 36 web files, so it goes last).
+> - Start: O1, L18, L357, C3, L373, L376 early. L365 waits for small-ports (1d218d1525 edits Sidebar.logic.ts). L353 waits for dev (L02 edits CodexAdapterV2.ts) and owes a native check. Class: C4 for L18 and O28. Host pen-macbookpro2.
+> ---
+> So, with the upstream subjects (git log -1 here):
+> - L357 = a9f2d7d5f4 fix(web): "Show full message" only appears when it at least doubles the message (#34306). It is NOT a88a0adfa1: a88a0adfa1 is O22 (L352, HTML previews anchored, with L359 4e48d9e6a5 and the Legend List 3.7.2 prerequisite 4df0c1302a), which belongs to N15a. So no dependency change in your lane from L357; if a9f2d7d5f4 turns out to need 4df0c1302a, stop and say so with path:line.
+> - L373 = f419698aea feat(web): drop folders on the sidebar to add them as projects (#35202). "Decision B" is the coordinator's, verbatim from the #3519 card (10.025:1006): "port with B, L14a retry round (keep upstream's hook refactor; resolve the dropped folder's target with GOAT's 'this machine' check, browserTargetResolver.ts:80; when the local server is off say so plainly instead of 'This computer's server is not connected yet'; test the Local-off case)". The earlier lane's reason it was held: upstream SidebarFolderDrop.tsx:59 passes a desktop-local path to useOpenLocalWorkspace.ts:26, which targets the primary environment, and GOAT's primary environment can be remote.
+> - L376 = 46015ec958 fix(web): Go to source on a side chat quote keeps you on its parent thread (#33160).
+> - L365 = facd190640 fix(web): opening the terminal with Cmd+J no longer re-renders the whole sidebar (#33129). The #3519 card noted "row render isolation unfinished: Cmd+J still redraws the Sidebar body". small-ports is long merged, so its wait is over; check Sidebar.logic.ts on your head.
+> - L353 = 5b11efe5df fix(clients): images the agent opens stay visible in the chat (#30473) (your reading was right), then 330b9f4840 fix(web): arrow keys and buttons step through the images an agent viewed (#34333) and 250d372e51 fix(web): images in expanded tool rows page through the group's viewed images (#36321). L02 is in dev, so its wait is over. It "owes a native check" (it is fix(clients), so mobile is touched): say per client what changes; the mobile capture joins P1's pass unless you can show it without a device.
+> - O28 = L461 0f13d2ccbd refactor(web): remove icon morphing (#33985). LAST, C4 (dependency removal): plan to the coordinator first.
+>
+> --- 3176-decision-sheet.md, O1 ---
+> ### O1. L17 `1a8ecc64b7` feat(web): a quote in a sent message shows as an inset card (#34181), M
+> - **Upstream:** renders a quote as a block card (apps/web/src/components/ChatMarkdown.tsx:967, embed imported at :99; apps/web/src/components/chat/AssistantCitationChip.tsx:8). Thread find skips the card (packages/shared/src/threadFindText.ts:153), and collapse counts it (apps/web/src/components/chat/MessagesTimeline.logic.ts:2701).
+> - **GOAT today:** a quote is an inline chip with a popover (apps/web/src/components/chat/AssistantCitationChip.tsx:168, popup :186), and find searches the quote text (packages/shared/src/threadFindText.ts:141).
+> - **Options:** (A) take the card, which changes layout and stops find from matching quoted text; (B) keep the popover and skip 1a8e and c0f8; (C) keep the popover and port only c0f8's reply action onto it.
+> - **Recommend A.** Upstream builds its later quote work on the card: c0f8 replies (L18) and a9f2d7d5f4 (L357) measures a quote by its card. Keeping the popover forks every later quote port.
+> - **Via L18 `c0f85e7f79`:** this adds a `citation` composer context kind (upstream packages/contracts/src/composerContext.ts:238). GOAT's kinds stop at packages/contracts/src/composerContext.ts:103-220. After A, port it as C4 with an older-client decode test.
+>
+> --- O28 ---
+> ### O28. L461 `0f13d2ccbd` refactor(web): remove icon morphing (#33985), M
+> - **Upstream:** deletes MorphIcon and the `morphicons` dependency, replacing it with plain icon swaps (for example apps/web/src/components/CommandBlock.tsx:39).
+> - **GOAT today:** `morphicons` is a dependency (apps/web/package.json:85), and 36 files under apps/web/src reference MorphIcon.
+> - **Options:** (A) remove it as upstream does, losing the icon transition; (B) keep it.
+> - **Recommend A.** It drops a dependency and an animation, and later upstream icon edits assume plain icons.
+>
+> --- C3 ---
+> ### C3. L29 `66ec37079a` (rest) other-link guard, S
+> - **Upstream:** adds an alternative that claims any link to somewhere else, so a thread URL inside its label or href stays as written (packages/shared/src/threadLinks.ts:13-19). It also handles hosted thread URLs.
+> - **GOAT today:** escapes and the label rule are ported (packages/shared/src/threadLinks.ts:17). GOAT has only `goat-thread://` and no hosted thread URL.
+> - **Options:** (A) port the other-link alternative only; (B) also add hosted URLs; (C) leave it.
+> - **Recommend A.** GOAT has no hosted app.
+> (Owner decisions: "O1-O28 and C1-C27, all decided as recommended".)
+
+Why the question was needed: in #3176's body (every edit from 2026-11-16 04:02Z to 2026-11-17 08:46Z keeps the same numbering) line 357 is a88a0adfa1, lines 353 and 461 are blank, and lines 365, 373, 376 are ticked rows, so the plan's L-numbers are next-pr-plan.md's own row labels, not body lines.
+
+
+## READY (2026-11-17 15:54 UTC, date -u)
+
+- Branch `chase/t3-261114-next2-n14-web`, head **2a94ed4deb589b8e4f02b0da7e776be9f3e0588f**, verified on origin with `git ls-remote origin refs/heads/chase/t3-261114-next2-n14-web` at 15:48:58 UTC.
+- Integration head merged: e04442e66c (merge commit 00870f795b, a merge, no rebase); `git rev-parse origin/chase/t3-261114-next2` = e04442e66cd2d3de6d4bfdf2f0566448d5f3fff0 at 15:48 UTC, so nothing newer to merge.
+- goat-ci (workflow_dispatch, lane all) on the final head: https://github.com/goat-si/goat/actions/runs/44118636205 (queued at 15:54 UTC). The earlier run on d23fa3223a (https://github.com/goat-si/goat/actions/runs/44112901530) had every finished job green at 15:47 (goat-check, goat-typecheck, goat-test, goat-test-changed, goat-test-desktop, goat-test-mobile, goat-test-windows, goat-build and the rest) with the server shards still running; the three commits after it touch only apps/web.
+- 56 lane commits on the first-parent line from ef8e62ad8c, every row in its own commits.
+
+## Rows (each test commit before its fix; failing output quoted where the order is shown)
+
+| Row | Commits | What a person sees (web / desktop / mobile) | Surfaces |
+| --- | --- | --- | --- |
+| O1 L17 1a8ecc64b7 | 9c382f510d, 5a81919cbb, a8b477d2f4 (move-outs, verbatim), 0c82d084ec port | Web and desktop: a quote in a sent message shows as an inset card; thread find no longer matches the quoted text the card hides. Mobile: no change. | contracts none; rule 3 x3 as authorised 12:59:47 |
+| L18 c0f85e7f79 (C4) | cb87ceb8f1, 38a54d1aec, 5813cb40c7, dd8fbe93f1 (move-outs), 88b1003e07, 38eeb71e21 (tests), 1f8e25bc9c port, 01b7f19010 test fix; capture-pass fix: 8096d52aab test, 55a9cb93f7 fix | Web and desktop: Reply on an assistant message's hover row (only when the thread's server reports replyToResponse), "Replying to" banner above the composer with Cancel reply, the sent message opens with a card; a failed send, stashes and queued edits keep it. Against a server without the capability there is no Reply action. Mobile: a received reply shows as a plain chip, no Reply action. | contract: composer context kind "response" + environment capability replyToResponse; the server checks the client-built record (ResponseContextCheck.ts) |
+| L357 a9f2d7d5f4 | 147026a1d9 test, bd3ad8e8be port + deletion, c967da6f92 case per 14:19:09 ruling | Web and desktop: "Show full message" only when opening at least doubles what is shown. Mobile: has no fold of user messages (no shared rule), no change. | none |
+| C3 L29 66ec37079a rest | d7f09b745a test, e7232be701 fix | Everywhere links are rendered: a thread link inside another link's address or title stays as written. | shared |
+| L373 f419698aea | f1d4685826 test, 8a1fbbff4d port + docs, 9e8ce7ad8d goat <dir> base/head test | Desktop: folders dropped on the sidebar become projects of this computer's server; with Local off a plain sentence says so. "goat <dir>" unchanged (2/2 on base and head). Web in a browser: the drop is refused (no local path). Mobile: no change. | docs/user line |
+| L376 46015ec958 | 89a9eacd0e test, 2a97870196 fix, bec826303e knip, d23fa3223a placement (the reveal mounts in routes/_chat.tsx beside ThreadLinkPrompt, so ThreadRouteView.tsx is back to the integration head's content and its browser tests render without a router as before) | Web and desktop: Go to source on a side chat quote keeps you on its parent thread. Mobile: no change. | none |
+| L365 facd190640 | f6fc2f3953 move-out, 6b1729f0c3 test, c18c4f86cd port, f3e14033b9 rule-3 test (13:57:07), 3c2005f014 baseline after the catalog loads, 70ff936299 legacy previewOpen test | Web and desktop: a quick Cmd+J no longer redraws every sidebar row; jump hints unchanged; the Projects (legacy) sidebar evaluates when-clauses with previewOpen/previewFocus/isWeb/isDesktop like the main sidebar. Mobile: no change. | keybinding context only |
+| L353 5b11efe5df + 330b9f4840 + 250d372e51 | 3c27a1759a, 73fcec4842, b37a88bf59, 864dabcfb7, fc57930f00 (move-outs), 5899fca57a tests, 766be6f5b3 port, 76da3998a9 test, 4d257334e9 port, 7ac0ccc279 tests, db74eff5ec test import, 929a5408e1 port | Web and desktop: images an agent viewed stay visible as thumbnails under the tool group; clicking one pages through all of them, also from an expanded tool row. Mobile: the same thumbnails under the group (two a row); native capture joins P1's pass. | Codex adapter emits imageView as a view_image dynamic_tool item with the existing viewedImagePath field; no contract change |
+| (a) Decisions inbox half of O2/O4 | 2396a5a4b3 move, 625d477237 tests, 49c8ec6790 fix | Web and desktop: Stop while answering in the Decisions inbox keeps the typed answer in the thread's draft; "/side ..." typed in the inbox opens the thread's side chat and is not sent. Mobile: not touched (next3). | client-runtime |
+| (b) Activity rows + window title words | 23789a0612 move-out, a3ae6a9573; capture-pass fix 2a94ed4deb (row titles) | Web and desktop: Settings > General > Activity (heading, both row titles, descriptions, accessible names, levels) and the window title's status words follow the app language; desktop's window takes the renderer's title (apps/desktop/src/window/DesktopWindow.ts:719-725), so it shows the same words. Mobile: no change. | catalogs: 11 keys per locale; drift filed as #3689 |
+| O28 L461 0f13d2ccbd (C4, last) | dfe99ad44c, 98eaec2742, c14d9778de (move-outs), c805722aee | Web and desktop: copy-to-check, chevrons, panel, lock, volume, theme and other toggles swap instantly instead of morphing. Mobile: no change. | morphicons dependency removed; nodes.ts kept (accepted 14:54:53) |
+
+Budgets: 0f6ba13286 lowers the 20 code-budget entries this lane shrank (node oxlint-plugin-goat/update-code-budgets.ts; every moved entry is a lane file) and drops shortcutModifierState.ts from the effect budget. The three commits after it (d23fa3223a, 55a9cb93f7, 2a94ed4deb) touch no budgeted file and add no React effect (ComposerBannerStack.tsx, 386 lines, is not listed; the effect budgets of ThreadRouteView.tsx 5 and routes/_chat.tsx 1 are unchanged because the reveal's effect lives in lib/assistantCitationNavigation.ts). Merge of the integration head: 00870f795b (e04442e66c; conflicts resolved by keeping both capabilities replyToResponse and serverBrowserStopLoading, and the budget entries of both sides).
+
+## Two bugs the real-client pass found, both fixed in the lane
+
+1. **A cancelled reply banner stayed invisible on the next reply (L18).** GOAT's ComposerBannerStack remembers the id of a dismissed notice for its exit animation (apps/web/src/components/chat/ComposerBannerStack.tsx:57) and never forgot it; the reply banner's id is the fixed "reply-to" (as upstream), so after one Cancel reply every later reply banner rendered in its exit state (opacity 0, translate-y-16) while the reply was still attached and sent. Upstream's stack has no exit animation, so upstream does not hit it. Fail-first, in the stack's existing test file (a new case, no existing line changed): 8096d52aab, then the fix 55a9cb93f7 (forget a dismissed notice once it is gone from the items, the same render-phase pattern the file already uses for stackExpanded).
+   `vp test run apps/web/src/components/chat/ComposerBannerStack.browser.test.tsx` at 8096d52aab: `× shows a dismissed notice again when the same notice comes back` / `- opacity: 1; + opacity: 0;` / `Tests 1 failed | 3 passed (4)`; at 55a9cb93f7: `Tests 4 passed (4)`. In the browser after the fix: cancel, reply to the same response, type: the banner shows (opacity 1), capture after-l18-4 below.
+2. **The two Activity row titles stayed English (addition b).** a3ae6a9573 wrapped the titles in msg() in settingsSearch.ts and translated the descriptions, levels and accessible names, but the rows spread searchableSetting() raw, so the visible titles were never passed through useMessages(); the other General rows use useTranslatedSearchableSetting (apps/web/src/components/settings/SettingsPanels.tsx:540). 2a94ed4deb does the same in ActivitySettingsRows.tsx. Visual, so captures are the proof (before-b-2 and after-b-2 below); settingsSearch.test.ts and I18nProvider.browser.test.tsx pass at the head.
+
+## Real-client pass (web; this worktree's own .goat seeded by vp run dev; Replay (dev) for every turn)
+
+Head: `vp run dev` in this worktree at 2a94ed4deb's code (web 8673, server 16713). Before: a `git archive e04442e66c` export in /tmp with its own home inside the export (so Replay registers), `vp run dev --home-dir <export>/.goat` (web 5733, server 13773), seeded with a copy of this worktree's statev2.sqlite. The no-Reply state: the head's own Vite (this worktree, :8673) proxying to that e04442e66c server (GOAT_PORT=13773); `/.well-known/goat/environment` there reports replyToResponse absent. For the inbox captures both builds used a scratch copy of the acp_elicitation replay transcript whose field is free text (the stock fixture has an enum, so the inbox shows no answer box); that one-line edit to apps/server/scripts/dev-replay-agent.ts was never committed and is reverted. The clipboard was stubbed in the page for the copy captures (headless Chromium refuses clipboard writes, so the copied state never renders otherwise). Every server, Vite and the export were stopped or removed afterwards (ports 8673, 5733, 13773 free at 15:45:50 UTC; the export deleted).
+
+L18, after (head): the Reply action, the banner, Cancel reply, the banner with text typed after an earlier cancel, the sent card:
+![n14-after-l18-1-reply-action](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-after-l18-1-reply-action.png)
+![n14-after-l18-2-banner](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-after-l18-2-banner.png)
+![n14-after-l18-3-cancelled](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-after-l18-3-cancelled.png)
+![n14-after-l18-4-banner-typed](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-after-l18-4-banner-typed.png)
+![n14-after-l18-5-sent-card](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-after-l18-5-sent-card.png)
+
+L18, before (e04442e66c): Copy and Fork only. The head's client against the e04442e66c server (no replyToResponse): Copy and Fork only, no Reply. And a reply the head stored, read by the e04442e66c build: the reference shows as the old inline quote chip before the message text, nothing breaks:
+![n14-before-l18-1-no-reply](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-before-l18-1-no-reply.png)
+![n14-headclient-oldserver-l18-no-reply](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-headclient-oldserver-l18-no-reply.png)
+![n14-oldbuild-l18-stored-reply](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-oldbuild-l18-stored-reply.png)
+
+(a) Stop keeps the answer. Before: the inbox answer never reaches the thread, and after Stop the composer is empty. After: the thread's question composer already holds the inbox answer, and after Stop it stays in the thread's draft:
+![n14-before-a1-1-inbox-typed](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-before-a1-1-inbox-typed.png)
+![n14-before-a1-2-thread-before-stop](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-before-a1-2-thread-before-stop.png)
+![n14-before-a1-3-thread-after-stop](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-before-a1-3-thread-after-stop.png)
+![n14-after-a1-1-inbox-typed](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-after-a1-1-inbox-typed.png)
+![n14-after-a1-2-thread-before-stop](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-after-a1-2-thread-before-stop.png)
+![n14-after-a1-3-thread-after-stop](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-after-a1-3-thread-after-stop.png)
+
+(a) "/side ..." in the inbox. Before: sent to the agent as the answer. After: the side chat opens with the question and the question stays pending:
+![n14-before-a2-1-inbox-side-typed](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-before-a2-1-inbox-side-typed.png)
+![n14-before-a2-2-sent-as-answer](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-before-a2-2-sent-as-answer.png)
+![n14-after-a2-1-inbox-side-typed](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-after-a2-1-inbox-side-typed.png)
+![n14-after-a2-2-side-chat-opened](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-after-a2-2-side-chat-opened.png)
+
+(b) Settings > General > Activity: English (head), Korean before (all English) and after (all Korean, levels open):
+![n14-after-b-1-activity-en](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-after-b-1-activity-en.png)
+![n14-before-b-2-activity-ko](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-before-b-2-activity-ko.png)
+![n14-after-b-2-activity-ko](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-after-b-2-activity-ko.png)
+Window title on a thread that needs input, read from document.title with "Screen reader window title" on: e04442e66c in Korean: `Needs your input: Replay: question - server - GOAT (Dev)`; head in Korean: `입력 필요: Replay: question - server - GOAT (Dev)`; head in English: `Needs your input: Replay: question - server - GOAT (Dev)`.
+
+O28, copy to check and a chevron toggle, before (the morph caught mid-transition) and after (an instant swap; the DOM shows CopyIcon -> CheckIcon and aria-label "Copied", ChevronRightIcon -> ChevronDownIcon with aria-expanded false -> true):
+![n14-before-o28-1-copy](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-before-o28-1-copy.png)
+![n14-before-o28-2-copied-check](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-before-o28-2-copied-check.png)
+![n14-before-o28-3-chevron-open](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-before-o28-3-chevron-open.png)
+![n14-after-o28-1-copy](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-after-o28-1-copy.png)
+![n14-after-o28-2-copied-check](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-after-o28-2-copied-check.png)
+![n14-after-o28-3-chevron-open](https://raw.githubusercontent.com/goat-si/goat/4cc34855164543e714bfdf000929d175454e6ed7/3660/n14-after-o28-3-chevron-open.png)
+Play/pause: GOAT has no play/pause MorphIcon site (the base's sites are copy/check, chevrons, and the two-state glyphs volume, lock, theme, panel, folder, steer/queue, maximize, resolved, text/image), so there is no play/pause capture; the third kind I tried, the main sidebar's panel toggle, did not register a click in the headless browser and is left out. Desktop is the same web bundle, so these captures stand for it.
+
+## Checks on the final head 2a94ed4deb
+
+- `node scripts/goat-rename.ts --check` and the static half of `vp run check:changed origin/chase/t3-261114-next2` (15:47 UTC): goat-rename, unused patches, format, graphql, lint, agent context budget, agent surface audit, typecheck (42 packages), knip 1/2 and 2/2 all pass. Its test step selects the wide set (747 files on the first count), so it was stopped and the wide selection is CI's (run 44118636205).
+- Tests beside the changed files, on d23fa3223a (15:10-15:18 UTC): `vp test run` over the 266 listed files: `Test Files 267 passed (267)`, `Tests 3362 passed (3362)`. The three later commits: `vp test run` of ComposerBannerStack.browser.test.tsx, settingsSearch.test.ts, I18nProvider.browser.test.tsx: `Tests 69 passed`; and the 35 files that exercise replies and the banner (composerReplyTarget, composerDraftStore.replyTo, stashFailedSend, ChatView.replySnapshot, ComposerBannerStack and the GoatBot reply files): `Test Files 35 passed (35)`, `Tests 252 passed (252)`.
+- O28's lockfile on the head: `git diff e04442e66c HEAD -- pnpm-lock.yaml` holds morphicons' importer, package and snapshot entries and the peer-hash suffixes of @alchemy.run/cloudflare, drizzle and test 2.0.0-beta.85 (the version stays 2.0.0-beta.85); the only removed resolution is morphicons'. `vp i --frozen-lockfile` exited 0 (earlier in the lane; pnpm-lock.yaml unchanged since).
+- MCP count tests: this lane adds no agent tool; agent surface audit and context budget pass unchanged.
+- Earlier evidence per row, accepted by the coordinator at 14:10:49 and 14:19:09: O1 threadFindText fail-first (userMessageCollapse.test.ts a characterisation, passing before and after); L18's eight failing files before the port and the decoder transcript through ef8e62ad8c's real decoder (`pre-L18 decoder (ef8e62ad8c) kinds: ["thread"]`); ChatView.ssh.browser.test.tsx 44/44 after dd8fbe93f1; L357 `× folds one long paragraph` before c967da6f92 and 3/3 after; C3 `× leaves a thread link inside another link's address or title as written` before e7232be701, 15/15 after; L373 localFolderTarget.test.ts failing before the port, 5/5 after; "goat <dir>" 2/2 on the base and on the head; L376 5 failures before 2a97870196, 8/8 after; L365 hook cases 4 failing before, all passing at the head, render isolation awaiting the catalog; L353 7 files 179 tests and the companions 33/33; additions 46 and 65 tests; O28's 17 touched-component test files, 209 tests.
+
+## Rule 3
+
+Existing dev tests this lane changed, each with its authorisation:
+- packages/shared/src/threadFindText.test.ts:107-127, 0c82d084ec: upstream's case byte for byte (12:59:47 (1)).
+- apps/web/src/components/chat/MessagesTimeline.logic.test.ts:4209-4228: moved verbatim to userMessageCollapse.test.ts (a8b477d2f4), upstream's edit there (0c82d084ec) (12:59:47 (2)); userMessageCollapse.test.ts deleted with its rule in bd3ad8e8be (13:29:38 part 1), replaced by the TimelineUserMessageFold.browser.test.tsx cases (two cards do not fold, ten do; the long paragraph per 14:19:09).
+- apps/web/src/components/chat/AssistantCitationChip.browser.test.tsx:64, 0c82d084ec: the composer prop line removed (12:59:47 (3)).
+- packages/contracts/src/composerContext.test.ts knownRecords, 88b1003e07: one row for kind "response" (12:57:11 (iii)); the rest of +96 is new cases.
+- apps/web/src/components/chat/stashFailedSend.test.ts:40-52, 38eeb71e21: replyTo: null and draftText: messageText, plus the new reply case (13:21:07).
+- apps/web/src/components/Sidebar.logic.browser.test.tsx:36-59, f3e14033b9: upstream's body and three cases (13:57:07); the tail equals upstream's apart from the @goat import names.
+- Import lines only (13:05:00 / 14:19:09): composerModelOptionPrecedence.test.ts and modelSelection.test.ts (cb87ceb8f1), composerDraftStore.test.ts and useComposerSelection.browser.test.tsx (8f6f5e8901), ChatView.logic.test.ts (5813cb40c7), Sidebar.logic.browser.test.tsx (f6fc2f3953).
+- Only added cases, no existing line changed: threadLinks.test.ts (d7f09b745a), assistantCitationNavigation.test.ts (89a9eacd0e), composerContextRecords.test.ts and composerContextReferences.test.ts (88b1003e07), ComposerBannerStack.browser.test.tsx (8096d52aab).
+- The lane's own new test files changed after their test commit: Sidebar.renderIsolation.browser.test.tsx (3c2005f014, the baseline after the environment catalog loads, ruling 14:10:49 a, accepted 14:19:09); threadActivity.viewedImages.test.ts (mobile, 766be6f5b3: the port puts the viewed-images entry after the tool group's work-toggle row, where 5899fca57a had expected it after the activity-group row; the file is this lane's, added in 5899fca57a, so its fail-first is the missing entry, not the position).
+
+## NOT RUN
+
+- NOT RUN: the wide test selection locally (747 files); goat-ci run 44118636205 carries it.
+- NOT RUN: desktop build (O28 (f)); desktop is the same web bundle.
+- NOT RUN: mobile native captures for L353 and L18's received chip; they join P1's pass (no device on this Mac).
+- NOT RUN: full CI (ci:full) beyond lane all; an independent review (the coordinator runs one per READY).
+- NOT RUN: a play/pause O28 capture (no such site in GOAT, see above).
+
+## Known limits and notes for the pull request body
+
+- L357 behaviour note (14:19:09): a paragraph of about 700 characters is no longer folded, on desktop or at phone width; folding now depends on rendered height, so it differs by column width.
+- L18 known limit: a multi-model fan-out or a plan follow-up sends a reply's reference to threads that do not hold the response; those threads see the reply as unavailable (the agent gets an unavailable marker, no read instruction). The guest page hides Reply (no composer).
+- For next3's mobile row (the Decisions inbox and question card half of O2/O4): the shared rule is packages/client-runtime/src/state/unsentQuestionAnswers.ts, imported as @goat/client-runtime/state/unsent-question-answers, exports parseSideChatCommand, sideChatCommandOverAnswer and questionDraftKeysForRequests; the second copy of the selection rule is apps/mobile/src/state/unsent-question-answers.ts, which that row removes. Decision for that row: web moves only the context chips the answer references; mobile merges the whole draft context.
+- next3 row from L365: Sidebar hosts the GOAT Bot environment observer (useBotSidebarSelected -> useGoatBotEnabled -> useObservedEnvironments), so any environment presentation change re-renders every sidebar row.
+- gt catalog drift: #3689 (a regenerate drops 17 existing entries); not touched here.
+
+
+## L18 C4 plan as sent (12:54:47 UTC)
+
+> N14 L18 C4 PLAN (c0f85e7f79 "reply to an assistant response from its hover actions", #33124), 2026-11-17 12:54:47 UTC. No L18 code exists yet; it lands after O1 (1a8ecc64b7), on which it builds.
+> 
+> WHAT A PERSON SEES (after the port)
+> - Web and desktop: a Reply button in an assistant message's hover meta row, beside Fork (apps/web/src/components/chat/TimelineAssistantRows.tsx:200). Clicking it shows a "Replying to <opening>" banner above the composer, with a cancel X (the way back out). The banner's label goes to the response. On send, the reply leads the message as a card above the text (the O1 card, titled with the subagents it reported on, if any). A failed send puts the banner back, without moving the reply into the text. Stash, queued-message edit and multi-model send carry the reply as upstream does.
+> - Mobile: no Reply action (upstream adds none). A received reply shows as a plain labelled chip (apps/mobile/src/lib/composerChipPresentation.ts gets a "response" entry, as upstream).
+> - Agents, through MCP: no new tool. The provider text gains a "response" entry that names the response's thread and item. It gives the read call as goatCallText("thread.read", {threadId, itemId}), the same form the thread kind uses (packages/shared/src/composerContextReferences.ts:347), never upstream's t3_thread_read. GOAT's thread.read already takes itemId (packages/contracts/src/agentSurface/entries/thread.ts:183; it equals the projected sourceItemId, apps/server/src/mcp/threadReadItems.ts:126).
+> - Settings, permissions, auth: none.
+> 
+> WHAT CHANGES IN CONTRACTS, WIRE AND STORED DATA
+> 1. Contract (public, C4): packages/contracts/src/composerContext.ts gains kind "response" in COMPOSER_CONTEXT_KINDS (:22-34) and ResponseContextRecord in KnownComposerContextRecord (:288-300). The record is recordBase plus citation: AssistantCitation (packages/contracts/src/assistantCitations.ts:11), itemId: TurnItemId (baseSchemas.ts:323), and optional subagents (at most 20) of {threadId, title, environmentId?}. Nothing else in the union, the envelope or OrchestrationMessageContext (:341-362) changes.
+> 2. Wire and persisted events: no new field or event type. The record rides in the existing context.records of a user message (orchestrationV2.ts:1277, :1614, :2493, :3243, :3371, :3794), which are already stored as JSON in the event store and projections. No migration and no new column.
+> 3. Web localStorage: the composer draft gains an optional replyTo key (composerDraftStore.ts:222, storage version 10 at :129 unchanged, as upstream leaves its version). The prompt stash stores the reply as one of its records. The composer clipboard fragment can carry a response record (packages/contracts/src/composerContextClipboard.ts:23-26).
+> 4. Subagents, a GOAT difference: upstream reads remote children from OrchestrationV2RemoteTaskChild/remoteChild. GOAT has neither (rg finds no remoteChild in packages/contracts), so GOAT fills subagents from local child threads only (subagent items' childThreadId, delegatedCompletion taskIds, senderThreadId). The optional environmentId stays in the schema, identical to upstream, so a later upstream port does not fork the contract. GOAT never sets it today.
+> 
+> WHAT OLDER READERS SEE (all already forward compatible, by mechanism)
+> - Older server, newer client: the old union has no response member, and UnknownContextRecord requires a payload field (composerContext.ts:271-286), so the record fails every member. ForwardCompatibleArray drops it (baseSchemas.ts:106-139, filter at :135). The message is accepted, and every other record survives. The text keeps [label](goat-context://v1/response/<id>). The agent gets "[Response: <first 64 chars of the response>; ref=<id>]" (kindDisplayName, composerContextReferences.ts:194) and <context kind="response" id=... unavailable="true"/> (:394). So it sees which response by its opening, but gets no item id. No error and no rejected turn.
+> - Older client, newer server: the same drop on decode. Web shows the reference as the existing unresolved chip "This context is no longer available." (apps/web/src/components/chat/UserMessageContextChips.tsx:301). Mobile shows "<label> (unavailable)" (apps/mobile/src/features/threads/ThreadFeed.tsx:1764). An older web client reading a newer localStorage draft ignores replyTo: its normalizer builds drafts from known keys only. A draft holding only a reply is dropped as empty. A paste from a newer client into an older one drops the record and keeps the link.
+> - Already stored threads: no stored message has a response record, so nothing changes for them. If the server is downgraded later, threads that do have one replay with the record dropped, as above.
+> I propose no capability gate to hide Reply against an older server: the fallback above is readable and harmless, and a gate is machinery this row does not need. Say so if you want one.
+> 
+> TESTS (failing test first for each logic piece, in the modules' existing test files)
+> 1. packages/contracts/src/composerContext.test.ts: the knownRecords table must cover every kind, so it needs a "response" entry (upstream adds it; a new table row in an existing dev test means I will ask rule 3 for it). Negative decodes: a response record with 21 subagents, a missing itemId, or a malformed citation is dropped from OrchestrationMessageContext while its sibling records survive. It must never pass as UnknownContextRecord, because KNOWN_KIND_PATTERN now excludes "response".
+> 2. OLDER-CLIENT DECODE TEST (the owner's condition), same file: decode a newer wire context, holding a response record and a thread record, with the pre-L18 reader. That reader is the union without ResponseContextRecord plus an UnknownContextRecord whose kind pattern excludes only the old kinds. The message must decode, the response record must drop, and the thread record must survive. Plus a one-off transcript, kept in next2-N14.md and outside the tree: the same JSON through the real decoder of ef8e62ad8c, from a git archive.
+> 3. packages/shared/src/composerContextReferences.test.ts: the response projection gives its marker, the subagent lines, "starts: <opening>" and the goatCallText thread.read {threadId,itemId} line. It never includes the response text past its opening. A reference whose record is missing (the older-server shape) projects as unavailable="true".
+> 4. Web draft store test (composerDraftStore's existing test file): replyTo round-trips through partialize and hydrate. A malformed persisted replyTo is dropped while the rest of the draft is kept. A draft holding only a reply is kept. setReplyTo(null) removes a draft that becomes empty.
+> 5. apps/web/src/components/ChatView.logic.test.ts (upstream's added cases): a failed send's snapshot puts the reply back as replyTo, never inside draftText.
+> 6. Real client: the Replay (dev) provider in my worktree's own .goat, web captures of Reply, then the banner, cancel, send, and the card in the sent message. Mobile display: a capture in P1's pass, since a running mobile client is needed (unless I can show it without a device).
+> 
+> BUDGETS AND FILES: composerDraftStore.ts (4477 lines), useComposerSend.ts, ChatView.tsx and others will be checked against oxlint-plugin-goat/code-budgets.json; a verbatim move-out commit first wherever a file is at its entry. GOAT-only pieces (the subagent reader adapted to GOAT's model) go in a GOAT-owned module, not in state/entities.ts.
+> 
+> QUESTIONS (I carry on with O1 meanwhile):
+> (i) Is "no capability gate" acceptable?
+> (ii) Should subagents keep upstream's optional environmentId (never set by GOAT), or should I drop it from GOAT's schema?
+> (iii) Rule 3: may I add the "response" row to composerContext.test.ts's knownRecords table? It is required by its every-kind check.
+
+
+## O28 C4 plan as sent
+
+> N14 O28 C4 PLAN (0f13d2ccbd "remove icon morphing", #33985), 2026-11-17 13:39:23 UTC. O28 stays last; no code before your answer.
+> 
+> WHAT CHANGES
+> - Dependency removal: "morphicons": "^1.7.1" leaves apps/web/package.json:86, and its entries leave pnpm-lock.yaml (:1367 importer, :10822 package, :21692 snapshot), through vp i in this worktree. Upstream also drops vanilla "lucide". GOAT has no such dependency (apps/web/package.json lists only lucide-react:83, which stays), so only morphicons goes. No other package depends on morphicons (rg: apps/web only; the lock's react-native-svg peer is morphicons' own optional peer).
+> - Code: apps/web/src/components/MorphIcon.tsx is deleted. Its 34 call sites in 33 files under apps/web/src (rg -l MorphIcon) swap icons plainly: <MorphIcon icon={copied ? nodes.check : nodes.copy}/> becomes {copied ? <CheckIcon/> : <CopyIcon/>}, using GOAT's Solar components (~/components/solar), the GOAT equivalent of upstream's lucide swap.
+> - GOAT difference: GOAT's MorphIcon draws Solar icon data from ~/components/solar/nodes.ts, which only MorphIcon-style drawing uses (its header comment says so). After the swap, 10 files import nodes.ts and every one of those is a MorphIcon site, so nodes.ts has no consumer. I will delete it in the same row, and its part of apps/web/scripts/generate-solar-icons.ts if that script emits it, rather than leave dead code for knip. If you prefer to keep nodes.ts as a generated asset, say so and I keep it.
+> - Stored data, wire, contracts, settings, permissions, server, mobile, desktop shell: none. This is web/desktop renderer only.
+> 
+> WHAT A PERSON SEES
+> Web and desktop: copy to check, chevron, play/pause, and the other toggles swap instantly instead of morphing (about 34 places: copy buttons, toasts, diff/file trees, panel controls, device and settings controls). Reduced-motion users already saw instant swaps (reducedMotion="user"), so nothing changes for them. Mobile: no change. Agents, MCP, settings: no change.
+> 
+> OLDER SERVER / CLIENT / STORED THREADS
+> Not applicable: nothing crosses the wire or is stored.
+> 
+> BUDGETS
+> Eight call-site files are at their entries: ResourceTelemetryDiagnostics.tsx 1304, ThemeEditorPanel.tsx 1254, PullRequestCodeTab.tsx 1458, MessagesTimeline.tsx 1647, DiffPanel.tsx 1207, ProviderInstanceCard.tsx 1395, DiagnosticsSettings.tsx 1336, FilePreviewPanel.tsx 1732. A ternary of two icons takes no more lines than the MorphIcon call. If an import grows a file past its entry, that file gets a verbatim move-out commit first.
+> 
+> VERIFICATION AND NEGATIVE CASES
+> - rg MorphIcon|morphicons|solar/nodes over apps and packages returns nothing; vp i leaves no morphicons in pnpm-lock.yaml; knip (in check:changed) finds no unused export or dependency.
+> - Typecheck of the web package; vp test run on the browser tests of the touched components (copy buttons, toasts, ChangedFilesTree, MessageCopyButton). A test asserting a morph would be a rule 3 case. rg finds no test that mentions MorphIcon.
+> - The change is purely visual, so the proof is before/after captures (Replay, my worktree's .goat) of a copy button (copy to check) and a chevron toggle, plus a reduced-motion before/after showing no change.
+> - The desktop build is not run locally (heavy); the goat-ci run on my branch covers the web bundle. I will name this on a NOT RUN line.
+> - Rule 3: any existing test needing an edit comes to you first.
+> 
+> QUESTION: delete solar/nodes.ts with MorphIcon (my recommendation), or keep it?
+
+
+## Coordinator messages to N14, verbatim (relayed by the lane coordinator)
+
+### Order, 2026-11-17 12:41:08 UTC (cycle coordinator, the part for the next lanes)
+
+> NEXT LANES, by the plan, each from the then-current integration head, each brief with the cut paragraph of 11:27:54 and host.status placement first:
+> - pen-macbookpro2, after N9a's follow-up is pushed: SF1 orchestration (goat#3656, #3653, #3558, #3581, #3568, #3569, #3641, #3639).
+> - pen-mac-studio, after X1's follow-up is pushed: N14 web timeline and shell (O1, L18 as C4 with its plan to me before code, L357, C3 rest, L373, L376, L365, L353 with its two companions, O28 last, C4).
+> Start both without asking again; send me the thread ids.
+
+### The cut of #3660, 2026-11-17 11:27:54 UTC
+
+> THE CUT OF #3660 (the owner asked on 11-17 to wrap up, merge, and line up the next one, so this pull request does not wait for the whole plan): it merges when the lanes now cut from it (X1, N4, N12, N15b, N9a; S4 and CF1 are in) are reviewed and merged into the integration branch and P1's integrated pass on that head is done. N10, N14, N15a, SF1 to SF3 and TF1 still start as their hosts free up, in the plan's order, but a lane that is not READY at the cut moves to next3 with its branch as it is (cut from the same line, so nothing is lost). Tell each new lane this in its brief.
+
+### Lane coordinator, 12:50 UTC
+
+> the integration head is now e80f5132e7 (X1's follow-ups on top of ef8e62ad8c). Merge THAT at your READY point (a merge, no rebase; git's own merge expected, X1 touches only CI files and structure/ci.md). N14: you were cut from ef8e62ad8c, which is fine; merge e80f5132e7 (or whatever the head is then) only at your READY point.
+
+### Stable promotion and the light rule (relayed)
+
+> 2. THE THIRD NIGHTLY IS PUBLISHED: GOAT Nightly 0.1.10-nightly.20261117.376 at dev 6f872e6b2d (release published 12:48:32Z, 31 assets; every desktop build passed, Windows x64 and arm64 included). THE STABLE PROMOTION IS DISPATCHED for that commit: https://github.com/goat-si/goat/actions/runs/44086810768 (channel stable, sha 6f872e6b2d, publish true). While it signs on goat-mac-studio, pen-mac-studio stays light: N14 reads and plans (its C4 plans for L18 and O28, the row list) and runs no typecheck, test suite or build until I say the stable macOS jobs are done.
+>
+> (Lane coordinator: relayed verbatim; the part that binds you is the last sentence. Until I relay that the stable macOS jobs are done: read, port code and write the L18 and O28 C4 plans, but run no typecheck, test suite, check:changed, dev server or build on pen-mac-studio. Single focused test files are not allowed either during the signing; queue them.)
+
+### Coordinator, 12:53:46 UTC (additions)
+
+> BOTH JOIN N14, after its plan rows and before O28 (O28 stays last):
+> (a) The Decisions inbox half of O2 and O4, web: Stop keeps a typed answer and its attachments in the web Decisions inbox; "/side ..." typed there opens the side chat. As ruled on 11-16: the rule lives ONCE in packages/client-runtime and the web inbox uses it. N14 builds the shared rule and the web side, with a failing test first for the rule and a web before/after capture for each of the two behaviours. It does NOT touch apps/mobile. The mobile card and inbox half is NOT N15b's now (N15b finishes A1 and goes READY): it goes to next3 as a row of the mobile follow-up, consuming N14's shared rule; put it in next3's plan with the file N14 leaves it.
+> (b) Settings > General's two Activity rows and the window title's status words, translated (SP-P3-4): S, visual, captures in two languages as proof; it says whether desktop's window title takes the same strings.
+> Your row list for N14 with the SHAs is right as you sent it (L357 = a9f2d7d5f4, not a88a0adfa1). If either (a) or (b) turns out to need a contract or stored-setting change, it comes to me as a plan first like L18 and O28.
+>
+> (Lane coordinator: relayed verbatim; it is now part of your brief. The source text for (a), next-pr-plan.md "Added 2026-11-16 (N1 review N1-P3-3)", verbatim: "N14 (web shell): the Decisions inbox half of O2 and O4. Stop while a question is answered from the Decisions inbox (apps/web DecisionUserInputForm) should keep the typed answer and its attachments like the composer does since N1 (5364929301), and \"/side ...\" typed there should open the side chat as in the composer (1dd6ac8850). Reuse N1's client-runtime tracker and the composerSubmission rule; S." And: "Coordinator ruling 2026-11-16: N14 owns the web Decisions inbox; N15b owns the mobile question card and the mobile Decisions inbox. The rule lives once in packages/client-runtime; whichever lane lands first puts it there and the other calls it." (N1's tracker is unsent-question-answers.ts in client-runtime.) For (b), "Added 2026-11-16 (small ports review SP-P3-4)", verbatim: "translate both Activity rows in Settings -> General (the existing Activity row and #3397's new window-title switch, 1d218d1525 / 9b068f4fd2) and the status words the window title uses; both are English-only today." At READY, name the client-runtime file and export the mobile half should call, for next3's plan. The light rule on pen-mac-studio still holds until I relay otherwise.)
+
+### Coordinator, 12:57:11 UTC, part 3 (L18)
+
+> PART 3, N14, L18 (c0f85e7f79, Reply to an assistant response): PLAN APPROVED with three rulings and four conditions.
+>  (i) A CAPABILITY GATE, YES. A reply the server silently drops is a fallback that hides a failure: the person sees their reply card, the agent gets "unavailable". Follow N12's precedent (capabilities.serverBrowserStopLoading in the ServerEnvironment descriptor): one capability for the response context kind; web and desktop show Reply only when the thread's environment reports it; absent or false = no Reply action (the banner, card and draft code never start). A reply already in a draft or stash when the environment turns out not to support it: say what happens (the banner shows and send refuses with a sentence, or the reply is dropped with a notice; not silently). The drop path through ForwardCompatibleArray stays as the safety net and keeps its tests.
+>  (ii) Keep upstream's optional subagents.environmentId in the schema, never set by GOAT; the fork delta says so.
+>  (iii) RULE 3 AUTHORISED: packages/contracts' composerContext.test.ts knownRecords table gains exactly ONE row, for kind "response" (its every-kind check requires it; upstream adds the same row). No other row, expectation or title changes; the record quotes the file:line before and after.
+>  Conditions: (1) the older-client decode test as you describe it, both the reconstructed pre-L18 reader and the one-off transcript through the previous head's real decoder; (2) the response record is built by the CLIENT, so the server must not trust it: say what the server checks before it turns the record into the agent-facing thread.read line (that itemId is an item of a thread in this environment the sending session may read; a record naming another thread's item or a thread on another environment is dropped or projected unavailable, never turned into a read instruction for something the sender could not read); negative tests for both; (3) the agent never receives the response text beyond its opening through this record, as you say, and the agent surface audit and context budget stay unchanged or you tell me what moved; (4) mobile: the received chip only, no Reply action, stated in docs/user if the feature gets a sentence there. Move-outs first, verbatim, for composerDraftStore.ts and any other file at its entry. Web captures with Replay for Reply, banner, cancel, send, card, and the no-Reply state against a server without the capability (the previous build's dev server will do).
+>
+> (Lane coordinator: part 3 relayed verbatim; parts 1 and 2 were for SF1. L18 may start after O1 under these rulings. Note the capability gate makes L18 also touch the ServerEnvironment descriptor and its capability tests; if that moves any existing test expectation, it is rule 3 again. The light rule on pen-mac-studio still holds.)
+
+### Lane coordinator, 12:58 UTC (MCP count rule)
+
+> a new lane rule from the coordinator (12:54:53): a lane that adds or removes an agent tool (an MCP tool or agent surface entry) runs apps/server/src/mcp's exhaustive count tests by name before its CI run, at least apps/server/src/mcp/McpToolAccess.capabilities.test.ts and apps/server/src/mcp/agentSurface.test.ts (vp test run from apps/server). A beside-files run cannot see those counts; N12's CI failed on exactly that. A change to either count is rule 3.
+
+
+
+### Coordinator to lane coordinator, 2026-11-17 12:59:47 UTC (relayed; verbatim)
+
+PART 2, N14, O1 (1a8ecc64b7), RULE 3 AUTHORISED, exactly these three:
+ (1) packages/shared/src/threadFindText.test.ts:107-127: the test becomes upstream's, byte for byte: title "indexes a citation by its comment, not its quote or link text"; expectations ["Please fix ", " thanks"] and, for the commented citation with comment "my\nnote", ["fix ", "my note thanks"]. Reason: the owner's O1 decision A (find no longer matches the quoted text the card hides); the record quotes that decision line with its source.
+ (2) apps/web/src/components/chat/MessagesTimeline.logic.test.ts:4209-4228, describe("shouldCollapseUserMessage"): moved verbatim into the new apps/web/src/components/chat/userMessageCollapse.test.ts beside the moved rule (the two unused imports dropped from the old file), THEN upstream's edit there: the title "measures a quote by its card, not its encoded link", the fixture split into source and citation, the two existing expectations unchanged, two added (bare.repeat(2) false, bare.repeat(10) true). The move and the edit are TWO commits so the move can be checked by script.
+ (3) apps/web/src/components/chat/AssistantCitationChip.browser.test.tsx:64: the "composer" prop line removed, because O1 deletes the prop.
+ Nothing else in those files changes. L357's deletion of shouldCollapseUserMessage and its test comes as its own request, with what replaces the coverage (useTallEnoughToFold's test) side by side.
+
+PART 3, pen-mac-studio: the stable run 44086810768 has finished CLI darwin-arm64; its desktop macOS jobs have not started yet. The light rule stays; I lift it when Desktop macOS arm64 and x64 are done. N14 keeps reading, planning and committing; its fail-first runs wait.
+
+(Lane coordinator: parts 2 and 3 relayed verbatim; part 1 was for SF1. Commit the three authorised changes with O1 (the move and the edit of (2) as two commits); fail-first waits for the light rule to lift.)
+
+### Lane coordinator, 13:1x UTC (verbatim)
+
+O1's commits noted and reported. For the fail-first when the light rule lifts: the authorised test edits (1) and (2b) sit in 0c82d084ec with the port, so show the failure by running 0c82d084ec's versions of threadFindText.test.ts and userMessageCollapse.test.ts against a8b477d2f4's code (e.g. git checkout 0c82d084ec -- those two test files on a detached a8b477d2f4, run, then restore), quote the failure, then the pass at 0c82d084ec. For later rows, commit the test change before the fix so the order shows by itself.
+
+### Coordinator to lane coordinator, 2026-11-17 13:05:00 UTC (relayed; verbatim)
+
+L18 BUDGETS: (A) for useComposerSend.ts and (B) for ChatView.tsx, as N14 recommends.
+(A) useComposerSend.ts: ONE mechanical extraction commit before L18: the SSH port factories (makeSshThreadOpenPorts, makeSshSubmissionPorts, :299-366) lifted into a GOAT-owned module, the values they capture passed as one parameter object, the bodies otherwise byte-identical. The record shows the script diff of the bodies (only the captured names' access changes) and the entry lowered to the new length. It is a refactor of code that sends to other machines, so: no behaviour change, the existing tests of those paths named and passing after it (when the light rule lifts), and if no test covers the factories today, say so and add one characterisation test BEFORE the move (same commit order: test, move).
+(B) ChatView.tsx is not touched: the Reply action writes replyTo to the composer draft store for that thread and asks for composer focus through the path keyboard focus already uses; ChatComposer.tsx shows the banner or the refusal. Conditions: it works with two threads open side by side (the reply lands in the right thread's draft and focuses that composer); with the composer collapsed or scrolled away, whatever the existing focus path does today (say what); Reply on a message while another reply is pending replaces it (as upstream) or says why not. The fork delta gets one line: GOAT routes Reply through the draft store where upstream goes through the composer handle in ChatView, to keep the upstream file unchanged.
+The other move-outs (composerDraftStore.ts, ChatComposer.tsx, ChatView.logic.ts, MessagesTimeline.tsx) verbatim, each its own commit; the new tests in new files as planned, so no existing test moves.
+
+(Lane coordinator: relayed verbatim; go. The light rule on pen-mac-studio still holds.)
+
+### Coordinator to lane coordinator, 2026-11-17 13:15:52 UTC (relayed; verbatim)
+
+PART 2, N14, the two deviations in L18's move-outs:
+ (a) The SSH ports built lazily at send (dd8fbe93f1): ACCEPTED. The bodies are identical and the React compiler's ref rule is a real constraint. Conditions: the record says, with path:line before and after, that every ref the factories read was read at send time before too (so nothing is now read later or earlier than it was), and that the toast's retry path builds its ports at the moment of the retry as before; the four named ChatView.ssh.browser.test.tsx cases pass after the move when the light rule lifts, and their output goes in the record. If any of the four does not actually reach the factory it is named for, add the characterisation test then.
+ (b) The composer handle registry in place of my draft-store route: ACCEPTED, it is closer to upstream and keeps ChatView.tsx untouched. Conditions: (1) the key is the composer's scope, not the thread alone: the SAME thread shown twice (two panes, or a pane and an embedded side chat of it) must send the reply to the composer beside the message that was clicked; say what the key is and add that case as a test; (2) a composer that unmounts leaves no handle behind (the ref cleanup; one test: unmount, then Reply gives the "composer is not open" toast and nothing throws); (3) the registry holds handles only, never drafts or message text, and is keyed so two environments' threads with the same id cannot collide; (4) the toast's wording and when it can really happen (a timeline visible without its composer: name the surfaces, e.g. a read-only or archived thread, a history view) and whether Reply should be hidden there instead of failing on click: if the composer can never be opened for that surface, hide the button; (5) the fork delta line describes the registry (replacing my draft-store wording).
+ The other three move-outs (cb87ceb8f1, 38a54d1aec, 5813cb40c7) as reported; the reviewer checks them by script.
+
+(Lane coordinator: part 2 relayed verbatim; part 1 was for N15b. The light rule on pen-mac-studio still holds.)
+
+### Coordinator to lane coordinator, 2026-11-17 13:21:07 UTC (relayed; verbatim)
+
+RULE 3, L18, AUTHORISED: apps/web/src/components/chat/stashFailedSend.test.ts:40-52, the snapshot(messageText) fixture gains exactly two lines, replyTo: null and draftText: messageText. A harness change forced by the snapshot's two new fields; neutral values (no reply; the text a send without a reply puts back); no expectation, title or row changes. Condition: the failed-send stash gets its own NEW case with a reply (a failed send with replyTo set keeps the reply in the stash and restores the banner, and draftText comes back without the reply's reference), so the fixture's null is not the only thing ever exercised.
+N15b: run 44091082395 on d8dd40a166 noted; READY with its result.
+pen-mac-studio stays light: the stable run's macOS desktop jobs are not both done yet (Desktop linux arm64:completed:success | Desktop win x64:completed:success | Desktop win arm64:completed:success | Desktop macOS arm64:in_progress: | Desktop linux x64:completed:success).
+
+(Lane coordinator: relayed verbatim; the N15b line is not yours. Commit the two fixture lines with the new stash case. The light rule holds until I relay that macOS arm64 and x64 are done.)
+
+### Lane coordinator, 13:28 UTC (verbatim)
+
+A new rule from the coordinator (13:27:11), until the owner answers: any pull request to dev is opened as a DRAFT and stays a draft (gh pr create --draft); the coordinator marks it ready at the moment it merges. Reason: #3678 was merged through the owner's account three seconds after a "review: PASS" comment posted via the Cursor app while it sat open and green; neither the lanes nor the lane coordinator did it. #3660 is a draft and stays one.
+
+### Coordinator to lane coordinator, 2026-11-17 13:29:38 UTC (relayed; verbatim)
+
+PART 1, N14, L357 (a9f2d7d5f4), RULE 3 AUTHORISED: apps/web/src/components/chat/userMessageCollapse.test.ts is deleted together with userMessageCollapse.ts (no caller after the port), because the fold rule it tested (a line and character count) no longer exists; the fold is now measured on the rendered row. CONDITION, since the deleted test pinned two things the new browser case does not: TimelineUserMessageFold.browser.test.tsx gains (a) a message of quote cards: two cards do not fold, ten do (what the old "measures a quote by its card" expectations said, now by real height), and (b) one long single-paragraph message (the old 60-sentence case) folds. Same style as the committed case (expect.element / vi.waitFor, no frame waits). If a card's real height makes "two do not fold" false in the rendered row, do not bend the numbers to pass: tell me what a person sees with two cards and I rule on it. The deletion and the port go in one commit after 147026a1d9; the record shows old expectations and new cases side by side.
+
+PART 2, N14, L18 as written: read. The server check (the item must be an assistant message with the citation's message id, in the receiving thread or the thread a side chat or run fork shows, on this environment; anything else unavailable with no read line) and the per-pane registry by the composer's form element meet my conditions. Two things for the record and the reviewer: the known limit (a multi-model fan-out or a plan follow-up sends the reference to threads that do not hold the response, which see it unavailable) goes into #3660's or next3's Known limits with what a person sees in those threads; and the guest page hiding Reply is stated with its path:line. The transcript through the previous head's decoder and every test run when the light rule lifts. The light rule stays: the stable run's macOS desktop job is still running.
+
+(Lane coordinator: parts 1 and 2 relayed verbatim; part 3 was for SF1. Since the light rule still holds, write the two new browser cases now and run them, with the deletion's commit, when it lifts.)
+
+### Coordinator to lane coordinator, 2026-11-17 13:40:30 UTC (relayed; verbatim)
+
+PART 1, N14, O28 (0f13d2ccbd, remove icon morphing): PLAN APPROVED, including deleting ~/components/solar/nodes.ts with MorphIcon. Conditions: (a) the generator (apps/web/scripts/generate-solar-icons.ts) stops emitting nodes.ts in the SAME commit, and running it afterwards leaves the tree clean (show the command and an empty git status); (b) pnpm-lock.yaml's diff holds morphicons' entries and nothing else: the importer line, the package and the snapshot (and its own optional peers only if nothing else references them); regenerated by the installer, not by hand; say the command; no other version moves; (c) every one of the 34 sites keeps its accessible name, its pressed or expanded state and its size: the swap changes the glyph only (one sentence per kind of control, and the browser tests of the touched components pass unchanged; any existing test edit comes to me first); (d) no CSS or motion replacement is added for the morph: an instant swap, as upstream; (e) captures: copy to check, a chevron toggle, play/pause, each before and after, on web; desktop is the same bundle: say so; (f) NOT RUN names the desktop build. It stays the LAST row of the lane.
+
+PART 2, N14, L373's side effect on "goat <dir>": the question is what it did BEFORE. Show it on the base with a test or a transcript: a desktop whose primary environment is not on this machine receives a "goat <dir>" activation: did it create a project on the other machine with this machine's path, fail with an error, or do nothing? RULING: if the old behaviour handed a local path to another machine (a project that cannot exist there, or a failure nobody could read), the new refusal is WANTED for "goat <dir>" too, with its own sentence that says what to do (open the folder from the machine that has it, or switch the primary), a test for that entry point, and a line in docs/user where "goat <dir>" is described. If the old behaviour worked in any real case (say which), the shared hook keeps it for "goat <dir>" and only the sidebar drop gets the new refusal. Either way the record states before and after for that entry point; it is not to change by accident of sharing a hook.
+ L357, C3 and L373 as committed locally: read; they run when the light rule lifts. It stays: the stable run's macOS x64 desktop job is still running.
+
+(Lane coordinator: parts 1 and 2 relayed verbatim; part 3 was for T1. Showing the base behaviour of "goat <dir>" with a test needs a test run, which waits for the light rule; a transcript from reading the base code path with path:line is allowed now if it settles the question.)
+
+### Lane coordinator correction, 13:4x UTC (verbatim)
+
+My note under part 2 was too loose. Reading the base code with path:line is fine for deciding which branch of the ruling applies, and you can send that now, but the evidence the coordinator asked for is a TEST or a TRANSCRIPT of the base behaviour; run it when the light rule lifts and put it in the record.
+
+### Coordinator to lane coordinator, 2026-11-17 13:41:48 UTC (relayed; verbatim)
+
+Addition (a), the Decisions inbox half of O2/O4: YES, N14's (1) to (3) is the intended shape. apps/mobile is not touched in this lane.
+ 1. The move of web's existing logic (which questions of a request hold an unsent answer; sideChatCommandOverAnswer) into packages/client-runtime/src/state/unsent-question-answers.ts is ITS OWN COMMIT, as verbatim as the move allows, with web's existing tests of that logic passing unchanged before any inbox wiring; if an existing test must change its import line only, that is an import line; anything more comes to me first.
+ 2. Then the inbox: DecisionUserInputForm's Stop and submit call the shared functions; a failing test first for each of the two behaviours (Stop keeps the typed answer and its attachments; "/side ..." typed in the inbox opens the side chat and is not sent as an answer); the two web captures.
+ 3. The shared functions take plain data (answer drafts, attachment draft keys, the text), nothing of web's stores or React, so next3's mobile row can call them as they are; N14 names the file and exports at READY, and the lane coordinator's next3 plan names the two copies of the selection rule that exist until that row lands (client-runtime for web; apps/mobile/src/state/unsent-question-answers.ts) and that the mobile row removes the second.
+ 4. If the two existing implementations (web's and mobile's) DISAGREE on any case while you read them (what counts as an unsent answer: whitespace only, an attachment without text, a question already answered), list the cases in the record; the shared rule follows web's behaviour in this lane, and the difference goes to next3's row as a decision, not silently unified.
+
+(Lane coordinator: relayed verbatim. And my apology: my earlier relay said N1's tracker lived in client-runtime; you were right that it is in apps/mobile. The light rule on pen-mac-studio still holds.)
+
+### Coordinator to lane coordinator, 2026-11-17 13:48:28 UTC (relayed; verbatim)
+
+3. N14, "goat <dir>": accepted as the SECOND branch: the base could not hand a local path to another machine (a desktop's primary is always its own backend; Local off answers "not connected"), and the shared hook keeps that. The two-case test at the activation entry point runs on the base and on the head when the light rule lifts; no docs change.
+
+(Lane coordinator: part 3 relayed verbatim. The light rule still holds.)
+
+
+### Lane coordinator, 13:55 UTC (verbatim)
+
+THE LIGHT RULE ON pen-mac-studio IS LIFTED (coordinator, 13:53:53: the stable run has no macOS job running). Run your queued checks, one heavy job at a time: O1's fail-first (0c82d084ec's test files against a8b477d2f4's code), L18's tests and the transcript through ef8e62ad8c's decoder, the four ChatView.ssh cases after the SSH ports move, L357's browser cases, C3, L373 and the goat <dir> two-case test on base and head, typecheck. Lane coordinator (date -u 13:55 UTC): the integration head is now 349e167a32 (N4 merged; S4, CF1, X1, N9a, N4 in). Merge it at your READY or fix-round point (a merge, no rebase). Your L365 rule 3 request (Sidebar.logic.browser.test.tsx:36-59) and the LegacySidebar scope note went to the coordinator; keep that edit uncommitted until the line comes back.
+
+
+### Coordinator to lane coordinator, 2026-11-17 13:57:07 UTC (relayed; verbatim)
+
+PART 2, N14, L365 (facd190640), RULE 3 AUTHORISED: apps/web/src/components/Sidebar.logic.browser.test.tsx:36-59, describe "useThreadJumpHintsVisible": the existing case keeps its title "waits for the delay again on a second hold" and takes upstream's body (driven by the real modifier key and THREAD_JUMP_HINT_SHOW_DELAY_MS), and upstream's three cases join the describe; the file's tail from that point equals upstream's byte for byte apart from the @goat import names. Reason: the hook's signature changes from a boolean to (keybindings, routeThreadRef), so the old driver cannot compile, and the expectation it held (hidden before the delay, shown at it, again on a second hold) is kept. The useSnoozeWakeClock case is untouched. Record: the empty diff of the tail against upstream.
+ SCOPE: LegacySidebar.tsx is ported the same way: ACCEPTED, including the side effect that its shortcut context gains previewFocus, previewOpen, isWeb and isDesktop, so a custom keybinding's "when" clause evaluates there as it already does in the main sidebar. Conditions: one test in the legacy view for a binding with a previewOpen clause (fires when it should, not otherwise), one sentence in the record that default bindings are unaffected with the path:line of the defaults, and the fork delta names the remaining difference (the legacy jump label map still redraws once when the terminal opens). The render-isolation test's zero is not bent: if GOAT's lazy sortable rows still render, find the cause or bring me the number and what a person would notice.
+
+PART 4, the stable promotion: run 44086810768 built everything (all 5 CLI and all 6 desktop jobs passed, macOS x64 included) and then FAILED in "Assemble and verify" at "Fetch build outputs": "GitHubReleaseError: Failed to download GitHub release asset" after eight hand-offs had restored (a download failure on the hosted runner, not a build or verify failure). The workflow kept every hand-off for exactly this; I re-ran the failed jobs at 13:54Z (Assemble queued). THE LIGHT RULE ON pen-mac-studio IS LIFTED: no macOS job runs any more.
+
+(Lane coordinator: parts 2 and 4 relayed verbatim; part 1 was for T1, part 3 for SF1. Note for your useComposerSend.ts: SF1 will move a block you did not move (you moved the SSH port factories); the two lanes meet in that file at the integration merge.)
+
+
+### Lane coordinator, 13:58 UTC, from the coordinator (13:57:51) (verbatim)
+
+#3660 now CONFLICTS with dev (the N4 cherry-pick of #3678 against dev's squash). The coordinator does the ONE dev merge into the integration branch after T1's #3682 is on dev. Until then: no lane merges dev, and because a conflicting pull request gets no pull_request CI from GitHub, every lane that goes READY in the meantime brings its OWN goat-ci run on its lane branch (workflow_dispatch, lane all), as N12 and N15b already do; the 12:07:55 rule for wide selections stands.
+
+
+### Lane coordinator, 14:10 UTC (verbatim)
+
+the integration head is now 7023eb1ada (N12 merged; S4, CF1, X1, N9a, N4, N12 in). Merge it at your READY point (a merge, no rebase). Your L365 render-isolation numbers went to the coordinator for its ruling; keep the case as it is meanwhile.
+
+
+### Coordinator to lane coordinator, 2026-11-17 14:10:49 UTC (relayed; verbatim)
+
+PART 1, N14, L365's render-isolation zero: the investigation so far is good work and the number is not to be bent. RULING:
+ a. ONE more time box of 45 minutes on the cause of the single late Sidebar render after mount (you have ruled out timers, the provider context, the router, deferred values and about 80 hook results; what is left is promise- or observer-driven state inside a Sidebar hook: a React Profiler or a why-did-you-render style probe on Sidebar itself, naming the hook whose setState fired, is the direct way). If you find it: fix it if the fix is small and GOAT-owned (it is a real startup cost: every row rendering twice on mount), or, if the fix is not small, the test awaits THAT event before it takes its baseline (an awaited event or an expect.element / vi.waitFor on something a person can see that depends on it; never an idle wait).
+ b. If the box ends without the cause: the render-isolation case is committed SKIPPED with a quarantine line and a tracking issue ("// quarantine: #<n> one late Sidebar render after mount re-renders every row; the shortcut itself adds none"), the issue carries your probe list, the 0/0/5/5/5 and 5/5/5/5/5 runs and the 500 ms observation, and it is a next3 row. The port is still proven by the hook cases (4 fail before, all pass at the head) and by the count dropping from 30 to 5; the record says exactly that and does not claim the zero.
+ c. Not allowed: a baseline taken after a sleep or an idle period, a tolerance ("at most 5"), or a retry.
+ The other N14 checks you report (O1's fail-first on threadFindText, L18's eight failing files and the decoder transcript giving kinds ["thread"], ChatView.ssh 44/44 after the lazy ports): read, accepted. Note for the record: userMessageCollapse.test.ts's edited expectations pass before and after, so for O1 it is a characterisation, not a fail-first; the record already says so.
+
+(Lane coordinator: part 1 relayed verbatim; part 2 was for SF1. The 45-minute box starts now (14:11 UTC); report at its end either way.)
+
+
+### Coordinator to lane coordinator, 2026-11-17 14:19:09 UTC (relayed; verbatim)
+
+L357, the long-paragraph case: OPTION (1). Upstream's rule is the one being ported: a message folds only when opening it at least doubles what is shown. A 684-character paragraph that renders 250 px tall against a 352 px threshold shows in full, and that is the intended behaviour, so the old "60 sentences folds" expectation described the rule this port replaces. The case keeps its title's meaning with a paragraph long enough to double (your x200), and gains the second assertion that the 60-sentence paragraph does NOT fold, with a one-line comment stating the rule (twice the folded height). Conditions: both assertions are about what a person sees (the "Show full message" control present or absent, the text's last sentence visible or not), at the test's stated column width; the record names the visible change from the old rule in one sentence (a paragraph of about 700 characters is no longer folded, on desktop or at phone width; folding now depends on rendered height, so it differs by column width), and the same sentence goes into the pull request body's behaviour notes for whichever pull request carries N14. The quote-card case holding by real height (two do not fold, ten do) is what I asked for. Mobile: say whether the phone's fold rule is the same code or its own, and if its own, that it is unchanged.
+The other checks you report (C3, L373, L376 fail-first; "goat <dir>" 2/2 on the base and on the head, so unchanged; typecheck 42/42; the legacy previewOpen test failing before the port) are read and accepted. The two existing tests whose import lines followed the moved composer model state module: import lines only, fine; list them in the record.
+L365: the cause (the environment catalog arriving after mount, reaching Sidebar through the GOAT Bot observer) and the test awaiting it are accepted as under ruling (a); add the next3 row as you propose.
+
+(Lane coordinator: relayed verbatim; go. The L365 next3 row is already in next2-pr-plan.md's next3 notes (b0884a6831); file an issue for it only if you want a number for the record.)
+
+
+### Lane coordinator, 14:21 UTC (verbatim)
+
+the integration head is now ad363b04a7 (N4's follow-ups merged). Merge it at your READY point (a merge, no rebase).
+
+### Coordinator to lane coordinator, 2026-11-17 14:54:53 UTC (relayed; verbatim)
+
+PART 2, N14's two deviations on O28: BOTH ACCEPTED. (1) solar/nodes.ts stays (contextMenuFallback.ts and composerInlineChip.ts use it); only the morph's glyph aliases go; the generator leaves the tree clean on a second run. (2) the lockfile: morphicons' three entries removed and the peer-hash suffix of three @alchemy.run 2.0.0-beta.85 entries recomputed by the installer; accepted provided the review confirms that no "version:" line and no resolved tarball moved and that vp i --frozen-lockfile succeeds on the head. Addition (a) and (b) as reported: read. The web and mobile disagreement on context chips (web moves only the chips the answer references; mobile merges the whole draft context) goes into next3's mobile row as a decision, as planned. N14 files ONE issue for the gt catalog drift (a regenerate drops 17 existing entries) and does not touch it here. Then its READY as it lists.
+
+(Lane coordinator: part 2 relayed verbatim; file the one gt catalog issue through --body-file and send the number; then READY.)
+
