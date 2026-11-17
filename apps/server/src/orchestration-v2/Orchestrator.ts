@@ -3078,7 +3078,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
           ),
         );
-      if (endsTurn(command.type, runs, liveSessions, providerContext))
+      if (endsTurn(command.type, runs, liveSessions))
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,

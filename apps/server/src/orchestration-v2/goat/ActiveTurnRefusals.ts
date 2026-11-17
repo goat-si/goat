@@ -42,31 +42,17 @@ export const isActiveTurnRefusal = (error: {
   readonly refusal?: "active_turn" | undefined;
 }): boolean => error._tag === "OrchestratorDispatchError" && error.refusal === "active_turn";
 
-type Projection = Pick<OrchestrationV2ThreadProjection, "providerSessions" | "providerThreads">;
-
-/**
- * Whether the refused change would end a blocking run. A mode change releases only the sessions
- * that cannot switch in place, so it waits only for a blocking run on one of those; a run with no
- * provider thread yet is matched by its provider instance.
- */
+/** Whether the refused change ends a blocking run: a mode change matches by the run's instance. */
 export function endsTurn(
   commandType: string,
   runs: OrchestrationV2ThreadProjection["runs"],
-  released: Projection["providerSessions"],
-  context: Pick<Projection, "providerThreads"> | null,
+  released: OrchestrationV2ThreadProjection["providerSessions"],
 ): boolean {
   const blocking = runs.filter(isBlockingRun);
   if (commandType !== "thread.runtime-mode.set") return blocking.length > 0;
-  return blocking.some((run) => {
-    const sessionId = context?.providerThreads.find(
-      (thread) => thread.id === run.providerThreadId,
-    )?.providerSessionId;
-    return released.some((session) =>
-      sessionId === undefined
-        ? session.providerInstanceId === run.providerInstanceId
-        : session.id === sessionId,
-    );
-  });
+  return blocking.some((run) =>
+    released.some((session) => session.providerInstanceId === run.providerInstanceId),
+  );
 }
 
 function refusalText(input: Parameters<typeof activeTurnRefusal>[0]): string | undefined {
