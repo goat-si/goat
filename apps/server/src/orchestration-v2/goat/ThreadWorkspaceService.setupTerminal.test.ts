@@ -248,3 +248,24 @@ it.live.each([
       }).pipe(Effect.provide(ThreadWorkspace.layer.pipe(Layer.provideMerge(layer)))),
     ),
 );
+// The lane's terminal entry point: open, attach and restart restore a missing worktree first.
+it.live(
+  "a terminal opened in a thread whose worktree is missing restores it, runs setup and finishes",
+  () =>
+    withSetupProject({ async: false }, ({ worktreePath, pty, git, layer }) =>
+      Effect.gen(function* () {
+        const repo = NodePath.dirname(
+          git(worktreePath, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+        );
+        git(repo, "worktree", "remove", "--force", worktreePath);
+        const service = yield* ThreadWorkspace.ThreadWorkspaceService;
+        yield* service.prepareTerminal({ threadId, cwd: worktreePath });
+        assert.isTrue(NodeFS.existsSync(NodePath.join(worktreePath, ".git")));
+        assert.deepEqual(
+          pty.spawnInputs.map((input) => input.cwd),
+          [worktreePath],
+        );
+        assert.isFalse(yield* (yield* makeRestorePending).marked(worktreePath));
+      }).pipe(Effect.provide(ThreadWorkspace.layer.pipe(Layer.provideMerge(layer)))),
+    ),
+);
