@@ -124,6 +124,7 @@ import {
 } from "./queued-run-edit";
 import { setPendingConnectionError } from "../state/use-remote-environment-registry";
 import { clearThreadComposerError, setThreadComposerError } from "./thread-composer-error";
+import { useSaveRuntimeModeBeforeRedirect } from "./redirectSettings";
 import {
   useSelectedThreadProjection,
   useSelectedThreadVisibleTurnItems,
@@ -154,6 +155,7 @@ function activeComposerDraftKey(thread: {
 
 export function useThreadComposerState() {
   const sideChatCommand = useSideChatCommand();
+  const saveModeBeforeRedirect = useSaveRuntimeModeBeforeRedirect();
   const {
     selectedThread: selectedThreadShell,
     selectedThreadCreation,
@@ -679,7 +681,13 @@ export function useThreadComposerState() {
       return null;
     }
 
+    const metadata = makeQueuedMessageMetadata();
     if (beforeDispatch !== undefined) {
+      const refusal = await saveModeBeforeRedirect(thread, draft.runtimeMode, metadata);
+      if (refusal !== null) {
+        setThreadComposerError(threadKey, refusal);
+        return null;
+      }
       const response = await beforeDispatch(
         text,
         attachments.length > 0 || draft.context !== undefined,
@@ -725,7 +733,6 @@ export function useThreadComposerState() {
           ? "queue"
           : "auto";
 
-    const metadata = makeQueuedMessageMetadata();
     // Only a send the notice announced compacts, since the notice's minute clock can trail the
     // exact deadline.
     const compactBeforeSend =
