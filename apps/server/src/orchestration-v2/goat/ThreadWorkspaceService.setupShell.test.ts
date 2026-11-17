@@ -47,6 +47,7 @@ type Services =
 // from an earlier run still has its shell in the removed folder. Real TerminalManager and setup
 // runner on a fake PTY; it.live because the restore and the fixtures run git as a subprocess.
 const withSetupShell = <A, E, R>(
+  options: { readonly async: boolean },
   body: (fixture: {
     readonly repo: string;
     readonly worktreePath: string;
@@ -58,6 +59,8 @@ const withSetupShell = <A, E, R>(
     readonly finishFrom: { value: number };
     /** Done once the first setup command was written. */
     readonly firstCommand: Deferred.Deferred<void>;
+    /** Done once a command was written to the second PTY. */
+    readonly secondCommand: Deferred.Deferred<void>;
     readonly git: (cwd: string, ...args: string[]) => string;
     readonly layer: Layer.Layer<
       Services,
@@ -100,7 +103,7 @@ const withSetupShell = <A, E, R>(
           icon: "configure",
           runOnWorktreeCreate: true,
           stopOnSettle: false,
-          async: false,
+          async: options.async,
         },
       ],
     };
@@ -109,7 +112,10 @@ const withSetupShell = <A, E, R>(
     const closedIdle: Array<string> = [];
     const finishFrom = { value: 0 };
     const firstCommand = yield* Deferred.make<void>();
+    const secondCommand = yield* Deferred.make<void>();
     const terminals = yield* TerminalManager.makeWithOptions({
+      // No process table: an idle check must not depend on the host's processes.
+      processTable: Effect.succeed([]),
       logsDir: NodePath.join(root, "terminal-logs"),
       ptyAdapter: pty,
       processKillGraceMs: 1,
@@ -146,6 +152,7 @@ const withSetupShell = <A, E, R>(
                     if (sentinel === undefined) return;
                     events.push(`command ${latest()}`);
                     Deferred.doneUnsafe(firstCommand, Exit.void);
+                    if (latest() >= 1) Deferred.doneUnsafe(secondCommand, Exit.void);
                     if (latest() >= finishFrom.value)
                       pty.processes.at(-1)?.emitData(`${worktreePath}\r\n${sentinel}0\r\n$ `);
                   }),
@@ -188,6 +195,7 @@ const withSetupShell = <A, E, R>(
       closedIdle,
       finishFrom,
       firstCommand,
+      secondCommand,
       git,
       layer,
     });
@@ -209,14 +217,15 @@ const withSetupShell = <A, E, R>(
   );
 
 /** The launch's setup run: it leaves the thread's setup terminal running in the worktree. */
-const earlierSetup = (worktreePath: string) =>
+const earlierSetup = (worktreePath: string, lines?: Array<string>) =>
   Effect.gen(function* () {
     const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
     return yield* runner.runForThread({
       threadId,
       projectCwd: "unused",
       worktreePath,
-      observeCompletion: {},
+      observeCompletion:
+        lines === undefined ? {} : { onOutputLine: (line) => Effect.sync(() => lines.push(line)) },
     });
   });
 
@@ -274,7 +283,7 @@ it.live.each([
 ] as const)(
   "a restore after the folder was %s runs setup in a new shell in the restored folder (%s)",
   ([, entry, how]) =>
-    withSetupShell((fixture) =>
+    withSetupShell({ async: false }, (fixture) =>
       Effect.gen(function* () {
         const { worktreePath, pty, events } = fixture;
         yield* earlierSetup(worktreePath);
@@ -292,7 +301,7 @@ it.live.each([
 );
 
 it.live("a thread's first restore starts exactly one setup shell", () =>
-  withSetupShell((fixture) =>
+  withSetupShell({ async: false }, (fixture) =>
     Effect.gen(function* () {
       removeFolder("deleted", fixture);
       yield* restoreThrough("recreate", fixture.worktreePath);
@@ -304,7 +313,7 @@ it.live("a thread's first restore starts exactly one setup shell", () =>
 
 // A recreate that succeeded before its setup failed leaves the marker; the old shell may still live.
 it.live("resuming an unfinished restore runs setup in a new shell too", () =>
-  withSetupShell((fixture) =>
+  withSetupShell({ async: false }, (fixture) =>
     Effect.gen(function* () {
       const { worktreePath, pty, events, git } = fixture;
       yield* earlierSetup(worktreePath);
@@ -324,15 +333,16 @@ it.live("resuming an unfinished restore runs setup in a new shell too", () =>
   ),
 );
 
-// The earlier run is still going when the restore replaces its shell; its watcher sees that end.
-it.live("an earlier setup run that is still going settles nothing of the restore's run", () =>
-  withSetupShell((fixture) =>
+// A tracked launch's async setup is still going when a restore replaces its shell: the restart
+// ends that run, and the new shell's output is not its output.
+it.live("a restart ends an earlier setup run that is still going, with the new shell open", () =>
+  withSetupShell({ async: true }, (fixture) =>
     Effect.gen(function* () {
-      const { worktreePath, closedIdle, finishFrom, firstCommand } = fixture;
+      const { worktreePath, pty, finishFrom, firstCommand, secondCommand } = fixture;
       // Only the restore's new shell reports its command finished.
       finishFrom.value = 1;
-      const earlier = yield* earlierSetup(worktreePath);
-      assert.strictEqual(earlier.status, "started");
+      const lines: Array<string> = [];
+      const earlier = yield* earlierSetup(worktreePath, lines);
       const earlierCompletion = yield* (
         earlier.status === "started" && earlier.completion !== undefined
           ? earlier.completion
@@ -342,11 +352,11 @@ it.live("an earlier setup run that is still going settles nothing of the restore
       removeFolder("moved", fixture);
       const pending = yield* makeRestorePending;
       yield* restoreThrough("recreate", worktreePath);
-      // The earlier run ends without an exit code; the restore's own run finished with 0.
+      yield* Deferred.await(secondCommand);
       assert.strictEqual((yield* Fiber.join(earlierCompletion)).exitCode, null);
+      assert.isFalse(pty.processes[1]?.killed);
+      assert.deepEqual(lines, []);
       assert.isFalse(yield* pending.marked(worktreePath));
-      // Only the restore's successful run closed its idle shell.
-      assert.deepEqual(closedIdle, ["setup-setup"]);
     }).pipe(provideAll(fixture.layer)),
   ),
 );

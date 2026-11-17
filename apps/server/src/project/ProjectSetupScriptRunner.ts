@@ -162,7 +162,8 @@ const BRACKETED_PASTE_ON = "\x1b[?2004h";
 const BRACKETED_PASTE_OFF = "\x1b[?2004l";
 // Longer than one subprocess poll plus its ps timeout, so a startup prompt is seen as busy first.
 const SHELL_QUIET_FALLBACK = "3 seconds";
-// The terminal manager's own size for a terminal opened without one.
+// The restart contract requires a size; these are the terminal manager's own defaults, and the open
+// that follows keeps the size an attached viewer sets.
 const FRESH_SHELL_COLS = 120;
 const FRESH_SHELL_ROWS = 30;
 
@@ -239,6 +240,8 @@ export const make = Effect.gen(function* () {
       const promptReturned = yield* Deferred.make<void>();
       let lineBuffer = "";
       let settled = false;
+      let written = false;
+      let replaced = false;
 
       const settle = (exitCode: number | null) =>
         Effect.suspend(() => {
@@ -276,6 +279,7 @@ export const make = Effect.gen(function* () {
           return Effect.void;
         }
         if (event.type === "output") {
+          if (replaced) return Effect.void;
           lineBuffer += event.data;
           // Bare CR redraws progress in place; split redraws instead of growing one line.
           const lines = lineBuffer.split(/\r\n|\r|\n/);
@@ -294,7 +298,9 @@ export const make = Effect.gen(function* () {
             ),
           );
         }
-        if (event.type === "exited" || event.type === "closed") {
+        // A restart ends a run whose command was already typed; the new shell's output is not its.
+        if (event.type === "restarted" && written) replaced = true;
+        if (event.type === "exited" || event.type === "closed" || replaced) {
           return settle(null).pipe(Effect.andThen(Deferred.succeed(promptReturned, undefined)));
         }
         return Effect.void;
@@ -314,12 +320,16 @@ export const make = Effect.gen(function* () {
       const abandon = settle(null).pipe(
         Effect.andThen(Deferred.succeed(promptReturned, undefined)),
       );
-      return { completion, unsubscribe, flushPartialLine, abandon };
+      const markWritten = Effect.sync(() => {
+        written = true;
+      });
+      return { completion, unsubscribe, flushPartialLine, abandon, markWritten };
     },
   );
 
   // Input typed during shell startup can be read by an rc-file prompt (fnm, nvm) instead of the
-  // shell, which loses the command. Subscribe before the terminal opens so no activity is missed.
+  // shell, which loses the command. Subscribe before the open (after a fresh shell's restart) so no
+  // activity of the shell this run types into is missed.
   const watchShellReadiness = Effect.fn("ProjectSetupScriptRunner.watchShellReadiness")(
     function* (input: {
       readonly threadId: string;
@@ -337,6 +347,8 @@ export const make = Effect.gen(function* () {
         }
         activity += 1;
         // A new shell process starts idle; the manager resets its subprocess state without an event.
+        // A run still waiting for its prompt carries on into a restarted shell (a person restarting
+        // the setup terminal past a stuck rc-file prompt still gets setup).
         if (event.type === "started" || event.type === "restarted") {
           busy = false;
           reading = false;
@@ -498,7 +510,8 @@ export const make = Effect.gen(function* () {
     const observe = input.observeCompletion;
     const completionToken = observe ? (yield* random.uuidV4()).replaceAll("-", "") : null;
     const echoedWrapperLines: string[] = [];
-    // Subscribe before opening so neither startup activity nor the sentinel can race the listeners.
+    // Subscribe before the open (after a fresh shell's restart) so neither the shell's startup
+    // activity nor the sentinel can race the listeners.
     const observed =
       observe && completionToken
         ? yield* observeTerminalCompletion({
@@ -578,11 +591,13 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((shell) =>
         shell === "exited" || commandLine === null
           ? Effect.void
-          : terminalManager.write({
-              threadId: input.threadId,
-              terminalId,
-              data: projectScriptTerminalInput(commandLine),
-            }),
+          : terminalManager
+              .write({
+                threadId: input.threadId,
+                terminalId,
+                data: projectScriptTerminalInput(commandLine),
+              })
+              .pipe(Effect.andThen(observed?.markWritten ?? Effect.void)),
       ),
       Effect.catchCause((cause) =>
         Effect.logWarning("project script command was not written", {
