@@ -314,3 +314,17 @@ lane CF1 merged into the integration branch at bd3901fca9 (#3660)
 > #3660's body: I add CF1's row and the Known limits lines it proposed (CF1 already added a Known limits section; I read the body before editing).
 
 The final review report is /Users/jun/handoff-in/chase/next2-CF1-fix2-review-bd3901fc.md (relayed in full to this lane). Its one P3 is the follow-up CF1F2-P3-1, on chase/t3-261114-next2-cf1b-a11y cut from bd3901fca9.
+
+## Follow-up CF1F2-P3-1 (branch chase/t3-261114-next2-cf1b-a11y)
+
+Head `b531d2511c2626e632b1a13d5fa58b4bc3c15a08`, one commit cut from bd3901fca9 (the integration head), plain push. It rides with N15b's phone captures, as the coordinator asked.
+
+Fix (apps/mobile/src/features/threads/GitActionProgressOverlay.tsx): the banner passes its dismiss to `onAccessibilityEscape` only when the phase is "success" or "error", the phases in which it shows the selected thread's own result. A VoiceOver escape on a "running" banner no longer clears another thread's unseen failure.
+
+Test, new apps/mobile/src/features/threads/GitActionProgressOverlay.test.tsx: "a VoiceOver escape on a %s banner dismisses only a finished action's result" for running (0 dismissals), success (1) and error (1). It is listed in the mobile "react" (jsdom) project in apps/mobile/vite.config.ts beside the Git sheet tests, because lint forbids a per-file environment pragma. With the fix stashed, the running case failed: `expected "vi.fn()" to be called +0 times, but got 1 times`. With the fix, 3 passed. No existing test changed.
+
+Checks on b531d2511c: `vp run check:changed origin/chase/t3-261114-next2` exit 0 (format, lint, knip 1/2, knip 2/2, agent surface audit, agent context budget, typecheck (2 packages), test (2 files)); apps/mobile: GitActionProgressOverlay.test.tsx, ThreadWorkspaceBanner.test.tsx, the keyboard tests and use-vcs-action-state.test.ts, 6 files, 14 passed; mobile typecheck exit 0.
+
+Phone capture owed with the others (N15b): a VoiceOver escape on a running banner leaves the other thread's failure in place.
+
+NOT RUN: VoiceOver on a device; ci:full; a review of this commit.
