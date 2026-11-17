@@ -28,7 +28,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("PreviewBrowser",
         const { browser, requests } = yield* makeHarness({ variant, pinnedRelease: true });
         yield* browser.executable.pipe(Effect.flip);
         expect(requests).toHaveLength(1);
-        expect(requests[0]).toContain(`/157.0.8103.38/`);
+        expect(requests[0]).toContain(`/157.0.8103.78/`);
         expect(requests[0]).toContain(
           variant === "chrome" ? "/chrome-" : "/chrome-headless-shell-",
         );

@@ -1,7 +1,9 @@
 // @effect-diagnostics globalTimers:off - The final frame is a Playwright promise outside the Effect runtime.
+import { constVoid } from "effect/Function";
 import type { CDPSession } from "playwright-core";
 import { BrowserControlInterrupted, type SessionControl } from "./SessionControl.ts";
 import { captureViewport } from "./ServerBrowserPage.ts";
+import type { EncoderWindow } from "./ServerBrowserRecordingScript.ts";
 
 // How long Chromium gets to draw a recording's last frame; one that stopped drawing never does.
 const FRAME_ANSWER_MS = 1_000;
@@ -15,6 +17,20 @@ export const answeredFinalFrame = <A>(capture: Promise<A>) => {
   return Promise.race([capture.catch(() => undefined), late]).finally(() => clearTimeout(timer));
 };
 
+/** Hands the final frame to the encoder; a failure there loses only this frame. */
+export const encodeFinalFrame = (
+  encoder: { evaluate<R, A>(run: (arg: A) => R, arg: A): Promise<R> },
+  frame: string,
+  width: number,
+) =>
+  encoder
+    .evaluate(
+      ([data, pageWidth]) =>
+        (globalThis as unknown as EncoderWindow).__goatRecorder.frame(data, pageWidth),
+      [frame, width] as const,
+    )
+    .then(constVoid, constVoid);
+
 export const captureFinalRecordingFrame = async (
   cdp: CDPSession,
   quality: number,
@@ -25,11 +41,13 @@ export const captureFinalRecordingFrame = async (
     return await control.observe(async () => {
       await cdp.send("Runtime.evaluate", {
         expression: `(async () => {
-        const paint = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        // A page that stops painting answers no frame; each wait gives up after a second.
+        const bounded = wait => Promise.race([wait, new Promise(resolve => setTimeout(resolve, 1000))]);
+        const paint = () => bounded(new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         await paint();
-        await Promise.allSettled(document.getAnimations()
+        await bounded(Promise.allSettled(document.getAnimations()
           .filter(animation => animation.playState === "running" && animation.effect?.getComputedTiming().iterations !== Infinity)
-          .map(animation => animation.finished));
+          .map(animation => animation.finished)));
         await paint();
       })()`,
         awaitPromise: true,

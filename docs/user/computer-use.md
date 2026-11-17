@@ -143,6 +143,8 @@ you chose for agents too, so import only the sessions you want an agent to be ab
 A profile keeps its sign-ins where an agent first used it: in the desktop app, or in the
 browser of the GOAT environment. Agents can use it only there, and GOAT tells the agent why when
 that place is not available.
+The environment keeps the profile list it last received from your GOAT apps, so agents and
+scheduled tasks can open a profile by name after the server restarts, before an app reconnects.
 
 When an agent fills a password, it hears that the sign-in finished only after you hand the
 tab back. Screenshots and recordings of that site stay off for the rest of the thread, and for
