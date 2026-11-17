@@ -272,3 +272,27 @@ it.effect("a version change of the open memory requests its read and history aga
     }),
   ),
 );
+it.effect.each(["upsert", "invalidate"] as const)(
+  "a second change to an open memory (%s) hides its body, purges a new draft and reports it changed",
+  (kind) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* harness();
+        const source = h.memory.read(readTarget);
+        const body = Atom.make((get) => Option.flatten(AsyncResult.value(get(source))));
+        h.registry.mount(body);
+        yield* Deferred.succeed(yield* Queue.take(h.reads), item);
+        yield* waitFor(h.registry, body, Option.isSome);
+        yield* Queue.offer(h.signals, signal("upsert"));
+        yield* Deferred.succeed(yield* Queue.take(h.reads), item);
+        yield* waitFor(h.registry, body, Option.isSome);
+        const seen = h.registry.get(h.exposure);
+        h.registry.set(h.edit, { text: "Synthetic memory, edited", memoryIds: [id] });
+        yield* Queue.offer(h.signals, signal(kind));
+        yield* waitFor(h.registry, h.exposure, (state) => state !== seen);
+        expect(memoryBodyGap(seen, h.registry.get(h.exposure), id)).toBe("changed");
+        expect(Option.isNone(h.registry.get(body))).toBe(true);
+        expect(h.registry.get(h.edit)).toBeNull();
+      }),
+    ),
+);
