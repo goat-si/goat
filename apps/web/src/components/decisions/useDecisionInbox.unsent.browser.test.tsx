@@ -65,11 +65,22 @@ const question: Extract<DecisionItem, { kind: "user_input" }> = {
   },
 };
 
-function setup() {
+const twoQuestions: Extract<DecisionItem, { kind: "user_input" }> = {
+  ...question,
+  request: {
+    ...question.request,
+    questions: [
+      ...question.request.questions,
+      { id: "scope", header: "Scope", question: "Which files?", multiSelect: false, options: [] },
+    ],
+  },
+};
+
+function setup(item = question) {
   state.registry = AtomRegistry.make();
   state.registry.set(state.snapshot!, {
-    items: [question],
-    authoritativeRefs: [question.ref],
+    items: [item],
+    authoritativeRefs: [item.ref],
     loadingRefs: [],
     errors: [],
     isLoading: false,
@@ -115,4 +126,52 @@ it("Stop keeps an answer typed in the Decisions inbox in the thread's draft", as
   expect(
     useComposerDraftStore.getState().getComposerDraft({ environmentId, threadId })?.prompt,
   ).toBe("Use the cache");
+});
+
+const requestKey = JSON.stringify([environmentId, threadId, requestId]);
+
+it("keeps the composer's answer to one question when the inbox answers another, and Stop returns both", async () => {
+  using inbox = setup(twoQuestions);
+  // A bare hook host; nothing here links or navigates.
+  await using _screen = await render(inbox.ui, { router: false });
+  await act(() =>
+    usePendingUserInputAnswers.setState({
+      [requestKey]: { approach: { customAnswer: "Typed in the composer" } },
+    }),
+  );
+
+  await act(() =>
+    inbox.latest.inbox!.setAnswers(twoQuestions.id, {
+      ...inbox.latest.inbox!.drafts[twoQuestions.id],
+      scope: { customAnswer: "Typed in the inbox" },
+    }),
+  );
+  await act(() =>
+    makeThreadRequestsResolvedAnnouncer(
+      environmentId,
+      threadId,
+    )([{ id: requestId, status: "cancelled" }]),
+  );
+
+  const prompt = useComposerDraftStore
+    .getState()
+    .getComposerDraft({ environmentId, threadId })?.prompt;
+  expect(prompt).toContain("Typed in the composer");
+  expect(prompt).toContain("Typed in the inbox");
+});
+
+it("shows in the inbox an answer typed in the thread composer", async () => {
+  using inbox = setup(twoQuestions);
+  // A bare hook host; nothing here links or navigates.
+  await using _screen = await render(inbox.ui, { router: false });
+
+  await act(() =>
+    usePendingUserInputAnswers.setState({
+      [requestKey]: { approach: { customAnswer: "Typed in the composer" } },
+    }),
+  );
+
+  expect(inbox.latest.inbox!.drafts[twoQuestions.id]?.approach?.customAnswer).toBe(
+    "Typed in the composer",
+  );
 });
