@@ -151,6 +151,7 @@ Setup: one `vp run dev` in this worktree (isolated `.goat`, ports 7095 web and 1
 
 ## Still open
 
+- #3660 merged to dev at 20:27:10 UTC (lane coordinator, relaying the coordinator): dev 42bf8633ce carries the whole integration tree, N12, N12b and N12c included (checked: dev's loadUrlAllowingRedirects.ts has stopLoad, ServerBrowserStop.ts has hardReload, and coreToolNames.testkit.ts has goat_preview_stop); chase/t3-261114-next2 is gone from origin.
 - Lane N12 is DONE (coordinator 16:30:54): n12c e79c46a7de merged into chase/t3-261114-next2 at d12958d037 on its green lane=quick run 44123436045; lane N12 merged at 7023eb1ada, N12b at 3a254fa1a5. Nothing more on n12b or n12c.
 - P1's second sitting: rows 1 to 4 above, with row 3 (desktop Stop, now with n12c) re-walked; issue #3683.
 
