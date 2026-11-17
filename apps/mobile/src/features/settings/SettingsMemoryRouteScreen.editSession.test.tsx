@@ -292,3 +292,90 @@ it("guard: a forget closes the editor and drops its text (#3601)", async () => {
   expect(field()).toBeNull();
   expect(text()).not.toContain("Typed before the forget");
 });
+
+const reject = (input: unknown) => ({
+  ...accept(input),
+  outcome: "rejected",
+  failureCode: "revision_changed",
+});
+type SaveReply = ReturnType<NativeMemoryHarness["deferred"]>;
+const replies = {
+  accepted: (save: SaveReply, input: unknown) => save.succeed(accept(input)),
+  refused: (save: SaveReply, input: unknown) => save.succeed(reject(input)),
+  failed: (save: SaveReply) => save.fail(new Error("The memory service is unavailable.")),
+};
+/** Presses Save with its reply held, so the test decides when and how it answers. */
+async function saveHeld() {
+  const save = h.deferred<unknown>();
+  h.responses.set(WS_METHODS.memoryUpsert, () => save.response);
+  await view.click("Save memory");
+  const input = h.calls.find((call) => call.method === WS_METHODS.memoryUpsert)?.input;
+  return { save, input };
+}
+
+it.each([
+  ["accepted", false],
+  ["refused", true],
+  ["failed", true],
+] as const)(
+  "guard: a hold during a save shows the typing only until its reread settles, then the %s reply closes the editor (#3601)",
+  async (outcome, closedLine) => {
+    await openEditor("Typed before the hold");
+    const { save, input } = await saveHeld();
+    const reread = await changeSignal("invalidate");
+    expect(field()?.value).toBe("Typed before the hold");
+    expect(field()?.disabled).toBe(true);
+    await act(async () => {
+      await reread.succeed(held("secret_detected"));
+    });
+    await dropped();
+    expect(field()?.value).toBe("");
+    expect(text()).not.toContain("Typed before the hold");
+    expect(text()).not.toContain("The draft is no longer available");
+    await act(async () => {
+      await replies[outcome](save, input);
+    });
+    expect(field()).toBeNull();
+    expect(text()).not.toContain("Typed before the hold");
+    expect(text().includes(CLOSED_LINE)).toBe(closedLine);
+  },
+);
+
+it("guard: an untouched edit hides its text again on every later reread (#3601)", async () => {
+  await openEditor();
+  const first = await changeSignal("invalidate");
+  await act(async () => {
+    await first.succeed(nativeItem);
+  });
+  await answered();
+  expect(field()?.value).toBe("Synthetic memory body");
+  const second = await changeSignal("invalidate");
+  expect(field()?.value).toBe("");
+  expect(text()).not.toContain("Synthetic memory body");
+  await act(async () => {
+    await second.succeed(nativeItem);
+  });
+  await answered();
+  expect(field()?.value).toBe("Synthetic memory body");
+});
+
+it.each(["refused", "failed"] as const)(
+  "guard: after a %s save, a hold discards the typing and closes the editor with the line (#3601)",
+  async (outcome) => {
+    await openEditor("Typed before the save was turned down");
+    const { save, input } = await saveHeld();
+    await act(async () => {
+      await replies[outcome](save, input);
+    });
+    expect(field()?.value).toBe("Typed before the save was turned down");
+    const reread = await changeSignal("invalidate");
+    expect(field()?.value).toBe("Typed before the save was turned down");
+    await act(async () => {
+      await reread.succeed(held("secret_detected"));
+    });
+    await dropped();
+    expect(field()).toBeNull();
+    expect(text()).toContain(CLOSED_LINE);
+    expect(text()).not.toContain("Typed before the save was turned down");
+  },
+);
