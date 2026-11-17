@@ -1,6 +1,6 @@
 import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
 import { vi } from "vite-plus/test";
-// @effect-diagnostics nodeBuiltinImport:off - seeds other homes' databases the way their servers write them.
+// @effect-diagnostics nodeBuiltinImport:off - seeds other homes' databases as their servers write them, and reads Windows 8.3 names.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeOS from "node:os";
 import * as NodeSqlite from "node:sqlite";
@@ -262,7 +262,11 @@ describe("otherGoatHomes", () => {
         const bindings = yield* readOtherHomeBindings({
           ownDatabase: path.join(home, ".goat", "desktop", "userdata", "statev2.sqlite"),
         });
-        assert.isNotNull(otherHomeReason(path, bindings, shared));
+        assert.deepEqual(bindings.unreadable, []);
+        assert.equal(
+          otherHomeReason(path, bindings, shared),
+          "another GOAT app on this machine uses this worktree",
+        );
       }),
     ),
   );

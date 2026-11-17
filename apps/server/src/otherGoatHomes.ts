@@ -56,6 +56,7 @@ export const ownWorktreeRoots = Effect.fnUntraced(function* (input: {
   const real = (value: string) =>
     fs.realPath(value).pipe(Effect.orElseSucceed(() => path.resolve(value)));
   const ownBase = yield* real(input.baseDir);
+  // The caller passes realpath'd roots and gets them back as given; a link is judged by its target.
   const roots = yield* Effect.forEach(input.roots, (root) =>
     real(root).pipe(Effect.map((resolved) => ({ root, resolved }))),
   );
