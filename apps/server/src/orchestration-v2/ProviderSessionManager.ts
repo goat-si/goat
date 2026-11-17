@@ -117,13 +117,9 @@ const busyTurnPrefix = (providerThreadId: ProviderThreadId) => `${providerThread
 const busyTurnKey = (providerThreadId: ProviderThreadId, runOrdinal: number) =>
   `${busyTurnPrefix(providerThreadId)}${runOrdinal}`;
 const UNLOAD_THREAD_TIMEOUT_MS = 10 * 1000;
-const WORKING_RUN_STATUSES: ReadonlySet<string> = new Set([
-  "preparing",
-  "starting",
-  "running",
-  "waiting",
-]);
 
+import { WORKING_RUN_STATUSES } from "./ProviderSessionWorkingRuns.ts";
+import { readPreparedThread } from "./goat/PreparedThreadRead.ts";
 export { delegatedTaskWillWake } from "./delegatedTaskWake.ts";
 export {
   ProviderSessionActivityError,
@@ -412,7 +408,7 @@ export const layerWithOptions = (
                 if (preparedInput === undefined)
                   return { mcpCredentialId: undefined, issued: false };
                 const { threadId, providerInstanceId } = preparedInput;
-                const thread = yield* projectionStore.getThread(threadId).pipe(Effect.option);
+                const thread = yield* readPreparedThread(projectionStore, threadId);
                 const usableThread =
                   Option.isSome(thread) &&
                   thread.value.deletedAt === null &&
