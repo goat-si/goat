@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@goat/contracts";
+import type { EnvironmentId, UnifiedSettings } from "@goat/contracts";
 import {
   squashAtomCommandFailure,
   type AtomCommandResult,
@@ -14,6 +14,8 @@ import { environmentPresentations } from "../../state/presentation";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { fileAttachmentCapabilityBlockReason } from "./composerAttachmentFiles";
+
+export const selectPlanModeEnabled = (settings: UnifiedSettings) => settings.planModeEnabled;
 
 export function readEnvironmentPresentation(environmentId: EnvironmentId) {
   return appAtomRegistry.get(environmentPresentations.presentationsAtom).get(environmentId);

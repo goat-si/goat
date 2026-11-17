@@ -104,7 +104,6 @@ import {
   restoreComposerDraft,
 } from "./chatViewSend";
 import { notifyDirectAnnotationAttached } from "./composerSendNotices";
-import type { UnifiedSettings } from "@goat/contracts";
 import type { DraftSshDestination } from "../../composerDraftStore";
 import { NO_PROVIDER_MODEL_SELECTION } from "../../providerInstances";
 import type { SavedSshWorktreeOption } from "../../lib/sshWorktree";
@@ -136,6 +135,7 @@ import {
   liveAttachmentCapabilities,
   readEnvironmentPresentation,
   saveSettingsBeforeRedirect,
+  selectPlanModeEnabled,
   showMultipleModelsNeedGitThread,
 } from "./useComposerSend.helpers";
 import { keepFailedSendInStash } from "./stashFailedSend";
@@ -143,8 +143,6 @@ import { keepFailedSendInStash } from "./stashFailedSend";
 const sshWorkspaceLaunchCommand = vcsEnvironment.sshWorkspaceLaunch;
 
 const ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE = 3;
-
-const selectPlanModeEnabled = (settings: UnifiedSettings) => settings.planModeEnabled;
 
 /**
  * Everything the composer's send button can start: a turn on this thread or a new one,
