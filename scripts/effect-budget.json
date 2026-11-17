@@ -94,7 +94,7 @@
   "apps/mobile/src/features/settings/SettingsAuthRouteScreen.tsx": 2,
   "apps/mobile/src/features/settings/SettingsEnvironmentDetailRouteScreen.tsx": 1,
   "apps/mobile/src/features/settings/SettingsHubNodesRouteScreen.tsx": 2,
-  "apps/mobile/src/features/settings/SettingsMemoryRouteScreen.tsx": 9,
+  "apps/mobile/src/features/settings/SettingsMemoryRouteScreen.tsx": 8,
   "apps/mobile/src/features/settings/SettingsMicrophoneRouteScreen.tsx": 1,
   "apps/mobile/src/features/settings/SettingsNotificationsRouteScreen.tsx": 2,
   "apps/mobile/src/features/settings/SettingsProjectOverviewRouteScreen.tsx": 1,

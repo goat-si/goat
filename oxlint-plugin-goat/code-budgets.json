@@ -61,9 +61,9 @@
   "apps/mobile/src/features/settings/MemorySharingSettings.tsx": { "nonNull": 2 },
   "apps/mobile/src/features/settings/MemorySyncDiagnostics.tsx": { "nonNull": 1 },
   "apps/mobile/src/features/settings/SettingsHubNodesRouteScreen.tsx": { "nonNull": 1 },
-  "apps/mobile/src/features/settings/SettingsMemoryRouteScreen.test.tsx": { "lines": 2248 },
+  "apps/mobile/src/features/settings/SettingsMemoryRouteScreen.test.tsx": { "lines": 2241 },
   "apps/mobile/src/features/settings/SettingsMemoryRouteScreen.tsx": {
-    "lines": 1947,
+    "lines": 1805,
     "nonNull": 2
   },
   "apps/mobile/src/features/settings/SettingsMicrophoneRouteScreen.tsx": { "nonNull": 1 },
