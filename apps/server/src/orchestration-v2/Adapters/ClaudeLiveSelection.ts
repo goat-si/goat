@@ -1,5 +1,6 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import * as Effect from "effect/Effect";
+import * as Semaphore from "effect/Semaphore";
 
 import type { CompiledClaudeModelSelection } from "../../claudeModelOptions.ts";
 import type {
@@ -34,8 +35,19 @@ export interface ClaudeLiveSelectionTarget {
   reportedModel: string | undefined;
 }
 
-/** A failure leaves the live identity unknown, so the next turn applies the selection again. */
-export const applyClaudeSelectionLive = Effect.fn("ClaudeLiveSelection.apply")(function* (
+// One live change per process at a time: a reactor change and a steer's change must not interleave.
+const locks = new WeakMap<object, Semaphore.Semaphore>();
+const lockOf = (query: object) => {
+  const existing = locks.get(query);
+  if (existing !== undefined) return existing;
+  const lock = Semaphore.makeUnsafe(1);
+  locks.set(query, lock);
+  return lock;
+};
+
+// A failed or interrupted update leaves the live identity unknown, so the next turn applies it.
+// Untraced: both callers are spans of their own.
+const applyUnlocked = Effect.fnUntraced(function* (
   live: ClaudeLiveSelectionTarget,
   selection: CompiledClaudeModelSelection,
 ) {
@@ -46,7 +58,7 @@ export const applyClaudeSelectionLive = Effect.fn("ClaudeLiveSelection.apply")(f
       : Effect.void
   ).pipe(
     Effect.andThen(live.query.applyFlagSettings(claudeLiveSelectionFlagSettings(selection))),
-    Effect.tapError(() =>
+    Effect.onError(() =>
       Effect.sync(() => {
         live.selection = { ...live.selection, queryIdentity: "" };
       }),
@@ -54,6 +66,13 @@ export const applyClaudeSelectionLive = Effect.fn("ClaudeLiveSelection.apply")(f
   );
   if (live.selection.apiModelId !== selection.apiModelId) live.reportedModel = undefined;
   live.selection = selection;
+});
+
+export const applyClaudeSelectionLive = Effect.fn("ClaudeLiveSelection.apply")(function* (
+  live: ClaudeLiveSelectionTarget,
+  selection: CompiledClaudeModelSelection,
+) {
+  yield* lockOf(live.query).withPermits(1)(applyUnlocked(live, selection));
 });
 
 /** Between turns only effort and fast mode move live; a model change waits for the turn that checks it. */
@@ -85,13 +104,21 @@ export const applyClaudeSelectionToRunningQuery = Effect.fn(
   selection: CompiledClaudeModelSelection,
   nativeThreadId: string | null | undefined,
 ) {
-  if (live === null || !claudeSelectionAppliesToRunningQuery(live, selection, nativeThreadId))
-    return;
-  yield* applyClaudeSelectionLive(live, selection).pipe(
-    Effect.catch((cause) =>
-      Effect.logWarning("orchestration-v2.claude-live-selection-failed", { cause }),
-    ),
-  );
+  if (live === null) return;
+  // Checked under the lock: a change that waited may no longer apply.
+  yield* lockOf(live.query)
+    .withPermits(1)(
+      Effect.suspend(() =>
+        claudeSelectionAppliesToRunningQuery(live, selection, nativeThreadId)
+          ? applyUnlocked(live, selection)
+          : Effect.void,
+      ),
+    )
+    .pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("orchestration-v2.claude-live-selection-failed", { cause }),
+      ),
+    );
 });
 
 /** A selection sent with a steer applies to the running turn when the live process can switch to it. */
