@@ -292,7 +292,8 @@ it.effect.each(["revoked by the command line", "Pen-bound and its row is deleted
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
-+it.effect(
+
+it.effect(
   "Revoke others keeps a kept Pen session's running call and cuts a revoked one's, and settling the revoked id again changes nothing",
   () =>
     Effect.gen(function* () {

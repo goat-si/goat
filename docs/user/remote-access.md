@@ -825,8 +825,9 @@ that session still has in progress stops at once.
 `goat auth session revoke <id>` does the same from the command line: the session
 is refused at once, and a running server closes its open connections and stops
 its MCP requests in progress within about 5 seconds. A command-line revoke of a
-session that has already expired does not stop a request still running on it;
-**Revoke others** in Settings does.
+session that has already expired does not stop a request still running on it.
+**Revoke others** in Settings stops the requests in progress on every session it
+revokes, expired or not.
 
 An agent whose request was stopped sees the call fail and has to sign in again.
 Work the request had already handed to the server, such as a turn it started,
@@ -834,9 +835,10 @@ keeps running. More commands are listed by `goat auth --help`.
 
 **Revoke others** keeps sessions signed in with the desktop app's built-in
 credential, normally the desktop app on that computer, and sessions Pen members
-hold; both are marked **Kept by Revoke others**. If you do not recognise one or
-suspect it, revoke it by itself. After you revoke the desktop app's session, quit
-and reopen GOAT on that computer.
+hold; both are marked **Kept by Revoke others**, and MCP requests they have in
+progress keep running. If you do not recognise one or suspect it, revoke it by
+itself, which also stops its requests in progress. After you revoke the desktop
+app's session, quit and reopen GOAT on that computer.
 
 A session with an open connection stays listed after its access credential
 expires. **Settings → Connections** shows which sessions are connected;
