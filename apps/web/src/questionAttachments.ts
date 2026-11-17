@@ -1,5 +1,4 @@
 import { scopedThreadKey, scopeThreadRef } from "@goat/client-runtime/environment";
-import type { PendingUserInputDraftAnswer } from "@goat/client-runtime/state/user-input-draft";
 import {
   onThreadRequestsResolved,
   pruneResolvedUserInputDrafts,
@@ -15,6 +14,7 @@ import type {
   ThreadId,
 } from "@goat/contracts";
 import { create } from "zustand";
+import { usePendingUserInputAnswers } from "./pendingUserInputAnswers";
 import { DraftId, useComposerDraftStore } from "./composerDraftStore";
 import { releaseDraftAttachments } from "./lib/attachmentUploadQueue";
 import {
@@ -23,9 +23,7 @@ import {
 } from "./pendingUserInput";
 
 /** Edited question answers, keyed by `userInputDraftKey`; suggested answers are not stored. */
-export const usePendingUserInputAnswers = create<
-  Record<string, Record<string, PendingUserInputDraftAnswer>>
->(() => ({}));
+export { usePendingUserInputAnswers };
 export const usePendingUserInputQuestionIndex = create<Record<string, number>>(() => ({}));
 
 export function questionAttachmentDraftPrefix(

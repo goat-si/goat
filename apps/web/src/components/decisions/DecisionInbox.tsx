@@ -4,7 +4,8 @@ import {
   unlistedApprovalsNotice,
 } from "@goat/client-runtime/state/decision-inbox";
 import { AuthOrchestrationOperateScope } from "@goat/contracts";
-import { Link } from "@tanstack/react-router";
+import { scopedThreadKey } from "@goat/client-runtime/environment";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useId } from "react";
 
 import { isElectron } from "../../env";
@@ -12,6 +13,8 @@ import { useThreadShell } from "../../state/entities";
 import { useEnvironment } from "../../state/environments";
 import { useEnvironmentScope } from "../../state/session";
 import { buildThreadRouteParams } from "../../threadRoutes";
+import { canOpenSideChat } from "../sideChat/sideChat.logic";
+import { queueSideChatQuestion } from "../sideChat/sideChatFromComposer";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { HandoffCard } from "../chat/HandoffCard";
@@ -151,6 +154,7 @@ function DecisionCard({
   feedAway: boolean;
 }) {
   const titleId = useId();
+  const navigate = useNavigate();
   const shell = useThreadShell(item.ref);
   const parentShell = useThreadShell(item.routing.parentRef ?? null);
   const parentTitle = parentShell?.title || item.routing.parentTitle;
@@ -245,8 +249,16 @@ function DecisionCard({
           item={item}
           drafts={drafts}
           disabled={disabled}
+          sideChatAvailable={canOpenSideChat(shell)}
           onChange={onChange}
           onSubmit={onSubmit}
+          onSideChat={(prompt) => {
+            queueSideChatQuestion(scopedThreadKey(item.ref), item.ref, prompt);
+            void navigate({
+              to: "/$environmentId/$threadId",
+              params: buildThreadRouteParams(item.ref),
+            });
+          }}
         />
       ) : null}
       {submission?.phase === "submitting" ? <p role="status">Sending answer…</p> : null}

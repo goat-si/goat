@@ -10,6 +10,7 @@ import {
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import type { PendingUserInputDraftAnswer } from "@goat/client-runtime/state/user-input-draft";
+import { userInputDraftKey } from "@goat/client-runtime/state/thread-requests";
 import {
   AuthOrchestrationOperateScope,
   type ProviderApprovalDecision,
@@ -18,6 +19,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 
 import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { usePendingUserInputAnswers } from "../../pendingUserInputAnswers";
 import { readEnvironmentScope } from "../../state/session";
 import { decisionInbox } from "../../state/decisionInbox";
 import { serverEnvironment } from "../../state/server";
@@ -73,6 +75,16 @@ export function useDecisionInbox() {
   function setAnswers(id: string, answers: QuestionDrafts) {
     if (current?.id === id) setActiveId(id);
     setDrafts((previous) => ({ ...previous, [id]: answers }));
+    // Also where the thread composer keeps answers, so Stop returns them to the thread's draft
+    // through the one shared rule.
+    const item = snapshot.items.find((candidate) => candidate.id === id);
+    if (item?.kind !== "user_input") return;
+    const key = userInputDraftKey(
+      item.ref.environmentId,
+      item.ref.threadId,
+      item.request.requestId,
+    );
+    usePendingUserInputAnswers.setState((previous) => ({ ...previous, [key]: answers }));
   }
 
   function setDecisionDraft(id: string, draft: DecisionDraft) {

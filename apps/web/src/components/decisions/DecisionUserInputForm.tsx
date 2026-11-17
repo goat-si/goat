@@ -1,6 +1,7 @@
 import { useId } from "react";
 import type { DecisionItem } from "@goat/client-runtime/state/decision-inbox";
 import { seedUserInputDraftAnswers } from "@goat/client-runtime/state/thread-requests";
+import { sideChatCommandOverAnswer } from "@goat/client-runtime/state/unsent-question-answers";
 import {
   buildPendingUserInputAnswers,
   setPendingUserInputCustomAnswer,
@@ -17,14 +18,19 @@ export function DecisionUserInputForm({
   item,
   drafts,
   disabled,
+  sideChatAvailable = false,
   onChange,
   onSubmit,
+  onSideChat,
 }: {
   item: Extract<DecisionItem, { kind: "user_input" }>;
   drafts: QuestionDrafts;
   disabled: boolean;
+  /** Whether "/side ..." typed as an answer opens the thread's side chat instead. */
+  sideChatAvailable?: boolean;
   onChange: (drafts: QuestionDrafts) => void;
   onSubmit: (answers: Record<string, string | string[]>) => Promise<unknown>;
+  onSideChat?: (prompt: string) => void;
 }) {
   const fieldId = useId();
   const seeded: QuestionDrafts = seedUserInputDraftAnswers(item.request.questions, drafts);
@@ -36,7 +42,23 @@ export function DecisionUserInputForm({
     <form
       onSubmit={(event) => {
         event.preventDefault();
-        if (!disabled && answers !== null) void onSubmit(answers);
+        if (disabled) return;
+        for (const question of item.request.questions) {
+          const command = sideChatCommandOverAnswer({
+            answer: seeded[question.id]?.customAnswer ?? "",
+            sideChatAvailable: sideChatAvailable && onSideChat !== undefined,
+            hasAttachmentsOrContext: false,
+          });
+          if (command === null) continue;
+          // As in the composer: the question stays pending and the command leaves the answer.
+          onChange({
+            ...seeded,
+            [question.id]: setPendingUserInputCustomAnswer(seeded[question.id], "", question),
+          });
+          onSideChat?.(command.prompt);
+          return;
+        }
+        if (answers !== null) void onSubmit(answers);
       }}
     >
       <div className="flex flex-col gap-6">
