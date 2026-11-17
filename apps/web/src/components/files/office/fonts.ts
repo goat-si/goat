@@ -48,8 +48,8 @@ export function sheetFace(family: string, bold: boolean, italic: boolean) {
 
 /**
  * A bundled face's bytes. The font package caches them per worker, so a face loads once per open file; the browser's
- * caches, which every worker shares, serve the files to the next. A download pauses the call's deadline and has its
- * own: CJK faces of 4 to 12 MB must not fail a preview on a slow link, and a stalled one must not hang it.
+ * caches, which every worker shares, serve the files to the next. A download pauses every pending call's deadline and
+ * has its own: CJK faces of 4 to 12 MB must not fail a preview on a slow link, and a stalled one must not hang it.
  */
 export function loadFace(face: BundledFontFace) {
   const bound =

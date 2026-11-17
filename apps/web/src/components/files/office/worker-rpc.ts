@@ -19,7 +19,10 @@ type Request = {
 /** Withdraws a call whose caller aborted it. */
 type Cancel = { readonly cancel: number };
 
-/** The call waits on downloads with their own bound, such as fonts, so its deadline pauses until the wait ends. */
+/**
+ * The worker waits on a download with its own bound, such as a font, which the call `wait` started. The worker runs one
+ * call at a time, so every pending call's deadline pauses until all waits end, even one an aborted call started.
+ */
 type Wait = { readonly wait: number; readonly waiting: boolean };
 
 /** How long the worker may compute one call, apart from the waits it reports. */
@@ -67,16 +70,17 @@ type CallOptions = {
 type Pending = {
   readonly settle: (response: Response) => void;
   readonly reject: (error: Error) => void;
-  readonly wait: (waiting: boolean) => void;
+  readonly pause: () => void;
+  readonly resume: () => void;
 };
 
-/** The next call id, and why the worker stopped answering once it has. */
-type ClientState = { next: number; failure: Error | undefined };
+/** The next call id, why the worker stopped answering once it has, and the calls whose downloads are open. */
+type ClientState = { next: number; failure: Error | undefined; readonly waits: Set<number> };
 
 /** The window's end: starts the worker and calls its methods. */
 export function createWorkerClient<M extends Methods>(worker: Worker) {
   const pending = new Map<number, Pending>();
-  const state: ClientState = { next: 0, failure: undefined };
+  const state: ClientState = { next: 0, failure: undefined, waits: new Set() };
 
   const fail = (error: Error) => {
     state.failure ??= error;
@@ -87,7 +91,13 @@ export function createWorkerClient<M extends Methods>(worker: Worker) {
 
   worker.addEventListener("message", (event: MessageEvent<Response | Wait>) => {
     if ("wait" in event.data) {
-      pending.get(event.data.wait)?.wait(event.data.waiting);
+      const before = state.waits.size;
+
+      if (event.data.waiting) state.waits.add(event.data.wait);
+      else state.waits.delete(event.data.wait);
+
+      if (before === 0 && state.waits.size > 0) pending.forEach((call) => call.pause());
+      if (before > 0 && state.waits.size === 0) pending.forEach((call) => call.resume());
 
       return;
     }
@@ -132,7 +142,9 @@ export function createWorkerClient<M extends Methods>(worker: Worker) {
               "This document took too long to preview. Open it in another app.",
             ),
           );
-        const deadline = { timer: setTimeout(expire, callDeadlineMs) };
+        const deadline: { timer: ReturnType<typeof setTimeout> | undefined } = {
+          timer: state.waits.size === 0 ? setTimeout(expire, callDeadlineMs) : undefined,
+        };
         const abort = () => {
           clearTimeout(deadline.timer);
           pending.delete(id);
@@ -161,9 +173,13 @@ export function createWorkerClient<M extends Methods>(worker: Worker) {
             options.signal?.removeEventListener("abort", abort);
             reject(error);
           },
-          wait: (waiting) => {
+          pause: () => {
             clearTimeout(deadline.timer);
-            if (!waiting) deadline.timer = setTimeout(expire, callDeadlineMs);
+            deadline.timer = undefined;
+          },
+          resume: () => {
+            clearTimeout(deadline.timer);
+            deadline.timer = setTimeout(expire, callDeadlineMs);
           },
         });
         worker.postMessage({ id, method, key: options.key, input } satisfies Request, [
