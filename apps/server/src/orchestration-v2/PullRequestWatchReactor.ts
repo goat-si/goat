@@ -85,6 +85,18 @@ interface WatchTarget {
   readonly watch: ThreadPullRequestWatch;
 }
 
+/** A wake a pass holds back so each thread wakes once for everything the pass found. */
+interface HeldWake {
+  readonly groupKey: string;
+  readonly target: WatchTarget;
+  readonly next: ThreadPullRequestWatch | null;
+  readonly wake: PullRequestWatchWake;
+  readonly endedWatch?: ThreadPullRequestWatch | undefined;
+  readonly dropQueuedWakes?: true;
+  /** Bookkeeping that follows a sent wake. */
+  readonly after: Effect.Effect<void>;
+}
+
 interface WatchGroup {
   readonly key: string;
   readonly targets: ReadonlyArray<WatchTarget>;
@@ -433,11 +445,92 @@ export const make = Effect.gen(function* () {
       ),
   );
 
-  const closed = (target: WatchTarget) =>
+  /** The wakes the current pass found; passes run one at a time. */
+  let held: Array<HeldWake> | undefined;
+
+  const sendOne = (item: HeldWake) =>
     record(
+      item.target,
+      item.next,
+      item.wake,
+      undefined,
+      item.endedWatch,
+      item.dropQueuedWakes,
+    ).pipe(
+      Effect.andThen(item.after),
+      Effect.catchCause((cause) => {
+        lastReads.delete(item.groupKey);
+        return logFailure("pull request watch update failed", {
+          threadId: item.target.thread.id,
+          pullRequest: item.groupKey,
+        })(cause);
+      }),
+    );
+
+  const holdWake = (item: HeldWake) =>
+    held === undefined ? sendOne(item) : Effect.sync(() => void held?.push(item));
+
+  const sendTogether = Effect.fn("PullRequestWatchReactor.sendTogether")(function* (
+    items: readonly [HeldWake, ...ReadonlyArray<HeldWake>],
+  ) {
+    const [first, ...rest] = items;
+    const uuid = yield* random.uuidV4();
+    const entry = (item: HeldWake, index: number) => ({
+      ...identityOf(item.target.link),
+      startedAt: item.target.watch.startedAt,
+      watch: item.next,
+      ...(item.endedWatch === undefined ? {} : { endedWatch: item.endedWatch }),
+      ...(item.dropQueuedWakes === undefined ? {} : { dropQueuedWakes: item.dropQueuedWakes }),
+      wake: {
+        text: item.wake.text,
+        notification: item.wake.notification,
+        messageId: pullRequestWakeMessageId(
+          item.target.link,
+          `${uuid}-${index}`,
+          item.wake.checksOn,
+          item.next === null,
+        ),
+      },
+    });
+    yield* engine.dispatch({
+      type: "thread.pull-request-watch.sync",
+      commandId: CommandId.make(`server:pr-watch:${first.target.thread.id}:${uuid}`),
+      threadId: first.target.thread.id,
+      ...entry(first, 0),
+      others: rest.map((item, index) => entry(item, index + 1)),
+    });
+    yield* Effect.forEach(items, (item) => item.after, { discard: true });
+  });
+
+  /** One wake per thread for the pass; a refused batch sends each on its own, as a watch that ended decides alone. */
+  const sendHeld = (items: ReadonlyArray<HeldWake>) => {
+    const byThread = new Map<string, Array<HeldWake>>();
+    for (const item of items) {
+      byThread.set(item.target.thread.id, [...(byThread.get(item.target.thread.id) ?? []), item]);
+    }
+    return Effect.forEach(
+      byThread.values(),
+      ([first, ...rest]) =>
+        first === undefined
+          ? Effect.void
+          : rest.length === 0
+            ? sendOne(first)
+            : sendTogether([first, ...rest]).pipe(
+                Effect.catchCauseIf(
+                  (cause) => !Cause.hasInterruptsOnly(cause),
+                  () => Effect.forEach([first, ...rest], sendOne, { discard: true }),
+                ),
+              ),
+      { discard: true },
+    );
+  };
+
+  const closed = (groupKey: string, target: WatchTarget) =>
+    holdWake({
+      groupKey,
       target,
-      null,
-      {
+      next: null,
+      wake: {
         text: `Pull request #${target.link.number} (${target.link.url}) was closed, so GOAT stopped watching it. Call ${goatCallText("pull_request.watch")} if it reopens.`,
         notification: {
           source: { kind: "monitor" },
@@ -445,13 +538,9 @@ export const make = Effect.gen(function* () {
           summary: `#${target.link.number}: closed, stopped watching`,
         },
       },
-      undefined,
-      undefined,
-      true,
-    ).pipe(
-      Effect.tap(() => woke(target)),
-      Effect.tap(() => ended(target, "closed")),
-    );
+      dropQueuedWakes: true,
+      after: woke(target).pipe(Effect.andThen(ended(target, "closed"))),
+    });
 
   const endsWithoutRead = ({ thread, link }: WatchTarget): WatchEndReason | undefined =>
     link.snapshot?.state === "merged"
@@ -590,7 +679,7 @@ export const make = Effect.gen(function* () {
       lastReads.delete(group.key);
       return yield* eachTarget(group, (target) =>
         detail.state === "closed"
-          ? closed(target)
+          ? closed(group.key, target)
           : record(target, null, undefined, undefined, undefined, true).pipe(
               Effect.tap(() => ended(target, "merged")),
             ),
@@ -636,10 +725,16 @@ export const make = Effect.gen(function* () {
         report,
       });
       if (outcome.wake !== undefined) {
-        return record(target, outcome.next, outcome.wake, undefined, outcome.endedWatch).pipe(
-          Effect.tap(() => woke(target)),
-          Effect.tap(() => (report.exhausted ? ended(target, "comment-limit") : Effect.void)),
-        );
+        return holdWake({
+          groupKey: group.key,
+          target,
+          next: outcome.next,
+          wake: outcome.wake,
+          endedWatch: outcome.endedWatch,
+          after: woke(target).pipe(
+            Effect.andThen(report.exhausted ? ended(target, "comment-limit") : Effect.void),
+          ),
+        });
       }
       if (outcome.note !== undefined) return record(target, outcome.next, undefined, outcome.note);
       return outcome.next !== null && watchesEqual(outcome.next, target.watch)
@@ -651,6 +746,7 @@ export const make = Effect.gen(function* () {
   /** Every watch, or with `changed`, only that pull request's after its host reported a change. */
   // The sweep and change reads each name their own span.
   const pass = Effect.fnUntraced(function* (changed: string | undefined) {
+    held = [];
     const threads = yield* projections.getThreadsWithPullRequests();
     const targets = threads.flatMap((thread) =>
       visibleThreadPullRequests(thread.pullRequests ?? []).flatMap((link) =>
@@ -759,6 +855,9 @@ export const make = Effect.gen(function* () {
         ),
       { concurrency: "unbounded", discard: true },
     );
+    const found = held ?? [];
+    held = undefined;
+    yield* sendHeld(found);
   }, passes.withPermit);
 
   const sweep = pass(undefined).pipe(

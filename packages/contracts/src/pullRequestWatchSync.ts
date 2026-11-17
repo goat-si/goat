@@ -4,16 +4,7 @@ import { CommandId, IsoDateTime, MessageId, ThreadId } from "./baseSchemas.ts";
 import { OrchestrationV2Notification } from "./orchestrationV2Notification.ts";
 import { ThreadPullRequestKey, ThreadPullRequestWatch } from "./threadPullRequest.ts";
 
-/**
- * Records what a pull request watch saw, and wakes the agent in the same transaction when
- * `wake` is set, or adds `note` to the timeline without starting a turn. Rejected once the
- * watch started at `startedAt` has ended, and a wake is rejected on a settled or archived
- * thread, so a read that raced either changes nothing.
- */
-export const ThreadPullRequestWatchSyncCommand = Schema.Struct({
-  type: Schema.Literal("thread.pull-request-watch.sync"),
-  commandId: CommandId,
-  threadId: ThreadId,
+const watchSyncFields = {
   ...ThreadPullRequestKey.fields,
   startedAt: IsoDateTime,
   watch: Schema.NullOr(ThreadPullRequestWatch),
@@ -29,4 +20,22 @@ export const ThreadPullRequestWatchSyncCommand = Schema.Struct({
     }),
   ),
   note: Schema.optional(OrchestrationV2Notification),
+};
+
+/**
+ * Records what a pull request watch saw, and wakes the agent in the same transaction when
+ * `wake` is set, or adds `note` to the timeline without starting a turn. Rejected once the
+ * watch started at `startedAt` has ended, and a wake is rejected on a settled or archived
+ * thread, so a read that raced either changes nothing.
+ */
+export const ThreadPullRequestWatchSyncCommand = Schema.Struct({
+  type: Schema.Literal("thread.pull-request-watch.sync"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  ...watchSyncFields,
+  /**
+   * More watches of this thread read in the same pass: every wake reaches the agent as one digest,
+   * and the whole command is refused if any of them ended or was muted during the read.
+   */
+  others: Schema.optional(Schema.Array(Schema.Struct(watchSyncFields))),
 });
