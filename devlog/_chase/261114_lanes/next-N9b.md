@@ -853,3 +853,17 @@ textGenerationDefaultModel is the server's pick; the web reaches the same model 
 
 Full CI; real-client passes; live Pi, OmO and Cursor.
 
+## Lane N9b part 2 merged at 0c3d629e2c
+
+> Coordinator decision, 2026-11-17 06:25 UTC: LANE N9b PART 2 IS MERGED, and with it every lane of #3519 is in. chase/t3-261114-next = 0c3d629e2c6d5cd37a500201920c9cd103385879 (fast-forward from dd6096a168, verified on origin; #3519 MERGEABLE). Checked here before the push: the head's Orchestrator.ts is blob 4711bf6f10, the reviewer's combined file (13528 lines); the merge differs from git's own merge-tree result only in the two conflicted files (Orchestrator.ts and code-budgets.json); all 326 budget entries equal countLines, none above dev's. O23 stays out (goat#3632).
+> For N9b part 2 (mcp:76435a27), records only: the merge line "merged into the integration branch at 0c3d629e2c (#3519)" in next-N9b.md, the card row, the #3176 rows of part 2 ("merged into the integration branch at 0c3d629e2c (#3519)", unticked; the goat#3491 row included). Then it is finished for #3519.
+
+Lane N9b part 2 (L408 817b92f13a, the a3cde98425 remainder, goat#3491, both fix rounds, item 7 and both integration merges) is merged into the integration branch at 0c3d629e2c (#3519).
+
+#3176 rows updated with one --body-file edit, read back:
+- a3cde98425 remainder: "merged into the integration branch at 0c3d629e2c (#3519)", unticked.
+- 817b92f13a: "merged into the integration branch at 0c3d629e2c (#3519)" (with the fix round commits 8042a90a37 and dcc44087b7), unticked.
+- goat#3491 has no row of its own. Its upstream row, 2248ca8db9, is already ticked because it is in dev (#3397). That row gains the follow-up line "goat#3491 ... ported in lane N9b part 2 (next PR), dfcea5f1aa, 1f4552a7cf, f22ab6dcae, 8964efb090, 87c97d8e54, merged into the integration branch at 0c3d629e2c (#3519)", and its tick is left as it was.
+
+O23 (L407) stays out of #3519 (goat#3632).
+
