@@ -17,6 +17,7 @@ import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as HostProcess from "@goat/shared/HostProcess";
 import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -31,6 +32,15 @@ import { fleetSnapshot } from "../hub/parity.testkit.ts";
 import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as Runner from "../processRunner.ts";
 import { prepareProviderHomeRuntime } from "./ProviderHomeRuntime.ts";
+
+const plainEnvValue = (value: string | Redacted.Redacted<string> | undefined) =>
+  Redacted.isRedacted(value) ? Redacted.value(value) : value;
+const plainEnv = (
+  env: Readonly<Record<string, string | Redacted.Redacted<string> | undefined>> | undefined,
+) =>
+  env === undefined
+    ? undefined
+    : Object.fromEntries(Object.entries(env).map(([key, value]) => [key, plainEnvValue(value)]));
 
 const instanceId = ProviderInstanceId.make("pi-home");
 const threadId = ThreadId.make("thread-pi-home");
@@ -58,7 +68,7 @@ const fakePi = () => {
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.gen(function* () {
       const env = ChildProcess.isStandardCommand(command) ? (command.options.env ?? {}) : {};
-      spawns.push(env);
+      spawns.push(plainEnv(env) ?? {});
       const sessionDir = env.PI_CODING_AGENT_SESSION_DIR ?? "";
       let sessionFile = `${sessionDir}/session-${spawns.length}.jsonl`;
       saved.add(sessionFile);

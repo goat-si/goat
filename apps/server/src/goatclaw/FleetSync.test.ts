@@ -297,7 +297,7 @@ describe("GoatclawFleetSync", () => {
           Effect.provide(
             McpHttpServer.toolkitRegistration(FleetToolkit, FleetHandlers.layer).pipe(
               Layer.provideMerge(Layer.succeed(FleetSync.GoatclawFleetSync, remote.sync)),
-              Layer.provideMerge(McpServer.McpServer.layer),
+              Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
               Layer.provideMerge(dependencies),
             ),
           ),

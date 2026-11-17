@@ -1,9 +1,9 @@
 import { HOURLY_OPERATIONS, DEFAULT_LIMITS } from "./AccountLimits.ts";
 // @effect-diagnostics anyUnknownInErrorContext:off -- Alchemy's test provider owns the local Worker lifecycle and exposes its framework error union.
 import { expect } from "@effect/vitest";
-import * as Cloudflare from "alchemy/Cloudflare";
-import * as Test from "alchemy/Test/Vitest";
-import { resolveDev } from "alchemy/Test/Core";
+import * as Cloudflare from "@alchemy.run/cloudflare";
+import * as Test from "@alchemy.run/test/Vitest";
+import { resolveDev } from "@alchemy.run/test/Core";
 import { AlchemyContext } from "alchemy/AlchemyContext";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";

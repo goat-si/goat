@@ -31,6 +31,7 @@ import * as Ref from "effect/Ref";
 import * as Tracer from "effect/Tracer";
 import * as TestClock from "effect/testing/TestClock";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it, vi } from "@effect/vitest";
 import * as SshConfig from "@goat/ssh/config";
@@ -184,7 +185,7 @@ describe("SSH dispatch tool compatibility", () => {
               Layer.provide(ServerSettings.layerTest()),
               Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-dispatch-test-" })),
               Layer.provide(FetchHttpClient.layer),
-              Layer.provide(NodeServices.layer),
+              Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
             ),
           ),
         );
@@ -1230,7 +1231,7 @@ const registrationLayer = McpHttpServer.toolkitRegistration(
   }),
 ).pipe(
   Layer.provide(layerPermissionProfilesOff),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
 );
 const mcpClient = McpSchema.McpServerClient.of({
@@ -1538,7 +1539,7 @@ const withLaunchRemote = <A, E>(
             Layer.provide(ServerSettings.layerTest()),
             Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-saved-target-" })),
             Layer.provide(FetchHttpClient.layer),
-            Layer.provide(NodeServices.layer),
+            Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ),
       );
@@ -2814,7 +2815,7 @@ it.effect.each(["matching", "missing", "wrong"] as const)(
                 ServerConfig.layerTest("/projects/fixture", { prefix: "report-echo-test-" }),
               ),
               Layer.provide(FetchHttpClient.layer),
-              Layer.provide(NodeServices.layer),
+              Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
             ),
           ),
         );
@@ -3305,7 +3306,7 @@ describe("SshRemoteDispatch SSH attachments", () => {
                 Layer.provide(Layer.succeed(ServerConfig.ServerConfig, config)),
                 Layer.provide(Layer.succeed(FileSystem.FileSystem, testFs)),
                 Layer.provide(Layer.succeed(HttpClient.HttpClient, uploadHttp)),
-                Layer.provide(NodeServices.layer),
+                Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
               ),
             ),
           );
@@ -3323,7 +3324,7 @@ describe("SshRemoteDispatch SSH attachments", () => {
       }).pipe(
         Effect.provide(
           ServerConfig.layerTest("/fixture", { prefix: "ssh-attachments-" }).pipe(
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ),
       ),
@@ -4094,7 +4095,7 @@ describe("SSH launcher transport", () => {
             Layer.provide(ServerSettings.layerTest()),
             Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-launcher-test-" })),
             Layer.provide(FetchHttpClient.layer),
-            Layer.provide(NodeServices.layer),
+            Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ),
       );
@@ -4183,7 +4184,7 @@ it.effect("ready-only host tools never bootstrap or issue a session on a stopped
           Layer.provide(ServerSettings.layerTest()),
           Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "ready-only-" })),
           Layer.provide(FetchHttpClient.layer),
-          Layer.provide(NodeServices.layer),
+          Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
       ),
       Effect.ensuring(
@@ -4320,7 +4321,7 @@ it.effect(
                 Layer.provide(ServerSettings.layerTest()),
                 Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "placement-restart-" })),
                 Layer.provide(FetchHttpClient.layer),
-                Layer.provide(NodeServices.layer),
+                Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
               ),
             ),
           );

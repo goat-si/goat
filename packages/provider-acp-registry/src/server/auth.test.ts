@@ -1,4 +1,6 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Layer from "effect/Layer";
 import { assert, it } from "@effect/vitest";
 import { ProviderInstanceId, type ProviderAuthState } from "@goat/contracts";
 import { AcpRegistrySettings } from "../settings.ts";
@@ -253,7 +255,7 @@ it.effect("logout reports the profile captured before the operation started", ()
     yield* Deferred.succeed(release, undefined);
     yield* Fiber.join(logout);
     assert.deepEqual(h.changedEnvironments, [{ HOME: "/profile/a" }]);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("regression #3079: ACP authentication discovers and launches with the current PATH", () =>
@@ -277,7 +279,7 @@ it.effect("regression #3079: ACP authentication discovers and launches with the 
     assert.strictEqual(h.resolvedPaths.at(-1), "/new");
     assert.strictEqual(h.terminalSpawn()?.env?.PATH, "/new");
     yield* h.controller.cancel("owner", flow.flowId!);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("rediscovers sign-in methods when the environment changes without a version change", () =>
@@ -297,7 +299,7 @@ it.effect("rediscovers sign-in methods when the environment changes without a ve
     host.HOME = "/profile/two";
     yield* h.controller.refreshMethods!;
     assert.strictEqual(h.runtimes(), 2);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("keeps local credentials separate from a matching registry agent ID", () =>
@@ -317,7 +319,7 @@ it.effect("keeps local credentials separate from a matching registry agent ID", 
       owner: "provider",
       key: "acp:local:test-agent",
     });
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -351,7 +353,7 @@ it.effect(
       assert.deepEqual(h.closed, [1, 2]);
       yield* h.controller.logout(Effect.void);
       assert.deepEqual(h.changed, [true, false]);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -395,7 +397,7 @@ it.effect(
       yield* h.phase("succeeded");
       assert.deepEqual(h.started, [3]);
       assert.deepEqual(h.changed, [true]);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("cancels the login PTY and rejects further terminal input", () =>
@@ -416,7 +418,7 @@ it.effect("cancels the login PTY and rejects further terminal input", () =>
       }).pipe(Effect.result))._tag,
       "Failure",
     );
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("does not report authentication when post-login verification fails", () =>
@@ -430,7 +432,7 @@ it.effect("does not report authentication when post-login verification fails", (
     yield* h.phase("failed");
     assert.deepEqual(h.changed, []);
     assert.isTrue(h.killed());
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("surfaces the agent error message when authenticate fails with AcpRequestError", () =>
@@ -454,5 +456,5 @@ it.effect("surfaces the agent error message when authenticate fails with AcpRequ
       "The ACP agent could not complete sign-in. Connect to the VPN, then sign in again.",
     );
     assert.deepEqual(h.changed, []);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

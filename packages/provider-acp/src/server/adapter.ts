@@ -1,4 +1,8 @@
 import { ACP_PROMPT_ACTIVITY_UPDATES } from "./capabilities.ts";
+import {
+  acpSubagentStatusBlocksTurnSettlement,
+  acpSubagentStatusIsTerminal,
+} from "./acpSubagentStatus.ts";
 import { launchEnvironment } from "./sessionLaunchEnvironment.ts";
 import { negotiatedCapabilities, nativeThreadId, makeProviderThread } from "./capabilities.ts";
 export { AcpProviderCapabilitiesV2 } from "./capabilities.ts";
@@ -51,6 +55,7 @@ import {
   type ThreadId,
 } from "@goat/contracts";
 import { AgentScope, AgentScopeThreadId } from "@goat/shared/AgentScope";
+import { forkInScope } from "@goat/shared/forkInScope";
 import { HTML_RENDER_TOOL_NAME } from "@goat/shared/htmlRender";
 import { modelSelectionsEqual } from "@goat/shared/model";
 import {
@@ -71,7 +76,7 @@ import {
 export { acpToolCallDiffPatch, acpToolCallSnippetEdit } from "./toolDiff.ts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -625,20 +630,6 @@ interface AcpNativeChildSession {
   readonly pending: Array<EffectAcpSchema.SessionNotification>;
 }
 
-function acpSubagentStatusIsTerminal(status: OrchestrationV2Subagent["status"]): boolean {
-  return (
-    status === "completed" ||
-    status === "failed" ||
-    status === "interrupted" ||
-    status === "cancelled" ||
-    status === "idle"
-  );
-}
-
-function acpSubagentStatusBlocksTurnSettlement(status: OrchestrationV2Subagent["status"]): boolean {
-  return status === "running" || status === "pending";
-}
-
 function acpSubagentHasPendingBackgroundWork(subagent: ActiveAcpSubagent): boolean {
   return (
     acpSubagentStatusBlocksTurnSettlement(subagent.task.status) || !subagent.terminalStatusProjected
@@ -707,7 +698,7 @@ function shouldPersistToolUpdate(
 export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
   options: AcpAdapterV2Options,
 ) {
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const fileSystem = yield* FileSystem.FileSystem;
   const toolNice = yield* resolveNice(yield* HostProcess.Platform);
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -987,7 +978,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const promptInstructionStates = yield* Ref.make(new Map<string, GoatAcpInstructionState>());
         // Unique markers keep delayed prompt completions from clearing later compactions.
         const compactionMarkers = yield* Ref.make(new Map<string, symbol>());
-        const latestAdvertisedCommands = yield* Ref.make<AdvertisedCommands.Latest | null>(null);
+        const advertisedCommandsBySession = yield* Ref.make(AdvertisedCommands.empty);
         const compactsContext =
           flavor.supportsCompaction === true || flavor.compactViaAdvertisedCommand === true;
         const runtimeRestartRequired = yield* Ref.make(false);
@@ -5385,9 +5376,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               if (notification.update.sessionUpdate === "available_commands_update") {
                 const sessionId = rawNotification.sessionId;
                 const advertisedCommands = notification.update.availableCommands;
-                yield* Ref.set(
-                  latestAdvertisedCommands,
-                  AdvertisedCommands.remember(sessionId, advertisedCommands),
+                yield* Ref.update(advertisedCommandsBySession, (current) =>
+                  AdvertisedCommands.remember(current, sessionId, advertisedCommands),
                 );
                 yield* flavor.onAvailableCommandsUpdate?.(advertisedCommands) ?? Effect.void;
               }
@@ -5952,7 +5942,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const mcpBridge = yield* makeAcpMcpOverAcpBridge({
             endpoint: mcpContext.endpoint,
             authorization: mcpContext.authorization,
-            allocateConnectionId: crypto.randomUUIDv4().pipe(Effect.orDie),
+            allocateConnectionId: random.uuidV4(),
           });
           yield* Scope.addFinalizer(scope, mcpBridge.dispose);
           return mcpBridge;
@@ -5991,7 +5981,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             )
             .pipe(
               Effect.provideService(Scope.Scope, runtimeScope),
-              Effect.provideService(Crypto.Crypto, crypto),
+              Effect.provideService(SecureRandom.SecureRandom, random),
               Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
               Effect.provideService(AgentScope, agentScope),
               Effect.provideService(AgentScopeThreadId, threadId ?? undefined),
@@ -6073,7 +6063,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               )
               .pipe(
                 Effect.provideService(Scope.Scope, replacementScope),
-                Effect.provideService(Crypto.Crypto, crypto),
+                Effect.provideService(SecureRandom.SecureRandom, random),
                 Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
                 Effect.provideService(AgentScope, agentScope),
                 Effect.provideService(AgentScopeThreadId, threadId ?? undefined),
@@ -7215,7 +7205,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               turnInput.message.text.trim() === "/compact" &&
               turnInput.message.attachments.length === 0 &&
               !AdvertisedCommands.advertises(
-                yield* Ref.get(latestAdvertisedCommands),
+                yield* Ref.get(advertisedCommandsBySession),
                 requestedSessionId,
                 "compact",
               )
@@ -8258,7 +8248,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     );
                   }).pipe(
                     Effect.ensuring(runtimeTransitionPermit.release(1)),
-                    Effect.forkIn(sessionScope, { startImmediately: true, uninterruptible: true }),
+                    forkInScope(sessionScope, { startImmediately: true, uninterruptible: true }),
                   );
                   return yield* restore(Fiber.join(transitionFiber)).pipe(
                     Effect.onInterrupt(() =>

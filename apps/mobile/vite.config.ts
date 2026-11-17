@@ -14,6 +14,8 @@ const reactTests = [
   "src/features/threads/CustomAnswerInput.test.tsx",
   "src/features/threads/MessageImageGalleryScope.test.tsx",
   "src/features/threads/ThreadMarkdownVideo.test.tsx",
+  "src/features/threads/useThreadHistoryControls.test.tsx",
+  "src/features/threads/useThreadMessageJumpLoading.test.tsx",
   "src/features/devices/device-stream.browser.test.ts",
   "src/features/notes/live-editor/note-editor-images.dom.test.ts",
   "src/features/notes/useNoteFiles.test.tsx",
@@ -29,6 +31,7 @@ const reactTests = [
   "src/features/threads/git/GitBranchesSheet.occupancy.test.tsx",
   "src/features/threads/git/GitBranchesSheet.test.tsx",
   "src/components/ui/SplitButton.android.test.tsx",
+  "src/components/ui/AndroidAnchoredMenu.test.tsx",
   "src/components/ProjectFavicon.test.tsx",
   "src/features/files/useFileTreeEntries.test.tsx",
   "src/features/home/home-route-visibility.test.tsx",
@@ -95,6 +98,7 @@ const reactTests = [
   "src/features/goat-bot/MobileBotStatusCard.test.tsx",
   "src/features/goat-bot/MobileBotRoster.test.tsx",
   "src/features/goat-bot/MobileBotRoster.refusal.test.tsx",
+  "src/features/goat-bot/MobileBotRoster.reload.test.tsx",
   "src/features/goat-bot/MobileBotList.test.tsx",
   "src/features/goat-bot/useMobileBotRoster.test.tsx",
   "src/features/goat-bot/useMobileGoatBotMemberModel.test.tsx",
@@ -122,6 +126,7 @@ const reactTests = [
   "src/features/goat-bot/MobileGoatBotHomeWorker.test.tsx",
   "src/features/goat-bot/useMobileGoatBotHomeSettings.test.tsx",
   "src/features/goat-bot/useMobileGoatBotSession.test.tsx",
+  "src/features/goat-bot/useMobileGoatBotEnvironments.test.tsx",
   "src/features/goat-bot/useMobileGoatBotSession.offline.test.tsx",
   "src/features/goat-bot/useReplying.test.tsx",
   "src/features/settings/MemorySyncDiagnostics.test.tsx",
@@ -181,6 +186,8 @@ const devCompiledSources = [
   "/features/goat-bot/GoatBotScreen.tsx",
   "/features/goat-bot/MobileBotWork.tsx",
   "/features/goat-bot/MobileBotRowMenu.tsx",
+  "/features/goat-bot/MobileBotRosterPanel.tsx",
+  "/features/threads/useThreadHistoryControls.ts",
 ];
 const require = NodeModule.createRequire(import.meta.url);
 const babel: {

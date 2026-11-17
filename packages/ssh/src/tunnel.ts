@@ -33,7 +33,8 @@ import { compareRuntimeBuilds } from "@goat/shared/semver";
 import * as Option from "effect/Option";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -101,6 +102,7 @@ import { REMOTE_PROTOCOL_TOKEN_SCRIPT, REMOTE_RUNNER_HINT_SCRIPT } from "./runti
 import { buildRemoteStopScript } from "./remoteStopScript.ts";
 export { buildRemoteStopScript };
 import { REMOTE_RUNTIME_PUBLISH_SCRIPT, remoteUploadCommand } from "./runtimeInstallScripts.ts";
+import { REMOTE_NODE_ENV_SCRIPT } from "./remoteNodeEnvScript.ts";
 import { runtimePreparationError } from "./runtimePreparationErrors.ts";
 import { buildRemoteRuntimeProbeScript, decodeRemoteRuntimeProbe } from "./runtimeProbe.ts";
 import { makeRuntimeProvisioning } from "./runtimeProvisioning.ts";
@@ -227,7 +229,8 @@ export interface SshTunnelEntry {
 
 export type SshEnvironmentEffectContext =
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | Digest.Digest
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | Path.Path
   | HttpClient.HttpClient
@@ -514,104 +517,6 @@ function probe() {
   }
   process.exit(1);
 })().catch(() => process.exit(1));
-`;
-
-const REMOTE_NODE_ENV_SCRIPT = `prepend_path_if_dir() {
-  if [ -d "$1" ]; then
-    case ":$PATH:" in
-      *":$1:"*) ;;
-      *) PATH="$1:$PATH" ;;
-    esac
-  fi
-}
-
-remote_node_satisfies_engine() {
-  GOAT_NODE_ENGINE_RANGE=@@GOAT_NODE_ENGINE_RANGE@@
-  if [ -z "$GOAT_NODE_ENGINE_RANGE" ]; then
-    return 0
-  fi
-  node - "$GOAT_NODE_ENGINE_RANGE" <<'NODE'
-@@GOAT_NODE_ENGINE_CHECK_SCRIPT@@
-NODE
-}
-
-ensure_remote_node_path() {
-  if command -v node >/dev/null 2>&1 && remote_node_satisfies_engine >/dev/null 2>&1; then
-    return 0
-  fi
-
-  prepend_path_if_dir "$HOME/.local/bin"
-  prepend_path_if_dir "$HOME/bin"
-  prepend_path_if_dir "/opt/homebrew/bin"
-  prepend_path_if_dir "/home/linuxbrew/.linuxbrew/bin"
-  prepend_path_if_dir "/usr/local/bin"
-  prepend_path_if_dir "/usr/bin"
-  prepend_path_if_dir "/bin"
-  # lsof lives in sbin on macOS. A login PATH that already has node returns
-  # before these lines, so the launch script also prepends them unconditionally.
-  prepend_path_if_dir "/usr/sbin"
-  prepend_path_if_dir "/sbin"
-
-  if [ -z "\${VOLTA_HOME:-}" ]; then
-    VOLTA_HOME="$HOME/.volta"
-  fi
-  export VOLTA_HOME
-  prepend_path_if_dir "$VOLTA_HOME/bin"
-
-  prepend_path_if_dir "$HOME/.asdf/shims"
-  prepend_path_if_dir "$HOME/.asdf/bin"
-  if [ ! -x "$HOME/.asdf/shims/node" ] && [ -s "$HOME/.asdf/asdf.sh" ]; then
-    # shellcheck disable=SC1090
-    . "$HOME/.asdf/asdf.sh"
-  fi
-
-  prepend_path_if_dir "$HOME/.local/share/mise/shims"
-  prepend_path_if_dir "$HOME/.mise/shims"
-  if ! command -v node >/dev/null 2>&1 && command -v mise >/dev/null 2>&1; then
-    eval "$(mise activate sh)" >/dev/null 2>&1 || true
-  fi
-
-  if [ -z "\${FNM_DIR:-}" ]; then
-    FNM_DIR="$HOME/.local/share/fnm"
-  fi
-  export FNM_DIR
-  prepend_path_if_dir "$FNM_DIR"
-  prepend_path_if_dir "$HOME/.fnm"
-  if ! command -v node >/dev/null 2>&1 && command -v fnm >/dev/null 2>&1; then
-    eval "$(fnm env --shell bash)" >/dev/null 2>&1 || true
-    fnm use --silent-if-unchanged >/dev/null 2>&1 || fnm use default >/dev/null 2>&1 || true
-  fi
-
-  prepend_path_if_dir "$HOME/.nodenv/bin"
-  prepend_path_if_dir "$HOME/.nodenv/shims"
-  if ! command -v node >/dev/null 2>&1 && command -v nodenv >/dev/null 2>&1; then
-    eval "$(nodenv init -)" >/dev/null 2>&1 || true
-  fi
-
-  if [ -z "\${NVM_DIR:-}" ]; then
-    NVM_DIR="$HOME/.nvm"
-  fi
-  export NVM_DIR
-
-  if [ -s "$NVM_DIR/nvm.sh" ]; then
-    # shellcheck disable=SC1090
-    . "$NVM_DIR/nvm.sh"
-    if ! command -v node >/dev/null 2>&1 && command -v nvm >/dev/null 2>&1; then
-      nvm use --silent default >/dev/null 2>&1 || nvm use --silent node >/dev/null 2>&1 || nvm use --silent --lts >/dev/null 2>&1 || true
-    fi
-  fi
-
-  if ! command -v node >/dev/null 2>&1 && [ -d "$NVM_DIR/versions/node" ]; then
-    for GOAT_NODE_BIN in "$NVM_DIR"/versions/node/*/bin; do
-      if [ -x "$GOAT_NODE_BIN/node" ]; then
-        PATH="$GOAT_NODE_BIN:$PATH"
-        export PATH
-      fi
-    done
-  fi
-
-  command -v node >/dev/null 2>&1 && remote_node_satisfies_engine
-}
 `;
 
 const REMOTE_RUNNER_SCRIPT = `#!/bin/sh
@@ -1465,7 +1370,11 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
     }) => Effect.Effect<
       void,
       never,
-      ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
+      | ChildProcessSpawner.ChildProcessSpawner
+      | Digest.Digest
+      | SecureRandom.SecureRandom
+      | FileSystem.FileSystem
+      | Path.Path
     >,
     /** The app server refused a credential recently, so this launch goes to the managed server. */
     skipAppServer = false,
@@ -1480,7 +1389,11 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
       }
     | { readonly status: "pending"; readonly pending: SshRuntimePendingReplacement },
     SshCommandError | SshInvalidTargetError | SshLaunchError,
-    ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
+    | ChildProcessSpawner.ChildProcessSpawner
+    | Digest.Digest
+    | SecureRandom.SecureRandom
+    | FileSystem.FileSystem
+    | Path.Path
   > {
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
@@ -1763,7 +1676,11 @@ const stopRemoteServer = Effect.fn("ssh/tunnel.stopRemoteServer")(function* (
 ): Effect.fn.Return<
   void,
   SshCommandError | SshInvalidTargetError | SshLaunchError,
-  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner
+  | Digest.Digest
+  | SecureRandom.SecureRandom
+  | FileSystem.FileSystem
+  | Path.Path
 > {
   const stateKey = REMOTE_RUNTIME_STATE_KEY;
   yield* Effect.logInfo("ssh.remoteServer.stop.start", {
@@ -1807,7 +1724,11 @@ const readRemoteServerLogTail = Effect.fn("ssh/tunnel.readRemoteServerLogTail")(
 ): Effect.fn.Return<
   string,
   SshCommandError | SshInvalidTargetError | SshLaunchError,
-  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner
+  | Digest.Digest
+  | SecureRandom.SecureRandom
+  | FileSystem.FileSystem
+  | Path.Path
 > {
   const result = yield* runSshCommand(target, {
     remoteCommandArgs: ["sh", "-s"],
@@ -1882,7 +1803,8 @@ const startSshTunnelAttempt = Effect.fn("ssh/tunnel.startSshTunnel")(function* (
   SshTunnelEntry,
   SshCommandError | SshInvalidTargetError | SshReadinessError,
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | Digest.Digest
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | Path.Path
   | HttpClient.HttpClient
@@ -3078,7 +3000,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       if (remoteLaunch.pending === undefined && !needsArchiveRetry)
         pendingReplacements.delete(input.key);
       const spawnerService = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const cryptoService = yield* Crypto.Crypto;
+      const randomService = yield* SecureRandom.SecureRandom;
+      const digestService = yield* Digest.Digest;
       const fileSystemService = yield* FileSystem.FileSystem;
       const pathService = yield* Path.Path;
       yield* Scope.addFinalizer(
@@ -3126,7 +3049,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           ).pipe(
             Effect.provideService(SshConnectionSharing, sharing),
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawnerService),
-            Effect.provideService(Crypto.Crypto, cryptoService),
+            Effect.provideService(SecureRandom.SecureRandom, randomService),
+            Effect.provideService(Digest.Digest, digestService),
             Effect.provideService(FileSystem.FileSystem, fileSystemService),
             Effect.provideService(Path.Path, pathService),
           );
@@ -4859,7 +4783,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
 });
 
 /**
- * @effect-expect-leaking ChildProcessSpawner | Crypto | FileSystem | HttpClient | NetService | Path | SshPasswordPrompt
+ * @effect-expect-leaking ChildProcessSpawner | Digest | FileSystem | HttpClient | NetService | Path | SecureRandom | SshPasswordPrompt
  */
 export class SshEnvironmentManager extends Context.Service<
   SshEnvironmentManager,

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { AuthMcpClientAccess, AuthSessionId } from "@goat/contracts";
 import * as NetService from "@goat/shared/Net";
@@ -96,7 +97,7 @@ export const loadDefaultStoredLogin: Effect.Effect<
           detail: `Could not read this GOAT home's login: ${error.message}`,
         }),
   ),
-  Effect.provide(Layer.mergeAll(NodeServices.layer, NetService.layer)),
+  Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer)),
 );
 
 /**

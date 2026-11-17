@@ -72,19 +72,9 @@ export const makeWorktreeMeasurement = (input: {
             const empty = { target, bytes: 0, names: [] as string[], children: [] as string[] };
             const inStore = skipped !== null && (target === skipped || inside(skipped, target));
             if (inStore && !inspectRepositories) return empty;
-            const isLink = yield* fs.readLink(target).pipe(
-              Effect.as(true),
-              Effect.catchIf(
-                (error) =>
-                  error.cause instanceof Error &&
-                  "code" in error.cause &&
-                  error.cause.code === "EINVAL",
-                () => Effect.succeed(false),
-              ),
-            );
-            if (isLink) return empty;
+            const stat = yield* fs.lstat(target);
+            if (stat.type === "SymbolicLink") return empty;
             if ((yield* fs.realPath(target)) !== target) return null;
-            const stat = yield* fs.stat(target);
             if (stat.type === "Directory") {
               if (!inStore) {
                 const names = yield* fs.readDirectory(target);

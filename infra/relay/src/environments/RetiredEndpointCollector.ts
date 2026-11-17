@@ -1,5 +1,5 @@
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -43,14 +43,14 @@ const make = Effect.gen(function* () {
   const sql = db.$client;
   const config = yield* RelayConfiguration;
   const tx = yield* AccountTransactions;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const inventory = yield* RetiredEndpointInventory;
   return RetiredEndpointCollector.of({
     sweep: Effect.gen(function* () {
       const stage = config.managedEndpointNamespace;
       if (!stage) return;
-      const owner = yield* crypto
-        .randomUUIDv4()
+      const owner = yield* random
+        .uuidV4()
         .pipe(
           Effect.mapError((cause) => new RetiredInventoryError({ operation: "lease-id", cause })),
         );

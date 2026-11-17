@@ -1,5 +1,6 @@
 // @effect-diagnostics preferSchemaOverJson:off - Moved test fixtures encode recorded gh output.
 import { SourceControlProviderKind } from "@goat/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -196,6 +197,7 @@ export function harness(input: {
     policy,
     Layer.succeed(HttpClient.HttpClient, graphQlHttp(graphql, graphqlCalls)),
     NodeServices.layer,
+    NodeCrypto.layer,
   );
   return { layer, git, graphqlCalls };
 }

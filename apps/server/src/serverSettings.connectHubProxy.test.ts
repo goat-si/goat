@@ -1,5 +1,6 @@
 import { AuthStandardClientScopes, MemorySpaceId } from "@goat/contracts";
 import * as Grants from "./auth/PairingGrantStore.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -28,7 +29,7 @@ const app = Layer.mergeAll(Auth.layer, Settings.layer).pipe(
 );
 const storage = Sqlite.layerMemory.pipe(
   Layer.provideMerge(Config.layerTest(process.cwd(), { prefix: "goat-connect-watch-" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 it.effect(

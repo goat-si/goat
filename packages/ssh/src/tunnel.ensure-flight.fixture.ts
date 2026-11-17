@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@goat/shared/Net";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -91,7 +92,7 @@ export const makeEnsureFlightFixture = Effect.gen(function* () {
               JSON.stringify({ credential: `fixture-pairing-${count.pairings}` }),
             );
       }
-      if (isRemoteLaunch(command.args)) {
+      if (isRemoteLaunch(command.args.map(String))) {
         count.launches++;
         if (state.launchFails)
           return {
@@ -131,6 +132,7 @@ export const makeEnsureFlightFixture = Effect.gen(function* () {
   };
   const layer = Layer.mergeAll(
     NodeServices.layer,
+    NodeCrypto.layer,
     ConfigProvider.layer(ConfigProvider.fromUnknown({ HOME: archive.root })),
     Layer.succeed(FileSystem.FileSystem, fs),
     Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),

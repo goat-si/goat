@@ -1,6 +1,6 @@
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -60,7 +60,7 @@ export const make = Effect.fn("server.auto_update.make")(function* (options?: {
   const settings = yield* ServerSettings.ServerSettingsService;
   const identity = yield* ServerEnvironment.ServerEnvironmentIdentity;
   const config = yield* ServerConfig.ServerConfig;
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const httpClient = yield* HttpClient.HttpClient;
@@ -165,7 +165,7 @@ export const make = Effect.fn("server.auto_update.make")(function* (options?: {
             !isRolloutEligible({
               channel,
               bucket: yield* rolloutBucket(environmentId, targetVersion).pipe(
-                Effect.provideService(Crypto.Crypto, crypto),
+                Effect.provideService(Digest.Digest, digest),
               ),
               publishedAt: release.publishedAt,
               now: tick,

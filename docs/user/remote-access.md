@@ -819,11 +819,22 @@ threads on an environment through its MCP server. See
 
 On the host, **Settings → Connections** lets authorized administrators create
 pairing links and revoke client sessions. Revoking an unused link prevents new
-pairings; revoke a device's session to remove its existing access. Command-line
-management is available through `goat auth --help`.
+pairings; revoke a device's session to remove its existing access.
+`goat auth session revoke <id>` does the same from the command line: the session
+is refused at once, and a running server closes its open connections within
+about 5 seconds. An MCP request that was admitted before the revoke runs to
+completion on the access it was admitted with, and can still write or start work
+until it finishes. More commands are listed by `goat auth --help`.
+
+**Revoke others** keeps sessions signed in with the desktop app's built-in
+credential, normally the desktop app on that computer, and sessions Pen members
+hold; both are marked **Kept by Revoke others**. If you do not recognise one or
+suspect it, revoke it by itself. After you revoke the desktop app's session, quit
+and reopen GOAT on that computer.
 
 A session with an open connection stays listed after its access credential
-expires.
+expires. **Settings → Connections** shows which sessions are connected;
+`goat auth session list` cannot tell.
 
 To choose a token's permissions, pass `--scope` once for each scope you want:
 

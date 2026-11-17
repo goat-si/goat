@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId } from "@goat/contracts";
@@ -69,7 +70,7 @@ const layerWith = (
     Layer.provideMerge(layerBase),
   );
 
-it.layer(NodeServices.layer)(
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
   "Pen member session issue (mesh link design §5, review P3-1)",
   (it) => {
     it.effect(

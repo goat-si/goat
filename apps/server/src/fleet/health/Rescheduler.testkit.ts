@@ -1,4 +1,5 @@
 /** The hosts, dispatch and server the Rescheduler's integration tests run against. */
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { FleetOwnerKey, type HostStatusEntry, type RuntimeMode, ThreadId } from "@goat/contracts";
@@ -426,7 +427,7 @@ export const databaseFile = Effect.gen(function* () {
     yield* fs.makeTempDirectoryScoped({ prefix: "goat-fleet-health-" }),
     "state.sqlite",
   );
-}).pipe(Effect.provide(NodeServices.layer));
+}).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 export const ref = { host: "A", threadId: ThreadId.make("thread:a1"), watchId: null };
 

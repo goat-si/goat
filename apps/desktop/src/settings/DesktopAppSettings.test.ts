@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
   DesktopUpdateInstallPolicySchema,
   DesktopUpdatePendingRecordSchema,
@@ -81,11 +82,11 @@ const withSettings = <A, E, R>(
       Effect.provide(
         DesktopAppSettings.layer.pipe(
           Layer.provideMerge(layerEnvironment(baseDir, options?.appVersion)),
-          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
       ),
     );
-  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped);
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped);
 
 function writeSettingsPatch(patch: typeof DesktopSettingsPatch.Type) {
   return Effect.gen(function* () {

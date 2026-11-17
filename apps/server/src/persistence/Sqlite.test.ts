@@ -8,6 +8,7 @@ import * as Path from "effect/Path";
 import { vi } from "vite-plus/test";
 import { migrationManifest, runMigrations } from "./Migrations.ts";
 
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -41,7 +42,7 @@ it.effect("retains up to 128 MiB of WAL between checkpoints", () => {
   }).pipe(
     Effect.provide(
       SqlitePersistence.layerFromPath(NodePath.join(tempDir, "state.sqlite")).pipe(
-        Layer.provide(NodeServices.layer),
+        Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       ),
     ),
     Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
@@ -52,7 +53,9 @@ it.effect("drops planner statistics a database already has", () => {
   const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-sqlite-stats-"));
   const dbPath = NodePath.join(tempDir, "state.sqlite");
   const persistence = () =>
-    SqlitePersistence.layerFromPath(dbPath).pipe(Layer.provide(NodeServices.layer));
+    SqlitePersistence.layerFromPath(dbPath).pipe(
+      Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+    );
 
   return Effect.gen(function* () {
     yield* Effect.gen(function* () {
@@ -114,7 +117,7 @@ it.effect("runs file database opening and migration SQL away from the server thr
       assert.deepEqual(yield* sql`SELECT value FROM writer_roundtrip`, [{ value: "kept" }]);
     }).pipe(Effect.provide(SqlitePersistence.layerFromPath(dbPath)));
     assert.equal(nativeCalls, 0);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 import * as NodeWorkerThreads from "node:worker_threads";
@@ -187,7 +190,7 @@ it.effect("publishes one fatal notification after a lost COMMIT without replayin
         }),
       ),
     );
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each([false, true])(
@@ -294,7 +297,7 @@ it.effect(
       assert.isTrue(Exit.isFailure(refused));
       assert.equal(alarms, 0);
       assert.deepEqual(exits, []);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("writer failure during SQLite layer construction reaches the server lifetime owner", () =>
@@ -331,7 +334,7 @@ it.effect("writer failure during SQLite layer construction reaches the server li
     assert.isTrue(Exit.isFailure(result));
     assert.equal(alarms, 1);
     assert.deepEqual(exits, [80]);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("fatal construction arms an exit independent of stuck application finalizers", () =>
@@ -433,7 +436,7 @@ it.effect("does not receipt a failed worker migration and reopens safely", () =>
         Math.max(...migrationManifest.map(([id]) => id)),
       );
     }).pipe(Effect.provide(SqlitePersistence.layerFromPath(filename)));
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("prunes expired computer use history when the database opens", () =>
@@ -453,7 +456,7 @@ it.effect("prunes expired computer use history when the database opens", () =>
       const sql = yield* SqlClient.SqlClient;
       assert.deepEqual(yield* sql`SELECT id FROM computer_use_input_history`, []);
     }).pipe(Effect.provide(SqlitePersistence.layerFromPath(dbPath)));
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("names a database file that is not SQLite", () => {
@@ -464,7 +467,9 @@ it.effect("names a database file that is not SQLite", () => {
   return Effect.gen(function* () {
     const opened = yield* Effect.void.pipe(
       Effect.provide(
-        SqlitePersistence.layerFromPath(dbPath).pipe(Layer.provide(NodeServices.layer)),
+        SqlitePersistence.layerFromPath(dbPath).pipe(
+          Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        ),
       ),
       Effect.result,
     );
@@ -506,7 +511,7 @@ const recordedMigrations = onServerDatabase(
 
 const layerGoatHome = ServerConfig.layerTest(process.cwd(), { prefix: "goat-sqlite-cli-" });
 
-it.layer(NodeServices.layer)("layerCliConfig", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("layerCliConfig", (it) => {
   it.effect("does not migrate a GOAT home a running server owns", () =>
     Effect.gen(function* () {
       const recorded = Math.max(...migrationManifest.map(([id]) => id)) - 1;

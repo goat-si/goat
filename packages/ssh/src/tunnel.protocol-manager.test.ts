@@ -1,6 +1,7 @@
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, layer } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@goat/shared/Net";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -57,6 +58,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const context = yield* Layer.buildWithScope(
           Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, transport),
             Layer.succeed(FileSystem.FileSystem, f.observedFs),
             Layer.succeed(HttpClient.HttpClient, testHttpClient),
@@ -109,7 +111,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     const scenario = (mode: Parameters<typeof prepareScenario>[0]) =>
       layer(
         Layer.effect(PreparedScenario, prepareScenario(mode)).pipe(
-          Layer.provide(NodeServices.layer),
+          Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
         { excludeTestServices: true },
       );

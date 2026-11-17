@@ -1,6 +1,7 @@
 import { normalizeDpopHtu, type DpopPublicJwk } from "@goat/shared/dpopCommon";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as Base64Url from "effect/encoding/Base64Url";
 
@@ -9,20 +10,23 @@ export const createProof = Effect.fn("DpopProof.createProof")(function* <E>(inpu
   readonly url: string;
   readonly accessToken?: string | undefined;
   readonly publicJwk: DpopPublicJwk;
-  readonly sign: (bytes: Uint8Array) => Effect.Effect<Uint8Array, E, Crypto.Crypto>;
+  readonly sign: (
+    bytes: Uint8Array,
+  ) => Effect.Effect<Uint8Array, E, SecureRandom.SecureRandom | Digest.Digest>;
   readonly error: (message: string, cause?: unknown) => E;
 }) {
   const htu = normalizeDpopHtu(input.url);
   if (htu === null) return yield* Effect.fail(input.error("DPoP URL is invalid."));
-  const crypto = yield* Crypto.Crypto;
-  const jti = yield* crypto
-    .randomUUIDv4()
+  const random = yield* SecureRandom.SecureRandom;
+  const digest = yield* Digest.Digest;
+  const jti = yield* random
+    .uuidV4()
     .pipe(
       Effect.mapError((cause) => input.error("Could not generate DPoP proof identifier.", cause)),
     );
   const now = yield* Clock.currentTimeMillis;
   const ath = input.accessToken
-    ? yield* crypto.digest("SHA-256", new TextEncoder().encode(input.accessToken)).pipe(
+    ? yield* digest.digest(Digest.sha256, new TextEncoder().encode(input.accessToken)).pipe(
         Effect.map(Base64Url.encode),
         Effect.mapError((cause) => input.error("Could not hash the DPoP access token.", cause)),
       )

@@ -1,4 +1,5 @@
 import * as ClaudeSdk from "@anthropic-ai/claude-agent-sdk";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -106,7 +107,7 @@ const layerOpenCodex = (calls: Array<Runner.ProcessRunInput>) =>
     MemoryDerivedCache.layer,
     IdAllocator.layer,
     McpProviderSessions.layer,
-  ).pipe(Layer.provideMerge(NodeServices.layer));
+  ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 /** A user home and a project whose Claude settings each point somewhere other than Home. */
 const conflictingSettings = Effect.fn("ClaudeHomeSettingsTest.conflictingSettings")(function* () {
@@ -297,7 +298,7 @@ it.effect("pins Home in the Claude text generation and capability probe launches
     const spawned: Array<ReadonlyArray<string>> = [];
     const spawner = ChildProcessSpawner.make((command) =>
       Effect.sync(() => {
-        if (ChildProcess.isStandardCommand(command)) spawned.push(command.args);
+        if (ChildProcess.isStandardCommand(command)) spawned.push(command.args.map(String));
         return ChildProcessSpawner.makeHandle({
           pid: ChildProcessSpawner.ProcessId(999_999_998),
           exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),

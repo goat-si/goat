@@ -285,6 +285,8 @@ describe("absolute receipt delivery deadlines", () => {
   it.effect("starts another receipt while eight receipt transports are hung", () =>
     Effect.gen(function* () {
       const firstEntered = yield* Deferred.make<void>();
+      const lastRecorded = yield* Deferred.make<void>();
+      let lastSent = false;
       const sent: string[] = [];
       yield* Effect.gen(function* () {
         const ledger = yield* ChannelLedger.ChannelLedger;
@@ -293,21 +295,33 @@ describe("absolute receipt delivery deadlines", () => {
         const last = yield* receipt("last");
         yield* Effect.forkChild(worker.deliverDue(owner));
         yield* Deferred.await(firstEntered);
+        // Hung sends time out at 4 s, so a receipt recorded at 1 s did not wait for them.
         yield* TestClock.adjust("1 second");
+        yield* Deferred.await(lastRecorded);
         assert.lengthOf(sent, 9);
         assert.strictEqual(yield* ledger.getDeliveryState(last), "delivered");
       }).pipe(
         Effect.provide(
-          layer((message) => {
-            const key = message.destination.kind === "slack" ? message.destination.rootTs : "";
-            sent.push(key);
-            return key === "last"
-              ? Effect.succeed({
-                  deliveryId: message.deliveryId,
-                  acceptedAt: "1970-01-01T00:00:00.000Z",
-                })
-              : Deferred.succeed(firstEntered, undefined).pipe(Effect.andThen(Effect.never));
-          }),
+          layer(
+            (message) => {
+              const key = message.destination.kind === "slack" ? message.destination.rootTs : "";
+              sent.push(key);
+              if (key === "last") lastSent = true;
+              return key === "last"
+                ? Effect.succeed({
+                    deliveryId: message.deliveryId,
+                    acceptedAt: "1970-01-01T00:00:00.000Z",
+                  })
+                : Deferred.succeed(firstEntered, undefined).pipe(Effect.andThen(Effect.never));
+            },
+            // Only a settled receipt wakes here, after its commit; the hung sends never settle.
+            Layer.succeed(ChannelWake.ChannelWake)({
+              wake: Effect.suspend(() =>
+                lastSent ? Deferred.succeed(lastRecorded, undefined) : Effect.succeed(false),
+              ).pipe(Effect.asVoid),
+              next: Effect.never,
+            }),
+          ),
         ),
       );
     }),

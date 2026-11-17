@@ -18,7 +18,7 @@ import * as NodeNet from "node:net";
 
 import { expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
-import { NodeWS } from "@effect/platform-node/NodeSocket";
+import * as NodeWS from "@effect/platform-node/NodeWS";
 import {
   AuthStandardClientScopes,
   EnvironmentAuthorizationError,

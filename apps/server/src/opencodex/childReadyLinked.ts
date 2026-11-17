@@ -17,7 +17,7 @@ import {
 } from "@goat/contracts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -94,13 +94,13 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
     const config = yield* ServerConfig.ServerConfig;
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const crypto = yield* Crypto.Crypto;
+    const digest = yield* Digest.Digest;
     const runtimeContext = yield* Effect.context<
       | CodexInstallation.CodexInstallation
       | ServerConfig.ServerConfig
       | FileSystem.FileSystem
       | Path.Path
-      | Crypto.Crypto
+      | Digest.Digest
     >();
     // One paid request per Home at a time; an identical retry joins it.
     const probes = new Map<
@@ -154,7 +154,7 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
       return { ...observed, linkId: device.connection.linkId, ocxPath: device.ocx.path };
     });
     const digestText = (text: string) =>
-      crypto.digest("SHA-256", new TextEncoder().encode(text)).pipe(Effect.map(Hex.encode));
+      digest.digest(Digest.sha256, new TextEncoder().encode(text)).pipe(Effect.map(Hex.encode));
     const desiredFor = (home: EnvironmentId, port: number): ProviderInstanceConfig => {
       const id = bootstrapInstanceId(home);
       return {
@@ -537,7 +537,7 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
         localAccountsDigest:
           attested === undefined
             ? undefined
-            : yield* localAccountsDigest(crypto, attested.generation).pipe(
+            : yield* localAccountsDigest(digest, attested.generation).pipe(
                 Effect.orElseSucceed(() => undefined),
               ),
         connectionGeneration: attested?.connectionGeneration,
@@ -655,7 +655,7 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
           completedAt,
           expiresAt: completedAt + CHILD_READY_PROOF_TTL_MS,
           attribution: "home_zero_local_accounts",
-          localAccountsDigest: yield* localAccountsDigest(crypto, attested.generation).pipe(
+          localAccountsDigest: yield* localAccountsDigest(digest, attested.generation).pipe(
             Effect.mapError(() => childError("attribution_unproven", step)),
           ),
         },

@@ -16,7 +16,8 @@ import * as Clock from "effect/Clock";
 import * as Cause from "effect/Cause";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import { openAiUserId } from "../telemetry/Identify.ts";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Hex from "effect/encoding/Hex";
 import * as Exit from "effect/Exit";
 import { codexAuthCallbackPage, codexAuthReturnUrl } from "./CodexAuthCallbackPage.ts";
@@ -113,7 +114,8 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
     options.instanceId,
   );
   const secrets = yield* ServerSecretStore.ServerSecretStore;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
+  const digest = yield* Digest.Digest;
   const environmentLocks = sessionLocks.get(secrets) ?? new Map<string, Semaphore.Semaphore>();
   sessionLocks.set(secrets, environmentLocks);
   const lock = environmentLocks.get(store.binding.key) ?? (yield* Semaphore.make(1));
@@ -272,7 +274,8 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
     };
   }).pipe(
     Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
-    Effect.provideService(Crypto.Crypto, crypto),
+    Effect.provideService(SecureRandom.SecureRandom, random),
+    Effect.provideService(Digest.Digest, digest),
   );
   const saveRegistration = Effect.fnUntraced(function* (profile: Reg.Registration) {
     const saved = yield* readRegistrations;
@@ -695,9 +698,9 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
   // ID tokens survive renewal but change on sign-in. Bind active children to the
   // launch profile without putting an identity token or subject in their argv.
   const profileKey = (record: CodexChatGptCredentials) =>
-    crypto
+    digest
       .digest(
-        "SHA-256",
+        Digest.sha256,
         new TextEncoder().encode(
           JSON.stringify([record.clientId, record.subject, record.idToken ?? null]),
         ),

@@ -47,6 +47,7 @@ import {
   type AdvertisedEndpoint,
   type AuthClientSession,
   type AuthGrantScope,
+  type AuthOtherClientSessionsRevokeResult,
   type AuthPairingLink,
   AuthTerminalOperateScope,
   AuthTerminalReadScope,
@@ -214,9 +215,52 @@ export function togglePairingScopeSelection(
 }
 
 export function canRevokeOtherClients(
-  clientSessions: ReadonlyArray<{ readonly current: boolean }> | null,
+  clientSessions: ReadonlyArray<
+    Pick<ServerClientSessionRecord, "current" | "keptByRevokeOthers">
+  > | null,
 ): boolean {
-  return clientSessions === null || clientSessions.some((session) => !session.current);
+  return (
+    clientSessions === null ||
+    clientSessions.some((session) => !session.current && session.keptByRevokeOthers === undefined)
+  );
+}
+
+/** Names what the server says Revoke others kept; the list on screen can be missing or stale.
+ * A caller who cannot read the list is pointed to someone who can, never "below". */
+export function revokeOthersToast(
+  { revokedCount, kept }: AuthOtherClientSessionsRevokeResult,
+  { listShown }: { readonly listShown: boolean },
+) {
+  const title = revokedCount === 1 ? "Revoked 1 other client" : `Revoked ${revokedCount} clients`;
+  const asker = "Ask someone who can see the authorized clients on this computer";
+  if (kept === undefined)
+    return {
+      type: "success" as const,
+      title,
+      description: `Revoke others may keep sessions signed in with the desktop app's built-in credential and Pen members' sessions. ${listShown ? "Check the list below for" : asker} what is still signed in.`,
+    };
+  const parts = [
+    ...(kept.desktop === 0
+      ? []
+      : [
+          `${kept.desktop} ${kept.desktop === 1 ? "session" : "sessions"} signed in with the desktop app's built-in credential`,
+        ]),
+    ...(kept.pen === 0 ? [] : [`${kept.pen} Pen ${kept.pen === 1 ? "session" : "sessions"}`]),
+  ];
+  const one = kept.desktop + kept.pen === 1;
+  const hint = listShown
+    ? one
+      ? "Revoke it below if you do not recognise it."
+      : "Revoke them one by one below if you do not recognise them."
+    : `${asker} to revoke ${one ? "it" : "them"} if you do not recognise ${one ? "it" : "them"}.`;
+  return {
+    type: "success" as const,
+    title,
+    description:
+      parts.length === 0
+        ? "Other paired clients will need a new pairing link before reconnecting."
+        : `Kept ${parts.join(" and ")}. ${hint}`,
+  };
 }
 
 type WslEnableBridge = Pick<DesktopBridge, "setWslBackendEnabled" | "setWslDistro" | "setWslOnly">;

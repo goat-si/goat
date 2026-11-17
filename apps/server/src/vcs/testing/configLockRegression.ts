@@ -165,7 +165,7 @@ export const trackingWorktreeLockRegression = Effect.gen(function* () {
     Effect.gen(function* () {
       const handle = yield* delegate.spawn(command);
       if (!ChildProcess.isStandardCommand(command)) return handle;
-      const args = command.args;
+      const args = command.args.map(String);
       if (
         !(args.includes("worktree") && args.includes("add")) &&
         !args.some((arg) => arg.startsWith("--set-upstream-to"))

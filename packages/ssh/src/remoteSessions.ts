@@ -10,7 +10,8 @@ import {
   ChildSetupPurpose as ChildSetupPurposeSchema,
 } from "@goat/contracts";
 import { fromLenientJson } from "@goat/shared/schemaJson";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as FileSystem from "effect/FileSystem";
@@ -379,7 +380,11 @@ export function makeRemoteSessions({
     ): Effect.fn.Return<
       RemoteMcpClientSession,
       SshCommandError | SshInvalidTargetError | SshPairingError | SshLaunchError,
-      ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
+      | ChildProcessSpawner.ChildProcessSpawner
+      | Digest.Digest
+      | SecureRandom.SecureRandom
+      | FileSystem.FileSystem
+      | Path.Path
     > {
       const stateKey = REMOTE_RUNTIME_STATE_KEY;
       // A server that issues its own credentials: the GOAT app's, or native Windows' goat.exe.
@@ -514,7 +519,11 @@ export function makeRemoteSessions({
   ): Effect.fn.Return<
     RemoteClientSession,
     SshCommandError | SshInvalidTargetError | SshPairingError | SshLaunchError,
-    ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
+    | ChildProcessSpawner.ChildProcessSpawner
+    | Digest.Digest
+    | SecureRandom.SecureRandom
+    | FileSystem.FileSystem
+    | Path.Path
   > {
     const stateKey = REMOTE_RUNTIME_STATE_KEY;
     if (prepared?.appServerPort !== undefined) {
@@ -612,7 +621,11 @@ export function makeRemoteSessions({
       readonly credential: string;
     },
     SshCommandError | SshInvalidTargetError | SshPairingError | SshLaunchError,
-    ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
+    | ChildProcessSpawner.ChildProcessSpawner
+    | Digest.Digest
+    | SecureRandom.SecureRandom
+    | FileSystem.FileSystem
+    | Path.Path
   > {
     const stateKey = REMOTE_RUNTIME_STATE_KEY;
     yield* Effect.logDebug("ssh.remoteServer.pairingToken.start", {

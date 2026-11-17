@@ -30,6 +30,7 @@ import { type McpInvocationScope, McpInvocationContext } from "../../McpInvocati
 import { liveThreadShell } from "../../McpToolAccess.testkit.ts";
 import { makeProject } from "./handlers.testkit.ts";
 import { PullRequestsToolkit } from "./tools.ts";
+import * as McpHttpServer from "../../McpHttpServer.ts";
 
 const callerId = ThreadId.make("pr-writer");
 const scope: McpInvocationScope = {
@@ -151,7 +152,7 @@ const harness = Effect.fn("prWritesTest.harness")(function* (
       }),
     ),
     Layer.provideMerge(Sqlite.layerMemory),
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   );
   return { calls, syncs, registered };
 });

@@ -1,8 +1,8 @@
 // @effect-diagnostics anyUnknownInErrorContext:off -- Alchemy's local provider owns the workerd fixture lifecycle.
 import { expect } from "@effect/vitest";
-import * as Cloudflare from "alchemy/Cloudflare";
-import * as Test from "alchemy/Test/Vitest";
-import { resolveDev } from "alchemy/Test/Core";
+import * as Cloudflare from "@alchemy.run/cloudflare";
+import * as Test from "@alchemy.run/test/Vitest";
+import { resolveDev } from "@alchemy.run/test/Core";
 import { AlchemyContext } from "alchemy/AlchemyContext";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";

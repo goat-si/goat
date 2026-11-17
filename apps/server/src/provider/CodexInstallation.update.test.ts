@@ -1,7 +1,9 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Hex from "effect/encoding/Hex";
 
 import { makeHarness, terminalState } from "./CodexInstallation.testkit.ts";
@@ -26,9 +28,9 @@ const upstreamResponses = (checksum: string) => ({
 
 it.effect("updates a managed install to OpenAI's newest release and never downgrades it", () =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
+    const digest = yield* Digest.Digest;
     const checksum = Hex.encode(
-      yield* crypto.digest("SHA-256", upstreamArchive).pipe(Effect.orDie),
+      yield* digest.digest(Digest.sha256, upstreamArchive).pipe(Effect.orDie),
     );
     const h = yield* makeHarness({ responses: upstreamResponses(checksum) });
     yield* h.installation.checkForUpdate;
@@ -61,7 +63,7 @@ it.effect("updates a managed install to OpenAI's newest release and never downgr
       installedVersion: upstreamVersion,
     });
     expect(restarted.downloads()).toBe(0);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 /** Counts requests for the upstream archive, the download only an update makes. */
@@ -85,9 +87,9 @@ it.effect(
   "an OpenCodex child's repair over a broken install never installs a cached newer release",
   () =>
     Effect.gen(function* () {
-      const crypto = yield* Crypto.Crypto;
+      const digest = yield* Digest.Digest;
       const checksum = Hex.encode(
-        yield* crypto.digest("SHA-256", upstreamArchive).pipe(Effect.orDie),
+        yield* digest.digest(Digest.sha256, upstreamArchive).pipe(Effect.orDie),
       );
       const { counter, responses } = countedUpstream(checksum);
       const h = yield* makeHarness({ responses });
@@ -102,14 +104,14 @@ it.effect(
       expect(counter.archive).toBe(0);
       const active = yield* h.fs.readFileString(`${h.baseDir}/tools/codex/active.json`);
       expect(active).toContain("0.156.1");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("Install on an authless home with a Codex on PATH keeps the newer managed release", () =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
+    const digest = yield* Digest.Digest;
     const checksum = Hex.encode(
-      yield* crypto.digest("SHA-256", upstreamArchive).pipe(Effect.orDie),
+      yield* digest.digest(Digest.sha256, upstreamArchive).pipe(Effect.orDie),
     );
     const h = yield* makeHarness({ responses: upstreamResponses(checksum) });
     yield* h.installation.start;
@@ -127,7 +129,7 @@ it.effect("Install on an authless home with a Codex on PATH keeps the newer mana
     expect((yield* withLocal.installation.resolve({ managedOnly: true })).version).toBe(
       upstreamVersion,
     );
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("keeps the managed install when an update fails its published checksum", () =>
@@ -143,7 +145,7 @@ it.effect("keeps the managed install when an update fails its published checksum
       message: expect.stringContaining("SHA-256"),
     });
     expect((yield* h.installation.resolve()).version).toBe("0.156.1");
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("offers no update and keeps the managed install when the checksums are unreachable", () =>
@@ -171,14 +173,14 @@ it.effect("offers no update and keeps the managed install when the checksums are
       installedVersion: "0.156.1",
     });
     expect(upstreamDownloads).toBe(0);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("does not install a cached update the manifest has since withdrawn", () =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
+    const digest = yield* Digest.Digest;
     const checksum = Hex.encode(
-      yield* crypto.digest("SHA-256", upstreamArchive).pipe(Effect.orDie),
+      yield* digest.digest(Digest.sha256, upstreamArchive).pipe(Effect.orDie),
     );
     let manifest = ModelManifest.BUNDLED_MODEL_MANIFEST;
     const h = yield* makeHarness({
@@ -211,14 +213,14 @@ it.effect("does not install a cached update the manifest has since withdrawn", (
     });
     expect(h.downloads()).toBe(downloads);
     expect((yield* h.installation.resolve()).version).toBe("0.156.1");
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("returns a managed install the manifest withdraws to the pinned release", () =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
+    const digest = yield* Digest.Digest;
     const checksum = Hex.encode(
-      yield* crypto.digest("SHA-256", upstreamArchive).pipe(Effect.orDie),
+      yield* digest.digest(Digest.sha256, upstreamArchive).pipe(Effect.orDie),
     );
     let manifest = ModelManifest.BUNDLED_MODEL_MANIFEST;
     const h = yield* makeHarness({
@@ -258,16 +260,16 @@ it.effect("returns a managed install the manifest withdraws to the pinned releas
       version: "0.156.1",
     });
     expect((yield* h.installation.resolve()).version).toBe("0.156.1");
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each(["update", "reinstall"] as const)(
   "rejects withdrawal during $0 validation",
   (operation) =>
     Effect.gen(function* () {
-      const crypto = yield* Crypto.Crypto;
+      const digest = yield* Digest.Digest;
       const checksum = Hex.encode(
-        yield* crypto.digest("SHA-256", upstreamArchive).pipe(Effect.orDie),
+        yield* digest.digest(Digest.sha256, upstreamArchive).pipe(Effect.orDie),
       );
       let manifest = ModelManifest.BUNDLED_MODEL_MANIFEST;
       let withdraw = operation === "update";
@@ -310,5 +312,5 @@ it.effect.each(["update", "reinstall"] as const)(
         expect((yield* h.installation.state).version).toBe("0.156.1");
         yield* Effect.flip(h.installation.resolve());
       }
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

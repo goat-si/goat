@@ -1,6 +1,6 @@
 import type { DesktopSshEnvironmentTarget } from "@goat/contracts";
 import * as Config from "effect/Config";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -78,8 +78,8 @@ export function makeManagedTrust() {
       const stat = yield* fs.stat(confPath);
       const mtime = Option.getOrUndefined(stat.mtime);
       if (mtime === undefined) return yield* pinError();
-      const crypto = yield* Crypto.Crypto;
-      const digest = yield* crypto.digest("SHA-256", Buffer.from(key, "base64"));
+      const digestService = yield* Digest.Digest;
+      const digest = yield* digestService.digest(Digest.sha256, Buffer.from(key, "base64"));
       return {
         alias: target.alias,
         confMtimeMs: mtime.getTime(),

@@ -30,13 +30,12 @@ import * as Hold from "./MemoryGenerationHold.ts";
 import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGenerationRunner";
 import * as Rpc from "effect/rpc/Rpc";
 import * as Exit from "effect/Exit";
-import { McpServer } from "effect/ai";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import * as McpAccess from "../mcp/McpToolAccess.testkit.ts";
 import * as McpFixture from "../mcp/toolkits/memory/handlers.testkit.ts";
 import { assert, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -6368,7 +6367,7 @@ it.effect.each(["accepted", "rejected"] as const)(
           Layer.provide(McpFixture.layerRecallUnused),
           Layer.provide(McpAccess.layerPermissionProfilesOff),
           Layer.provideMerge(fixture(client)),
-          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
           Layer.provide(McpAccess.liveThreadsLayer),
           Layer.provide(NodeServices.layer),
         );

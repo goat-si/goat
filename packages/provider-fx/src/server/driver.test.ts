@@ -10,6 +10,7 @@ import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
@@ -21,6 +22,9 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { FxSettings } from "../settings.ts";
 import { FxDriver } from "./driver.ts";
+
+const plainEnvValue = (value: string | Redacted.Redacted<string> | undefined) =>
+  Redacted.isRedacted(value) ? Redacted.value(value) : value;
 
 const homeRelativeSettings = Schema.decodeSync(FxSettings)({ binaryPath: "~/.local/bin/fx" });
 
@@ -66,7 +70,8 @@ it.layer(layerTest)("FxDriver", (it) => {
     const paths: Array<string | undefined> = [];
     let failSpawn = false;
     const spawner = lazyChildProcessSpawner((command) => {
-      if (ChildProcess.isStandardCommand(command)) paths.push(command.options.env?.PATH);
+      if (ChildProcess.isStandardCommand(command))
+        paths.push(plainEnvValue(command.options.env?.PATH));
       if (failSpawn)
         return Effect.fail(
           PlatformError.systemError({

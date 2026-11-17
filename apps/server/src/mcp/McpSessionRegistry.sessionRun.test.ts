@@ -1,7 +1,9 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import { HttpServer } from "effect/http";
 import * as NetAddress from "effect/net/NetAddress";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -19,7 +21,7 @@ const makeRegistry = McpSessionRegistry.__testing.make({}).pipe(
     getEnvironmentId: Effect.succeed(EnvironmentId.make("session-run-test")),
     getDescriptor: Effect.die("unused"),
   }),
-  Effect.provide(NodeServices.layer),
+  Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 const tokenOf = (issued: McpSessionRegistry.McpIssuedCredential) =>
   issued.config.authorizationHeader.replace(/^Bearer\s+/, "");

@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -74,7 +75,9 @@ const layerDialog = Layer.succeed(ElectronDialog.ElectronDialog, {
   showErrorBox: (title, content) => Effect.sync(() => showErrorBox(title, content)),
 });
 const layer = BrowserSession.layer.pipe(
-  Layer.provide(Layer.mergeAll(NodeServices.layer, layerDialog, ElectronApp.layer)),
+  Layer.provide(
+    Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, layerDialog, ElectronApp.layer),
+  ),
 );
 
 const selfSignedCertificate = {
@@ -540,7 +543,7 @@ describe("BrowserSession", () => {
         assert.isFalse(yield* certificateError(sessions.get(incognito), { url }).trusted);
         assert.strictEqual(showMessageBox.mock.calls.length, 1);
       }).pipe(Effect.provide(layer));
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("an answer to a prompt opened before cookies were cleared does not trust", () =>
@@ -577,7 +580,10 @@ describe("BrowserSession", () => {
           `${browserSession!.storagePath}/goat-certificate-approvals.json`,
         ),
       );
-    }).pipe(Effect.scoped, Effect.provide(Layer.merge(layer, NodeServices.layer))),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(layer, Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+    ),
   );
 
   it.effect("a tab that closes or navigates away dismisses its certificate prompt", () =>
@@ -634,7 +640,10 @@ describe("BrowserSession", () => {
       showMessageBox.mockReturnValue(1);
       assert.isFalse(yield* certificateError(browserSession, { url }).trusted);
       assert.strictEqual(showMessageBox.mock.calls.length, 1);
-    }).pipe(Effect.scoped, Effect.provide(Layer.merge(layer, NodeServices.layer))),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(layer, Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+    ),
   );
 
   it.effect("clearing cookies deletes a saved approval even when none are loaded", () =>
@@ -661,6 +670,9 @@ describe("BrowserSession", () => {
 
       yield* browserSessions.clearCookies([partition]);
       assert.isFalse(yield* fileSystem.exists(file));
-    }).pipe(Effect.scoped, Effect.provide(Layer.merge(layer, NodeServices.layer))),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(layer, Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+    ),
   );
 });

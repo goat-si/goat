@@ -2,6 +2,7 @@
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -32,11 +33,14 @@ import { makeMockRuntime } from "../../../../apps/server/src/orchestration-v2/Ad
 import { AcpProviderCapabilitiesV2, makeAcpAdapterV2 } from "./adapter.ts";
 
 const layer = Layer.mergeAll(
-  DocumentText.layer.pipe(Layer.provide(NodeServices.layer)),
+  DocumentText.layer.pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   NodeServices.layer,
+  NodeCrypto.layer,
   IdAllocator.layer,
   McpProviderSessions.layer,
-  TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
+  TestProviderHost.layer().pipe(
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+  ),
 );
 
 it.live("runtime launches retain the environment captured at session open", () =>
@@ -392,7 +396,7 @@ it.live("resolves relative PATH from the workspace and launches with the session
         resolveSessionLaunch: (environment, sessionEnvironment) => {
           launchPaths.push(sessionEnvironment?.PATH);
           return resolveCommandPath("goat-acp-test-command", { env: environment }).pipe(
-            Effect.provide(NodeServices.layer),
+            Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           );
         },
         makeRuntime: (input) => {
@@ -457,7 +461,7 @@ it.live.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             resolveSessionLaunch: (environment, sessionEnvironment) => {
               launchPaths.push(sessionEnvironment?.PATH);
               return resolveCommandPath("goat-acp-test-command", { env: environment }).pipe(
-                Effect.provide(NodeServices.layer),
+                Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
               );
             },
             makeRuntime: (input) => {

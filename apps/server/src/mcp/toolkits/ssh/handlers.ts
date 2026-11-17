@@ -22,7 +22,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
@@ -610,7 +610,7 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                     // still settles once that dispatch ends.
                     const launchCorrelationId =
                       correlationId ??
-                      `rr-${yield* (yield* Crypto.Crypto).randomUUIDv4().pipe(Effect.orDie)}`;
+                      `rr-${yield* (yield* SecureRandom.SecureRandom).uuidV4().pipe(Effect.orDie)}`;
                     if (admitted.enabled)
                       yield* permissions.correlate(laneId, launchCorrelationId).pipe(
                         Effect.mapError(

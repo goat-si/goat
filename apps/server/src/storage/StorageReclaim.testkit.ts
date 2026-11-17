@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId, type HostCapacitySnapshot, type StorageItem } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -114,7 +115,7 @@ export const layer = (tempRoot: string) =>
     Layer.provideMerge(
       Layer.succeed(HostProcess.Environment, { ...process.env, TMPDIR: tempRoot }),
     ),
-    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
 
 /**

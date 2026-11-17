@@ -1,5 +1,5 @@
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Hex from "effect/encoding/Hex";
@@ -51,7 +51,7 @@ const make = Effect.gen(function* () {
   const sql = db.$client;
   const access = yield* AccountAccess;
   const tx = yield* AccountTransactions;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* Digest.Digest;
   const config = yield* RelayConfiguration;
   return EndpointIdentity.of({
     resolve: Effect.fn("EndpointIdentity.resolve")(function* (input) {
@@ -93,7 +93,7 @@ const make = Effect.gen(function* () {
         );
       const hash = yield* crypto
         .digest(
-          "SHA-256",
+          Digest.sha256,
           new TextEncoder().encode(
             managedEndpointDigestInput(stage, input.userId, input.environmentId, generation),
           ),

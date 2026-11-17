@@ -1,10 +1,12 @@
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it, beforeEach, afterEach, vi } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { REMOTE_RUNTIME_STATE_KEY } from "./command.ts";
@@ -45,6 +47,7 @@ const reuseManagedServer = (persistedRunner: string) =>
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as http from "node:http";
+
 const args = process.argv.slice(2);
 if (args[0] === "--version") { console.log("goat v${ARCHIVE.archiveVersion}"); }
 else if (args[0] === "__ssh-helper") {
@@ -103,7 +106,7 @@ else {
     let uploads = 0;
     const spawner = ChildProcessSpawner.make((command) => {
       if (command._tag !== "StandardCommand") return Effect.succeed(makeSuccessfulProcess(""));
-      const args = command.args;
+      const args = command.args.map(String);
       if (args.includes("-c")) uploads++;
       const remoteArgs = args.slice(args.indexOf("sh") + 1).filter((arg) => arg !== "-l");
       const stdin = isRemoteLaunch(args)
@@ -140,7 +143,7 @@ else {
     assert.isTrue(yield* child.isRunning);
     yield* child.kill({ killSignal: "SIGTERM" });
     assert.equal(yield* child.exitCode, 0);
-  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped);
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped);
 
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("runtime preparation", () => {
   it.live("does not restart an existing managed server after runtime preparation", () =>

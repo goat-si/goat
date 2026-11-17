@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentConnectionPhase } from "@goat/client-runtime/connection";
-import { accessDenied } from "@goat/client-runtime/goatBot";
+import { accessDenied, goatBotRefusedText } from "@goat/client-runtime/goatBot";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { BotProfile, EnvironmentId } from "@goat/contracts";
 import * as Cause from "effect/Cause";
@@ -62,7 +62,7 @@ function GoatBotProfileSection() {
   }
   if (!supported) return null;
   const label = environment.label ?? "this computer";
-  const refusedLine = `GOAT on ${label} did not accept this device`;
+  const refusedLine = goatBotRefusedText(label);
   const deniedLine = `GOAT on ${label} did not let this device read the bot's profile`;
   // A refusal swaps the row out, which drops an open dialog and the profile it was read from.
   return (

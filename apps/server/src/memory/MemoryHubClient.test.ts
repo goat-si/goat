@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -43,7 +44,7 @@ const live = Client.layer.pipe(
   Layer.provideMerge(Sqlite.layerMemory),
   Layer.provideMerge(Secrets.layer),
   Layer.provideMerge(Config.layerTest(process.cwd(), { prefix: "goat-hub-client-test-" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 const seed = Effect.gen(function* () {
   const transitions = yield* Settings.MemoryHubSettingsTransitions;

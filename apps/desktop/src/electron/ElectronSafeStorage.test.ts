@@ -1,4 +1,5 @@
 import * as NodePath from "@effect/platform-node/NodePath";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -72,7 +73,12 @@ const makeDesktopEnvironmentLayer = (input: {
     runningUnderArm64Translation: false,
   }).pipe(
     Layer.provide(
-      Layer.mergeAll(NodeServices.layer, NodePath.layerPosix, DesktopConfig.layerTest(input.env)),
+      Layer.mergeAll(
+        NodeServices.layer,
+        NodeCrypto.layer,
+        NodePath.layerPosix,
+        DesktopConfig.layerTest(input.env),
+      ),
     ),
   );
 
@@ -83,7 +89,7 @@ const makeSafeStorageLayer = (input: {
 }) =>
   ElectronSafeStorage.layer.pipe(
     Layer.provideMerge(makeDesktopEnvironmentLayer(input)),
-    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
 
 const makeCatalogStoreLayer = (input: {
@@ -142,7 +148,7 @@ describe("ElectronSafeStorage", () => {
       assert.equal(result.available, false);
       assert.equal(result.saved, false);
       assert.equal(encryptStringMock.mock.calls.length, 0);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("ignores GOAT_DEV_INSECURE_SECRET_STORAGE when using a default home", () =>
@@ -193,7 +199,7 @@ describe("ElectronSafeStorage", () => {
         assert.equal(result.available, false, `GOAT_HOME=${String(goatHome)}`);
         assert.equal(result.saved, false, `GOAT_HOME=${String(goatHome)}`);
       }
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("never touches the OS keychain when opted in, even if native encryption works", () =>
@@ -231,7 +237,7 @@ describe("ElectronSafeStorage", () => {
       assert.equal(isEncryptionAvailableMock.mock.calls.length, 0);
       assert.equal(encryptStringMock.mock.calls.length, 0);
       assert.equal(decryptStringMock.mock.calls.length, 0);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("keeps using the OS keychain without the opt-in", () =>
@@ -256,7 +262,7 @@ describe("ElectronSafeStorage", () => {
       );
       assert.equal(textDecoder.decode(blob), "os-crypt:secret-token");
       assert.equal(encryptStringMock.mock.calls.length, 1);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("allows saving and round-tripping in dev with an isolated home and opt-in flag", () =>
@@ -305,7 +311,7 @@ describe("ElectronSafeStorage", () => {
       assert.equal(encryptStringMock.mock.calls.length, 0);
       assert.equal(decryptStringMock.mock.calls.length, 0);
       assert.equal(warnings.length, 1);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("refuses to decrypt a dev-plaintext blob when the fallback is not active", () =>
@@ -413,6 +419,6 @@ describe("ElectronSafeStorage", () => {
       );
 
       assert.equal(decryptStringMock.mock.calls.length, 0);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 });

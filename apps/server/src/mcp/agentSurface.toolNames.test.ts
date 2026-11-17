@@ -5,11 +5,12 @@ import { McpServer } from "effect/ai";
 
 import * as Sqlite from "../persistence/Sqlite.ts";
 import { catalog, dependencies } from "./agentSurface.testkit.ts";
+import * as McpHttpServer from "./McpHttpServer.ts";
 
 const registered = catalog.pipe(
   Layer.provide(dependencies),
   Layer.provideMerge(Sqlite.layerMemory),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
 );
 
 describe("GOAT's MCP tool names", () => {

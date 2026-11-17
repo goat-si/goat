@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -24,7 +25,7 @@ import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
 const layerDeps = ServerConfig.layerTest(process.cwd(), {
   prefix: "goat-codex-driver-maintenance-",
 }).pipe(
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   Layer.provideMerge(Layer.succeed(HostProcess.Environment, { PATH: "" })),
   Layer.provideMerge(IdAllocator.layer),
   Layer.provideMerge(McpProviderSessions.layer),

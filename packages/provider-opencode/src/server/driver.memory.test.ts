@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodePath from "node:path";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -123,7 +124,11 @@ it.effect("holds a missing executable until a due probe gets a non-repeatable ve
           ProviderEventLoggers.NoOpProviderEventLoggers,
         ),
         OpenCodeRuntime.layer.pipe(Layer.provide(OpenCodeServerLedger.layerTest)),
-      ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer))),
+      ).pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, FetchHttpClient.layer),
+        ),
+      ),
     ),
   ),
 );

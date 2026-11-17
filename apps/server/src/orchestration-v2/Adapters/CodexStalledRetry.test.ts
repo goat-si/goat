@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import { RunAttemptId } from "@goat/contracts";
@@ -108,6 +109,7 @@ it.effect("fails a stalled 429 provider retry as a usage limit and stops the Cod
           MemoryDerivedCache.layer,
           McpProviderSessions.layer,
           NodeServices.layer,
+          NodeCrypto.layer,
         ),
       ),
     ),

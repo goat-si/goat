@@ -2,10 +2,13 @@ import { ProviderSessionId, ThreadId } from "@goat/contracts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { assert, it } from "@effect/vitest";
 import * as CodexClient from "effect-codex-app-server/client";
+import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexReplay from "effect-codex-app-server/replay";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
@@ -304,6 +307,26 @@ it.effect("retires a silent initialize before the provider can be reused", () =>
       ),
     );
   }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "a request after its session closed fails with the client's error, not an interrupt",
+  () =>
+    Effect.gen(function* () {
+      const ended = new CodexErrors.CodexAppServerInputStreamEndedError({});
+      const client = {
+        request: () => Effect.fail(ended),
+        terminated: Effect.never,
+        raw: {},
+      } as unknown as CodexClient.CodexAppServerClient["Service"];
+      const session = yield* Scope.make();
+      const guarded = yield* withCodexRequestDeadlines(client).pipe(Scope.provide(session));
+      yield* Scope.close(session, Exit.void);
+      const failure = yield* guarded
+        .request("turn/interrupt", { threadId: "thread", turnId: "turn" })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure, ended);
+    }),
 );
 
 it.effect("a config/read deadline does not terminate a responsive shared client", () =>

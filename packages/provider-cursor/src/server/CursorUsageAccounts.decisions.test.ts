@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { ProviderInstanceId, ServerSettings } from "@goat/contracts";
@@ -119,7 +120,12 @@ const scanCase = (input: Case) => {
       .join(" | ");
     return { keys, hostReads, scans, note, home };
   }).pipe(
-    Effect.provide(Layer.provideMerge(TestProviderHost.layer(), NodeServices.layer)),
+    Effect.provide(
+      Layer.provideMerge(
+        TestProviderHost.layer(),
+        Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+      ),
+    ),
     Effect.scoped,
   );
 };

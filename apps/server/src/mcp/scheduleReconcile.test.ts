@@ -92,6 +92,7 @@ it.effect("schedule.list distinguishes another successful manual run of a disabl
           Layer.provide(
             Layer.mergeAll(
               NodeServices.layer,
+              NodeCrypto.layer,
               ServerSettings.layerTest(),
               Layer.mock(Threads.ThreadManagementService)({}),
               Layer.mock(Projects.ProjectService)({}),
@@ -185,6 +186,7 @@ const updateFixture = () => {
   const stored: { task: ScheduledTask; failNext?: boolean } = { task: webhookTask };
   const services = Layer.mergeAll(
     NodeServices.layer,
+    NodeCrypto.layer,
     ServerSettings.layerTest(),
     Layer.mock(Threads.ThreadManagementService)({
       getThreadShell: (id) =>
@@ -240,7 +242,7 @@ const updateFixture = () => {
     OrchestratorToolkit,
     OrchestratorHandlers.layer,
   ).pipe(
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provide(
       Layer.mergeAll(
         layerPermissionProfilesOff,

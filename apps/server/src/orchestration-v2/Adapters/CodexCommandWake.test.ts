@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { RunAttemptId } from "@goat/contracts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -139,6 +140,7 @@ it.effect("marks a root command it wakes the agent for once the command finishes
         IdAllocator.layer,
         McpProviderSessions.layer,
         NodeServices.layer,
+        NodeCrypto.layer,
         MemoryDerivedCache.layer,
       ),
     ),

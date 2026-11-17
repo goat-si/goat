@@ -46,7 +46,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH owner life
       ["-e", "process.exit(23)"],
       { forceKillAfter: 2000 },
     );
-    const child = NodeChildProcess.spawn(command.command, command.args, {
+    const child = NodeChildProcess.spawn(command.command, command.args.map(String), {
       detached: command.options.detached,
       stdio: ["pipe", "pipe", "pipe"],
     });

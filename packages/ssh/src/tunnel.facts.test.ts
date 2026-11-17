@@ -6,9 +6,11 @@ import * as NodeNet from "node:net";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
@@ -123,7 +125,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
         answers.filter((status) => status === "none"),
         ["none", "none"],
       );
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
   it.live(
     "a launch over a killed server's record asks again only where a server could have appeared",
@@ -174,7 +176,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
           answers.filter((status) => status === "none"),
           ["none", "none", "none", "none", "none"],
         );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     LAUNCHES_TIMEOUT_MS,
   );
   it.live(
@@ -190,7 +192,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
         yield* launch(f);
         // Probe, candidate checks and every live recheck reuse the recorded answers.
         assert.deepEqual(yield* recordableAsks(f), first);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     LAUNCHES_TIMEOUT_MS,
   );
 
@@ -406,7 +408,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
             message,
           );
         }
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live.each(["compatible 0 -", "unknown 0 -", "failure"])(
@@ -444,7 +446,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
         });
         if (Result.isFailure(refreshed)) throw refreshed.failure;
         assert.equal(refreshed.success.refresh, "replaced");
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     LAUNCHES_TIMEOUT_MS,
   );
 
@@ -475,7 +477,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
         const positive = yield* recordableAsks(f);
         yield* probe(f);
         assert.equal((yield* recordableAsks(f)).compat, positive.compat);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     LAUNCHES_TIMEOUT_MS,
   );
 
@@ -495,7 +497,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
         );
         yield* launch(f);
         assert.isAbove((yield* recordableAsks(f)).own, first.own);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     LAUNCHES_TIMEOUT_MS,
   );
 
@@ -518,7 +520,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
         const second = yield* recordableAsks(f);
         assert.isAbove(second.live, first.live);
         assert.equal(second.own, first.own);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     LAUNCHES_TIMEOUT_MS,
   );
 
@@ -653,7 +655,7 @@ sleep() {
             }
           }
         }
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     LAUNCHES_TIMEOUT_MS,
   );
 
@@ -675,7 +677,7 @@ sleep() {
         assert.isAbove((yield* recordableAsks(f)).own, first.own);
         assert.notEqual(selected.source, "retained");
         assert.isFalse(yield* f.fs.exists(`${f.home}/.goat/ssh-launch/facts`));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     LAUNCHES_TIMEOUT_MS,
   );
 
@@ -732,7 +734,7 @@ sleep() {
         f.setScriptPrefix("rm() { return 1; }\n");
         yield* probe(f);
         assert.equal(yield* f.fs.readFileString(`${facts}/own.1.0.0.exe`), "keep behind link\n");
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     LAUNCHES_TIMEOUT_MS,
   );
 
@@ -771,7 +773,7 @@ sleep() {
         // Later probes start goat only for the live server, whose answers Windows cannot key.
         assert.equal(second, 2);
         assert.isTrue((yield* f.fs.readDirectory(facts)).some((name) => name.startsWith("own.")));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     LAUNCHES_TIMEOUT_MS,
   );
 
@@ -792,7 +794,7 @@ sleep() {
         const second = yield* recordableAsks(f);
         assert.isAbove(second.own, first.own);
         assert.isAbove(second.live, first.live);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     LAUNCHES_TIMEOUT_MS,
   );
 
@@ -817,7 +819,7 @@ sleep() {
         assert.isFalse(
           names.some((name) => name.startsWith("live.") || name.startsWith("compat.")),
         );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     LAUNCHES_TIMEOUT_MS,
   );
 });

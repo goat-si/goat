@@ -1,9 +1,11 @@
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -51,7 +53,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.deepEqual(yield* f.snapshot, before);
         assert.isTrue(f.state.endsWith(`/ssh-launch/${REMOTE_RUNTIME_STATE_KEY}`));
         assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live(
@@ -88,7 +90,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.equal(yield* f.fs.readFileString(`${f.state}/port`), `${f.port}\n`);
           yield* Effect.sync(() => process.kill(f.pid, 0));
           assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live(
@@ -126,7 +131,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.deepEqual(legacyAfter, legacyBefore);
           yield* Effect.sync(() => process.kill(f.pid, 0));
           assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("a compatible runtime from another release train is attached, never replaced", () =>
@@ -149,7 +157,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.deepEqual(yield* f.snapshot, before);
         assert.isFalse(yield* f.fs.exists(`${f.test}/activity-requests`));
         assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each(["busy", "unknown", "idle"] as const)(
@@ -192,7 +200,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             yield* Effect.sync(() => process.kill(f.pid, 0));
             assert.deepEqual(yield* f.snapshot, before);
           }
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
   },
 );
@@ -237,7 +248,10 @@ ${mode === "stalled" ? "process.exit(1);" : ""}`,
           assert.deepEqual(yield* f.snapshot, before);
           yield* Effect.sync(() => process.kill(f.pid, 0));
           assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("adopts a live server without a managed record instead of restarting it", () =>
@@ -259,7 +273,7 @@ ${mode === "stalled" ? "process.exit(1);" : ""}`,
         }
         yield* Effect.sync(() => process.kill(f.pid, 0));
         assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
   },
 );

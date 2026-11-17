@@ -16,7 +16,7 @@ import {
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -317,7 +317,7 @@ export const make = Effect.gen(function* () {
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const git = yield* GitManager.GitManager;
   const pullRequests = yield* PullRequestService.PullRequestService;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const shellClosedThreads = new Set<ThreadId>();
@@ -335,7 +335,7 @@ export const make = Effect.gen(function* () {
   // Untraced: a parent's settle can release many native children and the sweep's span covers them.
   const settleNativeChild = Effect.fnUntraced(
     function* (thread: ProjectionStore.ProjectionSettlementCandidate) {
-      const uuid = yield* crypto.randomUUIDv4();
+      const uuid = yield* random.uuidV4();
       yield* orchestrator.dispatch({
         type: "thread.auto-settle",
         commandId: CommandId.make(`server:auto-settle:${thread.id}:${uuid}`),
@@ -490,7 +490,7 @@ export const make = Effect.gen(function* () {
             autoSettleKeepPullRequests: currentSettings.sidebarAutoSettleKeepPullRequests,
           });
         if (settledAt === null) return thread;
-        const uuid = yield* crypto.randomUUIDv4();
+        const uuid = yield* random.uuidV4();
         yield* orchestrator.dispatch({
           type: "thread.auto-settle",
           commandId: CommandId.make(`server:auto-settle:${thread.id}:${uuid}`),

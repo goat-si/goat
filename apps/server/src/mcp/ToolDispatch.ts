@@ -7,6 +7,17 @@ import * as Schema from "effect/Schema";
 import { McpSchema } from "effect/ai";
 import { HttpServerRequest } from "effect/http";
 
+const isInvalidParams = Schema.is(McpSchema.InvalidParams);
+const isInternalError = Schema.is(McpSchema.InternalError);
+
+/** `callTool` may fail with any MCP error; dispatch callers handle the two it names. */
+export const dispatchError = (
+  error: McpSchema.InvalidParams | McpSchema.InternalError | McpSchema.McpErrorBase,
+) =>
+  isInvalidParams(error) || isInternalError(error)
+    ? error
+    : new McpSchema.InternalError({ message: error.message });
+
 /**
  * Calls registered tools by name through the same handle /mcp serves, so each
  * call keeps its own argument refusal and McpToolAccess checks. McpHttpServer

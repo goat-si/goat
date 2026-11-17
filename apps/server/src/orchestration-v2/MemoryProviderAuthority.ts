@@ -22,6 +22,9 @@ const prepareAuthority = (prepared: Prepared) =>
     readOnly: prepared.readOnly,
     dispatchScopes: prepared.dispatchScopes,
   });
+// A run row's evidence also names its run and task: the DTO matches on both.
+export const prepareEvidence = (prepared: Prepared) =>
+  JSON.stringify([prepareAuthority(prepared), prepared.runId, prepared.delegatedTaskId]);
 
 export const makeMemoryProviderAuthority = (input: {
   readonly policy: Option.Option<Settings.MemoryProviderCommittedPolicy["Service"]>;

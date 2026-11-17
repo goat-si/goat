@@ -9,13 +9,14 @@ import { catalog, client, dependencies } from "../../agentSurface.testkit.ts";
 import { McpInvocationContext, type McpInvocationScope } from "../../McpInvocationContext.ts";
 import { surfaceVersionOf } from "./describe.ts";
 import { searchEntries } from "./search.ts";
+import * as McpHttpServer from "../../McpHttpServer.ts";
 
 const entries = Object.values(agentSurfaceRegistry);
 const agentSurfaceEntries = (resource: string) =>
   entries.filter((entry) => entry.resource === resource);
 const registered = catalog.pipe(
   Layer.provide(dependencies),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
 );
 
 const scope = (caller: "thread" | "client"): McpInvocationScope => ({
@@ -244,7 +245,7 @@ describe("goat_describe search", () => {
   it.effect("refuses a query too long to be a search", () =>
     Effect.gen(function* () {
       const refused = yield* Effect.flip(describeAs("thread", { query: "word ".repeat(200) }));
-      expect(refused._tag).toBe("InvalidParams");
+      expect("_tag" in refused ? refused._tag : undefined).toBe("InvalidParams");
     }).pipe(Effect.provide(registered)),
   );
 
@@ -271,7 +272,7 @@ describe("goat_describe search", () => {
   it.effect("holds a path that is searched to the query's length", () =>
     Effect.gen(function* () {
       const refused = yield* Effect.flip(describeAs("thread", { path: "x".repeat(600) }));
-      expect(refused._tag).toBe("InvalidParams");
+      expect("_tag" in refused ? refused._tag : undefined).toBe("InvalidParams");
     }).pipe(Effect.provide(registered)),
   );
 

@@ -203,7 +203,7 @@ export async function run(input: {
       ),
     );
     const driverLayer = Driver.layer.pipe(
-      Layer.provide(Layer.mergeAll(measuredHttp, resolverLayer, sessionLayer)),
+      Layer.provide(Layer.mergeAll(measuredHttp, resolverLayer, sessionLayer, dependencies)),
     );
     const started = performance.now();
     const result = await Effect.runPromise(

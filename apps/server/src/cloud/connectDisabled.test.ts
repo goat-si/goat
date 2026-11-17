@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as ConnectReachability from "./ConnectReachability.ts";
 import { EnvironmentAuthenticatedPrincipal } from "@goat/contracts";
 import { expect, it } from "@effect/vitest";
@@ -6,7 +7,7 @@ import * as Context from "effect/Context";
 import * as Stream from "effect/Stream";
 import { RelayClient } from "@goat/shared/relayClient";
 import { installRelayClient } from "./installRelayClient.ts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -45,6 +46,7 @@ const failOnUse = <I, S extends object>(key: Context.Key<I, S>) =>
   );
 
 const dependencies = Layer.mergeAll(
+  NodeCrypto.layer,
   failOnUse(ConnectReachability.ConnectReachability),
   failOnUse(EnvironmentAuthenticatedPrincipal),
   failOnUse(ServerSecretStore.ServerSecretStore),
@@ -55,7 +57,7 @@ const dependencies = Layer.mergeAll(
   failOnUse(HttpClient.HttpClient),
   failOnUse(HttpServer.HttpServer),
   failOnUse(AgentAwarenessRelay.AgentAwarenessRelay),
-  failOnUse(Crypto.Crypto),
+  failOnUse(SecureRandom.SecureRandom),
   failOnUse(ServerConfig.ServerConfig),
   failOnUse(FileSystem.FileSystem),
   failOnUse(Path.Path),

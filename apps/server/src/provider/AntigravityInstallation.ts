@@ -7,7 +7,7 @@ import { compareSemverVersions } from "@goat/shared/semver";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -120,7 +120,7 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
   const manifestService = yield* ModelManifest.ModelManifest;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const http = yield* HttpClient.HttpClient;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const serviceScope = yield* Effect.scope;
@@ -306,7 +306,7 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     );
   const validate =
     options.validate ??
-    makeAntigravityValidator({ fs, path, crypto, spawner, platform, environment });
+    makeAntigravityValidator({ fs, path, random, spawner, platform, environment });
 
   const install = Effect.fn("AntigravityInstallation.install")(
     function* (asset: AntigravityReleaseAsset | AntigravityCliReleaseAsset) {
@@ -600,7 +600,7 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
             "start",
             "No Antigravity release is available to install. Check the network connection and try again.",
           );
-        const operationId = yield* crypto.randomUUIDv4();
+        const operationId = yield* random.uuidV4();
         const next: ProviderInstallState = {
           driver: DRIVER,
           operationId,

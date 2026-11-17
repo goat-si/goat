@@ -288,7 +288,7 @@ it.effect("readiness probes the selected command/profile without shell or ACP cr
         Effect.sync(() => {
           assert.equal(command._tag, "StandardCommand");
           if (command._tag === "StandardCommand") {
-            commands.push(command.args);
+            commands.push(command.args.map(String));
             assert.equal(command.command, launch.command);
             assert.equal(command.options.cwd, launch.cwd);
             assert.equal(command.options.env?.HOME, "/sibling-home");

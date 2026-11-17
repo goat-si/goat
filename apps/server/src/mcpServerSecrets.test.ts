@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -16,7 +17,7 @@ const layerServerSettingsWithSecrets = () =>
       Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-settings-test-" })),
     ),
   );
-it.layer(NodeServices.layer)("MCP server secrets", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("MCP server secrets", (it) => {
   it.effect("redacts MCP secrets, preserves resubmitted values, and removes stale secrets", () =>
     Effect.gen(function* () {
       const service = yield* ServerSettingsModule.ServerSettingsService;

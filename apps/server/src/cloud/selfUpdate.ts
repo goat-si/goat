@@ -12,7 +12,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as Cause from "effect/Cause";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -240,7 +240,7 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
   const audit = yield* MaintenanceAudit.MaintenanceAudit;
   const admission = yield* RuntimeAdmission.RuntimeAdmission;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const requireIdle = Effect.gen(function* () {
     const activity = yield* projections
       .getServerActivity()
@@ -401,8 +401,8 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
       yield* reportProgress("downloading");
       const paths = yield* prepareRuntime(targetVersion);
 
-      const operationId = yield* crypto
-        .randomUUIDv4()
+      const operationId = yield* random
+        .uuidV4()
         .pipe(
           Effect.mapError((cause) => failWith("Could not allocate an update operation ID.", cause)),
         );

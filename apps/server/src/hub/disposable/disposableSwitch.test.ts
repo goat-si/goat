@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -81,7 +82,13 @@ it.effect("every change to the switch writes a new grant to disk; other changes 
     // A patch cannot name the grant; only the server writes one.
     const forged = { hub: { attachDisposableMachines: { grantId: "chosen" } } };
     expect((yield* grantOf(forged as ServerSettingsPatch)).grantId).toBe(before);
-  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.provide(
+      layerServerSettings().pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
 );
 
 // A provider change carries any settings patch; it must end a grant like any other write.
@@ -112,7 +119,13 @@ it.effect("turning the hub off and on through provider changes still ends the ol
     yield* service.updateProviderInstance(upsert("Kilo"), { hub: { enabled: false } });
     yield* service.updateProviderInstance(upsert("Kilo 2"), { hub: { enabled: true } });
     expect(yield* grant).not.toBe(before);
-  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.provide(
+      layerServerSettings().pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
 );
 
 // hub.enabled is not the person's switch: any write that turns the hub off and on must not renew it.
@@ -150,7 +163,13 @@ it.effect("an expired switch stays closed when any write turns the hub off and o
     yield* closed;
     // Turning the hub off turns the switch off, so only a person opens it again.
     expect((yield* service.getSettings).hub.attachDisposableMachines.enabled).toBe(false);
-  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.provide(
+      layerServerSettings().pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
 );
 
 it.effect("a person's past expiry keeps the switch closed, and a far one is held to 30 days", () =>
@@ -211,7 +230,13 @@ it.effect("a person's past expiry keeps the switch closed, and a far one is held
     );
     expect((yield* value).expiresAt).toBe(iso(2));
     expect(disposableSwitch((yield* service.getSettings).hub, 6 * DAY_MS).open).toBe(false);
-  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.provide(
+      layerServerSettings().pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
 );
 
 it.effect("the switch stays off while the hub is off, so turning the hub on never opens it", () =>
@@ -228,7 +253,13 @@ it.effect("the switch stays off while the hub is off, so turning the hub on neve
       open: false,
       reason: "switch_off",
     });
-  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.provide(
+      layerServerSettings().pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
 );
 
 // A route that forwards a patch (an agent tool, a provider change) must not open the switch.
@@ -265,7 +296,13 @@ it.effect("a saved switch this version cannot read reads as off and stays off", 
     const onDisk = JSON.parse(yield* fs.readFileString(config.settingsPath));
     expect(onDisk.hub.attachDisposableMachines?.enabled ?? false).toBe(false);
     expect(disposableSwitch((yield* service.getSettings).hub, 0).open).toBe(false);
-  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.provide(
+      layerServerSettings().pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
 );
 
 it.effect("only the person path changes the switch; every other settings writer is refused", () =>
@@ -301,7 +338,13 @@ it.effect("only the person path changes the switch; every other settings writer 
     // A writer may still turn the hub off, which closes the switch without asking for it.
     yield* service.updateSettings({ hub: { enabled: false } });
     expect((yield* service.getSettings).hub.attachDisposableMachines.enabled).toBe(false);
-  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.provide(
+      layerServerSettings().pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
 );
 
 it.effect("the switch admits work only while on, unexpired and holding its grant", () =>

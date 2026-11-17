@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -14,7 +15,7 @@ export const layerServerConfig = ServerConfig.layerTest(process.cwd(), {
 });
 export const layerTest = GitVcsDriver.layer.pipe(
   Layer.provide(layerServerConfig),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 export const makeTmpDir = Effect.fn("test.makeTmpDir")(function* (prefix = "git-vcs-driver-test-") {

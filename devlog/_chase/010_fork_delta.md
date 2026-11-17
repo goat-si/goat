@@ -55,6 +55,7 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 커밋: #812
 - 경로: `oxlint-plugin-goat/{codeBudget.ts,code-budgets.json,update-code-budgets.ts,index.ts}`, `oxlint-plugin-goat/rules/code-budget.ts`, `vite.config.ts`, `docs/operations/{testing,code-quality}.md`, `AGENTS.md`
 - 정책: GOAT 전용. `goat/code-budget`은 1000줄 넘는 파일, baseline보다 커진 파일, 테스트 밖의 새 non-null 단언, 새 `any` 캐스트를 막는다. upstream의 플러그인 index와 lint 설정 변경은 받고 규칙 등록 한 줄씩을 다시 얹는다. upstream 머지가 baseline 파일을 키우면 `node oxlint-plugin-goat/update-code-budgets.ts`는 1로 끝난다. 머지 커밋에서 `--init`으로 baseline을 다시 쓰고, 올라간 항목이 upstream 줄에서 온 것인지 확인한다. GOAT 변경으로는 올리지 않는다.
+- Effect 4.1 (261114 N3): upstream 57cd05904d는 `Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)`를 줄마다 인라인으로 쓴다. 그 줄 때문에 budget을 넘는 GOAT 파일 32개는 대신 GOAT 공유 레이어 `@goat/shared/testing/nodeServicesWithCrypto`(`packages/shared/src/testing/nodeServicesWithCrypto.ts`)를 import한다(목록: `devlog/_chase/261114_lanes/next-N3.md`). 이 파일들의 upstream 변경을 받을 때 그 import를 유지한다.
 
 ### `composer-footer` 컴포저 푸터
 
@@ -208,6 +209,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 커밋: `c96310a1a` `d18f83e4e`
 - 경로: `apps/server/src/persistence/Migrations*`, `ProjectionStore.ts`, `apps/server/src/http.ts`, `packages/contracts/src/environment*`
 - 정책: 아래 마이그레이션 규칙.
+
+### `session-ended-check` 쿠키 탭의 끝난 세션 판별
+
+- 커밋: #3592
+- 경로: `packages/client-runtime/src/connection/{driver,sessionEndedCheck,diagnosis,presentation,model}.ts`, `packages/client-runtime/src/platform/capabilities.ts`, `packages/client-runtime/src/state/presentation.ts`, `apps/web/src/components/settings/ConnectionDiagnosisDetails.tsx`
+- 정책: GOAT 전용. `driver.ts`에는 `PrimaryEnvironmentAuth`를 읽는 줄, import, 연결 시도의 `catchTags` 훅만 둔다. 판별 로직은 `sessionEndedCheck.ts`에 있다. upstream driver 변경을 받은 뒤 그 훅을 다시 얹는다. 나머지 upstream 파일에는 한두 줄씩만 더했다. `ConnectionBlockedError.sessionEnded`, presentation failure의 `sessionEnded`와 `state/presentation.ts` `sameConnection`의 비교, capability의 선택 멤버 `sessionEnded`, `diagnosis.ts`의 단계 하나, 배너 헤드라인의 단계 줄이다. upstream이 이 모델이나 비교를 바꾸면 이 필드를 다시 붙인다.
 
 ### `settings-page` 설정은 모달이 아니라 전체 페이지
 

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import { GOAT_PROJECT_FILE_NAME, ServerSettings } from "@goat/contracts";
@@ -14,7 +15,7 @@ import { runSetup, setupScript, projectId } from "./testkit/ProjectScriptRunnerH
 
 const layerTest = Layer.empty.pipe(
   Layer.provideMerge(GoatProjectFileLoader.layer),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 const makeTempDir = Effect.gen(function* () {

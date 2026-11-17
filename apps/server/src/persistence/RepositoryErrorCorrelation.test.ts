@@ -94,7 +94,11 @@ describe("persistence error correlation", () => {
       assert.notInclude(createError.message, DateTime.formatIso(issuedAt));
 
       const revokeOtherError = yield* Effect.flip(
-        sessions.revokeAllExcept({ currentSessionId, revokedAt: now }),
+        sessions.revokeAllExcept({
+          currentSessionId,
+          revokedAt: now,
+          keep: { subject: "desktop-bootstrap", method: "bearer-access-token" },
+        }),
       );
       assert.instanceOf(revokeOtherError, PersistenceErrors.PersistenceSqlError);
       assert.deepStrictEqual(revokeOtherError.correlation, { currentSessionId });

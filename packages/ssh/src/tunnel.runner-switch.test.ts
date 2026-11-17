@@ -1,8 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@goat/shared/Net";
 import * as HostProcess from "@goat/shared/HostProcess";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Hex from "effect/encoding/Hex";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -50,7 +51,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.equal(result.code, 0, result.stderr);
         assert.isFalse(yield* f.fs.exists(alias));
         assert.isFalse(yield* f.fs.exists(marker));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
     it.live("stop continues ownership checks when the stale alias cannot be removed", () =>
       Effect.gen(function* () {
@@ -61,7 +62,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const result = yield* shell(f.home, SshTunnel.buildRemoteStopScript(stateKey));
         assert.equal(result.code, 0, result.stderr);
         assert.include(result.stdout, '{"stopped":true}');
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
     it.live("launch replaces a stale alias without executing it", () =>
       Effect.gen(function* () {
@@ -77,7 +78,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           yield* f.fs.readFileString(alias),
           yield* f.fs.readFileString(`${f.state}/run-t3.sh`),
         );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
     it.live("launch succeeds when publishing the runner alias fails", () =>
       Effect.gen(function* () {
@@ -96,7 +97,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           (yield* f.fs.readDirectory(f.state)).filter((name) => name.startsWith("run-goat.next.")),
           [],
         );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
     it.live.each([false, true])(
       "repairs the runner alias after old-client publication (copy fallback=%s)",
@@ -126,7 +127,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.equal(yield* f.fs.readFileString(alias), yield* f.fs.readFileString(protocol));
           if (!copyFallback)
             assert.deepEqual((yield* f.fs.stat(alias)).ino, (yield* f.fs.stat(protocol)).ino);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
     it.live.each([false, true])(
       "launch from a deleted cwd starts in home (upgrade=%s)",
@@ -151,7 +155,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             const supervised = events.find((event) => event.type === "supervise");
             assert.equal(supervised?.cwd, f.home);
           }
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
     it.live("launch falls back to the filesystem root when home cannot be entered", () =>
       Effect.gen(function* () {
@@ -163,7 +170,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.equal(result.code, 0, result.stderr);
         const started = (yield* f.events).find((event) => event.type === "start");
         assert.equal(started?.cwd, "/");
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
     it.live.each([
       { leaveRemoteServerRunning: true, action: "disconnect" },
@@ -206,6 +213,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           );
           const layer = Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
             Layer.succeed(HttpClient.HttpClient, testHttpClient),
             Layer.succeed(NetService.NetService, testNetService),
@@ -245,7 +253,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           } else {
             assert.equal((yield* f.events).filter((event) => event.type === "stop").length, 1);
           }
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each([
@@ -285,7 +296,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
               yield* f.fs.exists(`${f.home}/.goat/runtime/goat/versions/${nextVersion}`),
             );
           }
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live(
@@ -328,9 +342,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             ]),
           );
           assert.equal(Number(yield* packed.exitCode), 0);
-          const crypto = yield* Crypto.Crypto;
+          const digest = yield* Digest.Digest;
           const sha256 = Hex.encode(
-            yield* crypto.digest("SHA-256", yield* fs.readFile(`${release}/${stem}.tar.gz`)),
+            yield* digest.digest(Digest.sha256, yield* fs.readFile(`${release}/${stem}.tar.gz`)),
           );
           yield* fs.writeFileString(`${release}/SHA256SUMS`, `${sha256}  ${stem}.tar.gz\n`);
           const snapshot = Effect.gen(function* () {
@@ -364,7 +378,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.deepEqual(yield* snapshot, before);
           assert.deepEqual(yield* fs.readDirectory(versions), versionEntries(requestedVersion));
           assert.deepEqual(yield* fs.readDirectory(state), ["run-t3.sh"]);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("verifies, drains, publishes, then supervises startup on a successful upgrade", () =>
@@ -427,7 +444,7 @@ fi
         ])
           assert.deepEqual(after[key], before[key]);
         yield* f.cleanCandidates;
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("identical runner retains managed PID even with its default descriptor", () =>
@@ -445,7 +462,7 @@ fi
           ["start"],
         );
         yield* f.cleanCandidates;
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live(
@@ -461,7 +478,10 @@ fi
           assert.isTrue(yield* f.oldProcess!.isRunning);
           assert.isFalse((yield* f.events).some((event) => event.version === nextVersion));
           yield* f.cleanCandidates;
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each(["pairing", "mcp"] as const)(
@@ -490,7 +510,10 @@ fi
             [oldVersion],
           );
           yield* f.cleanCandidates;
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each(["pairing", "mcp"] as const)(
@@ -526,7 +549,10 @@ fi
           );
           assert.isFalse(yield* f.fs.exists(`${f.state}/pid`));
           yield* f.cleanCandidates;
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each([
@@ -564,7 +590,10 @@ fi
             );
           }
           yield* f.cleanCandidates;
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live(
@@ -593,7 +622,10 @@ process.exit(95);
           assert.isTrue(yield* f.oldProcess!.isRunning);
           assert.isFalse((yield* f.events).some((event) => event.type === "stop"));
           yield* f.cleanCandidates;
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
   },
 );

@@ -3,7 +3,7 @@ import * as RelayDb from "../db.ts";
 import * as Layer from "effect/Layer";
 import * as SqliteClient from "@effect/sql-sqlite-do/SqliteClient";
 import type * as Alchemy from "alchemy";
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";

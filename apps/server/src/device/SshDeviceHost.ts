@@ -9,7 +9,7 @@ import { runSshCommand, baseSshArgs, resolveSshCommand } from "@goat/ssh/command
 import { SshCommandError } from "@goat/ssh/errors";
 import * as NetService from "@goat/shared/Net";
 import { waitForHttpReady } from "@goat/shared/httpReadiness";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Exit from "effect/Exit";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -179,9 +179,12 @@ const ownerFor = Effect.fn("SshDeviceHost.ownerFor")(function* (hostId: string) 
   const environmentId = yield* fs
     .readFileString(server.environmentIdPath)
     .pipe(Effect.orElseSucceed(() => server.stateDir));
-  const crypto = yield* Crypto.Crypto;
-  const owner = yield* crypto
-    .digest("SHA-256", new TextEncoder().encode(`${environmentId}\0${server.stateDir}\0${hostId}`))
+  const digest = yield* Digest.Digest;
+  const owner = yield* digest
+    .digest(
+      Digest.sha256,
+      new TextEncoder().encode(`${environmentId}\0${server.stateDir}\0${hostId}`),
+    )
     .pipe(Effect.map(Hex.encode), Effect.orDie);
   return owner.slice(0, 24);
 });
@@ -228,7 +231,7 @@ export const make = Effect.fn("SshDeviceHost.make")(function* (
   const net = yield* NetService.NetService;
   const http = yield* HttpClient.HttpClient;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   const parentScope = yield* Scope.Scope;
   const ssh = yield* resolveSshCommand;
   const owner = yield* ownerFor(config.id);
@@ -239,7 +242,7 @@ export const make = Effect.fn("SshDeviceHost.make")(function* (
       | FileSystem.FileSystem
       | Path.Path
       | ChildProcessSpawner.ChildProcessSpawner
-      | Crypto.Crypto
+      | Digest.Digest
       | ServerConfig.ServerConfig
     >,
   ) =>
@@ -248,7 +251,7 @@ export const make = Effect.fn("SshDeviceHost.make")(function* (
       Effect.provideService(Path.Path, path),
       Effect.provideService(ServerConfig.ServerConfig, server),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      Effect.provideService(Crypto.Crypto, crypto),
+      Effect.provideService(Digest.Digest, digest),
     );
   const lock = yield* Semaphore.make(1);
   let stopped = false;

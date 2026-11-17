@@ -8,7 +8,7 @@ import {
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveNodeExecutable } from "@goat/shared/nodeRuntime";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -138,7 +138,7 @@ export const makeAgentSessionClose = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const runner = yield* ProcessRunner.ProcessRunner;
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   const config = yield* ServerConfig.ServerConfig;
   const environment = yield* HostProcess.Environment;
   const exists = (file: string) => fs.exists(file).pipe(Effect.mapError(failed));
@@ -193,7 +193,7 @@ export const makeAgentSessionClose = Effect.gen(function* () {
     Effect.provideService(FileSystem.FileSystem, fs),
     Effect.provideService(Path.Path, path),
     Effect.provideService(ProcessRunner.ProcessRunner, runner),
-    Effect.provideService(Crypto.Crypto, crypto),
+    Effect.provideService(Digest.Digest, digest),
   );
   return close;
 });

@@ -3,6 +3,7 @@ import { expect } from "@effect/vitest";
 import { ProviderInstanceId, type AntigravitySettings } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -16,6 +17,9 @@ import {
   resolveAntigravityInstanceDirectories,
 } from "../antigravityAuthSupport.ts";
 import { AntigravityDriver } from "./AntigravityDriver.ts";
+
+const plainEnvValue = (value: string | Redacted.Redacted<string> | undefined) =>
+  Redacted.isRedacted(value) ? Redacted.value(value) : value;
 
 export const hostPlatform = HostProcess.Platform.defaultValue();
 export const windowsHost = hostPlatform === "win32";
@@ -186,19 +190,21 @@ export const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
       const environment = command.options.env ?? {};
       launches.push({
         command: command.command,
-        path: environment.PATH,
-        args: command.args,
+        path: plainEnvValue(environment.PATH),
+        args: command.args.map(String),
         cwd: command.options.cwd,
         extendEnv: command.options.extendEnv,
-        profileDirectory: environment.GEMINI_HOME,
-        harnessPath: environment.ANTIGRAVITY_HARNESS_PATH,
-        forceFileStorage: environment.AGY_ACP_FORCE_FILE_STORAGE,
+        profileDirectory: plainEnvValue(environment.GEMINI_HOME),
+        harnessPath: plainEnvValue(environment.ANTIGRAVITY_HARNESS_PATH),
+        forceFileStorage: plainEnvValue(environment.AGY_ACP_FORCE_FILE_STORAGE),
         credentialKeys: Object.keys(environment).filter((key) =>
           blockedCredentialKeys.has(key.toUpperCase()),
         ),
-        geminiApiKey: environment.GEMINI_API_KEY,
+        geminiApiKey: plainEnvValue(environment.GEMINI_API_KEY),
         tempDirectory:
-          environment.ANTIGRAVITY_HARNESS_PATH === undefined ? undefined : environment.TMPDIR,
+          environment.ANTIGRAVITY_HARNESS_PATH === undefined
+            ? undefined
+            : plainEnvValue(environment.TMPDIR),
         handle,
       });
       return handle;

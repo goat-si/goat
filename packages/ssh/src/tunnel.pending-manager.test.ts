@@ -1,4 +1,4 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as NetService from "@goat/shared/Net";
 import { ORCHESTRATION_PROTOCOL_VERSION, IsoDateTime, SshHostResult } from "@goat/contracts";
@@ -130,7 +130,7 @@ const fixture = Effect.gen(function* () {
   const spawner = lazyChildProcessSpawner((command) =>
     Effect.gen(function* () {
       if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
-      sshCalls.push(command.args);
+      sshCalls.push(command.args.map(String));
       if (command.args.includes("-G")) {
         const gate = resolutionGate;
         resolutionGate = null;
@@ -174,7 +174,7 @@ const fixture = Effect.gen(function* () {
         Stream.isStream(input.stream)
           ? yield* input.stream.pipe(Stream.decodeText(), Stream.mkString)
           : "";
-      if (script.includes("ready=false") && !isRemoteLaunch(command.args)) {
+      if (script.includes("ready=false") && !isRemoteLaunch(command.args.map(String))) {
         const gate = probeGate;
         probeGate = undefined;
         const capturedOverrides = { ...probeOverrides };

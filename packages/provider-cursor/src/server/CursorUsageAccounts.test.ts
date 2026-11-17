@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@goat/contracts";
@@ -59,7 +60,10 @@ describe("CursorUsageAccounts", () => {
       Effect.provide(
         Layer.provideMerge(
           CursorUsageAccounts.layer.pipe(Layer.provide(reader)),
-          Layer.provideMerge(TestProviderHost.layer(), NodeServices.layer),
+          Layer.provideMerge(
+            TestProviderHost.layer(),
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     );

@@ -1,9 +1,15 @@
 import { WORKTREE_CLEANUP_OFF } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+  type AtomCommandResult,
+} from "@goat/client-runtime/state/runtime";
 import type { EnvironmentId, WorktreeCleanupPreview } from "@goat/contracts";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
+import { toastManager } from "../ui/toast";
 import { SettingsGroup } from "./SettingsGroup";
 import { SettingsRow } from "./settingsLayout";
 
@@ -45,7 +51,7 @@ export function WorktreeCleanupPreviewPanel({
                 void respond({
                   environmentId,
                   input: { previewId: preview.id, response: "confirm" },
-                })
+                }).then(showFailure("Could not start worktree cleanup"))
               }
             >
               Clean up now
@@ -62,7 +68,7 @@ export function WorktreeCleanupPreviewPanel({
                       storageCleanup: WORKTREE_CLEANUP_OFF,
                     },
                   },
-                })
+                }).then(showFailure("Could not turn off worktree cleanup"))
               }
             >
               Turn off
@@ -83,3 +89,13 @@ function relativeStart(isoDate: string) {
       ? "in 1 day"
       : `in ${Math.ceil(hours / 24)} days`;
 }
+
+const showFailure = (title: string) => (result: AtomCommandResult<unknown, unknown>) => {
+  if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
+  const error = squashAtomCommandFailure(result);
+  toastManager.add({
+    type: "error",
+    title,
+    description: error instanceof Error ? error.message : String(error),
+  });
+};

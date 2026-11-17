@@ -145,7 +145,7 @@ const served = Layer.mergeAll(
     }),
   ),
   Layer.provideMerge(Profiles.layer),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   Layer.provideMerge(
     Layer.mock(ThreadManagement.ThreadManagementService)({
       getThreadShell: (threadId) =>

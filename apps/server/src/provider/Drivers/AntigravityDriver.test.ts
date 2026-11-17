@@ -1,4 +1,5 @@
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -40,7 +41,7 @@ import { hostPlatform, makeHarness, windowsHost } from "./AntigravityDriver.test
 const layerDeps = ServerConfig.layerTest(process.cwd(), {
   prefix: "goat-antigravity-driver-config-",
 }).pipe(
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   Layer.provideMerge(
     Layer.succeed(
       HttpClient.HttpClient,

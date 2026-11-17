@@ -13,7 +13,9 @@ import {
   makeHarness,
   terminalState,
 } from "./AntigravityInstallation.testkit.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Layer from "effect/Layer";
 import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
@@ -47,7 +49,7 @@ const expectPreviousRelease = Effect.fn("test.expectPreviousAntigravityRelease")
   expect((yield* installation.state).installedVersion).toBe(previousVersion);
 });
 
-it.layer(NodeServices.layer)("Antigravity installation", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("Antigravity installation", (it) => {
   it.effect("falls back to runtime 1.4.5 when Google's CLI manifest offers no release", () =>
     Effect.gen(function* () {
       const { installation, requests } = yield* makeHarness({ useBundledRelease: true });

@@ -11,7 +11,7 @@ import {
 import { fromLenientJson } from "@goat/shared/schemaJson";
 import { resolveSymlinkTarget } from "@goat/shared/symlink";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -536,7 +536,7 @@ export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const settingsRef = yield* SynchronizedRef.make(environment.defaultDesktopSettings);
   // Writing over a settings file we could not read would erase the preferences it holds.
   const persistenceEnabled = yield* Ref.make(true);
@@ -559,7 +559,7 @@ export const make = Effect.gen(function* () {
       return Ref.get(persistenceEnabled).pipe(
         Effect.flatMap((enabled) =>
           enabled
-            ? crypto.randomUUIDv4().pipe(
+            ? random.uuidV4().pipe(
                 Effect.map((uuid) => uuid.replace(/-/g, "")),
                 Effect.mapError(
                   (cause) =>

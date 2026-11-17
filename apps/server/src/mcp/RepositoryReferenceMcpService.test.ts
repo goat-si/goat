@@ -110,7 +110,7 @@ const toolkitFixture = Effect.gen(function* () {
     Layer.provide(Layer.mock(LaunchWatchService.LaunchWatchService)({})),
     Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
     Layer.provide(Layer.mock(RepositoryLaunchMcpService.RepositoryLaunchMcpService)({})),
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provide(referencesLayer),
     Layer.provide(liveThreadsLayer),
     Layer.provide(NodeCrypto.layer),

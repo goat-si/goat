@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import { GitCommandError } from "@goat/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -81,5 +82,5 @@ it.effect("an agent's clone is not cut off while git is still transferring", () 
     yield* Deferred.succeed(transferred, undefined);
 
     expect((yield* Fiber.join(clone)).at(-1)?.result).toMatchObject({ cwd: destinationPath });
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

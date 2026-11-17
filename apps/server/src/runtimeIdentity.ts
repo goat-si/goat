@@ -1,4 +1,4 @@
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
@@ -12,7 +12,7 @@ export class RuntimeIdentity extends Context.Service<
 export const layer = Layer.effect(
   RuntimeIdentity,
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
-    return { instanceId: yield* crypto.randomUUIDv4() };
+    const random = yield* SecureRandom.SecureRandom;
+    return { instanceId: yield* random.uuidV4() };
   }),
 );

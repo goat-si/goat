@@ -40,6 +40,7 @@ import {
   AuthPairingLink,
   AuthRevokeClientSessionInput,
   AuthRevokePairingLinkInput,
+  AuthRevokeOthersKept,
   AuthEnvironmentScope,
   AuthTokenExchangeRequest,
   AuthSessionState,
@@ -566,6 +567,8 @@ export type AuthClientSessionRevokeResult = typeof AuthClientSessionRevokeResult
 
 export const AuthOtherClientSessionsRevokeResult = Schema.Struct({
   revokedCount: Schema.Number,
+  /** Absent from older servers, which keep no session. */
+  kept: Schema.optionalKey(AuthRevokeOthersKept),
 });
 export type AuthOtherClientSessionsRevokeResult = typeof AuthOtherClientSessionsRevokeResult.Type;
 

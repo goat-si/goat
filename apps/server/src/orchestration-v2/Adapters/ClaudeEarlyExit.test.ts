@@ -1,11 +1,12 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ClaudeSettings, ProviderSessionId, RunAttemptId, ThreadId } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as Cause from "effect/Cause";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -52,7 +53,7 @@ describe("Claude query exit before first frame", () => {
             : fileSystem.readFileString(filePath, encoding),
       },
       path: yield* Path.Path,
-      crypto: yield* Crypto.Crypto,
+      random: yield* SecureRandom.SecureRandom,
       idAllocator,
       continuationRequests: { offer: () => Effect.void },
       queryRunner: {
@@ -146,6 +147,7 @@ describe("Claude query exit before first frame", () => {
             IdAllocator.layer,
             McpProviderSessions.layer,
             NodeServices.layer,
+            NodeCrypto.layer,
             MemoryDerivedCache.layer,
           ),
         ),

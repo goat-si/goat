@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -15,12 +16,15 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as AuthSessions from "../persistence/AuthSessions.ts";
 import { PersistenceSqlError } from "../persistence/Errors.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import { MCP_CLIENT_SUBJECT } from "./mcpClientSubject.ts";
+import { PEN_PROXY_SUBJECT } from "./sessionBinding.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
 import { base64UrlDecodeUtf8, base64UrlEncode, signPayload } from "./utils.ts";
@@ -32,6 +36,7 @@ const layerFailingSessionLookupRepository = Layer.succeed(AuthSessions.AuthSessi
   createIfAbsent: () => Effect.void,
   getById: () => Effect.fail(repositoryFailure),
   listActive: () => Effect.succeed([]),
+  listUnrevoked: () => Effect.fail(repositoryFailure),
   revoke: () => Effect.fail(repositoryFailure),
   revokeAllExcept: () => Effect.fail(repositoryFailure),
   setLastConnectedAt: () => Effect.void,
@@ -118,7 +123,7 @@ const makeDiskSessionStoreLayer = Effect.fn("makeDiskSessionStoreLayer")(functio
   );
 });
 
-it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("SessionStore.layer", (it) => {
   it.effect.each(["revoke", "revokeAllExcept", "replace"] as const)(
     "invalidates every connection for a session on %s and leaves other sessions active",
     (operation) =>
@@ -146,6 +151,80 @@ it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
         yield* Fiber.join(second);
         expect(yield* Deferred.isDone(ownerInvalidated)).toBe(false);
         yield* sessions.awaitInvalidation(client.sessionId);
+      }).pipe(Effect.scoped, Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
+  );
+
+  it.effect(
+    "Revoke others keeps the desktop app's own session and Pen-bound sessions live and ends exactly the others (decision 177)",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* SessionStore.SessionStore;
+        const penBinding = {
+          meshId: "mesh-1",
+          nodeId: "node-a",
+          signPub: "sign",
+          noisePub: "noise",
+        };
+        const desktopClient = { label: "GOAT Desktop", deviceType: "desktop" } as const;
+        const bearer = "bearer-access-token" as const;
+        const current = yield* sessions.issue({ subject: "settings-page" });
+        const kept = {
+          desktop: yield* sessions.issue({
+            subject: "desktop-bootstrap",
+            method: bearer,
+            client: desktopClient,
+          }),
+          penProxy: yield* sessions.issue({
+            subject: PEN_PROXY_SUBJECT,
+            method: bearer,
+            scopes: ["orchestration:read"],
+            principalKind: "proxied_person",
+            penBinding,
+          }),
+          penAgent: yield* sessions.issue({
+            subject: MCP_CLIENT_SUBJECT,
+            method: bearer,
+            penBinding,
+          }),
+        };
+        const ended = [
+          yield* sessions.issue({ subject: "desktop-bootstrap", method: "browser-session-cookie" }),
+          yield* sessions.issue({
+            subject: "one-time-token",
+            method: bearer,
+            client: desktopClient,
+          }),
+          yield* sessions.issue({ subject: MCP_CLIENT_SUBJECT, method: bearer }),
+          yield* sessions.issue({ subject: "hub-proxy", method: bearer }),
+        ];
+        const observed = yield* sessions.streamChanges.pipe(
+          Stream.takeUntil(
+            (change) =>
+              change.type === "clientUpserted" && change.clientSession.subject === "sentinel",
+          ),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        );
+
+        const result = yield* sessions.revokeAllExcept(current.sessionId);
+        // Removals publish inside the revoke's permit, so every one of them precedes this upsert.
+        yield* sessions.issue({ subject: "sentinel" });
+        const removedIds = Array.from(yield* Fiber.join(observed)).flatMap((change) =>
+          change.type === "clientRemoved" ? [change.sessionId] : [],
+        );
+
+        expect(result).toEqual({ revokedCount: ended.length, kept: { desktop: 1, pen: 2 } });
+        expect(removedIds.toSorted()).toEqual(ended.map((session) => session.sessionId).toSorted());
+        for (const session of Object.values(kept))
+          expect(yield* sessions.readActiveScopes(session.sessionId)).toEqual(session.scopes);
+        const marked = (yield* sessions.listActive()).flatMap((row) =>
+          row.keptByRevokeOthers === undefined ? [] : [[row.sessionId, row.keptByRevokeOthers]],
+        );
+        expect(Object.fromEntries(marked)).toEqual({
+          [kept.desktop.sessionId]: "desktop",
+          [kept.penProxy.sessionId]: "pen",
+          [kept.penAgent.sessionId]: "pen",
+        });
       }).pipe(Effect.scoped, Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
   );
 
@@ -593,7 +672,7 @@ it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
 
       yield* sessions.markConnected(client.sessionId);
       const beforeRevoke = yield* sessions.listActive();
-      const revokedCount = yield* sessions.revokeAllExcept(administrative.sessionId);
+      const { revokedCount } = yield* sessions.revokeAllExcept(administrative.sessionId);
       const afterRevoke = yield* sessions.listActive();
       const revokedClient = yield* Effect.flip(sessions.verify(client.token, MAIN_LISTENER));
       const revokedClientWebSocket = yield* Effect.flip(
@@ -688,7 +767,13 @@ it.effect("reads live scopes without a token and fences replacement, revocation 
     expect((yield* store.readActiveScopes(third.sessionId).pipe(Effect.flip))._tag).toBe(
       "UnknownSessionTokenError",
     );
-  }).pipe(Effect.provide(layerSessionStore().pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.provide(
+      layerSessionStore().pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
 );
 
 it.effect("serves live scopes for sessions another process issued after startup", () =>
@@ -751,7 +836,7 @@ it.effect("serves live scopes for sessions another process issued after startup"
         "UnknownSessionTokenError",
       );
     }).pipe(Effect.provide(running), Effect.scoped);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("a verify that read the row before a revocation cannot restore the grant", () =>
@@ -803,7 +888,7 @@ it.effect("a verify that read the row before a revocation cannot restore the gra
         "UnknownSessionTokenError",
       );
     }).pipe(Effect.provide(layerStore), Effect.scoped);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("next issuance prunes all expired live authority entries without reading them", () =>
@@ -832,5 +917,11 @@ it.effect("next issuance prunes all expired live authority entries without readi
       "UnknownSessionTokenError",
     );
     expect(yield* store.readActiveScopes(next.sessionId)).toEqual(["memory:read"]);
-  }).pipe(Effect.provide(layerSessionStore().pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.provide(
+      layerSessionStore().pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
 );

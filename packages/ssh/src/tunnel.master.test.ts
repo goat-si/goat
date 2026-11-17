@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Bind the actual OpenSSH temporary socket path on the host OS.
 import * as NodeNet from "node:net";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NetService from "@goat/shared/Net";
@@ -143,6 +144,7 @@ const fixture = (
     const platform = mode === "windows" ? "win32" : "linux";
     const layer = Layer.mergeAll(
       NodeServices.layer,
+      NodeCrypto.layer,
       Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Layer.succeed(HttpClient.HttpClient, testHttpClient),
       Layer.succeed(NetService.NetService, testNetService),
@@ -240,7 +242,7 @@ describe("scoped SSH master", () => {
           }),
         longTemp,
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect(

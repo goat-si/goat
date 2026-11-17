@@ -11,7 +11,7 @@ import { canResolveHumanStep, sessionResolver } from "./handoffs/HumanStepAuthor
 import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as DecisionClient from "./goatclaw/DecisionClient.ts";
 import { threadForkRpcHandlers } from "./orchestration-v2/goat/ThreadForkRpc.ts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Clock from "effect/Clock";
 import { installRelayClient } from "./cloud/installRelayClient.ts";
 import * as CloudAgentService from "./cloudAgents/CloudAgentService.ts";
@@ -22,6 +22,7 @@ import { makeHubNodesHandlers } from "./hubNodes/HubNodes.rpc.ts";
 import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
 import { memoryError } from "./mcp/toolkits/memory/handlers.ts";
 import * as MemoryService from "./memory/MemoryService.ts";
+import { memorySessionPermit } from "./wsMemorySessionPermit.ts";
 import * as SiteNotes from "./preview/SiteNotes.ts";
 import * as MemorySyncService from "./memory/MemorySyncService.ts";
 import { ProviderMemoryImportRuntime } from "./memory/imports/MemoryImportTypes.ts";
@@ -333,6 +334,7 @@ import {
   withLateEditorConfig,
   withProviderStatusChanges,
 } from "./serverConfigUpdates.ts";
+import { requestUrl } from "./requestUrl.ts";
 import { isNetworkPath } from "@goat/shared/path";
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
 function withoutWorkspaceSnapshots(providers: ReadonlyArray<ServerProvider>): ServerProvider[] {
@@ -411,21 +413,6 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
 // Middleware added later wraps middleware added earlier, so instrumentation wraps authorization.
-/** SQL-free live scope reads can safely run again after a source wait or inside a transaction. */
-const memorySessionPermit = <E>(
-  liveScopes: Effect.Effect<ReadonlyArray<import("@goat/contracts").AuthEnvironmentScope>, E>,
-  capturedScopes: ReadonlyArray<import("@goat/contracts").AuthEnvironmentScope>,
-  required: ReadonlyArray<import("@goat/contracts").AuthEnvironmentScope>,
-) =>
-  liveScopes.pipe(
-    Effect.flatMap((live) =>
-      required.every((scope) => capturedScopes.includes(scope) && live.includes(scope))
-        ? Effect.void
-        : Effect.fail(new MemoryService.MemoryAccessError({ code: "unavailable" })),
-    ),
-    Effect.mapError(() => new MemoryService.MemoryAccessError({ code: "unavailable" })),
-  );
-
 const isMemoryImportRpcError = Schema.is(MemoryImportRpcError);
 
 /** Shared by the installed websocket route and the transport integration harness. */
@@ -508,7 +495,7 @@ function shouldUseBoundedThreadSnapshot(input: {
 function readClientConnectionOrigin(
   request: HttpServerRequest.HttpServerRequest,
 ): OrchestrationClientOrigin {
-  const url = HttpServerRequest.toURL(request);
+  const url = requestUrl(request);
   if (Option.isNone(url)) {
     return {};
   }
@@ -524,7 +511,7 @@ function readClientConnectionOrigin(
 
 // Keep telemetry per socket; several client types can connect simultaneously.
 function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) {
-  const url = HttpServerRequest.toURL(request);
+  const url = requestUrl(request);
   if (Option.isNone(url)) {
     return {};
   }
@@ -572,7 +559,7 @@ function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) 
 function readClientOwners(
   request: HttpServerRequest.HttpServerRequest,
 ): ReadonlyArray<TelemetryOwner> {
-  const url = HttpServerRequest.toURL(request);
+  const url = requestUrl(request);
   if (Option.isNone(url)) {
     return [];
   }
@@ -1192,14 +1179,14 @@ export const layerWsRpc = (
       const deviceHostContext =
         yield* Effect.context<Effect.Services<ReturnType<typeof remoteSshDeviceHosts>>>();
       const orchestrationEngine = yield* Orchestrator.OrchestratorV2;
-      const crypto = yield* Crypto.Crypto;
-      const connectionId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      const random = yield* SecureRandom.SecureRandom;
+      const connectionId = yield* random.uuidV4().pipe(Effect.orDie);
       // RPC client ids are only unique within one socket; terminals share viewers across sockets.
-      const terminalViewerPrefix = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      const terminalViewerPrefix = yield* random.uuidV4();
       const terminalViewerId = (metadata: { readonly client: { readonly id: number } }) =>
         `${terminalViewerPrefix}:${metadata.client.id}`;
       const serverCommandId = (tag: string) =>
-        crypto.randomUUIDv4().pipe(
+        random.uuidV4().pipe(
           Effect.orDie,
           Effect.map((id) => CommandId.make(`server:${tag}:${id}`)),
         );
@@ -2611,7 +2598,7 @@ export const layerWsRpc = (
               ...(agentTerminalBinding === undefined ? {} : { agentTerminalBinding }),
             }).pipe(
               Effect.provideService(SessionStore.SessionStore, sessions),
-              Effect.provideService(Crypto.Crypto, crypto),
+              Effect.provideService(SecureRandom.SecureRandom, random),
               Effect.provideService(AgentWorkspaceTerminalPolicyThreadLookup, {
                 read: (threadId) =>
                   orchestrationEngine.getThreadProjection(threadId).pipe(

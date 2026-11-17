@@ -5,6 +5,7 @@ import { ProviderInstanceId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { createModelSelection } from "@goat/shared/model";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -15,6 +16,9 @@ import * as TestClock from "effect/testing/TestClock";
 import { CodexDriver } from "./CodexDriver.ts";
 import { layerTest } from "./CodexDriver.testkit.ts";
 import { ObservedOperation, observing } from "./CodexObservedOperation.testkit.ts";
+
+const plainEnvValue = (value: string | Redacted.Redacted<string> | undefined) =>
+  Redacted.isRedacted(value) ? Redacted.value(value) : value;
 
 const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 
@@ -38,8 +42,8 @@ it.layer(layerTest)("CodexDriver host environment", (it) => {
             if (ChildProcess.isStandardCommand(command)) {
               launches.push({
                 operation: yield* ObservedOperation,
-                path: command.options.env?.PATH,
-                home: command.options.env?.CODEX_HOME,
+                path: plainEnvValue(command.options.env?.PATH),
+                home: plainEnvValue(command.options.env?.CODEX_HOME),
               });
             }
             return yield* spawner.spawn(command);
@@ -132,7 +136,8 @@ it.layer(layerTest)("CodexDriver host environment", (it) => {
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const homes: Array<string | undefined> = [];
         const observedSpawner = ChildProcessSpawner.make((command) => {
-          if (ChildProcess.isStandardCommand(command)) homes.push(command.options.env?.CODEX_HOME);
+          if (ChildProcess.isStandardCommand(command))
+            homes.push(plainEnvValue(command.options.env?.CODEX_HOME));
           return spawner.spawn(command);
         });
         const root = yield* fs.makeTempDirectoryScoped();

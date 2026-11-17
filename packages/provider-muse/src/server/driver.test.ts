@@ -8,6 +8,7 @@ import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLate
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
@@ -15,6 +16,15 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as HttpClient from "effect/http/HttpClient";
 import { MuseDriver } from "./driver.ts";
+
+const plainEnvValue = (value: string | Redacted.Redacted<string> | undefined) =>
+  Redacted.isRedacted(value) ? Redacted.value(value) : value;
+const plainEnv = (
+  env: Readonly<Record<string, string | Redacted.Redacted<string> | undefined>> | undefined,
+) =>
+  env === undefined
+    ? undefined
+    : Object.fromEntries(Object.entries(env).map(([key, value]) => [key, plainEnvValue(value)]));
 
 it.effect(
   "refreshes the host PATH while preserving instance overrides and dropping host credentials",
@@ -25,7 +35,8 @@ it.effect(
       const host = { HOME: home, PATH: "/usr/bin:/bin", META_API_KEY: "secret" };
       const launches: NodeJS.ProcessEnv[] = [];
       const spawner = ChildProcessSpawner.make((command) => {
-        if (ChildProcess.isStandardCommand(command)) launches.push(command.options.env ?? {});
+        if (ChildProcess.isStandardCommand(command))
+          launches.push(plainEnv(command.options.env) ?? {});
         return Effect.fail(
           PlatformError.systemError({
             _tag: "NotFound",

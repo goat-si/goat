@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -152,7 +153,7 @@ const fixture = Effect.gen(function* () {
 const testLayer = GitVcsDriver.layer.pipe(
   Layer.provideMerge(ServerSettings.layerTest({})),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "wt-inventory-config-" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 const refusal = <A, E extends { readonly message: string }, R>(effect: Effect.Effect<A, E, R>) =>

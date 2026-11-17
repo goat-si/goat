@@ -2,8 +2,10 @@ import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import { ChildProcess } from "effect/process";
 import { ARCHIVE, installArchivePsDouble } from "./tunnel.fixture.ts";
@@ -115,7 +117,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
               ? "fixture readiness failed\nSelected live server did not answer; it was left running.\n"
               : "fixture launch failed\n",
           );
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each(["executable", "runner", "runtime record", "identity"] as const)(
@@ -168,7 +173,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
               );
             }
           }
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each([true, false])("reprobes a newer live runtime (compatible=%s)", (compatible) =>
@@ -200,7 +208,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.isUndefined(result.success.selectedRuntime.updateBlocked);
           assert.isString(result.success.selectedRuntime.reconnectProbe);
         }
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live(
@@ -229,7 +237,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.notInclude(events, '"type":"drain"');
           assert.notInclude(events, '"type":"stop"');
           assert.equal(events.split('"type":"start"').length - 1, 1);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live(
@@ -270,7 +281,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const reconnected = f.remoteCommands.length;
           yield* launch(f, result.selectedRuntime);
           assert.equal(f.remoteCommands.length - reconnected, 1);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
   },
 );

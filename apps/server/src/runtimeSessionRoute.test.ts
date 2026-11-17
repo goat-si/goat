@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { onMainListener } from "./auth/connectionContext.testkit.ts";
 import { expect, it } from "@effect/vitest";
@@ -90,7 +91,7 @@ const mcpSession = {
   runtimeModeCeiling: "approval-required",
 };
 
-it.layer(NodeServices.layer)("runtime session route", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("runtime session route", (it) => {
   it.effect(
     "issues an SSH client a session this server accepts, with the scopes it asked for",
     () =>
@@ -231,5 +232,10 @@ it.live("preserves the Child setup purpose through runtime session issuance", ()
     expect((yield* auth.listSessions()).map((session) => session.sessionId)).toEqual([
       issued.sessionId,
     ]);
-  }).pipe(Effect.scoped, Effect.provide(layerAuth.pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      layerAuth.pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+    ),
+  ),
 );

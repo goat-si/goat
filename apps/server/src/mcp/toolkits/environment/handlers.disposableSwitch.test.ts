@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ProviderInstanceId, ThreadId } from "@goat/contracts";
@@ -27,7 +28,7 @@ const layer = Layer.mergeAll(Auth.layer, Settings.layer).pipe(
   Layer.provide(Secrets.layer),
   Layer.provideMerge(Environment.layerIdentity),
   Layer.provideMerge(Config.layerTest(process.cwd(), { prefix: "goat-disposable-prefs-mcp-" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 // An agent may turn the hub off and on; that is not the person's consent to attach machines.

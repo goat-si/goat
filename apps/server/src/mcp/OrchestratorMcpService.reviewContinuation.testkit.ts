@@ -25,6 +25,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import { TestClock } from "effect/testing";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
@@ -357,6 +358,7 @@ const serviceLayer = ({ orchestrator, store }: Fixture, options: ServiceOptions 
     const { race: raceRef, staleTasks, beforeLock } = options;
     const dependencies = Layer.mergeAll(
       NodeServices.layer,
+      NodeCrypto.layer,
       ServerSettings.layerTest({
         goatclaw: {
           enabled: options.goatclaw === true,

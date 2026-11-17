@@ -3,6 +3,7 @@
 import * as NodeUtil from "node:util";
 import * as NodeCrypto from "node:crypto";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as PlatformNodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { CodexSettings, ProviderInstanceId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -159,7 +160,7 @@ await Effect.runPromise(
         Layer.provideMerge(
           ServerConfig.layerTest(process.cwd(), { prefix: "goat-title-evaluation-state-" }),
         ),
-        Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer)),
       ),
     ),
     Effect.scoped,

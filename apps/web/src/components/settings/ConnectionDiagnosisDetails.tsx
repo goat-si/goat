@@ -57,7 +57,20 @@ export function ConnectionDiagnosisHeadline({
 }: {
   readonly environment: EnvironmentPresentation;
 }) {
-  return useConnectionDiagnosis(environment).diagnosis?.headline ?? null;
+  const { diagnosis, state } = useConnectionDiagnosis(environment);
+  if (diagnosis === null) return null;
+  const failure = state.lastFailure;
+  // This page's own server has no diagnosis card, so the way back is said here.
+  const step =
+    failure?._tag === "ConnectionBlockedError" && failure.sessionEnded === true
+      ? diagnosis.steps[0]
+      : undefined;
+  return (
+    <>
+      {diagnosis.headline}
+      {step === undefined ? null : <span className="block">{step}</span>}
+    </>
+  );
 }
 
 const HOP_MARK = { ok: "✓", failed: "✕", unchecked: "–" } as const;
