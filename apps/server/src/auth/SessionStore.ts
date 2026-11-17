@@ -212,6 +212,8 @@ export class SessionStore extends Context.Service<
       { readonly session: VerifiedSession; readonly sessionEnd: SessionEndLatches.SessionEnd },
       SessionCredentialError
     >;
+    /** The MCP requests admitted and not yet ended; for diagnostics and tests. */
+    readonly admissionsInFlight: () => Effect.Effect<number>;
     readonly revoke: (
       sessionId: AuthSessionId,
     ) => Effect.Effect<boolean, SessionCredentialInternalError>;
@@ -1178,6 +1180,7 @@ export const make = Effect.gen(function* () {
     listActive,
     awaitInvalidation,
     admitMcpCall: (token, connection) => admitMcpCall(token, connection),
+    admissionsInFlight: () => sessionEnds.inFlight,
     get streamChanges() {
       return Stream.fromPubSub(changesPubSub);
     },

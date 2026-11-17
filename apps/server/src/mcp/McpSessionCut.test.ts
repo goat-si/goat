@@ -17,9 +17,11 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import { McpSchema, McpServer } from "effect/ai";
@@ -47,7 +49,7 @@ import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Project from "../project/ProjectService.ts";
 import * as ScreenRunService from "../screenCode/ScreenRunService.ts";
 import * as Settings from "../serverSettings.ts";
-import type * as AuthSessions from "../persistence/AuthSessions.ts";
+import * as AuthSessions from "../persistence/AuthSessions.ts";
 import { catalog, dependencies, serveOverHttp } from "./agentSurface.testkit.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -653,4 +655,42 @@ it.effect(
         expect(yield* unguarded(["goat_unguarded_probe"])).toEqual(["goat_unguarded_probe"]);
       }).pipe(Effect.provide(catalogServer));
     }).pipe(Effect.provide(layerAuth)),
+);
+
+it.effect(
+  "an MCP request interrupted while it is being admitted leaves no admission once it ends",
+  () =>
+    Effect.gen(function* () {
+      const reached = yield* Deferred.make<void>();
+      const gate = yield* Deferred.make<void>();
+      // markUsed runs after the admission is recorded and before the request finishes admitting.
+      const gated = Layer.effect(
+        SessionStore.SessionStore,
+        Effect.map(SessionStore.make, (store) =>
+          SessionStore.SessionStore.of({
+            ...store,
+            markUsed: () =>
+              Deferred.succeed(reached, undefined).pipe(Effect.andThen(Deferred.await(gate))),
+          }),
+        ),
+      ).pipe(Layer.provideMerge(AuthSessions.layer), Layer.provideMerge(Sqlite.layerMemory));
+      yield* Effect.gen(function* () {
+        const auth = yield* EnvironmentAuth.EnvironmentAuth;
+        const store = yield* SessionStore.SessionStore;
+        const issued = yield* store.issue({
+          subject: "mcp-client",
+          method: "bearer-access-token",
+          scopes: mcpClientScopes("full-access"),
+        });
+        const request = yield* Scope.make();
+        const admitting = yield* authenticate(auth, issued.token).pipe(
+          Effect.provideService(Scope.Scope, request),
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Deferred.await(reached);
+        yield* Fiber.interrupt(admitting);
+        yield* Scope.close(request, Exit.void);
+        expect(yield* store.admissionsInFlight()).toBe(0);
+      }).pipe(Effect.provide(layerAuthOver(gated)));
+    }).pipe(Effect.provide(NodeServices.layer)),
 );

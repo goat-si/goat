@@ -82,5 +82,12 @@ export const make = () => {
     };
   };
 
-  return { cut, admit };
+  /** Admissions held now; for diagnostics and tests. */
+  const inFlight = Effect.sync(() => {
+    let count = 0;
+    for (const current of admissions.values()) count += current.size;
+    return count;
+  });
+
+  return { cut, admit, inFlight };
 };
