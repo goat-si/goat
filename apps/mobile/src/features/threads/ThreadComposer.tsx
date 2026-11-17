@@ -31,6 +31,7 @@ import { useModelMentionOptions } from "./useModelMentionOptions";
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { Keyboard, Platform, View, type ViewStyle } from "react-native";
 import { useCompactComposerEditor } from "./useCompactComposerEditor";
+import { useComposerStopGuard } from "./useComposerStopGuard";
 import { composerImageGallery } from "../../lib/composerImageGallery";
 import { filePreviewGallery } from "../../lib/filePreviewGallery";
 import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
@@ -310,7 +311,12 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     draftAttachments.length > 0 ||
     (queuedEdit?.existingAttachments.length ?? 0) > 0;
   const stripAttachments = composerStripAttachments(draftAttachments);
-  const showStopAction = !hasContent && props.canStopThread && queuedEdit === null;
+  const stop = useComposerStopGuard({
+    canStop: props.canStopThread,
+    canOperateThread: props.canOperateThread,
+    onStop: props.onStopThread,
+  });
+  const showStopAction = !hasContent && stop.showStop && queuedEdit === null;
   const onResumeQueue = props.onResumeQueue;
   const [resumingQueue, setResumingQueue] = useState(false);
   const showResumeAction =
@@ -1020,18 +1026,18 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                 {showStopAction ? (
                   <ComposerActionButton
                     size={hasSidebarTabBar ? "large" : "regular"}
-                    accessibilityLabel="Stop agent"
+                    accessibilityLabel={stop.stopLabel}
                     icon="stop.fill"
                     variant="danger"
-                    disabled={!props.canOperateThread}
-                    onPress={props.onStopThread}
+                    disabled={stop.stopDisabled}
+                    onPress={stop.stop}
                   />
                 ) : showResumeAction ? (
                   <ComposerActionButton
                     size={hasSidebarTabBar ? "large" : "regular"}
                     accessibilityLabel="Resume thread"
                     icon="play"
-                    disabled={!props.canOperateThread || resumingQueue}
+                    disabled={!props.canOperateThread || resumingQueue || stop.replacementBlocked}
                     onPress={() => void handleResumeQueue()}
                   />
                 ) : (
@@ -1103,17 +1109,17 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                   />
                   {showStopAction ? (
                     <ComposerActionButton
-                      accessibilityLabel="Stop agent"
+                      accessibilityLabel={stop.stopLabel}
                       icon="stop.fill"
                       variant="danger"
-                      disabled={!props.canOperateThread}
-                      onPress={props.onStopThread}
+                      disabled={stop.stopDisabled}
+                      onPress={stop.stop}
                     />
                   ) : showResumeAction && voicePresentation.showsSend ? (
                     <ComposerActionButton
                       accessibilityLabel="Resume thread"
                       icon="play"
-                      disabled={!props.canOperateThread || resumingQueue}
+                      disabled={!props.canOperateThread || resumingQueue || stop.replacementBlocked}
                       onPress={() => void handleResumeQueue()}
                     />
                   ) : voicePresentation.showsSend ? (
