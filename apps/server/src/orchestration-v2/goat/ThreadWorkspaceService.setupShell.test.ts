@@ -53,6 +53,13 @@ const withSetupShell = <A, E, R>(
     readonly async: boolean;
     /** The first shell shows no prompt and runs a startup child (an rc-file prompt). */
     readonly stuckFirstShell?: boolean;
+    /** Holds the restore inside the folder's lease, before it recreates the folder. */
+    readonly holdRestore?: {
+      readonly entered: Deferred.Deferred<void>;
+      readonly go: Deferred.Deferred<void>;
+    };
+    /** Done when a terminal open is requested. */
+    readonly openRequested?: Deferred.Deferred<void>;
   },
   body: (fixture: {
     readonly repo: string;
@@ -154,15 +161,20 @@ const withSetupShell = <A, E, R>(
           Layer.succeed(TerminalManager.TerminalManager, {
             ...terminals,
             open: (input) =>
-              terminals.open(input).pipe(
-                Effect.tap(() =>
-                  Effect.sync(() => {
-                    if (options.stuckFirstShell === true && latest() === 0) return;
-                    events.push(`prompt ${latest()}`);
-                    pty.processes.at(-1)?.emitData("$ \x1b[?2004h");
-                  }),
+              (options.openRequested === undefined
+                ? Effect.void
+                : Deferred.succeed(options.openRequested, undefined)
+              )
+                .pipe(Effect.andThen(terminals.open(input)))
+                .pipe(
+                  Effect.tap(() =>
+                    Effect.sync(() => {
+                      if (options.stuckFirstShell === true && latest() === 0) return;
+                      events.push(`prompt ${latest()}`);
+                      pty.processes.at(-1)?.emitData("$ \x1b[?2004h");
+                    }),
+                  ),
                 ),
-              ),
             write: (input) =>
               terminals.write(input).pipe(
                 Effect.tap(() =>
@@ -199,7 +211,13 @@ const withSetupShell = <A, E, R>(
       } as unknown as ThreadManagement.ThreadManagementService["Service"]),
       Layer.succeed(WorktreeSnapshotStore, {
         capture: () => Effect.die("unused"),
-        latestForThread: () => Effect.succeed(null),
+        latestForThread: () =>
+          options.holdRestore === undefined
+            ? Effect.succeed(null)
+            : Deferred.succeed(options.holdRestore.entered, undefined).pipe(
+                Effect.andThen(Deferred.await(options.holdRestore.go)),
+                Effect.as(null),
+              ),
         markRestored: () => Effect.void,
         deleteForThread: () => Effect.succeed(0),
         purgeDeletedThreads: () => Effect.succeed(0),
@@ -414,4 +432,39 @@ it.live("a restore's setup run supersedes an earlier run that has not typed yet"
       assert.strictEqual(pty.processes[0]?.writes.length, 0);
     }).pipe(provideAll(fixture.layer)),
   ),
+);
+
+// The earlier run's open is still waiting for the folder the restore holds when the restore's run
+// restarts the terminal; it comes back with the restarted terminal and must not type there.
+it.live("a setup run whose open waited for the restore is superseded too", () =>
+  Effect.gen(function* () {
+    const holdRestore = { entered: yield* Deferred.make<void>(), go: yield* Deferred.make<void>() };
+    const openRequested = yield* Deferred.make<void>();
+    return yield* withSetupShell({ async: true, holdRestore, openRequested }, (fixture) =>
+      Effect.gen(function* () {
+        const { worktreePath, events, firstCommand } = fixture;
+        removeFolder("deleted", fixture);
+        const restore = yield* restoreThrough("recreate", worktreePath).pipe(Effect.forkChild);
+        yield* Deferred.await(holdRestore.entered);
+        // A launch's setup run asks for the setup terminal while the restore holds the folder.
+        const lines: Array<string> = [];
+        const earlierFiber = yield* earlierSetup(worktreePath, lines).pipe(Effect.forkChild);
+        yield* Deferred.await(openRequested);
+        yield* Deferred.succeed(holdRestore.go, undefined);
+        yield* Fiber.join(restore);
+        const earlier = yield* Fiber.join(earlierFiber);
+        // An async restore leaves the restored shell open; a command typed there is awaited.
+        yield* Deferred.await(firstCommand);
+        const settled =
+          earlier.status === "started" && earlier.completion !== undefined
+            ? (yield* earlier.completion).exitCode
+            : "no completion";
+        assert.isTrue(NodeFS.existsSync(NodePath.join(worktreePath, ".git")));
+        assert.strictEqual(settled, null);
+        // The restore's run typed once; the earlier run typed nothing.
+        assert.strictEqual(events.filter((event) => event.startsWith("command")).length, 1);
+        assert.deepEqual(lines, []);
+      }).pipe(provideAll(fixture.layer)),
+    );
+  }),
 );
