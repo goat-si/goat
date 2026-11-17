@@ -16,14 +16,21 @@ const SCREEN_READER_ANNOUNCEMENTS_LABELS: Record<ScreenReaderAnnouncements, stri
 
 const isScreenReaderAnnouncements = Schema.is(ScreenReaderAnnouncements);
 
+function useTranslatedSetting(id: Parameters<typeof searchableSetting>[0]) {
+  const m = useMessages();
+  const setting = searchableSetting(id);
+  return { ...setting, title: m(setting.title) };
+}
+
 export function ScreenReaderAnnouncementsRow() {
   const gt = useGT();
   const m = useMessages();
+  const setting = useTranslatedSetting("screen-reader-announcements");
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   return (
     <SettingsRow
-      {...searchableSetting("screen-reader-announcements")}
+      {...setting}
       description={
         <T>
           What a screen reader hears from the open thread: a turn starting, needing you, and ending.
@@ -77,11 +84,12 @@ export function ScreenReaderAnnouncementsRow() {
 
 export function ScreenReaderWindowTitleRow() {
   const gt = useGT();
+  const setting = useTranslatedSetting("screen-reader-window-title");
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   return (
     <SettingsRow
-      {...searchableSetting("screen-reader-window-title")}
+      {...setting}
       description={
         <T>
           Start the window title with the thread's status, like Needs approval, and its name, so
