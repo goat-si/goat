@@ -359,22 +359,13 @@ jobs:
 
       # web stays here. The other suites are their own matrix tasks so a
       # slow server shard does not block them. `check` above is still the aggregate.
-      # On the shared lidge host, Chromium fails every pending request with net::ERR_NETWORK_CHANGED
-      # whenever the host's interfaces change (#3646), so a self-hosted runner runs the step in a
-      # network namespace with loopback only. Ubuntu's AppArmor refuses plain unshare there and allows
-      # bwrap. Without bwrap, or when bwrap is refused, the step fails; it never falls back to the host.
+      # Steps that start Chromium run through loopback-netns.sh: loopback only on a self-hosted runner.
       - name: Test
         if: matrix.task == 'test'
         # Logs each failed browser request with Chromium's network error, the evidence #1719 lacks.
         env:
           VITEST_PW_DEBUG: "1"
-        run: |
-          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then exec vp run --filter @goat/web test; fi
-          if ! command -v bwrap >/dev/null; then
-            echo "::error::bwrap is missing on $RUNNER_NAME; the web tests need a loopback-only network namespace there"
-            exit 1
-          fi
-          exec bwrap --unshare-user --unshare-net --dev-bind / / --proc /proc vp run --filter @goat/web test
+        run: bash .github/scripts/loopback-netns.sh vp run --filter @goat/web test
 
       # Changed, companion, and importing tests (directly or through testkit/fixture files), plus
       # special suites, as check:changed runs them: from the repository root,
@@ -382,6 +373,7 @@ jobs:
       # A full run hands it every test file no suite owns instead (goat-ci-scope.cjs withUnownedTests).
       # A selected file that no Vitest project collects fails here, so a quick run cannot pass
       # without running a test it chose. Every runner runs; the step exits with the last failure.
+      # Web browser tests and server tests (some start Chromium) run with loopback only.
       - name: Test changed files
         if: matrix.task == 'test-changed'
         env:
@@ -405,7 +397,11 @@ jobs:
               for (const file of missing) console.log("::error file=" + file + "::no Vitest project collects this changed test file");
               process.exit(missing.length > 0 ? 1 : 0);
             ' || status=$?
-            vp test run "${files[@]}" || status=$?
+            netns=()
+            if printf '%s\n' "${files[@]}" | grep -qE '\.browser\.test\.|^apps/server/'; then
+              netns=(bash .github/scripts/loopback-netns.sh)
+            fi
+            "${netns[@]}" vp test run "${files[@]}" || status=$?
           fi
           if [ "${#node_files[@]}" -gt 0 ]; then
             echo "${#node_files[@]} changed node:test files"
@@ -545,7 +541,7 @@ jobs:
 
       - name: Test server
         if: matrix.task == 'test-server' && !matrix.related
-        run: vp run --filter goat test --shard ${{ matrix.shard }}/${{ matrix.shard_count }}
+        run: bash .github/scripts/loopback-netns.sh vp run --filter goat test --shard ${{ matrix.shard }}/${{ matrix.shard_count }}
 
       # goat-scope picked these files through the import graph, or took them from a quick run's
       # selection; its job summary says which. Shard count never exceeds the file count, so no
@@ -559,7 +555,7 @@ jobs:
           mapfile -t files < <(node -e 'for (const file of JSON.parse(process.env.SERVER_FILES)) console.log(file)')
           test "${#files[@]}" -gt 0
           echo "${#files[@]} related server test files, shard ${{ matrix.shard }}/${{ matrix.shard_count }}"
-          vp test run --shard ${{ matrix.shard }}/${{ matrix.shard_count }} "${files[@]}"
+          bash ../../.github/scripts/loopback-netns.sh vp test run --shard ${{ matrix.shard }}/${{ matrix.shard_count }} "${files[@]}"
 
       - name: Test memory growth
         if: matrix.task == 'test-memory-growth'
