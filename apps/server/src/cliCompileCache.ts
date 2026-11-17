@@ -9,8 +9,10 @@ export function enableCliCompileCache(): void {
   try {
     // SEA has no separate modules to cache.
     if (NodeSea.isSea()) return;
+    const xdgCache = process.env.XDG_CACHE_HOME;
+    // The XDG spec ignores a relative value; it would resolve against the launch folder.
     const cacheRoot =
-      process.env.XDG_CACHE_HOME ||
+      (xdgCache !== undefined && NodePath.isAbsolute(xdgCache) ? xdgCache : undefined) ||
       // oxlint-disable-next-line goat/no-global-process-runtime -- Runs before the CLI's Effect runtime loads.
       (process.platform === "linux" ? NodePath.join(NodeOS.homedir(), ".cache") : NodeOS.tmpdir());
     const directory = NodePath.join(cacheRoot, "goat", "compile-cache");

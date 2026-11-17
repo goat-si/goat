@@ -1,4 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off -- the relative cache path is computed from the test process.
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodePath from "node:path";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -6,12 +9,16 @@ import * as FileSystem from "effect/FileSystem";
 import { enableCliCompileCache } from "./cliCompileCache.ts";
 
 // Runs the AppImage branch, which deletes and returns without enabling a cache in this process.
-const launchAsAppImage = (root: string) =>
+const launchAsAppImage = (root: string, env: Record<string, string> = {}) =>
   Effect.acquireUseRelease(
     Effect.sync(() => {
-      const saved = { APPIMAGE: process.env.APPIMAGE, XDG_CACHE_HOME: process.env.XDG_CACHE_HOME };
-      process.env.APPIMAGE = `${root}/GOAT.AppImage`;
-      process.env.XDG_CACHE_HOME = `${root}/cache`;
+      const values: Record<string, string> = {
+        APPIMAGE: `${root}/GOAT.AppImage`,
+        XDG_CACHE_HOME: `${root}/cache`,
+        ...env,
+      };
+      const saved = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]));
+      Object.assign(process.env, values);
       return saved;
     }),
     () => Effect.sync(enableCliCompileCache),
@@ -96,5 +103,27 @@ it.live.each(["goat", "goat/compile-cache"])(
       expect(yield* fs.readFileString(`${outside}/v24.0.0-x64-1000/keep`)).toBe(
         "outside the cache",
       );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+// The XDG rule: a relative XDG_CACHE_HOME is ignored, so the launch folder decides nothing.
+it.live(
+  "an AppImage launch ignores a relative XDG_CACHE_HOME and uses the default cache folder",
+  () =>
+    Effect.gen(function* () {
+      const { fs, root, cacheDir } = yield* fixture;
+      yield* fs.makeDirectory(`${cacheDir}/v24.0.0-x64-1000`, { recursive: true });
+      const fallback =
+        (yield* HostProcess.Platform) === "linux"
+          ? `${root}/home/.cache/goat/compile-cache`
+          : `${root}/tmp/goat/compile-cache`;
+      yield* fs.makeDirectory(`${fallback}/v24.0.0-x64-1000`, { recursive: true });
+      yield* launchAsAppImage(root, {
+        XDG_CACHE_HOME: NodePath.relative(process.cwd(), `${root}/cache`),
+        HOME: `${root}/home`,
+        TMPDIR: `${root}/tmp`,
+      });
+      expect(yield* fs.readDirectory(cacheDir)).toEqual(["v24.0.0-x64-1000"]);
+      expect(yield* fs.readDirectory(fallback)).toEqual([]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
