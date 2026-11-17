@@ -1,6 +1,8 @@
 import {
   MessageId,
+  PlanId,
   RunId,
+  RuntimeRequestId,
   ThreadId,
   TurnItemId,
   type OrchestrationV2ProjectedTurnItem,
@@ -201,5 +203,98 @@ describe("tool-call visibility", () => {
       "wake",
       "thinking:",
     ]);
+  });
+
+  it("never hides what needs the person: approvals, questions, errors, plans and their messages", () => {
+    const failure = {
+      class: "provider_error" as const,
+      message: "API overloaded.",
+      code: null,
+      retryable: false,
+    };
+    const requestId = RuntimeRequestId.make("question");
+    const items: OrchestrationV2TurnItem[] = [
+      userMessage(),
+      { ...command(), id: TurnItemId.make("passed") },
+      {
+        ...base("approval", "2026-06-20T00:00:02.000Z", 2),
+        status: "pending",
+        completedAt: null,
+        type: "approval_request",
+        requestId: RuntimeRequestId.make("approval"),
+        requestKind: "command",
+        prompt: "Allow rm?",
+      },
+      {
+        ...base("answered", "2026-06-20T00:00:03.000Z", 3),
+        type: "user_input_request",
+        requestId,
+        questions: [],
+        questionAnswer: {
+          requestId,
+          questionTextById: { scope: "Which scope?" },
+          answers: { scope: "All" },
+          attachmentsByQuestionId: {},
+        },
+      },
+      { ...base("error", "2026-06-20T00:00:04.000Z", 4), status: "failed", type: "error", failure },
+      {
+        ...base("plan", "2026-06-20T00:00:05.000Z", 5),
+        type: "proposed_plan",
+        planId: PlanId.make("plan"),
+        markdown: "# Plan",
+        streaming: false,
+      },
+      assistantMessage("2026-06-20T00:00:06.000Z"),
+    ];
+    const shownIds = (display?: {
+      toolCallVisibility: "showAll" | "hideSuccessful" | "hideAll" | "zen";
+    }) =>
+      deriveThreadFeedPresentation(
+        buildThreadFeed(items.map((item, index) => projected(item, index))),
+        null,
+        new Set([runId]),
+        new Set(),
+        null,
+        false,
+        undefined,
+        display === undefined ? undefined : { ...display, revealedMessageId: null },
+      ).flatMap((row) =>
+        row.type === "activity-group"
+          ? row.activities.map((activity) => String(activity.projectedItem.item.id))
+          : row.type === "message"
+            ? [String(row.message.id)]
+            : [row.type],
+      );
+    const needed = ["message-user", "approval", "answered", "error", "plan", "message-assistant"];
+    expect(shownIds()).toEqual(expect.arrayContaining(needed));
+    for (const toolCallVisibility of ["hideSuccessful", "hideAll", "zen"] as const) {
+      const shown = shownIds({ toolCallVisibility });
+      // As upstream's zen keep list: zen leaves the open approval to PendingApprovalCard, which
+      // sits above the composer whatever this setting says.
+      const kept = toolCallVisibility === "zen" ? needed.filter((id) => id !== "approval") : needed;
+      expect(shown, toolCallVisibility).toEqual(expect.arrayContaining(kept));
+      expect(shown, toolCallVisibility).not.toContain("passed");
+    }
+
+    const running = {
+      runId,
+      status: "running" as const,
+      startedAt: "2026-06-20T00:00:01.000Z",
+      completedAt: null,
+    };
+    const live = { ...command(), status: "running" as const, completedAt: null };
+    expect(
+      deriveThreadFeedPresentation(
+        buildThreadFeed([userMessage(), live].map((item, index) => projected(item, index))),
+        running,
+        new Set([runId]),
+        new Set(),
+        running.startedAt,
+        false,
+        undefined,
+        { toolCallVisibility: "hideAll", revealedMessageId: null },
+      ).map((row) => row.type),
+    ).toContain("thinking");
   });
 });
