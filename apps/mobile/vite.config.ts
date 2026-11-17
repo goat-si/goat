@@ -32,6 +32,7 @@ const reactTests = [
   "src/features/threads/git/GitBranchesSheet.test.tsx",
   "src/features/threads/git/GitCommitSheet.test.tsx",
   "src/features/threads/useComposerStopGuard.test.tsx",
+  "src/features/threads/GitActionProgressOverlay.test.tsx",
   "src/components/ui/SplitButton.android.test.tsx",
   "src/components/ui/AndroidAnchoredMenu.test.tsx",
   "src/components/ProjectFavicon.test.tsx",
