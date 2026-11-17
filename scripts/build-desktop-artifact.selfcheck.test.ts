@@ -9,11 +9,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import {
-  BUNDLE_SELF_CHECK_RESOLVE_HOOK,
   BundleNotSelfContainedError,
   packWindowsServerAsar,
   verifyPackagedBundleIsSelfContained,
 } from "./build-desktop-artifact.ts";
+import { BUNDLE_SELF_CHECK_RESOLVE_HOOK } from "./lib/bundle-self-check-hook.ts";
 
 // The self-check runs its probe under the OS temp directory. A node_modules above it is real
 // machine state (an install left in /private/tmp), so the probe must judge only the packaged tree.

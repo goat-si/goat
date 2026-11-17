@@ -50,6 +50,7 @@ import {
 import { stageDesktopComputerUseHelper } from "./lib/desktop-computer-use-helper.ts";
 
 import { resolveBuildCommitTime } from "./lib/build-commit-time.ts";
+import { BUNDLE_SELF_CHECK_RESOLVE_HOOK } from "./lib/bundle-self-check-hook.ts";
 import { resolveDesktopBuildIconAssets } from "./lib/desktop-icon-assets.ts";
 export { resolveDesktopBuildIconAssets };
 export type { DesktopBuildIconAssets } from "./lib/desktop-icon-assets.ts";
@@ -2404,46 +2405,6 @@ export const copyDirectoryPreservingSymlinks = Effect.fn("copyDirectoryPreservin
   },
 );
 
-// Preloaded with --require, in argv and NODE_OPTIONS, before the server entry. A CommonJS preload
-// also runs in every worker, including one evaluated from a string, and NODE_OPTIONS carries it
-// into child Node processes. registerHooks covers import and require; dlopen is wrapped because
-// an addon loaded by path never passes through resolve.
-export const BUNDLE_SELF_CHECK_RESOLVE_HOOK = `const { realpathSync } = require("node:fs");
-const { registerHooks } = require("node:module");
-const { pathToFileURL } = require("node:url");
-
-const tree = process.env.GOAT_BUNDLE_SELF_CHECK_TREE;
-// The hook lives beside the tree and is required again through argv after NODE_OPTIONS.
-const self = pathToFileURL(__filename).href;
-const outside = (url) => url.startsWith("file:") && !url.startsWith(tree) && url !== self;
-// Fail the way a clean machine would, so optional-dependency probes still read it as missing.
-const escaped = (what, url, code) =>
-  Object.assign(new Error(what + " resolved outside the packaged tree to " + url), { code });
-
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    const resolved = nextResolve(specifier, context);
-    if (outside(resolved.url)) {
-      const code = context.conditions.includes("require") ? "MODULE_NOT_FOUND" : "ERR_MODULE_NOT_FOUND";
-      throw escaped(specifier, resolved.url, code);
-    }
-    return resolved;
-  },
-});
-
-const dlopen = process.dlopen;
-process.dlopen = function (module, filename, ...rest) {
-  let url;
-  try {
-    url = pathToFileURL(realpathSync(filename)).href;
-  } catch {
-    // A missing file fails in dlopen itself with its usual error.
-  }
-  if (url !== undefined && outside(url)) throw escaped(filename, url, "ERR_DLOPEN_FAILED");
-  return dlopen.call(this, module, filename, ...rest);
-};
-`;
-
 export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSelfContained")(
   function* (input: { readonly asarPath: string; readonly verbose: boolean }) {
     const fs = yield* FileSystem.FileSystem;
@@ -2467,7 +2428,6 @@ export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBund
     // Node looks for node_modules in every ancestor directory, so a dependency missing from the
     // packaged tree could resolve from whatever the machine has installed above the probe and
     // pass this check. The hook fails any resolution that leaves the tree instead.
-    const treeUrl = NodeURL.pathToFileURL(`${yield* fs.realPath(probeApp)}${path.sep}`).href;
     const hookPath = path.join(probeRoot, "contain-resolution.cjs");
     yield* fs.writeFileString(hookPath, BUNDLE_SELF_CHECK_RESOLVE_HOOK);
 
@@ -2494,7 +2454,7 @@ export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBund
             NODE_PATH: "",
             // Quoted so a path with spaces or backslashes survives NODE_OPTIONS parsing.
             NODE_OPTIONS: `--require="${hookPath.replace(/["\\]/g, "\\$&")}"`,
-            GOAT_BUNDLE_SELF_CHECK_TREE: treeUrl,
+            GOAT_BUNDLE_SELF_CHECK_TREE: probeApp,
           },
         },
       ),
