@@ -14,35 +14,38 @@ import type {
   RuntimeMode,
   ThreadId,
 } from "@goat/contracts";
+import { resolveProviderInteractionMode } from "../../state/legacy-plan-mode";
 
 type Command<Input, E> = (request: {
   readonly environmentId: EnvironmentId;
   readonly input: Input;
 }) => Promise<AtomCommandResult<unknown, E>>;
 
-/** Resolves to the first failed command's result, or the last successful one. */
-export async function resumeThread<E>(input: {
-  readonly thread: {
-    readonly environmentId: EnvironmentId;
-    readonly id: ThreadId;
-    readonly runtimeMode: RuntimeMode;
-    readonly interactionMode: ProviderInteractionMode;
-  };
-  readonly resumableRunId: RunId | null;
-  readonly queueHeld: boolean;
+interface ResumedThread {
+  readonly environmentId: EnvironmentId;
+  readonly id: ThreadId;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
-  readonly modelSelection: ModelSelection | null;
-  readonly messageId: MessageId;
+}
+
+interface ModeCommands<E> {
+  readonly thread: ResumedThread;
+  readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode;
   readonly createdAt: string;
   readonly setRuntimeMode: Command<SetThreadRuntimeModeInput, E>;
   readonly setInteractionMode: Command<SetThreadInteractionModeInput, E>;
-  readonly startTurn: Command<StartThreadTurnInput, E>;
-  readonly resumeQueue: Command<ResumeThreadQueueInput, E>;
-}): Promise<AtomCommandResult<unknown, E>> {
+}
+
+/**
+ * Turns on an existing thread, continued or released from the queue, run with its saved modes.
+ * Resolves to the failed command's result, so a refused mode resumes nothing.
+ */
+async function saveComposerModes<E>(
+  input: ModeCommands<E>,
+): Promise<AtomCommandResult<unknown, E> | null> {
   const { thread, runtimeMode, interactionMode, createdAt } = input;
   const environmentId = thread.environmentId;
-  // Turns on an existing thread, continued or released from the queue, run with its saved modes.
   if (runtimeMode !== thread.runtimeMode) {
     const saved = await input.setRuntimeMode({
       environmentId,
@@ -57,6 +60,24 @@ export async function resumeThread<E>(input: {
     });
     if (saved._tag === "Failure") return saved;
   }
+  return null;
+}
+
+/** Resolves to the first failed command's result, or the last successful one. */
+export async function resumeThread<E>(
+  input: ModeCommands<E> & {
+    readonly resumableRunId: RunId | null;
+    readonly queueHeld: boolean;
+    readonly modelSelection: ModelSelection | null;
+    readonly messageId: MessageId;
+    readonly startTurn: Command<StartThreadTurnInput, E>;
+    readonly resumeQueue: Command<ResumeThreadQueueInput, E>;
+  },
+): Promise<AtomCommandResult<unknown, E>> {
+  const { thread, runtimeMode, interactionMode } = input;
+  const environmentId = thread.environmentId;
+  const failed = await saveComposerModes(input);
+  if (failed !== null) return failed;
   // The server holds the queue behind a stopped or usage-limited run until that run is continued.
   if (input.resumableRunId !== null) {
     const continued = await input.startTurn({
@@ -82,13 +103,29 @@ export async function resumeThread<E>(input: {
   return input.resumeQueue({ environmentId, input: { threadId: thread.id } });
 }
 
-/** The queue sheet's Resume queue: releases the held queue. */
-export function resumeHeldQueue<E>(input: {
-  readonly thread: { readonly environmentId: EnvironmentId; readonly id: ThreadId };
-  readonly resumeQueue: Command<ResumeThreadQueueInput, E>;
-}): Promise<AtomCommandResult<unknown, E>> {
+/** The queue sheet's Resume queue: the composer draft's modes, as the composer's Resume. */
+export async function resumeHeldQueue<E>(
+  input: Omit<ModeCommands<E>, "runtimeMode" | "interactionMode"> & {
+    readonly draft: {
+      readonly runtimeMode?: RuntimeMode | undefined;
+      readonly interactionMode?: ProviderInteractionMode | undefined;
+    };
+    readonly provider: Parameters<typeof resolveProviderInteractionMode>[0];
+    readonly resumeQueue: Command<ResumeThreadQueueInput, E>;
+  },
+): Promise<AtomCommandResult<unknown, E>> {
+  const { thread, draft } = input;
+  const failed = await saveComposerModes({
+    ...input,
+    runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
+    interactionMode: resolveProviderInteractionMode(
+      input.provider,
+      draft.interactionMode ?? thread.interactionMode,
+    ),
+  });
+  if (failed !== null) return failed;
   return input.resumeQueue({
-    environmentId: input.thread.environmentId,
-    input: { threadId: input.thread.id },
+    environmentId: thread.environmentId,
+    input: { threadId: thread.id },
   });
 }

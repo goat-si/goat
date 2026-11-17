@@ -1,5 +1,6 @@
 import { EnvironmentId, ProviderInstanceId, RunId, ThreadId } from "@goat/contracts";
 import type { AtomCommandResult } from "@goat/client-runtime/state/runtime";
+import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -98,6 +99,7 @@ function ResumeQueueButton(props: {
   readonly persistSettings: (input: {
     readonly runtimeMode: string;
   }) => Promise<AtomCommandResult<void, unknown>>;
+  readonly setThreadError?: (threadId: ThreadId, error: string | null) => void;
 }) {
   const { onResume } = useComposerResume({
     environmentId: EnvironmentId.make("environment:test"),
@@ -119,7 +121,7 @@ function ResumeQueueButton(props: {
     persistThreadSettingsForNextTurn: props.persistSettings,
     clearUsageLimitsFor: () => undefined,
     scrollToEnd: () => undefined,
-    setThreadError: () => undefined,
+    setThreadError: props.setThreadError ?? (() => undefined),
   });
   return (
     <button type="button" onClick={() => void onResume()}>
@@ -144,4 +146,25 @@ it("regression goat#3656: saves the composer's runtime mode before releasing a h
 
   expect(await startedTurn.promise).toEqual({ threadId: threadA });
   expect(persisted).toEqual(["full-access"]);
+});
+
+it("a refused runtime mode resumes nothing and shows the refusal", async () => {
+  setup();
+  const dispatched: Array<unknown> = [];
+  state.startedTurn = { promise: Promise.resolve(undefined), resolve: (v) => dispatched.push(v) };
+  const shown = deferred<string | null>();
+  const refusal = "This thread has a turn running.";
+  await using screen = await render(
+    <ResumeQueueButton
+      persistSettings={async () => AsyncResult.failure(Cause.fail(new Error(refusal)))}
+      setThreadError={(_threadId, error) => {
+        if (error !== null) shown.resolve(error);
+      }}
+    />,
+  );
+
+  await screen.getByRole("button", { name: "Resume" }).click();
+
+  expect(await shown.promise).toBe(refusal);
+  expect(dispatched).toEqual([]);
 });

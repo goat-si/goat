@@ -40,6 +40,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { assetImageSource } from "../../lib/assetImageSource";
 import { beginQueuedRunEdit, useQueuedRunEdit } from "../../state/queued-run-edit";
+import { useComposerDraftSettings } from "../../state/use-composer-drafts";
 import { environmentThreadDetails, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
@@ -135,6 +136,19 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
     label: "resume queue",
     reportFailure: false,
   });
+  const setRuntimeModeCommand = useAtomCommand(threadEnvironment.setRuntimeMode, {
+    label: "set thread runtime mode",
+    reportFailure: false,
+  });
+  const setInteractionModeCommand = useAtomCommand(threadEnvironment.setInteractionMode, {
+    label: "set thread interaction mode",
+    reportFailure: false,
+  });
+  const threadShell = useQuietThreadShell(scopeThreadRef(target.environmentId, target.threadId));
+  const composerSettings = useComposerDraftSettings(threadKey);
+  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(target.environmentId));
+  const composerInstanceId = (composerSettings.modelSelection ?? threadShell?.modelSelection)
+    ?.instanceId;
   const [resuming, setResuming] = useState(false);
   const [busyRunId, setBusyRunId] = useState<RunId | null>(null);
   const busyRef = useRef(false);
@@ -270,11 +284,18 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
             label="Resume queue"
             disabled={resuming || busyRunId !== null}
             onPress={async () => {
-              if (busyRef.current) return;
+              if (busyRef.current || threadShell === null) return;
               busyRef.current = true;
               setResuming(true);
               const result = await resumeHeldQueue({
-                thread: { environmentId: target.environmentId, id: target.threadId },
+                thread: threadShell,
+                draft: composerSettings,
+                provider: serverConfig?.providers.find(
+                  (provider) => provider.instanceId === composerInstanceId,
+                ),
+                createdAt: new Date().toISOString(),
+                setRuntimeMode: setRuntimeModeCommand,
+                setInteractionMode: setInteractionModeCommand,
                 resumeQueue: resumeQueueCommand,
               });
               busyRef.current = false;
