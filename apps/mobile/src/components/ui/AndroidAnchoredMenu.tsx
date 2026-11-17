@@ -43,9 +43,9 @@ export type AndroidAnchoredMenuProps = {
 };
 
 /**
- * An open counts from its request until it settles, once: a choice, Back, an outside tap, an anchor
- * that cannot be measured, or the menu unmounting, whichever comes first. Each request has a token,
- * so only the latest one's measurement can open or settle the menu.
+ * Requests are coalesced: a later request replaces the earlier one, and only the latest request's
+ * measurement can open or close the menu. One close settles the current open: a choice, Back, an
+ * outside tap, an anchor that cannot be measured, or the menu unmounting, whichever comes first.
  */
 function useOwedOpen(onClose: (() => void) | undefined) {
   const owed = useRef<number | null>(null);
@@ -94,7 +94,7 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
   const open = () => {
     const token = owed.request();
     if (anchorNode === null) {
-      owed.settle();
+      close();
       return;
     }
     // A mounted host view always calls back, with zeros on failure; only an unmounted one does not.
@@ -102,7 +102,7 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
       // Closed, unmounted or superseded meanwhile, or nothing to anchor to: no menu.
       if (!owed.isCurrent(token)) return;
       if (width <= 0 || height <= 0) {
-        owed.settle();
+        close();
         return;
       }
       setAnchor({ x, y, width, height, keyboardWasVisible: keyboardVisible });

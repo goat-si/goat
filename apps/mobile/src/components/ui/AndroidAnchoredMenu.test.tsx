@@ -216,3 +216,19 @@ it("lets only the latest request open or settle the menu when an earlier measure
   expect(menu.items()).toEqual([]);
   expect(menu.closed).toHaveBeenCalledTimes(1);
 });
+
+it("closes a shown menu, and tells its owner once, when a newer request cannot be measured (#3611)", async () => {
+  await using menu = await mountMenu();
+  await menu.request();
+  await menu.measure(300, 48);
+  expect(menu.items()).toEqual(["Hide"]);
+  // The row asks again while the menu is up, and this time it cannot be measured.
+  await menu.request();
+  await menu.measure(0, 0);
+  expect(menu.items()).toEqual([]);
+  expect(menu.closed).toHaveBeenCalledTimes(1);
+  // Nothing is left open to report.
+  await menu.press("Outside the menu");
+  await menu.removeRow();
+  expect(menu.closed).toHaveBeenCalledTimes(1);
+});
