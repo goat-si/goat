@@ -183,8 +183,8 @@ G13 `goat-copy`, G14 `launch-watch`.
 ### `preparation-orphans` 아무것도 준비하지 않는 "preparing" run
 
 - 커밋: #3621
-- 경로: `apps/server/src/orchestration-v2/goat/{PreparationClaims,PreparationOrphans,PreparationFailure}.ts`, `apps/server/src/orchestration-v2/{ThreadLaunchService,Orchestrator,runtimeLayer}.ts`
-- 정책: GOAT 전용. 준비 fiber는 첫 단계로 run claim을 잡고, 그 claim 안에서 모든 작업 공간 전략의 run을 다시 읽는다. 검사는 같은 claim을 잡고 3분 넘게 "preparing"에 남은 run을 `prepared-run.fail`로 실패시켜 Retry가 되게 한다 (#3595). upstream이 `schedulePreparation`을 바꾸면 받고 claim(`claims.whileClaimed`)과 재조회만 다시 얹는다. `Orchestrator.ts`의 hook은 import 하나와 `dispatchPreparedRunFail`의 두 `title`(`preparationFailureTitle`)뿐이다. 검사 layer는 `runtimeLayer.ts`의 `layerProduction`에 있고 launch 서비스와 같은 `PreparationClaims.layer` 값을 받아야 claim을 함께 쓴다.
+- 경로: `apps/server/src/orchestration-v2/goat/{PreparationClaims,PreparationOrphans,PreparationFailure}.ts`, `apps/server/src/orchestration-v2/{ThreadLaunchService,Orchestrator,runtimeLayer}.ts`, `apps/server/src/mcp/OrchestratorMcpService.ts`
+- 정책: GOAT 전용. 준비 fiber는 첫 단계로 run claim을 잡고, 그 claim 안에서 모든 작업 공간 전략의 run을 다시 읽는다. 검사는 같은 claim을 잡고 3분 넘게 "preparing"에 남은 run을 `prepared-run.fail`로 실패시켜 Retry가 되게 한다 (#3595). run을 커밋하는 호출(launch, Retry, 위임)은 dispatch 전부터 준비 fiber가 claim을 잡거나 줄을 설 때까지 스레드에 pending 표시를 둔다. upstream이 `schedulePreparation`, `launch`, `retryPreparation`, 위임 `taskCreate`를 바꾸면 받고 `forkClaimed`, `claims.pending`, `preparationPending` hook과 재조회만 다시 얹는다. `Orchestrator.ts`의 hook은 import 하나와 `dispatchPreparedRunFail`의 두 `title`(`preparationFailureTitle`)뿐이다. 검사 layer는 `runtimeLayer.ts`의 `layerProduction`에 있고 launch 서비스와 같은 `PreparationClaims.layer` 값을 받아야 claim을 함께 쓴다.
 
 ### `remote-reports` 원격 보고와 원격 위임
 
