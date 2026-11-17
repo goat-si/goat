@@ -25,6 +25,18 @@ const MOVED =
 const UNREAD =
   "The terminal could not be started because GOAT could not read the thread's worktree. Try again.";
 
+/** Cleared for GOAT's own setup terminal, which opens before its thread is bound to the folder. */
+const CheckBinding = Context.Reference<boolean>(
+  "goat/terminal/TerminalThreadWorktree/CheckBinding",
+  {
+    defaultValue: () => true,
+  },
+);
+
+/** Runs a setup terminal's request without the moved-worktree check. */
+export const withoutBindingCheck = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.provideService(effect, CheckBinding, false);
+
 /**
  * A person's request that waited for its worktree starts nothing when the thread has left that
  * worktree or is gone, or when that cannot be checked.
@@ -40,7 +52,7 @@ export const refuseMovedWorktree = (
 ) => {
   const requested = request.worktreePath;
   if (!requested) return Effect.void;
-  return worktrees.current(request.threadId).pipe(
+  const check = worktrees.current(request.threadId).pipe(
     Effect.catch((error) =>
       Effect.logWarning("A waiting terminal was not started: its thread's worktree is unreadable", {
         threadId: request.threadId,
@@ -61,7 +73,8 @@ export const refuseMovedWorktree = (
               terminalId: request.terminalId,
             }),
           );
-        if (current.value !== null && resolve(current.value) === resolve(requested))
+        // A thread not bound to a worktree yet has not moved; only one bound elsewhere has.
+        if (current.value === null || resolve(current.value) === resolve(requested))
           return Effect.void;
         return Effect.logWarning(
           "A waiting terminal was not started: its thread moved to another worktree",
@@ -74,4 +87,5 @@ export const refuseMovedWorktree = (
       },
     ),
   );
+  return Effect.withFiber((fiber) => (fiber.getRef(CheckBinding) ? check : Effect.void));
 };

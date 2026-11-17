@@ -105,6 +105,9 @@ const withSetupProject = <A, E, R>(
       logsDir: NodePath.join(root, "terminal-logs"),
       ptyAdapter: pty,
       processKillGraceMs: 1,
+      // No shell runs a program, so idle closes never read the host's process table.
+      subprocessInspector: () =>
+        Effect.succeed({ hasRunningSubprocess: false, childCommand: null, processIds: [] }),
       threadWorktree: {
         current: () => Effect.suspend(() => Effect.succeedSome(currentWorktree())),
       },
@@ -328,6 +331,70 @@ it.live(
               pty.spawnInputs.map((input) => input.cwd),
               [restored.worktreePath],
             );
+          }).pipe(Effect.provide(ThreadWorkspace.layer.pipe(Layer.provideMerge(layer)))),
+      );
+    }),
+);
+
+/** A person's request for the setup terminal itself, with the pid it got. */
+const askSetupTerminal = (
+  terminals: TerminalManager.TerminalManager["Service"],
+  person: "open" | "restart",
+  worktreePath: string,
+) =>
+  Effect.gen(function* () {
+    const input = {
+      threadId,
+      terminalId: "setup-setup",
+      cwd: worktreePath,
+      worktreePath,
+      cols: 80,
+      rows: 24,
+    };
+    return person === "open"
+      ? (yield* terminals.open(input)).pid
+      : (yield* terminals.restart(input)).pid;
+  });
+
+// Setup closing its own idle terminal is housekeeping: it overtakes no request that waited. (An
+// attach finds the setup's shell already restarted, so it waits for nothing; the manager's
+// lease-order tests cover an attach that waited.)
+it.live.each([
+  ["beforeSentinel", "open"],
+  ["beforeSentinel", "restart"],
+  ["beforeOpen", "open"],
+] as const)(
+  "a restore paused %s and a person's %s of its setup terminal get a shell once setup closed it",
+  ([window, person]) =>
+    Effect.gen(function* () {
+      const reached = yield* Deferred.make<void>();
+      const go = yield* Deferred.make<void>();
+      const gate = Deferred.succeed(reached, undefined).pipe(Effect.andThen(Deferred.await(go)));
+      const gates = window === "beforeOpen" ? { beforeOpen: gate } : { beforeSentinel: gate };
+      yield* withSetupProject(
+        { async: false, gates },
+        ({ worktreePath, pty, git, terminals, layer }) =>
+          Effect.gen(function* () {
+            yield* markUnfinished(worktreePath, git);
+            const service = yield* ThreadWorkspace.ThreadWorkspaceService;
+            const restore = yield* service
+              .restore({ threadId, mode: "restore" })
+              .pipe(Effect.forkChild);
+            yield* Deferred.await(reached);
+            const asked = yield* askSetupTerminal(terminals, person, worktreePath).pipe(
+              Effect.forkChild({ startImmediately: true }),
+            );
+            yield* Deferred.succeed(go, undefined);
+            const restored = yield* Fiber.join(restore);
+            const pid = yield* Fiber.join(asked);
+            assert.strictEqual(restored.setupScript, "started");
+            // The setup's shell, closed once setup finished, then the person's own.
+            assert.isTrue(pty.processes[0]?.killed);
+            assert.deepEqual(
+              pty.spawnInputs.map((input) => input.cwd),
+              [worktreePath, worktreePath],
+            );
+            assert.strictEqual(pid, pty.processes[1]?.pid);
           }).pipe(Effect.provide(ThreadWorkspace.layer.pipe(Layer.provideMerge(layer)))),
       );
     }),

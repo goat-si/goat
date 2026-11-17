@@ -6,8 +6,13 @@ import {
 import { makeCloseOnSettle } from "./TerminalSettlement.ts";
 import { normalizedRuntimeEnv } from "./TerminalLaunchEnvironment.ts";
 import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto digest is effectful; a sync hash keeps historyPath a plain function.
-import * as NodeCrypto from "node:crypto";
+import {
+  encodedHistoryThreadPart,
+  hashId,
+  hashedHistoryThreadPart,
+  joinHistoryFileName,
+  legacySafeThreadId,
+} from "./historyFileNames.ts";
 
 import {
   createAgentTerminalState,
@@ -34,6 +39,7 @@ export { BoundedTerminalHistory } from "./BoundedTerminalHistory.ts";
 
 import { makeTerminalLeaseOrder, type TerminalLeaseBusy } from "./terminalLeaseOrder.ts";
 import { refuseMovedWorktree, TerminalThreadWorktree } from "./TerminalThreadWorktree.ts";
+import { registerTerminalProbe } from "./terminalProbes.ts";
 import {
   DEFAULT_TERMINAL_ID,
   DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
@@ -687,27 +693,6 @@ const windowsProcessTableSnapshot = Effect.fn("terminal.windowsProcessTableSnaps
   });
   return processTableSnapshotFromProcesses(processes);
 });
-
-function legacySafeThreadId(threadId: string): string {
-  return threadId.replace(/[^a-zA-Z0-9._-]/g, "_");
-}
-
-function encodedHistoryThreadPart(threadId: string): string {
-  return `terminal_${Base64Url.encode(threadId)}`;
-}
-
-function hashId(id: string): string {
-  return NodeCrypto.createHash("sha256").update(id).digest("base64url");
-}
-
-// "." is outside the base64url alphabet, so a hashed name can never collide with an encoded one.
-function hashedHistoryThreadPart(threadId: string): string {
-  return `terminal_sha256.${hashId(threadId)}`;
-}
-
-function joinHistoryFileName(threadPart: string, terminalPart: string | null): string {
-  return terminalPart === null ? `${threadPart}.log` : `${threadPart}_${terminalPart}.log`;
-}
 
 function toSessionKey(threadId: string, terminalId: string): string {
   return `${threadId}\u0000${terminalId}`;
@@ -1755,6 +1740,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     eventType: "started" | "restarted",
     authorize: Effect.Effect<void, E> = Effect.void,
   ): Effect.fn.Return<void, E> {
+    yield* supersede(session.threadId, session.terminalId, "start");
     yield* stopProcess(session, authorize);
     yield* Effect.annotateCurrentSpan({
       "terminal.thread_id": session.threadId,
@@ -1941,7 +1927,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     const closedEventSequence = Option.isSome(session) ? session.value.eventSequence + 1 : 0;
 
     yield* authorize;
-    yield* supersede(threadId, terminalId);
     if (Option.isSome(session)) {
       yield* stopProcess(session.value, authorize);
       resetAgentTerminal(session.value);
@@ -2190,10 +2175,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     ),
   );
 
-  const { attempt, supersede, tryTerminalLease, withThreadLockAndLease } = makeTerminalLeaseOrder({
+  const leaseOrder = makeTerminalLeaseOrder({
     resolve: (cwd) => path.resolve(cwd),
     withThreadLock,
   });
+  const { attempt, supersede, tryTerminalLease, withThreadLockAndLease } = leaseOrder;
 
   const openWithWorkspaceLease = Effect.fn("terminal.openLocked")(function* <
     E extends OrchestratorMcpFailure = never,
@@ -2347,21 +2333,14 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   /** A person's request that waited must not start a shell in a worktree its thread has left. */
   const stillBound = (input: TerminalOpenInput) =>
     Effect.flatMap(attempt, (run) =>
-      run === "rerun" && options.threadWorktree !== undefined
+      run !== "first" && options.threadWorktree !== undefined
         ? refuseMovedWorktree(options.threadWorktree, (folder) => path.resolve(folder), input)
         : Effect.void,
     );
 
   /** What a request overtaken while it waited returns: the terminal as it is now. */
-  const currentOr = <B, E>(
-    input: { readonly threadId: string; readonly terminalId: string },
-    gone: Effect.Effect<B, E>,
-  ): Effect.Effect<TerminalSessionSnapshot | B, E> =>
-    Effect.flatMap(
-      getSession(input.threadId, input.terminalId),
-      (session): Effect.Effect<TerminalSessionSnapshot | B, E> =>
-        Option.isSome(session) ? Effect.succeed(snapshot(session.value)) : gone,
-    );
+  const current = (input: { readonly threadId: string; readonly terminalId: string }) =>
+    Effect.map(getSession(input.threadId, input.terminalId), Option.map(snapshot));
 
   const notFound = (input: { readonly threadId: string; readonly terminalId: string }) =>
     Effect.fail(
@@ -2373,7 +2352,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       input,
       input.worktreePath ?? input.cwd,
       stillBound(input).pipe(Effect.andThen(openWithWorkspaceLease(input)), Effect.map(snapshot)),
-      currentOr(input, gone),
+      current(input),
+      gone,
     );
 
   const open: TerminalManager["Service"]["open"] = (input) =>
@@ -2941,10 +2921,12 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
               Effect.andThen(restartResolved(resolved)),
               Effect.map(snapshot),
             ),
-            currentOr(resolved, notFound(resolved)),
+            current(resolved),
+            notFound(resolved),
           ),
         ),
       ),
+      true,
     );
 
   const close: TerminalManager["Service"]["close"] = (input) =>
@@ -2952,11 +2934,12 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       input.threadId,
       Effect.gen(function* () {
         if (input.terminalId) {
+          yield* supersede(input.threadId, input.terminalId, "close");
           yield* closeSession(input.threadId, input.terminalId, input.deleteHistory === true);
           return;
         }
 
-        yield* supersede(input.threadId);
+        yield* supersede(input.threadId, undefined, "close");
         const threadSessions = yield* sessionsForThread(input.threadId);
         yield* Effect.forEach(
           threadSessions,
@@ -3052,6 +3035,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         input,
         input.cwd,
         openWithWorkspaceLease(input, input.owner, input.authorize),
+        Effect.succeedNone,
         notFound(input),
       ),
     mutate: Effect.fn("terminal.agentMutateLocked")(function* (
@@ -3084,6 +3068,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
               input.owner,
               input.authorize,
             ),
+            Effect.succeedNone,
             Effect.fail(
               new OrchestratorMcpFailure({
                 code: "conflict",
@@ -3093,12 +3078,13 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           );
           return;
         case "close":
-          return yield* closeSession(input.threadId, input.terminalId, false, input.authorize);
+          yield* closeSession(input.threadId, input.terminalId, false, input.authorize);
+          return yield* supersede(input.threadId, input.terminalId, "close");
       }
     }),
   });
 
-  return TerminalManager.of({
+  const service = TerminalManager.of({
     ...agentOperations,
     open,
     getShell,
@@ -3116,6 +3102,14 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     subscribe,
     subscribeMetadata,
   });
+  registerTerminalProbe(
+    service,
+    Effect.sync(() => ({
+      waiting: leaseOrder.waitingCount(),
+      listeners: terminalEventListeners.size,
+    })),
+  );
+  return service;
 });
 
 export const layer = (deriveConfigMap: typeof deriveProviderInstanceConfigMap) =>

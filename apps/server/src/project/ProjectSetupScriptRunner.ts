@@ -19,6 +19,7 @@ import * as Schema from "effect/Schema";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
+import { withoutBindingCheck } from "../terminal/TerminalThreadWorktree.ts";
 import * as ProjectService from "./ProjectService.ts";
 import * as GoatProjectFileLoader from "./GoatProjectFileLoader.ts";
 import { makeSetupScriptResolver } from "./projectSetupScripts.ts";
@@ -499,8 +500,8 @@ export const make = Effect.gen(function* () {
     // Restarted before the watchers subscribe, so the old shell's end settles nothing of this run;
     // a prompt the new shell printed before them is covered by the readiness watcher's quiet fallback.
     if (input.freshShell === true)
-      yield* terminalManager
-        .restart({
+      yield* withoutBindingCheck(
+        terminalManager.restart({
           threadId: input.threadId,
           terminalId,
           cwd,
@@ -508,17 +509,17 @@ export const make = Effect.gen(function* () {
           cols: FRESH_SHELL_COLS,
           rows: FRESH_SHELL_ROWS,
           env: shellEnv,
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ProjectSetupScriptOperationError({
-                ...errorContext,
-                operation: "openTerminal",
-                cause,
-              }),
-          ),
-        );
+        }),
+      ).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProjectSetupScriptOperationError({
+              ...errorContext,
+              operation: "openTerminal",
+              cause,
+            }),
+        ),
+      );
     const observe = input.observeCompletion;
     const completionToken = observe ? (yield* random.uuidV4()).replaceAll("-", "") : null;
     // Registered before the open: an open that waits for a folder a restore holds comes back with the
@@ -552,30 +553,31 @@ export const make = Effect.gen(function* () {
       onStartupPrompt: observed?.flushPartialLine ?? Effect.void,
     });
     const { completionShell, commandLine } = yield* Effect.gen(function* () {
-      const shell = yield* terminalManager
-        .open({
+      // Setup may open before its thread is bound to this worktree, as a pull request's does.
+      const shell = yield* withoutBindingCheck(
+        terminalManager.open({
           threadId: input.threadId,
           terminalId,
           stopOnSettle: script.stopOnSettle ?? false,
           cwd,
           worktreePath: threadWorktreePath,
           env: shellEnv,
-        })
-        .pipe(
-          Effect.andThen(() =>
-            terminalManager
-              .getShell({ threadId: input.threadId, terminalId })
-              .pipe(Effect.catchTags({ TerminalNotRunningError: () => Effect.succeed(null) })),
-          ),
-          Effect.mapError(
-            (cause) =>
-              new ProjectSetupScriptOperationError({
-                ...errorContext,
-                operation: "openTerminal",
-                cause,
-              }),
-          ),
-        );
+        }),
+      ).pipe(
+        Effect.andThen(() =>
+          terminalManager
+            .getShell({ threadId: input.threadId, terminalId })
+            .pipe(Effect.catchTags({ TerminalNotRunningError: () => Effect.succeed(null) })),
+        ),
+        Effect.mapError(
+          (cause) =>
+            new ProjectSetupScriptOperationError({
+              ...errorContext,
+              operation: "openTerminal",
+              cause,
+            }),
+        ),
+      );
       if (shell === null) {
         yield* observed?.abandon ?? Effect.void;
         return { completionShell: null, commandLine: null };
