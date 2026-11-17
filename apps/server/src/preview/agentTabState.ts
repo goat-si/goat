@@ -183,7 +183,7 @@ const within = <A>(work: Promise<A>, ms: number): Promise<A | null> =>
 
 /**
  * Applies a viewport setting and reports the size the page then has, with fill's caveat. A
- * desktop tab reports what the desktop drew, else the last size measured, never a default.
+ * desktop tab reports what the desktop drew; a failed or overtaken read reports no size.
  */
 export const measuredResize = async (
   tab: {
@@ -191,6 +191,7 @@ export const measuredResize = async (
     readonly page: { viewportSize(): Size | null };
     readonly setting: PreviewViewportSetting;
     readonly desktopViewport: Size | null;
+    readonly desktopViewportChanges: number;
     readonly desktopResize: PromiseWithResolvers<void>;
   },
   fallback: Size,
@@ -216,8 +217,10 @@ export const measuredResize = async (
   // because a page can keep another size than the one asked for.
   if (from?.width !== to?.width || from?.height !== to?.height)
     await within(drawn, Math.min(DESKTOP_RESIZE_WAIT_MS, remainingMs() / 2));
-  const viewport = (await within(desktop.measure(), remainingMs())) ?? tab.desktopViewport;
-  if (!viewport) throw notMeasured();
+  const changes = tab.desktopViewportChanges;
+  const viewport = await within(desktop.measure(), remainingMs());
+  // The size from before the resize, or one the page changed under, is not what it gave.
+  if (!viewport || tab.desktopViewportChanges !== changes) throw notMeasured();
   return (setting: PreviewViewportSetting) => ({
     viewport,
     ...fillNote(setting, before ?? undefined, viewport),

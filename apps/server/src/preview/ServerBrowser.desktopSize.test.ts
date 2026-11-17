@@ -160,30 +160,56 @@ const openDesktopTab = Effect.gen(function* () {
   return { status, resize };
 });
 
+it.effect("a desktop tab's resize reports the size the desktop draws", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      sizeAnswer = null;
+      const { status, resize } = yield* openDesktopTab;
+
+      const freeform = yield* resize({ mode: "freeform", width: 900, height: 600 }, 900, 600);
+      expect(freeform.viewport).toEqual({ width: 900, height: 600 });
+      // A page can keep another size than the fixed one asked for; both report the page's.
+      const kept = yield* resize({ mode: "freeform", width: 844, height: 390 }, 560, 760);
+      expect(kept.viewport).toEqual({ width: 560, height: 760 });
+      expect(yield* status).toEqual({ width: 560, height: 760 });
+      expect((yield* resize({ mode: "fill" }, 1234, 700)).viewport).toEqual({
+        width: 1234,
+        height: 700,
+      });
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 it.effect(
-  "a desktop tab's resize reports the size the desktop draws, else the last one measured",
+  "a desktop tab's resize whose read fails or meets a page resize gives no old size as the new one",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
         sizeAnswer = null;
-        const { status, resize } = yield* openDesktopTab;
-
-        const freeform = yield* resize({ mode: "freeform", width: 900, height: 600 }, 900, 600);
-        expect(freeform.viewport).toEqual({ width: 900, height: 600 });
-        // A page can keep another size than the fixed one asked for; both report the page's.
+        const { resize } = yield* openDesktopTab;
+        const desktop = desktopPages.at(-1)!;
         const kept = yield* resize({ mode: "freeform", width: 844, height: 390 }, 560, 760);
         expect(kept.viewport).toEqual({ width: 560, height: 760 });
-        expect(yield* status).toEqual({ width: 560, height: 760 });
-        // A read that fails after the resize reports the last size measured.
+        const messageOf = (error: unknown) => String((error as { message?: string }).message);
+
         sizeAnswer = failReads;
-        const unread = yield* resize({ mode: "freeform", width: 1000, height: 700 }, 1000, 700);
-        expect(unread.viewport).toEqual({ width: 560, height: 760 });
-        expect(yield* status).toEqual({ width: 560, height: 760 });
+        const unread = yield* resize(
+          { mode: "freeform", width: 1000, height: 700 },
+          1000,
+          700,
+        ).pipe(Effect.flip);
+        expect(messageOf(unread)).toContain("The setting is applied");
+
+        // The page resizes again while the size is read, so that answer may already be old.
+        sizeAnswer = async () => {
+          await desktop.sessions[0]!.emitAsync("Page.frameResized");
+          return { result: { value: { width: 1100, height: 700 } } };
+        };
+        const raced = yield* resize({ mode: "freeform", width: 1100, height: 700 }, 1100, 700).pipe(
+          Effect.flip,
+        );
+        expect(messageOf(raced)).toContain("The setting is applied");
         sizeAnswer = null;
-        expect((yield* resize({ mode: "fill" }, 1234, 700)).viewport).toEqual({
-          width: 1234,
-          height: 700,
-        });
       }),
     ).pipe(Effect.provide(layer)),
 );
