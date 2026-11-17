@@ -14,7 +14,7 @@ import { TestClock } from "effect/testing";
 import { vi } from "vite-plus/test";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import { CaptureEventQueue } from "./ClaudeAdapterV2.observations.testkit.ts";
-import { makeClaudeTestTurnInput } from "./ClaudeTestInput.testkit.ts";
+import { CLAUDE_TEST_RUNTIME_POLICY, makeClaudeTestTurnInput } from "./ClaudeTestInput.testkit.ts";
 import { makeWakeHarnessWithOptions } from "./ClaudeWakeHarness.testkit.ts";
 
 vi.mock("effect/Queue", async (importOriginal) => {
@@ -197,7 +197,7 @@ it.effect("records the model reported by Claude init on the completed delegated 
   }).pipe(Effect.scoped, Effect.provide(layer)),
 );
 
-const startBackgroundTurn = (attempt: string) =>
+const startBackgroundTurn = (attempt: string, interactionMode: "default" | "plan" = "default") =>
   Effect.gen(function* () {
     const harness = yield* makeWakeHarnessWithOptions();
     yield* harness.runtime.startTurn(
@@ -208,6 +208,7 @@ const startBackgroundTurn = (attempt: string) =>
         attemptId: RunAttemptId.make(attempt),
         text: "Build it",
         attachments: [],
+        runtimePolicy: { ...CLAUDE_TEST_RUNTIME_POLICY, interactionMode },
       }),
     );
     const system = (value: object) =>
@@ -316,4 +317,42 @@ it.effect("names no tool call it was not given, has forgotten, or evicted for a 
     // The launch memory evicted it, but the live roster entry keeps it.
     assert.equal(latest("live")?.nativeItemId, "toolu_live");
   }).pipe(Effect.scoped, Effect.provide(layer)),
+);
+
+// The wait writes only the awaited flag, and only on its own thread's roster; the server then
+// refuses a wait that matched nothing (ThreadManagementService awaitBackgroundTasks).
+it.effect.each(["default", "plan"] as const)(
+  "a %s-mode wait sets nothing on a task its thread's roster does not hold",
+  (mode) =>
+    Effect.gen(function* () {
+      const { harness, started, latest } = yield* startBackgroundTurn("wait-" + mode, mode);
+      const awaitBackgroundTasks = harness.runtime.awaitBackgroundTasks;
+      if (awaitBackgroundTasks === undefined) throw new Error("Claude must expose the wait.");
+      yield* started("task-held", "toolu_held", true);
+      const otherThread = {
+        ...harness.providerThread,
+        nativeThreadRef: { driver: "claudeAgent", nativeId: "other-native", strength: "strong" },
+      } as const;
+      const fromOther = yield* awaitBackgroundTasks({
+        providerThread: otherThread,
+        taskIds: ["task-held"],
+        awaited: true,
+      });
+      const unknown = yield* awaitBackgroundTasks({
+        providerThread: harness.providerThread,
+        taskIds: ["not-on-roster"],
+        awaited: true,
+      });
+      assert.deepEqual([fromOther.matched, unknown.matched], [[], []]);
+      yield* harness.awaitEventsRecorded;
+      assert.isUndefined(latest("task-held")?.awaited);
+      // The thread that holds it can mark it, so the check above can see a mark.
+      yield* awaitBackgroundTasks({
+        providerThread: harness.providerThread,
+        taskIds: ["task-held"],
+        awaited: true,
+      });
+      yield* harness.awaitEventsRecorded;
+      assert.isTrue(latest("task-held")?.awaited);
+    }).pipe(Effect.scoped, Effect.provide(layer)),
 );
