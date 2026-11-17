@@ -13,6 +13,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { HubOcx, type HubOcxError, type OcxOutput, SYNC_EXIT } from "./HubOcx.ts";
 import { OpenCodexUpdateHost } from "./OpenCodexUpdateHost.ts";
+import { runAsServerJob } from "./serverJob.ts";
 import { CONTRACTS_ARGS, OCX_CONTRACT, probeContracts, syncHomeOf } from "./ocxContracts.ts";
 import {
   childAliases,
@@ -125,6 +126,7 @@ const make = Effect.gen(function* () {
   const updating = yield* Ref.make(false);
   // One sync at a time, and none while an update window installs.
   const permit = yield* Semaphore.make(1);
+  const serviceScope = yield* Effect.scope;
 
   /** One row of the update window's report, which is also what clients watch while it runs. */
   const putUpdate = (row: OpenCodexSyncMember) =>
@@ -301,8 +303,9 @@ const make = Effect.gen(function* () {
     return { trigger: "plan", checkedAt, members } satisfies OpenCodexSyncReport;
   });
 
+  // When the caller stops waiting, the machine being synced finishes and no further machine starts.
   const run = (scope: McpInvocationScope, permits: SyncPermits = everyone) =>
-    permit.withPermit(
+    runAsServerJob(permit, serviceScope, "OpenCodexSync.run", (stopped) =>
       Effect.gen(function* () {
         const checkedAt = yield* Clock.currentTimeMillis;
         const initial: OpenCodexSyncReport = { trigger: "manual", checkedAt, members: [] };
@@ -326,6 +329,16 @@ const make = Effect.gen(function* () {
         const members = (yield* readPlan(scope, permits)).map(({ member }) => member);
         yield* SubscriptionRef.set(report, { ...initial, members });
         const perform = Effect.fn("OpenCodexSync.perform")(function* (member: OpenCodexSyncMember) {
+          if (yield* stopped) {
+            const at = yield* Clock.currentTimeMillis;
+            return yield* replace({
+              ...member,
+              state: "skipped",
+              restartCodex: false,
+              reason: "interrupted",
+              at,
+            });
+          }
           yield* replace({ ...member, state: "syncing" });
           const action = syncOne(member.alias, scope, permits);
           const done = yield* member.alias === null

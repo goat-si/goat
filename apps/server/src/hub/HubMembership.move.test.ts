@@ -1,6 +1,8 @@
 import { expect, it } from "@effect/vitest";
 import { HubDeviceMcpResult } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 
 import { PINNED, scope, setup, threadScope } from "./HubMembership.testkit.ts";
@@ -297,5 +299,72 @@ it.effect(
       const again = yield* hub.membership.move(scope, { ...move, decisionId: asked.decisionId! });
       expect(again.message).toContain("already linked");
       expect(hub.calls.filter((call) => call.startsWith("home link add"))).toHaveLength(1);
+    }),
+);
+
+/** Runs a move as a caller would; `stop` ends that caller the way a cancel or dropped request does. */
+const startMove = (hub: Effect.Success<ReturnType<typeof setup>>, input: typeof move) =>
+  Effect.gen(function* () {
+    const fiber = yield* hub.membership
+      .move(scope, input)
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    return { stop: Fiber.interrupt(fiber) };
+  });
+// The next membership change waits on the permit a running move holds until it finishes.
+const afterMoves = (hub: Effect.Success<ReturnType<typeof setup>>) =>
+  Effect.exit(hub.membership.move(scope, { fromAlias: "not an alias", toAlias: "x" }));
+
+it.effect("a move whose caller stops after the old link is revoked still links the new alias", () =>
+  Effect.gen(function* () {
+    const revoked = yield* Deferred.make<void>();
+    const gate = yield* Deferred.make<void>();
+    const hub = yield* setup({
+      linked: ["mini"],
+      pin: PINNED,
+      afterRevoke: Deferred.succeed(revoked, undefined).pipe(Effect.andThen(Deferred.await(gate))),
+    });
+    const moving = yield* startMove(hub, move);
+    yield* Deferred.await(revoked);
+    // The caller is gone here, with the device routing through no hub.
+    yield* moving.stop;
+    yield* Deferred.succeed(gate, undefined);
+    yield* afterMoves(hub);
+    expect(hub.calls).toContain(`home link add pen-mini --expect-fingerprint ${PINNED} --json`);
+    expect((yield* hub.audit).filter(({ action }) => action === "hub.move").at(-1)).toMatchObject({
+      target: "pen-mini",
+      outcome: "child",
+    });
+  }),
+);
+
+// A move that would ask an owner first, and an owner's move with the pinned key that would not.
+const profiles = {
+  "asking an owner": asking,
+  "an owner's pinned move": { linked: ["mini"], pin: PINNED },
+};
+it.effect.each(["asking an owner", "an owner's pinned move"] as const)(
+  "a move whose caller stops before routing changes (%s) is refused, moves nothing and asks no one",
+  (profile) =>
+    Effect.gen(function* () {
+      const probing = yield* Deferred.make<void>();
+      const gate = yield* Deferred.make<void>();
+      const hub = yield* setup({
+        ...profiles[profile],
+        duringProbe: Deferred.succeed(probing, undefined).pipe(
+          Effect.andThen(Deferred.await(gate)),
+        ),
+      });
+      const moving = yield* startMove(hub, move);
+      yield* Deferred.await(probing);
+      yield* moving.stop;
+      yield* Deferred.succeed(gate, undefined);
+      yield* afterMoves(hub);
+      expect(hub.calls.filter((call) => /revoke|disconnect|link add/.test(call))).toEqual([]);
+      expect((yield* hub.inboxItems).items).toEqual([]);
+      expect(
+        (yield* hub.audit).filter(
+          ({ action, target }) => action === "hub.move" && target === "pen-mini",
+        ),
+      ).toEqual([]);
     }),
 );
