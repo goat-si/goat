@@ -4,6 +4,7 @@ import {
   MemoryId,
   MemoryItem,
   MemoryHistoryPage,
+  MemoryRevisionId,
   MemorySpaceId,
   type AuthSessionState,
   type ServerConfig,
@@ -295,4 +296,192 @@ it.effect.each(["upsert", "invalidate"] as const)(
         expect(h.registry.get(h.edit)).toBeNull();
       }),
     ),
+);
+const revisionId = (n: number) =>
+  MemoryRevisionId.make(`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`);
+const since = "2026-10-14T00:00:00.000Z";
+const decodeItem = Schema.decodeUnknownSync(MemoryItem);
+const blocked = (
+  reason: "scanner_pending" | "secret_detected" | "forget_pending",
+  revision = revisionId(4),
+) =>
+  decodeItem({
+    memorySpaceId: space,
+    memoryId: id,
+    status: "blocked",
+    scope: { kind: "user" },
+    failureCode: reason,
+    pendingSync: false,
+    localAvailability: {
+      exposure: "held",
+      reasons: [reason],
+      deferred:
+        reason === "forget_pending"
+          ? []
+          : [
+              reason === "scanner_pending"
+                ? {
+                    kind: "scanner",
+                    state: "pending",
+                    reason,
+                    revisionId: revision,
+                    generation: 1,
+                    sinceAtUtc: since,
+                  }
+                : {
+                    kind: "scanner",
+                    state: "held",
+                    reason,
+                    revisionId: revision,
+                    generation: 1,
+                    sinceAtUtc: since,
+                  },
+              {
+                kind: "index",
+                state: "pending",
+                reason: "index_unavailable",
+                revisionId: revision,
+                generation: 1,
+                sinceAtUtc: since,
+              },
+            ],
+      cleanupPending: false,
+    },
+  });
+const otherRevision = decodeItem({
+  ...item,
+  revision: {
+    ...revision,
+    revisionId: revisionId(6),
+    operationId: revisionId(7),
+    payloadRef: revisionId(6),
+  },
+  payload: { ...payload, text: "Synthetic memory, saved elsewhere" },
+});
+const isStatus = (status: MemoryItem["status"]) => (value: Option.Option<MemoryItem>) =>
+  Option.isSome(value) && value.value.status === status;
+
+/** An edit opened on the visible revision 4, typed into or not, with its body read mounted. */
+const openEdit = Effect.fn(function* (typed: boolean) {
+  const h = yield* harness();
+  const source = h.memory.read(readTarget);
+  const body = Atom.make((get) => Option.flatten(AsyncResult.value(get(source))));
+  h.registry.mount(body);
+  yield* Deferred.succeed(yield* Queue.take(h.reads), item);
+  yield* waitFor(h.registry, body, Option.isSome);
+  h.registry.set(h.edit, {
+    text: "Synthetic memory",
+    memoryIds: [id],
+    expectedHeads: [revisionId(4)],
+  });
+  if (typed) h.registry.set(h.edit, { text: "Synthetic memory, edited", memoryIds: [id] });
+  const text = typed ? "Synthetic memory, edited" : "Synthetic memory";
+  /** A change signal, then the reread it causes, answered with reply. */
+  const change = Effect.fn(function* (kind: "upsert" | "invalidate", reply: MemoryItem) {
+    yield* Queue.offer(h.signals, signal(kind));
+    const reread = yield* Queue.take(h.reads);
+    // The decision waits for the reread: the draft is unchanged while it is pending.
+    expect(h.registry.get(h.edit)).toBe(text);
+    yield* Deferred.succeed(reread, reply);
+    yield* waitFor(h.registry, body, isStatus(reply.status));
+  });
+  return { ...h, body, text, change };
+});
+
+it.effect(
+  "an edited draft survives its own save's hub confirmation and the scanner's release",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* openEdit(true);
+        // The hub's confirmation re-projects this device's own revision as held for a re-scan.
+        yield* h.change("upsert", blocked("scanner_pending"));
+        expect(h.registry.get(h.edit)).toBe(h.text);
+        // The scanner releases the same revision.
+        yield* h.change("invalidate", item);
+        expect(h.registry.get(h.edit)).toBe(h.text);
+      }),
+    ),
+);
+
+it.effect.each([true, false])(
+  "a change signal whose reread shows the same visible revision keeps the draft (typed: %s)",
+  (typed) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* openEdit(typed);
+        yield* h.change("upsert", item);
+        expect(h.registry.get(h.edit)).toBe(h.text);
+      }),
+    ),
+);
+
+it.effect(
+  "an untouched draft is purged under the scanner hold, as the read-only body is hidden",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* openEdit(false);
+        yield* h.change("upsert", blocked("scanner_pending"));
+        yield* waitFor(h.registry, h.edit, (text) => text === null);
+        expect(h.registry.get(h.edit)).toBeNull();
+      }),
+    ),
+);
+
+it.effect.each([
+  { reread: "a different revision", reply: otherRevision },
+  { reread: "a detected secret", reply: blocked("secret_detected") },
+  { reread: "a pending forget hold", reply: blocked("forget_pending") },
+  { reread: "a re-scan of another revision", reply: blocked("scanner_pending", revisionId(6)) },
+])("a reread showing $reread purges an edited draft", ({ reply }) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* openEdit(true);
+      yield* h.change("upsert", reply);
+      yield* waitFor(h.registry, h.edit, (text) => text === null);
+      expect(h.registry.get(h.edit)).toBeNull();
+    }),
+  ),
+);
+
+it.effect("a re-scan that ends in a detected secret purges an edited draft", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* openEdit(true);
+      yield* h.change("upsert", blocked("scanner_pending"));
+      expect(h.registry.get(h.edit)).toBe(h.text);
+      yield* h.change("invalidate", blocked("secret_detected"));
+      yield* waitFor(h.registry, h.edit, (text) => text === null);
+      expect(h.registry.get(h.edit)).toBeNull();
+    }),
+  ),
+);
+
+it.effect("a reread that never answers purges an edited draft when it times out", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* openEdit(true);
+      yield* Queue.offer(h.signals, signal("upsert"));
+      yield* Queue.take(h.reads);
+      expect(h.registry.get(h.edit)).toBe(h.text);
+      yield* TestClock.adjust("1 minute");
+      yield* waitFor(h.registry, h.edit, (text) => text === null);
+      expect(h.registry.get(h.edit)).toBeNull();
+    }),
+  ),
+);
+
+it.effect("a draft written without a starting revision still purges on any change", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* harness();
+      const seen = h.registry.get(h.exposure);
+      h.registry.set(h.edit, { text: "Synthetic memory", memoryIds: [id] });
+      h.registry.set(h.edit, { text: "Synthetic memory, edited", memoryIds: [id] });
+      yield* Queue.offer(h.signals, signal("upsert"));
+      yield* waitFor(h.registry, h.exposure, (state) => state !== seen);
+      expect(h.registry.get(h.edit)).toBeNull();
+    }),
+  ),
 );
