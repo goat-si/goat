@@ -32,12 +32,12 @@ import {
   deriveMessagesTimelineRows,
   timelineEntryTurnFoldRunId,
   deriveMessagesTimelineRowsWithState,
-  shouldCollapseUserMessage,
   resolveAssistantMessageCopyState,
   type MessagesTimelineRow,
   workEntryDisplayLabel,
   liveWorkEntryLabel,
 } from "./MessagesTimeline.logic";
+import { shouldCollapseUserMessage } from "./userMessageCollapse";
 
 describe("resolveAssistantMessageCopyState", () => {
   it("copies the rendered representation of Codex directives", () => {
