@@ -81,3 +81,14 @@ export async function resumeThread<E>(input: {
   }
   return input.resumeQueue({ environmentId, input: { threadId: thread.id } });
 }
+
+/** The queue sheet's Resume queue: releases the held queue. */
+export function resumeHeldQueue<E>(input: {
+  readonly thread: { readonly environmentId: EnvironmentId; readonly id: ThreadId };
+  readonly resumeQueue: Command<ResumeThreadQueueInput, E>;
+}): Promise<AtomCommandResult<unknown, E>> {
+  return input.resumeQueue({
+    environmentId: input.thread.environmentId,
+    input: { threadId: input.thread.id },
+  });
+}

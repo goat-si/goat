@@ -51,6 +51,7 @@ import {
   resolveThreadQueueRowControls,
 } from "./threadQueueControlPresentation";
 import { threadDragGapOffset } from "./threadDragGap";
+import { resumeHeldQueue } from "./resume-thread";
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
 const REMOVE_ACTION_WIDTH = 76;
@@ -130,7 +131,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
   const promote = useAtomCommand(threadEnvironment.promoteQueuedRun, "promote queued message");
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun, "remove queued message");
   const resume = useAtomCommand(threadEnvironment.resumeThreadQueue, "resume queue");
-  const resumeHeldQueue = useAtomCommand(threadEnvironment.resumeThreadQueue, {
+  const resumeQueueCommand = useAtomCommand(threadEnvironment.resumeThreadQueue, {
     label: "resume queue",
     reportFailure: false,
   });
@@ -273,8 +274,8 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
               busyRef.current = true;
               setResuming(true);
               const result = await resumeHeldQueue({
-                ...target,
-                input: { threadId: target.threadId },
+                thread: { environmentId: target.environmentId, id: target.threadId },
+                resumeQueue: resumeQueueCommand,
               });
               busyRef.current = false;
               setResuming(false);
