@@ -407,4 +407,27 @@ it.layer(
       assert.strictEqual(ptyAdapter.spawnInputs.length, 2);
     }),
   );
+
+  it.effect(
+    "an open that only reused the shell still overtakes an older open waiting elsewhere",
+    () =>
+      Effect.gen(function* () {
+        const { manager, ptyAdapter } = yield* createManager();
+        const folder = yield* heldFolder;
+        const running = yield* manager.open(openInput({ cwd: folder.other }));
+        const holder = yield* folder.hold(Effect.void);
+        yield* Deferred.await(folder.held);
+        const older = yield* manager
+          .open(openInput({ cwd: folder.cwd }))
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        const newer = yield* manager.open(openInput({ cwd: folder.other }));
+        yield* Deferred.succeed(folder.release, undefined);
+        yield* Fiber.join(holder);
+        const fromOlder = yield* Fiber.join(older);
+        assert.strictEqual(newer.pid, running.pid);
+        assert.strictEqual(fromOlder.pid, running.pid);
+        assert.strictEqual(fromOlder.cwd, folder.other);
+        assert.strictEqual(ptyAdapter.spawnInputs.length, 1);
+      }),
+  );
 });
