@@ -614,3 +614,19 @@ Plan for N4e. It starts only after the coordinator says #3660 is on dev.
 3. Run the setupShell file and check:changed against origin/dev.
 4. Push plainly and open a DRAFT pull request into dev, with the body passed through --body-file.
 5. Report the URL and the head. The coordinator dispatches lane=quick and reads the change; there is no separate review.
+
+## N4e: the setupShell fixture marks the first shell busy (#3698)
+
+Coordinator to lane coordinator (20:3x UTC), items 1 and 4 (verbatim):
+1. #3660 merged at 20:27:10 UTC with scripts/merge-pr.ts at head df1a69dfd24a5a8ffd825a463cb587694e0dfb5a (governing runs 44158594709 and 44158583695, both goat-ci-result success). dev = 42bf8633ce55b4077f923d02ebddfe701d3d1bfd. Verified by me: git diff 42bf8633ce df1a69dfd2 is empty, so dev's tree is the integration head's tree. The watch on #3660 is removed. Tell every lane that holds a branch cut from chase/t3-261114-next2 that dev now carries it.
+4. N4e: GO. #3660 is on dev, so N4's thread cuts N4e from origin/dev 42bf8633ce as its own small draft pull request, per the 19:57 ruling; same last line to me (PR, head, checks). T1b: proceeds as the plan notes say now that dev carries #3660; ask me only if it needs a ruling.
+
+What was done: the branch fix/setupshell-test-busy-fixture was cut from origin/dev 42bf8633ce. Commit 55edbbbe817746cfd98e8daa70289a4eefa3c38f changes one file, apps/server/src/orchestration-v2/goat/ThreadWorkspaceService.setupShell.test.ts (+35/-9). It was pushed plainly, and draft PR https://github.com/goat-si/goat/pull/3698 into dev is open and linked. No goat-ci run was dispatched.
+
+- **Fix (fixture only).** The fixture's TerminalManager wrapper keeps the listeners that subscribe through it. When it opens the stuck first shell, it sends them an activity event with hasRunningSubprocess true, right after the open returns, so the event lands after the shell's "started" event. The test body gets the same subscribe, so its own wait for busy no longer depends on the poll either. The fake subprocess inspector and its 50 ms poll stay, so the manager's own state agrees. No production line changes, and no test body line or assertion changes.
+- **Before** (dev 42bf8633ce, poll slowed from 50 ms to 10 s to stand in for a stall): the case fails with "AssertionError: expected +0 to equal null" at setupShell.test.ts:427. The earlier run typed into the stuck shell at the 3-second quiet fallback and finished with exit code 0.
+- **After, same 10 s poll:** 1 passed, 8 skipped. The edit was restored, confirmed with cmp.
+- **Mutation:** ProjectSetupScriptRunner.ts's supersede bump was set to "earlier.generation += 0". The case fails with "ThreadWorkspaceRestoreError: Couldn't restore the thread's workspace (setup-failed): Setup script "Setup" exited with no exit code." The edit was restored, confirmed with cmp.
+- **Checks at 55edbbbe81:** vp test run on the setupShell file: 9 of 9 passed. vp run check:changed origin/dev: exit 0; format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget, typecheck (2 packages) and test (1 file, 9 tests) all pass.
+
+NOT RUN: Linux and Windows. A real shell (the case uses the fake PTY on purpose). The CI suites (the coordinator dispatches lane=quick).
