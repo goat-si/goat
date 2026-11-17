@@ -151,6 +151,7 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import { AssistantMessagePhase } from "@goat/contracts";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -201,6 +202,9 @@ import {
 } from "@goat/provider-core/server/subagentProjection";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { providerThreadFromCodexThread } from "./codexProviderThread.ts";
+
+// A phase newer than this build reads as none, so it is never stored.
+const isAssistantMessagePhase = Schema.is(AssistantMessagePhase);
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { codexFileChangeLineCounts } from "../fileChangeLineCounts.ts";
 import { codexFileChangePatch } from "../fileChangePatch.ts";
@@ -237,7 +241,7 @@ import {
   toCodexUserInputAnswers,
 } from "./CodexApprovalResponses.ts";
 
-export const CODEX_PROVIDER = ProviderDriverKind.make("codex");
+const CODEX_PROVIDER = ProviderDriverKind.make("codex");
 // How long Stop waits for Codex to end the turn before the user is offered Force stop.
 const CODEX_STOP_CONFIRM_TIMEOUT_MS = 10_000;
 export const CODEX_DRIVER_KIND = CODEX_PROVIDER;
@@ -582,7 +586,7 @@ export interface ActiveCodexTurnContext {
   readonly runningCompactionItemIds: Set<string>;
   // Modern approval requests omit paths; keep the kinds without retaining patch bodies.
   readonly fileChangeKindsByItem: Map<string, CodexFileChangeKinds>;
-  readonly messagePhases: Map<string, "commentary" | "partial_answer" | "final_answer">;
+  readonly messagePhases: Map<string, AssistantMessagePhase>;
   readonly itemPositions: Map<
     string,
     { readonly ordinal: number; readonly startedAt: DateTime.Utc }
@@ -4579,7 +4583,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
 
             if (payload.item.type === "agentMessage") {
-              if (payload.item.phase != null)
+              if (isAssistantMessagePhase(payload.item.phase))
                 context.messagePhases.set(payload.item.id, payload.item.phase);
               if (payload.item.phase == null || payload.item.phase === "final_answer") {
                 yield* Ref.update(finalAnswerItemIdsByTurn, (current) => {
@@ -4998,7 +5002,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return;
             }
 
-            if (payload.item.phase != null)
+            if (isAssistantMessagePhase(payload.item.phase))
               context.messagePhases.set(payload.item.id, payload.item.phase);
             const finalAnswer = payload.item.phase == null || payload.item.phase === "final_answer";
             if (finalAnswer) {

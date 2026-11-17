@@ -2,7 +2,7 @@ import type { OrchestrationV2ProviderThread, ProviderInstanceId, ThreadId } from
 import type * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 
 // The adapter's own constants; only read when a provider thread is built, after both modules load.
-import { CODEX_PROVIDER, codexTimestamp } from "./CodexAdapterV2.ts";
+import { CODEX_DRIVER_KIND as CODEX_PROVIDER, codexTimestamp } from "./CodexAdapterV2.ts";
 
 export function providerThreadFromCodexThread(input: {
   readonly appThreadId: ThreadId | null;
