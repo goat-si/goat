@@ -75,6 +75,14 @@ Coordinator to lane coordinator, 2026-11-17 07:55:54 UTC (verbatim):
 
 Coordinator to lane coordinator, 2026-11-17 08:44:59 UTC (verbatim): "#3519 IS MERGED. goat-ci-result SUCCESS on d1177ac841 (pull request run 44038808221, every suite green, goat-test included); out of draft; node scripts/merge-pr.ts 3519 merged it at head d1177ac841 at 08:43:14 UTC. THE SQUASH COMMIT ON DEV: S = 3ecea04f193e48fac0685a718f6ae782f74911aa ("chore(chase): upstream catch-up cycle 261114, second PR (remaining #3176 ports) (#3519)"), dev's tip."
 
+Coordinator to lane coordinator, 2026-11-17 08:48:01 UTC (verbatim):
+
+1. YES to a fourth lane now: CF1 clients on pen-macmini (goat#3654, goat#3658, goat#3652, goat#3557, goat#3513, goat#3514), from thread A's head, with the cycle's rules. It is client work with visible changes: each fix that changes what a person sees ships a before/after capture from the real client (web through test-goat-app; the phone rows wait for juns-MacBook-Pro, so CF1 does the web and shared client-runtime parts first and lists the phone captures it owes). goat#3658 needs the workspace status to say whether a worktree can be recreated: if that is a contract change, it is C4 and comes to me as a plan before any code.
+2. The 64 ticks by ancestry: accepted (the integration branch was #3519; ancestry of d1177ac841 is the right test). The five closed issues: accepted.
+3. Nothing else changes: X1, S4, N4 start when A's head is on origin; N12, N15a, N15b wait for the mobile release thread.
+
+Lanes started 2026-11-17 after #3519's merge (S = 3ecea04f19), all from chase/t3-261114-next2 = ed4268897e (draft PR #3660): X1 CI on pen-mac-studio (mcp:f6b11538-1291-48b4-98b5-7a4d86f85534), S4 auth on pen-macbookpro2 (mcp:06e3d315-d2cc-45ba-a3f0-5cc843d554c8), N4 on pen-macbookair (mcp:4ea150a3-314d-42cf-afd9-46b535476d90), CF1 clients on pen-macmini (mcp:ce248a26-a8cd-42e4-8522-7914348034f4).
+
 ## Appendix: 85 carried #3176 rows outside next-pr-plan.md (verdict needed)
 
 - `479ee74135` persists PR metadata in drafts: changes draft normalization used by the persisted-state migration (`apps/web/src/composerDraftStore.ts:2084`, `:2242`).
