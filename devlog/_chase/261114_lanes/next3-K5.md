@@ -514,3 +514,39 @@ The lane head stays 18c6644ea8; nothing pushed or merged. The fixes below are lo
 
 Prepared-fix checks (local, uncommitted): typecheck of package goat (apps/server) exit 0; whole runs of ClaudeLiveSelection, ClaudeDescendants, providerProcesses, agentScope, ClaudeSteerSelection, ClaudeLiveEffort, LiveModelSelection and ClaudeAgentSdkQueryRunner test files: 8 files, 52 passed, 3 skipped (the three Linux providerProcesses cases).
 
+
+## Coordinator 23:40 UTC, section II for K5 (verbatim)
+
+> II. K5 (head stays 18c6644ea8; prepared fixes for (a), (b), (c), (f))
+> 1. Good: preparing while the review reads is what I want. The fixes stay LOCAL (commits allowed, no push) until the review reports. Then ONE fix round carries them together with the reviewer's findings, one fix per commit, each with its failing test first as you describe.
+> 2. After the push of that round: goat-ci lane=quick AND lane=server on the new head (the new Linux case of (c) must RUN there, as the two existing ones), and a fresh review of the fix delta 18c6644ea8..<new head> only. That review takes the next free slot ahead of any lane's first review that has not started. K5 merges after it, still first.
+> 3. For the fix-delta brief, K5 states in its record, by path:line: (c) the group is signalled only after the recorded leader's pid AND start time still match at signal time, and never for pgid 0, 1 or the server's own group; (a) a row is dropped only on a COMPLETE table (not on a failed, timed out or truncated one); (f) the lock is released when the reactor's 10 s deadline interrupts the holder, and the steer path cannot wait behind it longer than that deadline.
+> 4. (g) RULED: no name-based exclusion list. A list of daemon names is fragile, differs from Linux under the systemd scope and from upstream, and each of adb, Gradle, kache and an ssh ControlMaster starts again on next use. Conditions: one sentence in #3700's Limits and one in docs/user where closing a session is described, in the product's voice (closing a Claude session stops the background helpers that session started; they start again when next needed). I reopen this only if the review's 1(e) names a helper whose stop loses data rather than costing a cold start.
+> 5. (d) and (e) noted; the reviewer checks them (2(e), 2(f)).
+
+### Local fix commits (not pushed; lane head on origin stays 18c6644ea8)
+
+- e813c9f320 (a) the descendant sampler keeps only live jobs
+- 50269b590f (b) provider process records never fail server startup
+- 53de7f798f (c) reaping a recorded CLI takes the group it still leads (+ Linux case)
+- aa30e28658 (f) a live selection change is serialized and safe to interrupt (+ three cases)
+- 65ddf6b326 (g) docs/user/providers-claude.md: one sentence
+
+Checks at 65ddf6b326: typecheck of package goat (apps/server) exit 0; whole runs of ClaudeLiveSelection, ClaudeDescendants, providerProcesses, agentScope, ClaudeAgentSdkQueryRunner, ClaudeSteerSelection, ClaudeLiveEffort and LiveModelSelection test files: 8 files, 53 passed, 3 skipped (Linux).
+
+### Item 3 statements, by path:line at 65ddf6b326
+
+(c) apps/server/src/process/providerProcesses.ts:151 skips a survivor that is protected (this server or an ancestor) or whose pid and start time do not match; inside the same synchronous call, :156 reads the identity again (\`if (!matches(survivor)) return;\`) right before the signal, and :157 signals the group only when \`survivor.pgid === survivor.pid && survivor.pgid > 1 && survivor.pgid !== owner.pgid\` (owner is this server's own identity, :87, so its pgid is the server's group); otherwise :159 signals the pid alone. pgid 0 and 1 fail \`> 1\`; the record schema also refuses pid below 2, and signalProcessGroup itself throws for pid <= 1 (packages/provider-core/src/server/processGroup.ts). The read-to-signal race inside that call stays, as named in the comment (no pidfd_send_signal in Node).
+
+(a) apps/server/src/orchestration-v2/Adapters/ClaudeDescendants.ts:145 drops a tracked identity only inside observe, and observe runs only on Option.some: the shared sample (:134) and the per-session refresh (:160) map over the table Option, and stop observes inside Option.map too. readClaudeProcessTable (:41-55) returns Option.some only when ps exited 0 and the output was not truncated (:50); a 5 s timeout (:45) and output past 8 MiB (:46, ProcessRunner's default outputMode "error" raises ProcessOutputLimitError) fail the run, and :54 turns every failure into Option.none. So a failed, timed out or truncated table drops nothing.
+
+(f) apps/server/src/orchestration-v2/Adapters/ClaudeLiveSelection.ts:75 and :110 take the per-query permit with Semaphore.withPermits, which releases it when the holder ends, interruption included; :61 (Effect.onError) clears the identity on that interruption. The reactor wraps its whole apply (lock wait and control call) in Effect.timeout(CALL_DEADLINE) (apps/server/src/orchestration-v2/goat/LiveModelSelection.ts:17 and :37), so a reactor holding the permit is interrupted no later than 10 s after its apply began, and the permit is released then: a steer waits behind the reactor at most that deadline. Test: "an interrupted change frees the process for the next one" (ClaudeLiveSelection.test.ts: the reactor's call never answers, TestClock passes 10 s, the waiting steer then runs and re-sends the model because the identity was cleared). Limit stated plainly: a steer behind another steer's apply waits for that apply's CLI answer, which has no deadline of its own (as a steer's own control calls had none before the lock); a turn start's apply runs before its turn is active, so a steer for that turn cannot be queued behind it.
+
+### (g) sentences
+
+docs/user/providers-claude.md (no existing passage described closing a session; the sentence goes under the guide's opening, where Claude sessions are introduced; on Windows the CLI is not tracked as a process group, so the sentence names macOS and Linux):
+"On macOS and Linux, closing a Claude session stops the background helpers that session started, such as a dev server or a build daemon; they start again when next needed."
+
+Proposed for #3700's Limits (the coordinator owns that body):
+"On macOS, closing a Claude session now also stops background helpers the session started outside its process group (a dev server, a Gradle or adb daemon, an ssh ControlMaster), as Linux under the systemd agent scope already does; each starts again on next use."
+
