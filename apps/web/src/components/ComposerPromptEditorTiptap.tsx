@@ -504,7 +504,6 @@ function ComposerCitationNodeView({ node, editor, getPos }: NodeViewProps) {
     >
       <AssistantCitationChip
         citation={citation}
-        composer
         commentEditor={{
           environmentId: actions.environmentId,
           open: commentTarget !== null,

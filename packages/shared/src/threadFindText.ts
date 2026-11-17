@@ -25,7 +25,7 @@ import {
   isAttachmentOnlyBootstrapPrompt,
   parseComposerContextHref,
 } from "./composerContextReferences.ts";
-import { assistantCitationLabel, parseAssistantCitationHref } from "./assistantCitations.ts";
+import { parseAssistantCitationHref } from "./assistantCitations.ts";
 import type { OrchestrationV2ConversationMessage } from "@goat/contracts";
 import { proposedPlanTitle, stripDisplayedPlanMarkdown } from "./proposedPlanText.ts";
 import { unified } from "unified";
@@ -152,7 +152,9 @@ function markdownThreadFindText(
     const citation =
       node.tagName === "a" && typeof href === "string" ? parseAssistantCitationHref(href) : null;
     if (citation) {
-      text += assistantCitationLabel(citation);
+      // The quote card is not searched, and it splits the text before it from its comment.
+      flush();
+      text += (citation.comment ?? "").replace(/\r?\n/g, " ");
       return;
     }
     {

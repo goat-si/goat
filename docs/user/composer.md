@@ -155,8 +155,10 @@ On web and desktop, select text within one assistant response and choose
 **Cite in composer**. You can add a comment about the quote and write instructions
 around it.
 
-Select the quote in a draft or sent message to return to its source. If the source
-is unavailable or has changed, the saved quote remains readable.
+In a sent message the quote shows as a card, with your comment under it. Click the card, or the
+quote in a draft, to return to its source. If the source is unavailable or has changed, the saved
+quote remains readable. Find in a thread matches your comment and skips the quoted text, which
+stays findable in the response it came from.
 
 The chip shows your comment when it has one, or a short quote preview otherwise. Use the pencil
 button to add or change the comment. To remove the citation, place the caret beside its chip and
