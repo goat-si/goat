@@ -1410,3 +1410,27 @@ Left armed with the client still waiting: a connected server whose effect worker
 
 (k) The server keeps up to 8 MiB of history per terminal (BoundedTerminalHistory.ts:7, DEFAULT_HISTORY_BYTE_LIMIT), so the trim to 512 KiB matters: up to about 7.5 MiB less per attach on a busy terminal. The cost is one TextEncoder.encode of the whole history per snapshot (attach and resync, never per output event). For a history at or under 512 KiB it returns the input after that one encode. Option for a fix round, cheap and behaviour-preserving: skip the encode when 3 x history.length <= maxBytes (UTF-8 is at most 3 bytes per UTF-16 unit), and encode only the last maxBytes UTF-16 units when the history is longer (each unit is at least one byte, so the tail holds the cut). The control-sequence scan already starts from the last ESC before the cut (terminalSequenceStateAfter uses lastIndexOf). Keys: nothing keys on maxHistoryBytes. The client adds it inside the subscribe effect, not to the atom family key (state/terminal.ts:72-77; the family keys on the caller's target, runtime.ts:745). The server's viewer retention keys on threadId and terminalId (Manager.ts:2534 toSessionKey), prepareTerminal reads only threadId and cwd (ThreadWorkspaceService.ts:371-384), and T1c's lease order keys on the workspace folder (terminalLeaseOrder.ts).
 
+
+## Coordinator, 2026-11-17 23:58 UTC, II (K7), verbatim
+
+II. K7: the conn review STARTED at 23:5x UTC on 9fb762a2b5 (task goat-next3-K7-conn-review-9fb762a2, the slot K10's review freed). The wire review starts when K5's review reports. Head stays put.
+On K7's prepared answers (records b167790ba4), which the reviewers will check:
+- (g) RULED now, for the fix round: B. The stored outcome, the shell, the toast and the MCP thread detail carry only sentences the server wrote: the fixed ones that exist (no project, no messages, over two minutes) and a generic "Title generation failed." for anything that is raw provider or CLI output. The raw text goes to the server log only. Where the server can classify the cause without quoting the text (not signed in, quota), a fixed sentence per class is allowed, each with a case. Record it in the fork delta as a difference from upstream, with the reason: the plan said no provider text beyond today's, and a CLI's last stderr line can be anything.
+- (a) accepted as a test gap: one case that drives the REAL supervisor through a dying socket, in the fix round.
+- (b), (d), (k): options, not ordered. They wait for the reviewers' reading; no code before the two reports.
+- (i): the command palette and the mobile thread screen report nothing: the wire reviewer weighs it; K7 writes which of the two can take the outcome in a few lines.
+
+## Coordinator, 2026-11-17 23:50:37 UTC, II, verbatim
+
+II. Queue and one rule changed.
+- K7's wire review STARTED now (task goat-next3-K7-wire-review-9fb762a2), beside the conn review. Both read 9fb762a2b5; K7's head stays put until both report.
+- A fix-delta review (small: the delta and its test files only) does not count against the cap of two. So K5's fix-delta review starts as soon as its head and runs are there, and K10's likewise.
+- SF3 and N10 may start code now (K5's review has reported), heavy jobs by the machine token, K5's and K10's fix rounds first.
+
+## K7 on II (no code; head stays 9fb762a2b5)
+
+- (g) B is taken for the fix round. Only server-written sentences go into the outcome. Fork delta entry with the reason. Cases for each class the server can name without quoting.
+- (a) The fix round adds one case on the real supervisor through a dying socket.
+- (b), (d), (k) wait for the two reports.
+- (i), which of the two can take the outcome in a few lines. The mobile thread screen can. Its header already has a menu (apps/mobile/src/features/threads/ThreadHeader.tsx:29-61, the history menu), and useThreadListActions.regenerateThreadTitle already reports a failure (the "Could not regenerate title" alert, row 8). One menu item calling it is a few lines, plus a P1 row. The command palette cannot, not in a few lines. It has no per-thread actions at all (CommandPalette.logic.ts lists threads only to open them; settle, archive and rename are not there either). A regenerate entry there is a new "active thread actions" group, not a small addition. The keyboard path is already covered: the keybinding thread.regenerateTitle (useThreadLifecycle.tsx:713) shows the outcome toast. My suggestion for the wire reviewer: the mobile thread header item if the review wants parity, and no palette entry.
+
