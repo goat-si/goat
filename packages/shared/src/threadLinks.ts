@@ -90,9 +90,15 @@ export function hasThreadLinks(markdown: string): boolean {
   );
 }
 
-// Each unheld link of a message asks for its ids on every render; streaming re-renders often.
-const THREAD_LINK_IDS_CACHE_LIMIT = 256;
+// Each unheld link of a message asks for its ids on every render. Keys are whole message texts,
+// and every streamed chunk is a new one, so the cache is bounded by the characters it holds.
+const THREAD_LINK_IDS_CACHE_CHARACTERS = 200_000;
 const threadLinkIdsCache = new Map<string, ReadonlyArray<ThreadId>>();
+let threadLinkIdsCachedCharacters = 0;
+
+export function threadLinkIdsCacheCharacters(): number {
+  return threadLinkIdsCachedCharacters;
+}
 
 /** Every thread a message links, as written and percent-decoded, once each, outside code. */
 export function threadLinkIds(markdown: string): ReadonlyArray<ThreadId> {
@@ -100,11 +106,14 @@ export function threadLinkIds(markdown: string): ReadonlyArray<ThreadId> {
   const cached = threadLinkIdsCache.get(markdown);
   if (cached !== undefined) return cached;
   const ids = scanThreadLinkIds(markdown);
-  if (threadLinkIdsCache.size >= THREAD_LINK_IDS_CACHE_LIMIT) {
-    const oldest = threadLinkIdsCache.keys().next();
-    if (!oldest.done) threadLinkIdsCache.delete(oldest.value);
+  if (markdown.length > THREAD_LINK_IDS_CACHE_CHARACTERS) return ids;
+  for (const oldest of threadLinkIdsCache.keys()) {
+    if (threadLinkIdsCachedCharacters + markdown.length <= THREAD_LINK_IDS_CACHE_CHARACTERS) break;
+    threadLinkIdsCache.delete(oldest);
+    threadLinkIdsCachedCharacters -= oldest.length;
   }
   threadLinkIdsCache.set(markdown, ids);
+  threadLinkIdsCachedCharacters += markdown.length;
   return ids;
 }
 
