@@ -289,6 +289,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `packages/ssh/src/tunnel.ts`, `apps/server/src/sshRemote`, `apps/server/src/cli/{sshHelper,sshRuntimeHelperCommands,sshRuntimeProbes,sshRuntimeSupervisor}.ts`, `apps/server/src/mcp/toolkits/ssh`, `apps/desktop/src/ssh`
 - 정책: GOAT가 `tunnel.ts`를 크게 다시 썼다. upstream ssh 변경은 의도를 GOAT 코드에 손으로 옮긴다. 충돌 위험이 가장 높다. upstream의 설치 lock 수정(#20059, uutils mkdir)은 GOAT lock이 rename으로 게시해 해당 없으므로 받지 않았다 (사이클 261020). `__ssh-helper`의 GOAT 하위 명령은 `cli/sshRuntimeProbes.ts`(protocol, activity, compat, drain 등)와 `cli/sshRuntimeSupervisor.ts`(supervise)에 있고 `cli/sshRuntimeHelperCommands.ts`가 목록과 export를 모은다. `cli/sshHelper.ts`는 upstream에 import, 하위 명령 spread, re-export만 더한다(#827). re-export는 tunnel fixture가 `sshHelper.ts`를 URL로 불러오거나 묶기 때문에 남긴다. upstream이 `sshHelper.ts`를 바꾸면 upstream을 받고 이 세 줄을 다시 얹는다.
 
+### `terminal-retained-history` 터미널 attach 기록 자르기
+
+- 커밋: #3700 (사이클 261114 next3, K7 행 9)
+- 경로: `packages/contracts/src/terminal.ts`, `packages/client-runtime/src/state/terminalOutput.ts`, `apps/server/src/terminal/{retainedAttachHistory,Manager}.ts`
+- 정책: upstream c9f0caca1b의 `retainedTerminalHistory`는 바이트로만 자른다. GOAT의 같은 함수는 자른 자리가 제어 시퀀스 안이면 그 시퀀스의 나머지도 버린다. 클라이언트 `trimBufferToBytes`에 있던 GOAT 동작을 그대로 옮겼다. 서버가 upstream 방식으로 자르면 클라이언트는 시퀀스 중간에서 시작하는 기록을 받고, 그것을 알아챌 수 없어 나머지를 글자로 찍는다. upstream이 이 함수를 바꾸면 바이트 자르기만 받고 시퀀스 단계는 남긴다. `Manager.ts`에는 `attachOutputStream`의 두 listener를 `retainedAttachHistory.ts`로 감싸는 줄과 import 하나만 둔다.
+
 ## 깨끗하게 머지되고도 깨지는 것
 
 다음 세 가지는 텍스트 충돌이 없어도 확인한다. `scan.sh`가 모두 출력한다.

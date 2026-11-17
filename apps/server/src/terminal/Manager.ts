@@ -130,6 +130,7 @@ import { withThreadMcpEnvironment } from "@goat/provider-core/server/mcpSession"
 import { ThreadId } from "@goat/contracts";
 import { terminalOutputStream } from "./OutputProtocol.ts";
 import { normalizeChildCommandName } from "./childCommandName.ts";
+import { retainedAttachListener as retained } from "./retainedAttachHistory.ts";
 
 export {
   TerminalCwdError,
@@ -2614,8 +2615,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       ).pipe(
         Effect.as(
           terminalOutputStream(
-            (listener, registerCleanup) => attachStream(input, listener, registerCleanup, viewerId),
-            (listener, registerCleanup) => resyncStream(input, listener, registerCleanup),
+            (listener, registerCleanup) =>
+              attachStream(input, retained(input, listener), registerCleanup, viewerId),
+            (listener, registerCleanup) =>
+              resyncStream(input, retained(input, listener), registerCleanup),
           ),
         ),
       ),
