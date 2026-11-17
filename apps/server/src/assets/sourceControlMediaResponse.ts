@@ -1,4 +1,5 @@
 import * as Mime from "effect/http/Mime";
+import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -65,7 +66,8 @@ export const sourceControlMediaResponse = Effect.fn(
     }
   }
   // The claims only name a repository; the server's project list at this moment decides whether
-  // the host credential may go with it. A lookup that fails or stalls sends none.
+  // the host credential may go with it. Any other answer than yes (a failure, a defect, a stall)
+  // sends none; an interruption still interrupts.
   const host = media.definition.publicHost;
   const pullRequests = yield* PullRequestService.PullRequestService;
   const repository =
@@ -74,10 +76,13 @@ export const sourceControlMediaResponse = Effect.fn(
       : yield* pullRequests.hasProjectRepository({ host, repository: named }).pipe(
           Effect.timeout(PROJECT_LOOKUP_TIMEOUT),
           Effect.map((used) => (used ? named : undefined)),
-          Effect.tapError((cause) =>
-            Effect.logWarning("Could not read the projects for a media credential.", { cause }),
+          Effect.catchCause((cause) =>
+            Cause.hasInterrupts(cause)
+              ? Effect.interrupt
+              : Effect.logWarning("Could not read the projects for a media credential.", {
+                  cause: Cause.pretty(cause),
+                }).pipe(Effect.as(undefined)),
           ),
-          Effect.orElseSucceed(() => undefined),
         );
   const response = yield* fetchMedia({
     url: asset.url,
