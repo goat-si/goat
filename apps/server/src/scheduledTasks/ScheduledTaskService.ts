@@ -84,6 +84,13 @@ import {
   type RoutineOwner,
 } from "./scheduledBotRoutines.ts";
 import { WebhookAutomationHeldError, rejectWebhookWhileHeld } from "./webhookAutomationHold.ts";
+import {
+  decodeHeadersJson,
+  decodeMissingFieldsJson,
+  encodeHeadersJson,
+  encodeMissingFieldsJson,
+  type WebhookDeliveryRow,
+} from "./webhookDeliveryRow.ts";
 
 export { WEBHOOK_ROUTE_PREFIX } from "./webhookEndpoint.ts";
 export { listDueTasks };
@@ -155,36 +162,11 @@ export type { WebhookDeliveryOutcome, WebhookTriggerRequest, WebhookTriggerResul
 const webhookFilters = (filters: ReadonlyArray<ScheduledTaskWebhookFilter> | undefined) =>
   filters?.length ? { filters } : {};
 
-const HeadersJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
-const MissingFieldsJson = Schema.fromJsonString(Schema.Array(Schema.String));
-const decodeHeadersJson = Schema.decodeUnknownOption(HeadersJson);
-const decodeMissingFieldsJson = Schema.decodeUnknownOption(MissingFieldsJson);
-const encodeHeadersJson = Schema.encodeSync(HeadersJson);
-const encodeMissingFieldsJson = Schema.encodeSync(MissingFieldsJson);
-
 /** Server-captured authority; never decoded from a public task mutation. */
 export interface CapturedTaskMemoryGrant {
   readonly memoryGrantCeiling: MemoryTaskGrantCeiling;
   /** The authenticated person, for routines bound to a GOAT Bot conversation. */
   readonly owner?: RoutineOwner;
-}
-
-interface WebhookDeliveryRow {
-  readonly delivery_id: string;
-  readonly task_id: string;
-  readonly received_at: string;
-  readonly method: string;
-  readonly query: string;
-  readonly headers_json: string;
-  readonly body: string;
-  readonly body_bytes: number;
-  readonly body_truncated: number;
-  readonly outcome: string;
-  readonly signature_verified: number;
-  readonly missing_fields_json: string;
-  readonly rendered_prompt: string | null;
-  readonly pending_window: number;
-  readonly error: string | null;
 }
 
 export class ScheduledTaskService extends Context.Service<
