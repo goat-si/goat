@@ -284,3 +284,7 @@ NOT RUN: a goat-ci run on the merge commit daf4b9bb3b; the 385-file check:change
 ## Coordinator, 14:58:58 UTC (verbatim, the part for N15b)
 
 > "1. N15b follow-ups: your route is accepted (the 9 test files plus format and lint on its changed files locally, push, ONE goat-ci run on chase/t3-261114-next2-n15bb-followups carrying typecheck and the rest, recorded as such). These are P3 follow-ups, so no fresh review task: I read the diff against e04442e66c myself and merge it into the integration branch when its run is green. Send the head and the run URL. P3-2 changes behaviour (the guard also clears on another thread): P1 mobile adds one line for it only if it still has time before its stop; otherwise it joins the re-walk with N4c."
+
+## Coordinator, 15:04:18 UTC (verbatim, part 3)
+
+> 3. N15bb at c63e00683b: received (5 commits on e04442e66c, 9 files; I read the list: two move-outs, the stop guard, the Publish empty state, two descriptor assertions). I read the diff in full and merge when run 44109073502 is green; nothing else needed from N15b. Its typecheck rests on that run, recorded as such.
