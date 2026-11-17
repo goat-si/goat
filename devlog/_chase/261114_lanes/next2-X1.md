@@ -196,3 +196,11 @@ Coordinator, 2026-11-17 11:08:30 UTC, item 3 (as relayed): dev moved to 6f872e6b
 
 Host: pen-mac-studio is LIGHT from 11:08:30 (nightly run 44071261820 signs there) until the coordinator says its macOS jobs are done.
 
+## The runner host's Wi-Fi (owner's decision applied)
+
+Coordinator, 2026-11-17 11:26:34 UTC, order 1e: VERBATIM TEXT NOT YET RECEIVED by X1 (the lane coordinator's 11:40 relay gave the facts below but not the message); it goes here when relayed.
+
+Facts as relayed by the lane coordinator at 11:40 UTC: the owner's decision "와이파이를 꺼" (turn the Wi-Fi off), asked at 10:07 UTC with the warning that there is then no way in over Wi-Fi if the wired link drops; done 2026-11-17 11:28:56 UTC on the runner host with `nmcli radio wifi off` (exit 0; NetworkManager's reboot-persistent radio state, a reboot not tested; nothing else changed; the eduroam profile kept); at 11:29:04 UTC `wlp13s0` DOWN, the only default route the wired `enp6s0`, Tailscale up, runners 02 and 03 listening; no test process in flight, so no rerun needed; undo `nmcli radio wifi on`.
+
+Posted on goat#3646: https://github.com/goat-si/goat/issues/3646#issuecomment-6946856016. Closing rule stated there: open until a week of goat-test runs shows no ERR_NETWORK_CHANGED, counted over every goat-test job on a lidge runner started 2026-11-17 11:29Z to 2026-11-24 11:29Z that ran its web tests on the host network (any branch without the wrapper; dev's runs until #3660 lands), ERR_NETWORK_CHANGED lines counted in each job's raw log; zero over the week closes it, with the job count and run ids in the closing comment. Jobs inside the wrapper cannot show the error and do not count.
+
