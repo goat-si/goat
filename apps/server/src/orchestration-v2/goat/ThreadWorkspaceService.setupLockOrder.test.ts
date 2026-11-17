@@ -105,6 +105,9 @@ const withSetupProject = <A, E, R>(
       logsDir: NodePath.join(root, "terminal-logs"),
       ptyAdapter: pty,
       processKillGraceMs: 1,
+      // No shell runs a program, so idle closes never read the host's process table.
+      subprocessInspector: () =>
+        Effect.succeed({ hasRunningSubprocess: false, childCommand: null, processIds: [] }),
       threadWorktree: {
         current: () => Effect.suspend(() => Effect.succeedSome(currentWorktree())),
       },
