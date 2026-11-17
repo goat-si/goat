@@ -18,10 +18,8 @@ import {
   type OrchestrationV2ShellSnapshot,
 } from "@goat/contracts";
 import { onTestFinished } from "vite-plus/test";
-import {
-  subscribeComposerDraftModelReconciliation,
-  deriveEffectiveComposerModelState,
-} from "./composerDraftStore";
+import { subscribeComposerDraftModelReconciliation } from "./composerDraftStore";
+import { deriveEffectiveComposerModelState } from "./composerModelState";
 import {
   scopedProjectKey,
   scopedThreadKey,
