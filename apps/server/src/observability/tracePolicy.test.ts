@@ -2,7 +2,11 @@
 import { assert, it } from "vite-plus/test";
 import { it as effectIt } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { makeLocalFileTracer, type LocalSpanEvents } from "@goat/shared/observability";
+import {
+  makeLocalFileTracer,
+  type LocalSpanEvents,
+  type TraceRecord,
+} from "@goat/shared/observability";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -81,6 +85,29 @@ effectIt.effect("marks a recorded child whose fast parent already ended (#2465)"
     assert.isFalse(keep(hotParent));
     assert.isTrue(keep(child));
     assert.isTrue(child.attributes.get("trace.parent_omitted"));
+    // The mark must also reach the record GOAT writes, which LocalFileSpan builds after the policy.
+    const records: Array<TraceRecord> = [];
+    const recording = spansOf(
+      yield* makeLocalFileTracer({
+        filePath: "",
+        maxBytes: 0,
+        maxFiles: 0,
+        batchWindowMs: 0,
+        shouldRecord: makeLocalSpanPolicy(),
+        sink: {
+          filePath: "",
+          push: (record) => records.push(record),
+          flush: Effect.void,
+          close: () => Effect.void,
+        },
+      }).pipe(Effect.provide(NodeServices.layer)),
+    );
+    recording("child", { parent: recording("SqliteWriter.send") });
+    assert.deepStrictEqual(
+      records.map((record) => record.name),
+      ["child"],
+    );
+    assert.isTrue(records[0]?.attributes["trace.parent_omitted"]);
   }),
 );
 
