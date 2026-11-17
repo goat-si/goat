@@ -282,6 +282,108 @@ it.layer(
     }),
   );
 
+  it.effect.each([
+    ["a person's close of it", "person"],
+    ["an agent's close of it", "agent"],
+    ["the thread-wide close", "thread"],
+  ] as const)(
+    "an open that waited, overtaken by a restart and then by %s, starts nothing",
+    ([, closer]) =>
+      Effect.gen(function* () {
+        const { manager, ptyAdapter } = yield* createManager();
+        const folder = yield* heldFolder;
+        const agent = { threadId: "thread-1", owner: "agent", authorize: Effect.void };
+        const opened = yield* manager.agentOpen!({ ...agent, cwd: folder.other });
+        const holder = yield* folder.hold(Effect.void);
+        yield* Deferred.await(folder.held);
+        const waiting = yield* Effect.exit(
+          manager.open(openInput({ terminalId: opened.terminalId, cwd: folder.cwd })),
+        ).pipe(Effect.forkChild({ startImmediately: true }));
+        const terminal = { ...agent, terminalId: opened.terminalId };
+        yield* manager.agentMutate!({
+          ...terminal,
+          generation: opened.generation,
+          operation: "restart",
+        });
+        if (closer === "person") {
+          yield* manager.close({ threadId: "thread-1", terminalId: opened.terminalId });
+        } else if (closer === "thread") {
+          yield* manager.close({ threadId: "thread-1" });
+        } else {
+          const [listed] = yield* manager.agentList!(agent);
+          yield* manager.agentMutate!({
+            ...terminal,
+            generation: listed!.generation,
+            operation: "close",
+          });
+        }
+        yield* Deferred.succeed(folder.release, undefined);
+        yield* Fiber.join(holder);
+        assert.isTrue(Exit.isFailure(yield* Fiber.join(waiting)));
+        assert.deepEqual(
+          ptyAdapter.spawnInputs.map((spawned) => spawned.cwd),
+          [folder.other, folder.other],
+        );
+      }),
+  );
+
+  it.effect.each([
+    ["closed as idle, starts its own shell after that one", true],
+    ["still running, returns that shell and starts nothing", false],
+  ] as const)(
+    "an open that waited while the holder opened the same terminal, with that one %s",
+    ([, closedAsIdle]) =>
+      Effect.gen(function* () {
+        const { manager, ptyAdapter } = yield* createManager(5, {
+          subprocessInspector: () =>
+            Effect.succeed({ hasRunningSubprocess: false, childCommand: null, processIds: [] }),
+        });
+        const folder = yield* heldFolder;
+        const lifecycle: Array<string> = [];
+        const unsubscribe = yield* manager.subscribe((event) =>
+          Effect.sync(() => {
+            if (event.type === "started" || event.type === "closed") lifecycle.push(event.type);
+          }),
+        );
+        // Like a restore's setup: the holder opens the terminal under its lease, then may close it.
+        const holder = yield* folder.hold(
+          reuseHeldWorkspaceLease(
+            manager.open(openInput({ cwd: folder.cwd, env: { GOAT_BY: "setup" } })),
+          ).pipe(
+            Effect.andThen(
+              closedAsIdle ? manager.closeIdle({ threadId: "thread-1" }) : Effect.void,
+            ),
+          ),
+        );
+        yield* Deferred.await(folder.held);
+        const waiting = yield* manager
+          .open(openInput({ cwd: folder.cwd, cols: 120, rows: 40, env: { GOAT_BY: "person" } }))
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.succeed(folder.release, undefined);
+        yield* Fiber.join(holder);
+        const snapshot = yield* Fiber.join(waiting);
+        unsubscribe();
+        const spawned = ptyAdapter.spawnInputs.map((input) => [
+          input.cwd,
+          input.cols,
+          input.rows,
+          input.env.GOAT_BY,
+        ]);
+        if (closedAsIdle) {
+          assert.deepEqual(lifecycle, ["started", "closed", "started"]);
+          assert.deepEqual(spawned, [
+            [folder.cwd, 100, 24, "setup"],
+            [folder.cwd, 120, 40, "person"],
+          ]);
+          assert.strictEqual(snapshot.pid, ptyAdapter.processes[1]?.pid);
+        } else {
+          assert.deepEqual(lifecycle, ["started"]);
+          assert.deepEqual(spawned, [[folder.cwd, 100, 24, "setup"]]);
+          assert.strictEqual(snapshot.pid, ptyAdapter.processes[0]?.pid);
+        }
+      }),
+  );
+
   it.effect(
     "a newer open of the same terminal in another folder outlives an older one that waited",
     () =>
