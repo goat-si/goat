@@ -1,4 +1,5 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
+import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import type {
   ComposerContextRecord,
   EnvironmentId,
@@ -71,11 +72,14 @@ function showsHistoryOf(
   threadId: ThreadId,
 ) {
   const seen = new Set<ThreadId>();
-  for (let current: ThreadId | null = target.threadId; current !== null && !seen.has(current);) {
+  let current: ThreadId | null = target.threadId;
+  while (current !== null && !seen.has(current)) {
     if (current === threadId) return true;
     seen.add(current);
-    const forkedFrom = readThreadShell(scopeThreadRef(target.environmentId, current))?.forkedFrom;
-    current = forkedFrom?.type === "run" ? forkedFrom.threadId : null;
+    const shell: EnvironmentThreadShell | null = readThreadShell(
+      scopeThreadRef(target.environmentId, current),
+    );
+    current = shell?.forkedFrom?.type === "run" ? shell.forkedFrom.threadId : null;
   }
   return false;
 }

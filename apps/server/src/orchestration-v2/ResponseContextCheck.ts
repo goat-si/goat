@@ -47,7 +47,7 @@ export const checkResponseContexts = Effect.fn("ResponseContextCheck.check")(fun
     const source = runForkSource(thread);
     if (source === null || walked.has(source)) break;
     walked.add(source);
-    thread = yield* input.store.getThread(source).pipe(Effect.catch(() => Effect.succeed(null)));
+    thread = yield* input.store.getThread(source).pipe(Effect.orElseSucceed(() => null));
     if (thread !== null && thread.deletedAt === null) readable.add(source);
   }
 
