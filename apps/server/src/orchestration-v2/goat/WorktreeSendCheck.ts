@@ -35,7 +35,7 @@ export const worktreeSendRefusal = Effect.fn("WorktreeSendCheck.refusal")(functi
   if (thread.branch === null)
     return `${missing}: the thread has no branch to recreate it from. Move the thread to an existing folder, or start a new thread.`;
   if (!(yield* reads.isManaged(thread.worktreePath)))
-    return `${missing}: it is outside GOAT's worktrees folder. Put the folder back at that path, or move the thread to another worktree.`;
+    return `${missing}: GOAT only recreates worktrees at <worktrees folder>/<repository>/<name>. Put the folder back at that path, or move the thread to another worktree.`;
   if (!(yield* reads.projectExists(thread.projectId)))
     return `${missing}: its project is no longer available. Start a new thread in an available project.`;
   return undefined;

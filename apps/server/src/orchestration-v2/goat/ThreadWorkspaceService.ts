@@ -1,7 +1,8 @@
 import {
   CommandId,
+  describeThreadWorkspaceRestore,
+  ThreadId,
   ThreadWorkspaceRestoreError,
-  type ThreadId,
   type ThreadWorkspaceRestoreFailure,
   type ThreadWorkspaceRestoreInput,
   type ThreadWorkspaceRestoreResult,
@@ -19,7 +20,12 @@ import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
-import { tryWithWorkspaceLease } from "../../workspace/workspaceLease.ts";
+import { isWithinRoot } from "../../workspace/KnownWorkspaces.ts";
+import {
+  reuseHeldWorkspaceLease,
+  tryWithWorkspaceLease,
+  withWorkspaceLease,
+} from "../../workspace/workspaceLease.ts";
 import { makeIsManagedWorktreePath } from "../../worktreesDirectory.ts";
 import { WorktreeSnapshotStore } from "../../worktreeSnapshots/WorktreeSnapshotStore.ts";
 import * as ProjectionStore from "../ProjectionStore.ts";
@@ -30,6 +36,8 @@ import {
   verifyInterruptedRestore,
 } from "./restoreThreadWorkspace.ts";
 import { verifyRestoredWorktree } from "./restoreSnapshot.ts";
+import { makeRecreateScratchFolder } from "./recreateScratchFolder.ts";
+import { makeSetAsideFolder, setAsideSentence } from "./setAsideFolder.ts";
 
 /** What a client shows for a thread whose worktree cleanup removed, and the ways back. */
 export class ThreadWorkspaceService extends Context.Service<
@@ -39,6 +47,11 @@ export class ThreadWorkspaceService extends Context.Service<
     readonly restore: (
       input: ThreadWorkspaceRestoreInput,
     ) => Effect.Effect<ThreadWorkspaceRestoreResult, ThreadWorkspaceRestoreError>;
+    /** Before a terminal starts in a thread's folder, brings a missing one back as a turn would. */
+    readonly prepareTerminal: (input: {
+      readonly threadId: string;
+      readonly cwd?: string | undefined;
+    }) => Effect.Effect<void>;
   }
 >()("goat/orchestration-v2/goat/ThreadWorkspaceService") {}
 
@@ -55,6 +68,47 @@ const make = Effect.gen(function* () {
   const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
   const restoreMissing = yield* makeRestoreThreadWorkspace;
   const restorePending = yield* makeRestorePending;
+  const setAside = yield* makeSetAsideFolder;
+  const recreateScratchFolder = yield* makeRecreateScratchFolder;
+  // Ready for a terminal: present, not mid-restore, not empty, not just a failed removal's leftovers.
+  const ready = (worktreePath: string) =>
+    Effect.all([
+      restorePending.ready(worktreePath),
+      setAside.leftover(worktreePath),
+      setAside.missing(worktreePath),
+    ]).pipe(Effect.map(([present, leftover, missing]) => present && !leftover && !missing));
+
+  const recordRestoreNotice = Effect.fn("ThreadWorkspace.recordRestoreNotice")(function* (
+    threadId: ThreadId,
+    branch: string,
+    restored: Omit<Parameters<typeof describeThreadWorkspaceRestore>[0], "branch"> & {
+      readonly setAsidePath?: string;
+    },
+  ) {
+    const { summary, lost } = describeThreadWorkspaceRestore({ ...restored, branch });
+    const setAsideNote =
+      restored.setAsidePath === undefined ? null : setAsideSentence(restored.setAsidePath);
+    const stamp = (yield* Clock.currentTimeMillis).toString(36);
+    yield* threads
+      .dispatch({
+        type: "thread.notice.record",
+        commandId: CommandId.make(`worktree-restored:${threadId}:${stamp}`),
+        threadId,
+        recordKey: `worktree-restored:${stamp}`,
+        // The first line is the row clients show; what did not come back opens with it.
+        message: [summary, [lost, setAsideNote].filter((part) => part !== null).join(" ")]
+          .filter((part) => part !== "")
+          .join("\n"),
+      })
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("worktree restored, but its thread notice was not recorded", {
+            threadId,
+            cause,
+          }),
+        ),
+      );
+  });
 
   const load = Effect.fn("ThreadWorkspace.load")(function* (threadId: ThreadId) {
     const fail = (reason: ThreadWorkspaceRestoreFailure, detail: string) =>
@@ -164,7 +218,11 @@ const make = Effect.gen(function* () {
     );
     if (Option.isNone(held))
       return yield* fail("busy", "Another task is using this worktree. Try again in a moment.");
-    return { threadId, worktreePath, branch, ...held.value };
+    const { restoredFrom, headSha, setupScript } = held.value;
+    // The client shows the restore itself; only the thread can say where the leftovers went.
+    if ("setAsidePath" in held.value && held.value.setAsidePath !== undefined)
+      yield* recordRestoreNotice(threadId, branch, held.value);
+    return { threadId, worktreePath, branch, restoredFrom, headSha, setupScript };
   });
 
   const startFresh = Effect.fn("ThreadWorkspace.startFresh")(function* (threadId: ThreadId) {
@@ -230,15 +288,16 @@ const make = Effect.gen(function* () {
     // can start in a half-prepared worktree, and the folder is checked after setup ran in it.
     const prepareAndRebind = Effect.gen(function* () {
       const createdHead = yield* headOf(worktreePath);
-      const setup = yield* setupScripts
-        .runForThread({
+      // Its terminal takes the new folder's lease, which this holds.
+      const setup = yield* reuseHeldWorkspaceLease(
+        setupScripts.runForThread({
           threadId,
           projectCwd: project.workspaceRoot,
           worktreePath,
           trigger: "setup",
           observeCompletion: {},
-        })
-        .pipe(Effect.mapError((error) => fail("setup-failed", error.message)));
+        }),
+      ).pipe(Effect.mapError((error) => fail("setup-failed", error.message)));
       if (setup.status === "started" && !setup.async) {
         if (setup.completion === undefined)
           return yield* fail("setup-failed", "GOAT couldn't follow the setup script to its end.");
@@ -309,6 +368,54 @@ const make = Effect.gen(function* () {
     };
   });
 
+  const prepareTerminal = Effect.fn("ThreadWorkspace.prepareTerminal")(function* (input: {
+    readonly threadId: string;
+    readonly cwd?: string | undefined;
+  }) {
+    const threadId = ThreadId.make(input.threadId);
+    const shell = yield* projections
+      .getThreadShell(threadId)
+      .pipe(Effect.orElseSucceed(() => null));
+    if (shell?.worktreePath != null && shell.branch === null) {
+      const scratch = path.resolve(shell.worktreePath);
+      if (isWithinRoot(path, path.resolve(input.cwd ?? scratch), scratch))
+        yield* withWorkspaceLease(scratch, recreateScratchFolder(scratch)).pipe(Effect.ignore);
+      return;
+    }
+    const loaded = yield* load(threadId).pipe(Effect.option);
+    if (Option.isNone(loaded)) return;
+    const { project, worktreePath, branch } = loaded.value;
+    if (
+      !isWithinRoot(path, path.resolve(input.cwd ?? worktreePath), worktreePath) ||
+      (yield* ready(worktreePath)) ||
+      !(yield* isManagedWorktreePath(worktreePath))
+    )
+      return;
+    // Waits out a turn or another terminal restoring the same folder, then finds it ready.
+    const restored = yield* withWorkspaceLease(
+      worktreePath,
+      Effect.gen(function* () {
+        if (yield* ready(worktreePath)) return null;
+        return yield* restoreMissing({
+          threadId,
+          cwd: project.workspaceRoot,
+          worktreePath,
+          branch,
+        });
+      }),
+    ).pipe(
+      // The terminal then fails on the missing folder, which the thread's banner offers to restore.
+      Effect.catch((cause) =>
+        Effect.logWarning("terminal open could not restore the thread's worktree", {
+          threadId,
+          worktreePath,
+          cause,
+        }).pipe(Effect.as(null)),
+      ),
+    );
+    if (restored !== null) yield* recordRestoreNotice(threadId, branch, restored);
+  });
+
   return ThreadWorkspaceService.of({
     status,
     restore: Effect.fn("ThreadWorkspaceService.restore")(function* (input) {
@@ -316,6 +423,7 @@ const make = Effect.gen(function* () {
         ? yield* startFresh(input.threadId)
         : yield* restoreInPlace(input.threadId);
     }),
+    prepareTerminal,
   });
 });
 

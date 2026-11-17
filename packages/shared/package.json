@@ -699,6 +699,10 @@
       "types": "./src/generatedImageMarkdown.ts",
       "import": "./src/generatedImageMarkdown.ts"
     },
+    "./markdownAssistantInsights": {
+      "types": "./src/markdownAssistantInsights.ts",
+      "import": "./src/markdownAssistantInsights.ts"
+    },
     "./markdownPipeline": {
       "types": "./src/markdownPipeline.ts",
       "import": "./src/markdownPipeline.ts"

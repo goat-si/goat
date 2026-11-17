@@ -20,7 +20,7 @@ export function registerUnpricedTest(
   setup: typeof Main.setup,
   layerService: typeof Main.layerService,
 ) {
-  it.live("counts unpriced tokens from the unpriced records of a mixed model", () =>
+  it.effect("counts unpriced tokens from the unpriced records of a mixed model", () =>
     Effect.gen(function* () {
       const { settings, home } = yield* setup;
       const message = (id: string, cost: number, input: number, output: number, minute: number) =>

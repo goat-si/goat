@@ -1,4 +1,5 @@
 import {
+  type SourceControlOfferSettings,
   buildProjectCreateCommand,
   canCreateProjectInEnvironment,
   findExistingAddProject,
@@ -42,6 +43,7 @@ export interface EnvironmentOption {
   readonly connectionErrorTraceId: string | null;
   readonly supportsCloneTracking: boolean;
   readonly ghqCloneLayout: boolean;
+  readonly sourceControlOfferSettings: SourceControlOfferSettings | undefined;
 }
 
 export function getActiveRoute(navigation: {

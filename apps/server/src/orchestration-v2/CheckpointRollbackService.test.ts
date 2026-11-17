@@ -190,7 +190,7 @@ it.effect.each([
     const worktreePath = unmanaged
       ? path.join(workspaceRoot, "elsewhere", "feature")
       : path.join(worktreesDir, "repo", "feature");
-    yield* fileSystem.makeDirectory(worktreePath, { recursive: true });
+    yield* fileSystem.makeDirectory(path.join(worktreePath, ".git"), { recursive: true });
     const threadId = ThreadId.make("rollback-worktree");
     const projectId = ProjectId.make("rollback-worktree-project");
     const providerThreadId = ProviderThreadId.make("rollback-worktree-provider-thread");
@@ -755,7 +755,7 @@ it.effect.each([
     const worktreePath = unmanaged
       ? path.join(workspaceRoot, "elsewhere", "feature")
       : path.join(worktreesDir, "repo", "feature");
-    yield* fileSystem.makeDirectory(worktreePath, { recursive: true });
+    yield* fileSystem.makeDirectory(path.join(worktreePath, ".git"), { recursive: true });
     const threadId = ThreadId.make("rollback-worktree");
     const projectId = ProjectId.make("rollback-worktree-project");
     const providerThreadId = ProviderThreadId.make("rollback-worktree-provider-thread");

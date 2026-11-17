@@ -132,8 +132,7 @@ export const PreviewAutomationStatus = Schema.Struct({
       }),
     ),
   ),
-  profiles: Schema.optional(Schema.Array(Session.PreviewAutomationProfile)),
-  defaultProfileId: Schema.optional(BrowserProfileId),
+  ...Session.PreviewAutomationProfileListFields,
   session: Schema.optional(Session.PreviewTabSession),
 });
 export type PreviewAutomationStatus = typeof PreviewAutomationStatus.Type;

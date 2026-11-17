@@ -15,7 +15,11 @@ import { scopedThreadKey } from "../../lib/scopedEntities";
 import { deriveThreadArrangementSizing } from "../../lib/layout";
 import { threadListEnvironmentsAtom } from "../../state/presentation";
 import { environmentServerConfigsAtom } from "../../state/server";
-import { environmentThreadShells, launchSubagentRowsAtom } from "../../state/threads";
+import {
+  launchSubagentRowsAtom,
+  steadyNavigationThreadShellsAtom,
+  steadyShellsHoldingAtom,
+} from "../../state/threads";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../../state/olderSettledShelf";
 import {
   pendingThreadOrderAtom,
@@ -166,7 +170,7 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
     baseFontSize: appearance.baseFontSize,
     fontScale,
   });
-  const threads = useAtomValue(environmentThreadShells.navigationThreadShellsAtom);
+  const threads = useAtomValue(steadyNavigationThreadShellsAtom);
   const launchOwners = useAtomValue(launchSubagentRowsAtom);
   const hiddenBotThreadKeys = useAtomValue(hiddenGoatBotThreadKeysAtom);
   const configs = useAtomValue(environmentServerConfigsAtom);
@@ -174,6 +178,7 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
   const queuedThreadKeys = useAtomValue(queuedThreadKeysAtom);
   const pendingOrder = useAtomValue(pendingThreadOrderAtom);
   const dropBusy = useAtomValue(threadDropBusyAtom);
+  const holdingRows = useAtomValue(steadyShellsHoldingAtom);
   const { moveThread } = useThreadListActions();
   const { workingShelfEnabled } = useThreadListV2ShelfPreferences();
   const [now, setNow] = useState(() => new Date().toISOString());
@@ -513,6 +518,7 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
                               disabled={
                                 dropBusy ||
                                 pendingOrder !== null ||
+                                holdingRows ||
                                 !(
                                   listEnvironments.pinReorderEnvironmentIds.has(
                                     thread.environmentId,

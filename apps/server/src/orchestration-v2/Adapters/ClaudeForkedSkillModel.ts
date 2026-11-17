@@ -21,7 +21,9 @@ type Registered = {
  * A `context: fork` skill has no Agent call and streams none of its own frames; only its
  * transcript, written after the fork reports its outcome, records the model it ran on.
  */
-export const claudeForkedSkillModels = Effect.fnUntraced(function* <E>(input: {
+export const claudeForkedSkillModels = Effect.fn("ClaudeForkedSkillModel.models")(function* <
+  E,
+>(input: {
   readonly taskIds: Iterable<string>;
   readonly registered: Effect.Effect<ReadonlyMap<string, Registered>>;
   readonly lookup: ((taskId: string) => Effect.Effect<string | null, E>) | undefined;

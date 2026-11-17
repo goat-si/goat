@@ -197,6 +197,11 @@ For a local Git repository without a remote, **Publish Repository** creates a ho
 adds it as `origin`, and pushes your commits. If there are no commits yet, it creates the remote;
 make your first commit before pushing.
 
+Every hosting provider is listed in **Add Project** and **Publish Repository**. To hide one you do
+not use, turn off its switch under **Settings → Source control** (on mobile, **Project sources**
+under **Source control**). The choice is saved on each machine's server. On a server too old to
+store it, every provider is listed and the switches are disabled.
+
 ## Create a pull request
 
 Use a thread's Git actions to commit, push, and create a pull request. GOAT can generate commit

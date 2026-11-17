@@ -40,6 +40,7 @@ import {
 } from "../../../attachmentStore.ts";
 import { resolveAttachmentRelativePath } from "../../../attachmentPaths.ts";
 import * as ServerConfig from "../../../config.ts";
+import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -139,6 +140,7 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
       "back",
       "forward",
       "reload",
+      "stopLoading",
       "snapshot",
       "logs",
       "fetch",
@@ -209,6 +211,28 @@ const browserGuide = Effect.fn("PreviewToolkit.browserGuide")(function* (
   );
   return guide === undefined ? {} : { guide };
 });
+
+/** Stop reaches the page only where this server advertises serverBrowserStopLoading. */
+const requireStopLoading = Effect.serviceOption(ServerEnvironment.ServerEnvironment).pipe(
+  Effect.flatMap((environment) =>
+    environment._tag === "Some"
+      ? environment.value.getDescriptor.pipe(
+          Effect.map((descriptor) => descriptor.capabilities.serverBrowserStopLoading === true),
+        )
+      : Effect.succeed(false),
+  ),
+  Effect.flatMap((advertised) =>
+    advertised
+      ? Effect.void
+      : Effect.fail(
+          new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message:
+              "This GOAT server's browser cannot stop a loading page, so nothing was sent. Navigate elsewhere with goat_preview_navigate, or update GOAT on this machine.",
+          }),
+        ),
+  ),
+);
 
 const invokeTargeted = <A extends object>(
   operation: PreviewAutomationOperation,
@@ -391,6 +415,11 @@ const handlers = {
   ),
   preview_reload: McpToolAccess.actsAsCaller((input) =>
     invokeTargeted<PreviewAutomationStatus>("reload", input, input.timeoutMs),
+  ),
+  goat_preview_stop: McpToolAccess.actsAsCaller((input) =>
+    requireStopLoading.pipe(
+      Effect.andThen(invokeTargeted<PreviewAutomationStatus>("stopLoading", input)),
+    ),
   ),
   preview_resize: McpToolAccess.actsAsCaller((input) =>
     invokeTargeted<PreviewAutomationResizeResult>("resize", input, input.timeoutMs),

@@ -17,12 +17,17 @@ import { tryWithWorkspaceLease } from "../../workspace/workspaceLease.ts";
 import { makeIsManagedWorktreePath } from "../../worktreesDirectory.ts";
 import * as ProjectionStore from "../ProjectionStore.ts";
 import { makeRestorePending, makeRestoreThreadWorkspace } from "./restoreThreadWorkspace.ts";
+import { makeRecreateScratchFolder } from "./recreateScratchFolder.ts";
+import { makeSetAsideFolder, setAsideSentence } from "./setAsideFolder.ts";
 
-type Restored = Pick<ThreadWorkspaceRestoreResult, "restoredFrom" | "setupScript">;
+type Restored = Pick<ThreadWorkspaceRestoreResult, "restoredFrom" | "setupScript"> & {
+  readonly setAsidePath?: string;
+};
 
 /**
  * Before a local turn starts in a worktree: confirm the thread still uses it and, when the folder
- * is gone or its restore never finished, bring it back. Busy sends the start to the outbox retry.
+ * is gone, its restore never finished, or a failed removal left only dependencies, bring it back.
+ * Busy sends the start to the outbox retry.
  */
 export const makePrepareTurnWorkspace = Effect.gen(function* () {
   const path = yield* Path.Path;
@@ -31,6 +36,8 @@ export const makePrepareTurnWorkspace = Effect.gen(function* () {
   const restorePending = yield* makeRestorePending;
   const restoreMissing = yield* makeRestoreThreadWorkspace;
   const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
+  const setAside = yield* makeSetAsideFolder;
+  const recreateScratchFolder = yield* makeRecreateScratchFolder;
   return Effect.fn("ProviderTurnStart.prepareWorkspace")(function* (thread: {
     readonly id: ThreadId;
     readonly projectId: ProjectId;
@@ -46,8 +53,11 @@ export const makePrepareTurnWorkspace = Effect.gen(function* () {
         // A rebinding that committed after this start loaded the thread sends it to retry.
         const bound = yield* projectionStore.getThreadShell(thread.id).pipe(Effect.option);
         if (Option.getOrNull(bound)?.worktreePath !== worktreePath) return "rebound" as const;
-        if (branch === null) return undefined;
-        const ready = yield* restorePending.ready(worktreePath);
+        if (branch === null) return void (yield* recreateScratchFolder(worktreePath));
+        const ready =
+          (yield* restorePending.ready(worktreePath)) &&
+          !(yield* setAside.leftover(worktreePath)) &&
+          !(yield* setAside.missing(worktreePath));
         if (ready || !(yield* isManagedWorktreePath(worktreePath))) return undefined;
         const project = yield* projects.getById(thread.projectId).pipe(
           Effect.map(Option.getOrUndefined),
@@ -93,6 +103,10 @@ export function workspaceRestoredItem(input: {
     ...input.restored,
     branch: input.branch,
   });
+  const { setAsidePath } = input.restored;
+  const detail = [lost, setAsidePath === undefined ? null : setAsideSentence(setAsidePath)]
+    .filter((sentence) => sentence !== null)
+    .join(" ");
   return {
     id: input.id,
     threadId: input.threadId,
@@ -116,6 +130,6 @@ export function workspaceRestoredItem(input: {
     source: { kind: "system" },
     outcome: "updated",
     summary,
-    ...(lost === null ? {} : { detail: lost }),
+    ...(detail === "" ? {} : { detail }),
   };
 }

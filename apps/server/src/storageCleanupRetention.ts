@@ -1,4 +1,5 @@
-import type { WorktreeCleanupRules } from "@goat/contracts";
+import type { OrchestrationV2ThreadShell, WorktreeCleanupRules } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 
 /** Rank distinct worktree paths by the most recent activity of any owning thread. */
 export function rankWorktrees(worktrees: ReadonlyArray<{ path: string; activityAt: number }>) {
@@ -32,4 +33,17 @@ export function retentionReason(input: {
   if (keepRecent !== null && input.rank !== undefined && input.rank >= keepRecent)
     return `beyond the most recent ${keepRecent} worktrees`;
   return null;
+}
+
+/** PR metadata refreshes must not reset the inactivity clock. */
+export function storageCleanupActivityAt(thread: OrchestrationV2ThreadShell): number {
+  return Math.max(
+    ...[
+      thread.createdAt,
+      thread.latestUserMessageAt,
+      thread.latestRunRequestedAt,
+      thread.latestRunStartedAt,
+      thread.latestRunCompletedAt,
+    ].flatMap((value) => (value == null ? [] : [DateTime.toEpochMillis(value)])),
+  );
 }

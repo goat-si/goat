@@ -48,10 +48,10 @@ it.effect.each([
     says: "the thread has no branch to recreate it from. Move the thread to an existing folder, or start a new thread.",
   },
   {
-    case: "outside GOAT's worktrees folder",
+    case: "a worktree GOAT cannot recreate in place",
     state: { exists: false, managed: false, project: true },
     branch: "feature",
-    says: "it is outside GOAT's worktrees folder. Put the folder back at that path, or move the thread to another worktree.",
+    says: "GOAT only recreates worktrees at <worktrees folder>/<repository>/<name>. Put the folder back at that path, or move the thread to another worktree.",
   },
   {
     case: "project gone",

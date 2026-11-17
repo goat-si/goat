@@ -85,7 +85,7 @@ export const cleanupFixture = (
     yield* command(repo, ["add", "."]);
     yield* command(repo, ["commit", "-m", "initial"]);
     yield* fs.makeDirectory(config.worktreesDir, { recursive: true });
-    const worktree = path.join(config.worktreesDir, "feature");
+    const worktree = path.join(config.worktreesDir, "repo", "feature");
     yield* command(repo, ["worktree", "add", "-b", "feature", worktree]);
     let settings: import("@goat/contracts").ServerSettings = {
       ...DEFAULT_SERVER_SETTINGS,

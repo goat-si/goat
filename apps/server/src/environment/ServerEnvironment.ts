@@ -298,6 +298,7 @@ export const make = Effect.gen(function* () {
       storageUsage: true,
       threadAutoSettlementScope: true,
       threadRestartContinuation: true,
+      offeredSourceControlProviders: true,
       ...(codexAppServerIsolationAvailable(codexTransport)
         ? { codexTurnSurvival: true, codexAppServerIsolation: true }
         : {}),
@@ -344,6 +345,7 @@ export const make = Effect.gen(function* () {
       ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
       serverBrowser: true,
       replyToResponse: true,
+      serverBrowserStopLoading: true,
       sshActivity: true,
       hubProxy: true,
       drainRestart: true,

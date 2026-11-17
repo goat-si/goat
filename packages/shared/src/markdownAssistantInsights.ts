@@ -1,61 +1,88 @@
 import type { PhrasingContent, Root, RootContent } from "mdast";
 import type { Processor } from "unified";
 
+/** Where an insight block's rewritten line came from, to map positions back to the source. */
+interface InsightLineOffset {
+  readonly original: number;
+  readonly rewritten: number;
+  readonly prefix: number;
+}
+
+export interface AssistantInsightSource {
+  /** The source with each insight block as a blockquote, line for line. */
+  readonly lines: ReadonlyArray<string>;
+  /** 1-based numbers of the lines that open an insight block. */
+  readonly starts: ReadonlySet<number>;
+  readonly offsets: ReadonlyArray<InsightLineOffset>;
+}
+
+/**
+ * Rewrites Claude's `★ Insight ───` blocks as blockquotes, skipping code, lists and quotes in
+ * `tree` (the parse of `source`). Null when the source has no insight block.
+ */
+export function rewriteAssistantInsights(
+  source: string,
+  tree: Root,
+): AssistantInsightSource | null {
+  if (!source.includes("★ Insight")) return null;
+  const protectedRanges: { start: number; end: number; code: boolean }[] = [];
+  const inspect = (node: RootContent | PhrasingContent) => {
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    if (start !== undefined && end !== undefined) {
+      const code =
+        node.type === "code" ||
+        node.type === "html" ||
+        (node.type === "inlineCode" && node.position?.start.line !== node.position?.end.line);
+      if (code || node.type === "list" || node.type === "blockquote")
+        protectedRanges.push({ start, end, code });
+    }
+    if ("children" in node) node.children.forEach(inspect);
+  };
+  tree.children.forEach(inspect);
+  const starts = new Set<number>();
+  const offsets: InsightLineOffset[] = [];
+  let indent: string | undefined;
+  let original = 0;
+  let rewritten = 0;
+  const lines = source.split(/(?<=\n)|(?<=\r)(?!\n)/u).map((line, index) => {
+    const value = line.replace(/[\r\n]+$/u, "");
+    const blocked = protectedRanges.some(
+      (range) =>
+        original >= range.start && original < range.end && (indent === undefined || range.code),
+    );
+    const opening =
+      indent === undefined && !blocked
+        ? /^( {0,3})(`?)★ Insight[ \t]+─{3,}\2[ \t]*$/u.exec(value)
+        : null;
+    const closing =
+      indent !== undefined && !blocked ? /^( {0,3})(`?)─{3,}\2[ \t]*$/u.exec(value) : null;
+    let prefix = 0;
+    let output = line;
+    if (opening) {
+      indent = opening[1] ?? "";
+      starts.add(index + 1);
+      output = ">" + line.slice(value.length);
+    } else if (closing && closing[1] === indent) {
+      indent = undefined;
+      output = line.slice(value.length);
+    } else if (indent !== undefined) {
+      prefix = 2;
+      output = "> " + line;
+    }
+    offsets.push({ original, rewritten, prefix });
+    original += line.length;
+    rewritten += output.length;
+    return output;
+  });
+  return starts.size === 0 ? null : { lines, starts, offsets };
+}
+
 export function remarkAssistantInsights(this: Processor) {
   return (tree: Root, file: { value: unknown }) => {
-    const source = String(file.value);
-    if (!source.includes("★ Insight")) return;
-    const protectedRanges: { start: number; end: number; code: boolean }[] = [];
-    const inspect = (node: RootContent | PhrasingContent) => {
-      const start = node.position?.start.offset;
-      const end = node.position?.end.offset;
-      if (start !== undefined && end !== undefined) {
-        const code =
-          node.type === "code" ||
-          node.type === "html" ||
-          (node.type === "inlineCode" && node.position?.start.line !== node.position?.end.line);
-        if (code || node.type === "list" || node.type === "blockquote")
-          protectedRanges.push({ start, end, code });
-      }
-      if ("children" in node) node.children.forEach(inspect);
-    };
-    tree.children.forEach(inspect);
-    const starts = new Set<number>();
-    const offsets: { original: number; rewritten: number; prefix: number }[] = [];
-    let indent: string | undefined;
-    let original = 0;
-    let rewritten = 0;
-    const lines = source.split(/(?<=\n)|(?<=\r)(?!\n)/u).map((line, index) => {
-      const value = line.replace(/[\r\n]+$/u, "");
-      const blocked = protectedRanges.some(
-        (range) =>
-          original >= range.start && original < range.end && (indent === undefined || range.code),
-      );
-      const opening =
-        indent === undefined && !blocked
-          ? /^( {0,3})(`?)★ Insight[ \t]+─{3,}\2[ \t]*$/u.exec(value)
-          : null;
-      const closing =
-        indent !== undefined && !blocked ? /^( {0,3})(`?)─{3,}\2[ \t]*$/u.exec(value) : null;
-      let prefix = 0;
-      let output = line;
-      if (opening) {
-        indent = opening[1] ?? "";
-        starts.add(index + 1);
-        output = ">" + line.slice(value.length);
-      } else if (closing && closing[1] === indent) {
-        indent = undefined;
-        output = line.slice(value.length);
-      } else if (indent !== undefined) {
-        prefix = 2;
-        output = "> " + line;
-      }
-      offsets.push({ original, rewritten, prefix });
-      original += line.length;
-      rewritten += output.length;
-      return output;
-    });
-    if (starts.size === 0) return;
+    const rewritten = rewriteAssistantInsights(String(file.value), tree);
+    if (rewritten === null) return;
+    const { lines, starts, offsets } = rewritten;
     const parsed = this.parse(lines.join("")) as Root;
     const restorePosition = (node: RootContent | PhrasingContent) => {
       if (node.position) {
