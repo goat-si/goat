@@ -37,6 +37,7 @@ import {
 import * as TestClock from "effect/testing/TestClock";
 import { describe, vi } from "vite-plus/test";
 import { openMediaFile } from "./assets/MediaFile.ts";
+import { mediaAsset } from "./assets/MediaFile.testkit.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import { base64UrlEncode, signPayload } from "./auth/utils.ts";
@@ -597,19 +598,6 @@ describe("signed media HTTP route", () => {
     },
   );
 });
-
-/** A guarded response closes its descriptor, so each request opens a fresh one, as the server does. */
-const mediaAsset = (
-  path: string,
-  guarded: boolean,
-  extra: { readonly mimeType: string; readonly expiresAt?: number },
-) =>
-  Effect.gen(function* () {
-    if (!guarded) return { path, ...extra };
-    const file = yield* openMediaFile(path);
-    if (!file) throw new Error("Expected an opened media file");
-    return { path, file, ...extra };
-  });
 
 describe("video asset byte ranges", () => {
   it.effect("uses current descriptor metadata after an in-place truncate or extension", () =>

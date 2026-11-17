@@ -188,7 +188,7 @@
   "apps/server/src/handoffs/Handoffs.ts": { "nonNull": 1 },
   "apps/server/src/htmlRender/headlessChrome.ts": { "nonNull": 1 },
   "apps/server/src/htmlRender/publicProxy.ts": { "nonNull": 12 },
-  "apps/server/src/http.test.ts": { "lines": 1290 },
+  "apps/server/src/http.test.ts": { "lines": 1278 },
   "apps/server/src/http.ts": { "nonNull": 2 },
   "apps/server/src/hub/HubDown.ts": { "nonNull": 1 },
   "apps/server/src/hub/OpenCodexManagedUpdate.ts": { "nonNull": 1 },
