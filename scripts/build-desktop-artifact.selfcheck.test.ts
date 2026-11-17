@@ -1,3 +1,7 @@
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeURL from "node:url";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -5,6 +9,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import {
+  BUNDLE_SELF_CHECK_RESOLVE_HOOK,
   BundleNotSelfContainedError,
   packWindowsServerAsar,
   verifyPackagedBundleIsSelfContained,
@@ -58,6 +63,75 @@ const serverAsar = Effect.fn("test.serverAsar")(function* (serverEntrySource: st
   const asarPath = path.join(root, "server.asar");
   yield* packWindowsServerAsar({ sourceDir, asarPath, arch: "x64" });
   return asarPath;
+});
+
+// A tiny tree directly under the OS temp directory, where the builder makes its probe.
+const hookProbe = Effect.fn("test.hookProbe")(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-selfcheck-hook-" });
+  const app = path.join(root, "app");
+  yield* fs.makeDirectory(app);
+  yield* fs.writeFileString(path.join(app, "dep.mjs"), "export default 1;\n");
+  yield* fs.writeFileString(path.join(app, "entry.mjs"), 'import "./dep.mjs";\n');
+  yield* fs.writeFileString(path.join(app, "escape.mjs"), 'import "../outside.mjs";\n');
+  yield* fs.writeFileString(path.join(root, "outside.mjs"), "export default 1;\n");
+  const hookPath = path.join(root, "contain-resolution.cjs");
+  yield* fs.writeFileString(hookPath, BUNDLE_SELF_CHECK_RESOLVE_HOOK);
+  // The temp directory's own spelling (C:\Users\RUNNER~1 on a hosted Windows runner), the native
+  // realpath's (the long name, /private/var), and a letter-case variant where the volume folds case.
+  const flipped = root.replace("goat-selfcheck-hook-", "GOAT-SELFCHECK-HOOK-");
+  const canonical = NodeFS.realpathSync.native(root);
+  const spellings = [root, canonical, ...(NodeFS.existsSync(flipped) ? [flipped] : [])];
+  const run = (treeRoot: string, entry: string) => {
+    const tree = NodeURL.pathToFileURL(`${path.join(treeRoot, "app")}${path.sep}`).href;
+    const result = NodeChildProcess.spawnSync(
+      process.execPath,
+      ["--no-global-search-paths", "--require", hookPath, entry],
+      {
+        encoding: "utf8",
+        env: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "", GOAT_BUNDLE_SELF_CHECK_TREE: tree },
+      },
+    );
+    return { tree, entry, status: result.status, stderr: result.stderr };
+  };
+  return { canonical, spellings, run, path };
+});
+
+it.layer(NodeServices.layer)("bundle self-check resolve hook", (it) => {
+  it.effect("accepts the tree's own files however the tree and the entry are spelled", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { spellings, run, path } = yield* hookProbe();
+        const failures: string[] = [];
+        for (const treeRoot of spellings) {
+          for (const entryRoot of spellings) {
+            const result = run(treeRoot, path.join(entryRoot, "app", "entry.mjs"));
+            if (result.status !== 0) {
+              failures.push(
+                `tree ${result.tree} rejected entry ${result.entry} (exit ${String(result.status)}):\n${result.stderr}`,
+              );
+            }
+          }
+        }
+        assert.deepStrictEqual(failures, []);
+      }),
+    ),
+  );
+
+  it.effect("still rejects an import that resolves outside the tree", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { canonical, spellings, run, path } = yield* hookProbe();
+        for (const entryRoot of spellings) {
+          const result = run(canonical, path.join(entryRoot, "app", "escape.mjs"));
+          assert.notStrictEqual(result.status, 0, result.stderr);
+          assert.include(result.stderr, "ERR_MODULE_NOT_FOUND");
+          assert.include(result.stderr, "outside the packaged tree");
+        }
+      }),
+    ),
+  );
 });
 
 it.layer(NodeServices.layer)("bundle self-check", (it) => {
