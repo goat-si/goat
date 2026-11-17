@@ -665,17 +665,26 @@ threads on an environment through its MCP server. See
 <h2 id="manage-or-revoke-access">Manage or revoke access</h2>
 <p>On the host, <strong>Settings → Connections</strong> lets authorized administrators create
 pairing links and revoke client sessions. Revoking an unused link prevents new
-pairings; revoke a device’s session to remove its existing access.
-<code>goat auth session revoke &lt;id&gt;</code> does the same from the command line: the session
-is refused at once, and a running server closes its open connections within
-about 5 seconds. An MCP request that was admitted before the revoke runs to
-completion on the access it was admitted with, and can still write or start work
-until it finishes. More commands are listed by <code>goat auth --help</code>.</p>
+pairings; revoke a device’s session to remove its existing access. An MCP request
+that session still has in progress stops at once.</p>
+<p><code>goat auth session revoke &lt;id&gt;</code> does the same from the command line: the session
+is refused at once, and a running server closes its open connections and stops
+its MCP requests in progress within about 5 seconds. A command-line revoke of a
+session that has already expired does not stop a request still running on it.
+<strong>Revoke others</strong> in Settings stops the requests in progress on every session it
+revokes, expired or not.</p>
+<p>An agent whose request was stopped sees the call fail and has to sign in again.
+Work the request had already handed to the server, such as a turn it started,
+keeps running. More commands are listed by <code>goat auth --help</code>.</p>
 <p><strong>Revoke others</strong> keeps sessions signed in with the desktop app’s built-in
 credential, normally the desktop app on that computer, and sessions Pen members
-hold; both are marked <strong>Kept by Revoke others</strong>. If you do not recognise one or
-suspect it, revoke it by itself. After you revoke the desktop app’s session, quit
-and reopen GOAT on that computer.</p>
+hold; both are marked <strong>Kept by Revoke others</strong>. An MCP request a Pen member’s
+session has in progress keeps running. If you do not recognise a kept session or
+suspect it, revoke it by itself in Settings, which also stops its requests in
+progress. A Pen member’s session whose sign-in has expired is no longer listed,
+and nothing in Settings or on the command line stops a request it still has
+running, so that request can continue until it finishes or GOAT restarts. After
+you revoke the desktop app’s session, quit and reopen GOAT on that computer.</p>
 <p>A session with an open connection stays listed after its access credential
 expires. <strong>Settings → Connections</strong> shows which sessions are connected;
 <code>goat auth session list</code> cannot tell.</p>
