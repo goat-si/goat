@@ -47,7 +47,12 @@ import {
   webSearchPatternsFromClaudeTool,
   webSearchResultsFromClaudeOutput,
 } from "./ClaudeToolFrames.ts";
-import { handoffSkillOffset, makeClaudeUserMessage } from "./ClaudeUserMessage.ts";
+import {
+  appendClaudeUserText,
+  handoffSkillOffset,
+  makeClaudeUserMessage,
+} from "./ClaudeUserMessage.ts";
+import { claudeMcpProxyBypassEnvironment } from "./claudeMcpProxyBypass.ts";
 import { CLAUDE_QUERY_ENDED_BEFORE_TURN_DETAIL } from "../PromptRefusal.ts";
 import { interruptUnlessClosed } from "./ClaudeStopTeardown.ts";
 import {
@@ -749,6 +754,7 @@ export const CLAUDE_GOAT_MCP_TOOL_WILDCARD = "mcp__goat__*";
 const CLAUDE_CUA_MCP_TOOL_PREFIX = `mcp__${McpProviderSession.CUA_MCP_SERVER_NAME}__`;
 const CLAUDE_CUA_MCP_TOOL_WILDCARD = `${CLAUDE_CUA_MCP_TOOL_PREFIX}*`;
 
+export { claudeMcpProxyBypassEnvironment };
 export {
   CLAUDE_MEMORY_READ_TOOLS,
   CLAUDE_MEMORY_WRITE_TOOLS,
@@ -772,29 +778,6 @@ export const CLAUDE_GOAT_MCP_TOOL_TIMEOUT_MS = 65 * 60 * 1_000;
 //
 // The header carries the credential itself: the query runner sends
 // `mcpServers` over the CLI's stdin, never its argv or environment.
-
-// Claude Code sends HTTP MCP traffic through any configured HTTPS_PROXY, including
-// one set in the user's Claude settings.json, and it does so even for loopback URLs.
-// Proxies cannot reach this server's local endpoint (an intercepting CONNECT proxy
-// answers 405), so the goat server would silently fail to attach. Exempting the
-// endpoint host keeps the user's proxy for everything else. A NO_PROXY set in
-// Claude's own settings env still wins over the process environment.
-export function claudeMcpProxyBypassEnvironment(
-  endpoint: string,
-  environment: NodeJS.ProcessEnv | undefined,
-): Readonly<Record<string, string>> {
-  const host = new URL(endpoint).hostname.replace(/^\[(.*)\]$/u, "$1");
-  const existing = environment?.NO_PROXY ?? environment?.no_proxy ?? "";
-  const entries = existing
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-  if (entries.includes("*") || entries.includes(host)) return {};
-  const value = [...entries, host].join(",");
-  return environment?.no_proxy === undefined
-    ? { NO_PROXY: value }
-    : { NO_PROXY: value, no_proxy: value };
-}
 
 export function claudeMcpQueryOverrides(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
@@ -853,20 +836,6 @@ export function claudeMcpQueryOverrides(input: {
       ...McpProviderSession.goatSdkServers(session.goatMcpServers),
     },
     mcpEnvironment: claudeMcpProxyBypassEnvironment(session.endpoint, input.environment),
-  };
-}
-
-function appendClaudeUserText(message: SDKUserMessage, text: string): SDKUserMessage {
-  const content = message.message.content;
-  return {
-    ...message,
-    message: {
-      ...message.message,
-      content: [
-        ...(typeof content === "string" ? [{ type: "text" as const, text: content }] : content),
-        { type: "text" as const, text },
-      ],
-    },
   };
 }
 
