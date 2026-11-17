@@ -350,6 +350,11 @@ export function createMemoryEnvironmentAtoms<R, E>(
 
   function bodyQuery<T extends MemoryBodyRpcTag>(tag: T) {
     const read = command(tag);
+    type Reply = Option.Option<EnvironmentRpcSuccess<T>> | null;
+    // Atom.family holds its values weakly, so the family returns the read atom itself and the
+    // reply finds its request through it: a wrapper object would be collected and rebuilt with a
+    // second request while the read and reply taken out of it are still in use.
+    const replies = new WeakMap<object, (get: Atom.AtomContext) => Reply>();
     const family = Atom.family((key: string) => {
       const [environmentId, input] = JSON.parse(key) as [
         EnvironmentId,
@@ -476,7 +481,7 @@ export function createMemoryEnvironmentAtoms<R, E>(
         (refresh) => refresh(raw),
       ).pipe(Atom.setIdleTTL(0));
       // The admitted reply of the request for the current exposure, or null while it is pending.
-      const reply = Atom.make((get) => {
+      replies.set(readable, (get): Reply => {
         const value = get(readable);
         const result = get(raw);
         if (value._tag === "Failure") return Option.none<EnvironmentRpcSuccess<T>>();
@@ -486,12 +491,19 @@ export function createMemoryEnvironmentAtoms<R, E>(
           result.value.settled
           ? value.value
           : null;
-      }).pipe(Atom.setIdleTTL(0));
-      return { readable, reply };
+      });
+      return readable;
+    });
+    // The reply holds its read atom, so the read stays the family's value while a reply is in use.
+    const replyFamily = Atom.family((key: string) => {
+      const readable = family(key);
+      const reply = replies.get(readable);
+      if (reply === undefined) throw new Error("A memory read atom has no reply.");
+      return Atom.make((get) => reply(get)).pipe(Atom.setIdleTTL(0));
     });
     type Target = { readonly environmentId: EnvironmentId; readonly input: EnvironmentRpcInput<T> };
-    return Object.assign((target: Target) => family(environmentRpcKey(target)).readable, {
-      reply: (target: Target) => family(environmentRpcKey(target)).reply,
+    return Object.assign((target: Target) => family(environmentRpcKey(target)), {
+      reply: (target: Target) => replyFamily(environmentRpcKey(target)),
     });
   }
   const read = bodyQuery(WS_METHODS.memoryRead);
