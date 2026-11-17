@@ -1,7 +1,9 @@
 export { splitNullSeparatedGitStdoutPaths } from "./gitStdoutPaths.ts";
 import {
   parseDefaultBranchFromRemoteHeadRef,
+  remoteHeadRefArgs,
   resolvePrimaryDefaultBranch,
+  servedRemoteBranch,
 } from "./primaryDefaultBranch.ts";
 import { checkConflictMarkers } from "./commitConflictMarkers.ts";
 import { gitCommandContext } from "./gitCommandContext.ts";
@@ -1541,12 +1543,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     cwd: string,
     remoteName: string,
   ): Effect.Effect<string | null, GitCommandError> =>
-    executeGit(
-      "GitVcsDriver.resolveDefaultBranchName",
-      cwd,
-      ["symbolic-ref", `refs/remotes/${remoteName}/HEAD`],
-      { allowNonZeroExit: true },
-    ).pipe(
+    executeGit("GitVcsDriver.resolveDefaultBranchName", cwd, remoteHeadRefArgs(remoteName), {
+      allowNonZeroExit: true,
+    }).pipe(
       Effect.map((result) => {
         if (result.exitCode !== 0) {
           return null;
@@ -3583,7 +3582,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         executeGit(
           "GitVcsDriver.listRefs.defaultRef",
           fetchCwd,
-          [...gitDirArgs, "symbolic-ref", "refs/remotes/origin/HEAD"],
+          [...gitDirArgs, ...remoteHeadRefArgs("origin")],
           {
             timeoutMs: 5_000,
             allowNonZeroExit: true,
@@ -3611,7 +3610,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
     const defaultBranch =
       defaultRefResult.exitCode === 0
-        ? defaultRefResult.stdout.trim().replace(/^refs\/remotes\/origin\//, "")
+        ? parseDefaultBranchFromRemoteHeadRef(defaultRefResult.stdout, "origin")
         : null;
     const parsedWorktreeEntries =
       worktreeListResult.exitCode === 0
@@ -4736,7 +4735,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         remoteName: "origin",
         branchName: input.refName,
       };
-      return remoteNames.includes(remoteName) ? { remoteName, branchName } : null;
+      return servedRemoteBranch(remoteNames, { remoteName, branchName });
     });
 
   /**
