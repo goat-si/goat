@@ -61,6 +61,7 @@ import {
   parseClaudeBackgroundTaskEntry,
   claudeBackgroundDetails,
 } from "./ClaudeBackgroundTasks.ts";
+import { claudeForkedSkillModels } from "./ClaudeForkedSkillModel.ts";
 import {
   claudeCompactionOutcome,
   readToolSearchSetting,
@@ -8320,6 +8321,23 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               next.delete(context.providerTurnId);
               return next;
             });
+            const lookupModel = queryRunner.subagentModel;
+            for (const update of yield* claudeForkedSkillModels({
+              taskIds: context.subagentsByTaskId.keys(),
+              registered: Ref.get(sessionSubagentsByTaskId),
+              canonical: (model) => canonicalClaudeSubagentModel(modelCatalog, model),
+              lookup:
+                lookupModel &&
+                ((taskId) =>
+                  lookupModel({
+                    sessionId: liveQuery.nativeThreadId,
+                    agentId: taskId,
+                    dir: context.input.runtimePolicy.cwd,
+                    threadId: context.input.threadId,
+                    providerSessionId: session.id,
+                  })),
+            }))
+              yield* updateClaudeSubagentNode({ context, ...update });
             if (!isClaudeProviderContinuationTurn(context.input)) {
               yield* markAbsorbedWake(liveQuery.nativeThreadId);
             }
