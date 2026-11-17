@@ -802,3 +802,322 @@ K7's answers:
 3. "pushes a pending secret card once across its updates, without its text, and clears it when answered": two updates of the same pending card give one publication (waiting_for_input); the published state contains neither the card's label nor its reason; once the card is saved and the child's summary clears, a second publication leaves waiting_for_input. The push text for a child's secret request and for a child's handoff is the same: headline "Waiting for input", the parent's thread title, project title and model (agentAwareness.ts projectThreadAwarenessV2). Its detail is set only for waiting_for_approval, from the parent's own handoff title, so neither a child's secret label, reason or value nor a child's handoff title reaches the push.
 4. An older client on a newer server receives the kept card updates only as shell refreshes; it does not read userOnly, so it rolls up nothing and shows what it shows today.
 
+
+
+## Coordinator, 2026-11-17 22:45:36 UTC, for every lane (verbatim)
+
+FOR EVERY LANE (relay it): before a push, every changed test file runs whole, with no -t filter; and for a row that changes when or whether something wakes, notifies or holds a thread, the test files of that subsystem run whole as well. A -t run is for iteration and is named as such in the record.
+
+K7 under it: from now on every changed test file runs whole before a push, and a -t run is called iteration. Row 8 changes no wake, notify or hold path. Row 7 (8044daa14c, pushed before this rule) changed notifications. Before READY I run row 7's changed test files and the subsystem's test files whole (ShellStream, AgentAwarenessRelay, agentAwareness, the push notification and client-runtime threadShell tests) and record the result here.
+
+## Row 8 (1c9ea568a1): build notes and rule 3 (quoted before the commit)
+
+Move-outs before the row (local, not pushed until the row is in):
+- 1213ea8016, claim 6: orchestratorMcp.ts:685-696 at c995c5427a (comment and clampedPositiveInt) to contracts/src/mcpClampedInt.ts; only the export keyword changes. 1083 -> 1072; with the row 1073 (entry at the cut 1083).
+- 53162fd791, claim 7: Orchestrator.ts:401-414 plus blank :415 at c995c5427a (OrchestratorThreadAboveModeLimitError) to orchestration-v2/OrchestratorModeLimitError.ts, byte for byte, imported and re-exported. 13528 -> 13516; with the row 13525 (entry at the cut 13528).
+- Claim 8 (OrchestratorMcpService.ts:515-530) is NOT used and its local commit was dropped before any push: in GOAT the MCP thread detail mapping lives in apps/server/src/mcp/threadListView.ts (no budget entry), so the row writes no line into OrchestratorMcpService.ts (3871, its entry). The card row can be released.
+
+What the row does: a thread remembers the outcome of its last regeneration that a person asked for (renamed, unchanged, or failed with a short reason). The shell and the MCP thread detail carry it, and clients wait for the outcome of their own request. Web shows "Title kept" or a failure toast with the server's reason, and mobile shows an alert on failure. Before this row a failed or unchanged regeneration looked like success: the spinner stopped and nothing was said.
+
+Files: contracts threadTitle.ts (outcome schemas), orchestrationV2.ts (optional lastTitleRegeneration on AppThread, ThreadShell and their Json forms; optional outcome on thread.title.regeneration.complete), orchestratorMcp.ts (optional lastTitleRegeneration on OrchestratorMcpThreadDetail); server Orchestrator.ts (record the outcome, :3609), ThreadTitleRegenerationService.ts (outcome per path; failure reason = last non-empty line of a TextGenerationError's detail, at most 300 characters; other causes "Title generation failed."), threadShellProjection.ts (upstream's ProjectionStore hunk, which lives here in GOAT), threadListView.ts (upstream's OrchestratorMcpService hunk); client-runtime threadCommands.ts (armTitleRegeneration, regenerateTitle) and new state/threadTitleRegeneration.ts; web new components/threadTitleRegenerationToast.ts, Sidebar.tsx, useThreadActionMenu.ts, chat/useThreadLifecycle.tsx; mobile features/home/useThreadListActions.ts.
+
+Adaptations: upstream's runtime.ts hunk (export environmentConnectionAtom) is not needed, because GOAT already exports environmentConnectionAtoms from state/environmentConnections.ts and threadCommands.ts calls it. Upstream's OrchestrationV2LastTitleRegeneration is local to orchestrationV2.ts; GOAT declares it, with its Json form, in threadTitle.ts so orchestrationV2.ts (at a budget entry) gains one line per field. Upstream's VcsStatusBroadcaster.test.ts hunk is an unrelated fixture fix bundled in the commit and is not ported. Upstream changes the existing case "clears the marker and keeps the title when generation fails" (die -> TextGenerationError, plus an assertion). GOAT leaves that case as it is and covers the outcomes in new cases, so no existing server expectation changes; the existing die case still passes and now records "Title generation failed.".
+
+GOAT-only behaviour to know: an older settled thread that is not in the shell snapshot (GOAT's olderSettled cut) settles the wait at once with no outcome, so it shows what it shows today, no toast. The multi-select regenerate in Sidebar now sends the requests together (upstream's shape) and clears the selection first; before, it went one by one and stopped at the first failure.
+
+C4, each way:
+- Older client, newer server: the new fields are optional and an older decoder ignores keys it does not know. The new orchestratorMcp.test.ts case decodes a newer thread read with the previous schema; the shell and app-thread fields are optional in the same way. An older client keeps today's behaviour, with no outcome shown.
+- Newer client, older server: no lastTitleRegeneration arrives. The waiter keeps waiting while titleRegeneration still names its request, then settles with null when the marker clears. So the client shows today's behaviour and cannot hang. A server that cannot regenerate is still refused up front by readEnvironmentSupportsTitleRegeneration on web and environmentSupportsTitleRegeneration on mobile.
+- Strict MCP consumers (condition (d)): OrchestratorMcpThreadDetail.lastTitleRegeneration is Schema.optional(Schema.NullOr(...)). The new case decodes an older host's read (no field) and a newer one (field present), and the previous schema decodes the newer read. Mutations: with the field required, both the new case and the existing peer-versions case fail ("Missing key"); with the field removed, the new case fails (expected undefined to deeply equal {...}).
+- Reconnect during the wait: when the connection's projection phase is disconnected, the wait settles with null and the client shows nothing; the title still updates through the shell later. Test: "settles without an outcome when the environment disconnects while waiting".
+- Stored data: the outcome is part of the thread's projected state (JSON), so no migration is needed. An older server that reads it ignores the optional field.
+- Negative cases: a superseded request (the shell shows a later or earlier requestId and no marker for this request) resolves with null and is never shown another request's outcome. Test: the second half of "resolves with the outcome recorded for its own request". A first-message title records no outcome (new case). A stale execute records nothing (unchanged path). The failure reason keeps only the last line of the CLI detail, so the conversation text in earlier lines does not reach the shell, as upstream's fixture shows ("Conversation text" is in the detail and is not in the message).
+
+Tests, failing first:
+- apps/server ThreadTitleRegenerationService.test.ts, three new cases. With the service and Orchestrator changes set aside, "records the outcome of a regeneration: renamed, failed with its detail, unchanged" and "records a failed outcome when generation outlives its two-minute deadline" fail (AssertionError: Target cannot be null or undefined). "records no outcome for a first-message title" passes there by design. With the change: 10 passed (whole file).
+- packages/client-runtime threadCommands.test.ts, upstream's two cases. With threadCommands.ts set aside, both fail (regenerateTitle undefined). Behaviour mutation: the waiter accepts any recorded outcome (last != null), and "resolves with the outcome recorded for its own request" fails (AssertionError). With the change: 27 passed (whole file).
+- packages/contracts orchestratorMcp.test.ts, the new decode case (mutations above). 22 passed (whole file).
+- apps/mobile useThreadListActions.test.ts, upstream's case. With the hook change set aside it fails (expected true to be false). With the change: 50 passed (whole file).
+- apps/web threadTitleRegenerationToast.test.ts, new file with the new module, 3 cases (quiet on rename, unknown and interrupt; the failure reason, single and batch; kept, single and batch). 3 passed.
+- Wider server run for shells and thread details (39 files, whole): channelWorkerObservation, ProjectionStore{,.provenance,.shellReads,.notifications}, ThreadStop, UsageLimitRecoveryWorker, RunStartHoldReactor, DelegatedCompletionInterrupt, ProjectionSettlement, WireProjection, ProviderTurnStartService, ThreadTitleRegenerationService, HostThreadsMcpService*, OrchestratorMcpService*: 39 files, 560 passed.
+- Typecheck (vp run typecheck) exit 0 for contracts, client-runtime, server, web and mobile; vp lint on the changed files has no error, and the three Orchestrator.ts warnings are on existing lines 4552, 5788 and 5801.
+
+Budgets: Orchestrator.ts 13516 -> 13525 (cut 13528), orchestrationV2.ts 4411 -> 4421 (cut 4438, after f64a05819a's move-out), orchestratorMcp.ts 1072 -> 1073 (cut 1083), Sidebar.tsx 3331 -> 3321 (net -10 by the row itself; no claim needed). The other changed files have no entry and stay under 1000 (orchestratorMcp.test.ts 869, threadCommands.test.ts 673, useThreadListActions.ts 862).
+
+Exports changed (for K2, K10, M3): contracts: new ThreadTitleRegenerationStatus, ThreadTitleRegenerationOutcome, LastThreadTitleRegeneration, OrchestrationV2LastTitleRegeneration, OrchestrationV2LastTitleRegenerationJson (threadTitle.ts); new clampedPositiveInt (mcpClampedInt.ts, moved from a private const); OrchestrationV2AppThread, OrchestrationV2ThreadShell and their Json forms gain optional lastTitleRegeneration; OrchestrationV2Command thread.title.regeneration.complete gains optional outcome; OrchestratorMcpThreadDetail gains optional lastTitleRegeneration. client-runtime: createThreadEnvironmentAtoms' result gains armTitleRegeneration and regenerateTitle (resolves to ThreadTitleRegenerationOutcome | null); new module state/threadTitleRegeneration.ts (waitForTitleRegenerationOutcome, TitleRegenerationRequest, TitleRegenerationSources). Server: OrchestratorThreadAboveModeLimitError now lives in OrchestratorModeLimitError.ts and is re-exported from Orchestrator.ts.
+
+P1 rows (no dev server in this lane): web, a single regenerate from the sidebar menu, the chat header menu and the shortcut showing "Title kept" when the model keeps the title and a failure toast with the reason; a multi-select regenerate showing "Kept n of m titles" or "Failed to regenerate n of m thread titles". Mobile: a failed regenerate shows the "Could not regenerate title" alert with the reason. Desktop wraps web.
+
+### Rule 3, IV (i) mirrored: threadCommands.test.ts harness (quoted before the commit)
+
+Upstream's own copy, 1c9ea568a1 (harness hunks; the added describe is new and needs no word):
+
+```diff
+@@ -22,11 +22,16 @@ import * as Layer from "effect/Layer";
+ import * as Option from "effect/Option";
+ import * as Queue from "effect/Queue";
+ import * as Scope from "effect/Scope";
++import * as Stream from "effect/Stream";
+ import * as SubscriptionRef from "effect/SubscriptionRef";
+ import { Atom, AtomRegistry } from "effect/reactivity";
+ 
+ import * as EnvironmentRegistry from "../connection/registry.ts";
+-import { BearerConnectionTarget } from "../connection/model.ts";
++import {
++  AVAILABLE_CONNECTION_STATE,
++  BearerConnectionTarget,
++  type SupervisorConnectionState,
++} from "../connection/model.ts";
+ import * as EnvironmentSupervisor from "../connection/supervisor.ts";
+ import type { RpcSession } from "../rpc/session.ts";
+ import { createThreadEnvironmentAtoms } from "./threadCommands.ts";
+@@ -96,12 +101,19 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* (optio
+     reply: Deferred.Deferred<{ sequence: number }, Error>;
+   }>();
+   const reconciled = yield* Queue.unbounded<ThreadId>();
++  const connectionFollowed = yield* Deferred.make<void>();
++  const connection = yield* SubscriptionRef.make<SupervisorConnectionState>({
++    ...AVAILABLE_CONNECTION_STATE,
++    desired: true,
++    phase: "connected",
++  });
+   const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+     target: new BearerConnectionTarget({
+       environmentId: ENVIRONMENT_ID,
+       label: "Test",
+       connectionId: "test",
+     }),
++    state: connection,
+     session: yield* SubscriptionRef.make(
+       Option.some({
+         client: {
+@@ -120,6 +132,12 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* (optio
+       Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, {
+         run: (_environmentId, effect) =>
+           Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
++        followStream: (_environmentId, stream) =>
++          Stream.provideService(
++            stream,
++            EnvironmentSupervisor.EnvironmentSupervisor,
++            supervisor,
++          ).pipe(Stream.onStart(Deferred.succeed(connectionFollowed, undefined))),
+       } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
+       Layer.succeed(
+         SecureRandom.SecureRandom,
+@@ -137,13 +155,24 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* (optio
+       ),
+     ),
+   );
+-  const snapshotAtom = Atom.family((_environmentId: EnvironmentId) => Atom.make(SNAPSHOT));
++  const snapshotAtom = Atom.family((_environmentId: EnvironmentId) =>
++    Atom.make<OrchestrationV2ShellSnapshot | null>(SNAPSHOT),
++  );
+   const commands = createThreadEnvironmentAtoms(runtime, snapshotAtom);
+   const registry = AtomRegistry.make();
+   yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
+   const visibleAtom = commands.snapshotAtom(ENVIRONMENT_ID);
+   registry.mount(visibleAtom);
+-  return { registry, commands, snapshotAtom, visibleAtom, requests, reconciled };
++  return {
++    registry,
++    commands,
++    snapshotAtom,
++    visibleAtom,
++    requests,
++    reconciled,
++    connection,
++    connectionFollowed,
++  };
+ });
+ 
+ describe("history loading", () => {
+```
+
+GOAT's hunks, the same lines. The one difference is names: GOAT's harness never imported BearerConnectionTarget (its target is a plain object), so the model import is one line.
+
+```diff
+@@ -22,10 +22,12 @@ import * as Layer from "effect/Layer";
+ import * as Option from "effect/Option";
+ import * as Queue from "effect/Queue";
+ import * as Scope from "effect/Scope";
++import * as Stream from "effect/Stream";
+ import * as SubscriptionRef from "effect/SubscriptionRef";
+ import { Atom, AtomRegistry } from "effect/reactivity";
+ 
+ import * as EnvironmentRegistry from "../connection/registry.ts";
++import { AVAILABLE_CONNECTION_STATE, type SupervisorConnectionState } from "../connection/model.ts";
+ import * as EnvironmentSupervisor from "../connection/supervisor.ts";
+ import type { RpcSession } from "../rpc/session.ts";
+ import { createThreadEnvironmentAtoms } from "./threadCommands.ts";
+@@ -95,8 +97,15 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* (optio
+     reply: Deferred.Deferred<{ sequence: number }, Error>;
+   }>();
+   const reconciled = yield* Queue.unbounded<ThreadId>();
++  const connectionFollowed = yield* Deferred.make<void>();
++  const connection = yield* SubscriptionRef.make<SupervisorConnectionState>({
++    ...AVAILABLE_CONNECTION_STATE,
++    desired: true,
++    phase: "connected",
++  });
+   const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+     target: { environmentId: ENVIRONMENT_ID },
++    state: connection,
+     session: yield* SubscriptionRef.make(
+       Option.some({
+         client: {
+@@ -115,6 +124,12 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* (optio
+       Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, {
+         run: (_environmentId, effect) =>
+           Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
++        followStream: (_environmentId, stream) =>
++          Stream.provideService(
++            stream,
++            EnvironmentSupervisor.EnvironmentSupervisor,
++            supervisor,
++          ).pipe(Stream.onStart(Deferred.succeed(connectionFollowed, undefined))),
+       } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
+       Layer.succeed(
+         SecureRandom.SecureRandom,
+@@ -132,13 +147,24 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* (optio
+       ),
+     ),
+   );
+-  const snapshotAtom = Atom.family((_environmentId: EnvironmentId) => Atom.make(SNAPSHOT));
++  const snapshotAtom = Atom.family((_environmentId: EnvironmentId) =>
++    Atom.make<OrchestrationV2ShellSnapshot | null>(SNAPSHOT),
++  );
+   const commands = createThreadEnvironmentAtoms(runtime, snapshotAtom);
+   const registry = AtomRegistry.make();
+   yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
+   const visibleAtom = commands.snapshotAtom(ENVIRONMENT_ID);
+   registry.mount(visibleAtom);
+-  return { registry, commands, snapshotAtom, visibleAtom, requests, reconciled };
++  return {
++    registry,
++    commands,
++    snapshotAtom,
++    visibleAtom,
++    requests,
++    reconciled,
++    connection,
++    connectionFollowed,
++  };
+ });
+ 
+ describe("history loading", () => {
+```
+
+### Rule 3, IV and IV (i) mirrored: apps/mobile useThreadListActions.test.ts (quoted before the commit)
+
+The mutationCases row changes the way upstream's does (IV, the same assertion in upstream's own copy). The state field, the mock factory's action list and return line, and the beforeEach reset are fixture and mock lines that upstream changes the same way (IV (i)). The added case is upstream's verbatim and new. GOAT's file differs from upstream's parent elsewhere (holdingRows and other state), so IV (iv) does not apply.
+
+Upstream's hunks, 1c9ea568a1:
+
+```diff
+@@ -7,6 +7,7 @@ import {
+   ProviderInstanceId,
+   RunId,
+   ThreadId,
++  type ThreadTitleRegenerationOutcome,
+ } from "@t3tools/contracts";
+ import * as Cause from "effect/Cause";
+ import { AsyncResult } from "effect/reactivity";
+@@ -18,6 +19,7 @@ const state = vi.hoisted(() => ({
+   dropBusy: false,
+   holdingRows: false,
+   failedAction: null as string | null,
++  titleOutcome: null as ThreadTitleRegenerationOutcome | null,
+   archivedRefreshes: [] as string[],
+   scopes: new Map<string, Set<string>>(),
+   shells: [] as EnvironmentThreadShell[],
+@@ -141,6 +143,7 @@ vi.mock("../../state/threads", () => ({
+       "reorderPin",
+       "reorderActive",
+       "updateMetadata",
++      "regenerateTitle",
+     ].map((action) => [
+       action,
+       async (request: {
+@@ -155,7 +158,7 @@ vi.mock("../../state/threads", () => ({
+         if (action === state.failedAction)
+           return AsyncResult.failure(Cause.fail(new Error("Server rejected action")));
+         state.afterRequest?.();
+-        return AsyncResult.success(undefined);
++        return AsyncResult.success(action === "regenerateTitle" ? state.titleOutcome : undefined);
+       },
+     ]),
+   ),
+@@ -186,12 +189,13 @@ const mutationCases = [
+   ["unsnoozeThread", "unsnooze"],
+   ["pinThread", "pin"],
+   ["unpinThread", "unpin"],
+-  ["regenerateThreadTitle", "updateMetadata"],
++  ["regenerateThreadTitle", "regenerateTitle"],
+ ] as const;
+ 
+ beforeEach(() => {
+   state.connectedEnvironmentIds = [primaryEnvironmentId, otherEnvironmentId];
+   state.failedAction = null;
++  state.titleOutcome = null;
+   state.archivedRefreshes = [];
+   state.pendingOrder = null;
+   state.dropBusy = false;
+```
+
+GOAT's hunks:
+
+```diff
+@@ -7,6 +7,7 @@ import {
+   ProviderInstanceId,
+   RunId,
+   ThreadId,
++  type ThreadTitleRegenerationOutcome,
+ } from "@goat/contracts";
+ import * as Cause from "effect/Cause";
+ import { AsyncResult } from "effect/reactivity";
+@@ -17,6 +18,7 @@ const state = vi.hoisted(() => ({
+   pendingOrder: null as object | null,
+   dropBusy: false,
+   failedAction: null as string | null,
++  titleOutcome: null as ThreadTitleRegenerationOutcome | null,
+   archivedRefreshes: [] as string[],
+   scopes: new Map<string, Set<string>>(),
+   shells: [] as EnvironmentThreadShell[],
+@@ -143,6 +145,7 @@ vi.mock("../../state/threads", () => ({
+       "reorderPin",
+       "reorderActive",
+       "updateMetadata",
++      "regenerateTitle",
+     ].map((action) => [
+       action,
+       async (request: {
+@@ -157,7 +160,7 @@ vi.mock("../../state/threads", () => ({
+         if (action === state.failedAction)
+           return AsyncResult.failure(Cause.fail(new Error("Server rejected action")));
+         state.afterRequest?.();
+-        return AsyncResult.success(undefined);
++        return AsyncResult.success(action === "regenerateTitle" ? state.titleOutcome : undefined);
+       },
+     ]),
+   ),
+@@ -188,12 +191,13 @@ const mutationCases = [
+   ["unsnoozeThread", "unsnooze"],
+   ["pinThread", "pin"],
+   ["unpinThread", "unpin"],
+-  ["regenerateThreadTitle", "updateMetadata"],
++  ["regenerateThreadTitle", "regenerateTitle"],
+ ] as const;
+ 
+ beforeEach(() => {
+   state.connectedEnvironmentIds = [primaryEnvironmentId, otherEnvironmentId];
+   state.failedAction = null;
++  state.titleOutcome = null;
+   state.archivedRefreshes = [];
+   state.pendingOrder = null;
+   state.dropBusy = false;
+```
+
+ThreadTitleRegenerationService.test.ts and orchestratorMcp.test.ts: new cases only; no existing line changes beyond the import list (TextGenerationError, Fiber, TestClock in the service test; none in orchestratorMcp.test.ts, which already imports what the case uses).
+
+NOT RUN for row 8: a real client pass (P1 rows above); the web Sidebar and useThreadActionMenu browser suites (they run in check:changed before READY); a mutation that removes the disconnect check (that case would then hang to the project timeout, so I did not run it); a running older GOAT release (older peers are shown by schema decode cases).
+
