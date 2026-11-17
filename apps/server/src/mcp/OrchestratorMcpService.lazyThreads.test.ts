@@ -29,7 +29,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
-import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
@@ -47,6 +46,7 @@ import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { liveThreadShell } from "./McpToolAccess.testkit.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
+import { layerTestThreadLaunch } from "./OrchestratorMcpService.testkit.ts";
 
 const now = DateTime.makeUnsafe("2026-10-28T03:00:00.000Z");
 const projectId = ProjectId.make("project:mcp-test");
@@ -127,7 +127,7 @@ const parentProjection = (subagents: ReadonlyArray<unknown>) =>
 const layerFor = (threads: Partial<ThreadManagementService.ThreadManagementService["Service"]>) =>
   OrchestratorMcpService.layer.pipe(
     Layer.provide(layerNoFleetSync),
-    Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
+    Layer.provide(layerTestThreadLaunch()),
     Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
     Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
     Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),

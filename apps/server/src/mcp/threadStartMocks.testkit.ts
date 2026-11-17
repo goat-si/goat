@@ -2,16 +2,16 @@ import { OrchestrationV2ThreadForkError } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadForkWorkspace from "../orchestration-v2/goat/ThreadForkWorkspace.ts";
+import { layerTestThreadLaunch } from "./OrchestratorMcpService.testkit.ts";
 
 /**
  * Thread-starting doubles for tests that assemble MCP toolkits: launches are inert, and a fork
  * dispatches thread.fork through the test's ThreadManagementService, as a same-checkout fork does.
  */
 export const layerThreadStartMocks = Layer.mergeAll(
-  Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+  layerTestThreadLaunch(),
   Layer.effect(
     ThreadForkWorkspace.ThreadForkWorkspaceService,
     Effect.gen(function* () {

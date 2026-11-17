@@ -80,7 +80,10 @@ const isJson = Schema.is(Schema.Json);
 
 const decodeTarget = Schema.decodeUnknownEffect(OrchestratorMcpTarget);
 
-import { layerOrchestratorService } from "./OrchestratorMcpService.testkit.ts";
+import {
+  layerOrchestratorService,
+  layerTestThreadLaunch,
+} from "./OrchestratorMcpService.testkit.ts";
 
 describe("OrchestratorMcpService", () => {
   it.effect("reports a restart-cut child as working until its continuation settles", () =>
@@ -3666,7 +3669,7 @@ describe("OrchestratorMcpService provider resolution", () => {
         Layer.provide(layerNoFleetSync),
         Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
         Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
-        Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
+        Layer.provide(layerTestThreadLaunch()),
         Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)(git)),
         Layer.provide(
           Layer.mergeAll(

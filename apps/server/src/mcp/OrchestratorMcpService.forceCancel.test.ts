@@ -16,7 +16,6 @@ import {
 } from "../orchestration-v2/delegatedForceStop.testkit.ts";
 import { layerTest } from "../orchestration-v2/ThreadStop.testkit.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
-import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
@@ -27,6 +26,7 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
+import { layerTestThreadLaunch } from "./OrchestratorMcpService.testkit.ts";
 
 const scopeOf = (threadId: ThreadId): McpInvocationScope => ({
   environmentId: EnvironmentId.make("force-cancel"),
@@ -58,7 +58,7 @@ const withService = <A, E, R>(
           Layer.succeed(ThreadManagementService.ThreadManagementService, threads),
           Layer.mock(ProviderRegistry.ProviderRegistry)({}),
           Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({}),
-          Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+          layerTestThreadLaunch(),
           Layer.mock(GitVcsDriver.GitVcsDriver)({}),
           Layer.mock(ProjectService.ProjectService)({}),
           Layer.mock(SecretRequests.SecretRequests)({}),

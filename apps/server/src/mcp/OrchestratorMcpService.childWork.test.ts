@@ -31,7 +31,6 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
-import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -57,6 +56,7 @@ import { prepareTransition, type ChannelTaskEventSpec } from "../channels/channe
 import { liveThreadShell } from "./McpToolAccess.testkit.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
+import { layerTestThreadLaunch } from "./OrchestratorMcpService.testkit.ts";
 
 const NOW = "2026-10-12T00:00:00.000Z";
 const callerThreadId = ThreadId.make("thread:oms-cw-parent");
@@ -466,7 +466,7 @@ const fixture = Effect.fn("childWorkTest.fixture")(function* (
             ),
         }),
       ),
-      Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
+      Layer.provide(layerTestThreadLaunch()),
       Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
       Layer.provide(
         Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({
@@ -748,7 +748,7 @@ describe("OrchestratorMcpService delegate child work", () => {
                 Layer.mock(ProjectService.ProjectService)({}),
                 Layer.mock(SecretRequests.SecretRequests)({}),
                 Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
-                Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+                layerTestThreadLaunch(),
                 Layer.mock(GitVcsDriver.GitVcsDriver)({}),
                 Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
                 Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({}),

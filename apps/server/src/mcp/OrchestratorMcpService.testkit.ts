@@ -13,27 +13,33 @@ import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 export const layerTestClaims = PreparationClaims.layer.pipe(
   Layer.provide(ThreadCommandExecutor.layer),
   Layer.provide(NodeSqliteClient.layer({ filename: ":memory:" })),
+  // An in-memory database that cannot open is a broken test environment, not a case to handle.
+  Layer.orDie,
 );
 
-/** The service with a launch service whose mark is real and whose other methods the test gives. */
-export const layerOrchestratorServiceWith = (
+/** A launch service whose pending mark is real and whose other methods the test gives. */
+export const layerTestThreadLaunch = (
   launch: (
     claims: PreparationClaims.PreparationClaims["Service"],
   ) => Partial<ThreadLaunchService.ThreadLaunchService["Service"]> = () => ({}),
 ) =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const claims = yield* PreparationClaims.PreparationClaims;
+      return Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+        preparationPending: claims.pending,
+        ...launch(claims),
+      });
+    }),
+  ).pipe(Layer.provide(layerTestClaims));
+
+/** The service with a launch service whose mark is real and whose other methods the test gives. */
+export const layerOrchestratorServiceWith = (
+  launch: Parameters<typeof layerTestThreadLaunch>[0] = () => ({}),
+) =>
   OrchestratorMcpService.layer.pipe(
     Layer.provide(layerNoFleetSync),
-    Layer.provide(
-      Layer.unwrap(
-        Effect.gen(function* () {
-          const claims = yield* PreparationClaims.PreparationClaims;
-          return Layer.mock(ThreadLaunchService.ThreadLaunchService)({
-            preparationPending: claims.pending,
-            ...launch(claims),
-          });
-        }),
-      ).pipe(Layer.provide(layerTestClaims)),
-    ),
+    Layer.provide(layerTestThreadLaunch(launch)),
     // Scheduling resolves a base ref; a checkout with no remote and a main branch is enough here.
     Layer.provide(
       Layer.mock(GitVcsDriver.GitVcsDriver)({

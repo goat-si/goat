@@ -36,7 +36,6 @@ import * as ProviderReplayHarness from "../orchestration-v2/testkit/ProviderRepl
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
-import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
@@ -46,6 +45,7 @@ import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoord
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
+import { layerTestThreadLaunch } from "./OrchestratorMcpService.testkit.ts";
 
 const instanceId = ProviderInstanceId.make("codex");
 export const driver = ProviderDriverKind.make("codex");
@@ -414,7 +414,7 @@ const serviceLayer = ({ orchestrator, store }: Fixture, options: ServiceOptions 
         get: () => Effect.succeed(adapter),
         list: () => Effect.succeed([instanceId]),
       }),
-      Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+      layerTestThreadLaunch(),
       Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       Layer.mock(ProjectService.ProjectService)({}),
       Layer.mock(SecretRequests.SecretRequests)({}),

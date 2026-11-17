@@ -19,7 +19,6 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
-import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -32,6 +31,7 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
+import { layerTestThreadLaunch } from "./OrchestratorMcpService.testkit.ts";
 
 const instanceId = ProviderInstanceId.make("codex");
 const threadId = ThreadId.make("capability-send-target");
@@ -95,7 +95,7 @@ it.effect("goat_thread_send capabilities reach the thread as the chips a person 
       }),
       Layer.mock(ProviderRegistry.ProviderRegistry)({}),
       Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({}),
-      Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+      layerTestThreadLaunch(),
       Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       Layer.mock(ProjectService.ProjectService)({}),
       Layer.mock(SecretRequests.SecretRequests)({}),
