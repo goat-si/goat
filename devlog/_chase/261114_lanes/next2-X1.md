@@ -280,3 +280,15 @@ Known limits line for #3660's body (P3 e), sent to the coordinator: "ci:affected
 
 NOT RUN: a real runner without bwrap or with a refusing profile (stubs only); a cancelled job on a runner (`--die-with-parent` and `--unshare-pid` are bwrap's documented behavior, not observed here).
 
+
+
+## The new review and the install-windows issue
+
+> Coordinator to lane coordinator, 2026-11-17 12:13:04 UTC (date -u; quote in X1's record and in next2-pr-plan.md under "Coordinator answers").
+> 1. X1 READY at f8c3a1897b: checked here (git ls-remote = f8c3a1897b8c79f898ce0c9c940884b4380c53c1; 6 files +140/-58 against e9e20d52be; run 44073635721 completed SUCCESS on that sha). A NEW REVIEW IS RUNNING on that exact head: task goat-next2-X1-fix-f8c3a189 (Opus 5.5 xhigh), with the previous report in its brief; it reads the lane=all logs itself and reruns the step with stubs. X1 pushes nothing until the verdict. X1's Known limits line (e) is accepted as written; I put it in #3660's body at the merge.
+> 2. scripts/install-windows.test.ts runs nowhere in CI (Windows-only, not in WINDOWS_SUITES): X1 files ONE issue with that fact (body through --body-file) and sends the number; it becomes a TF1 row ("add it to WINDOWS_SUITES with one windows-lane run that shows it passing on the hosted runner; if it fails there, that is the finding"). Not in this lane.
+> 3. THE RUNNER POOL GAP: the thread's report is accepted: no undo, Wi-Fi stays off, nothing ties the gap to it. I filed https://github.com/goat-si/goat/issues/3676 ("CI: the lidge runner scaler gives no runner to queued jobs of a run GitHub reports as pending") with the journal lines, scaler.mjs:182-204, what is not established (why GitHub said pending; the inference is not a reproduced fault) and the proposed change. The scaler is the owner's code on the host, so it is his to change; I tell him. For every lane until then: a pull request run that sits with only goat-scope queued for more than a few minutes while lidge slots are idle is this issue; tell me, do not push again to shake it loose.
+> 4. TF1 rows so far from today, for the plan: check-changed's test step prints per-file progress; install-windows.test.ts into WINDOWS_SUITES (item 2).
+
+Issue filed (body through --body-file): https://github.com/goat-si/goat/issues/3677, "ci: scripts/install-windows.test.ts runs nowhere in CI (Windows-only, not in WINDOWS_SUITES)". Not fixed in this lane (a TF1 row). The lane branch stays at f8c3a1897b until the verdict of goat-next2-X1-fix-f8c3a189.
+
