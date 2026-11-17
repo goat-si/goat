@@ -1,4 +1,7 @@
-import { OrchestratorMcpScheduledTask } from "./orchestratorMcpScheduledTask.ts";
+import {
+  OrchestratorMcpFreshSession,
+  OrchestratorMcpScheduledTask,
+} from "./orchestratorMcpScheduledTask.ts";
 export { OrchestratorMcpScheduledTask } from "./orchestratorMcpScheduledTask.ts";
 import * as Lineage from "./orchestratorMcpThreadLineage.ts";
 import {
@@ -1046,28 +1049,13 @@ export const OrchestratorMcpScheduleTaskInput = Schema.Struct({
       description: "Post here, else new thread per run. Unset: true in own project, else false.",
     }),
   ),
+  freshSession: OrchestratorMcpFreshSession,
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
 });
 export type OrchestratorMcpScheduleTaskInput = typeof OrchestratorMcpScheduleTaskInput.Type;
 
 export const OrchestratorMcpScheduleTaskResult = OrchestratorMcpScheduledTask;
 export type OrchestratorMcpScheduleTaskResult = typeof OrchestratorMcpScheduleTaskResult.Type;
-
-export const OrchestratorMcpListScheduledTasksInput = Schema.Struct({
-  projectId: Schema.optional(
-    ProjectId.annotate({
-      description: "Default: your thread's project, or all outside a thread.",
-    }),
-  ),
-});
-export type OrchestratorMcpListScheduledTasksInput =
-  typeof OrchestratorMcpListScheduledTasksInput.Type;
-
-export const OrchestratorMcpListScheduledTasksResult = Schema.Struct({
-  tasks: Schema.Array(OrchestratorMcpScheduledTask),
-});
-export type OrchestratorMcpListScheduledTasksResult =
-  typeof OrchestratorMcpListScheduledTasksResult.Type;
 
 export const OrchestratorMcpUpdateScheduledTaskInput = Schema.Struct({
   scheduledTaskId: ScheduledTaskId,
@@ -1077,6 +1065,7 @@ export const OrchestratorMcpUpdateScheduledTaskInput = Schema.Struct({
   notificationPolicy: Schema.optional(ScheduledTaskNotificationPolicy),
   enabled: Schema.optional(Schema.Boolean),
   bindToCurrentThread: Schema.optional(Schema.Boolean),
+  freshSession: OrchestratorMcpFreshSession,
 });
 export type OrchestratorMcpUpdateScheduledTaskInput =
   typeof OrchestratorMcpUpdateScheduledTaskInput.Type;
@@ -1089,4 +1078,6 @@ export {
 export {
   OrchestratorMcpDeleteScheduledTaskInput,
   OrchestratorMcpDeleteScheduledTaskResult,
+  OrchestratorMcpListScheduledTasksInput,
+  OrchestratorMcpListScheduledTasksResult,
 } from "./orchestratorMcpScheduledTask.ts";

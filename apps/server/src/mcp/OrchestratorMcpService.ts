@@ -22,7 +22,6 @@ import {
   OrchestratorMcpFailure,
   type OrchestratorMcpInteractionMode,
   type OrchestratorMcpRuntimeMode,
-  type OrchestratorMcpScheduledTask,
   type OrchestratorMcpTarget,
   type OrchestratorMcpTaskCancelResult,
   type OrchestratorMcpThreadInterruptResult,
@@ -45,7 +44,6 @@ import {
 } from "@goat/contracts";
 import { derive } from "@goat/provider-core/server/IdAllocator";
 import { latestProviderTurnForAttempt } from "@goat/contracts";
-import { webhookUrlFields } from "./scheduledTaskWebhookUrl.ts";
 import { getProviderOptionCurrentValue, withLegacyUltracodeEffort } from "@goat/shared/model";
 import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
 import { withTurnCapabilities } from "@goat/shared/turnCapabilities";
@@ -137,6 +135,7 @@ import { runStop, STOP_TURN_ITEM_TYPES, statusFromShell, threadRun } from "./thr
 import * as View from "./threadListView.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 import type { OrchestratorMcpServiceShape } from "./OrchestratorMcpServiceShape.ts";
+import { scheduledTaskSummary, updatedThreadMode } from "./scheduledTaskSummary.ts";
 import { endsTaskWait, isTerminalTaskStatus } from "./taskWaitState.ts";
 
 // Resolved per call: RemoteDispatchCoordinator → LaunchWatchService → PressureNudger →
@@ -255,32 +254,6 @@ function agentStopReason(reason: string | undefined): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): OrchestratorMcpScheduledTask {
-  return {
-    scheduledTaskId: task.id,
-    title: task.title,
-    prompt: task.prompt,
-    enabled: task.enabled,
-    projectId: task.projectId,
-    boundThreadId: task.threadId,
-    schedule: task.schedule,
-    notificationPolicy: task.notificationPolicy ?? "all_runs",
-    nextRunAt: task.nextRunAt,
-    lastRunStatus: task.lastRunStatus,
-    ...(task.lastRun === undefined ? {} : { lastRun: task.lastRun }),
-    ...(task.lastRunError === null ? {} : { lastRunError: task.lastRunError }),
-    runCount: task.runCount,
-    lastRunAt: task.lastRunAt,
-    ...webhookUrlFields(task.webhook, mayRun),
-    ...(task.webhook === undefined
-      ? {}
-      : { webhookSignature: task.webhook.hasSecret ? "set" : "none" }),
-    ...(task.webhook?.secretRef === undefined
-      ? {}
-      : { webhookSignatureSecretRef: task.webhook.secretRef }),
-  };
 }
 
 /** Option ids and allowed values are all a delegating agent needs; labels are UI copy. */
@@ -1894,6 +1867,11 @@ const make = Effect.gen(function* () {
           : { notificationPolicy: input.notificationPolicy }),
         projectId,
         threadId: bindToCurrentThread && parent !== undefined ? parent.thread.id : null,
+        threadMode: input.freshSession
+          ? "fresh_session"
+          : bindToCurrentThread
+            ? "continue"
+            : "new_thread",
         workspaceStrategy: bindToCurrentThread
           ? { type: "root" }
           : {
@@ -1970,6 +1948,18 @@ const make = Effect.gen(function* () {
             : "bindToCurrentThread binds to this thread, which belongs to a different project.",
         );
       }
+      // A save keeps a bound thread unless the task goes back to new threads, so this pair
+      // would leave runs in the old thread.
+      if (
+        input.bindToCurrentThread === false &&
+        input.freshSession === true &&
+        existing.threadId !== null
+      ) {
+        return yield* failure(
+          "invalid_request",
+          "To move this task to a new thread with fresh sessions, first unbind it with bindToCurrentThread: false, then set freshSession: true in a second call.",
+        );
+      }
       const threadId =
         input.bindToCurrentThread === undefined
           ? existing.threadId
@@ -2003,6 +1993,7 @@ const make = Effect.gen(function* () {
           : { notificationPolicy: input.notificationPolicy }),
         projectId: existing.projectId,
         threadId,
+        threadMode: updatedThreadMode(input, existing, threadId),
         workspaceStrategy,
         modelSelection: existing.modelSelection,
         runtimeMode: existing.runtimeMode,

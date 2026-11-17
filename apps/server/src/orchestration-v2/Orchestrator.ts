@@ -101,7 +101,6 @@ import {
   type OrchestrationV2InternalCommand,
   type OrchestrationV2LimitRecoveryUpdate,
   type OrchestrationV2ServerCommand,
-  type ThreadPullRequestKey,
   type ThreadPullRequestLink,
   type OrchestrationV2AppThread,
   type OrchestrationV2ContextHandoff,
@@ -191,7 +190,6 @@ import {
   syncedPullRequestWatch,
 } from "./goat/PullRequestAutoWatch.ts";
 import {
-  dropQueuedPullRequestWakes as dropQueuedWakes,
   endingWakeText,
   pullRequestWatchNote,
   takeHeldPullRequestContext,
@@ -222,6 +220,8 @@ import {
   withServerAttribution,
 } from "./GuestShareDecider.ts";
 import { makeGuestShare } from "./goat/GuestShare.ts";
+import { makeTaskCompletionDisposal } from "./goat/TaskCompletionDisposal.ts";
+import { makePullRequestWakeDrops } from "./goat/PullRequestWakeDrops.ts";
 import {
   computerUseStopEffect,
   delegatedTasksStopEffect,
@@ -756,7 +756,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const sessionHasBackgroundWork = makeSessionHasBackgroundWork(providerSessions);
 
   // Runs in every command transaction; avoid reading thousands of finished leaf nodes.
-  const readCommandProjection = (threadId: ThreadId) =>
+  const readCommandProjection = (
+    threadId: ThreadId,
+    recent?: ProjectionRecordFilter["sinceLastCompaction"],
+  ) =>
     projectionStore
       .getThreadRecords(
         threadId,
@@ -785,6 +788,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           omitSettledSubagentRecords: true,
           // Commands act on pending forks and merge-backs only; consumed ones stay unread.
           contextTransferStatuses: ["pending"],
+          ...(recent === undefined ? {} : { sinceLastCompaction: recent }),
         },
       )
       .pipe(
@@ -833,9 +837,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     Effect.fnUntraced(function* (
       threadId: ThreadId,
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+      recent?: ProjectionRecordFilter["sinceLastCompaction"],
     ) {
       const pending = (yield* Ref.get(events)).filter((event) => event.threadId === threadId);
-      const stored = yield* Effect.option(readCommandProjection(threadId));
+      const stored = yield* Effect.option(readCommandProjection(threadId, recent));
       let projection: OrchestrationV2ThreadProjection;
       if (Option.isSome(stored)) {
         projection = stored.value;
@@ -2399,43 +2404,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
   });
 
-  /** Drops the wakes these delegated tasks still owe their parent; settled deliveries stay. */
-  const disposeTaskCompletionDeliveries = (input: {
-    readonly command: OrchestrationV2ServerCommand;
-    readonly events: Ref.Ref<Array<OrchestrationV2DomainEvent>>;
-    readonly tasks: ReadonlyArray<OrchestrationV2Subagent>;
-    readonly now: DateTime.Utc;
-  }) =>
-    Effect.forEach(
-      input.tasks.filter(
-        (task) =>
-          task.completionDelivery?.state !== "acknowledged" &&
-          task.completionDelivery?.state !== "delivered" &&
-          task.completionDelivery?.state !== "disposed",
-      ),
-      (task) =>
-        emit(
-          input.events,
-          input.command,
-        )({
-          type: "subagent.updated",
-          threadId: task.threadId,
-          ...(task.runId === null ? {} : { runId: task.runId }),
-          nodeId: task.id,
-          driver: task.driver,
-          providerInstanceId: task.providerInstanceId,
-          occurredAt: input.now,
-          payload: {
-            ...task,
-            completionDelivery: {
-              state: "disposed",
-              observedByRunId: null,
-            },
-            updatedAt: input.now,
-          },
-        }),
-      { discard: true },
-    );
+  const { disposeTaskCompletionDeliveries } = makeTaskCompletionDisposal({ emit });
 
   const disposeAllDelegatedCompletionCohorts = (input: {
     readonly command: OrchestrationV2Command;
@@ -2704,35 +2673,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
-  // A stopped watch, or one whose pull request merged or closed, drops the wakes it queued (#926);
-  // a push drops only the check results of earlier heads (#1056).
-  const dropQueuedPullRequestWakes = (
-    command: Extract<OrchestrationV2ServerCommand, ThreadPullRequestKey>,
-    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-    headSha?: string,
-  ) => {
-    const read = Effect.mapError(
-      (cause: unknown) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
-    );
-    return dropQueuedWakes(
-      command,
-      read(projectionStore.getThreadRecords(command.threadId, ["runs"])),
-      (runId) => read(projectionStore.getRunMessage(command.threadId, runId)),
-      (change) =>
-        "update" in change
-          ? emit(events, command)(change.update).pipe(Effect.asVoid)
-          : dispatchQueuedRunCancel(
-              {
-                type: "queued-run.cancel",
-                commandId: command.commandId,
-                threadId: command.threadId,
-                runId: change.cancel,
-              },
-              events,
-            ),
-      headSha,
-    );
-  };
+  const { dropQueuedPullRequestWakes } = makePullRequestWakeDrops({
+    projectionStore,
+    emit,
+    dispatchQueuedRunCancel: (command, events) => dispatchQueuedRunCancel(command, events),
+    OrchestratorProjectionError,
+  });
 
   const { shouldAutoWatchPullRequest } = makePullRequestAutoWatch({
     serverSettings,
@@ -5122,7 +5068,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
   ) {
-    let projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+    // A compacted thread reads every run and turn item, but attempts, nodes, messages and provider
+    // turns only for its recent runs and the runs this command names. An idle compaction reads
+    // in full: its busy check below looks for a delegated result's message under any old run.
+    let projection = yield* getProjectionWithPendingEvents(
+      command.threadId,
+      events,
+      command.idleCompaction === undefined
+        ? {
+            keepRunIds: [
+              command.manualContinuationOfRunId,
+              command.restartContinuationOfRunId,
+              command.usageLimitContinuationOfRunId,
+              command.steerFollowUpOfRunId,
+              ...(command.dispatchMode.type === "steer_active" ||
+              command.dispatchMode.type === "restart_active"
+                ? [command.dispatchMode.targetRunId]
+                : []),
+            ].flatMap((runId) => (runId === undefined ? [] : [runId])),
+            keepMessageId: command.messageId,
+          }
+        : undefined,
+    );
     let steerFollowUpAfterStop = false;
     if (command.steerFollowUpOfRunId !== undefined) {
       const source = projection.runs.find((run) => run.id === command.steerFollowUpOfRunId);
@@ -5164,6 +5131,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         projection,
       }),
     );
+    const activeProviderInstanceId = projection.providerThreads.find(
+      (candidate) => candidate.id === projection.thread.activeProviderThreadId,
+    )?.providerInstanceId;
+    // Another provider is handed what ran since it last saw the thread, which can be older than
+    // the compaction, so a provider switch reads the whole history.
+    if (
+      activeProviderInstanceId !== undefined &&
+      activeProviderInstanceId !==
+        (command.modelSelection ?? projection.thread.modelSelection).instanceId
+    ) {
+      projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+    }
     if (command.manualContinuationOfRunId !== undefined) {
       const source = projection.runs.find((run) => run.id === command.manualContinuationOfRunId);
       const limited = latestRootProviderFailure(source ?? null, projection.turnItems);
@@ -5368,15 +5347,27 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       projection = applyToProjection(projection, event, { deferNotificationCursor: true });
     }
     const userMessages = projection.messages.filter((message) => message.role === "user");
-    const onlyMaintenanceHistory =
-      userMessages.length > 0 && userMessages.every(isNativeMaintenanceCommand);
+    // The recent runs of a compacted thread can hold only a `/compact` while an older prompt
+    // exists. Every prompt's turn item is loaded; without one, every user message is checked.
+    const onlyMaintenanceHistory = [
+      ...userMessages,
+      ...projection.turnItems.flatMap((item) => (item.type === "user_message" ? [item] : [])),
+    ].every(isNativeMaintenanceCommand)
+      ? projectionStore
+          .getThreadRecords(command.threadId, ["messages"], { messageRoles: ["user"] })
+          .pipe(
+            Effect.map(({ messages }) => [...messages, ...userMessages]),
+            Effect.map((all) => all.length > 0 && all.every(isNativeMaintenanceCommand)),
+            mapDispatchError(command),
+          )
+      : Effect.succeed(false);
     if (
       !isNativeMaintenanceCommand(command) &&
       ((command.titleSeed !== undefined &&
         (yield* projectionStore
           .getMessageCount(command.threadId)
           .pipe(mapDispatchError(command))) === 0) ||
-        (command.createdBy === "user" && onlyMaintenanceHistory))
+        (command.createdBy === "user" && (yield* onlyMaintenanceHistory)))
     ) {
       const now = yield* DateTime.now;
       const thread: OrchestrationV2AppThread = {

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Label } from "../ui/label";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -40,14 +40,13 @@ export function ScheduledTaskNotificationPolicyField({
   draft: DraftState;
   onChange: (patch: Partial<DraftState>) => void;
 }) {
-  const [reset, setReset] = useState(false);
   const known = choices.find((choice) => choice.value === draft.notificationPolicy);
   return (
     <Field label="Notifications" htmlFor="scheduled-task-notifications">
       <Select
         value={draft.notificationPolicy}
         onValueChange={(value) => {
-          if (value) onChange({ notificationPolicy: value });
+          if (value) onChange({ notificationPolicy: value, notificationPolicyReset: false });
         }}
       >
         <SelectTrigger id="scheduled-task-notifications" size="sm">
@@ -55,7 +54,11 @@ export function ScheduledTaskNotificationPolicyField({
         </SelectTrigger>
         <SelectPopup>
           {choices
-            .filter((choice) => choice.value !== "important_updates" || draft.threadId !== "")
+            .filter(
+              (choice) =>
+                choice.value !== "important_updates" ||
+                (draft.threadId !== "" && draft.threadMode !== "new_thread"),
+            )
             .map((choice) => (
               <SelectItem key={choice.value} value={choice.value}>
                 {choice.label}
@@ -68,20 +71,25 @@ export function ScheduledTaskNotificationPolicyField({
           This environment uses a newer policy. It stays saved unless you choose another option.
         </p>
       ) : null}
-      {draft.threadId ? (
+      {draft.threadId && draft.threadMode !== "new_thread" ? (
         <Button
           variant="ghost"
           size="sm"
           onClick={() => {
             const important = draft.notificationPolicy === "important_updates";
-            onChange({ threadId: "", ...(important ? { notificationPolicy: "all_runs" } : {}) });
-            setReset(important);
+            onChange({
+              threadId: "",
+              threadMode: "new_thread",
+              ...(important
+                ? { notificationPolicy: "all_runs", notificationPolicyReset: true }
+                : {}),
+            });
           }}
         >
           Run in new threads
         </Button>
       ) : null}
-      {reset ? (
+      {draft.notificationPolicyReset ? (
         <p role="status" className="text-sm text-muted-foreground">
           Notifications changed to All runs because Important updates requires an existing thread.
         </p>

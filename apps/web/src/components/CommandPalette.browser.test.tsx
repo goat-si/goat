@@ -80,7 +80,7 @@ describe("CommandPalette open intents", () => {
       row.element().dispatchEvent(pointer("pointerdown", bounds.x + 20, bounds.y + 10));
       document.dispatchEvent(pointer("pointermove", bounds.x + 30, bounds.y + 20));
     });
-    expect(page.getByRole("option", { name: /Drag this thread/ }).query()).toBeNull();
+    await expect.element(row).not.toBeInTheDocument();
     await act(() => {
       document.dispatchEvent(pointer("pointermove", 50, window.innerHeight - 30));
       document.dispatchEvent(pointer("pointerup", 50, window.innerHeight - 30));

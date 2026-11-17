@@ -47,7 +47,12 @@ const threadFamilyRead = {
   threads: [{ id: task.threadId, title: "Fix login bug" }],
 };
 
-const state = vi.hoisted(() => ({ connected: true, tasksLoaded: true, secondary: false }));
+const state = vi.hoisted(() => ({
+  connected: true,
+  tasksLoaded: true,
+  secondary: false,
+  threadModes: false,
+}));
 const secondaryId = EnvironmentId.make("secondary");
 const permissions = new Map<string, Atom.Writable<boolean>>();
 
@@ -55,14 +60,21 @@ function setup() {
   state.connected = true;
   state.tasksLoaded = true;
   state.secondary = false;
+  state.threadModes = false;
   permissions.clear();
   permissions.set(environmentId, Atom.make(true));
   permissions.set(secondaryId, Atom.make(true));
   permissions.set("", Atom.make(false));
 }
 
+// With threadModes, Laptop advertises scheduled task thread modes and Secondary does not.
 function secondaryEnvironment() {
-  return { ...environment(), environmentId: secondaryId, label: "Secondary" };
+  return {
+    ...environment(),
+    environmentId: secondaryId,
+    label: "Secondary",
+    serverConfig: state.connected ? { environment: { platform: "linux" } } : null,
+  };
 }
 
 function environment() {
@@ -70,7 +82,14 @@ function environment() {
     environmentId,
     label: "Laptop",
     connection: { phase: state.connected ? "connected" : "disconnected" },
-    serverConfig: state.connected ? { environment: { platform: "linux" } } : null,
+    serverConfig: state.connected
+      ? {
+          environment: {
+            platform: "linux",
+            ...(state.threadModes ? { capabilities: { scheduledTaskThreadModes: true } } : {}),
+          },
+        }
+      : null,
   };
 }
 
@@ -212,5 +231,29 @@ describe("ScheduledTasksSettings", () => {
 
     await expect.element(dialog.getByRole("heading", { name: "New task" })).toBeInTheDocument();
     await expect.element(name).toHaveValue("My draft");
+  });
+
+  it("a one-thread Destination moved to an older server's environment says each run starts a new thread", async () => {
+    setup();
+    state.secondary = true;
+    state.threadModes = true;
+    await using screen = await render(<ScheduledTasksSettings />);
+    await screen.getByRole("button", { name: "New task" }).click();
+    const dialog = page.getByRole("dialog");
+    await userEvent.click(dialog.getByRole("combobox", { name: "Destination" }));
+    await userEvent.click(
+      page.getByRole("option", { name: "One thread, continuing the conversation" }),
+    );
+    await expect
+      .element(dialog.getByText("Later runs continue that conversation", { exact: false }))
+      .toBeVisible();
+    await userEvent.click(page.getByLabelText("Runs on"));
+    await userEvent.click(page.getByRole("option", { name: "Secondary" }));
+    await expect
+      .element(dialog.getByText("Each run starts a new thread", { exact: false }))
+      .toBeVisible();
+    await expect
+      .element(dialog.getByText("Later runs continue that conversation", { exact: false }))
+      .not.toBeInTheDocument();
   });
 });

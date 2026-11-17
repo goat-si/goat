@@ -38,6 +38,8 @@ export interface ThreadManagementSendInput {
   readonly modelSelection?: ModelSelection;
   readonly mode: ThreadManagementSendMode;
   readonly targetRunId?: RunId;
+  /** Start a new provider session; the orchestrator queues it instead of steering. */
+  readonly freshContext?: boolean;
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
   /** Set by the agent send tools: refuse a thread whose missing worktree cannot be restored. */

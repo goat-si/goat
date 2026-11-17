@@ -100,6 +100,9 @@ import {
   scheduledTaskDefaultModel,
   taskToDraft,
   type DraftState,
+  isBotRoutineDraft,
+  withProject,
+  withThreadMode,
   workspaceStrategyFromDraft,
   type ScheduleMode,
   type WorkspaceMode,
@@ -995,6 +998,8 @@ function ScheduledTaskEditorForm({
   const environment = useEnvironment(environmentId);
   const connected =
     environment?.connection.phase === "connected" && environment.serverConfig !== null;
+  const offersThreadModes =
+    environment?.serverConfig?.environment?.capabilities?.scheduledTaskThreadModes === true;
   const tasksQuery = useEnvironmentQuery(
     connected ? serverEnvironment.scheduledTasksLive({ environmentId, input: {} }) : null,
   );
@@ -1039,11 +1044,7 @@ function ScheduledTaskEditorForm({
   const liveTask = tasksQuery.data
     ? (tasksQuery.data.tasks.find((entry) => entry.id === draft.editingId) ?? null)
     : task;
-  // Still bound to its GOAT Bot conversation; moved to new threads it is an ordinary task again.
-  const botRoutine =
-    liveTask?.goatBotRoutine === true &&
-    draft.threadId !== "" &&
-    draft.threadId === liveTask.threadId;
+  const botRoutine = isBotRoutineDraft(liveTask, draft);
   const selectedProjectId = draft.projectId || projects[0]?.id || "";
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
   const instanceEntries = sortProviderInstanceEntries(
@@ -1167,6 +1168,7 @@ function ScheduledTaskEditorForm({
         : {}),
       schedule,
       threadId: draft.threadId ? (draft.threadId as ThreadId) : null,
+      ...(offersThreadModes ? { threadMode: draft.threadMode } : {}),
       ...context,
       runtimeMode: draft.runtimeMode,
       interactionMode: draft.interactionMode,
@@ -1299,6 +1301,12 @@ function ScheduledTaskEditorForm({
           <ScheduledTaskDestination
             environmentId={environmentId}
             threadId={draft.threadId ? (draft.threadId as ThreadId) : null}
+            threadMode={draft.threadMode}
+            onThreadModeChange={
+              offersThreadModes
+                ? (mode) => setDraft((current) => withThreadMode(current, mode, liveTask))
+                : undefined
+            }
             botRoutine={botRoutine}
           />
 
@@ -1309,7 +1317,9 @@ function ScheduledTaskEditorForm({
                   <Select
                     value={selectedProjectId}
                     onValueChange={(projectId) =>
-                      setDraft((current) => ({ ...current, projectId: projectId ?? "" }))
+                      setDraft((current) =>
+                        withProject(current, projectId ?? "", offersThreadModes ? liveTask : null),
+                      )
                     }
                   >
                     <SelectTrigger size="sm" id="scheduled-task-project">
