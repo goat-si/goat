@@ -2,6 +2,7 @@ import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
 import { vi } from "vite-plus/test";
 // @effect-diagnostics nodeBuiltinImport:off - seeds other homes' databases the way their servers write them.
 import * as NodeChildProcess from "node:child_process";
+import * as NodeOS from "node:os";
 import * as NodeSqlite from "node:sqlite";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -71,6 +72,31 @@ const alias = (target: string, link: string) =>
     yield* (yield* FileSystem.FileSystem).symlink(target, link);
     return link;
   });
+
+/**
+ * withHome on the system volume on Windows, where a real install's home and TEMP have 8.3 names;
+ * CI keeps TEMP on a volume that has none.
+ */
+const withAliasableHome = <A, E>(
+  run: (
+    home: string,
+  ) => Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | AuxiliarySqlite.AuxiliarySqlite>,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory =
+      HostProcess.Platform.defaultValue() === "win32"
+        ? path.join(NodeOS.homedir(), "AppData", "Local", "Temp")
+        : undefined;
+    const home = yield* fs.realPath(
+      yield* fs.makeTempDirectoryScoped({ prefix: "goat-homes-", directory }),
+    );
+    return yield* run(home).pipe(
+      Effect.provideService(HostProcess.HomeDirectory, home),
+      Effect.provideService(HostProcess.Environment, {}),
+    );
+  }).pipe(Effect.provide(AuxiliarySqlite.layer), Effect.scoped, Effect.provide(NodeServices.layer));
 
 describe("otherGoatHomes", () => {
   it.effect("shows stable's cleanup the worktrees a nightly copy still binds, and back", () =>
@@ -186,7 +212,7 @@ describe("otherGoatHomes", () => {
   it.effect(
     "judges each app's worktree folder the same when its home arrives by another name",
     () =>
-      withHome((home) =>
+      withAliasableHome((home) =>
         Effect.gen(function* () {
           const path = yield* Path.Path;
           const fs = yield* FileSystem.FileSystem;
@@ -208,7 +234,7 @@ describe("otherGoatHomes", () => {
   );
 
   it.effect("drops another app's worktree folder when its root is named through an alias", () =>
-    withHome((home) =>
+    withAliasableHome((home) =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const fs = yield* FileSystem.FileSystem;
@@ -223,7 +249,7 @@ describe("otherGoatHomes", () => {
   );
 
   it.effect("keeps a worktree another app's database records under another spelling", () =>
-    withHome((home) =>
+    withAliasableHome((home) =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const fs = yield* FileSystem.FileSystem;
