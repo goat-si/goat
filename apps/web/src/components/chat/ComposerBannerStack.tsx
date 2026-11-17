@@ -55,10 +55,13 @@ export function ComposerBannerStack({ className, items, attachedAbove }: Compose
   const expandedItemsRef = useRef<HTMLDivElement>(null);
   const expandedItemsId = useId();
   const [requestedExitingItemId, setExitingItemId] = useState<string | null>(null);
-  const exitingItemId =
-    requestedExitingItemId !== null && items.some((item) => item.id === requestedExitingItemId)
-      ? requestedExitingItemId
-      : null;
+  const exitingItemPresent =
+    requestedExitingItemId !== null && items.some((item) => item.id === requestedExitingItemId);
+  const exitingItemId = exitingItemPresent ? requestedExitingItemId : null;
+  // Forget a dismissed notice once it is gone, so the same notice coming back shows again.
+  if (requestedExitingItemId !== null && !exitingItemPresent) {
+    setExitingItemId(null);
+  }
 
   if (items.length < 2 && stackExpanded) {
     setStackExpanded(false);
