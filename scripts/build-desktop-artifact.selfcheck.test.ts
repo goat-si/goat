@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - spells paths with the native realpath and runs the hook in a plain Node child.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeURL from "node:url";
