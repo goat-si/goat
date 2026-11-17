@@ -2274,6 +2274,7 @@ NOT RUN: `vp run check:changed` and the full CI run for ab59bbdacc; the next #35
 - Branch: chase/t3-261114-next-dev, cut from origin/chase/t3-261114-next = 0c3d629e2c6d5cd37a500201920c9cd103385879 (checked before the merge). Head af18ef2f8cd04e1bc1634f9fc33c280610bb6947, one merge commit whose parents are 0c3d629e2c and dev 43a57a4a841d5c26fe9cb9b0407f4423981a086d. Plain push of the new branch; git ls-remote: refs/heads/chase/t3-261114-next-dev = af18ef2f8c, refs/heads/chase/t3-261114-next = 0c3d629e2c (untouched), refs/heads/dev = 43a57a4a84.
 - dev taken: origin/dev = 43a57a4a84 at the start, still 43a57a4a84 at the push. No commits beyond the two the decision names.
 - Merge: tree b13e16f26116c3073eaf5a04900938dcc7194078, equal to git merge-tree --write-tree 0c3d629e2c 43a57a4a84. No conflict, nothing resolved by hand. pnpm-lock.yaml unchanged, so no install.
+- Integration: the final dev merge af18ef2f8c merged into the integration branch at af18ef2f8c (#3519). The coordinator fast-forwarded chase/t3-261114-next from 0c3d629e2c to af18ef2f8cd04e1bc1634f9fc33c280610bb6947 (verified on origin with git ls-remote).
 
 Dev commits since 229ae283d3, with their files:
 
