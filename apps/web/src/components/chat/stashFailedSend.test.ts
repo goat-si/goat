@@ -216,3 +216,71 @@ function sideChatOfParent(options: { readonly parentLive: boolean }) {
   };
   return { sideChat, reply, [Symbol.dispose]: () => spy.mockRestore() };
 }
+
+describe("restoring a stashed reply where the client holds only part of the fork chain", () => {
+  it("puts a reply back in a fork of a fork whose middle thread the client does not hold", () => {
+    using _shells = heldShells({ "fork-2": { forkedFrom: forkOf("fork-1") } });
+    const target = scopeThreadRef(environmentId, ThreadId.make("fork-2"));
+    restoreStashedReply([responseIn("source")], target);
+    expect(useComposerDraftStore.getState().getComposerDraft(target)?.replyTo).toEqual(
+      responseIn("source"),
+    );
+  });
+
+  it("puts a reply back in a fork whose own shell has not arrived yet", () => {
+    using _shells = heldShells({});
+    const target = scopeThreadRef(environmentId, ThreadId.make("fresh-fork"));
+    restoreStashedReply([responseIn("source")], target);
+    expect(useComposerDraftStore.getState().getComposerDraft(target)?.replyTo).toEqual(
+      responseIn("source"),
+    );
+  });
+
+  it("leaves a reply out of a thread whose held chain shows it does not show the response", () => {
+    using _shells = heldShells({ plain: {} });
+    const target = scopeThreadRef(environmentId, ThreadId.make("plain"));
+    restoreStashedReply([responseIn("elsewhere")], target);
+    expect(useComposerDraftStore.getState().getComposerDraft(target)?.replyTo ?? null).toBeNull();
+  });
+});
+
+function forkOf(threadId: string) {
+  return { type: "run", threadId: ThreadId.make(threadId), runId: "run-1" };
+}
+
+// The client holds exactly these shells; every other thread reads as not held.
+function heldShells(shells: Readonly<Record<string, { readonly forkedFrom?: unknown }>>) {
+  const byAtom = new Map<unknown, unknown>(
+    Object.entries(shells).map(([id, shell]) => [
+      environmentThreadShells.threadShellAtom(scopeThreadRef(environmentId, ThreadId.make(id))),
+      { id: ThreadId.make(id), deletedAt: null, ...shell },
+    ]),
+  );
+  const get = appAtomRegistry.get.bind(appAtomRegistry);
+  const spy = vi
+    .spyOn(appAtomRegistry, "get")
+    .mockImplementation(((atom: unknown) =>
+      byAtom.has(atom) ? byAtom.get(atom) : get(atom as never)) as typeof appAtomRegistry.get);
+  return { [Symbol.dispose]: () => spy.mockRestore() };
+}
+
+function responseIn(threadId: string): ResponseContextRecord {
+  return {
+    version: 1,
+    kind: "response",
+    contextId: `response_${threadId}` as ComposerContextId,
+    label: "An earlier answer",
+    citation: {
+      version: 1,
+      environmentId,
+      threadId: ThreadId.make(threadId),
+      messageId: MessageId.make(`m-${threadId}`),
+      text: "An earlier answer",
+      start: 0,
+      end: 17,
+      prefix: "",
+      suffix: "",
+    },
+    itemId: TurnItemId.make(`item-${threadId}`),
+  };
+}
