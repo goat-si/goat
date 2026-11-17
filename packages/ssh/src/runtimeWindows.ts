@@ -5,7 +5,7 @@ import {
   type RuntimeSessionRequest,
 } from "@goat/contracts";
 import { compareRuntimeBuilds, parseSemver } from "@goat/shared/semver";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -355,8 +355,8 @@ export const launchWindowsRuntime = Effect.fn("ssh.windows.launch")(function* (
 ) {
   const selection = selected.nativeWindows;
   if (selection === undefined) return yield* failure("No native Windows runtime is selected.");
-  const uuid = yield* (yield* Crypto.Crypto)
-    .randomUUIDv4()
+  const uuid = yield* (yield* SecureRandom.SecureRandom)
+    .uuidV4()
     .pipe(Effect.mapError((cause) => failure("No launch nonce could be generated.", cause)));
   const result = yield* nativeWindowsCommand(target, auth, {
     op: "launch",

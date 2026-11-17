@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it, vi } from "@effect/vitest";
 import {
@@ -317,6 +318,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
           refreshStatus,
         } satisfies Partial<VcsStatusBroadcaster.VcsStatusBroadcaster["Service"]>),
         NodeServices.layer,
+        NodeCrypto.layer,
         options.existsFails
           ? FileSystem.layerNoop({
               exists: (path) =>
@@ -409,7 +411,7 @@ describe("goat_worktree_handoff", () => {
       Effect.provide(
         GitVcsDriver.layer.pipe(
           Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "handoff-setup-git-" })),
-          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
       ),
     ),
@@ -483,7 +485,7 @@ describe("goat_worktree_handoff", () => {
       Effect.provide(
         GitVcsDriver.layer.pipe(
           Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "handoff-remote-git-" })),
-          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
       ),
     ),
@@ -758,7 +760,7 @@ describe("goat_worktree_list", () => {
         worktreePath,
         workspaceRoot,
       ]);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("fails instead of falling back when the worktree cannot be checked", () => {

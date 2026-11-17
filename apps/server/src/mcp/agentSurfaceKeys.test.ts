@@ -25,6 +25,7 @@ import {
 } from "./agentSurface.testkit.ts";
 import { McpInvocationContext, type McpInvocationScope } from "./McpInvocationContext.ts";
 import { ScreenToolkit } from "./toolkits/screen/tools.ts";
+import * as McpHttpServer from "./McpHttpServer.ts";
 
 const toolkits = { ...standardToolkits, screen: ScreenToolkit };
 
@@ -88,7 +89,7 @@ const failingGoals = Layer.mock(GoalService.GoalService)({
 });
 const registeredWithFailingGoals = catalog.pipe(
   Layer.provide(Layer.mergeAll(dependencies, failingGoals)),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
 );
 const threadCaller: McpInvocationScope = {
   environmentId: EnvironmentId.make("environment"),

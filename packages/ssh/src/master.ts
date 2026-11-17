@@ -1,6 +1,6 @@
 import type { DesktopSshEnvironmentTarget } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -55,7 +55,7 @@ export const ensureSshMaster = Effect.fn("ssh/master.ensure")(function* (
   yield* Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const crypto = yield* Crypto.Crypto;
+    const digest = yield* Digest.Digest;
     // macOS TMPDIR can leave no room for OpenSSH's temporary socket name.
     // mkdtemp creates a fresh private directory rather than trusting a shared fixed path.
     const directory = yield* fs.makeTempDirectoryScoped({
@@ -69,7 +69,7 @@ export const ensureSshMaster = Effect.fn("ssh/master.ensure")(function* (
       return yield* Effect.fail("control-directory-owner-mismatch");
     // The effective config includes ProxyJump/ProxyCommand and every selected identity.
     const hash = Hex.encode(
-      yield* crypto.digest("SHA-256", new TextEncoder().encode(`${key}\u0000${configuration}`)),
+      yield* digest.digest(Digest.sha256, new TextEncoder().encode(`${key}\u0000${configuration}`)),
     ).slice(0, 12);
     const socket = path.join(directory, hash);
     // OpenSSH binds <ControlPath>.<16 random chars> before rename; reserve its suffix

@@ -3,7 +3,8 @@ import * as HomeRoute from "../OpenCodexRoute.ts";
 import * as AdapterInfrastructure from "../ProviderOrchestrationAdapterInfrastructure.ts";
 import * as Option from "effect/Option";
 import { CodexSettings, ProviderDriverKind } from "@goat/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -137,7 +138,8 @@ export type CodexDriverEnv =
   | ProviderHost.ProviderHost
   | ChildProcessSpawner.ChildProcessSpawner
   | ResetCreditCoordinator.ResetCreditCoordinator
-  | Crypto.Crypto
+  | Digest.Digest
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | ProviderLatestVersions.ProviderLatestVersions

@@ -34,7 +34,8 @@ import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Digest from "effect/crypto/Digest";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -791,7 +792,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const { worktreesDir } = yield* ServerConfig.ServerConfig;
   const isServerInternalPath = yield* makeIsServerInternalPath;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
+  const digest = yield* Digest.Digest;
   const hostPlatform = yield* HostProcess.Platform;
   const serviceScope = yield* Effect.scope;
   const statusFetches = new Map<string, Fiber.Fiber<void, GitCommandError>>();
@@ -3244,7 +3246,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       );
       return { ...patch, files: stat.files };
     });
-    const hashDiff = yield* makeReviewDiffHash(crypto, cwd, metadataOnly);
+    const hashDiff = yield* makeReviewDiffHash(random, digest, cwd, metadataOnly);
     // Index scopes use Git's real index as the boundary. Only Unstaged adds untracked paths
     // to a disposable copy; the real index is never refreshed or written by review reads.
     if (scope === "staged" || scope === "unstaged") {
@@ -4010,7 +4012,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         repository?.gitCommonDir ?? path.resolve(input.cwd),
         hostPlatform,
         options?.reuseExistingBranch === true && input.newRefName !== undefined,
-      ).pipe(Effect.provideService(Crypto.Crypto, crypto));
+      ).pipe(
+        Effect.provideService(SecureRandom.SecureRandom, random),
+        Effect.provideService(Digest.Digest, digest),
+      );
       const location = yield* resolveAvailableWorktreesDirectory(
         {
           setting: options?.worktreesDirectory ?? "",

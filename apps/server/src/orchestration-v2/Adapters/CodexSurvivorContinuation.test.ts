@@ -1,15 +1,24 @@
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
 import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import type * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
-import { ProviderInstanceId, ProviderSessionId, RunId, ThreadId } from "@goat/contracts";
+import {
+  ProviderInstanceId,
+  ProviderSessionId,
+  ProviderTurnId,
+  RunId,
+  ThreadId,
+} from "@goat/contracts";
+import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { CodexDetachedAppServerError } from "../../provider/CodexDetachedAppServer.ts";
 import type { CodexSurvivors } from "../../provider/CodexSurvivors.ts";
 import {
+  adoptSurvivor,
   interruptSurvivor,
   makeSurvivorNotifications,
   readSurvivorResult,
@@ -249,4 +258,49 @@ it.effect("a dropped connection to a process that stops with the session holds n
   Effect.gen(function* () {
     assert.deepEqual((yield* droppedConnection(false)).held, []);
   }),
+);
+
+it.effect(
+  "a survivor adopted after its session closed still settles the wait session loss awaits",
+  () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-closed-session");
+      const binding = {
+        instanceId: ProviderInstanceId.make("codex"),
+        recordName: "record",
+        threadId,
+        sourceRunId: RunId.make("run-before-restart"),
+        nativeThreadId: "native-closed-session",
+        nativeTurnId: "turn-closed-session",
+      };
+      const waiting = { waiting: new Map(), tracked: new Map() };
+      const session = yield* Scope.make();
+      yield* Scope.close(session, Exit.void);
+      yield* adoptSurvivor({
+        survivors: Option.some({
+          get: () => Effect.succeed(binding),
+        } as unknown as CodexSurvivors["Service"]),
+        instanceId: binding.instanceId,
+        turnInput: {
+          threadId,
+          runId: RunId.make("run-after-restart"),
+          restartContinuationOfRunId: binding.sourceRunId,
+        } as unknown as ProviderAdapter.ProviderAdapterV2TurnInput,
+        waiting,
+        continuation: {
+          scope: session,
+          client: {
+            request: () => Effect.never,
+          } as unknown as CodexClient.CodexAppServerClient["Service"],
+          emitCompletedItem: () => Effect.void,
+          settle: () => Effect.void,
+        },
+        registerRootTurn: () =>
+          Effect.succeed({ providerTurnId: ProviderTurnId.make("provider-turn-closed-session") }),
+      });
+      // sessionLost awaits this before it clears dead survivor fences.
+      const done = waiting.tracked.get(binding.nativeThreadId)?.done;
+      assert.isDefined(done);
+      assert.isTrue(yield* Deferred.isDone(done!));
+    }),
 );

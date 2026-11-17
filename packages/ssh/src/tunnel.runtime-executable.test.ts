@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - the remote fixture hashes the GOAT file it plants.
 import * as NodeCrypto from "node:crypto";
 
+import * as PlatformNodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as NetService from "@goat/shared/Net";
@@ -87,13 +88,13 @@ const makeHost = Effect.gen(function* () {
             : "",
         );
       }
-      if (script.includes("ready=false") && !isRemoteLaunch(command.args))
+      if (script.includes("ready=false") && !isRemoteLaunch(command.args.map(String)))
         return makeSuccessfulProcess(
           JSON.stringify({ platform: "linux", arch: "x64", ready: true }),
         );
       if (script.includes("auth pairing create"))
         return makeSuccessfulProcess('{"credential":"pairing"}');
-      if (!isRemoteLaunch(command.args)) return makeSuccessfulProcess("");
+      if (!isRemoteLaunch(command.args.map(String))) return makeSuccessfulProcess("");
       return makeSuccessfulProcess(
         JSON.stringify(
           state.pending
@@ -118,6 +119,7 @@ const makeHost = Effect.gen(function* () {
   );
   const layer = Layer.mergeAll(
     NodeServices.layer,
+    PlatformNodeCrypto.layer,
     ConfigProvider.layer(ConfigProvider.fromUnknown({ HOME: home })),
     Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
     Layer.succeed(NetService.NetService, testNetService),
@@ -172,7 +174,10 @@ describe("provisioned GOAT executable", () => {
         assert.include(script, "selected_version='1.2.2'");
         assert.notInclude(script, ARCHIVE.archiveVersion);
         assert.notMatch(script, /command -v|versions\/\*/u);
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer)),
+      ),
   );
 
   it.effect("returns no executable for an unprovisioned or pending alias", () =>
@@ -188,7 +193,10 @@ describe("provisioned GOAT executable", () => {
       assert.strictEqual("type" in results.ensured && results.ensured.type, "ssh-runtime-pending");
       assert.strictEqual(results.after, undefined);
       assert.deepStrictEqual(state.lookups, []);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer)),
+    ),
   );
 
   it.effect("discards an executable lookup overtaken by disconnect or runtime replacement", () =>
@@ -214,7 +222,10 @@ describe("provisioned GOAT executable", () => {
         assert.strictEqual(yield* Fiber.join(second), undefined);
         assert.strictEqual(yield* lookup, executableOf(ARCHIVE.archiveVersion));
       }).pipe(Effect.provide(layer));
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer)),
+    ),
   );
 
   it.effect(
@@ -236,7 +247,10 @@ describe("provisioned GOAT executable", () => {
         assert.strictEqual(results.first, executableOf("1.2.2"));
         assert.strictEqual(results.second, executableOf(ARCHIVE.archiveVersion));
         assert.strictEqual(results.gone, undefined);
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer)),
+      ),
   );
 
   it.effect("accepts only the complete selected install that reports its own version", () =>
@@ -299,6 +313,9 @@ describe("provisioned GOAT executable", () => {
         { ...selected, version: "1.2.2'; id; '" },
       ])
         assert.strictEqual(buildProvisionedRuntimeExecutableScript(selection), undefined);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer)),
+    ),
   );
 });

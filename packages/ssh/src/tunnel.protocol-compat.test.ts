@@ -1,9 +1,11 @@
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import { protocolExecutable, makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 
@@ -25,7 +27,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         if (Result.isFailure(result))
           assert.include(String(result.failure), "is incompatible; it was left running");
         assert.deepEqual(yield* f.snapshot, before);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each(
@@ -62,7 +64,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.isFalse(events.some((event) => event.type === "stop"));
         if (entry !== "launch")
           assert.equal(events.findLast((event) => event.type === "auth")?.version, "1.2.2");
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each(["launch", "pairing", "mcp"] as const)(
@@ -88,7 +90,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           if (Result.isSuccess(result)) assert.equal(result.success.version, "1.2.2");
           assert.equal(yield* f.fs.readFileString(file), runner);
           assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live(
@@ -113,7 +118,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.isTrue(Result.isSuccess(result));
           if (Result.isSuccess(result)) assert.equal(result.success.version, "1.2.2");
           assert.equal(f.counters().uploads, 0);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each((["launch", "pairing", "mcp"] as const).map((entry) => ({ entry })))(
@@ -139,7 +147,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const events = yield* f.fs.readFileString(`${f.test}/events`);
           assert.notInclude(events, '"type":"stop"');
           assert.notInclude(events, '"type":"auth"');
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each(
@@ -186,7 +197,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const events = yield* f.fs.readFileString(`${f.test}/events`);
           for (const type of ["drain", "drain-request", "self-stop", "stop", "supervise"])
             assert.notInclude(events, `"type":"${type}"`);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each([
@@ -248,7 +262,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.deepEqual(yield* f.snapshot, before);
         yield* Effect.sync(() => process.kill(f.pid, 0));
         assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
   },
 );

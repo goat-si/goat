@@ -1,7 +1,7 @@
 import * as Redacted from "effect/Redacted";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- real DPoP proofs for live socket admission.
 import * as NodeCrypto from "node:crypto";
-import { NodeWS } from "@effect/platform-node/NodeSocket";
+import * as NodeWS from "@effect/platform-node/NodeWS";
 import { expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import { ServerSettings } from "@goat/contracts";

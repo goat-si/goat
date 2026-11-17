@@ -10,9 +10,11 @@ import {
 import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveSpawnCommand } from "@goat/shared/shell";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -388,7 +390,7 @@ it.effect("installs with the official argv and never relays the installer's outp
       "install",
       "-g",
       "@xai-official/grok@1.2.3",
-    ]).pipe(Effect.provide(NodeServices.layer));
+    ]).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
     expect(state.spawned.at(-1)).toEqual({ command: official.command, args: official.args });
     expect(done.done).toBe(true);
     expect(done.hosts[0]).toMatchObject({ host: null, phase: "failed" });
@@ -443,7 +445,7 @@ it.effect("reads a CLI as installed once its installer has put it in a folder on
       { PATH: `/usr/bin:/bin:${bin}` },
     );
     expect(host).toMatchObject({ host: null, phase: "installed" });
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("says the login shell PATH is unread when an installed CLI still cannot be found", () =>
@@ -460,7 +462,7 @@ it.effect("says the login shell PATH is unread when an installed CLI still canno
     );
     expect(unread?.message).toContain("cannot find claude on its PATH here.");
     expect(unread?.message).toContain("GOAT may not have your login shell's current PATH yet");
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(

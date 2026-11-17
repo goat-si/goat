@@ -1,6 +1,7 @@
 import { assert } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
@@ -9,6 +10,15 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import type { PiRpcRecord } from "../rpc.ts";
+
+const plainEnvValue = (value: string | Redacted.Redacted<string> | undefined) =>
+  Redacted.isRedacted(value) ? Redacted.value(value) : value;
+const plainEnv = (
+  env: Readonly<Record<string, string | Redacted.Redacted<string> | undefined>> | undefined,
+) =>
+  env === undefined
+    ? undefined
+    : Object.fromEntries(Object.entries(env).map(([key, value]) => [key, plainEnvValue(value)]));
 
 const decodeJsonLine = Schema.decodeSync(Schema.fromJsonString(Schema.Unknown));
 const encodeJsonLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -240,8 +250,8 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     Effect.sync(() => {
       if (ChildProcess.isStandardCommand(command)) {
         lastSpawn = {
-          args: command.args,
-          env: command.options.env ?? {},
+          args: command.args.map(String),
+          env: plainEnv(command.options.env) ?? {},
           cwd: command.options.cwd,
         };
       }

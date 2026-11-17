@@ -10,7 +10,7 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexReplay from "effect-codex-app-server/replay";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -195,7 +195,7 @@ export const makeCodexReplayHarness = (
       environment: {},
       clientFactory,
       ...(offeredModels === undefined ? {} : { offeredModels }),
-      crypto: yield* Crypto.Crypto,
+      digest: yield* Digest.Digest,
       fileSystem,
       idAllocator,
       serverConfig,

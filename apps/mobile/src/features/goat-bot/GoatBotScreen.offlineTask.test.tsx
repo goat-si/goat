@@ -107,3 +107,65 @@ it("offline, a card without Open task still opens its reachable work thread", as
   expect(onSelectThread).toHaveBeenCalledWith({ environmentId: "remote", id: "worker" });
   await view.unmount();
 });
+it("a home that refused this phone says so in the banner and the empty chat, never offline, and keeps the move (#3550, access)", async () => {
+  try {
+    for (const availability of ["home_offline", "offline"]) {
+      Object.assign(screenSession, {
+        availability,
+        rows: [],
+        homeConnected: false,
+        homeLabel: "Mac Studio",
+        homeKnown: true,
+        refusedBy: "Mac Studio",
+        moveTarget: { environmentId: "laptop", label: "Laptop" },
+      });
+      const view = await render(<GoatBotScreen visible />);
+      const text = view.container.textContent ?? "";
+      expect(text, availability).toContain("GOAT on Mac Studio did not accept this device");
+      expect(text, availability).not.toMatch(/isn.t connected|offline/i);
+      expect(text, availability).toContain(
+        "Pair this device with Mac Studio again to send messages.",
+      );
+      expect(text, availability).not.toContain("Ask GOAT Bot for anything");
+      if (availability === "home_offline") expect(text).toContain("Move GOAT Bot to Laptop");
+      await view.unmount();
+    }
+  } finally {
+    Object.assign(screenSession, {
+      availability: "ready",
+      rows: [],
+      homeConnected: true,
+      homeLabel: null,
+      homeKnown: false,
+      refusedBy: null,
+      moveTarget: null,
+    });
+  }
+});
+
+it("guard: a home that is only unreachable keeps the offline banner and the usual empty chat (#3550)", async () => {
+  try {
+    Object.assign(screenSession, {
+      availability: "home_offline",
+      rows: [],
+      homeConnected: false,
+      homeLabel: "Mac Studio",
+      homeKnown: true,
+      refusedBy: null,
+    });
+    const view = await render(<GoatBotScreen visible />);
+    const text = view.container.textContent ?? "";
+    expect(text).toContain("GOAT Bot runs on Mac Studio, which isn't connected.");
+    expect(text).not.toContain("did not accept");
+    expect(text).toContain("Ask GOAT Bot for anything");
+    await view.unmount();
+  } finally {
+    Object.assign(screenSession, {
+      availability: "ready",
+      rows: [],
+      homeConnected: true,
+      homeLabel: null,
+      homeKnown: false,
+    });
+  }
+});

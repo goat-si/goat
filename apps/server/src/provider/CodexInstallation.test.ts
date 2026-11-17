@@ -1,4 +1,6 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Layer from "effect/Layer";
 import * as ModelManifest from "./ModelManifest.ts";
 import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -40,7 +42,7 @@ it.live(
         const executable = yield* h.installation.acquire();
         expect(executable.source).toBe("local");
         expect(yield* h.fs.exists(marker)).toBe(true);
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     ),
 );
 
@@ -62,7 +64,7 @@ function startupProbeFixture(
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.gen(function* () {
       if (!ChildProcess.isStandardCommand(command)) return yield* Effect.die("Unexpected pipe");
-      calls.push(command.args);
+      calls.push(command.args.map(String));
       const version = command.args[0] === "--version";
       const startup = command.args.includes("--print-startup-config");
       if (version && input.beforeVersion) yield* input.beforeVersion;
@@ -130,7 +132,7 @@ it.effect.each([true, false])(
         3,
       );
       expect(h.downloads()).toBe(0);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each(["0.156.0", "0.163.0", "0.164.0", "0.165.0", "1.0.0"])(
@@ -152,7 +154,7 @@ it.effect.each(["0.156.0", "0.163.0", "0.164.0", "0.165.0", "1.0.0"])(
             ]),
       ]);
       expect(h.downloads()).toBe(0);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each(["0.164.0-alpha.1", "0.164.0-rc.1", "0.165.0-alpha.1", "unknown"])(
@@ -163,7 +165,7 @@ it.effect.each(["0.164.0-alpha.1", "0.164.0-rc.1", "0.165.0-alpha.1", "unknown"]
       const h = yield* makeHarness({ local: { version }, spawner: fixture.spawner });
       expect((yield* h.installation.state).installedVersion).toBeNull();
       expect(fixture.calls).toEqual([["--version"]]);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each([
@@ -235,7 +237,7 @@ it.effect.each([
       ["app-server", "--print-startup-config"],
       ["app-server", "--print-startup-config"],
     ]);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each(["version", "legacy-help"] as const)(
@@ -258,7 +260,7 @@ it.effect.each(["version", "legacy-help"] as const)(
       expect((yield* h.installation.state).installedVersion).toBeNull();
       expect(fixture.calls).toHaveLength(stage === "version" ? 1 : 2);
       expect(h.downloads()).toBe(0);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("shares the five-second budget and retains the candidate on diagnostic timeout", () =>
@@ -295,7 +297,7 @@ it.effect("shares the five-second budget and retains the candidate on diagnostic
     expect(yield* h.installation.resolve()).not.toHaveProperty("startupWarning");
     expect(fixture.calls).toHaveLength(3);
     expect(h.downloads()).toBe(0);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("recovers a diagnostic timeout on the same service and unchanged binary", () =>
@@ -338,7 +340,7 @@ it.effect("recovers a diagnostic timeout on the same service and unchanged binar
     ]);
     expect(fixture.calls.filter((args) => args[0] === "--version")).toHaveLength(1);
     expect(fixture.calls.filter((args) => args.includes("--print-startup-config"))).toHaveLength(3);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("propagates external diagnostic cancellation and finalizes the child", () =>
@@ -360,7 +362,7 @@ it.effect("propagates external diagnostic cancellation and finalizes the child",
     const exit = yield* Fiber.await(fiber);
     expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
     expect(fixture.calls).toHaveLength(2);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each(["0.156.0", "0.156.1", "0.156.2", "0.157.0"])(
@@ -391,7 +393,7 @@ it.effect.each(["0.156.0", "0.156.1", "0.156.2", "0.157.0"])(
       yield* h.installation.remove();
       expect(yield* h.fs.exists(h.localBinaryPath)).toBe(true);
       expect((yield* h.installation.state).source).toBe("local");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each([
   { version: "0.128.9" },
@@ -414,7 +416,7 @@ it.effect.each([
     expect(installed.executablePath).toBe(executable.executablePath);
     expect(h.downloads()).toBe(1);
     expect(yield* h.fs.exists(h.localBinaryPath)).toBe(true);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 const compileNative = Effect.fn("test.compileNative")(function* (
@@ -444,7 +446,7 @@ it.effect("rechecks compatibility after the local executable is replaced", () =>
     expect((yield* terminalState(h.installation)).phase).toBe("succeeded");
     expect((yield* h.installation.resolve()).source).toBe("managed");
     expect(h.downloads()).toBe(1);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("rechecks a cached local executable when the shared manifest policy changes", () =>
@@ -476,7 +478,7 @@ it.effect("rechecks a cached local executable when the shared manifest policy ch
       "--version",
       "app-server --help",
     ]);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("uses bundled Codex compatibility when the remote manifest omits its policy", () =>
@@ -490,7 +492,7 @@ it.effect("uses bundled Codex compatibility when the remote manifest omits its p
     });
     expect((yield* h.installation.start).source).toBe("local");
     expect(h.downloads()).toBe(0);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each([
@@ -529,7 +531,7 @@ int main(int argc, char **argv) {
     expect(yield* h.installation.start).toMatchObject({ source: "local", phase: "succeeded" });
     expect((yield* h.installation.resolve()).executablePath).toBe(h.localBinaryPath);
     expect(h.downloads()).toBe(0);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -549,7 +551,7 @@ it.effect(
       );
       const restarted = yield* makeHarness({ baseDir });
       expect((yield* restarted.installation.resolve()).version).toBe("0.156.1");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("requires an update before running an older activated managed installation", () =>
@@ -579,7 +581,7 @@ it.effect("requires an update before running an older activated managed installa
     expect((yield* terminalState(restarted.installation)).phase).toBe("succeeded");
     expect((yield* restarted.installation.resolve()).version).toBe("0.156.1");
     expect(restarted.downloads()).toBe(1);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("updates an older supported managed installation to the pinned release on startup", () =>
@@ -606,7 +608,7 @@ it.effect("updates an older supported managed installation to the pinned release
     expect((yield* terminalState(restarted.installation)).phase).toBe("succeeded");
     expect((yield* restarted.installation.resolve()).version).toBe("0.156.1");
     expect(restarted.downloads()).toBe(1);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("rejects corrupted downloads without publishing a runtime", () =>
@@ -620,7 +622,7 @@ it.effect("rejects corrupted downloads without publishing a runtime", () =>
     expect(state.message).toContain("SHA-256");
     expect(yield* fs.exists(`${installation.managedDirectory}/active.json`)).toBe(false);
     expect(yield* fs.exists(`${installation.managedDirectory}/0.156.1`)).toBe(false);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each(["interrupted body", "HTTP 404"] as const)(
@@ -657,7 +659,7 @@ it.effect.each(["interrupted body", "HTTP 404"] as const)(
       });
       expect(h.downloads()).toBe(1);
       expect(yield* h.fs.readDirectory(h.installation.managedDirectory)).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -676,7 +678,7 @@ it.effect(
       });
       expect(h.downloads()).toBe(0);
       expect(yield* fs.readFileString(baseDir)).toBe("existing file");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("reports a download timeout and cleans the staging directory", () =>
@@ -695,7 +697,7 @@ it.effect("reports a download timeout and cleans the staging directory", () =>
     });
     expect(h.downloads()).toBe(1);
     expect(yield* h.fs.readDirectory(h.installation.managedDirectory)).toEqual([]);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("cancels an in-flight download and cleans the staging directory", () =>
@@ -714,7 +716,7 @@ it.effect("cancels an in-flight download and cleans the staging directory", () =
       ),
     ).toEqual([]);
     expect(yield* fs.exists(`${installation.managedDirectory}/active.json`)).toBe(false);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("protects active process leases and removes the runtime after release", () =>
@@ -730,7 +732,7 @@ it.effect("protects active process leases and removes the runtime after release"
     expect(yield* fs.exists(installation.managedDirectory)).toBe(false);
     expect((yield* installation.state).installedVersion).toBeNull();
     expect((yield* installation.state).executablePath).toBeNull();
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each([true, false])(
@@ -769,7 +771,7 @@ it.effect.each([true, false])(
       yield* Scope.close(leaseScope, Exit.void);
       if (hasManaged) yield* h.installation.remove();
       expect(yield* h.fs.exists(h.localBinaryPath)).toBe(true);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("keeps an activated runtime when a later update fails verification", () =>
@@ -787,7 +789,7 @@ it.effect("keeps an activated runtime when a later update fails verification", (
     yield* update.installation.start;
     expect((yield* terminalState(update.installation)).phase).toBe("failed");
     expect((yield* update.installation.resolve()).version).toBe("0.156.1");
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 // Stands in for Windows' bsdtar: CRLF listings, and extraction writes the Windows layout.
@@ -811,5 +813,5 @@ it.effect(
       const managed = yield* h.installation.resolve({ managedOnly: true });
       expect(managed.source).toBe("managed");
       expect(managed.executablePath).not.toBe(h.localBinaryPath);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

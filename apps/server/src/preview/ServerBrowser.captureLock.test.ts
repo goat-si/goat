@@ -1,6 +1,7 @@
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as NodeEvents from "node:events";
 
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import {
@@ -148,7 +149,7 @@ const layer = ServerBrowser.layer.pipe(
       }),
     ).pipe(
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-capture-lock-" })),
-      Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     ),
   ),
 );

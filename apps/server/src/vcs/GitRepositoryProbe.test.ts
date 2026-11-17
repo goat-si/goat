@@ -16,7 +16,7 @@ import * as VcsProcess from "./VcsProcess.ts";
 const layerGitContract = Layer.mergeAll(GitVcsDriver.layerVcs, GitVcsDriver.layer).pipe(
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-probe-test-" })),
   Layer.provideMerge(VcsProcess.layer),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 const runGit = (cwd: string, args: ReadonlyArray<string>) =>
   Effect.gen(function* () {

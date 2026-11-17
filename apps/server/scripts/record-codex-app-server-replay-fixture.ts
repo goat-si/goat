@@ -6,7 +6,7 @@ import { CODEX_THREAD_CONFIG } from "../src/orchestration-v2/Adapters/CodexAdapt
 import { revertCodexThread } from "../src/provider/CodexThreadRevert.ts";
 import { buildCodexInitializeParams } from "../src/provider/CodexProvider.ts";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveSpawnCommand } from "@goat/shared/shell";
 import * as Console from "effect/Console";

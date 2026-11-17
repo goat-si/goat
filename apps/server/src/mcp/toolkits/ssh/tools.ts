@@ -1,4 +1,4 @@
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import * as SshDeviceAdd from "../../../sshRemote/SshDeviceAdd.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
@@ -56,7 +56,7 @@ const shared = {
   dependencies: [
     McpInvocationContext.McpInvocationContext,
     Profiles.PermissionProfiles,
-    Crypto.Crypto,
+    SecureRandom.SecureRandom,
     ThreadManagementService.ThreadManagementService,
     SshRemoteDispatch.SshRemoteDispatch,
     SshHostSetup.SshHostSetup,

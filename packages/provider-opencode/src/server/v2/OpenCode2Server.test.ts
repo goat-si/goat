@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -111,7 +112,7 @@ describe("OpenCode2Server error details", () => {
         Layer.mergeAll(
           OpenCode2Client.layer.pipe(Layer.provide(httpClient)),
           OpenCodeRuntime.layer.pipe(Layer.provide(OpenCodeServerLedger.layerTest)),
-        ).pipe(Layer.provideMerge(NodeServices.layer)),
+        ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
       ),
     );
 
@@ -185,7 +186,7 @@ describe("OpenCode2Server external server", () => {
           Layer.mergeAll(
             OpenCode2Client.layer.pipe(Layer.provide(layerService)),
             OpenCodeRuntime.layer.pipe(Layer.provide(OpenCodeServerLedger.layerTest)),
-          ).pipe(Layer.provideMerge(NodeServices.layer)),
+          ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
         ),
       );
       assert.deepStrictEqual(versions, ["2.2.4", "2.2.4", "2.2.5"]);
@@ -262,7 +263,11 @@ describe("OpenCode2Server spawned server", () => {
         Layer.mergeAll(
           OpenCode2Client.layer,
           OpenCodeRuntime.layer.pipe(Layer.provide(OpenCodeServerLedger.layerTest)),
-        ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer))),
+        ).pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, FetchHttpClient.layer),
+          ),
+        ),
       ),
     ),
   );
@@ -310,7 +315,11 @@ it.live("starts an isolated memory server with the current selected credential",
       Layer.mergeAll(
         OpenCode2Client.layer,
         OpenCodeRuntime.layer.pipe(Layer.provide(OpenCodeServerLedger.layerTest)),
-      ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer))),
+      ).pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, FetchHttpClient.layer),
+        ),
+      ),
     ),
   ),
 );
@@ -354,7 +363,11 @@ it.live("keeps both environment-specific shared connections available to their s
       Layer.mergeAll(
         OpenCode2Client.layer,
         OpenCodeRuntime.layer.pipe(Layer.provide(OpenCodeServerLedger.layerTest)),
-      ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer))),
+      ).pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, FetchHttpClient.layer),
+        ),
+      ),
     ),
   ),
 );

@@ -1,5 +1,5 @@
 import * as HostProcess from "@goat/shared/HostProcess";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
@@ -96,9 +96,9 @@ export const makeHarness = Effect.fn("test.makePreviewBrowser")(function* (
   const path = yield* Path.Path;
   const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-preview-browser-test-" });
   const archive = options.archive ?? browserArchive;
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   const sha256 =
-    options.sha256 ?? Hex.encode(yield* crypto.digest("SHA-256", archive).pipe(Effect.orDie));
+    options.sha256 ?? Hex.encode(yield* digest.digest(Digest.sha256, archive).pipe(Effect.orDie));
   const requests: Array<string> = [];
   const release =
     options.release !== undefined

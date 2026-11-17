@@ -1,5 +1,5 @@
 import * as NodeNet from "node:net";
-import { NodeWS } from "@effect/platform-node/NodeSocket";
+import * as NodeWS from "@effect/platform-node/NodeWS";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 

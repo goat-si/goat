@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@goat/contracts";
@@ -38,7 +39,7 @@ const layer = Layer.mergeAll(
     ProviderEventLoggers.NoOpProviderEventLoggers,
   ),
   Layer.succeed(OpenCodeRuntime.OpenCodeRuntime, openCode2Runtime),
-).pipe(Layer.provideMerge(NodeServices.layer));
+).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 it.layer(layer)("OpenCode workspace environment", (it) => {
   it.effect("status probing and inventory launch share an environment when PATH changes", () =>

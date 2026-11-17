@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -53,7 +54,7 @@ import * as AccessFixture from "./mcp/McpToolAccess.testkit.ts";
 import * as McpHttp from "./mcp/McpHttpServer.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import * as Sessions from "./mcp/McpSessionRegistry.ts";
-import { McpServer } from "effect/ai";
+import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const id = (n: number) =>
@@ -88,7 +89,7 @@ const environment = (home: string) =>
     const base = yield* Layer.buildWithMemoMap(
       Layer.mergeAll(Environment.layer, Client.layer).pipe(
         Layer.provideMerge(routes),
-        Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         Layer.provideMerge(FetchHttpClient.layer),
         Layer.provideMerge(HttpRouter.layer),
       ),
@@ -153,7 +154,7 @@ const environment = (home: string) =>
             getInstance: () => Effect.succeed(undefined),
           }),
         ),
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(
           Layer.mock(ThreadManagement.ThreadManagementService)({
             getThreadShell: (tid) =>
@@ -571,7 +572,7 @@ it.effect(
       c.a.setMemoryEnabled(false);
       yield* c.a.releaseResult();
       assert.isTrue((yield* Fiber.join(grantRevoked)).result.isError === true);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -629,7 +630,7 @@ it.effect(
         (yield* Fiber.join(fresh)).messages[0]?.text,
         "synthetic original from owner",
       );
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 const runtimePermit = (request: M.MemorySourceReadRequest) =>
   Sync.MemorySyncRuntime.use((r) => Effect.result(r.ownerPermit(request)));
@@ -678,7 +679,7 @@ it.effect(
       );
       yield* assertPersisted(restarted, settled.policy);
       yield* restarted.sync.shutdown;
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each([

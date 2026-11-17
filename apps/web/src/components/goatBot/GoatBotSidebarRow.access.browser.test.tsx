@@ -11,12 +11,11 @@ import {
 import * as DateTime from "effect/DateTime";
 import { cloneElement, useSyncExternalStore, type ReactElement, type ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
-import { act, fakeTimers, render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 import {
   createPrimarySessionCheck,
   type PrimarySessionCheck,
-} from "~/environments/primary/sessionCheckSchedule";
-import type { PrimarySessionAnswer } from "~/environments/primary/auth";
+} from "~/environments/primary/sessionCheck";
 
 vi.unmock("./useGoatBotComputerReadable");
 
@@ -30,8 +29,6 @@ const state = vi.hoisted(() => ({
     serverConfig: { environment: { capabilities: object } };
   },
   primaryId: null as EnvironmentId | null,
-  probe: (() => Promise.resolve("unknown")) as () => Promise<PrimarySessionAnswer>,
-  probes: 0,
   check: null as PrimarySessionCheck | null,
   listeners: new Set<() => void>(),
   version: 0,
@@ -90,8 +87,9 @@ vi.mock("~/state/environments", async (original) => ({
   },
   usePrimaryEnvironmentId: () => state.primaryId,
 }));
-// The real check, driven by this file's connection and auth/session answers.
-vi.mock("~/environments/primary/sessionCheck", () => ({
+// The real check, following this file's connection.
+vi.mock("~/environments/primary/sessionCheck", async (original) => ({
+  ...(await original<typeof import("~/environments/primary/sessionCheck")>()),
   primarySessionCheck: {
     subscribe: (listener: () => void) => state.check?.subscribe(listener) ?? (() => {}),
     revoked: () => state.check?.revoked() ?? false,
@@ -199,25 +197,20 @@ function setup({ primary = false }: { primary?: boolean } = {}) {
   state.items = [projectedBot("b1", "2026-10-12T12:01:00.000Z", LINE)];
   state.presentation = connection("connected");
   state.primaryId = primary ? BOT_COMPUTER : OTHER_COMPUTER;
-  state.probe = () => Promise.resolve("unknown");
-  state.probes = 0;
   state.listeners = new Set();
   state.version = 0;
   state.check = null;
   if (!primary) return;
   state.check = createPrimarySessionCheck({
-    connection: () => state.presentation?.connection ?? null,
-    subscribeConnection: (listener) => {
+    primary: () => ({
+      environmentId: BOT_COMPUTER,
+      connection: state.presentation?.connection ?? null,
+    }),
+    subscribePrimary: (listener) => {
       state.listeners.add(listener);
       return () => state.listeners.delete(listener);
     },
-    visible: () => true,
-    subscribeVisible: () => () => {},
     eligible: () => true,
-    probe: () => {
-      state.probes += 1;
-      return state.probe();
-    },
   });
 }
 
@@ -300,33 +293,39 @@ it("the chat header's face rests while its computer refuses this client, even as
   expect(screen.getByRole("img").query()).toBeNull();
 });
 
-it.each([
-  ["revoked", true],
-  ["signed-in", false],
-  ["unknown", false],
-] as const)(
-  "on this tab's own server, a dropped socket hides the main row's line only once auth/session says the session is gone (%s)",
-  async (answer, hides) => {
-    setup({ primary: true });
-    state.probe = () => Promise.resolve(answer);
-    await using screen = await renderRow();
-    using _timers = fakeTimers();
-    await act(async () => {
-      state.presentation = connection("reconnecting", {
-        kind: "retrying",
-        reason: "transport",
-        detail: "Socket closed",
-      });
-      notify();
+it("on this tab's own server, a refusal hides the main row's line through Retry and a later dropped socket until it connects (#3473, steady refusal)", async () => {
+  setup({ primary: true });
+  await using screen = await renderRow();
+  await act(async () => {
+    state.presentation = connection("error", {
+      kind: "blocked",
+      reason: "authentication",
+      detail: "This browser is no longer signed in to the bot's computer.",
     });
-    // A dropped socket alone keeps the line: it looks the same as a network failure.
-    expect(screen.getByText(LINE).query()).not.toBeNull();
-    await act(() => vi.advanceTimersByTimeAsync(5_000));
-    if (hides) expectClosed(screen);
-    else expect(screen.getByText(LINE).query()).not.toBeNull();
-    expect(state.probes).toBe(1);
-  },
-);
+    notify();
+  });
+  expectClosed(screen);
+  // Retry clears the failure for its attempt; the refusal holds.
+  await act(async () => {
+    state.presentation = connection("connecting");
+    notify();
+  });
+  expectClosed(screen);
+  await act(async () => {
+    state.presentation = connection("reconnecting", {
+      kind: "retrying",
+      reason: "transport",
+      detail: "Socket closed",
+    });
+    notify();
+  });
+  expectClosed(screen);
+  await act(async () => {
+    state.presentation = connection("connected");
+    notify();
+  });
+  await expect.element(screen.getByText(LINE)).toBeVisible();
+});
 
 it.each([
   ["host-unreachable", false],
@@ -337,7 +336,6 @@ it.each([
   async (reason, primary) => {
     setup({ primary });
     await using screen = await renderRow();
-    using _timers = fakeTimers();
     await act(async () => {
       state.presentation = connection("reconnecting", {
         kind: "retrying",
@@ -346,10 +344,7 @@ it.each([
       });
       notify();
     });
-    await act(() => vi.advanceTimersByTimeAsync(60_000));
     expect(screen.getByText(LINE).query()).not.toBeNull();
     await expect.element(screen.getByRole("img", { name: "2 waiting for you" })).toBeVisible();
-    // The check reads only this tab's own server.
-    expect(state.probes).toBe(primary ? 3 : 0);
   },
 );

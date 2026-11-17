@@ -131,7 +131,7 @@ export const makeWorld = () => {
       Layer.provide(Layer.succeed(ServerSecretStore.ServerSecretStore, secretStore)),
       Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-cloud-machines-test-" })),
       Layer.provide(NodeCrypto.layer),
-      Layer.provide(NodeServices.layer),
+      Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     ),
   };
 };

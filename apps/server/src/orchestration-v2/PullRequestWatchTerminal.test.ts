@@ -1,4 +1,5 @@
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -185,6 +186,7 @@ const watchedThread = (name: string) =>
       Effect.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           ServerSettings.layerTest(),
           Layer.mock(PullRequestService.PullRequestService)({
             detail: (input) =>
@@ -529,6 +531,7 @@ it.effect("reads a watched pull request before another project's fingerprint ret
       Effect.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           ServerSettings.layerTest(),
           Layer.mock(PullRequestService.PullRequestService)({
             watchFingerprint: (input) =>

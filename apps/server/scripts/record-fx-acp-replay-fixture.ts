@@ -4,6 +4,7 @@
  * fx 0.0.13 on PATH (or GOAT_FX_BIN); HOME stays the user's real login:
  *   node scripts/record-fx-acp-replay-fixture.ts --scenario simple
  */
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProviderInstanceId, type ProviderReplayEntry } from "@goat/contracts";
 import { FxSettings } from "@goat/provider-fx/settings";
@@ -401,8 +402,11 @@ const recordScenario = Effect.fn("recordFxScenario")(function* (fixtureName: str
   ).pipe(
     Layer.provide(
       Layer.mergeAll(
-        TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
+        TestProviderHost.layer().pipe(
+          Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        ),
         NodeServices.layer,
+        NodeCrypto.layer,
         IdAllocator.layer,
       ),
     ),
@@ -523,5 +527,5 @@ if (scenarios.length === 0) {
 await Effect.runPromise(
   Effect.forEach(scenarios, (name) => Effect.scoped(recordScenario(name)), {
     discard: true,
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

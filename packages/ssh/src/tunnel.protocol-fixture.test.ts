@@ -1,8 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeHttp from "node:http";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -140,7 +142,7 @@ describe("SSH protocol fixture Node seeds", () => {
       assert.include(args, f.nodeEntry);
       assert.include(args, `--port ${f.port}`);
       yield* h.assertCompetitors;
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live("bounds seed bind collisions at three exited children and preserves competitors", () =>
@@ -162,7 +164,7 @@ describe("SSH protocol fixture Node seeds", () => {
         0,
       );
       yield* h.assertCompetitors;
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live("does not retry an unrelated seed startup failure mentioning EADDRINUSE", () =>
@@ -186,6 +188,6 @@ describe("SSH protocol fixture Node seeds", () => {
         events.filter((event) => event.type === "serve-exit"),
         1,
       );
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 });

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -10,7 +11,7 @@ import { captureWorktreeSnapshot, verifySnapshot } from "./captureSnapshot.ts";
 
 const layer = GitVcsDriver.layer.pipe(
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "snapshot-test-" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 const git = Effect.fn("SnapshotTest.git")(function* (cwd: string, args: string[]) {
   const driver = yield* GitVcsDriver.GitVcsDriver;

@@ -1,11 +1,13 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as ServerSettingsModule from "./serverSettings.ts";
 import { layerServerSettings } from "./serverSettingsLayers.testkit.ts";
 
-it.layer(NodeServices.layer)("server settings", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings", (it) => {
   it.effect("creates provider instances named after Object.prototype members", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;

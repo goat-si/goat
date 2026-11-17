@@ -12,6 +12,7 @@ import * as ProviderEventIngestor from "../ProviderEventIngestor.ts";
 import { ProviderThreadId, ProviderTurnId } from "@goat/contracts";
 import * as RuntimeLayer from "../runtimeLayer.ts";
 import * as ServerConfig from "../../config.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   captureRootRunTermination,
@@ -227,7 +228,7 @@ it.effect(
           Layer.provide(Fixture.layerNoProviderInstances),
           Layer.provideMerge(Fixture.layer),
           Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "receipt-runtime-" })),
-          Layer.provide(NodeServices.layer),
+          Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
       ),
     ),

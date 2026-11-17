@@ -30,17 +30,20 @@ const fixture = Effect.gen(function* () {
   const spawner = lazyChildProcessSpawner((command) =>
     Effect.gen(function* () {
       if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
-      calls.push({ command: command.command, args: command.args });
+      calls.push({ command: command.command, args: command.args.map(String) });
       assert.equal(command.options.forceKillAfter, 2_000);
-      if (command.args.includes("-G")) {
-        if (command.args.at(-1) === "trusted-jump")
+      if (command.args.map(String).includes("-G")) {
+        if (command.args.map(String).at(-1) === "trusted-jump")
           return makeSuccessfulProcess("proxyjump none\n");
         return makeSuccessfulProcess(
           "hostname endpoint.example\nport 2200\nuser deploy\nproxyjump trusted-jump\nproxycommand none\n",
         );
       }
-      if (command.args.includes("-lf")) {
-        assert.equal(command.args[command.args.indexOf("-lf") + 1], temporaryFile);
+      if (command.args.map(String).includes("-lf")) {
+        assert.equal(
+          command.args.map(String)[command.args.map(String).indexOf("-lf") + 1],
+          temporaryFile,
+        );
         assert.equal(yield* fs.readFileString(temporaryFile), written);
         return makeSuccessfulProcess(
           failFingerprint
@@ -49,11 +52,12 @@ const fixture = Effect.gen(function* () {
         );
       }
       temporaryFile = command.args
+        .map(String)
         .find((arg) => arg.startsWith("UserKnownHostsFile="))!
         .slice("UserKnownHostsFile=".length)
         .replace(/^"|"$/gu, "");
       assert.equal((yield* fs.stat(temporaryFile)).mode & 0o777, 0o600);
-      const ed25519Only = command.args.includes("HostKeyAlgorithms=ssh-ed25519");
+      const ed25519Only = command.args.map(String).includes("HostKeyAlgorithms=ssh-ed25519");
       written =
         ecdsaFirst && !ed25519Only
           ? "[endpoint.example]:2200 ecdsa-sha2-nistp256 " + key + "\n"

@@ -2,7 +2,7 @@ import { CloudMachineError, isCloudMachineAlias } from "@goat/contracts";
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
 import { resolveSshCommand } from "@goat/ssh/command";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -157,7 +157,7 @@ export const makeManagedSshWriter = (options: {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const runner = yield* ProcessRunner.ProcessRunner;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const context = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
 
     const sshDir = path.join(options.home, ".ssh");
@@ -194,7 +194,7 @@ export const makeManagedSshWriter = (options: {
     /** Same-directory temp file, created exclusively with mode 0600, then renamed into place. */
     const writePrivate = (file: string, contents: string) =>
       Effect.gen(function* () {
-        const temp = `${file}.${yield* crypto.randomUUIDv4()}.tmp`;
+        const temp = `${file}.${yield* random.uuidV4()}.tmp`;
         yield* fs.writeFileString(temp, contents, { mode: 0o600, flag: "wx" }).pipe(
           Effect.andThen(fs.chmod(temp, 0o600)),
           Effect.andThen(fs.rename(temp, file)),

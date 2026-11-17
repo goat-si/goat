@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import { RunAttemptId } from "@goat/contracts";
@@ -16,6 +17,7 @@ const layerAdapterTest = Layer.mergeAll(
   IdAllocator.layer,
   McpProviderSessions.layer,
   NodeServices.layer,
+  NodeCrypto.layer,
 );
 
 it.effect("clears retry limits while waiting for network", () =>

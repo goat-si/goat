@@ -19,7 +19,7 @@ import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -216,7 +216,7 @@ export const make = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const pullRequests = yield* PullRequestService.PullRequestService;
   const settingsService = yield* ServerSettings.ServerSettingsService;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const bootedAt = yield* Clock.currentTimeMillis;
   const lives = new Map<string, WatchLife>();
 
@@ -305,7 +305,7 @@ export const make = Effect.gen(function* () {
     endedWatch?: ThreadPullRequestWatch,
     dropQueuedWakes?: true,
   ) {
-    const uuid = yield* crypto.randomUUIDv4();
+    const uuid = yield* random.uuidV4();
     yield* engine.dispatch({
       type: "thread.pull-request-watch.sync",
       commandId: CommandId.make(`server:pr-watch:${target.thread.id}:${uuid}`),

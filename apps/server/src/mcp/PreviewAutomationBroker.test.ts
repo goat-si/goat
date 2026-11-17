@@ -1,4 +1,4 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,

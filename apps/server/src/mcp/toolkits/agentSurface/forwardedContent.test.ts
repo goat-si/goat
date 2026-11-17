@@ -14,6 +14,7 @@ import { McpSchema, McpServer } from "effect/ai";
 import * as DeviceService from "../../../device/DeviceService.ts";
 import { catalog, client, dependencies, deviceAccessGranted } from "../../agentSurface.testkit.ts";
 import { McpInvocationContext } from "../../McpInvocationContext.ts";
+import * as McpHttpServer from "../../McpHttpServer.ts";
 
 const png = new Uint8Array([
   137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
@@ -45,7 +46,7 @@ const device = Layer.mock(DeviceService.DeviceService)({
 });
 const registered = catalog.pipe(
   Layer.provide(Layer.mergeAll(dependencies, deviceAccessGranted, device)),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
 );
 
 const thread = {

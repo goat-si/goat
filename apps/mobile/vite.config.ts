@@ -31,6 +31,7 @@ const reactTests = [
   "src/features/threads/git/GitBranchesSheet.occupancy.test.tsx",
   "src/features/threads/git/GitBranchesSheet.test.tsx",
   "src/components/ui/SplitButton.android.test.tsx",
+  "src/components/ui/AndroidAnchoredMenu.test.tsx",
   "src/components/ProjectFavicon.test.tsx",
   "src/features/files/useFileTreeEntries.test.tsx",
   "src/features/home/home-route-visibility.test.tsx",
@@ -125,6 +126,7 @@ const reactTests = [
   "src/features/goat-bot/MobileGoatBotHomeWorker.test.tsx",
   "src/features/goat-bot/useMobileGoatBotHomeSettings.test.tsx",
   "src/features/goat-bot/useMobileGoatBotSession.test.tsx",
+  "src/features/goat-bot/useMobileGoatBotEnvironments.test.tsx",
   "src/features/goat-bot/useMobileGoatBotSession.offline.test.tsx",
   "src/features/goat-bot/useReplying.test.tsx",
   "src/features/settings/MemorySyncDiagnostics.test.tsx",
@@ -184,6 +186,7 @@ const devCompiledSources = [
   "/features/goat-bot/GoatBotScreen.tsx",
   "/features/goat-bot/MobileBotWork.tsx",
   "/features/goat-bot/MobileBotRowMenu.tsx",
+  "/features/goat-bot/MobileBotRosterPanel.tsx",
   "/features/threads/useThreadHistoryControls.ts",
 ];
 const require = NodeModule.createRequire(import.meta.url);

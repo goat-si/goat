@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
@@ -57,7 +58,7 @@ const desktopAt = (home: string) =>
         homeDirectory: home,
       } as DesktopEnvironment.DesktopEnvironment["Service"]),
     ),
-  ).pipe(Layer.provideMerge(NodeServices.layer));
+  ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 function jsonResponse(request: HttpClientRequest.HttpClientRequest, body: unknown, status = 200) {
   return HttpClientResponse.fromWeb(
@@ -672,7 +673,7 @@ describe("cloud machine guard", () => {
         const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-desktop-cloud-test-" });
         return yield* use(home, fs).pipe(Effect.provide(desktopAt(home)));
       }),
-    ).pipe(Effect.provide(NodeServices.layer));
+    ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
   it.effect("refuses a cloud machine this computer's server has not readied recently", () =>
     withHome((home, fs) =>

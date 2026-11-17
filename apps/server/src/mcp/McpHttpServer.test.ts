@@ -1,4 +1,5 @@
 import { snapshotResult } from "./toolkits/preview/snapshotTransport.testkit.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -77,17 +78,17 @@ const client = McpSchema.McpServerClient.of({
 });
 const layerTest = McpHttpServer.layerPreviewToolkit.pipe(
   Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
   Layer.provideMerge(PreviewAutomationBroker.layer),
   Layer.provideMerge(
     ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-http-server-test-" }),
   ),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 const layerPullRequestsTest = McpHttpServer.layerPullRequestsToolkit.pipe(
   Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
   Layer.provide(
     Layer.mergeAll(
@@ -96,6 +97,7 @@ const layerPullRequestsTest = McpHttpServer.layerPullRequestsToolkit.pipe(
       Layer.mock(Orchestrator.OrchestratorV2)({}),
       Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
       NodeServices.layer,
+      NodeCrypto.layer,
     ),
   ),
 );
@@ -158,7 +160,7 @@ const layerRecordingTools = (calls: Array<unknown>) => {
     }),
   ).pipe(
     Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provide(
       Layer.mergeAll(
         McpToolAccessTestkit.liveThreadsLayer,
@@ -167,6 +169,7 @@ const layerRecordingTools = (calls: Array<unknown>) => {
         Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({}),
         Layer.mock(ThreadResultService.ThreadResultService)({}),
         NodeServices.layer,
+        NodeCrypto.layer,
       ),
     ),
   );
@@ -762,7 +765,7 @@ it.effect("terminates HTTP MCP sessions with DELETE", () =>
         capabilities: new Set(["orchestration"]),
         issuedAt: 1,
       };
-      const layerServer = McpHttpServer.layerMcpTransport.pipe(
+      const layerServer = McpHttpServer.layerMcpTransport(Layer.empty).pipe(
         Layer.provide(
           Layer.mock(McpSessionRegistry.McpSessionRegistry)({
             explainRefusal: () => Effect.succeed({ reason: "unknown" as const }),
@@ -951,7 +954,7 @@ it.effect("registers annotated tools and preserves authenticated request context
           Effect.provideService(McpSchema.McpServerClient, client),
           Effect.flip,
         );
-      expect(malformed._tag).toBe("InvalidParams");
+      expect("_tag" in malformed ? malformed._tag : undefined).toBe("InvalidParams");
 
       const snapshot = yield* server
         .callTool({
@@ -1041,7 +1044,7 @@ it.effect(
               }),
             ),
             Effect.provideService(ServerEnvironment.ServerEnvironment, fakeEnvironment),
-            Effect.provide(NodeServices.layer),
+            Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           );
         const registry = yield* makeRegistry;
         const earlierRun = yield* makeRegistry;
@@ -1056,7 +1059,7 @@ it.effect(
             .pipe(Effect.map(tokenOf));
 
         yield* HttpRouter.serve(
-          McpHttpServer.layerMcpTransport.pipe(
+          McpHttpServer.layerMcpTransport(Layer.empty).pipe(
             Layer.provide(Layer.succeed(McpSessionRegistry.McpSessionRegistry, registry)),
           ),
           { disableListenLog: true, disableLogger: true },

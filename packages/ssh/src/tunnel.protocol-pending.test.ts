@@ -1,9 +1,11 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 
@@ -55,7 +57,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           if (replacement === "incompatible")
             assert.isFalse(yield* f.fs.exists(`${f.test}/activity-requests`));
           assert.notEqual((yield* f.snapshot).pid, before.pid);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each(["legacy", "incompatible"] as const)(
@@ -89,7 +94,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             assert.include(events, '"type":"supervise"');
             assert.isFalse(yield* f.fs.exists(`${f.test}/activity-requests`));
           }
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each([true, false])(
@@ -116,7 +124,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           }
           assert.deepEqual(yield* f.snapshot, before);
           assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
     it.live("an idle response for the wrong PID is unknown and preserves the live runtime", () =>
       Effect.gen(function* () {
@@ -137,7 +148,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         if (Result.isFailure(result)) throw result.failure;
         assert.equal(result.success.pending?.reason, "unknown");
         assert.deepEqual(yield* f.snapshot, before);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("an older runtime that never answers its activity probe is not attached as ready", () =>
@@ -166,7 +177,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.equal(busy.success.status, "ready");
         assert.equal(busy.success.pending?.reason, "busy");
         assert.deepEqual(yield* f.snapshot, before);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each(["busy", "unknown"] as const)(
@@ -189,7 +200,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           if (Result.isFailure(result)) throw result.failure;
           assert.equal(result.success.pending?.reason, final);
           assert.deepEqual(yield* f.snapshot, before);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each(["older", "legacy", "incompatible"] as const)(
@@ -214,7 +228,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.equal(result.success.pending?.reason, "busy");
           assert.deepEqual(yield* f.snapshot, before);
           assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("compatible retained helpers without the new comparator remain reusable", () =>
@@ -235,7 +252,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.equal(result.success.version, "1.2.2");
         assert.deepEqual(yield* f.snapshot, before);
         assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
   },
 );

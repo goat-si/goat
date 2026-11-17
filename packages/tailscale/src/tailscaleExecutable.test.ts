@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
@@ -17,6 +18,15 @@ import {
   TailscaleCommandSpawnError,
   TailscaleCommandTimeoutError,
 } from "./tailscale.ts";
+
+const plainEnvValue = (value: string | Redacted.Redacted<string> | undefined) =>
+  Redacted.isRedacted(value) ? Redacted.value(value) : value;
+const plainEnv = (
+  env: Readonly<Record<string, string | Redacted.Redacted<string> | undefined>> | undefined,
+) =>
+  env === undefined
+    ? undefined
+    : Object.fromEntries(Object.entries(env).map(([key, value]) => [key, plainEnvValue(value)]));
 
 const APP_CLI = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
 const LAUNCHER_CLI = "/usr/local/bin/tailscale";
@@ -78,8 +88,8 @@ function layerHost(input: {
         }
         input.spawned.push({
           command: command.command,
-          args: command.args,
-          env: command.options.env,
+          args: command.args.map(String),
+          env: plainEnv(command.options.env),
           extendEnv: command.options.extendEnv,
         });
         if (input.denied?.includes(command.command)) {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import { beforeEach, vi } from "vite-plus/test";
 
 const { values } = vi.hoisted(() => ({ values: new Map<string, string>() }));
@@ -72,5 +73,64 @@ describe("mobile language preference", () => {
       expect(loaded.followUpBehavior).toBe("steer");
       expect(loaded.language).toBeUndefined();
     }),
+  );
+});
+// A database that opens; preferences use only its preferences row.
+const openedDatabase = (row: { current: MobileDatabase.StoredPreferencesJson | null }) => {
+  const unused = Effect.die(new Error("not used by preferences"));
+  return Layer.mergeAll(
+    Layer.succeed(
+      MobileDatabase.MobileDatabase,
+      MobileDatabase.MobileDatabase.of({
+        loadNoteOutbox: unused,
+        saveNoteOutbox: () => unused,
+        removeNoteOutbox: () => unused,
+        loadCache: () => unused,
+        listCache: () => unused,
+        saveCache: () => unused,
+        removeCache: () => unused,
+        clearCacheKind: () => unused,
+        clearEnvironmentCache: () => unused,
+        clearAllCaches: unused,
+        inspectCaches: unused,
+        loadPreferencesJson: Effect.sync(() =>
+          row.current === null ? Option.none() : Option.some(row.current),
+        ),
+        savePreferencesJson: (payload, updatedAt) =>
+          Effect.sync(() => {
+            row.current = { payload, updatedAt };
+          }),
+      }),
+    ),
+    MobileSecureStorage.layer,
+  );
+};
+const fallbackItem = MobileSecureStorage.MobileSecureStorage.pipe(
+  Effect.flatMap((storage) => storage.getItem("goat.preferences.fallback")),
+  Effect.provide(MobileSecureStorage.layer),
+);
+
+describe("preferences when the database opens on Android (#3549)", () => {
+  it.effect(
+    "guard: preferences kept in the fallback load unchanged and move into the database (#3549)",
+    () =>
+      Effect.gen(function* () {
+        yield* seedStoredPreferences({ language: "ko", followUpBehavior: "steer" });
+        const withoutDatabase = yield* loadFresh;
+        const row = { current: null as MobileDatabase.StoredPreferencesJson | null };
+
+        const withDatabase = yield* MobilePreferences.make().pipe(
+          Effect.flatMap((store) => store.load),
+          Effect.provide(openedDatabase(row)),
+        );
+
+        expect(withDatabase).toEqual(withoutDatabase);
+        expect(row.current?.updatedAt).toBe(1);
+        expect(JSON.parse(row.current?.payload ?? "null")).toEqual({
+          language: "ko",
+          followUpBehavior: "steer",
+        });
+        expect(yield* fallbackItem).toBeNull();
+      }),
   );
 });

@@ -5,7 +5,7 @@ import {
   type ThreadId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -49,7 +49,7 @@ const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const path = yield* Path.Path;
   const fileSystem = yield* FileSystem.FileSystem;
   const realPath = (folder: string) =>
@@ -132,9 +132,7 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const randomId = crypto
-    .randomUUIDv4()
-    .pipe(Effect.mapError(fail("Could not create an id for the project.")));
+  const randomId = random.uuidV4();
 
   // bootstrap returns the project that already owns the folder, so retries reuse it.
   const createProject = Effect.fn("ScratchThreadPromotion.createProject")(function* (

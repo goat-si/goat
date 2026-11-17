@@ -1,6 +1,7 @@
 import * as Profiles from "../../goatclaw/PermissionProfiles.ts";
 import * as Settings from "../../serverSettings.ts";
 import * as MaintenanceAudit from "../../maintenance/MaintenanceAudit.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
@@ -69,13 +70,14 @@ export const projection: OrchestrationV2ThreadProjection = {
 };
 export const baseDependencies = Layer.mergeAll(
   NodeServices.layer,
+  NodeCrypto.layer,
   // No open disposable machine; SshHostSetup.disposable.test.ts covers the refusals.
   Layer.succeed(DisposableRouteGuard, {
     claim: () => Effect.undefined,
     refusal: () => Effect.undefined,
   }),
   Layer.succeed(MaintenanceAudit.MaintenanceAudit, { append: () => Effect.void }),
-  ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer)),
+  ProcessRunner.layer.pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   Layer.mock(SessionStore.SessionStore)({
     cookieName: "test",
     legacyCookieName: undefined,

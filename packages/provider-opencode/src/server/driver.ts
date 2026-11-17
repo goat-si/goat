@@ -1,7 +1,8 @@
 import { settingsSecretLiteral, type ServerProviderModel } from "@goat/contracts";
 import { ProviderDriverKind } from "@goat/contracts";
 import { OpenCodeSettings } from "../settings.ts";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
@@ -231,7 +232,8 @@ export type OpenCodeDriverEnv =
   | OpenCodeAdapterV2.OpenCodeAdapterV2DriverEnv
   | ProviderHost.ProviderHost
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | Digest.Digest
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | ProviderLatestVersions.ProviderLatestVersions
@@ -266,7 +268,8 @@ export const OpenCodeDriver: ProviderDriver<
     const agentScope = yield* AgentScope;
     const httpClient = yield* HttpClient.HttpClient;
     const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
-    const crypto = yield* Crypto.Crypto;
+    const digest = yield* Digest.Digest;
+    const random = yield* SecureRandom.SecureRandom;
     const host = yield* ProviderHost.ProviderHost;
     const hostEnvironment = yield* HostProcess.Environment;
     const home = yield* HostProcess.HomeDirectory;
@@ -483,7 +486,7 @@ export const OpenCodeDriver: ProviderDriver<
       ),
       // Sessions belong to the build that opened them: a rebuild closes this build's server
       // owner, so ProviderSessionRetirement retires them even when the settings came back unchanged.
-      sessionConfigKey: yield* crypto.randomUUIDv4().pipe(Effect.orDie),
+      sessionConfigKey: yield* random.uuidV4().pipe(Effect.orDie),
       runningVersion: openCode2Server.runningVersion ?? Effect.undefined,
     });
     const loadOpenCode2Models = yield* makeOpenCode2ModelLoader(
@@ -613,7 +616,7 @@ export const OpenCodeDriver: ProviderDriver<
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, pathService),
       Effect.provideService(HttpClient.HttpClient, httpClient),
-      Effect.provideService(Crypto.Crypto, crypto),
+      Effect.provideService(Digest.Digest, digest),
     );
     let unsupportedUsageVersion: string | undefined;
     // One environment per usage check, whether it runs inside a status check or on its own.

@@ -1,6 +1,5 @@
 import { layerNoFleetSync } from "../../../goatclaw/FleetSync.testkit.ts";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
@@ -18,6 +17,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import type * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -106,7 +106,6 @@ const launchFromThread = (params: {
     let launchedInput: ThreadLaunch.ThreadLaunchInput | undefined;
     const layerDependencies = Layer.mergeAll(
       ServerSettings.layerTest(settings),
-      NodeCrypto.layer,
       launchWatches(
         registrations,
         externalWatches,
@@ -188,7 +187,7 @@ const launchFromThread = (params: {
       expect(launchedInput).toBeUndefined();
     }
     const exit = yield* toolkit
-      .handle("goat_thread_launch", input)
+      .handle("goat_thread_launch", input as Schema.Json)
       .pipe(
         Stream.unwrap,
         Stream.runCollect,
@@ -446,7 +445,6 @@ it.effect("launches a scratch thread into the Scratch project", () =>
     const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
     const layerDependencies = Layer.mergeAll(
       ServerSettings.layerTest(),
-      NodeCrypto.layer,
       launchWatches(),
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
@@ -550,7 +548,6 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
     };
     const layerDependencies = Layer.mergeAll(
       ServerSettings.layerTest(),
-      NodeCrypto.layer,
       launchWatches(),
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
@@ -916,7 +913,6 @@ it.effect("lists and reads another machine's projects through that machine's own
     const calls: Array<SshRemoteDispatch.SshHostToolCall> = [];
     const layerDependencies = Layer.mergeAll(
       ServerSettings.layerTest(),
-      NodeCrypto.layer,
       launchWatches(),
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),

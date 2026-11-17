@@ -55,7 +55,7 @@ it.effect(
       }),
     ).pipe(
       Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
-      Layer.provideMerge(McpServer.McpServer.layer),
+      Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     );
     return Effect.gen(function* () {
       const server = yield* McpServer.McpServer;
@@ -87,7 +87,7 @@ it.effect(
 
 const registered = catalog.pipe(
   Layer.provide(dependencies),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
 );
 
 it.effect("omits redundant safe-integer bounds from every registered input schema", () =>

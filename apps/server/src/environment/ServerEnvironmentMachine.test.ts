@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -13,7 +14,9 @@ import {
   serverMachineNonceDirectory,
 } from "./ServerEnvironmentMachine.ts";
 
-const layer = ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer));
+const layer = ProcessRunner.layer.pipe(
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+);
 // Every clone of one image reads this /etc/machine-id and the same home path.
 const IMAGE_MACHINE_ID = "4f1c0e5a9b2d4c7e8f6a1b3c5d7e9f02";
 const HOME = "/home/ubuntu";

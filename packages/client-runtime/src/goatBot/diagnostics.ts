@@ -12,6 +12,7 @@ import {
   type SlackChannelStatusEvent,
 } from "@goat/contracts";
 
+import { goatBotRefusedText } from "./availability.ts";
 import type { GoatBotFaceTaskItem } from "./face.ts";
 import type { GoatBotHomeResolution } from "./home.ts";
 import { deriveGoatBotModelSettings } from "./model.ts";
@@ -126,7 +127,7 @@ export function diagnoseGoatBot(input: GoatBotDiagnosticsInput): GoatBotDiagnost
   const homeId = input.home.state === "claimed" ? input.home.claim.environmentId : null;
   // Model, work and Slack would be read from the computer that refused this device.
   if (input.home.state === "claimed" && input.homeRefused === true && !input.home.homeConnected) {
-    const text = `GOAT on ${input.homeLabel} did not accept this device`;
+    const text = goatBotRefusedText(input.homeLabel);
     return {
       verdict: "down",
       title: "Not working",

@@ -6,8 +6,10 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { afterEach, assert, describe, it } from "@effect/vitest";
+import * as PlatformNodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import { ChildProcessSpawner } from "effect/process";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
@@ -285,7 +287,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH runtime cl
       // Garbage appears only when a launch installs a runtime, so attaching costs no round trip.
       assert.isFalse(cleanupAttempted);
       assert.isTrue(yield* f.fs.exists(old));
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(
+      Effect.provide(Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer)),
+      Effect.scoped,
+    ),
   );
 });
 

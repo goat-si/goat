@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -109,6 +110,7 @@ it.effect.each([
           IdAllocator.layer,
           McpProviderSessions.layer,
           NodeServices.layer,
+          NodeCrypto.layer,
           MemoryDerivedCache.layer,
         ),
       ),
@@ -165,6 +167,7 @@ it.effect("surfaces an older server's unsupported resume error without retrying"
         IdAllocator.layer,
         McpProviderSessions.layer,
         NodeServices.layer,
+        NodeCrypto.layer,
         MemoryDerivedCache.layer,
       ),
     ),

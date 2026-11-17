@@ -2,6 +2,7 @@
  * The goal controller over a scripted worker runtime and fixed placement, health, fallback and
  * recovery, shared by the controller's test files.
  */
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   FleetGoalId,
@@ -276,7 +277,9 @@ export const freshStarts = Layer.succeed(GoalRecovery, {
 const persistence = (path: string | undefined) =>
   path === undefined
     ? SqlitePersistence.layerMemory
-    : SqlitePersistence.layerFromPath(path).pipe(Layer.provide(NodeServices.layer));
+    : SqlitePersistence.layerFromPath(path).pipe(
+        Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      );
 
 export const layerFor = (
   fake: Fake,

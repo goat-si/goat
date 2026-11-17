@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it, vi } from "@effect/vitest";
 import type { SshHostResult } from "@goat/contracts";
@@ -106,7 +107,7 @@ it.effect("shares the dispatch manager", () =>
             Layer.provide(dependencies),
             Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "ssh-host-setup-" })),
             Layer.provide(FetchHttpClient.layer),
-            Layer.provide(NodeServices.layer),
+            Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ),
       );

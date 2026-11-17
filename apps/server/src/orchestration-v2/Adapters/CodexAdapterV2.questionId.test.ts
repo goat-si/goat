@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it } from "@effect/vitest";
 import { RunAttemptId } from "@goat/contracts";
@@ -17,6 +18,7 @@ const layerAdapterTest = Layer.mergeAll(
   IdAllocator.layer,
   McpProviderSessions.layer,
   NodeServices.layer,
+  NodeCrypto.layer,
 );
 
 describe("CodexAdapterV2 user input questions", () => {

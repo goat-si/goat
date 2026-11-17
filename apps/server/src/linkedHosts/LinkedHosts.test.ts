@@ -6,7 +6,7 @@ import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -78,7 +78,7 @@ const withHost = <A, E>(
   ) => Effect.Effect<A, E, LinkedHosts.LinkedHosts>,
 ) =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const hostConfig = ServerConfig.layerTest(process.cwd(), { prefix: "goat-linked-host-" });
     const hostAuthLayer = EnvironmentAuth.layer.pipe(
       Layer.provide(Sqlite.layerMemory),
@@ -107,17 +107,17 @@ const withHost = <A, E>(
       Layer.provide(hostConfig),
       Layer.provideMerge(
         HttpPlatform.layer.pipe(
-          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           Layer.provideMerge(Etag.layerWeak),
         ),
       ),
-      Layer.provide(NodeServices.layer),
+      Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     );
     const requests: Array<string> = [];
     return yield* Effect.acquireUseRelease(
       Effect.sync(() => HttpRouter.toWebHandler(routes, { disableLogger: true })),
       (web) => {
-        const context = Context.make(Crypto.Crypto, crypto);
+        const context = Context.make(SecureRandom.SecureRandom, random);
         const toHost = async (input: string | URL | Request, init?: RequestInit) => {
           const request = new Request(input, init);
           const url = new URL(request.url);
@@ -151,7 +151,7 @@ const withHost = <A, E>(
                 Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-linker-" })),
                 Layer.provide(FetchHttpClient.layer),
                 Layer.provide(Layer.succeed(FetchHttpClient.Fetch, toHost as typeof fetch)),
-                Layer.provide(NodeServices.layer),
+                Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
               ),
             ),
           );
@@ -160,7 +160,7 @@ const withHost = <A, E>(
       },
       (web) => Effect.promise(() => web.dispose()),
     );
-  }).pipe(Effect.provide(NodeServices.layer));
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 const pairingCode = (auth: EnvironmentAuth.EnvironmentAuth["Service"]) =>
   auth

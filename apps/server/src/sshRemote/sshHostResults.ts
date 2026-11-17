@@ -1,6 +1,8 @@
 import { type HandoffError, SshHostProbeError, type SshHostResult } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
+import type * as Dispatch from "./SshRemoteDispatch.ts";
+
 const isProbeError = Schema.is(SshHostProbeError);
 
 export const errorResult = (
@@ -65,3 +67,21 @@ export const setupFailure = (host: string, error: HandoffError): SshHostResult =
           : "operation_failed",
   );
 };
+
+export const dispatchFailure = (error: Dispatch.SshRemoteDispatchError): SshHostResult => ({
+  kind: "error",
+  code:
+    error.reason === "host_unknown" || error.reason === "invalid_request"
+      ? error.reason
+      : error.reason === "host_unavailable"
+        ? "host_unreachable"
+        : "operation_failed",
+  message: error.message.slice(0, 2000),
+  fix: { actor: "agent", instruction: "Try again" },
+});
+export const outsideThread = (instruction: string): SshHostResult => ({
+  kind: "error",
+  code: "unsupported",
+  message: instruction,
+  fix: { actor: "human", instruction },
+});

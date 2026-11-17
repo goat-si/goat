@@ -12,6 +12,7 @@ export {
 import { registerAgentOomIngestorCases } from "./ProviderEventIngestor.oomCases.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import { assert, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CheckpointId,
@@ -83,7 +84,7 @@ export const layerTestEventSink = EventSink.layer.pipe(
 
 const layerGit = GitVcsDriver.layer.pipe(
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "ingestor-git-" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 export const layerEmptyInstances = Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({

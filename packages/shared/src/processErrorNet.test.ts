@@ -98,7 +98,7 @@ it.live("a ws closed while connecting, with no error listener, leaves the proces
     const result = yield* runFixture(
       "net",
       `const NodeNet = await import("node:net");
-const { NodeWS } = await import("@effect/platform-node/NodeSocket");
+const NodeWS = await import("@effect/platform-node/NodeWS");
 let ws;
 // Accepts the connection and never answers the upgrade, so the client stays CONNECTING.
 const server = NodeNet.createServer((socket) => {

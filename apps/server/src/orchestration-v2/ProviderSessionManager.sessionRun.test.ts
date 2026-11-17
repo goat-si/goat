@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, RunId, ThreadId } from "@goat/contracts";
@@ -61,7 +62,7 @@ const dependencies = (driver: string) =>
 const testLayer = (driver: string) =>
   ProviderSessionManager.layerWithOptions().pipe(
     Layer.provideMerge(dependencies(driver)),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
 
 it.effect.each([

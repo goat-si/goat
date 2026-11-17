@@ -2,6 +2,7 @@
 import * as ClaudeSdk from "@anthropic-ai/claude-agent-sdk";
 import { beforeEach, vi } from "vite-plus/test";
 import * as NodePath from "node:path";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -18,7 +19,7 @@ import {
   RunId,
   ThreadId,
 } from "@goat/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -52,6 +53,7 @@ const layerAdapterTest = Layer.mergeAll(
   IdAllocator.layer,
   McpProviderSessions.layer,
   NodeServices.layer,
+  NodeCrypto.layer,
 );
 const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
 const CLAUDE_TEST_MODEL_SELECTION = {
@@ -148,7 +150,7 @@ describe("ClaudeAdapterV2 append-system-prompt-file launch argument", () => {
       attachmentsDir: yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-claude-append-" }),
       fileSystem,
       path: yield* Path.Path,
-      crypto: yield* Crypto.Crypto,
+      random: yield* SecureRandom.SecureRandom,
       idAllocator: yield* IdAllocator.IdAllocatorV2,
       queryRunner: {
         allocateSessionId: Effect.succeed("native-thread-claude-append-file"),

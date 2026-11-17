@@ -2,6 +2,7 @@
 import * as NodeFS from "node:fs";
 import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@goat/shared/Net";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -71,6 +72,7 @@ const program = Command.runWith(makeCli(), { version: "0.0.0" })(args).pipe(
   Effect.provide(
     Layer.mergeAll(
       NodeServices.layer,
+      NodeCrypto.layer,
       NetService.layer,
       ConfigProvider.layer(ConfigProvider.fromEnv({ env: configEnv })),
     ),

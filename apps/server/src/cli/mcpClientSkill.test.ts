@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - the contract is with a file outside the bundle.
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as NetService from "@goat/shared/Net";
@@ -24,7 +25,9 @@ describe("goat mcp skill", () => {
       assert.strictEqual(printed, installableSkill);
       assert.match(installableSkill, /^---\nname: goat-mcp\ndescription: \S/);
     }).pipe(
-      Effect.provide(Layer.mergeAll(NodeServices.layer, NetService.layer, TestConsole.layer)),
+      Effect.provide(
+        Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer, TestConsole.layer),
+      ),
     ),
   );
 });

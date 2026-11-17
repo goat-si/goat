@@ -27,6 +27,7 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
@@ -60,6 +61,7 @@ import {
   addRolledBackRecoveryCandidate,
   queryPlanFor,
 } from "./ProjectionStore.testkit.ts";
+import { addOrphanedRecoveryCandidate } from "./ProjectionStore.orphanRecovery.testkit.ts";
 
 declare module "node:sqlite" {
   interface StatementSync {
@@ -67,79 +69,6 @@ declare module "node:sqlite" {
     stat(counter: "vmStep"): number;
   }
 }
-
-const addOrphanedRecoveryCandidate = Effect.fn("addOrphanedRecoveryCandidate")(function* (
-  suffix: string,
-) {
-  const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
-  const now = yield* DateTime.now;
-  const threadId = ThreadId.make(`thread:${suffix}:orphaned`);
-  const runId = RunId.make(`run:${suffix}:missing`);
-  const rootNodeId = NodeId.make(`node:${suffix}:orphaned`);
-
-  yield* projectionStore.apply({
-    id: EventId.make(`event:${suffix}:thread-created`),
-    type: "thread.created",
-    threadId,
-    occurredAt: now,
-    payload: {
-      createdBy: "user",
-      creationSource: "web",
-      id: threadId,
-      projectId: ProjectId.make(`project:${suffix}`),
-      title: "Orphaned recovery candidate",
-      providerInstanceId,
-      modelSelection,
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      branch: null,
-      worktreePath: null,
-      activeProviderThreadId: null,
-      lineage: {
-        parentThreadId: null,
-        relationshipToParent: null,
-        rootThreadId: threadId,
-      },
-      forkedFrom: null,
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: null,
-      settledOverride: null,
-      settledAt: null,
-      lastVisitedAt: null,
-      deletedAt: null,
-    },
-  });
-  yield* projectionStore.apply({
-    id: EventId.make(`event:${suffix}:item-running`),
-    type: "turn-item.updated",
-    threadId,
-    runId,
-    nodeId: rootNodeId,
-    driver,
-    occurredAt: now,
-    payload: {
-      id: TurnItemId.make(`item:${suffix}:orphaned`),
-      threadId,
-      runId,
-      nodeId: rootNodeId,
-      providerThreadId: null,
-      providerTurnId: null,
-      nativeItemRef: null,
-      parentItemId: null,
-      ordinal: 1,
-      status: "running",
-      title: "orphaned command",
-      startedAt: now,
-      completedAt: null,
-      updatedAt: now,
-      type: "command_execution",
-      input: "sleep 60",
-    },
-  });
-
-  return threadId;
-});
 
 const restartCancelledWorkSurvivesStaleRunUpdate = Effect.gen(function* () {
   const store = yield* ProjectionStore.ProjectionStoreV2;
@@ -1226,8 +1155,8 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       ];
       yield* sql.withTransaction(
         Effect.gen(function* () {
-          for (let offset = 0; offset < items.length; offset += 50) {
-            const rows = items.slice(offset, offset + 50).map((item) => ({
+          for (const chunk of Arr.chunksOf(items, 50)) {
+            const rows = Arr.map(chunk, (item) => ({
               turn_item_id: item.id,
               thread_id: item.threadId,
               run_id: item.runId,

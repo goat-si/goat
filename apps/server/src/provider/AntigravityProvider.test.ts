@@ -1,4 +1,5 @@
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -129,7 +130,7 @@ const layerTest = ProviderHostLive.layer.pipe(
   Layer.provideMerge(ServerSecretStore.layer),
   Layer.provide(
     ServerConfig.layerTest(process.cwd(), { prefix: "goat-antigravity-provider-test-" }).pipe(
-      Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     ),
   ),
 );

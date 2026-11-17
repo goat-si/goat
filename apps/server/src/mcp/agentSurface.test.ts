@@ -63,6 +63,7 @@ import {
   routeOutcome,
 } from "./agentSurfaceOutcome.testkit.ts";
 import { DEPRECATED_META_KEY, listedToolCall } from "./ToolDispatch.ts";
+import * as McpHttpServer from "./McpHttpServer.ts";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const toolkits = { ...standardToolkits, screen: ScreenToolkit };
@@ -71,7 +72,7 @@ const registered = catalog.pipe(
   Layer.provide(dependencies),
   // As served: ToolAdmission reserves keys and goat_eval journals steps in the database.
   Layer.provideMerge(Sqlite.layerMemory),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
 );
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
@@ -569,7 +570,7 @@ describe("agent surface access", () => {
             if (route === "legacy" && legacy === undefined) continue;
             const call: Effect.Effect<
               McpSchema.CallToolResult,
-              McpSchema.InternalError | McpSchema.InvalidParams,
+              McpSchema.InternalError | McpSchema.InvalidParams | McpSchema.McpErrorBase,
               McpServer.McpServer
             > =
               route === "legacy"
@@ -834,7 +835,7 @@ const failingDevice = Layer.mock(DeviceService.DeviceService)({
 });
 const registeredWithFailingDevice = catalog.pipe(
   Layer.provide(Layer.mergeAll(dependencies, deviceAccessGranted, failingDevice)),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
 );
 
 it.effect("goat_call never shows failure text a direct call hides", () =>
@@ -880,7 +881,7 @@ const operationKey = Layer.mock(ServerSecretStore.ServerSecretStore)({
 });
 const registeredWithOperationKey = catalog.pipe(
   Layer.provide(Layer.mergeAll(dependencies, operationKey)),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
 );
 
 it.effect("goat_operation_cancel meets exactly the refusals of the kind's own cancel tool", () =>
@@ -928,7 +929,7 @@ it.effect("goat_call starts no long work it could not hand back a handle for", (
             }),
           ),
         ),
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
       ),
     ),
   ),
@@ -972,7 +973,7 @@ it.effect(
               }),
             ),
           ),
-          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         ),
       ),
     ),

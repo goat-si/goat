@@ -1,4 +1,5 @@
 import { SourceControlProviderKind } from "@goat/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -69,7 +70,7 @@ export function layerTestFor(state: {
     Layer.provideMerge(
       state.fileSystem
         ? Layer.succeed(FileSystem.FileSystem, state.fileSystem)
-        : NodeServices.layer,
+        : Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
     ),
     Layer.provide(layerBackgroundPolicy(() => state.backgroundWorkEnabled !== false)),
     Layer.provide(

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -8,6 +9,7 @@ import {
   type ProviderReplayEntry,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
 import {
   ClaudeOrchestratorReplayHarness,
@@ -34,9 +36,12 @@ import {
 } from "./ProviderReplayFixtures.ts";
 import { readProviderReplayTranscript } from "@goat/provider-testing/replayTranscript";
 
-const readTranscript = Effect.fn("readClaudeReplayFixture")(function* (file: URL) {
-  return yield* readProviderReplayTranscript(file);
-}, Effect.provide(NodeServices.layer));
+const readTranscript = Effect.fn("readClaudeReplayFixture")(
+  function* (file: URL) {
+    return yield* readProviderReplayTranscript(file);
+  },
+  Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+);
 
 function readClaudeTranscriptFixture(path: string) {
   return readTranscript(new URL(`./fixtures/${path}/claude_transcript.ndjson`, import.meta.url));

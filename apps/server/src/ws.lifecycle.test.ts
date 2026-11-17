@@ -25,6 +25,7 @@ import * as ProviderHostSync from "./provider/ProviderHostSync.ts";
 import * as RemoteLaunchCatalog from "./remoteReports/RemoteLaunchCatalog.ts";
 import * as SlackChannelSettings from "./channels/SlackChannelSettings.ts";
 import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as AcpRegistryRuntimeCoordinator from "@goat/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
@@ -292,7 +293,7 @@ const layerLifecycleSources = Layer.mergeAll(
       ServerConfigModule.layerTest(process.cwd(), { prefix: "goat-lifecycle-subscription-test-" }),
     ),
   ),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 it.effect.each([

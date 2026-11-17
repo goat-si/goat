@@ -11,7 +11,8 @@ import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Digest from "effect/crypto/Digest";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -196,7 +197,8 @@ const make = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const routeGuard = yield* DisposableRouteGuard;
   const http = yield* HttpClient.HttpClient;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
+  const digest = yield* Digest.Digest;
   const lock = yield* Semaphore.make(1);
   const signals = yield* PubSub.unbounded<void>();
 
@@ -313,11 +315,11 @@ const make = Effect.gen(function* () {
         );
       const client = yield* decoded(AuthMcpRegisteredClient, "client registration")(registeredBody);
 
-      const verifier = base64UrlEncode(yield* crypto.randomBytes(32).pipe(Effect.orDie));
+      const verifier = base64UrlEncode(yield* random.randomBytes(32).pipe(Effect.orDie));
       const challenge = base64UrlEncode(
-        yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier)).pipe(Effect.orDie),
+        yield* digest.digest(Digest.sha256, new TextEncoder().encode(verifier)).pipe(Effect.orDie),
       );
-      const state = base64UrlEncode(yield* crypto.randomBytes(16).pipe(Effect.orDie));
+      const state = base64UrlEncode(yield* random.randomBytes(16).pipe(Effect.orDie));
       const resource = url("/mcp");
       const decision = yield* send(
         HttpClientRequest.post(url("/oauth/mcp/decision")).pipe(

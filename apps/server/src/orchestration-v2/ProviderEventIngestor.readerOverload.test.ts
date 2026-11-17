@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   NodeId,
@@ -115,7 +116,7 @@ function threadCreatedEvent(
 
 const git = GitVcsDriver.layer.pipe(
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "ingestor-overload-" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 const instances = Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
   // @effect-diagnostics-next-line effectSucceedWithVoid:off - Optional instances require undefined rather than void.
@@ -339,7 +340,7 @@ it.effect.each([false, true])(
         const normalizeError = yield* ingestor.normalize(input).pipe(Effect.flip);
         assert.equal(normalizeError._tag, "ProviderEventNormalizeError");
       }).pipe(Effect.provide(layerFor(path.join(directory, "state.sqlite"), writerWorker)));
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 type IngestEvent = ProviderEventIngestor.ProviderEventIngestInput["event"];
 interface Saturated {
@@ -417,7 +418,7 @@ const withSaturatedReaders = <A, E, E2 = never>(
       for (const read of reads) yield* Fiber.interrupt(read);
       return result;
     }).pipe(Effect.provide(layerFor(path.join(directory, "state.sqlite"), false)));
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 const overloadTurnId = ProviderTurnId.make("provider-turn:overload");
 const ingestionReads: ReadonlyArray<{

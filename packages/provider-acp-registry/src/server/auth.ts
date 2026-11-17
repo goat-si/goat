@@ -4,7 +4,8 @@ import {
   type ProviderInstanceId,
 } from "@goat/contracts";
 import type { AcpRegistrySettings } from "../settings.ts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Digest from "effect/crypto/Digest";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import * as EffectAcpErrors from "effect-acp/errors";
@@ -59,7 +60,8 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
 }) {
   const catalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
+  const random = yield* SecureRandom.SecureRandom;
   const pty = yield* Effect.serviceOption(PtyAdapter.PtyAdapter);
   const coordinator = yield* Effect.serviceOption(
     AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator,
@@ -101,7 +103,7 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
             Layer.provide(
               Layer.mergeAll(
                 Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
-                Layer.succeed(Crypto.Crypto, crypto),
+                Layer.succeed(SecureRandom.SecureRandom, random),
               ),
             ),
           ),
@@ -136,7 +138,8 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
         return yield* failure("methods", "Prepare this ACP agent before signing in.");
       const resolved = yield* resolve(environment);
       const key = yield* probeFingerprint(environment, resolved.spawn).pipe(
-        Effect.provideService(Crypto.Crypto, crypto),
+        Effect.provideService(Digest.Digest, digest),
+        Effect.provideService(SecureRandom.SecureRandom, random),
       );
       if (
         inspected.version !== null &&

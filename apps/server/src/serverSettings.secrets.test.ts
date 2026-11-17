@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -79,7 +80,13 @@ it.effect("persists a reference when an older client updates a provider", () =>
       settings.providerInstances[codexId]?.environment?.[0]?.secret,
       reference,
     );
-  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.provide(
+      layerServerSettings().pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
 );
 
 it("preserves source control references while redacting literal tokens", () => {
@@ -121,7 +128,13 @@ it.effect("keeps a second host's stored literal when a token becomes a reference
     const clientTokens = client.sourceControlHosts.github?.tokens as Record<string, unknown>;
     assert.deepStrictEqual(clientTokens["github.com"], reference);
     assert.notStrictEqual(clientTokens["other.example"], "second-token");
-  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.provide(
+      layerServerSettings().pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
 );
 
 it.effect(
@@ -228,7 +241,7 @@ it.effect(
         yield* secrets.remove(name);
         assert.equal((yield* settings.getSettings).completionWebhook.secret, "");
       }).pipe(Effect.provide(layers), Effect.provideService(FileSystem.FileSystem, controlledFs));
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("reads secrets afresh when the directory watcher is unavailable", () =>
@@ -270,5 +283,5 @@ it.effect("reads secrets afresh when the directory watcher is unavailable", () =
           ),
       }),
     );
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

@@ -12,7 +12,7 @@ import {
   type ThreadPullRequestLink,
   SourceControlProviderKind,
 } from "@goat/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -39,10 +39,7 @@ import { PullRequestsToolkit } from "./tools.ts";
 export const PROJECT_ID = ProjectId.make("project-1");
 export const THREAD_ID = ThreadId.make("thread-1");
 
-const testCrypto = Crypto.make({
-  randomBytes: (size) => new Uint8Array(size).fill(7),
-  digest: (_algorithm, data) => Effect.succeed(data),
-});
+const testCrypto = SecureRandom.make((size) => new Uint8Array(size).fill(7));
 
 const invocation = (
   capabilities: ReadonlyArray<McpInvocationContext.McpCapability>,
@@ -233,7 +230,7 @@ export const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function*
         Effect.succeed(id === thread?.id ? v2PullRequestThread(thread) : null),
       dispatch,
     }),
-    Layer.succeed(Crypto.Crypto, testCrypto),
+    Layer.succeed(SecureRandom.SecureRandom, testCrypto),
     McpToolAccessTestkit.liveThreadsLayer,
   );
   const layerWithWatches = PullRequestWatchService.layer.pipe(

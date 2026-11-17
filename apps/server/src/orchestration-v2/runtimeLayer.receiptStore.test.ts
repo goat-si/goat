@@ -10,6 +10,7 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import { CommandId } from "@goat/contracts";
@@ -38,7 +39,7 @@ const layerServerConfig = ServerConfig.layerTest(process.cwd(), {
 });
 
 const layerPlatformTest = Layer.merge(
-  NodeServices.layer,
+  Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
   Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
     resolveLink: () => Effect.die("unused title link"),
   }),

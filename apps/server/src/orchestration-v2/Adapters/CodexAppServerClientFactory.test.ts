@@ -11,6 +11,7 @@ import {
 } from "@goat/contracts";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/process";
@@ -28,6 +29,15 @@ import {
   layerAppServerClientFactory,
   makeCodexAppServerProtocolLogger,
 } from "./CodexAppServerClientFactory.ts";
+
+const plainEnvValue = (value: string | Redacted.Redacted<string> | undefined) =>
+  Redacted.isRedacted(value) ? Redacted.value(value) : value;
+const plainEnv = (
+  env: Readonly<Record<string, string | Redacted.Redacted<string> | undefined>> | undefined,
+) =>
+  env === undefined
+    ? undefined
+    : Object.fromEntries(Object.entries(env).map(([key, value]) => [key, plainEnvValue(value)]));
 
 const defaultSettings = Schema.decodeSync(CodexSettings)({});
 
@@ -110,7 +120,7 @@ it.effect("socket and stdio launches both cap Codex's jemalloc arenas", () =>
             spawn: (command) =>
               Effect.sync(() =>
                 launchEnvs.push(
-                  command._tag === "StandardCommand" ? command.options.env : undefined,
+                  command._tag === "StandardCommand" ? plainEnv(command.options.env) : undefined,
                 ),
               ).pipe(Effect.andThen(Effect.die("observed stdio spawn"))),
           }),

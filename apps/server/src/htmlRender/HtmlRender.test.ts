@@ -749,7 +749,7 @@ it.effect("publishes one HTML attachment on a keyed retry and refuses changed ar
   }).pipe(
     Effect.provide(
       McpHttpServer.toolkitRegistration(HtmlRenderToolkit, HtmlHandlers.layerRender).pipe(
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(dependencies),
         Layer.provideMerge(Sqlite.layerMemory),
       ),

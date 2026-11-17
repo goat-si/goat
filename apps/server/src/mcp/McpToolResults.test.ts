@@ -84,7 +84,7 @@ const layer = McpHttpServer.toolkitRegistration(
       Layer.mock(ServerSettings.ServerSettingsService)({}),
     ),
   ),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
   Layer.provideMerge(NodeServices.layer),
 );

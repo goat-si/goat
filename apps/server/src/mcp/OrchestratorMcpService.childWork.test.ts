@@ -1,4 +1,5 @@
 import * as FleetSync from "../goatclaw/FleetSync.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -383,6 +384,7 @@ const fixture = Effect.fn("childWorkTest.fixture")(function* (
   );
   const layerDependencies = Layer.mergeAll(
     NodeServices.layer,
+    NodeCrypto.layer,
     Layer.mock(ThreadManagementService.ThreadManagementService)({
       hasReceipt: (commandId) =>
         stopBeforeClaim("receipt").pipe(
@@ -654,6 +656,7 @@ describe("OrchestratorMcpService delegate child work", () => {
             Layer.provide(
               Layer.mergeAll(
                 NodeServices.layer,
+                NodeCrypto.layer,
                 Layer.mock(ThreadManagementService.ThreadManagementService)({
                   hasReceipt: () => Effect.succeed(false),
                   getThreadShell: () =>

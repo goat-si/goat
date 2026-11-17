@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as PlatformNodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -101,7 +102,9 @@ const graph = (
       Layer.provideMerge(settings),
     );
     const base = yield* Layer.buildWithMemoMap(
-      services.pipe(Layer.provideMerge(NodeServices.layer)),
+      services.pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer)),
+      ),
       memo,
       scope,
     );
@@ -354,7 +357,10 @@ const assembledImport = (profile: MemoryImportFixtureProfile) =>
         `${process.env.WP5_IMPORT_EVIDENCE_DIR}/${fixture.snapshot.format}.json`,
         JSON.stringify(evidence, null, 2),
       );
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer)),
+  );
 
 it.effect.each(["codex-handbook-v1", "claude-topic-v1"] as const)(
   "c-6 assembled %s imports with provenance and unchanged original bytes/mtime",
@@ -444,7 +450,10 @@ it.effect(
       assert.equal(item.pendingSync, false);
       assert.equal(item.revision.provenance.importSource?.sourceId, sourceId);
       assert.deepEqual(stamp(source), before);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer)),
+    ),
 );
 
 it.effect.skipIf(!posixPermissions)(
@@ -507,7 +516,7 @@ it.effect.skipIf(!posixPermissions)(
       Effect.scoped,
       Effect.provide(
         Layer.merge(
-          NodeServices.layer,
+          Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer),
           Logger.layer([
             Logger.make(({ message }) => {
               logs.push(message);
@@ -539,7 +548,10 @@ it.effect(
         ))._tag,
         "None",
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer)),
+    ),
 );
 
 hostGit.it(
@@ -602,7 +614,10 @@ hostGit.it(
           if (result._tag === "Failure") assert.equal(result.failure._tag, "MemoryRpcError");
           barrier = undefined;
         }
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer)),
+    ),
 );
 
 it.effect("both grants are rechecked after SQL contention for all four actions", () =>
@@ -669,7 +684,10 @@ it.effect("both grants are rechecked after SQL contention for all four actions",
         if (result._tag === "Failure") assert.equal(result.failure._tag, "MemoryRpcError");
         permitEntered = undefined;
       }
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer)),
+  ),
 );
 
 it.effect.each([1, 2] as const)(
@@ -732,7 +750,10 @@ it.effect.each([1, 2] as const)(
       assert.equal(status.receipt.remaining, 2 - stopAfter);
       assert.equal(reads, readCount);
       assert.equal(commits, stopAfter);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer)),
+    ),
 );
 
 it.effect(
@@ -918,5 +939,8 @@ it.effect(
       const refused = yield* apply(project).pipe(Effect.flip);
       assert.equal(refused._tag, "MemoryImportRpcError");
       if (refused._tag === "MemoryImportRpcError") assert.equal(refused.issue, "scope_unmapped");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer)),
+    ),
 );

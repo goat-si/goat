@@ -1,9 +1,11 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import { ChildProcessSpawner } from "effect/process";
 
@@ -143,7 +145,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host downl
       assert.isNotEmpty(result.progress);
       assert.isTrue(result.progress.every((step) => step.upload === undefined));
       assert.deepEqual(result.fetched, ["SHA256SUMS", `${stem}.tar.gz`]);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live.each(["offline", "corrupt"])(
@@ -160,7 +162,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host downl
         assert.equal(uploads.at(-1)?.sentBytes, uploads.at(-1)?.totalBytes);
         assert.isUndefined(result.progress[0]?.upload);
         assert.isAtLeast(result.fetched.length, 1);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live("leaves acquisition to the client unless the runner opts in", () =>
@@ -169,7 +171,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host downl
       assert.equal(result.source, "cache");
       assert.equal(result.uploads, 1);
       assert.deepEqual(result.fetched, []);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live(
@@ -276,6 +278,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host downl
         assert.equal(fallbackResult.version, ARCHIVE.archiveVersion);
         assert.equal(fallbackRecord.trim().split(" ")[3], "cache");
         assert.equal(f.counters().uploads, 1);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 });

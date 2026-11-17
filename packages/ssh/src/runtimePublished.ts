@@ -16,7 +16,7 @@ import {
 } from "@goat/shared/runtimeManifest";
 import { compareRuntimeBuilds } from "@goat/shared/semver";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as Schema from "effect/Schema";
@@ -175,7 +175,7 @@ export const findPublishedRuntime = Effect.fn("ssh.runtime.published.find")(func
   const index = yield* readIndex(fetchImpl);
   if (index === undefined)
     return { miss: "unreachable", rejected } satisfies PublishedRuntimeSearch;
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   let clientTooOld = false;
   for (const channel of FALLBACK_CHANNELS) {
     const published = index
@@ -220,7 +220,7 @@ export const findPublishedRuntime = Effect.fn("ssh.runtime.published.find")(func
       }
       const [sumsBytes, manifestBytes] = fetched.success;
       const checksums = parseChecksums(text(sumsBytes));
-      const manifestSha = Hex.encode(yield* crypto.digest("SHA-256", manifestBytes));
+      const manifestSha = Hex.encode(yield* digest.digest(Digest.sha256, manifestBytes));
       const manifest = decodeRuntimeManifest(text(manifestBytes));
       const entry = manifest?.platforms?.[input.platformKey];
       if (

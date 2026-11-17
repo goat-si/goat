@@ -51,7 +51,7 @@ import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
 import { withTurnCapabilities } from "@goat/shared/turnCapabilities";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -681,7 +681,7 @@ function taskPrompt(input: OrchestratorMcpDelegateTaskInput): string {
 const make = Effect.gen(function* () {
   const permissions = yield* Profiles.PermissionProfiles;
   const fleet = yield* FleetSync.GoatclawFleetSync;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const remoteDispatch = yield* RemoteDispatchCoordinator.RemoteDispatchCoordinator;
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
@@ -1142,9 +1142,7 @@ const make = Effect.gen(function* () {
   });
 
   const requestKey = (clientRequestId: string | undefined): Effect.Effect<string> =>
-    clientRequestId === undefined
-      ? crypto.randomUUIDv4().pipe(Effect.orDie)
-      : Effect.succeed(clientRequestId);
+    clientRequestId === undefined ? random.uuidV4() : Effect.succeed(clientRequestId);
 
   // The described run's unanswered Stop, which agents otherwise cannot see.
   const readRunStop = (threadId: ThreadId, runId: RunId | null) =>
@@ -3858,7 +3856,7 @@ const make = Effect.gen(function* () {
 export const layer: Layer.Layer<
   OrchestratorMcpService,
   never,
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   | ThreadManagementService.ThreadManagementService
   | ThreadLaunchService.ThreadLaunchService
   | GitVcsDriver.GitVcsDriver

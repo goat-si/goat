@@ -172,7 +172,7 @@ it.effect.each([
     Effect.provide(
       McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
         Layer.provide(Layer.mock(AcpSessionService.AcpSessionService)({})),
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provideMerge(Profiles.layer),
         Layer.provide(dependencies),
         Layer.provideMerge(Sqlite.layerMemory),

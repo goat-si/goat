@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { makeGitVcsDriverCore } from "./GitVcsDriverCore.ts";
 import {
@@ -10,6 +11,9 @@ import {
   layerTest,
   makeTmpDir,
 } from "./testing/gitFixture.ts";
+
+const plainEnvValue = (value: string | Redacted.Redacted<string> | undefined) =>
+  Redacted.isRedacted(value) ? Redacted.value(value) : value;
 
 it.layer(layerTest)("push diagnostics", (it) => {
   it.effect("explains a non-fast-forward push from a host with a translated Git", () =>
@@ -38,7 +42,7 @@ it.layer(layerTest)("push diagnostics", (it) => {
       const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
       const spawner = ChildProcessSpawner.make((command) => {
         if (ChildProcess.isStandardCommand(command) && command.args.includes("push")) {
-          locales.push(command.options.env?.LANGUAGE);
+          locales.push(plainEnvValue(command.options.env?.LANGUAGE));
         }
         return delegate.spawn(command);
       });

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   COMPUTER_USE_GRANT_HANDOFF_PATH,
@@ -25,7 +26,9 @@ const database = NodeSqliteClient.layer({ filename: ":memory:" });
 export const foregroundDatabase = database;
 export const foregroundServiceLayer = Layer.merge(
   database,
-  ComputerUseLeases.layer.pipe(Layer.provide(Layer.merge(database, NodeServices.layer))),
+  ComputerUseLeases.layer.pipe(
+    Layer.provide(Layer.merge(database, Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  ),
 );
 export const foregroundProxyLayer = Layer.merge(
   foregroundServiceLayer,

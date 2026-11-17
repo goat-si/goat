@@ -3,7 +3,7 @@ import { CursorSettings } from "../settings.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -57,7 +57,7 @@ const MAINTENANCE_CAPABILITIES = makeManualOnlyProviderMaintenanceCapabilities({
 
 export type CursorDriverEnv =
   | CursorAdapterV2DriverEnv
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | Path.Path
   | HttpClient.HttpClient

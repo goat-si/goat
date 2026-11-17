@@ -13,6 +13,7 @@ import {
   type OrchestrationV2ThreadShell,
   type OrchestrationV2CloudSourceRestriction,
 } from "@goat/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -168,8 +169,9 @@ function fixture(
   const sources: Parameters<CloudSource.CloudTaskSourceService["Service"]["resolve"]>[0][] = [];
   let routes = 0;
   const deps = Layer.mergeAll(
-    DocumentText.layer.pipe(Layer.provide(NodeServices.layer)),
+    DocumentText.layer.pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     NodeServices.layer,
+    NodeCrypto.layer,
     ServerSettings.layerTest({
       goatclaw: {
         enabled: profile !== undefined,
@@ -187,7 +189,7 @@ function fixture(
       },
     }),
     ServerConfig.layerTest("/repo", { prefix: "goat-cloud-launch-ci-" }).pipe(
-      Layer.provide(NodeServices.layer),
+      Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     ),
     Layer.mock(ThreadManagement.ThreadManagementService)({
       getThreadShell: (threadId: ThreadId) =>

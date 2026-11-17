@@ -145,3 +145,10 @@ it("homeConnected follows the selected bot computer's connection, for the main b
     expect(view.session.homeConnected).toBe(true);
   }
 });
+it("a computer that refused this phone is named as refusing it, not left offline (#3550, access)", async () => {
+  harness.botRef = bot(EnvironmentId.make("env"));
+  harness.environments = [{ ...environment("env", false), refused: true }];
+  await render();
+  expect(view.session.availability).toBe("offline");
+  expect(view.session.refusedBy).toBe("env");
+});

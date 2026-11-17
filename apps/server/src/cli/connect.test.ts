@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The unlink test exercises a local HTTP listener.
 import * as NodeHttp from "node:http";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Console from "effect/Console";
 import * as Deferred from "effect/Deferred";
@@ -161,7 +162,7 @@ it.live.each([false, true])(
         Layer.mergeAll(
           FetchHttpClient.layer,
           ServerConfig.layerTest("/", { prefix: "goat-connect-unlink-test-" }).pipe(
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ),
       ),
@@ -262,7 +263,7 @@ it.effect.each(["credential-failure", "pending-delete"] as const)(
             ConfigProvider.fromEnv({ env: { GOAT_RELAY_URL: "https://relay.example.test" } }),
           ),
           ServerConfig.layerTest("/", { prefix: "goat-connect-logout-test-" }).pipe(
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ),
       ),
@@ -292,6 +293,7 @@ it.effect.each([{ args: ["publish"] }, { args: ["link", "--publish-only"] }])(
       Effect.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           NetService.layer,
           TestConsole.layer,
           // The test's own shell may be an SSH session; this case is a local one.
@@ -324,6 +326,7 @@ it.effect.each([{ SSH_CONNECTION: "203.0.113.1 50000 203.0.113.2 22" }, { SSH_TT
       Effect.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           NetService.layer,
           TestConsole.layer,
           ConfigProvider.layer(ConfigProvider.fromEnv({ env })),
@@ -382,7 +385,7 @@ it.effect.each([false, true])(
       Effect.scoped,
       Effect.provide(
         ServerConfig.layerTest("/", { prefix: "goat-connect-live-test-" }).pipe(
-          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
       ),
     ),

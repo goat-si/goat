@@ -1,5 +1,5 @@
 import * as NodeHttpServerRequest from "@effect/platform-node/NodeHttpServerRequest";
-import { NodeWS } from "@effect/platform-node/NodeSocket";
+import * as NodeWS from "@effect/platform-node/NodeWS";
 import { assert, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";

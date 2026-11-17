@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { ProviderInstanceId, ProviderSessionId, ThreadId } from "@goat/contracts";
@@ -6,7 +7,7 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import { resolveSelfInvocation } from "@goat/shared/nodeRuntime";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -20,9 +21,12 @@ import { makeAntigravityAdapterV2 } from "./AntigravityAdapterV2.ts";
 
 const layerSession = Layer.mergeAll(
   NodeServices.layer,
+  NodeCrypto.layer,
   IdAllocator.layer,
   McpProviderSessions.layer,
-  TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
+  TestProviderHost.layer().pipe(
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+  ),
 );
 
 describe("AntigravityAdapterV2 native goals", () => {
@@ -32,7 +36,7 @@ describe("AntigravityAdapterV2 native goals", () => {
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const path = yield* Path.Path;
-        const crypto = yield* Crypto.Crypto;
+        const random = yield* SecureRandom.SecureRandom;
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -54,7 +58,7 @@ describe("AntigravityAdapterV2 native goals", () => {
                 env: { GOAT_ACP_ANTIGRAVITY: "1" },
               },
             }).pipe(
-              Effect.provideService(Crypto.Crypto, crypto),
+              Effect.provideService(SecureRandom.SecureRandom, random),
               Effect.map((runtime) => ({
                 ...runtime,
                 drainEvents: Deferred.succeed(startupMilestone, undefined).pipe(

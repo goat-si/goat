@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -81,6 +82,7 @@ export const layerTest = (input: {
       Layer.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           layerSpawner,
           input.path ? Layer.succeed(Path.Path, input.path) : Layer.empty,
         ),

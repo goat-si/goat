@@ -143,7 +143,7 @@ const reportFixture = () => {
   });
   const served = McpHttpServer.toolkitRegistration(RemoteReportToolkit, layer).pipe(
     Layer.provide(OriginBoundDelete.layer),
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provide(
       Layer.mergeAll(
         layerPermissionProfilesOff,

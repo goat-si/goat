@@ -1,4 +1,5 @@
 import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import { AssetCreateUrlInput, AssetPreviewTypeValidationError } from "@goat/contracts";
@@ -30,7 +31,7 @@ const layerTest = Layer.mergeAll(
   Layer.mock(Orchestrator.OrchestratorV2)({}),
   Layer.mock(ProjectFaviconResolver.ProjectFaviconResolver)({}),
   Layer.mock(NativeAppIconResolver.NativeAppIconResolver)({}),
-).pipe(Layer.provideMerge(NodeServices.layer));
+).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const isInput = Schema.is(AssetCreateUrlInput);

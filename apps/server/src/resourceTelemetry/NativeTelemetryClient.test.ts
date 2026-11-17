@@ -1,9 +1,11 @@
 import type { HostPowerSnapshot } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
@@ -203,5 +205,5 @@ it.effect("publishes recovery after a TERM-resistant telemetry child is retired"
       yield* Deferred.succeed(forceMayComplete, undefined);
       yield* Deferred.succeed(release, undefined);
     }
-  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
 );

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { onMainListenerWeb } from "./connectionContext.testkit.ts";
 import { expect, it } from "@effect/vitest";
@@ -14,7 +15,7 @@ import {
   type AuthEnvironmentScope,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
@@ -66,11 +67,11 @@ const makeRoutes = (input: { readonly hubEnabled: boolean; readonly devToken?: b
     Layer.provide(layerConfig),
     Layer.provideMerge(
       HttpPlatform.layer.pipe(
-        Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         Layer.provideMerge(Etag.layerWeak),
       ),
     ),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
 };
 
@@ -81,7 +82,7 @@ type Handler = ReturnType<typeof toHandler>;
 
 const client = (
   web: Handler,
-  context: Context.Context<Crypto.Crypto | ServerSecretStore.ServerSecretStore>,
+  context: Context.Context<SecureRandom.SecureRandom | ServerSecretStore.ServerSecretStore>,
 ) => {
   const call = (request: Request) => web.handler(request, context);
   const exchange = async (credential: string) => {
@@ -155,7 +156,7 @@ const withRoutes = (
       getOrCreateRandom: () => Effect.die("Not used by these routes."),
       remove: () => Effect.void,
     });
-    const context = Context.make(Crypto.Crypto, yield* Crypto.Crypto).pipe(
+    const context = Context.make(SecureRandom.SecureRandom, yield* SecureRandom.SecureRandom).pipe(
       Context.add(ServerSecretStore.ServerSecretStore, unusedSecretStore),
     );
     return yield* Effect.acquireUseRelease(
@@ -163,7 +164,7 @@ const withRoutes = (
       (web) => Effect.tryPromise(() => use(client(web, context))),
       (web) => Effect.promise(() => web.dispose()),
     );
-  }).pipe(Effect.provide(NodeServices.layer));
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 const withHubProxy = [...AuthStandardClientScopes, AuthHubProxyScope];
 

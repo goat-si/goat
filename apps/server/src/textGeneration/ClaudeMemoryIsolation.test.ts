@@ -30,7 +30,7 @@ describe("Claude memory registry isolation", () => {
       const spawner = lazyChildProcessSpawner((command) => {
         if (command._tag !== "StandardCommand") return Effect.die("Unexpected pipeline");
         expect(command.command).toBe("reg.exe");
-        const candidate = command.args[1]!;
+        const candidate = command.args.map(String)[1]!;
         queries.push(candidate);
         if (scenario === "reg.exe unavailable")
           return Effect.fail(
@@ -47,7 +47,7 @@ describe("Claude memory registry isolation", () => {
           .replace(/^HKLM/, "HKEY_LOCAL_MACHINE")
           .replace(/^HKCU/, "HKEY_CURRENT_USER");
         const header = `${fullKey}\n`;
-        const valueOnly = command.args.includes("/v");
+        const valueOnly = command.args.map(String).includes("/v");
         let stdout = "";
         // Deliberately locale-neutral fixture: absence must follow the successful listing.
         let stderr = "synthetic registry failure";

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
@@ -78,7 +79,7 @@ describe("desktop SSH pending result", () => {
               resolve: () => Effect.die("Unexpected resolution"),
             }),
           ),
-          Layer.provide(NodeServices.layer),
+          Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           Layer.provide(FetchHttpClient.layer),
           Layer.provide(NetService.layer),
         ),

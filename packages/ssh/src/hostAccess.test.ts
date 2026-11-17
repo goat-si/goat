@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@goat/shared/Net";
 import * as Effect from "effect/Effect";
@@ -34,6 +35,7 @@ const recordingSpawner = () => {
 const withSpawner = (spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]) =>
   Layer.mergeAll(
     NodeServices.layer,
+    NodeCrypto.layer,
     Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
     Layer.succeed(HttpClient.HttpClient, testHttpClient),
     Layer.succeed(NetService.NetService, testNetService),

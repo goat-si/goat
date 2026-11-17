@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
@@ -17,7 +18,7 @@ const layer = Live.layer.pipe(
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "snapshot-store-" })),
   Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 it.layer(layer)("snapshot ledger", (it) => {
   it.effect(

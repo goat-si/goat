@@ -1,8 +1,10 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { ProviderInstanceId, ProviderSetupError, type ProviderAuthState } from "@goat/contracts";
 import { PtySpawnError, type PtyProcess, type PtySpawnInput } from "@goat/shared/PtyAdapter";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
@@ -107,7 +109,7 @@ it.effect.each([0, 1])("terminal exit %s publishes only safe completion state", 
       );
     assert.isTrue(killed);
     assert.strictEqual(detached, 2);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("drops native spawn diagnostics from setup errors", () =>

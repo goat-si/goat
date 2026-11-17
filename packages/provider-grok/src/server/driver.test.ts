@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ProviderInstanceId, ProviderSessionId, ThreadId } from "@goat/contracts";
@@ -5,6 +6,7 @@ import { ProviderAdapterV2RuntimePolicy } from "@goat/provider-core/server/Provi
 import * as PlatformError from "effect/PlatformError";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -25,8 +27,11 @@ import { resolveLatestProviderVersion } from "@goat/provider-core/server/mainten
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 
+const plainEnvValue = (value: string | Redacted.Redacted<string> | undefined) =>
+  Redacted.isRedacted(value) ? Redacted.value(value) : value;
+
 const layerTest = TestProviderHost.layer({ runBackgroundWork: false }).pipe(
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   Layer.provideMerge(IdAllocator.layer),
   Layer.provideMerge(McpProviderSessions.layer),
   Layer.provideMerge(ProviderLatestVersions.layer),
@@ -82,7 +87,8 @@ it.layer(layerTest)("GrokDriver", (it) => {
     const paths: Array<string | undefined> = [];
     let failSpawn = false;
     const spawner = lazyChildProcessSpawner((command) => {
-      if (ChildProcess.isStandardCommand(command)) paths.push(command.options.env?.PATH);
+      if (ChildProcess.isStandardCommand(command))
+        paths.push(plainEnvValue(command.options.env?.PATH));
       if (failSpawn)
         return Effect.fail(
           PlatformError.systemError({

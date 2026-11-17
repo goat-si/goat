@@ -6,9 +6,10 @@ import usageMigration from "../persistence/Migrations/105_MemoryUsageCounters.ts
 import revertMigration from "../persistence/Migrations/106_MemoryRevertResults.ts";
 import { assert, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
@@ -35,12 +36,14 @@ const setup = Layer.effectDiscard(
 ).pipe(Layer.provideMerge(database));
 const live = Auth.layer.pipe(
   Layer.provideMerge(Store.layer.pipe(Layer.provideMerge(setup))),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 const seed = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const crypto = yield* Crypto.Crypto;
-  const digest = Hex.encode(yield* crypto.digest("SHA-256", new TextEncoder().encode(credential)));
+  const digester = yield* Digest.Digest;
+  const digest = Hex.encode(
+    yield* digester.digest(Digest.sha256, new TextEncoder().encode(credential)),
+  );
   yield* sql`INSERT INTO memory_hub_members(space,environment,credential_digest,credential_version,status,joined_at) VALUES (${space},${member},${digest},1,'active',NULL)`;
 });
 

@@ -11,7 +11,7 @@ import {
   type ServerSettingsPatch,
 } from "@goat/contracts";
 import { applyServerSettingsPatch } from "@goat/shared/serverSettings";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -233,12 +233,12 @@ export const agentWorkspaceTerminalSettingsMethods = (
               if (agentTerminalBinding.threadId === null) {
                 delete bindings[agentTerminalBinding.sessionId];
               } else {
-                const crypto = yield* Effect.serviceOption(Crypto.Crypto);
+                const crypto = yield* Effect.serviceOption(SecureRandom.SecureRandom);
                 if (Option.isNone(crypto)) {
                   return yield* new ServerSettingsError({ settingsPath, operation: "normalize" });
                 }
                 const generation = yield* crypto.value
-                  .randomUUIDv4()
+                  .uuidV4()
                   .pipe(
                     Effect.mapError(
                       (cause) =>

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import type { AuthEnvironmentScope } from "@goat/contracts";
@@ -128,7 +129,7 @@ process.stdout.write(buildRemoteClientSessionScript("client-session-test", ${JSO
         quoted.label,
         "--json",
       ]);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it("refuses empty scopes instead of falling back to CLI defaults", () => {
@@ -272,6 +273,7 @@ describe("SSH manager client sessions", () => {
       Effect.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Layer.succeed(HttpClient.HttpClient, testHttpClient),
           Layer.succeed(NetService.NetService, testNetService),

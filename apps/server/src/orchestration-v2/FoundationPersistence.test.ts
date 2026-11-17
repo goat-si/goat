@@ -43,6 +43,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Arr from "effect/Array";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -1151,9 +1152,7 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         rows.push(eventRow(++ordinal, { commandId: exactPageCommandId }));
       }
       const inserted = yield* Effect.forEach(
-        Array.from({ length: Math.ceil(rows.length / 400) }, (_, chunk) =>
-          rows.slice(chunk * 400, (chunk + 1) * 400),
-        ),
+        Arr.chunksOf(rows, 400),
         (chunk) =>
           sql<{
             readonly sequence: number;

@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -20,14 +20,14 @@ type Row = {
 };
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   return WorktreeCleanupPreviewState.of({
     evaluate: Effect.fn("WorktreeCleanupPreviewState.evaluate")(function* ({
       nowMs,
       plannedCount,
       requiresConfirmation,
     }) {
-      const id = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      const id = yield* random.uuidV4().pipe(Effect.orDie);
       // A larger planned set gets a new id, so an answer to the smaller one cannot approve it.
       yield* sql`INSERT OR IGNORE INTO worktree_cleanup_preview (preview_id, started_at, planned_count) VALUES (${id}, ${nowMs}, ${plannedCount})`;
       const rows = yield* sql<Row>`UPDATE worktree_cleanup_preview SET

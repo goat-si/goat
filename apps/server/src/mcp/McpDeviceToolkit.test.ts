@@ -177,7 +177,7 @@ const layerDeviceServiceMock = (
 const layerTest = (opened?: Array<unknown>, target?: DeviceSummary, bootedTarget?: DeviceSummary) =>
   McpHttpServer.layerDeviceToolkit.pipe(
     Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
     Layer.provideMerge(layerDeviceServiceMock(opened, target, bootedTarget)),
     Layer.provideMerge(Sqlite.layerMemory),
@@ -318,7 +318,7 @@ it.effect("rejects unavailable agent access before booting or opening a device",
     Effect.provide(
       McpHttpServer.layerDeviceToolkit.pipe(
         Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
         Layer.provide(layerUnavailable),
         Layer.provide(layerProjectAccess),
@@ -371,7 +371,7 @@ it.effect("device_open reports a failed host's setup error instead of no devices
     Effect.provide(
       McpHttpServer.layerDeviceToolkit.pipe(
         Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
         Layer.provide(layerFailed),
         Layer.provide(layerProjectAccess),

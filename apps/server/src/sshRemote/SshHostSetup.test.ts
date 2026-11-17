@@ -1,6 +1,6 @@
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Schema from "effect/Schema";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- expected paths mirror the host's native join.
 import * as NodePath from "node:path";
 import { expect, it, vi } from "@effect/vitest";
@@ -35,8 +35,9 @@ import * as DateTime from "effect/DateTime";
 import { TestClock } from "effect/testing";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
+import { probeClient, probeSessionId } from "./SshHostSetup.probe.testkit.ts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import { HttpClient } from "effect/http";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -838,26 +839,6 @@ it.effect(
     }),
 );
 
-const probeSessionId = AuthSessionId.make("probe-reviewer");
-const probeClient = Layer.mock(SessionStore.SessionStore)({
-  cookieName: "test",
-  legacyCookieName: undefined,
-  listActive: () =>
-    Effect.succeed([
-      {
-        sessionId: probeSessionId,
-        subject: "reviewer",
-        method: "browser-session-cookie",
-        scopes: ["settings:write"],
-        client: { label: "Reviewer", deviceType: "unknown" },
-        issuedAt: DateTime.makeUnsafe(0),
-        expiresAt: DateTime.makeUnsafe(9999999999999),
-        lastConnectedAt: null,
-        connected: true,
-        current: true,
-      },
-    ]),
-});
 const processOutput = (stdout: string, stderr = "", code = 0) => ({
   stdout,
   stderr,
@@ -925,10 +906,10 @@ it.effect.each([
                   ChildProcessSpawner.make((command) => {
                     if (command._tag !== "StandardCommand")
                       return Effect.die("Unexpected pipeline");
-                    expect(command.args).toContain("-G");
+                    expect(command.args.map(String)).toContain("-G");
                     return Effect.succeed(
                       makeSuccessfulProcess(
-                        command.args.at(-1) === "bastion"
+                        command.args.map(String).at(-1) === "bastion"
                           ? "proxyjump outer\n"
                           : "proxyjump none\n",
                       ),
@@ -1469,10 +1450,11 @@ it.effect(
               expect(options.runner.nodeScriptPath).toBe("/src/server.ts");
               expect(options.runner.nodeEngineRange).toBeTruthy();
               return Effect.gen(function* () {
-                const crypto = yield* Crypto.Crypto;
+                const digest = yield* Digest.Digest;
                 yield* HttpClient.HttpClient;
                 expect(
-                  (yield* crypto.digest("SHA-256", new Uint8Array()).pipe(Effect.orDie)).byteLength,
+                  (yield* digest.digest(Digest.sha256, new Uint8Array()).pipe(Effect.orDie))
+                    .byteLength,
                 ).toBe(32);
                 return report;
               });
@@ -1568,13 +1550,14 @@ it.effect.each([true, false])(
       const spawner = ChildProcessSpawner.make((command) =>
         Effect.gen(function* () {
           if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected pipeline");
-          calls.push(command.args);
-          if (command.args.includes("-G"))
+          calls.push(command.args.map(String));
+          if (command.args.map(String).includes("-G"))
             return makeSuccessfulProcess("hostname cursor-2\nuser ubuntu\nport 22\n");
-          if (command.args.includes("-lf"))
+          if (command.args.map(String).includes("-lf"))
             return makeSuccessfulProcess(`256 SHA256:${"a".repeat(43)} cursor-2 (ED25519)\n`);
-          expect(command.args).toContain("PreferredAuthentications=none");
+          expect(command.args.map(String)).toContain("PreferredAuthentications=none");
           const knownHosts = command.args
+            .map(String)
             .find((arg) => arg.startsWith("UserKnownHostsFile="))!
             .slice("UserKnownHostsFile=".length)
             .replace(/^"|"$/gu, "");

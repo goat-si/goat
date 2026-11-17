@@ -15,6 +15,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as CodexInstallation from "./CodexInstallation.ts";
 import * as CodexManagedTokenBroker from "./CodexManagedTokenBroker.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it, assert, expect } from "@effect/vitest";
 
@@ -171,6 +172,7 @@ const awaitPersistedProvider = (
 const layerTestNodeServices = Layer.mergeAll(
   ProviderLatestVersions.layer,
   NodeServices.layer,
+  NodeCrypto.layer,
   Layer.mock(CodexManagedTokenBroker.CodexManagedTokenBroker)({
     endpoint: Effect.succeed("unused-private-pipe"),
   }),
@@ -187,7 +189,7 @@ const layerTestNodeServices = Layer.mergeAll(
     Effect.gen(function* () {
       return yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
     }),
-  ).pipe(Layer.provide(NodeServices.layer)),
+  ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.layer(
@@ -846,7 +848,7 @@ it.layer(
             Effect.provide(
               ServerConfig.layerTest(process.cwd(), {
                 prefix: "goat-pi-model-cache-",
-              }).pipe(Layer.provideMerge(NodeServices.layer)),
+              }).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
             ),
           ),
       );
@@ -1001,7 +1003,7 @@ it.layer(
           Effect.provide(
             ServerConfig.layerTest(process.cwd(), {
               prefix: "goat-codex-retired-model-cache-",
-            }).pipe(Layer.provideMerge(NodeServices.layer)),
+            }).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
           ),
         ),
       );
@@ -1074,7 +1076,7 @@ it.layer(
           Effect.provide(
             ServerConfig.layerTest(process.cwd(), {
               prefix: "goat-codex-probed-before-boot-",
-            }).pipe(Layer.provideMerge(NodeServices.layer)),
+            }).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
           ),
         ),
       );
@@ -1344,7 +1346,7 @@ it.layer(
                   prefix: "goat-provider-registry-shared-workspace-scan-",
                 }),
               ),
-              Layer.provideMerge(NodeServices.layer),
+              Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
             ),
           ).pipe(Scope.provide(scope));
 
@@ -1439,7 +1441,7 @@ it.layer(
                 prefix: "goat-provider-registry-unhealthy-workspace-",
               }),
             ),
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ).pipe(Scope.provide(scope));
 
@@ -1559,7 +1561,7 @@ it.layer(
                 prefix: "goat-provider-registry-shared-refresh-",
               }),
             ),
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ).pipe(Scope.provide(scope));
 
@@ -1679,7 +1681,7 @@ it.layer(
             Layer.provideMerge(
               ServerConfig.layerTest(process.cwd(), { prefix: "goat-cloud-auth-refresh-" }),
             ),
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ).pipe(Scope.provide(scope));
 
@@ -1796,7 +1798,7 @@ it.layer(
                 prefix: "goat-provider-registry-enriched-refresh-",
               }),
             ),
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ).pipe(Scope.provide(scope));
 
@@ -1922,7 +1924,7 @@ it.layer(
               }),
             ),
             Layer.provideMerge(layerBackgroundPolicyAlwaysRun),
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ).pipe(Scope.provide(scope));
 
@@ -2035,7 +2037,7 @@ it.layer(
                 ),
             } satisfies FileSystem.FileSystem;
           }),
-        ).pipe(Layer.provide(NodeServices.layer));
+        ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
         const scope = yield* Scope.make();
         yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
         const runtimeServices = yield* Layer.build(
@@ -2048,7 +2050,7 @@ it.layer(
             ),
             Layer.provideMerge(layerBackgroundPolicyAlwaysRun),
             Layer.provideMerge(layerGatedFileSystem),
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ).pipe(Scope.provide(scope));
 
@@ -2209,7 +2211,7 @@ it.layer(
                   prefix: "goat-provider-registry-opencode-authoritative-persist-",
                 }),
               ),
-              Layer.provideMerge(NodeServices.layer),
+              Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
             ),
           ).pipe(Scope.provide(scope));
 
@@ -2313,7 +2315,7 @@ it.layer(
               }),
             ),
             Layer.provideMerge(layerBackgroundPolicyAlwaysRun),
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ).pipe(Scope.provide(scope));
 
@@ -2408,7 +2410,7 @@ it.layer(
               });
             }),
           ),
-          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           Layer.provideMerge(layerBackgroundPolicyAlwaysRun),
         );
         const runtimeServices = yield* Layer.build(layerProviderRegistry).pipe(
@@ -2513,7 +2515,7 @@ it.layer(
           Layer.provideMerge(
             OpenCodeRuntime.layer.pipe(Layer.provide(OpenCodeServerLedger.layerTest)),
           ),
-          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           Layer.provideMerge(layerBackgroundPolicyAlwaysRun),
         );
         const runtimeServices = yield* Layer.build(layerProviderRegistry).pipe(

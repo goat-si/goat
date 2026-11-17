@@ -1,4 +1,5 @@
 import { assert } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
@@ -99,6 +100,7 @@ const heldTitleLayer = Effect.fn("EffectWorker.test.heldTitleLayer")(function* (
         }),
         ServerSettings.layerTest(),
         NodeServices.layer,
+        NodeCrypto.layer,
         Layer.mock(TextGeneration.TextGeneration)({
           generateThreadTitle: () =>
             Effect.acquireUseRelease(

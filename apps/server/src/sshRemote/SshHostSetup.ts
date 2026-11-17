@@ -49,7 +49,8 @@ import { probeHostKey } from "@goat/ssh/hostKey";
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 import * as Context from "effect/Context";
-import type * as Crypto from "effect/Crypto";
+import type * as Digest from "effect/crypto/Digest";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -80,7 +81,7 @@ import {
   type SshHostCaller,
 } from "./SshHostAuthorization.ts";
 import * as Dispatch from "./SshRemoteDispatch.ts";
-import { errorResult, setupFailure } from "./sshHostResults.ts";
+import { dispatchFailure, errorResult, outsideThread, setupFailure } from "./sshHostResults.ts";
 import { makeRefuseDisposable } from "./disposablePreflight.ts";
 import {
   managedAliasRevision,
@@ -142,23 +143,6 @@ export class SshHostSetup extends Context.Service<
     readonly onAlias: (listener: SshAliasListener) => Effect.Effect<void>;
   }
 >()("goat/sshRemote/SshHostSetup") {}
-const dispatchFailure = (error: Dispatch.SshRemoteDispatchError): SshHostResult => ({
-  kind: "error",
-  code:
-    error.reason === "host_unknown" || error.reason === "invalid_request"
-      ? error.reason
-      : error.reason === "host_unavailable"
-        ? "host_unreachable"
-        : "operation_failed",
-  message: error.message.slice(0, 2000),
-  fix: { actor: "agent", instruction: "Try again" },
-});
-const outsideThread = (instruction: string): SshHostResult => ({
-  kind: "error",
-  code: "unsupported",
-  message: instruction,
-  fix: { actor: "human", instruction },
-});
 const aliasFor = (input: SshHostAddInput) =>
   input.alias ??
   `goat-${input.address
@@ -197,7 +181,8 @@ export const make = (
     const runner = yield* ProcessRunner.ProcessRunner;
     const serviceScope = yield* Scope.Scope;
     const runtime = yield* Effect.context<
-      | Crypto.Crypto
+      | Digest.Digest
+      | SecureRandom.SecureRandom
       | FileSystem.FileSystem
       | Path.Path
       | import("effect/process/ChildProcessSpawner").ChildProcessSpawner

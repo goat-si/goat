@@ -2,14 +2,15 @@ import * as NodeNet from "node:net";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it, beforeEach, afterEach, vi } from "@effect/vitest";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import * as NetService from "@goat/shared/Net";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Hex from "effect/encoding/Hex";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -53,6 +54,10 @@ import {
 import { nextVersion, shell, fixture } from "./tunnel.runnerSwitch.fixture.ts";
 import { killGroupWithTestOwner } from "./testParentLifetime.fixture.ts";
 import { makeEnsureFlightFixture } from "./tunnel.ensure-flight.fixture.ts";
+import { MACOS_BIND_PRELOAD } from "./tunnel.core.fixture.ts";
+
+const plainEnvValue = (value: string | Redacted.Redacted<string> | undefined) =>
+  Redacted.isRedacted(value) ? Redacted.value(value) : value;
 
 // Archive acquisition stays local to these transport doubles.
 beforeEach(() => vi.stubGlobal("fetch", async () => new Response(null, { status: 404 })));
@@ -1024,17 +1029,17 @@ else exit 2; fi
               ? yield* input.stream.pipe(Stream.runCollect)
               : [];
           const data = new Uint8Array(chunks.flatMap((chunk) => Array.from(chunk)));
-          if (command.args.includes("goat-runtime-cleanup")) {
+          if (command.args.map(String).includes("goat-runtime-cleanup")) {
             calls.push("cleanup");
             return makeSuccessfulProcess("");
           }
-          if (command.args.includes("-c")) {
+          if (command.args.map(String).includes("-c")) {
             calls.push("upload");
-            assert.include(command.args.join(" "), ARCHIVE.archiveVersion);
+            assert.include(command.args.map(String).join(" "), ARCHIVE.archiveVersion);
             return makeSuccessfulProcess("");
           }
           if (
-            !isRemoteLaunch(command.args) &&
+            !isRemoteLaunch(command.args.map(String)) &&
             new TextDecoder().decode(data).includes("ready=false")
           ) {
             calls.push("probe");
@@ -1135,7 +1140,7 @@ else exit 2; fi
         Effect.gen(function* () {
           assert.equal(command._tag, "StandardCommand");
           if (command._tag !== "StandardCommand") return makeSuccessfulProcess("");
-          const args = command.args;
+          const args = command.args.map(String);
           const kind = args.includes("goat-runtime-cleanup")
             ? "cleanup"
             : args.includes("-c")
@@ -1146,9 +1151,9 @@ else exit 2; fi
           calls.push(kind);
           if (kind === "cleanup") return makeSuccessfulProcess("");
           auth.push({
-            secret: command.options.env?.T3_SSH_AUTH_SECRET,
+            secret: plainEnvValue(command.options.env?.T3_SSH_AUTH_SECRET),
             batch: args.find((arg) => arg.startsWith("BatchMode=")),
-            askpass: command.options.env?.SSH_ASKPASS_REQUIRE,
+            askpass: plainEnvValue(command.options.env?.SSH_ASKPASS_REQUIRE),
           });
           if (kind === "probe")
             return makeSuccessfulProcess(JSON.stringify({ platform, arch, ready }));
@@ -1313,8 +1318,8 @@ else exit 2; fi
             calls.push({
               kind,
               batch: args.find((arg) => arg.startsWith("BatchMode=")),
-              secret: command.options.env?.T3_SSH_AUTH_SECRET,
-              askpass: command.options.env?.SSH_ASKPASS_REQUIRE,
+              secret: plainEnvValue(command.options.env?.T3_SSH_AUTH_SECRET),
+              askpass: plainEnvValue(command.options.env?.SSH_ASKPASS_REQUIRE),
             });
           if (kind === "probe")
             return makeSuccessfulProcess(JSON.stringify({ platform, arch, ready: uploads > 1 }));
@@ -1926,8 +1931,8 @@ console.log("goat v" + (count === 0 ? version : "9.9.9"));`,
           assert.equal(Number(yield* tar.exitCode), 0);
         }
         const bytes = yield* f.fs.readFile(source);
-        const crypto = yield* Crypto.Crypto;
-        const hash = Hex.encode(yield* crypto.digest("SHA-256", bytes));
+        const digest = yield* Digest.Digest;
+        const hash = Hex.encode(yield* digest.digest(Digest.sha256, bytes));
         yield* f.fs.makeDirectory(bundle, { recursive: true });
         yield* f.fs.writeFile(`${bundle}/${asset}`, bytes);
         const checksum = `${mode === "corrupt-bundle" || mode === "retained-bundle-bypass" ? "0".repeat(64) : hash}  ${asset}
@@ -1943,19 +1948,19 @@ console.log("goat v" + (count === 0 ? version : "9.9.9"));`,
             }
             if (
               mode === "upload-failure" &&
-              command.args.some((arg) => arg.includes("GOAT_SSH_UPLOADED_ARCHIVE"))
+              command.args.map(String).some((arg) => arg.includes("GOAT_SSH_UPLOADED_ARCHIVE"))
             )
               return {
                 ...makeSuccessfulProcess(""),
                 exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(43)),
               };
-            const index = command.args.indexOf("sh");
+            const index = command.args.map(String).indexOf("sh");
             assert.isAtLeast(index, 0);
-            const args = command.args.slice(index);
+            const args = command.args.map(String).slice(index);
             return yield* realSpawner.spawn(
               ChildProcess.make(
                 remoteShell,
-                command.args.includes("-c")
+                command.args.map(String).includes("-c")
                   ? ["-c", [remoteShellCommand, ...args.slice(1)].join(" ")]
                   : args.slice(1).filter((arg) => arg !== "-l"),
                 {
@@ -2134,7 +2139,7 @@ describe("bundled runtime acquisition", () => {
         if (HostProcess.Platform.defaultValue() === "win32") return;
         const fs = yield* FileSystem.FileSystem;
         const realSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-        const crypto = yield* Crypto.Crypto;
+        const digest = yield* Digest.Digest;
         const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-bundle-behavior-" });
         const home = `${root}/remote-home`;
         const bundle = `${root}/packaged resources/ssh-runtime/archives`;
@@ -2164,7 +2169,7 @@ describe("bundled runtime acquisition", () => {
             );
             assert.equal(Number(yield* tar.exitCode), 0);
             const bytes = yield* fs.readFile(`${directory}/${asset}`);
-            const hash = Hex.encode(yield* crypto.digest("SHA-256", bytes));
+            const hash = Hex.encode(yield* digest.digest(Digest.sha256, bytes));
             yield* fs.writeFileString(`${directory}/${asset}.sha256`, `${hash}  ${asset}\n`);
             return { bytes, hash };
           });
@@ -2247,19 +2252,20 @@ describe("bundled runtime acquisition", () => {
             if (command._tag !== "StandardCommand") return makeSuccessfulProcess("");
             if (command.command === "gh") {
               downloads++;
-              const destination = command.args[command.args.indexOf("--dir") + 1]!;
+              const destination =
+                command.args.map(String)[command.args.map(String).indexOf("--dir") + 1]!;
               assert.isFalse(destination.startsWith(bundle));
               yield* fs.writeFile(`${destination}/${asset}`, fromGh.bytes);
               yield* fs.writeFileString(`${destination}/SHA256SUMS`, `${fromGh.hash}  ${asset}\n`);
               return makeSuccessfulProcess("");
             }
-            const index = command.args.indexOf("sh");
+            const index = command.args.map(String).indexOf("sh");
             assert.isAtLeast(index, 0);
-            const remoteArgs = command.args.slice(index);
+            const remoteArgs = command.args.map(String).slice(index);
             return yield* realSpawner.spawn(
               ChildProcess.make(
                 remoteShell,
-                command.args.includes("-c")
+                command.args.map(String).includes("-c")
                   ? ["-c", [remoteShellCommand, ...remoteArgs.slice(1)].join(" ")]
                   : ["-s"],
                 {
@@ -2668,18 +2674,6 @@ fi
     );
   },
 );
-
-// On macOS, Node can bind 127.0.0.1:<port> while another process (such as the
-// desktop app with network access on) listens on *:<port>. Linux refuses that
-// bind unless both sockets set SO_REUSEPORT, so on Linux the preload adds it to
-// the picker's probe and the holder sets it too. macOS needs neither.
-const MACOS_BIND_PRELOAD = `const net = require("node:net");
-const listen = net.Server.prototype.listen;
-net.Server.prototype.listen = function (port, host, callback) {
-  if (typeof port !== "number" || typeof host !== "string") return listen.apply(this, arguments);
-  return listen.call(this, { port, host, reusePort: true }, callback);
-};
-`;
 
 describe("remote port picker", () => {
   const hostPlatform = HostProcess.Platform.defaultValue();

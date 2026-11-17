@@ -32,7 +32,7 @@ import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -271,7 +271,7 @@ export const make = Effect.gen(function* () {
   const replicas = yield* ThreadReplicaService.ThreadReplicaService;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const layerScope = yield* Effect.scope;
   const lock = yield* Semaphore.make(1);
   const statePath = path.join(config.stateDir, LAUNCH_WATCH_FILE);
@@ -1339,7 +1339,7 @@ export const make = Effect.gen(function* () {
               message: `Retained checkpoint refused: ${invalid ?? "identity_mismatch"}.`,
             });
           const request = {
-            operationId: yield* crypto.randomUUIDv4().pipe(Effect.orDie),
+            operationId: yield* random.uuidV4().pipe(Effect.orDie),
             projectId: input.destinationProjectId,
             ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
           };
@@ -1684,8 +1684,8 @@ export const make = Effect.gen(function* () {
   const incarnationFor = (id: string) => {
     const previous = watches.get(id)?.incarnation;
     return previous === undefined
-      ? crypto
-          .randomUUIDv4()
+      ? random
+          .uuidV4()
           .pipe(
             Effect.mapError(
               (cause) => new LaunchWatchStoreError({ message: "Could not start a watch.", cause }),

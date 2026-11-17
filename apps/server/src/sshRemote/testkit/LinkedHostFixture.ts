@@ -1,5 +1,6 @@
 // A real SshRemoteDispatch with one linked host: link admission runs as in production, and
 // `answer` plays the host's /mcp. Nothing may reach SSH.
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { vi } from "@effect/vitest";
 import * as SshConfig from "@goat/ssh/config";
@@ -147,7 +148,7 @@ export const withLinkedHost = <A, E, R>(
             Layer.provideMerge(Layer.succeed(LinkedHosts.LinkedHosts, links)),
             Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-linked-dispatch-" })),
             Layer.provide(FetchHttpClient.layer),
-            Layer.provide(NodeServices.layer),
+            Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ),
       );

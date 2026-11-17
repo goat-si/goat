@@ -2,6 +2,7 @@ import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -76,6 +77,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           });
           const layer = Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, transport),
             Layer.succeed(FileSystem.FileSystem, f.observedFs),
             Layer.succeed(HttpClient.HttpClient, testHttpClient),
@@ -116,7 +118,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             Effect.provideService(Tracer.Tracer, tracer),
             Effect.scoped,
           );
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.effect.each(["verified", "rejected", "uncertain drain"] as const)(
@@ -146,6 +151,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           });
           const layer = Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, transport),
             Layer.succeed(FileSystem.FileSystem, f.observedFs),
             Layer.succeed(HttpClient.HttpClient, testHttpClient),
@@ -216,7 +222,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             assert.notInclude(events, '"type":"drain"');
             assert.notInclude(events, '"type":"stop"');
           }).pipe(Effect.provide(layer), Effect.scoped);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("rechecks a managed pin after master setup before using captured wake proof", () =>
@@ -277,6 +286,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         });
         const layer = Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           ConfigProvider.layer(ConfigProvider.fromUnknown({ HOME: f.home })),
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, transport),
           Layer.succeed(FileSystem.FileSystem, fs),
@@ -321,7 +331,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           if (result._tag === "Failure")
             assert.include(result.failure.message, "Managed SSH host key changed.");
         }).pipe(Effect.provide(layer), Effect.provideService(Tracer.Tracer, tracer), Effect.scoped);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each(["failed refresh", "superseded ensure", "changed config"] as const)(
@@ -364,6 +374,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           });
           const layer = Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             Logger.layer([logger], { mergeWithExisting: false }),
             Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, transport),
             Layer.succeed(FileSystem.FileSystem, f.observedFs),
@@ -432,7 +443,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             Effect.provideService(References.MinimumLogLevel, "Debug"),
             Effect.scoped,
           );
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
   },
 );

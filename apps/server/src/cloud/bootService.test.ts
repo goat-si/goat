@@ -11,7 +11,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import { Command } from "effect/cli";
+import { CliError, Command } from "effect/cli";
 import { vi } from "vite-plus/test";
 import { updateCommand } from "../cli/update.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -697,6 +697,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       commands.length = 0;
       const error = yield* other.install().pipe(Effect.flip);
       expect(error._tag).toBe("BootServiceBaseDirUnsupportedError");
+      expect(CliError.getUserMessage(error)).toBe(error.message);
       expect(yield* fs.readFileString(plan.unitPath)).toBe(unit);
       expect(commands).toEqual([]);
     }),

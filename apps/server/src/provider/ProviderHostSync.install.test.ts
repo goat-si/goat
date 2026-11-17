@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ProviderSyncHostState } from "@goat/contracts";
@@ -127,7 +128,7 @@ it.effect(
         expect(state.spawned).toEqual([]);
         expect(yield* fs.readDirectory(`${home}/.local/share/cursor-agent/versions`)).toEqual([]);
       }),
-    ).pipe(Effect.provide(NodeServices.layer)),
+    ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 /** Each probe answers the next entry; a fresh probe is recorded. */
