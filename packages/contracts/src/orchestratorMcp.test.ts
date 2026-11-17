@@ -11,10 +11,10 @@ import {
   OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadSearchResult,
   OrchestratorMcpThreadStatus,
-  OrchestratorMcpThreadPullRequest,
   OrchestratorMcpThreadSearchMatch,
   OrchestratorMcpThreadTimelineItem,
 } from "./orchestratorMcp.ts";
+import { OrchestratorMcpThreadPullRequest } from "./orchestratorMcpThreadPullRequest.ts";
 import { OrchestratorMcpCloudTask } from "./orchestratorMcpCloudTask.ts";
 import { ThreadReplicaStatus } from "./threadReplica.ts";
 import { ThreadResult } from "./threadResult.ts";

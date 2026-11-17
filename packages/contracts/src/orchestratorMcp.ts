@@ -46,12 +46,8 @@ import { OrchestratorMcpRunStop, OrchestratorMcpTaskForce } from "./orchestrator
 import { HostPressureAdvice } from "./hostPressure.ts";
 import { OrchestratorMcpCloudTask } from "./orchestratorMcpCloudTask.ts";
 import { OrchestratorMcpReconcileFields } from "./orchestratorMcpReconcile.ts";
-import { PullRequestState } from "./pullRequest.ts";
-import {
-  ThreadLinkedPullRequest,
-  ThreadPullRequestKey,
-  ThreadPullRequestLinkSource,
-} from "./threadPullRequest.ts";
+import { OrchestratorMcpThreadPullRequest } from "./orchestratorMcpThreadPullRequest.ts";
+import { ThreadLinkedPullRequest } from "./threadPullRequest.ts";
 import { ThreadResult } from "./threadResult.ts";
 import { RemoteSenderAttribution, TurnCapability } from "./composerContext.ts";
 import { ThreadReplicaStatus } from "./threadReplica.ts";
@@ -541,15 +537,6 @@ export const OrchestratorMcpThreadListInput = Schema.Struct({
   limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(100))),
 });
 export type OrchestratorMcpThreadListInput = typeof OrchestratorMcpThreadListInput.Type;
-
-/** state is null until the host is read. */
-export const OrchestratorMcpThreadPullRequest = Schema.Struct({
-  ...ThreadPullRequestKey.fields,
-  url: TrimmedNonEmptyString,
-  source: ThreadPullRequestLinkSource,
-  state: Schema.NullOr(PullRequestState),
-});
-export type OrchestratorMcpThreadPullRequest = typeof OrchestratorMcpThreadPullRequest.Type;
 
 export const OrchestratorMcpThreadBackgroundTask = Schema.Struct({
   taskId: TrimmedNonEmptyString,
