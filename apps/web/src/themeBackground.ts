@@ -1,6 +1,7 @@
 import {
   createEnvironmentRpcQueryAtomFamily,
   executeAtomQuery,
+  squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import { resolveAssetUrl } from "@goat/client-runtime/state/assets";
 import { WS_METHODS, type EnvironmentId } from "@goat/contracts";
@@ -21,7 +22,7 @@ import {
   subscribeToCustomThemes,
 } from "./themePalette";
 import { publishedBackgroundForSelection } from "./themeBackgroundSelection";
-import { fetchThemeBackground } from "./themeBackgroundFetch";
+import { fetchThemeBackground, retryBackgroundMint } from "./themeBackgroundFetch";
 
 const mint = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
   label: "environment-data:theme:background",
@@ -57,7 +58,7 @@ function show(url: string | null) {
     delete root.dataset.publishedBackground;
   } else {
     root.style.setProperty("--theme-background-image", `url("${url}")`);
-    root.dataset.publishedBackground = "true";
+    if (root.dataset.themeId !== "__preview") root.dataset.publishedBackground = "true";
   }
   if (currentUrl !== null) URL.revokeObjectURL(currentUrl);
   currentUrl = url;
@@ -97,19 +98,22 @@ async function load(
   revision: string,
   signal: AbortSignal,
 ): Promise<string> {
-  const result = await executeAtomQuery(
-    appAtomRegistry,
-    mint({ environmentId, input: { themeId, revision } }),
-    { signal, refresh: true, reportFailure: false },
-  );
+  const result = await retryBackgroundMint(async () => {
+    const attempt = await executeAtomQuery(
+      appAtomRegistry,
+      mint({ environmentId, input: { themeId, revision } }),
+      { signal, refresh: true, reportFailure: false },
+    );
+    if (attempt._tag === "Failure") throw squashAtomCommandFailure(attempt);
+    return attempt.value;
+  }, signal);
   if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-  if (result._tag === "Failure" || result.value === null)
-    throw new Error("Theme background unavailable.");
+  if (result === null) throw new Error("Theme background unavailable.");
   const connection = Option.getOrNull(
     appAtomRegistry.get(environmentSession.preparedConnectionValueAtom(environmentId)),
   );
   if (connection === null) throw new Error("Theme environment is disconnected.");
-  const url = resolveAssetUrl(connection.httpBaseUrl, result.value.relativeUrl);
+  const url = resolveAssetUrl(connection.httpBaseUrl, result.relativeUrl);
   if (url === null) throw new Error("Invalid theme background URL.");
   const response = await fetchThemeBackground(url, signal);
   if (!response.ok) throw new Error("Theme background unavailable.");
@@ -118,6 +122,9 @@ async function load(
 
 function refresh(force = false): void {
   if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  if (root.dataset.themeId === "__preview") delete root.dataset.publishedBackground;
+  else if (currentUrl !== null) root.dataset.publishedBackground = "true";
   const environmentId = appAtomRegistry.get(themeEnvironmentIdAtom);
   if (environmentId !== watchedEnvironment) {
     removeConnectionListener?.();
@@ -182,6 +189,10 @@ export function retryThemeBackground(): void {
   refresh(true);
 }
 export function startThemeBackground(): () => void {
+  const onOnline = () => {
+    if (status === "unavailable") refresh(true);
+  };
+  window.addEventListener("online", onOnline);
   const cleanups = [
     subscribeRenderedAppearance(() => refresh()),
     subscribeToCustomThemes(() => refresh()),
@@ -190,6 +201,7 @@ export function startThemeBackground(): () => void {
   ];
   refresh();
   return () => {
+    window.removeEventListener("online", onOnline);
     for (const cleanup of cleanups) cleanup();
     removeConnectionListener?.();
     removeConnectionListener = null;

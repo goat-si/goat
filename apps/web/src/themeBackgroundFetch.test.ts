@@ -1,5 +1,37 @@
 import { expect, it, vi } from "vite-plus/test";
-import { fetchThemeBackground } from "./themeBackgroundFetch";
+import { fetchThemeBackground, retryBackgroundMint } from "./themeBackgroundFetch";
+
+it("retries an unavailable mint but not a permission denial", async () => {
+  const mint = vi
+    .fn()
+    .mockRejectedValueOnce({ _tag: "EnvironmentRpcUnavailableError" })
+    .mockResolvedValue("token");
+  expect(await retryBackgroundMint(mint, new AbortController().signal, async () => {})).toBe(
+    "token",
+  );
+  expect(mint).toHaveBeenCalledTimes(2);
+  const denied = vi.fn().mockRejectedValue({ _tag: "EnvironmentAuthorizationError" });
+  await expect(
+    retryBackgroundMint(denied, new AbortController().signal, async () => {}),
+  ).rejects.toMatchObject({ _tag: "EnvironmentAuthorizationError" });
+  expect(denied).toHaveBeenCalledTimes(1);
+});
+
+it("recovers from a transient network failure and server error", async () => {
+  const request = vi
+    .fn()
+    .mockRejectedValueOnce(new TypeError("offline"))
+    .mockResolvedValueOnce(new Response(null, { status: 502 }))
+    .mockResolvedValue(new Response("ok", { status: 200 }));
+  const response = await fetchThemeBackground(
+    "https://goat.example/image",
+    new AbortController().signal,
+    request,
+    async () => {},
+  );
+  expect(response.status).toBe(200);
+  expect(request).toHaveBeenCalledTimes(3);
+});
 
 it("retries temporary 503 responses a bounded number of times", async () => {
   const request = vi

@@ -3,9 +3,11 @@ import { Atom } from "effect/reactivity";
 import * as Option from "effect/Option";
 import { EnvironmentId } from "@goat/contracts";
 import { appAtomRegistry } from "./rpc/atomRegistry";
+import "./index.css";
 
 const state = vi.hoisted(() => ({
   mint: vi.fn(),
+  mintInput: vi.fn(),
   themeListener: () => {},
   libraryListener: () => {},
   selected: null as unknown,
@@ -14,7 +16,10 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock("@goat/client-runtime/state/runtime", async (original) => ({
   ...(await original()),
-  createEnvironmentRpcQueryAtomFamily: () => () => ({}),
+  createEnvironmentRpcQueryAtomFamily: () => (input: unknown) => {
+    state.mintInput(input);
+    return {};
+  },
   executeAtomQuery: state.mint,
 }));
 vi.mock("./connection/runtime", () => ({ connectionAtomRuntime: {} }));
@@ -166,6 +171,59 @@ it("exposes an unavailable state and permits a person to retry", async () => {
     await vi.waitFor(() => expect(themeBackgroundStatus()).toBe("ready"));
     expect(request).toHaveBeenCalledTimes(2);
   } finally {
+    stop();
+  }
+});
+
+it("retries the intended published background when online during a preview", async () => {
+  state.selected = { id: "nightfall", label: "Nightfall", appearance: "dark", colors: {} };
+  state.published = state.selected;
+  state.authoritative = state.selected;
+  state.mint.mockClear().mockResolvedValue({
+    _tag: "Success",
+    value: { relativeUrl: "/api/assets/token/background", expiresAt: 1 },
+  });
+  state.mintInput.mockClear();
+  using _fetch = vi
+    .spyOn(window, "fetch")
+    .mockResolvedValueOnce(new Response(null, { status: 404 }))
+    .mockImplementation(
+      async () => new Response(new Uint8Array([1]), { headers: { "content-type": "image/png" } }),
+    );
+  using _create = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:online-background");
+  using _revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+  const previous = document.documentElement.dataset.themeId;
+  const previousCanvas = document.documentElement.style.getPropertyValue("--app-theme-canvas");
+  document.documentElement.style.setProperty("--app-theme-canvas", "#0c2238");
+  const conversation = document.createElement("div");
+  conversation.setAttribute("data-workspace-area", "conversation");
+  conversation.style.backgroundColor = "rgb(12, 34, 56)";
+  document.body.append(conversation);
+  const stop = startThemeBackground();
+  try {
+    await vi.waitFor(() => expect(themeBackgroundStatus()).toBe("unavailable"));
+    document.documentElement.dataset.themeId = "__preview";
+    state.themeListener();
+    expect(getComputedStyle(conversation).backgroundColor).toBe("rgb(12, 34, 56)");
+    expect(getComputedStyle(conversation).backgroundImage).not.toContain("blob:");
+    window.dispatchEvent(new Event("online"));
+    await vi.waitFor(() => expect(themeBackgroundStatus()).toBe("ready"));
+    expect(state.mintInput).toHaveBeenLastCalledWith({
+      environmentId: "env-test",
+      input: { themeId: "nightfall", revision: `png:${"a".repeat(64)}` },
+    });
+    expect(getComputedStyle(conversation).backgroundColor).toBe("rgb(12, 34, 56)");
+    expect(getComputedStyle(conversation).backgroundImage).not.toContain("blob:");
+    document.documentElement.dataset.themeId = "nightfall";
+    state.themeListener();
+    expect(getComputedStyle(conversation).backgroundImage).toContain("blob:");
+  } finally {
+    conversation.remove();
+    if (previousCanvas)
+      document.documentElement.style.setProperty("--app-theme-canvas", previousCanvas);
+    else document.documentElement.style.removeProperty("--app-theme-canvas");
+    if (previous === undefined) delete document.documentElement.dataset.themeId;
+    else document.documentElement.dataset.themeId = previous;
     stop();
   }
 });
