@@ -58,6 +58,17 @@ describe("Claude approval of GOAT tools", () => {
         expect(decide(tool, readOnlySandbox).called, tool).toBe("ask");
   });
 
+  // regression: upstream #32022 Claude Plan mode asked before goat_background_wait
+  it("runs goat_background_wait without asking, directly or through goat_call, in any sandbox", () => {
+    for (const readOnlySandbox of [true, false]) {
+      expect(decide("goat_background_wait", readOnlySandbox)).toEqual({
+        direct: "allow",
+        called: "allow",
+      });
+      expect(decide("background.wait", readOnlySandbox).called).toBe("allow");
+    }
+  });
+
   it("judges a goat_call spelled as MCP's {name, arguments}, or tool and input, as {path, args}", () => {
     const decision = (toolInput: object) =>
       claudeGoatToolDecision({
