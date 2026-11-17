@@ -99,7 +99,7 @@ function ResumeQueueButton(props: {
   readonly persistSettings: (input: {
     readonly runtimeMode: string;
   }) => Promise<AtomCommandResult<void, unknown>>;
-  readonly setThreadError?: (threadId: ThreadId, error: string | null) => void;
+  readonly setThreadError?: (threadId: ThreadId | null, error: string | null) => void;
 }) {
   const { onResume } = useComposerResume({
     environmentId: EnvironmentId.make("environment:test"),
