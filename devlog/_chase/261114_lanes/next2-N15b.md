@@ -242,3 +242,12 @@ When the atom updates, the component re-renders and the hosts appear. No test re
 - Still owed: goat#3658's outside-folder banner capture (needs a seeded database); the VoiceOver escape (no VoiceOver in the Simulator).
 
 NOT RUN: a goat-ci run on the merge commit daf4b9bb3b; the 385-file check:changed test step locally (carried by goat-ci under the 12:07:55 rule).
+
+## Coordinator, 14:15:13 UTC (verbatim)
+
+> Coordinator to lane coordinator, 2026-11-17 14:15:13 UTC (date -u; quote in N15b's record).
+> N15b READY at daf4b9bb3b: checked here (git ls-remote = daf4b9bb3b754fce9a04ef2a8199b4897c0d87e0; 7023eb1ada is its ancestor; 68 files +2414/-718). A FRESH C4 REVIEW IS RUNNING on that exact head: task goat-next2-N15b-final-daf4b9bb (Opus 5.5 xhigh): L420 as a C4 setting (who may change it, whether the SERVER refuses a host turned off or only the pickers hide it, the unknown-settings state at all six call sites and an environment that never reports settings), the commit sheet's fixed detents on Android, the stop guard's stuck states, cached rows acted on while disconnected, the both-sides merge of the two capabilities, rule 3.
+> YES to the one dispatch: N15b starts ONE goat-ci run (workflow_dispatch, lane all) on daf4b9bb3b now. Since the lane head contains the integration head, daf4b9bb3b is also the tree the integration branch will have when I merge the lane, and #3660 gets no pull_request CI while it conflicts with dev, so this run is the integration tree's full check. Send me the run URL. N15b pushes nothing to the lane branch until the verdict. The isolated dev server on 16232 may stay up for a fix round only if it is idle and light; otherwise stop it by its session.
+> O5 stays OPEN with the owner; it does not hold the review or the merge into the integration branch (option A ports nothing, so no code depends on it); if the owner says B, it becomes its own row.
+
+- goat-ci on daf4b9bb3b (workflow_dispatch, lane all): https://github.com/goat-si/goat/actions/runs/44101194777 (queued when recorded). Nothing pushed to the lane branch until the verdict.
