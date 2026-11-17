@@ -62,7 +62,12 @@ const navigateHistory = async (
  * call fails wherever the page landed, before and after the status read.
  */
 export const guardedHistoryNavigation = async <
-  Tab extends { readonly page: Page; readonly cdp: CDPSession; readonly control: SessionControl },
+  Tab extends {
+    readonly page: Page;
+    readonly cdp: CDPSession;
+    readonly control: SessionControl;
+    pendingInitialRequestUrl?: string | null;
+  },
   Status,
 >(input: {
   readonly tab: Tab;
@@ -76,6 +81,8 @@ export const guardedHistoryNavigation = async <
   readonly channelFor: (destination?: string) => ActionChannel;
 }): Promise<Status> => {
   const { tab, operation } = input;
+  // A stopped first load to the same URL must not swallow this navigation's request.
+  tab.pendingInitialRequestUrl = null;
   const generation = tab.control.generation;
   const assertControl = () => {
     if (generation !== tab.control.generation || !tab.control.agentCanActNow(input.agentSessionId))

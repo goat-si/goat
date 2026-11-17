@@ -6,7 +6,11 @@ import type { SessionControl } from "./SessionControl.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
 export const guardedNavigate = async (
-  tab: { readonly page: Page; readonly control: Pick<SessionControl, "track"> },
+  tab: {
+    readonly page: Page;
+    readonly control: Pick<SessionControl, "track">;
+    pendingInitialRequestUrl?: string | null;
+  },
   url: string,
   readiness: "load" | "domContentLoaded" | "none",
   timeout: number,
@@ -14,6 +18,8 @@ export const guardedNavigate = async (
   /** Checks the page the navigation reached, once it has loaded. */
   assertLoaded?: () => void,
 ) => {
+  // A stopped first load to the same URL must not swallow this navigation's request.
+  tab.pendingInitialRequestUrl = null;
   const startedAt = performance.now();
   const navigation = channel.call(() =>
     tab.page.goto(url, {
