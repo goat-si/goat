@@ -334,3 +334,4 @@ The ONE goat-ci run: https://github.com/goat-si/goat/actions/runs/44084858759, a
 
 - goat-test-changed, job 134046753589, lidge-goat-03: `3 changed Vitest files`; the host run `Test Files 2 passed (2)`, 72 tests (rules-meta 60, keyPath 12: keyPath passes only outside the user namespace, so it ran on the host); then the run through loopback-netns.sh `Test Files 1 passed (1)` (the web browser file, 8 tests; no ::error::, so the pre-check with the full flags, `--unshare-pid` and `--die-with-parent` included, passed on a real lidge runner); `1 changed node:test files`, tests 73, pass 73. "Test changed files" and "Check for leaked temp files" succeeded.
 
+- Run 44084858759 concluded success (goat-scope, goat-test-changed, goat-ci-result). The throwaway branch chase/t3-261114-next2-x1b-probe (1bb6179285) was deleted on origin and locally after the run; `git ls-remote` shows only chase/t3-261114-next2-x1b-followups at 031f92753bfc9f53b82e314d0f80f0a60376ce99.
