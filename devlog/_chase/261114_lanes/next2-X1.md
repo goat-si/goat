@@ -153,3 +153,35 @@ Verification (fresh, on 65e4257046's tree; rerun on the final tree as noted):
 NOT RUN: a full goat-ci run with the change.
 NOT RUN: a CI run of the wrapper on a runner without bwrap or with a refusing profile (shown locally with stubs only).
 NOT RUN: a CI run of the final head 530fabce64 (the coordinator: "No further CI run is needed for A"); option A only removes the wrapper from steps that pass unwrapped on dev, and the test-changed condition is pinned by the scope test.
+
+## Review of 530fabce64 and the fix round (local)
+
+> Coordinator to lane coordinator, 2026-11-17 10:57:56 UTC (quote each part verbatim in the lane's record, in card 10.027 and in next2-pr-plan.md under "Coordinator answers").
+>
+> B. X1 READY at 530fabce64 and N4 READY at 957cea501d: both checked on origin; both reviews are running (Opus 5.5 xhigh, read-only): goat-next2-X1-final-530fabce (the wrapper script's every path that could run tests outside the namespace, the workflow guard, the mixed selection of a web browser file and a server ownership test, goat#3493's coverage: no test file may end up run by nothing) and goat-next2-N4-final-957cea50 (C4: every deletion and rename with its lock and its crash state; O14's reversed protection; O17's links; O16's re-check and the agent path; goat#3664; the rule 3 lines). Both lanes stand by; no push until the verdicts. N4's Known limits line is accepted for #3660's body. N4's host note (isSshProvisionedRuntime.test.ts fails when SSH_CONNECTION is set in the shell): N4 files an issue if none exists (a test that reads the developer's environment), number to me.
+
+> Coordinator to lane coordinator, 2026-11-17 11:00:49 UTC, for X1 (quote verbatim in its record).
+> The mixed-selection defect at 530fabce64 (test-changed wrapped its whole Vitest run when the selection held any web browser file, so a server ownership test selected with it would fail inside the namespace): good that X1 found it itself, and the fix's shape is right (only the web browser files go inside the namespace; the other files run on the host). DECISION: do NOT push while the review runs. The review of 530fabce64 goes on (its brief asks about exactly this selection, so its verdict will name it or miss it, which tells me something either way). 8ae3f33912 becomes the FIRST commit of the fix round, together with whatever else the review finds, and a new reviewer reads the round with this report. Meanwhile X1 finishes its local checks on 8ae3f33912 (the full scope tests, check:changed against the integration head a6992a0f36, the workflow guard) and adds one more case to the step reproduction: a selection whose web browser file FAILS and whose host files pass, and the reverse: the step's exit status must be a failure in both, and both halves must have run. No CI run until the fix round is complete.
+
+Self-found defect at 530fabce64: test-changed wrapped its whole Vitest run when the list held any web `*.browser.test.*` file, so a server ownership test selected beside it (e.g. `apps/server/src/hub/disposable/keyPath.test.ts`) would run inside the user namespace and fail; the scope test at 530fabce64 asserted the mixed list is wrapped.
+
+Fix round, LOCAL ONLY (not pushed, per 10:57:56 and 11:00:49):
+
+| commit | what |
+| --- | --- |
+| `8ae3f33912` | goat-ci-scope.cjs `loopbackTests` publishes only the web browser files as `changed_tests_netns` (a JSON list); the step runs the other files on the host and only those inside loopback-netns.sh; the scope test "runs only test-changed's web browser tests with loopback only, never a server test beside them" pins a mixed list (`[keyPath, web, scripts/dev-runner]` gives `[web]`) and a server-only list (gives `[]`) |
+| `6ab397e58f` | merge of the integration head a6992a0f36 (S4), git's own merge, no CI file touched by S4 |
+
+Checks (local, on 8ae3f33912 and 6ab397e58f):
+
+- Test first: the new scope test failed on 530fabce64's code (`loopbackTests` missing; pass 0, fail 1), passes after.
+- `node --test .github/scripts/goat-ci-scope.test.cjs` on 8ae3f33912: tests 73, pass 73, fail 0.
+- `vp run check:changed origin/chase/t3-261114-next2` on 6ab397e58f: `5 files since a6992a0f365e`, `CHECK_EXIT=0`; format, lint, knip 1/2 and 2/2, agent surface audit, agent context budget, typecheck (42 packages), test (1 file), node --test (1 file) pass.
+- Workflow guard on 6ab397e58f: exit 0.
+- Step reproduction: the "Test changed files" script extracted from goat-ci.yml, run under /bin/bash -e with a `mapfile` shim (the Mac's bash 3.2 lacks it), stub `vp` (fails when its arguments match a chosen file) and stub `bwrap` (marks the run as inside), RUNNER_ENVIRONMENT=self-hosted, list `[keyPath.test.ts, ReopenClosedViewShortcut.browser.test.tsx, scripts/dev-runner.test.ts]`:
+  - web browser file fails, host files pass: host half ran (netns=no, pass), web half ran (netns=yes, FAIL), step exit 1;
+  - host files fail, web browser file passes: host half ran (netns=no, FAIL), web half ran (netns=yes, pass), step exit 1;
+  - nothing fails: both halves ran, step exit 0;
+  - server-only list: one host run (netns=no), no bwrap.
+
+NOT RUN: any CI run of the fix round (11:00:49: none until the round is complete).
