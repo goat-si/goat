@@ -86,12 +86,9 @@ import {
 } from "./workEntryRowLabel";
 import type { HtmlRenderReference } from "@goat/shared/htmlRender";
 import type { McpAppReference } from "@goat/shared/mcpApp";
-import {
-  compactDynamicToolOutput,
-  htmlRenderFromToolItem,
-  mcpAppFromToolItem,
-} from "@goat/shared/toolOutput";
+import { htmlRenderFromToolItem, mcpAppFromToolItem } from "@goat/shared/toolOutput";
 import * as DateTime from "effect/DateTime";
+import { groupAdjacentActivities } from "./threadActivityGroups";
 import { IDLE_COMPACTION_TITLES, IDLE_COMPACTING_LABELS } from "@goat/client-runtime/user-message";
 
 export type { PendingUserInputDraftAnswer } from "@goat/client-runtime/state/user-input-draft";
@@ -162,7 +159,7 @@ export interface LocalThreadMessage {
   readonly updatedAt: string;
 }
 
-type RawThreadFeedEntry =
+export type RawThreadFeedEntry =
   | {
       readonly type: "message";
       readonly id: string;
@@ -257,7 +254,7 @@ export interface ThreadFeedLatestRun {
   readonly providerStartingLabel?: string;
 }
 
-type ThreadFeedActivityGroup = Extract<ThreadFeedEntry, { readonly type: "activity-group" }>;
+export type ThreadFeedActivityGroup = Extract<ThreadFeedEntry, { readonly type: "activity-group" }>;
 
 // Immutable source rows let retained history keep its identities while the active item streams.
 const projectedEntriesCache = new WeakMap<
@@ -271,7 +268,6 @@ const localMessageEntriesCache = new WeakMap<
   LocalThreadMessage,
   Extract<RawThreadFeedEntry, { readonly type: "message" }>
 >();
-const activityGroupsCache = new WeakMap<ThreadFeedActivity, ThreadFeedActivityGroup>();
 const failedActivityGroupsCache = new WeakMap<
   ThreadFeedActivityGroup,
   ReadonlyArray<ThreadFeedActivityGroup>
@@ -689,110 +685,6 @@ function singleToolCallLabel(activity: ThreadFeedActivity, expanded: boolean): s
   if (commandActionsLabel) return commandActionsLabel;
   const command = activity.workEntry.command?.trim();
   return command ? truncate(command, WORK_LOG_LABEL_MAX_LENGTH) : activity.summary;
-}
-
-function isEmptyMessage(entry: RawThreadFeedEntry): boolean {
-  return (
-    entry.type === "message" &&
-    entry.message.text.trim().length === 0 &&
-    entry.message.attachments.length === 0
-  );
-}
-
-/**
- * `onRestart` hears each entry after which no group is open, with the grouped
- * length so far: the entries before it group the same whatever follows.
- */
-function groupAdjacentActivities(
-  entries: ReadonlyArray<RawThreadFeedEntry>,
-  childrenByRun: ReadonlyMap<RunId, ReadonlySet<string>>,
-  onRestart?: (entryIndex: number, groupedLength: number) => void,
-): ThreadFeedEntry[] {
-  const grouped: ThreadFeedEntry[] = [];
-  let firstActivityEntry: Extract<RawThreadFeedEntry, { readonly type: "activity" }> | null = null;
-  let openGroupActivities: ThreadFeedActivity[] = [];
-  const flushGroup = () => {
-    if (firstActivityEntry === null) return;
-    const cached = activityGroupsCache.get(firstActivityEntry.activity);
-    if (
-      cached &&
-      cached.activities.length === openGroupActivities.length &&
-      cached.activities.every((activity, index) => activity === openGroupActivities[index])
-    ) {
-      grouped.push(cached);
-    } else {
-      const group: ThreadFeedActivityGroup = {
-        type: "activity-group",
-        id: firstActivityEntry.id,
-        createdAt: firstActivityEntry.createdAt,
-        runId: firstActivityEntry.runId,
-        activities: openGroupActivities,
-      };
-      activityGroupsCache.set(firstActivityEntry.activity, group);
-      grouped.push(group);
-    }
-    firstActivityEntry = null;
-    openGroupActivities = [];
-  };
-
-  for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
-    const entry = entries[entryIndex]!;
-    if (entry.type === "activity") {
-      const item = entry.activity.projectedItem.item;
-      if (
-        item.type === "dynamic_tool" &&
-        item.runId !== null &&
-        (item.status === "running" || item.status === "completed") &&
-        resolveGoatMcpItemCall(item).definition?.summaryAction === "delegate" &&
-        !workEntryDisplayIndicatesToolFailure(entry.activity.workEntry)
-      ) {
-        const output = compactDynamicToolOutput(item.output);
-        if (
-          !output?.isError &&
-          output?.taskId !== undefined &&
-          childrenByRun.get(item.runId)?.has(output.taskId)
-        )
-          continue;
-      }
-    }
-    if (isEmptyMessage(entry)) {
-      continue;
-    }
-
-    if (entry.type !== "activity") {
-      flushGroup();
-      grouped.push(entry);
-      onRestart?.(entryIndex, grouped.length);
-      continue;
-    }
-
-    const isStandaloneActivity =
-      entry.activity.workEntry.questionAnswer !== undefined ||
-      entry.activity.projectedItem.item.type === "compaction" ||
-      entry.activity.projectedItem.item.type === "handoff" ||
-      entry.activity.projectedItem.item.type === "notification";
-    if (
-      isStandaloneActivity ||
-      entry.activity.prominent ||
-      (entry.activity.projectedItem.item.type === "subagent") !==
-        (firstActivityEntry?.activity.projectedItem.item.type === "subagent") ||
-      firstActivityEntry?.runId !== entry.runId ||
-      (entry.activity.projectedItem.item.type === "subagent" &&
-        firstActivityEntry?.activity.projectedItem.item.providerTurnId !==
-          entry.activity.projectedItem.item.providerTurnId) ||
-      (entry.activity.projectedItem.item.type !== "subagent" &&
-        firstActivityEntry?.activity.attemptId !== entry.activity.attemptId)
-    ) {
-      flushGroup();
-    }
-    firstActivityEntry ??= entry;
-    openGroupActivities.push(entry.activity);
-    if (isStandaloneActivity || entry.activity.prominent) {
-      flushGroup();
-    }
-  }
-  flushGroup();
-  return grouped;
 }
 
 function computeElapsedMs(startIso: string, endIso: string): number | null {
