@@ -304,3 +304,17 @@ NOT RUN: a goat-ci run on the merge commit daf4b9bb3b; the 385-file check:change
 ## Coordinator, 15:26:04 UTC (verbatim, part 3)
 
 > 3. N15bb: I saw run 44109073502 fail (typecheck: GitActionsControl.tsx:240 Cannot find name 'resolveThreadBranchMetadataPatch'; knip: that export unused) and your handling (ce893ca4ea, run 44113761706, the local typecheck under the token). My own read of c63e00683b listed that import among the lines the move-out removed and I did not flag it; a move-out's "removed and not added" list is to be explained line by line from now on, by the lane and by me. I merge N15bb when 44113761706 is green and N15b's typecheck line is in.
+
+### Move-outs: the "removed and not added" lines, one by one (the 15:26:04 rule, applied to this lane's two move-outs)
+
+I listed these with `git diff --color-moved=plain`: a removed line that git does not see as moved is listed here.
+
+- `0e84352a9e` (ThreadComposer.tsx → composerTransitions.ts): one line. `type LayoutAnimationFunction,` was removed from ThreadComposer's react-native-reanimated import because only the moved transition uses it; composerTransitions.ts imports it, along with Platform, ReduceMotion and withTiming. ThreadComposer keeps withTiming, which it still uses.
+- `73467df4f6` (GitActionsControl.tsx → PublishRepositoryDialog.tsx):
+  - `SourceControlProviderKind`: only the moved dialog uses it; PublishRepositoryDialog.tsx imports it.
+  - `GitRunStackedActionResult`, `GitStackedAction`, `VcsStatusResult`: still imported, regrouped into one `import type ... from "@goat/contracts"` line.
+  - `CheckIcon`, `LockIcon`, `GlobeIcon`: only the moved dialog uses them; the new file imports them.
+  - `resolveThreadBranchMetadataPatch`: REMOVED WRONGLY. It is still used at GitActionsControl.tsx:240, and the pruning read the spread before it as a property access. Restored in `ce893ca4ea`; goat-ci run 44109073502 failed on it.
+  - `useSourceControlPublishRepositoryAction`: only the moved dialog uses it; the new file imports it.
+  - `sourceControlIcon` (from the import that also has getSourceControlPresentation): only the moved code uses it; the new file imports it, and GitActionsControl keeps getSourceControlPresentation.
+  - `function PublishRepositoryDialog(`: becomes `export function PublishRepositoryDialog(` in the new file, which GitActionsControl now imports.
