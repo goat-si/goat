@@ -182,3 +182,255 @@ Effect on the rows above: aab388ddb1 (row 5) and R3 leave this lane (K12). Order
 
 ## Code log
 
+
+### Rule 3 widenings (coordinator, relayed verbatim)
+
+> B. IV IS WIDENED, for every lane (relay it). The standing authorisation also covers, under the same three conditions (upstream's own copy changes the same way; both hunks quoted in the record before the commit; nothing else existing changes): (i) fixture, mock and helper lines in a test file or testkit, where upstream changes its own copy of that fixture or helper the same way; (ii) an existing case whose title and body become upstream's verbatim text of that same case. Still to me, with exact before and after: a deleted test or test file, a moved harness, a test with no upstream counterpart, and any case where GOAT's result differs from upstream's text by more than names. The review matches each one to upstream's hunk; a mismatch is a P2.
+>
+> Quote it in next3-K5.md. R2 (agentScope.test.ts) still comes to the coordinator through me unless upstream's own copy of that test changes the same way and you quote both hunks.
+
+(2026-11-17 21:43:15 UTC)
+
+> IV gains one more mirrored-free case, for every lane (relay it): (iii) a test file that moves with the module it tests, where the commit is a rename and the only changed lines are import paths to the moved module, with TEST_TITLES updated in the same commit when the file is listed there. Titles, bodies, setup and expectations byte for byte; the review checks the rename with git show -M, and anything more is a P2. A harness moved out of a test file into a testkit still comes to me.
+
+(2026-11-17 21:52:47 UTC)
+
+Integration head noted: chase/t3-261114-next3 = 259883c788bb32d5601023932e07f879bde9af60 after T1c (21:49:21 UTC); draft PR #3700. This lane merges it once before READY.
+
+### M1 (384fbfd46e994b0d1f35997db3c30b2b3c208d8a)
+
+Verbatim move: ClaudeAgentSdkQueryRunner.ts lines 52-53 (CLAUDE_ROOT_REFUSAL), 130-167 (the four error classes), 211-212 (their Schema.is guards), 220-244 (queryRunnerError, CLAUDE_PROCESS_EXIT_ERROR_CLASSES, claudeProcessExitFailure) at c995c5427a to the new ClaudeQueryRunnerErrors.ts. Only changes: `export` added to the five names that were module-private, and a two-line import header. The runner re-exports the four names ClaudeAdapterV2.ts imports from it (ClaudeAdapterV2.ts:297-323 unchanged). The timeout constant stayed in the runner (the plan said :51-53; it is runner configuration, not error text). Runner 996 -> 930 (wc -l). Lines removed and not re-added: none; the four blank separator lines are re-created in the new file. Checks: server tsc exit 0; ClaudeAgentSdkQueryRunner.test.ts 13/13.
+
+### 86e2cb21c9 (67c1d0a4d585211a9097b324cee2a57b91fc23a8)
+
+Fail first (upstream's cases added, fix absent): "opens after a slow CLI boot" Expected "Success" Received "Failure"; "times out a CLI that never boots" Received "Claude timed out while registering its MCP tools…". After the fix 16/16. GOAT case "a CLI that exits during boot reports its exit, not a start-up timeout" (real fake CLI, exit 3; asserts claudeProcessExitFailure code process_exited_nonzero). R1 as authorised: initializationResult added to the six mocks, no expectation changed. providerRefusalCases.testkit.ts keeps its own local ClaudeMcpRegistrationTimeoutError class (tag-only), untouched.
+
+### fdd54b942d (e1457e545b695673a158d2b9cd60ebe255cbe745)
+
+Shared sampler as ruled: ClaudeDescendants.ts makeClaudeDescendantSampler, built once in layerQueryRunner (the runner service is provided once per server in ProviderOrchestrationAdapterInfrastructure.ts:133). One ps table per 1 s tick feeds every tracked CLI; the poll fiber starts with the first unscoped CLI and is interrupted when the last one stops. Per-session refresh before close kept. A failed, timed-out or over-8-MiB table (ProcessRunner outputMode error) is Option.none: nothing killed, one warning per server. Kill guard: pid > 1, not this server or its ancestors (walk of ppid from process.pid in the same table). The agent-scope path starts no tracker: ClaudeAgentSdkQueryRunner.ts `if (unit === undefined && child.pid !== undefined)` in the spawn callback.
+Measurement (pen-mac-studio, 2,400 sleep children added, 3,059 rows, 20 samples): 143,773 bytes per table; ps CPU 26 ms avg / 30 ms max; ps wall 36 / 40 ms; parse 1.5 / 4.0 ms. About 28 ms per sample, under 50 ms: interval stays 1 second.
+Fail first: upstream's two real-process cases hung before the wiring (timeout 75 exit 124; the detached job held the fifo). Three leftover sleep 600 processes from those killed runs were stopped by PID after lsof showed each writing to its own fixture fifo; their three /private/tmp/goat-test-* folders remain (the shell refused rm -rf). After: 18/18 runner, 5/5 ClaudeDescendants.test.ts, 26/26 with ClaudeProcessExit and ClaudeStopTeardown. Mutations: per-CLI polling fails "samples one process table per interval however many CLIs it tracks"; no server guard fails "never signals a reused pid, the CLI's old pid or this server".
+
+### e4025c8528, R2 under the widened IV (i) and (ii), quoted before the commit
+
+GOAT's case "stops agents a killed server left before the first launch" equals upstream's pre-image byte for byte except the slice name (upstream app-t3code-agents.slice, GOAT app-goat-agents.slice). GOAT's helper differs from upstream's only by an extra ServerSettings provide that the hunk does not touch. The commit changes no other existing expectation: before the test change, exactly this case failed (Expected [["--user","stop",…]] Received []) and the other 14 passed.
+
+Upstream's hunk (git show e4025c8528 -- apps/server/src/process/agentScope.test.ts):
+
+```diff
+diff --git a/apps/server/src/process/agentScope.test.ts b/apps/server/src/process/agentScope.test.ts
+index 0095146a30..a44ff15359 100644
+--- a/apps/server/src/process/agentScope.test.ts
++++ b/apps/server/src/process/agentScope.test.ts
+@@ -16,6 +16,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
+ import * as ServerConfig from "../config.ts";
+ import { makeCodexAppServerSpawnCommand } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
+ import * as ProcessRunner from "../processRunner.ts";
++import * as ProviderProcesses from "./providerProcesses.ts";
+ import { classifyScope, make, ownedAgentSlice, type ScopeState } from "./agentScope.ts";
+ 
+ const running: ScopeState = {
+@@ -55,7 +56,14 @@ const withFakeSystemd = <A, E>(
+   {
+     oomPolicy = true,
+     stopFails = false,
+-  }: { readonly oomPolicy?: boolean; readonly stopFails?: boolean } = {},
++    leftovers = false,
++    liveOwner = false,
++  }: {
++    readonly oomPolicy?: boolean;
++    readonly stopFails?: boolean;
++    readonly leftovers?: boolean;
++    readonly liveOwner?: boolean;
++  } = {},
+ ) =>
+   Effect.gen(function* () {
+     const bin = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-agent-scope-"));
+@@ -102,7 +110,12 @@ const withFakeSystemd = <A, E>(
+         }),
+     });
+     const fileSystem = yield* FileSystem.FileSystem;
++    const { stateDir } = yield* ServerConfig.ServerConfig;
++    if (leftovers) {
++      units.set(ownedAgentSlice(stateDir), { activeState: "active", result: "success" });
++    }
+     const scope = yield* make.pipe(
++      Effect.provideService(ProviderProcesses.ProviderProcesses, { hasOtherLiveOwner: liveOwner }),
+       Effect.provideService(ProcessRunner.ProcessRunner, runner),
+       Effect.provideService(HostProcess.Platform, "linux"),
+       Effect.provideService(HostProcess.Environment, { PATH: bin, XDG_RUNTIME_DIR: "/run/user/1" }),
+@@ -114,7 +127,6 @@ const withFakeSystemd = <A, E>(
+           fileSystem.writeFileString(path.replace("/sys/fs/cgroup", cgroupRoot), data, options),
+       }),
+     );
+-    const { stateDir } = yield* ServerConfig.ServerConfig;
+     return yield* body({ scope, units, calls, stateDir, cgroupRoot }).pipe(
+       Effect.ensuring(Effect.sync(() => NodeFS.rmSync(bin, { recursive: true, force: true }))),
+     );
+@@ -308,27 +320,34 @@ describe("AgentScope service", () => {
+     ),
+   );
+ 
+-  it.effect("stops agents a killed server left before the first launch", () =>
+-    withFakeSystemd(({ scope, units, calls, stateDir }) =>
+-      Effect.gen(function* () {
+-        units.set(ownedAgentSlice(stateDir), { activeState: "active", result: "success" });
+-        const agent = yield* scope.wrap({ command: "agent", args: [], name: "t", threadId: "a" });
+-        const stops = calls.filter(([, verb]) => verb === "stop");
+-        expect(stops).toEqual([["--user", "stop", ownedAgentSlice(stateDir)]]);
+-        expect(sliceOf(agent)).toBe(ownedAgentSlice(stateDir));
+-        expect(agent.args).toContain("--property=TimeoutStopSec=10s");
+-        const terminal = yield* scope.wrap({
+-          command: "agent",
+-          args: [],
+-          name: "terminal",
+-          survivesRestart: true,
+-        });
+-        expect(sliceOf(terminal)).toBe("app-t3code-agents.slice");
+-        expect(calls.filter(([, verb]) => verb === "stop")).toHaveLength(1);
+-      }),
++  it.effect("stops agents a killed server left before startup completes", () =>
++    withFakeSystemd(
++      ({ scope, calls, stateDir }) =>
++        Effect.gen(function* () {
++          expect(stopsOf(calls)).toEqual([["--user", "stop", ownedAgentSlice(stateDir)]]);
++          const agent = yield* scope.wrap({ command: "agent", args: [], name: "t", threadId: "a" });
++          expect(sliceOf(agent)).toBe(ownedAgentSlice(stateDir));
++          expect(agent.args).toContain("--property=TimeoutStopSec=10s");
++          const terminal = yield* scope.wrap({
++            command: "agent",
++            args: [],
++            name: "terminal",
++            survivesRestart: true,
++          });
++          expect(sliceOf(terminal)).toBe("app-t3code-agents.slice");
++          expect(stopsOf(calls)).toHaveLength(1);
++        }),
++      { leftovers: true },
+     ),
+   );
+ 
++  it.effect("leaves the slice to another live server sharing this home", () =>
++    withFakeSystemd(({ calls }) => Effect.sync(() => expect(stopsOf(calls)).toEqual([])), {
++      leftovers: true,
++      liveOwner: true,
++    }),
++  );
++
+   it.effect("stops leftover processes only in an active agent scope", () =>
+     withFakeSystemd(({ scope, units, calls, cgroupRoot }) =>
+       Effect.gen(function* () {
+```
+
+GOAT's hunk (git diff of apps/server/src/process/agentScope.test.ts on the lane, before commit):
+
+```diff
+diff --git a/apps/server/src/process/agentScope.test.ts b/apps/server/src/process/agentScope.test.ts
+index 0f653f4524..6d43a3f48f 100644
+--- a/apps/server/src/process/agentScope.test.ts
++++ b/apps/server/src/process/agentScope.test.ts
+@@ -18,6 +18,7 @@ import * as ServerSettings from "../serverSettings.ts";
+ import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts";
+ import { makeCodexAppServerSpawnCommand } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
+ import * as ProcessRunner from "../processRunner.ts";
++import * as ProviderProcesses from "./providerProcesses.ts";
+ import {
+   AGENTS_TASKS_MAX_PERCENT,
+   classifyScope,
+@@ -63,7 +64,14 @@ const withFakeSystemd = <A, E>(
+   {
+     oomPolicy = true,
+     stopFails = false,
+-  }: { readonly oomPolicy?: boolean; readonly stopFails?: boolean } = {},
++    leftovers = false,
++    liveOwner = false,
++  }: {
++    readonly oomPolicy?: boolean;
++    readonly stopFails?: boolean;
++    readonly leftovers?: boolean;
++    readonly liveOwner?: boolean;
++  } = {},
+ ) =>
+   Effect.gen(function* () {
+     const bin = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-agent-scope-"));
+@@ -110,12 +118,17 @@ const withFakeSystemd = <A, E>(
+         }),
+     });
+     const fileSystem = yield* FileSystem.FileSystem;
++    const { stateDir } = yield* ServerConfig.ServerConfig;
++    if (leftovers) {
++      units.set(ownedAgentSlice(stateDir), { activeState: "active", result: "success" });
++    }
+     const scope = yield* make.pipe(
+       Effect.provide(
+         Layer.mock(ServerSettings.ServerSettingsService)({
+           getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+         }),
+       ),
++      Effect.provideService(ProviderProcesses.ProviderProcesses, { hasOtherLiveOwner: liveOwner }),
+       Effect.provideService(ProcessRunner.ProcessRunner, runner),
+       Effect.provideService(HostProcess.Platform, "linux"),
+       Effect.provideService(HostProcess.Environment, { PATH: bin, XDG_RUNTIME_DIR: "/run/user/1" }),
+@@ -127,7 +140,6 @@ const withFakeSystemd = <A, E>(
+           fileSystem.writeFileString(path.replace("/sys/fs/cgroup", cgroupRoot), data, options),
+       }),
+     );
+-    const { stateDir } = yield* ServerConfig.ServerConfig;
+     return yield* body({ scope, units, calls, stateDir, cgroupRoot }).pipe(
+       Effect.ensuring(Effect.sync(() => NodeFS.rmSync(bin, { recursive: true, force: true }))),
+     );
+@@ -333,27 +345,34 @@ describe("AgentScope service", () => {
+     ),
+   );
+ 
+-  it.effect("stops agents a killed server left before the first launch", () =>
+-    withFakeSystemd(({ scope, units, calls, stateDir }) =>
+-      Effect.gen(function* () {
+-        units.set(ownedAgentSlice(stateDir), { activeState: "active", result: "success" });
+-        const agent = yield* scope.wrap({ command: "agent", args: [], name: "t", threadId: "a" });
+-        const stops = calls.filter(([, verb]) => verb === "stop");
+-        expect(stops).toEqual([["--user", "stop", ownedAgentSlice(stateDir)]]);
+-        expect(sliceOf(agent)).toBe(ownedAgentSlice(stateDir));
+-        expect(agent.args).toContain("--property=TimeoutStopSec=10s");
+-        const terminal = yield* scope.wrap({
+-          command: "agent",
+-          args: [],
+-          name: "terminal",
+-          survivesRestart: true,
+-        });
+-        expect(sliceOf(terminal)).toBe("app-goat-agents.slice");
+-        expect(calls.filter(([, verb]) => verb === "stop")).toHaveLength(1);
+-      }),
++  it.effect("stops agents a killed server left before startup completes", () =>
++    withFakeSystemd(
++      ({ scope, calls, stateDir }) =>
++        Effect.gen(function* () {
++          expect(stopsOf(calls)).toEqual([["--user", "stop", ownedAgentSlice(stateDir)]]);
++          const agent = yield* scope.wrap({ command: "agent", args: [], name: "t", threadId: "a" });
++          expect(sliceOf(agent)).toBe(ownedAgentSlice(stateDir));
++          expect(agent.args).toContain("--property=TimeoutStopSec=10s");
++          const terminal = yield* scope.wrap({
++            command: "agent",
++            args: [],
++            name: "terminal",
++            survivesRestart: true,
++          });
++          expect(sliceOf(terminal)).toBe("app-goat-agents.slice");
++          expect(stopsOf(calls)).toHaveLength(1);
++        }),
++      { leftovers: true },
+     ),
+   );
+ 
++  it.effect("leaves the slice to another live server sharing this home", () =>
++    withFakeSystemd(({ calls }) => Effect.sync(() => expect(stopsOf(calls)).toEqual([])), {
++      leftovers: true,
++      liveOwner: true,
++    }),
++  );
++
+   it.effect("stops leftover processes only in an active agent scope", () =>
+     withFakeSystemd(({ scope, units, calls, cgroupRoot }) =>
+       Effect.gen(function* () {
+```
+
