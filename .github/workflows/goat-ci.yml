@@ -359,12 +359,22 @@ jobs:
 
       # web stays here. The other suites are their own matrix tasks so a
       # slow server shard does not block them. `check` above is still the aggregate.
+      # On the shared lidge host, Chromium fails every pending request with net::ERR_NETWORK_CHANGED
+      # whenever the host's interfaces change (#3646), so a self-hosted runner runs the step in a
+      # network namespace with loopback only. Ubuntu's AppArmor refuses plain unshare there and allows
+      # bwrap. Without bwrap, or when bwrap is refused, the step fails; it never falls back to the host.
       - name: Test
         if: matrix.task == 'test'
         # Logs each failed browser request with Chromium's network error, the evidence #1719 lacks.
         env:
           VITEST_PW_DEBUG: "1"
-        run: vp run --filter @goat/web test
+        run: |
+          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then exec vp run --filter @goat/web test; fi
+          if ! command -v bwrap >/dev/null; then
+            echo "::error::bwrap is missing on $RUNNER_NAME; the web tests need a loopback-only network namespace there"
+            exit 1
+          fi
+          exec bwrap --unshare-user --unshare-net --dev-bind / / --proc /proc vp run --filter @goat/web test
 
       # Changed, companion, and importing tests (directly or through testkit/fixture files), plus
       # special suites, as check:changed runs them: from the repository root,
