@@ -300,3 +300,7 @@ NOT RUN: a goat-ci run on the merge commit daf4b9bb3b; the 385-file check:change
 
 - `vp run --cache --parallel --concurrency-limit 4 --filter @goat/mobile --filter @goat/oxlint-plugin-goat --filter @goat/scripts --filter @goat/web --filter goat typecheck`, scoped as check:changed scopes it against origin/chase/t3-261114-next2 (e04442e66c): exit 0, "5/5 successful", 0 "error TS" lines.
 - Record line, as asked. Cause: the import pruning in the move-out 73467df4f6 read the spread in `...resolveThreadBranchMetadataPatch(` as a property access and dropped the import. The local typecheck was not run before the first push of c63e00683b (the token was with P1); the first goat-ci run found it. After the fix, every name the old import block of GitActionsControl.tsx declared was rechecked against GitActionsControl.tsx and PublishRepositoryDialog.tsx; no other import is missing. Token handed back.
+
+## Coordinator, 15:26:04 UTC (verbatim, part 3)
+
+> 3. N15bb: I saw run 44109073502 fail (typecheck: GitActionsControl.tsx:240 Cannot find name 'resolveThreadBranchMetadataPatch'; knip: that export unused) and your handling (ce893ca4ea, run 44113761706, the local typecheck under the token). My own read of c63e00683b listed that import among the lines the move-out removed and I did not flag it; a move-out's "removed and not added" list is to be explained line by line from now on, by the lane and by me. I merge N15bb when 44113761706 is green and N15b's typecheck line is in.
