@@ -471,7 +471,7 @@
   "apps/web/src/components/ComposerPromptEditorTiptap.tsx": { "lines": 1824, "nonNull": 2 },
   "apps/web/src/components/ConfirmDialogHost.tsx": { "nonNull": 1 },
   "apps/web/src/components/DiffPanel.tsx": { "lines": 1207 },
-  "apps/web/src/components/GitActionsControl.tsx": { "lines": 1374 },
+  "apps/web/src/components/GitActionsControl.tsx": { "lines": 1375 },
   "apps/web/src/components/LegacySidebar.tsx": { "lines": 3907, "nonNull": 2 },
   "apps/web/src/components/ProviderUpdateLaunchNotification.logic.ts": { "nonNull": 5 },
   "apps/web/src/components/PublishRepositoryDialog.tsx": { "nonNull": 1 },
