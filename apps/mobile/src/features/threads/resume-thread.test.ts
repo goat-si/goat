@@ -3,7 +3,7 @@ import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 
-import { resumeThread } from "./resume-thread";
+import { resumeHeldQueue, resumeThread } from "./resume-thread";
 
 const runId = RunId.make("run-limited");
 const failure = AsyncResult.failure(Cause.fail(new Error("not connected")));
@@ -86,5 +86,81 @@ describe("resumeThread", () => {
     await resumeThread({ ...base, resumableRunId: null, queueHeld: true });
 
     expect(calls.map((call) => call.command)).toEqual(["resumeQueue"]);
+  });
+
+  it("regression goat#3656: releases a held queue under the modes the composer shows", async () => {
+    const { calls, base } = setup();
+    await resumeThread({
+      ...base,
+      runtimeMode: "approval-required",
+      interactionMode: "plan",
+      resumableRunId: null,
+      queueHeld: true,
+    });
+
+    expect(calls.map((call) => call.command)).toEqual([
+      "setRuntimeMode",
+      "setInteractionMode",
+      "resumeQueue",
+    ]);
+    expect(calls[0]?.input).toMatchObject({ runtimeMode: "approval-required" });
+  });
+
+  it("regression goat#3656: the queue sheet's Resume applies the composer draft's modes", async () => {
+    const { calls, base } = setup();
+    await resumeHeldQueue({
+      ...base,
+      draft: { runtimeMode: "approval-required", interactionMode: "plan" },
+      provider: undefined,
+    });
+
+    expect(calls.map((call) => call.command)).toEqual([
+      "setRuntimeMode",
+      "setInteractionMode",
+      "resumeQueue",
+    ]);
+    expect(calls[0]?.input).toMatchObject({ runtimeMode: "approval-required" });
+  });
+
+  it("a refused mode change resumes nothing from either Resume", async () => {
+    const { calls, base } = setup();
+    const refused = async (request: { readonly input: unknown }) => {
+      calls.push({ command: "setRuntimeMode", input: request.input });
+      return failure;
+    };
+
+    const fromComposer = await resumeThread({
+      ...base,
+      setRuntimeMode: refused,
+      runtimeMode: "approval-required",
+      resumableRunId: null,
+      queueHeld: true,
+    });
+    const fromSheet = await resumeHeldQueue({
+      ...base,
+      setRuntimeMode: refused,
+      draft: { runtimeMode: "approval-required" },
+      provider: undefined,
+    });
+
+    expect(fromComposer).toBe(failure);
+    expect(fromSheet).toBe(failure);
+    expect(calls.map((call) => call.command)).toEqual(["setRuntimeMode", "setRuntimeMode"]);
+  });
+
+  it("the queue sheet's Resume before the thread has loaded sends nothing and says why", async () => {
+    const { calls, base } = setup();
+    const result = await resumeHeldQueue({
+      ...base,
+      thread: null,
+      draft: { runtimeMode: "approval-required" },
+      provider: undefined,
+    });
+
+    expect(calls).toEqual([]);
+    expect(result._tag).toBe("Failure");
+    expect(result._tag === "Failure" ? Cause.squash(result.cause) : null).toEqual(
+      new Error("This thread is still loading. Try again in a moment."),
+    );
   });
 });

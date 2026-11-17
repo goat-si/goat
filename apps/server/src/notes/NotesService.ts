@@ -44,6 +44,7 @@ import { fileWatchResync } from "../fileWatchResync.ts";
 import * as ServerConfig from "../config.ts";
 import { parseNote, serializeNote, type NoteContents } from "./frontmatter.ts";
 import { bodySummary } from "./noteSummary.ts";
+import { sameDecision } from "./noteResultDecision.ts";
 import * as NotesGit from "./NotesGit.ts";
 import * as NoteAttachments from "./NoteAttachments.ts";
 import * as NoteResults from "./NoteResults.ts";
@@ -118,11 +119,13 @@ const make = Effect.gen(function* () {
   const threadNotes = new Map<string, Set<NotePath>>();
   const resultCache = new Map<string, ThreadResult | null>();
   const resultVersions = new Map<string, bigint>();
+  const decisionVersions = new Map<string, bigint>();
   const resultLookups = new Map<string, number>();
   let resultSequence = 0n;
   const releaseResult = (id: string) => {
     if (threadNotes.has(id) || resultLookups.has(id)) return;
     resultVersions.delete(id);
+    decisionVersions.delete(id);
     resultCache.delete(id);
   };
   const threadKey = (threadId: string, host: string | null) => JSON.stringify([host, threadId]);
@@ -327,8 +330,12 @@ const make = Effect.gen(function* () {
       (version) =>
         Effect.gen(function* () {
           const lastResult = observed === undefined ? yield* results.latest(link) : observed;
-          if (resultVersions.get(id) === version) resultCache.set(id, lastResult);
-          return { id, version, lastResult };
+          if (resultVersions.get(id) === version) {
+            // A completion's token changes only when the result's decision does.
+            if (!sameDecision(resultCache.get(id), lastResult)) decisionVersions.set(id, version);
+            resultCache.set(id, lastResult);
+          }
+          return { id, version, decision: decisionVersions.get(id), lastResult };
         }),
       () =>
         Effect.sync(() => {
@@ -838,11 +845,11 @@ const make = Effect.gen(function* () {
       return yield* lock.withPermits(1)(
         rereadOnConflict(
           Effect.gen(function* () {
-            const version = lookup ? lookup.version : resultVersions.get(id);
+            const version = lookup ? lookup.decision : decisionVersions.get(id);
             const isCurrent = () =>
               version !== undefined &&
-              resultVersions.get(id) === version &&
-              resultCache.get(id) === result;
+              decisionVersions.get(id) === version &&
+              sameDecision(resultCache.get(id), result);
             if (!isCurrent()) return false;
             const source = yield* optionalLoad(name);
             const last = source?.contents.threads.at(-1);

@@ -92,7 +92,7 @@ import { fingerprintCapturedFrame } from "./FrameFingerprint.ts";
 import { captureFavicon, safeHttpOrigin, selectFaviconCandidates } from "./FaviconCapture.ts";
 import { DEFAULT_RECORDING_INPUT_OPTIONS, type RecordingInputOptions } from "./RecordingInput.ts";
 import { createPreviewPopupLifecycle, isBlankPopupUrl, popupWebOrigin } from "./PopupLifecycle.ts";
-import { loadUrlAllowingRedirects } from "./loadUrlAllowingRedirects.ts";
+import { loadUrlAllowingRedirects, stopLoad } from "./loadUrlAllowingRedirects.ts";
 import {
   DEFAULT_ZOOM_FACTOR,
   normalizeZoomFactor,
@@ -1886,7 +1886,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       if (wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward();
     });
   const refresh = (tabId: string) => withWebContents("refresh", tabId, (wc) => wc.reload());
-  const stopLoading = (tabId: string) => withWebContents("stopLoading", tabId, (wc) => wc.stop());
+  const stopLoading = (tabId: string) => withWebContents("stopLoading", tabId, stopLoad);
   const hardReload = (tabId: string) =>
     withWebContents("hardReload", tabId, (wc) => wc.reloadIgnoringCache());
 

@@ -1,5 +1,6 @@
 import { EnvironmentId, ProviderInstanceId, RunId, ThreadId } from "@goat/contracts";
 import type { AtomCommandResult } from "@goat/client-runtime/state/runtime";
+import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -92,4 +93,78 @@ it("continues on the resumed thread's model after the composer moves to another 
     manualContinuationOfRunId: "run:interrupted",
     modelSelection: threadAModel,
   });
+});
+
+function ResumeQueueButton(props: {
+  readonly persistSettings: (input: {
+    readonly runtimeMode: string;
+  }) => Promise<AtomCommandResult<void, unknown>>;
+  readonly setThreadError?: (threadId: ThreadId | null, error: string | null) => void;
+}) {
+  const { onResume } = useComposerResume({
+    environmentId: EnvironmentId.make("environment:test"),
+    routeThreadKey: "environment:test:thread:a",
+    currentRouteThreadKeyRef: { current: "environment:test:thread:a" },
+    activeThread: { id: threadA } as never,
+    resumableRunId: null,
+    hasHeldQueuedRuns: true,
+    projection: { runtimeRequests: [] },
+    isSendBusy: false,
+    isConnecting: false,
+    isRevertingCheckpoint: false,
+    threadDetailLoading: false,
+    activeEnvironmentUnavailable: false,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    localCheckoutBranchMismatch: null,
+    composerRef: { current: composerShowing(threadAModel) },
+    persistThreadSettingsForNextTurn: props.persistSettings,
+    clearUsageLimitsFor: () => undefined,
+    scrollToEnd: () => undefined,
+    setThreadError: props.setThreadError ?? (() => undefined),
+  });
+  return (
+    <button type="button" onClick={() => void onResume()}>
+      Resume
+    </button>
+  );
+}
+
+it("regression goat#3656: saves the composer's runtime mode before releasing a held queue", async () => {
+  const { startedTurn } = setup();
+  const persisted: Array<string> = [];
+  await using screen = await render(
+    <ResumeQueueButton
+      persistSettings={async ({ runtimeMode }) => {
+        persisted.push(runtimeMode);
+        return AsyncResult.success(undefined);
+      }}
+    />,
+  );
+
+  await screen.getByRole("button", { name: "Resume" }).click();
+
+  expect(await startedTurn.promise).toEqual({ threadId: threadA });
+  expect(persisted).toEqual(["full-access"]);
+});
+
+it("a refused runtime mode resumes nothing and shows the refusal", async () => {
+  setup();
+  const dispatched: Array<unknown> = [];
+  state.startedTurn = { promise: Promise.resolve(undefined), resolve: (v) => dispatched.push(v) };
+  const shown = deferred<string | null>();
+  const refusal = "This thread has a turn running.";
+  await using screen = await render(
+    <ResumeQueueButton
+      persistSettings={async () => AsyncResult.failure(Cause.fail(new Error(refusal)))}
+      setThreadError={(_threadId, error) => {
+        if (error !== null) shown.resolve(error);
+      }}
+    />,
+  );
+
+  await screen.getByRole("button", { name: "Resume" }).click();
+
+  expect(await shown.promise).toBe(refusal);
+  expect(dispatched).toEqual([]);
 });

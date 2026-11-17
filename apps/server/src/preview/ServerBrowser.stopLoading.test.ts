@@ -205,6 +205,34 @@ it.effect("Stop on a committed page that is still loading reports the page it sh
   ).pipe(Effect.provide(layer)),
 );
 
+it.effect.each([{ operation: "navigate" }, { operation: "reload" }] as const)(
+  "regression: an agent's $operation after a Stop that beat the first request loads",
+  ({ operation }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { viewer, context, status } = yield* openLoadingTab;
+        const broker = yield* Broker.PreviewAutomationBroker;
+        yield* viewer.input({ type: "stopLoading" });
+        expect((yield* status).loading).toBe(false);
+        yield* viewer.input({ type: "releaseControl" });
+        Object.assign(context.page, { reload: async () => {} });
+
+        yield* broker.invoke({
+          scope,
+          tabId: PreviewTabId.make((yield* status).tabId!),
+          operation,
+          input: { url: "https://example.com/pending", readiness: "none" },
+        });
+        context.page.emit(
+          "request",
+          navigationRequest(context.page, "https://example.com/pending"),
+        );
+
+        expect((yield* status).loading).toBe(true);
+      }),
+    ).pipe(Effect.provide(layer)),
+);
+
 it.effect("an agent's Stop ends its tab's load through the same stop a person's Stop uses", () =>
   Effect.scoped(
     Effect.gen(function* () {

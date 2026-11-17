@@ -334,3 +334,6 @@ export const fixture = Effect.gen(function* () {
   };
 });
 export const database = NodeSqliteClient.layer({ filename: ":memory:" });
+
+/** Once every drain has ended, the drain owners and row locks the coordinator still holds. */
+export { heldAfterDrains } from "./RemoteDispatchCoordinator.ts";

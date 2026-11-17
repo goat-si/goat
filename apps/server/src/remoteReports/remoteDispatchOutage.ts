@@ -204,3 +204,23 @@ export const clearUnreachable = Effect.fn("remoteReports.clearUnreachable")(func
       AND host_unavailable_since IS NOT NULL`.pipe(Effect.mapError(storage));
   return false;
 });
+
+/** Failed passes in a row after which a drain tells the origin it lost track; it keeps retrying. */
+export const DRAIN_LOST_TRACK_AFTER = 3;
+
+/** The one notice per failure streak: tracking is not ended, so no result or failure is reported. */
+export const notifyDrainLostTrack = (record: RemoteDispatchRecord, since: string) =>
+  monitorMessage({
+    key: `remote-drain-lost:${record.correlationId}:${since}`,
+    record,
+    text: `GOAT lost track of ${
+      record.task === null
+        ? `remote thread ${record.remoteThreadId} on ${record.host}`
+        : `delegated task ${record.task.taskId} on ${record.host}`
+    }; the remote run may still be running. Reading its reports failed ${DRAIN_LOST_TRACK_AFTER} times in a row since ${since}. GOAT keeps trying and reports here when it gets through; ${
+      record.task === null
+        ? `read the thread with goat_thread_status with host "${record.host}".`
+        : `follow the task with goat_call {path: "task.read", args: {taskId: "${record.task.taskId}"}}.`
+    }`,
+    summary: `${record.host}: lost track of the remote run`,
+  });
