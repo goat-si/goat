@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { HubDeviceMcpResult } from "@goat/contracts";
+import { HubDeviceMcpResult, type HubDeviceMoveInput } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -304,7 +304,7 @@ it.effect(
 );
 
 /** Runs a move as a caller would; `stop` ends that caller the way a cancel or dropped request does. */
-const startMove = (hub: Effect.Success<ReturnType<typeof setup>>, input: typeof move) =>
+const startMove = (hub: Effect.Success<ReturnType<typeof setup>>, input: HubDeviceMoveInput) =>
   Effect.gen(function* () {
     const fiber = yield* hub.membership
       .move(scope, input)
@@ -416,5 +416,36 @@ it.effect("a move whose caller stops while its start is audited leaves the old l
         .filter(({ action, target }) => action === "hub.move" && target === "pen-mini")
         .map(({ outcome }) => outcome),
     ).toEqual(["started", "failed"]);
+  }),
+);
+
+it.effect("an approved move whose caller stops while its approval is checked starts nothing", () =>
+  Effect.gen(function* () {
+    const checking = yield* Deferred.make<void>();
+    const gate = yield* Deferred.make<void>();
+    // Holds the approval check's read of the stored binding until the caller has gone.
+    const holdCheck: Statement.Transformer = (statement) =>
+      statement.compile()[0].includes("FROM approval_bindings")
+        ? Deferred.succeed(checking, undefined).pipe(
+            Effect.andThen(Deferred.await(gate)),
+            Effect.as(statement),
+          )
+        : Effect.succeed(statement);
+    const hub = yield* setup(asking);
+    const asked = yield* hub.membership.move(scope, move);
+    yield* hub.approve(asked.decisionId!);
+    const moving = yield* startMove(hub, { ...move, decisionId: asked.decisionId! }).pipe(
+      Effect.provideService(Statement.CurrentTransformer, holdCheck),
+    );
+    yield* Deferred.await(checking);
+    yield* moving.stop;
+    yield* Deferred.succeed(gate, undefined);
+    yield* afterMoves(hub);
+    expect(hub.calls.filter((call) => /revoke|disconnect|link add/.test(call))).toEqual([]);
+    expect(
+      (yield* hub.audit)
+        .filter(({ action, target }) => action === "hub.move" && target === "pen-mini")
+        .map(({ outcome }) => outcome),
+    ).toEqual(["needs_decision"]);
   }),
 );

@@ -396,7 +396,7 @@ it.effect("a call cut after the desktop saved the connection still registers it 
     });
     const adding = yield* f.call().pipe(Effect.forkChild({ startImmediately: true }));
     yield* Deferred.await(registering);
-    // The cut waits for the registration, which cannot be interrupted once the desktop answered.
+    // Once the desktop answered, the cut waits for the registration instead of interrupting it.
     const cutting = yield* Fiber.interrupt(adding).pipe(
       Effect.forkChild({ startImmediately: true }),
     );
@@ -410,15 +410,22 @@ it.effect(
   "a hub registration still waiting after 30 seconds ends unsaved instead of holding the add",
   () =>
     Effect.gen(function* () {
+      const registering = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
-      // A registration that cannot be interrupted still ends with the test, whatever it asserted.
+      // Releases a registration the 30-second limit failed to end, so a failing test still ends.
       yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
-      const f = yield* fixture({ hubWait: Deferred.await(release) });
+      const f = yield* fixture({
+        hubWait: Deferred.succeed(registering, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+        ),
+      });
       const done = yield* Deferred.make<unknown>();
       yield* f.call().pipe(
         Effect.flatMap((result) => Deferred.succeed(done, result)),
         Effect.forkChild({ startImmediately: true }),
       );
+      // The registration and its 30-second limit have started.
+      yield* Deferred.await(registering);
       yield* TestClock.adjust(Duration.seconds(29));
       expect(yield* Deferred.isDone(done)).toBe(false);
       yield* TestClock.adjust(Duration.seconds(1));
