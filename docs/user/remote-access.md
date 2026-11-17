@@ -683,10 +683,12 @@ is, for example "last state 5 min ago". It reconnects on its own when the machin
 Stopped cloud machines are never started by opening them.
 
 If a hub stops accepting this device, for example because its pairing was revoked, the machines
-you reach through it stay in your list and show that they were not accepted. Their threads,
-drafts and unsent messages are kept. Pairing with the hub again retries them, and each one
-reconnects once it also accepts this device. If you no longer need one, remove the machine, or
-remove the hub, which also removes the machines you reach only through it.
+you reach through it stay in your list and show that they were not accepted. Their threads and
+saved drafts are kept, and on the phone so are messages waiting to send. In a browser or the
+desktop app, GOAT Bot messages still waiting to send are cleared when the page reloads, as
+before. Pairing with the hub again retries the machines, and each one reconnects once it also
+accepts this device. If you no longer need one, remove the machine, or remove the hub, which
+also removes the machines you reach only through it.
 
 When GOAT Connect becomes available, **Settings → Hub → Allow GOAT Connect devices to
 reach hub devices** (or **Settings → Hub devices** on mobile) gives standing consent to every
