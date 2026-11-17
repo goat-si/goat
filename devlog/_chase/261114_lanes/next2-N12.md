@@ -151,10 +151,10 @@ Setup: one `vp run dev` in this worktree (isolated `.goat`, ports 7095 web and 1
 
 ## Still open
 
-- N12c at e79c46a7de: the coordinator read the diff and dispatched run 44123436045 (lane=quick, check and typecheck; 16:16:28 item 2); it merges n12c by fast-forward when that run is green. Nothing more on n12b.
-- P1 rows 1 to 4 above, with row 3 re-checked on n12c (Stop on a desktop-rendered tab leaves what had loaded, no error toast, the address kept); issue #3683.
+- Lane N12 is DONE (coordinator 16:30:54): n12c e79c46a7de merged into chase/t3-261114-next2 at d12958d037 on its green lane=quick run 44123436045; lane N12 merged at 7023eb1ada, N12b at 3a254fa1a5. Nothing more on n12b or n12c.
+- P1's second sitting: rows 1 to 4 above, with row 3 (desktop Stop, now with n12c) re-walked; issue #3683.
 
-NOT RUN: the desktop Stop check on a real desktop build (P1 row 3, now with n12c); the full suites on e79c46a7de (lane=quick only under the 16:16:28 CI rule; the full suites run on the integration head); the C23 and C25 device checks and goat_preview_stop from a live agent turn (P1 rows 1, 2 and 4); a test of the hard reload clearing the marker (no milestone to await).
+NOT RUN: the desktop Stop check on a real desktop build (P1 row 3, second sitting); the C23 and C25 device checks and goat_preview_stop from a live agent turn (P1 rows 1, 2 and 4); a test of the hard reload clearing the marker (no milestone to await).
 
 
 ## Coordinator answers (verbatim)
@@ -230,4 +230,12 @@ NOT RUN: the desktop Stop check on a real desktop build (P1 row 3, now with n12c
 > 2. N12c at e79c46a7de: I read the production diff (stopLoad records the current load number, stops, and that load's ERR_ABORTED settles as success; a newer navigate or a blocked unload still fails). I dispatched ONE run with lane=quick (check and typecheck): https://github.com/goat-si/goat/actions/runs/44123436045. With N12's local check:changed (exit 0, 7 test files, 111 tests; its report) that is the gate under the CI rule; I merge it by fast-forward when that run is green. N12 is done after that; nothing more on n12b.
 >
 > 3. THE CI RULE, refined: a follow-up branch gets lane=quick from me (two jobs), never lane=all, while the pool is starved; its tests are the lane's local check:changed (or the beside files under the 12:07:55 rule) plus the reviewer's own runs; the full suites run on the integration head. Accordingly I CANCELLED the lane-all runs 44115576485 (SF1 410daab8e6: check, typecheck, build, mobile, desktop, contracts, client-runtime, shared, server 2/4 were green; test-changed had not started) and 44115010294 (N4c 4fa20e693f: check, typecheck, build, test-changed, desktop, mobile, contracts, client-runtime, shared were green). Neither lane re-dispatches. N14's lane-all run 44118636205 stays: that lane is wide and its web suite matters.
+
+> Coordinator to lane coordinator (2026-11-17 16:30:54 UTC). Three things happened; relay each part verbatim to its lane.
+>
+> A. #3682 IS MERGED to dev: squash d265257a044927ed15ff663ca96364a2413a8261 at 16:25:49Z, on goat-ci-result success at 52f3f8c6bf (node scripts/merge-pr.ts; read by me). goat#3674 is closed. THE ONE DEV MERGE IS DONE: chase/t3-261114-next2 = d12958d037c626f8cd4a5692b52b34ad5137cecf, built as: b574681d26 (SF1 in) -> 8c2813a7c4 (dev merged; six conflicts resolved by me: workspaceLease.ts and its two tests = dev's, ThreadWorkspaceService.ts = the branch's, setupTerminal.test.ts both cases, project-settings.md both sentences; on the merged tree apps/server tsc exit 0 and the nine terminal, lease and restore test files 132 passed) -> d12958d037 (N12c e79c46a7de merged on its green lane=quick run 44123436045). #3660 is MERGEABLE with dev again and its pull request run starts by itself. Tell every lane the new head.
+>  - T1: go on T1b now, as ordered at 15:49:39: one issue, a branch from dev d265257a04, a DRAFT PR to dev; it merges after #3660. P3-4's reachability test first.
+>  - N12: done. The desktop Stop row is re-walked in the second sitting.
+>  - SF1: cut sf1b from d12958d037 (not b574681d26).
+>  - N14: after both verdicts, merge d12958d037 once (code-budgets.json; useComposerSend.ts's import block where SF1 dropped the UnifiedSettings import and N14 dropped DraftSshDestination: both lines go; budgets to the merged real lengths: the SF1 reviewer measured useComposerSend.ts 1635 and ThreadFeed.tsx 3344).
 
