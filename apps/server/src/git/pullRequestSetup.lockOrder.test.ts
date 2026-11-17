@@ -24,10 +24,14 @@ const threadId = ThreadId.make("thread-pull-request");
 const projectId = ProjectId.make("project-pull-request");
 
 /**
- * A pull request's setup in a reused worktree that another thread's work holds, for a thread
- * bound as given; the setup's open waits for the folder, then runs again.
+ * A setup in a worktree that another thread's work holds, for a thread bound as given: a pull
+ * request's, or a restore's fresh-shell run, whose restart comes first. Its terminal waits, then
+ * runs again.
  */
-const pullRequestSetupWhileHeld = (bound: string | null) =>
+const pullRequestSetupWhileHeld = (
+  bound: string | null,
+  start: "pull request" | "fresh shell" = "pull request",
+) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const { join } = yield* Path.Path;
@@ -65,36 +69,51 @@ const pullRequestSetupWhileHeld = (bound: string | null) =>
       getById: () => Effect.succeedSome(project),
       getByWorkspaceRoot: () => Effect.succeedSome(project),
     } as unknown as ProjectService.ProjectService["Service"]);
-    const setup = yield* makePullRequestSetup.pipe(
-      Effect.provide(
-        Layer.effect(
-          ProjectSetupScriptRunner.ProjectSetupScriptRunner,
-          ProjectSetupScriptRunner.make,
-        ).pipe(
-          Layer.provide(
-            Layer.mergeAll(
-              projects,
-              // A shell that shows its prompt once open.
-              Layer.succeed(TerminalManager.TerminalManager, {
-                ...terminals,
-                open: (input) =>
-                  terminals
-                    .open(input)
-                    .pipe(
-                      Effect.tap(() =>
-                        Effect.sync(() => pty.processes.at(-1)?.emitData("$ \x1b[?2004h")),
-                      ),
-                    ),
-              }),
-              Layer.mock(ProjectionStore.ProjectionStoreV2)({
-                getThreadShell: () => Effect.succeed(null),
-              }),
-              GoatProjectFileLoader.layer,
-            ),
-          ),
+    const runner = Layer.effect(
+      ProjectSetupScriptRunner.ProjectSetupScriptRunner,
+      ProjectSetupScriptRunner.make,
+    ).pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          projects,
+          // A shell that shows its prompt once open.
+          Layer.succeed(TerminalManager.TerminalManager, {
+            ...terminals,
+            open: (input) =>
+              terminals
+                .open(input)
+                .pipe(
+                  Effect.tap(() =>
+                    Effect.sync(() => pty.processes.at(-1)?.emitData("$ \x1b[?2004h")),
+                  ),
+                ),
+          }),
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getThreadShell: () => Effect.succeed(null),
+          }),
+          GoatProjectFileLoader.layer,
         ),
       ),
     );
+    const setup =
+      start === "pull request"
+        ? (yield* makePullRequestSetup.pipe(Effect.provide(runner)))(
+            { cwd: repo, reference: "1", mode: "worktree", threadId },
+            worktreePath,
+          )
+        : ProjectSetupScriptRunner.ProjectSetupScriptRunner.pipe(
+            Effect.flatMap((scripts) =>
+              scripts.runForThread({
+                threadId,
+                projectCwd: repo,
+                worktreePath,
+                trigger: "setup",
+                // As a restore asks, for a folder that may be new at the old path.
+                freshShell: true,
+              }),
+            ),
+            Effect.provide(runner),
+          );
     // Another thread's work holds the reused worktree when the setup opens its terminal.
     const held = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
@@ -103,10 +122,7 @@ const pullRequestSetupWhileHeld = (bound: string | null) =>
       Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release))),
     ).pipe(Effect.forkChild);
     yield* Deferred.await(held);
-    const ran = yield* setup(
-      { cwd: repo, reference: "1", mode: "worktree", threadId },
-      worktreePath,
-    ).pipe(Effect.forkChild({ startImmediately: true }));
+    const ran = yield* setup.pipe(Effect.forkChild({ startImmediately: true }));
     return {
       pty,
       terminals,
@@ -167,5 +183,22 @@ it.layer(
         [worktreePath],
       );
     }),
+  );
+
+  it.effect(
+    "a restore's fresh-shell restart that waited runs while the thread is still bound elsewhere",
+    () =>
+      Effect.gen(function* () {
+        const { pty, worktreePath, finish } = yield* pullRequestSetupWhileHeld(
+          "/elsewhere",
+          "fresh shell",
+        );
+        yield* finish;
+        // The restart's shell, which the setup's open then reuses.
+        assert.deepEqual(
+          pty.spawnInputs.map((input) => input.cwd),
+          [worktreePath],
+        );
+      }),
   );
 });
