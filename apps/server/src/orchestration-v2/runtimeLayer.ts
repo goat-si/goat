@@ -316,6 +316,9 @@ export const layerProjectSetupScriptRunner = ProjectSetupScriptRunner.layer.pipe
 const layerManagedProjectFoldersProvided = ManagedProjectFolders.layer.pipe(
   Layer.provide(layerProjectService),
 );
+const layerPreparationClaims = PreparationClaims.layer.pipe(
+  Layer.provide(ThreadCommandExecutor.layer),
+);
 const layerThreadLaunchProvided = ThreadLaunchService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -327,10 +330,19 @@ const layerThreadLaunchProvided = ThreadLaunchService.layer.pipe(
       layerCommandReceiptStoreProvided,
       layerEventSink,
       IdAllocator.layer,
-      PreparationClaims.layer,
+      layerPreparationClaims,
     ),
   ),
 );
+/**
+ * The launch service and the orphan check over one claims value, whose marks take the lock the
+ * Orchestrator commits under. Takes the check so a test can step it on this same wiring.
+ */
+export const layerPreparation = <E, R>(check: Layer.Layer<never, E, R>) =>
+  Layer.merge(
+    layerThreadLaunchProvided,
+    check.pipe(Layer.provide(Layer.merge(layerThreadManagementProvided, layerPreparationClaims))),
+  );
 const layerThreadLifecycleProvided = ThreadLifecycleService.layer.pipe(
   Layer.provide(layerThreadManagementProvided),
 );
@@ -463,11 +475,7 @@ export const layerProduction = Layer.mergeAll(
     ),
   ),
   layerManagedProjectFoldersProvided,
-  layerThreadLaunchProvided,
-  // The same claims layer value as the launch service's, so both hold one set of claims.
-  PreparationOrphans.layer.pipe(
-    Layer.provide(Layer.merge(layerThreadManagementProvided, PreparationClaims.layer)),
-  ),
+  layerPreparation(PreparationOrphans.layer),
   layerThreadForkWorkspaceProvided,
   layerThreadLifecycleProvided,
   layerScheduledTaskProvided,

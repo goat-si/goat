@@ -756,7 +756,7 @@ export function makeHarness(
     layerThreads,
     CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase)),
     IdAllocator.layer,
-    PreparationClaims.layer,
+    PreparationClaims.layer.pipe(Layer.provide(Layer.merge(layerOrchestrator, layerDatabase))),
     WorktreeSetupTracker.layer,
     Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
     Layer.mock(TerminalManager.TerminalManager)({ close: () => Effect.void }),

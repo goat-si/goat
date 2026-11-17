@@ -76,7 +76,7 @@ const errorMessage = (threadId: ThreadId, runId: RunId) =>
   });
 
 it.effect(
-  "the check's status list is the recovery index's condition, so its read searches that index",
+  "the check's read searches the recovery index for suspects and the event index for each generation",
   () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -85,6 +85,13 @@ it.effect(
       `;
       const statuses = RECOVERY_INDEX_STATUSES.map((status) => `'${status}'`).join(", ");
       assert.include(String(index?.sql), `WHERE status IN (${statuses})`);
+      const [events] = yield* sql`
+        SELECT sql FROM sqlite_master WHERE name = 'idx_orchestration_events_agent_stream_sequence'
+      `;
+      assert.include(
+        String(events?.sql),
+        "WHERE application_event_version = 2 AND aggregate_kind = 'thread'",
+      );
       const plan = yield* sql.unsafe<{ readonly detail: string }>(
         `EXPLAIN QUERY PLAN ${SUSPECTS_QUERY}`,
       );
@@ -96,7 +103,7 @@ it.effect(
           "USE TEMP B-TREE FOR ORDER BY",
           "SCAN oldest",
           "CORRELATED SCALAR SUBQUERY 2",
-          "SEARCH item USING INDEX orchestration_v2_projection_turn_items_run_ordinal_idx (run_id=?)",
+          "SEARCH event USING INDEX idx_orchestration_events_agent_stream_sequence (stream_id=? AND sequence<?)",
         ],
       );
     }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
@@ -380,7 +387,7 @@ it.effect(
 );
 
 it.effect(
-  "a Retry made while the check still holds the run's claim after failing it waits for the claim and prepares the run",
+  "a Retry made right after the check's fail commits, while the check is still finishing, prepares the run",
   () =>
     Effect.gen(function* () {
       const probe = yield* makeOrphanProbe;
@@ -394,26 +401,25 @@ it.effect(
         assert.equal(yield* probe.pass, "read");
         yield* held.committed;
 
-        // Returns once the Retry's preparation is in line for the claim the check still holds.
+        // The check holds no claim, so the Retry prepares the run before the check finishes.
         yield* launches.retryPreparation({
           commandId: CommandId.make("command:retry-under-check:retry"),
           threadId,
           runId,
         });
-        yield* held.release;
         assert.deepEqual(yield* claims.outcome, { runId, ran: true });
         yield* released(threadId, "command:retry-under-check:retry");
+        yield* held.release;
       }).pipe(Effect.provide(withCheck(harness, probe)));
     }),
 );
 
 it.effect(
-  "a run failed and retried between the check's read and its claim is not failed on that read, and gets a full grace period",
+  "a run failed and retried between the check's read and its fail is not failed on that read, and gets a full grace period",
   () =>
     Effect.gen(function* () {
       const probe = yield* makeOrphanProbe;
-      const claims = yield* makeClaimProbe;
-      const harness = makeHarness({ claims: claims.layer });
+      const harness = makeHarness();
       yield* Effect.gen(function* () {
         const threads = yield* ThreadManagement.ThreadManagementService;
         const { threadId, runId } = yield* orphanRun("changed-under-read");
@@ -421,7 +427,7 @@ it.effect(
           Effect.map((status) => assert.equal(status, "preparing")),
         );
         yield* passesBeforeGrace(probe, preparing);
-        // The fourth pass reads the run as due, then waits before claiming it.
+        // The fourth pass reads the run as due, then waits before failing it.
         const goOn = yield* probe.holdPass;
         // Meanwhile its preparation fails and a Retry, cut before its own preparation, brings it back.
         yield* threads.dispatch({
@@ -438,7 +444,7 @@ it.effect(
           runId,
         });
         yield* goOn;
-        yield* claims.tried;
+        yield* probe.failAttempted;
         assert.equal(yield* probe.failCount, 0);
         yield* preparing;
 
@@ -456,11 +462,11 @@ it.effect(
     Effect.gen(function* () {
       const probe = yield* makeOrphanProbe;
       const hold = yield* makeLaunchHold;
-      const claims = yield* makeClaimProbe;
-      const harness = makeHarness({ claims: claims.layer });
+      const harness = makeHarness();
       yield* Effect.gen(function* () {
         const launches = yield* ThreadLaunch.ThreadLaunchService;
         const threads = yield* ThreadManagement.ThreadManagementService;
+        const claims = yield* PreparationClaims;
         const { input, threadId, runId } = yield* orphanRun("stopped-service");
         const serviceScope = yield* Scope.make();
         const stopping = yield* Layer.buildWithScope(
@@ -482,14 +488,11 @@ it.effect(
         yield* Scope.close(serviceScope, Exit.void);
         yield* hold.resume;
         yield* Fiber.join(launch);
+        assert.isFalse(yield* claims.isOwned(threadId, runId));
 
         yield* passesBeforeGrace(probe, Effect.void);
         assert.equal(yield* probe.pass, "read");
-        const outcome = yield* Effect.raceFirst(
-          probe.failed.pipe(Effect.as("failed")),
-          claims.refused.pipe(Effect.as("claim still held")),
-        );
-        assert.equal(outcome, "failed");
+        assert.equal(yield* probe.failed, runId);
         yield* launches.retryPreparation({
           commandId: CommandId.make("command:stopped-service:retry"),
           threadId,

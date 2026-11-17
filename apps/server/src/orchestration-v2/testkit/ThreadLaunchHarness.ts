@@ -35,6 +35,8 @@ import * as EventSink from "../EventSink.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
 import * as PreparationClaims from "../goat/PreparationClaims.ts";
+import type * as ThreadCommandExecutor from "../ThreadCommandExecutor.ts";
+import type * as SqlClient from "effect/sql/SqlClient";
 import * as ThreadLaunch from "../ThreadLaunchService.ts";
 import * as ThreadManagement from "../ThreadManagementService.ts";
 import * as ThreadTitleRegeneration from "../ThreadTitleRegenerationService.ts";
@@ -118,7 +120,11 @@ interface HarnessOptions {
   /** The provider CLI gate the launch service is built with; none unless given. */
   readonly providerCliGate?: Layer.Layer<ProviderCliGate.ProviderCliGate>;
   /** The run claims the launch service and the harness's callers share; the real ones unless given. */
-  readonly claims?: Layer.Layer<PreparationClaims.PreparationClaims>;
+  readonly claims?: Layer.Layer<
+    PreparationClaims.PreparationClaims,
+    never,
+    ThreadCommandExecutor.ThreadCommandExecutor | SqlClient.SqlClient
+  >;
   /** Replaces the thread service the launch service alone reads. */
   readonly launchThreads?: (
     real: ThreadManagement.ThreadManagementService["Service"],
@@ -246,7 +252,10 @@ export function makeHarness(options: HarnessOptions = {}) {
         }),
   );
   const prepared = options.prepared;
-  const layerClaims = options.claims ?? PreparationClaims.layer;
+  // Over the Orchestrator's own lock and database, as in production.
+  const layerClaims = (options.claims ?? PreparationClaims.layer).pipe(
+    Layer.provide(Layer.merge(layerOrchestrator, layerDatabase)),
+  );
   const layerLaunch = ThreadLaunch.layer.pipe(
     Layer.provide(
       Layer.mergeAll(

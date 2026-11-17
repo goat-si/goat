@@ -14,12 +14,13 @@ export interface ClaimOutcome {
   readonly ran: boolean;
 }
 
-/** The real claims, reporting what preparations and the orphan check did with them. */
+/** The real claims, reporting what preparations did with them. */
 export const makeClaimProbe = Effect.gen(function* () {
   const attempts = yield* Queue.unbounded<RunId>();
   const outcomes = yield* Queue.unbounded<ClaimOutcome>();
-  const refusals = yield* Queue.unbounded<RunId>();
-  const tries = yield* Queue.unbounded<RunId>();
+  // When set, the next preparation to ask for a claim waits here before it joins the line.
+  const lineGate = yield* Ref.make<Deferred.Deferred<void> | undefined>(undefined);
+  const atLine = yield* Queue.unbounded<void>();
   return {
     layer: Layer.effect(
       PreparationClaims,
@@ -31,6 +32,11 @@ export const makeClaimProbe = Effect.gen(function* () {
             Effect.gen(function* () {
               const ran = yield* Ref.make(false);
               yield* Queue.offer(attempts, runId);
+              const gate = yield* Ref.getAndSet(lineGate, undefined);
+              if (gate !== undefined) {
+                yield* Queue.offer(atLine, undefined);
+                yield* Deferred.await(gate);
+              }
               yield* real
                 .whileClaimed(runId, Effect.andThen(Ref.set(ran, true), body), queued)
                 .pipe(
@@ -41,17 +47,6 @@ export const makeClaimProbe = Effect.gen(function* () {
                   ),
                 );
             }),
-          tryClaim: (runId, body) =>
-            real
-              .tryClaim(runId, body)
-              .pipe(
-                Effect.tap((claimed) =>
-                  Effect.andThen(
-                    claimed ? Effect.void : Queue.offer(refusals, runId),
-                    Queue.offer(tries, runId),
-                  ),
-                ),
-              ),
         });
       }),
     ).pipe(Layer.provide(layerClaims)),
@@ -59,10 +54,19 @@ export const makeClaimProbe = Effect.gen(function* () {
     attempted: Queue.take(attempts),
     /** A preparation's claim ended, and whether it ran. */
     outcome: Queue.take(outcomes),
-    /** The orphan check found the run's claim held. */
-    refused: Queue.take(refusals),
-    /** The orphan check's attempt on a run has ended, its work under the claim included. */
-    tried: Queue.take(tries),
+    /**
+     * Holds the next preparation that asks for a claim before it joins the line, so its caller
+     * holds only its pending mark. The first effect returned waits until it is held; the second
+     * lets it go on.
+     */
+    holdNextAtLine: Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      yield* Ref.set(lineGate, gate);
+      return {
+        held: Queue.take(atLine),
+        release: Deferred.succeed(gate, undefined).pipe(Effect.asVoid),
+      };
+    }),
   };
 });
 

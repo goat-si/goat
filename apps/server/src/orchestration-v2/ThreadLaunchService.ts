@@ -80,6 +80,7 @@ import {
 import { confirmLaunchStep, type LaunchConfirm } from "./goat/LaunchConfirm.ts";
 import { classifyPreparationFailure } from "./goat/PreparationFailure.ts";
 import { PreparationClaims, forkClaimed } from "./goat/PreparationClaims.ts";
+import { failOwnedRun } from "./goat/PreparationStretch.ts";
 import { makeLaunchCommandSlots } from "./goat/launchCommandSlots.ts";
 import {
   preparationRunStopped,
@@ -957,44 +958,15 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const failPreparedRun = (
-    input: Pick<PreparationInput, "commandId">,
-    threadId: ThreadId,
-    runId: RunId | null,
-    cause: unknown,
-    log: PreparationLog = [],
-  ) =>
-    runId === null
-      ? Effect.logWarning("Thread workspace preparation failed", {
-          commandId: input.commandId,
-          threadId,
-          cause,
-        })
-      : threads
-          .dispatch({
-            type: "prepared-run.fail",
-            commandId: CommandId.make(`${input.commandId}:fail`),
-            threadId,
-            runId,
-            failure: withPreparationLog(
-              makeProviderFailure({
-                cause,
-                message: failureDetail(cause),
-                ...preparationFailureClass(cause),
-              }),
-              log,
-            ),
-          })
-          .pipe(
-            Effect.catchCause((persistCause) =>
-              Effect.logWarning("Failed to persist thread workspace preparation failure", {
-                commandId: input.commandId,
-                threadId,
-                cause,
-                persistCause,
-              }),
-            ),
-          );
+  const preparationFailure = (cause: unknown, log: PreparationLog = []) =>
+    withPreparationLog(
+      makeProviderFailure({
+        cause,
+        message: failureDetail(cause),
+        ...preparationFailureClass(cause),
+      }),
+      log,
+    );
 
   const schedulePreparation = Effect.fn("ThreadLaunchService.schedulePreparation")(function* (
     input: PreparationInput,
@@ -1002,9 +974,12 @@ const make = Effect.gen(function* () {
     runId: RunId | null,
   ) {
     const log = yield* Ref.make<PreparationLog>([]);
+    // Read before the status: a fail is pinned to the stretch this fiber found "preparing".
+    const generation = yield* Ref.make<number | null>(null);
     const preparation = Effect.gen(function* () {
       const prepare = prepareInBackground(input, threadId, runId, log);
       if (runId === null) return yield* prepare;
+      yield* Ref.set(generation, yield* claims.generation(threadId, runId));
       const afterSequence = yield* threads.getThreadEventSequence(threadId);
       const current = yield* threads.getThreadRecords(threadId, ["runs"], { runIds: [runId] });
       if (current.runs.find((run) => run.id === runId)?.status !== "preparing") return;
@@ -1016,22 +991,26 @@ const make = Effect.gen(function* () {
         watchPreparationInterruption({ threads, threadId, runId, afterSequence }),
       );
     }).pipe(
-      Effect.onError((cause) =>
-        Ref.get(log).pipe(
-          Effect.flatMap((lines) =>
-            failPreparedRun(
-              input,
-              threadId,
-              runId,
-              Cause.hasInterruptsOnly(cause) ? "Worktree setup cancelled." : Cause.squash(cause),
-              lines,
-            ),
-          ),
-        ),
+      Effect.onError((failed) =>
+        Effect.gen(function* () {
+          const cause = Cause.hasInterruptsOnly(failed)
+            ? "Worktree setup cancelled."
+            : Cause.squash(failed);
+          yield* failOwnedRun({
+            threads,
+            claims,
+            commandId: input.commandId,
+            threadId,
+            runId,
+            generation: yield* Ref.get(generation),
+            failure: preparationFailure(cause, yield* Ref.get(log)),
+            cause,
+          });
+        }),
       ),
     );
-    // The claim is the fiber's first step and the read above runs under it, so the orphan check and
-    // another preparation of this run exclude this one.
+    // The claim is the fiber's first step and the reads above run under it, so another preparation
+    // of this run waits for this one, and the orphan check finds the run owned.
     yield* forkClaimed(claims, runId, preparation, {
       scope: preparationScope,
       finally: releasePreparation(input.commandId),
@@ -1399,7 +1378,26 @@ const make = Effect.gen(function* () {
       );
     }).pipe(Effect.exit);
     if (Exit.isFailure(scheduled)) {
-      yield* failPreparedRun(input, input.threadId, input.runId, Cause.squash(scheduled.cause));
+      const cause = Cause.squash(scheduled.cause);
+      // A preparation holding the run owns its outcome.
+      yield* claims.tryClaim(
+        input.runId,
+        Effect.gen(function* () {
+          const generation = yield* claims
+            .generation(input.threadId, input.runId)
+            .pipe(Effect.orElseSucceed(() => null));
+          yield* failOwnedRun({
+            threads,
+            claims,
+            commandId: input.commandId,
+            threadId: input.threadId,
+            runId: input.runId,
+            generation,
+            failure: preparationFailure(cause),
+            cause,
+          });
+        }),
+      );
     }
   });
 

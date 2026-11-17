@@ -85,6 +85,8 @@ export const makeOrphanProbe = Effect.gen(function* () {
   const started = yield* Ref.make(0);
   const reads = yield* Queue.unbounded<PassOutcome>();
   const fails = yield* Queue.unbounded<RunId>();
+  // Offered just before the check sleeps between passes, so a step never races the last pass's tail.
+  const asleep = yield* Queue.unbounded<void>();
   // When set, the next read that succeeds reports itself and waits here before the pass goes on.
   const readGate = yield* Ref.make<Deferred.Deferred<void> | undefined>(undefined);
   const readHeld = yield* Queue.unbounded<void>();
@@ -156,11 +158,13 @@ export const makeOrphanProbe = Effect.gen(function* () {
   return {
     mode,
     /** The check, reading threads and claims from the layer it is given. */
-    layer: PreparationOrphans.layerWith({ suspects: wrapRead, run: (read) => read }).pipe(
-      Layer.provide(layerThreads),
-    ),
+    layer: PreparationOrphans.layerWith({
+      read: wrapRead,
+      wait: (wait) => Queue.offer(asleep, undefined).pipe(Effect.andThen(wait)),
+    }).pipe(Layer.provide(layerThreads)),
     /** Advances one interval; how that pass's read ended, or "none" if no pass ran. */
     pass: Effect.gen(function* () {
+      yield* Queue.take(asleep);
       yield* TestClock.adjust(PreparationOrphans.PASS_INTERVAL);
       if ((yield* Ref.getAndSet(started, 0)) === 0) return "none" as const;
       return yield* Queue.take(reads);
@@ -171,6 +175,7 @@ export const makeOrphanProbe = Effect.gen(function* () {
      */
     holdPass: Effect.gen(function* () {
       const release = yield* gate(readGate);
+      yield* Queue.take(asleep);
       yield* TestClock.adjust(PreparationOrphans.PASS_INTERVAL);
       yield* Queue.take(readHeld);
       return release.pipe(Effect.andThen(Queue.take(reads)), Effect.asVoid);

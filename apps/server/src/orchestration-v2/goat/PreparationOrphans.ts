@@ -16,6 +16,13 @@ import type * as SqlError from "effect/sql/SqlError";
 import * as ThreadManagement from "../ThreadManagementService.ts";
 import { PreparationClaims } from "./PreparationClaims.ts";
 import { PREPARATION_NOT_STARTED_CODE } from "./PreparationFailure.ts";
+import {
+  OWNED,
+  STRETCH_CHANGED,
+  dispatchGuardedFail,
+  generationOf,
+  refusalReason,
+} from "./PreparationStretch.ts";
 
 /**
  * How long a run must stay "preparing" with nothing owning it before the check fails it. Every step
@@ -33,29 +40,18 @@ export const NOT_STARTED_MESSAGE =
 export interface Suspect {
   readonly runId: RunId;
   readonly threadId: ThreadId;
-  /** When any of the run's items last changed; a failure and a Retry rewrite them. */
-  readonly lastItemChange: string | null;
+  /** The run's generation (see PreparationStretch): it names this stretch of "preparing". */
+  readonly generation: number | null;
 }
 
 export type SuspectRead = Effect.Effect<ReadonlyArray<Suspect>, SqlError.SqlError>;
 
-interface RunNow {
-  readonly status: string;
-  readonly lastItemChange: string | null;
-}
-
-export type RunRead = (runId: RunId) => Effect.Effect<Option.Option<RunNow>, SqlError.SqlError>;
-
 /** The condition of orchestration_v2_projection_runs_recovery_idx (RecoveryIndexes.ts). */
 export const RECOVERY_INDEX_STATUSES = ["queued", "preparing", "starting", "running", "waiting"];
 
-const lastItemChange = (runColumn: string) => `
-    SELECT MAX(item.updated_at) FROM orchestration_v2_projection_turn_items AS item
-    WHERE item.run_id = ${runColumn}`;
-
 // The literal status list repeats the partial index's condition: with status = 'preparing' alone,
 // or with bound values, SQLite does not see that the index applies and scans the table. INDEXED BY
-// fails the statement loudly if that index ever changes. Items are looked up for the kept runs only.
+// fails the statement loudly if that index ever changes. Status and generation come from one read.
 export const SUSPECTS_QUERY = `
   WITH oldest AS MATERIALIZED (
     SELECT run_id, thread_id, requested_at FROM orchestration_v2_projection_runs
@@ -65,86 +61,54 @@ export const SUSPECTS_QUERY = `
     ORDER BY requested_at, run_id
     LIMIT ${PASS_LIMIT}
   )
-  SELECT oldest.run_id, oldest.thread_id, (${lastItemChange("oldest.run_id")}) AS last_item_change
+  SELECT oldest.run_id, oldest.thread_id,
+    (${generationOf("oldest.thread_id", String(Number.MAX_SAFE_INTEGER), "oldest.run_id")}) AS generation
   FROM oldest
   ORDER BY oldest.requested_at, oldest.run_id `;
 
-const RUN_QUERY = `
-  SELECT runs.status, (${lastItemChange("runs.run_id")}) AS last_item_change
-  FROM orchestration_v2_projection_runs AS runs
-  WHERE runs.run_id = ?`;
-
-type Row = { readonly last_item_change: string | null };
-
 const readSuspects = (sql: SqlClient.SqlClient): SuspectRead =>
-  sql.unsafe<Row & { readonly run_id: string; readonly thread_id: string }>(SUSPECTS_QUERY).pipe(
-    Effect.map((rows) =>
-      rows.map((row) => ({
-        runId: RunId.make(row.run_id),
-        threadId: ThreadId.make(row.thread_id),
-        lastItemChange: row.last_item_change,
-      })),
-    ),
-  );
-
-const readRun =
-  (sql: SqlClient.SqlClient): RunRead =>
-  (runId) =>
-    sql.unsafe<Row & { readonly status: string }>(RUN_QUERY, [runId]).pipe(
+  sql
+    .unsafe<{
+      readonly run_id: string;
+      readonly thread_id: string;
+      readonly generation: number | null;
+    }>(SUSPECTS_QUERY)
+    .pipe(
       Effect.map((rows) =>
-        Option.map(Option.fromNullishOr(rows[0]), (row) => ({
-          status: row.status,
-          lastItemChange: row.last_item_change,
+        rows.map((row) => ({
+          runId: RunId.make(row.run_id),
+          threadId: ThreadId.make(row.thread_id),
+          generation: row.generation,
         })),
       ),
     );
 
-// A count belongs to one stretch of "preparing": a failure or a Retry changes the key.
-const countKey = (suspect: Suspect) => `${suspect.runId} ${suspect.lastItemChange ?? ""}`;
+// A count belongs to one stretch of "preparing": any run event changes the key.
+const countKey = (suspect: Suspect) => `${suspect.runId} ${suspect.generation ?? ""}`;
 
 /**
- * Fails runs left "preparing" that nothing owns (see PreparationClaims), so Retry works on them: only
- * once passes spanning PREPARATION_GRACE each found the run preparing, unowned and with the same
- * newest item change, and only after re-reading that under the run's claim.
+ * Fails runs left "preparing" that nothing owns (see PreparationClaims), so Retry works on them,
+ * once passes spanning PREPARATION_GRACE each found the run preparing and unowned in the same
+ * stretch. The fail commits only if its commit still finds that stretch and no owner.
  */
 // Untraced: a span here would parent every pass for the server's life; each pass has its own.
-const start = Effect.fnUntraced(function* (input: {
-  readonly suspects: SuspectRead;
-  readonly run: RunRead;
-}) {
+const start = Effect.fnUntraced(function* (suspects: SuspectRead, wait: Effect.Effect<void>) {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const claims = yield* PreparationClaims;
   const failing = yield* Ref.make(false);
   const graceMillis = Duration.toMillis(PREPARATION_GRACE);
   let firstSeen = new Map<string, number>();
 
-  const owned = (suspect: Suspect) =>
-    Effect.zipWith(
-      claims.isPending(suspect.threadId),
-      claims.isHeld(suspect.runId),
-      (pending, held) => pending || held,
-    );
-  const unchanged = (suspect: Suspect) =>
-    input
-      .run(suspect.runId)
-      .pipe(
-        Effect.map(
-          Option.exists(
-            (now) => now.status === "preparing" && now.lastItemChange === suspect.lastItemChange,
-          ),
-        ),
-      );
-
-  // Runs holding the run's claim, so no preparation of it can start meanwhile.
-  const failOrphan = Effect.fn("PreparationOrphans.failOrphan")(function* (suspect: Suspect) {
-    if (!(yield* unchanged(suspect))) return;
-    // A caller or a preparation that asked for the run meanwhile owns it.
-    if ((yield* claims.isPending(suspect.threadId)) || (yield* claims.hasWaiters(suspect.runId)))
-      return;
+  const failOrphan = Effect.fn("PreparationOrphans.failOrphan")(function* (
+    suspect: Suspect,
+    generation: number,
+  ) {
     // A fresh id each time: a run retried and stuck again must not replay the first fail.
     const nonce = yield* randomUuidV4;
-    yield* threads
-      .dispatch({
+    yield* dispatchGuardedFail(
+      threads,
+      claims,
+      {
         type: "prepared-run.fail",
         commandId: CommandId.make(`${suspect.runId}:preparation-not-started:${nonce}`),
         threadId: suspect.threadId,
@@ -155,41 +119,43 @@ const start = Effect.fnUntraced(function* (input: {
           message: NOT_STARTED_MESSAGE,
           retryable: true,
         }),
-      })
-      .pipe(
-        // Refused because the run changed after the read: nothing left to do.
-        Effect.catchCauseIf(
-          (cause) => !Cause.hasInterrupts(cause),
-          (cause) =>
-            unchanged(suspect).pipe(
-              Effect.flatMap((still) => (still ? Effect.failCause(cause) : Effect.void)),
-            ),
-        ),
-      );
+      },
+      { generation, unlessOwned: true },
+    ).pipe(
+      // Refused, or rejected because the run moved on since the read: nothing left to do.
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterrupts(cause),
+        (cause) => {
+          const reason = refusalReason(cause);
+          if (reason === STRETCH_CHANGED || reason === OWNED) return Effect.void;
+          return claims
+            .generation(suspect.threadId, suspect.runId)
+            .pipe(
+              Effect.flatMap((now) => (now === generation ? Effect.failCause(cause) : Effect.void)),
+            );
+        },
+      ),
+    );
   });
 
   const check = Effect.fn("PreparationOrphans.pass")(function* () {
     const now = yield* Clock.currentTimeMillis;
-    const read = yield* input.suspects;
+    const read = yield* suspects;
     const next = new Map<string, number>();
     for (const suspect of read) {
       // A run a caller is about to prepare, or one being prepared, starts no count.
-      if (yield* owned(suspect)) continue;
+      if (yield* claims.isOwned(suspect.threadId, suspect.runId)) continue;
       next.set(countKey(suspect), firstSeen.get(countKey(suspect)) ?? now);
     }
     firstSeen = next;
-    const due = read.filter((suspect) => {
+    const due = read.flatMap((suspect) => {
       const seen = next.get(countKey(suspect));
-      return seen !== undefined && now - seen >= graceMillis;
+      return seen !== undefined && suspect.generation !== null && now - seen >= graceMillis
+        ? [{ suspect, generation: suspect.generation }]
+        : [];
     });
-    const exits = yield* Effect.forEach(due, (suspect) =>
-      Effect.exit(claims.tryClaim(suspect.runId, failOrphan(suspect))).pipe(
-        Effect.tap((exit) =>
-          Exit.isSuccess(exit) && !exit.value
-            ? Effect.sync(() => firstSeen.delete(countKey(suspect)))
-            : Effect.void,
-        ),
-      ),
+    const exits = yield* Effect.forEach(due, ({ suspect, generation }) =>
+      Effect.exit(failOrphan(suspect, generation)),
     );
     // One run's failure stops no other run; it keeps its count and is tried again next pass.
     const failed = exits.find(Exit.isFailure);
@@ -220,7 +186,7 @@ const start = Effect.fnUntraced(function* (input: {
         ),
     ),
   );
-  yield* Effect.sleep(PASS_INTERVAL).pipe(Effect.andThen(pass), Effect.forever, Effect.forkScoped);
+  yield* wait.pipe(Effect.andThen(pass), Effect.forever, Effect.forkScoped);
 });
 
 const failureReason = <E extends { readonly _tag: string }>(cause: Cause.Cause<E>) =>
@@ -229,19 +195,19 @@ const failureReason = <E extends { readonly _tag: string }>(cause: Cause.Cause<E
     () => "defect",
   );
 
-/** The check with its reads wrapped, so a test can observe, hold and fail them. */
+/** The check with its read and its wait between passes wrapped, so a test can step it. */
 export const layerWith = (wrap: {
-  readonly suspects: (read: SuspectRead) => SuspectRead;
-  readonly run: (read: RunRead) => RunRead;
+  readonly read: (read: SuspectRead) => SuspectRead;
+  readonly wait: (wait: Effect.Effect<void>) => Effect.Effect<void>;
 }) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* start({
-        suspects: wrap.suspects(NodeSqliteClient.backgroundReads(readSuspects(sql))),
-        run: wrap.run((runId) => NodeSqliteClient.backgroundReads(readRun(sql)(runId))),
-      });
+      yield* start(
+        wrap.read(NodeSqliteClient.backgroundReads(readSuspects(sql))),
+        wrap.wait(Effect.sleep(PASS_INTERVAL)),
+      );
     }),
   );
 
-export const layer = layerWith({ suspects: (read) => read, run: (read) => read });
+export const layer = layerWith({ read: (read) => read, wait: (wait) => wait });

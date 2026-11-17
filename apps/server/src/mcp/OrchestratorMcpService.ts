@@ -2775,13 +2775,12 @@ const make = Effect.gen(function* () {
         ),
       );
       const runtimeMode = admitted.runtimeMode;
-      // The child's run is about to be prepared from before it commits until its preparation is
-      // scheduled, so the orphan check leaves it alone. A replay has no strategy of its own but
-      // replays the first call's run, which may need preparing.
+      // The child's run may need preparing whatever this call asked for (a replay returns the first
+      // call's run), so the child is marked from before the dispatch until its preparation is
+      // scheduled. A mark on a child with no preparing run hides nothing.
       const parentNodeId = parentRun.rootNodeId;
       const taskId = yield* Effect.gen(function* () {
-        if (workspaceStrategy !== undefined || prepared.isRetryOfAcceptedDelegation)
-          yield* threadLaunch.preparationPending(derive.delegatedTaskThread({ commandId }));
+        yield* threadLaunch.preparationPending(derive.delegatedTaskThread({ commandId }));
         const result = yield* threadManagement
           .dispatch({
             type: "delegated_task.request",
