@@ -255,7 +255,8 @@ merging, or when they have no commits beyond the default branch and their thread
 archived. Set settled retention to 0 days
 to remove a worktree at the next cleanup after settlement. In repositories without remotes,
 unchanged-worktree cleanup compares against the branch checked out in the project workspace;
-if that checkout has a detached HEAD, the worktree is kept. Only GOAT-managed worktrees are eligible.
+if that checkout has a detached HEAD, the worktree is kept. Only worktrees in the layout GOAT
+creates, <code>&lt;worktrees folder&gt;/&lt;repository&gt;/&lt;name&gt;</code>, are eligible, because only those can be restored.
 No rule except deleting the thread removes a worktree whose branch has commits that are not in the
 remote default branch (in repositories without remotes, the project’s branch) unless a merged pull
 request names them, even when its files are unchanged. The cleanup results show how many such
@@ -285,7 +286,9 @@ started from the thread’s branch; the saved snapshot remains available for man
 restore stops before its setup script finishes, the banner says so and offers <strong>Run setup now</strong>;
 the next turn also runs it. When a setup script waits to finish before the agent starts, new
 terminals in that thread open once it finishes. During <strong>Start in a new worktree</strong>, open them again
-once the new worktree is ready.</p>
+once the new worktree is ready. An earlier GOAT version could clean up a worktree at another place
+in the worktrees folder, which GOAT cannot restore in place; its snapshot is in the project
+repository, and the steps below recover it.</p>
 <p>Snapshots live in the project repository under <code>refs/goat/snapshots/&lt;thread&gt;/&lt;time&gt;</code> and are kept
 for 30 days by default; change the retention period in <strong>Settings → Storage</strong>. Snapshots of
 deleted threads are kept for at least 24 hours after they are created, subject to the configured
@@ -308,9 +311,10 @@ working. Current logs, message attachments, and browser profiles are kept.</p>
 <h2 id="disk-usage">Disk usage</h2>
 <p><strong>Settings → Storage → Disk usage</strong> shows each machine’s free space and what GOAT’s own folders
 hold there: worktrees and their <code>node_modules</code> and Rust <code>target/</code> folders, leftover folders of
-removed worktrees, worktrees Git still lists after their folder was deleted, older GOAT runtimes,
-rotated logs past retention, temporary folders, files deleted threads left behind, and the kache
-build cache. <strong>Scan again</strong> measures now; a scan can take a minute on machines with many worktrees.</p>
+removed worktrees, the folders of <strong>No project</strong> threads, worktrees Git still lists after their
+folder was deleted, older GOAT runtimes, rotated logs past retention, temporary folders, files
+deleted threads left behind, and the kache build cache. <strong>Scan again</strong> measures now; a scan can
+take a minute on machines with many worktrees.</p>
 <p><strong>Clean up…</strong> lists every path it would delete with its size. Nothing is deleted until you choose
 <strong>Delete</strong>. It starts with the categories that are safe to clear; tick build outputs, leftover
 folders, temporary folders and deleted threads’ files yourself after checking them. A worktree
@@ -318,9 +322,12 @@ qualifies only when it has no uncommitted changes, every commit is on a remote, 
 any GOAT server on that machine uses it. Build outputs qualify once every thread using their
 worktree is archived, and only when Git ignores them and tracks nothing in them. A deleted thread’s
 files stay while a surviving thread, its archived history, a task or a scheduled prompt still
-mentions that thread. Anything that changed after you reviewed it is skipped. Anything that holds
-work shows as <strong>Needs attention</strong> and is never deleted. Each deletion is written to
-<code>storage-cleanup.ndjson</code> in that machine’s logs folder.</p>
+mentions that thread. A <strong>No project</strong> thread’s folder is listed with the leftover folders and is
+never selected for you: deleting it removes its files for good, and the thread’s next turn or
+terminal starts in an empty folder. It is kept while its thread is working or a terminal is open
+in it. Anything that changed after you reviewed it is skipped. Anything that holds work shows as
+<strong>Needs attention</strong> and is never deleted. Each deletion is written to <code>storage-cleanup.ndjson</code> in
+that machine’s logs folder.</p>
 <p>From a terminal, <code>goat storage --dry-run</code> lists the default selection and <code>goat storage --clean</code>
 asks you to approve exactly that list in the GOAT app; run it again with <code>--approval &lt;id&gt;</code> once
 you have. Agents use the same approval: they can look, and a person decides what goes.</p>
