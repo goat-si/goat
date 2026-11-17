@@ -187,6 +187,12 @@ LANE COORDINATOR, FOR K1: quote your section (and I, III, IV, V) in next3-K1.md.
 
 B. IV IS WIDENED, for every lane (relay it). The standing authorisation also covers, under the same three conditions (upstream's own copy changes the same way; both hunks quoted in the record before the commit; nothing else existing changes): (i) fixture, mock and helper lines in a test file or testkit, where upstream changes its own copy of that fixture or helper the same way; (ii) an existing case whose title and body become upstream's verbatim text of that same case. Still to me, with exact before and after: a deleted test or test file, a moved harness, a test with no upstream counterpart, and any case where GOAT's result differs from upstream's text by more than names. The review matches each one to upstream's hunk; a mismatch is a P2.
 
+## Coordinator, 2026-11-17 21:52:47 UTC, IV (iii), verbatim
+
+IV gains one more mirrored-free case, for every lane (relay it): (iii) a test file that moves with the module it tests, where the commit is a rename and the only changed lines are import paths to the moved module, with TEST_TITLES updated in the same commit when the file is listed there. Titles, bodies, setup and expectations byte for byte; the review checks the rename with git show -M, and anything more is a P2. A harness moved out of a test file into a testkit still comes to me.
+
+Lane coordinator note (21:49:21 UTC): T1c merged; integration head 259883c788bb32d5601023932e07f879bde9af60; draft PR #3700. K1 had already fast-forwarded to c995c5427a, so it merges the integration head once before READY.
+
 ## Build log
 
 - 2026-11-18: git merge --ff-only origin/chase/t3-261114-next3: fast-forward a608046c51 to c995c5427accaaa92dadac50ec756c35f4b92034 (git reported "Fast-forward", files incl. apps/server/src/terminal/terminalProbes.ts and apps/web/src/components/chat/useComposerSend.ssh.ts created).
