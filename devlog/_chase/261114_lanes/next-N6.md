@@ -4,20 +4,20 @@ Branch `chase/t3-261114-n6-orchestrator`, head `5c92dee0bcefdbb6ea29702c0d86f249
 
 ## Rows
 
-| Row | Upstream | Outcome | GOAT commit |
-| --- | --- | --- | --- |
-| move-out | - | verbatim move-out of Orchestrator.ts: dispatchCreatedThreadRecord and dispatchSecretRequestRecord (288 lines) moved to goat/ThreadRecordDispatches.ts | `e725221f0b` |
-| C9 L69 | `86c379d07a` | adapt: delivery-time drop of a stale question wake, and a closed question's inbox item reads withdrawn | `0a694a82ac` |
-| C9 ruling A1 | - | test: a completed task's open question keeps its wake, and answering it continues the child | `2038c54027` |
-| C7 L59 | `94f54a5710` | adapt: a provider change that would end a running turn is refused | `31dc89a44f` |
-| C13 L138 | `8d236998d0` (rest) | adapt: a runtime mode change wakes the queue as an automatic start | `ceeac8f448` |
-| L94 | `daed1dd327` | take, adapted to GOAT names: a follow-up delegated task waits for the subagents its child starts | `4bed19149c` |
-| L95 | `d70bfe6e97` | adapt (ruling a950ff93, PRECHECK; C4): a send to a thread whose missing worktree GOAT cannot restore fails before it is stored | `0a98d70e69` |
-| L96 | `78b654f998` | adapt: Stop clears a finished child's row held by a stale native subagent | `4bf43f8ae1` |
-| goat#3523 | - | GOAT: moving a thread to another worktree is refused while it would end the running turn | `c691726123` |
-| goat#3523 condition | - | clients cannot send the worktree rebind check that lets a rebind pass a running turn (ruling 40507ed6) | `a827168d30` |
-| knip | - | the two refusal texts are module-private | `5c92dee0bc` |
-| budget | - | Orchestrator.ts entry lowered from 13908 to its real length: 13626 on the lane, 13630 on the tree merged with the integration branch (N5 added 4) | `311b91d165`, `c331539877` |
+| Row                 | Upstream            | Outcome                                                                                                                                               | GOAT commit                |
+| ------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| move-out            | -                   | verbatim move-out of Orchestrator.ts: dispatchCreatedThreadRecord and dispatchSecretRequestRecord (288 lines) moved to goat/ThreadRecordDispatches.ts | `e725221f0b`               |
+| C9 L69              | `86c379d07a`        | adapt: delivery-time drop of a stale question wake, and a closed question's inbox item reads withdrawn                                                | `0a694a82ac`               |
+| C9 ruling A1        | -                   | test: a completed task's open question keeps its wake, and answering it continues the child                                                           | `2038c54027`               |
+| C7 L59              | `94f54a5710`        | adapt: a provider change that would end a running turn is refused                                                                                     | `31dc89a44f`               |
+| C13 L138            | `8d236998d0` (rest) | adapt: a runtime mode change wakes the queue as an automatic start                                                                                    | `ceeac8f448`               |
+| L94                 | `daed1dd327`        | take, adapted to GOAT names: a follow-up delegated task waits for the subagents its child starts                                                      | `4bed19149c`               |
+| L95                 | `d70bfe6e97`        | adapt (ruling a950ff93, PRECHECK; C4): a send to a thread whose missing worktree GOAT cannot restore fails before it is stored                        | `0a98d70e69`               |
+| L96                 | `78b654f998`        | adapt: Stop clears a finished child's row held by a stale native subagent                                                                             | `4bf43f8ae1`               |
+| goat#3523           | -                   | GOAT: moving a thread to another worktree is refused while it would end the running turn                                                              | `c691726123`               |
+| goat#3523 condition | -                   | clients cannot send the worktree rebind check that lets a rebind pass a running turn (ruling 40507ed6)                                                | `a827168d30`               |
+| knip                | -                   | the two refusal texts are module-private                                                                                                              | `5c92dee0bc`               |
+| budget              | -                   | Orchestrator.ts entry lowered from 13908 to its real length: 13626 on the lane, 13630 on the tree merged with the integration branch (N5 added 4)     | `311b91d165`, `c331539877` |
 
 ## Decisions
 
@@ -31,12 +31,12 @@ Upstream drops the parent's question wake when the child's task ends in any of f
 
 What a parent agent and a person see, for a child question still open when the task ends:
 
-| Task ends | The parent's wake | The inbox item | task.read | Answering |
-| --- | --- | --- | --- | --- |
-| completed | stays; it starts once the parent is free | stays open | lists the question in pendingRequestIds | accepted; the child starts a follow-up run with the answer |
-| failed | stays; it starts once the parent is free | stays open | lists the question in pendingRequestIds | accepted; the child starts a follow-up run with the answer |
-| cancelled | cancelled, if it had not started; a started one gets a notice that the question was closed | closed: it leaves the open list, and decision.get reads it as withdrawn | does not list it | refused: "This question was closed when its thread stopped or settled at <time>, so it can no longer be answered." |
-| interrupted | as cancelled | as cancelled | as cancelled | as cancelled |
+| Task ends   | The parent's wake                                                                          | The inbox item                                                          | task.read                               | Answering                                                                                                          |
+| ----------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| completed   | stays; it starts once the parent is free                                                   | stays open                                                              | lists the question in pendingRequestIds | accepted; the child starts a follow-up run with the answer                                                         |
+| failed      | stays; it starts once the parent is free                                                   | stays open                                                              | lists the question in pendingRequestIds | accepted; the child starts a follow-up run with the answer                                                         |
+| cancelled   | cancelled, if it had not started; a started one gets a notice that the question was closed | closed: it leaves the open list, and decision.get reads it as withdrawn | does not list it                        | refused: "This question was closed when its thread stopped or settled at <time>, so it can no longer be answered." |
+| interrupted | as cancelled                                                                               | as cancelled                                                            | as cancelled                            | as cancelled                                                                                                       |
 
 The completed row is pinned end to end by QuestionEscalationService.staleWake.test.ts "a completed task's pending question keeps its inbox item and wake, and answering it continues the child" (`2038c54027`); the test fails if completed tasks also close their questions (the wake then reads cancelled). The refusal row is pinned by "a queued wake for a question closed while nobody listened is dropped, and the question refuses an answer" (`0a694a82ac`).
 
@@ -62,7 +62,8 @@ A thread.model-selection.set or provider.switch that would release a live provid
 Refusal surfaces. The text is: "This thread has a turn running, and this provider change would end it. Wait for the turn to finish, or press Stop, then try again."
 
 - Agent: an MCP call that changes the thread's model or provider (ThreadLifecycleService.ts:140, through threadAccess.ts dispatchFailure) fails with code orchestration_error and that text.
-- Client: the web and mobile model and provider pickers dispatch through client-runtime commands.ts:633 (updateThread with modelSelection); the command fails and the client shows the cause (UserFacingErrors replaces the generic dispatch prefix with it).
+- Mobile: the model and provider picker dispatches through client-runtime commands.ts:633 (updateThread with modelSelection); the command fails and the client shows the cause (UserFacingErrors replaces the generic dispatch prefix with it).
+- Web: cannot reach the C7 refusal: a cross-provider pick is staged as a pending context handoff until the next send (apps/web useApplyThreadModelPick.ts:28-33 dispatches only a same-instance pick), and a same-instance pick does not release the session; unchanged from dev. Corrected 2026-11-17 after the integrated pass (row W3 at 0c3d629e2c on pen-macmini: a cross-provider pick during a turn showed "Context handoff pending" and nothing reached the server; a same-instance pick was accepted while the session stayed live; the turn kept running in both cases; captures with the pass B results in next-integrated-pass-results.md). This line first said the web picker dispatches and shows the refusal; the coordinator ruled it a record correction, not a FAIL, since the turn keeps running, which is what C7 protects.
 
 Left out: upstream's OrchestratorProviderSelectionBusyError tag and its threadAccess.ts and ThreadMessageIntake.ts cases. GOAT's adjacent background-work refusal uses OrchestratorDispatchError with a cause, and a new tag would change the error union on the wire. Upstream's 8-case test is carried in a new Orchestrator.activeTurnRefusals.test.ts, because control-reads is at its budget.
 
@@ -86,17 +87,17 @@ How the condition is met. The exemption keys on two fields, and neither can come
 
 Every caller that changes worktreePath, and its side of the rule:
 
-| Caller | Fields | During an active run with a live session |
-| --- | --- | --- |
-| Web branch picker (apps/web/src/components/BranchToolbarBranchSelector.tsx:187), through client-runtime updateThread (packages/client-runtime/src/operations/commands.ts:617) | worktreePath | not refused in practice: the picker detaches the sessions first and then updates, as on dev, so no live session is left to release and the turn ends by that detach. The web guard isWorktreeChangeBlocked is lane N13b's port and is not in this head (corrected after review N6-P3-1). |
-| Mobile Git sheet (apps/mobile/src/state/use-selected-thread-git-actions.ts:327), same command | branch, worktreePath | refused |
-| Any client that sends the update while a session is live (an older web build, a script through the client RPC) | worktreePath | refused |
-| worktree.handoff (apps/server/src/mcp/WorktreeMcpService.ts:299) | worktreePath, expectedWorktreePath: null, optional continuation | proceeds: the agent's own move |
-| ThreadLaunchService workspace binding (ThreadLaunchService.ts:665) | branch, worktreePath | proceeds: it binds the worktree its preparing run waits for, and no provider session is live yet |
-| ThreadLaunchService branch renames (ThreadLaunchService.ts:706, :737) | expectedWorktreePath | proceeds |
-| ThreadLaunchService cancel-workspace (ThreadLaunchService.ts:933) | worktreePath: null | proceeds: a cancelled launch has no live session |
-| ThreadWorkspaceService workspace-fresh (goat/ThreadWorkspaceService.ts:270) | expectedWorktreePath | proceeds |
-| ThreadLifecycleService.updateMetadata (ThreadLifecycleService.ts:112) | worktreePath | has no caller in the server today; it would be refused |
+| Caller                                                                                                                                                                        | Fields                                                          | During an active run with a live session                                                                                                                                                                                                                                                 |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Web branch picker (apps/web/src/components/BranchToolbarBranchSelector.tsx:187), through client-runtime updateThread (packages/client-runtime/src/operations/commands.ts:617) | worktreePath                                                    | not refused in practice: the picker detaches the sessions first and then updates, as on dev, so no live session is left to release and the turn ends by that detach. The web guard isWorktreeChangeBlocked is lane N13b's port and is not in this head (corrected after review N6-P3-1). |
+| Mobile Git sheet (apps/mobile/src/state/use-selected-thread-git-actions.ts:327), same command                                                                                 | branch, worktreePath                                            | refused                                                                                                                                                                                                                                                                                  |
+| Any client that sends the update while a session is live (an older web build, a script through the client RPC)                                                                | worktreePath                                                    | refused                                                                                                                                                                                                                                                                                  |
+| worktree.handoff (apps/server/src/mcp/WorktreeMcpService.ts:299)                                                                                                              | worktreePath, expectedWorktreePath: null, optional continuation | proceeds: the agent's own move                                                                                                                                                                                                                                                           |
+| ThreadLaunchService workspace binding (ThreadLaunchService.ts:665)                                                                                                            | branch, worktreePath                                            | proceeds: it binds the worktree its preparing run waits for, and no provider session is live yet                                                                                                                                                                                         |
+| ThreadLaunchService branch renames (ThreadLaunchService.ts:706, :737)                                                                                                         | expectedWorktreePath                                            | proceeds                                                                                                                                                                                                                                                                                 |
+| ThreadLaunchService cancel-workspace (ThreadLaunchService.ts:933)                                                                                                             | worktreePath: null                                              | proceeds: a cancelled launch has no live session                                                                                                                                                                                                                                         |
+| ThreadWorkspaceService workspace-fresh (goat/ThreadWorkspaceService.ts:270)                                                                                                   | expectedWorktreePath                                            | proceeds                                                                                                                                                                                                                                                                                 |
+| ThreadLifecycleService.updateMetadata (ThreadLifecycleService.ts:112)                                                                                                         | worktreePath                                                    | has no caller in the server today; it would be refused                                                                                                                                                                                                                                   |
 
 A thread.metadata.update that changes worktreePath is refused while the thread has an active run (the web's deriveCanInterruptRunningThread rule) and the change would release a live provider session. The text is: "This thread has a turn running, and moving it to another worktree would end it. Wait for the turn to finish, or press Stop, then try again."
 
@@ -204,13 +205,13 @@ Focused runs on the lane, beyond the gate: the eight suites around provider swit
 
 e74a5be389 merged into the integration branch at 8540be97ac (44d7d60d20 plus e74a5be389; its tree equals the lane head's tree).
 
-| Item | Commit | What |
-| --- | --- | --- |
-| N6-P3-3 | 89f7f6dd83 | only a person's or an agent's send is refused for a worktree GOAT cannot restore; server-originated sends are stored as on dev |
-| N6-P3-2 | c34865fec7 | the precheck leaves cloud threads alone |
-| N6-P3-5 | 1f2bd0b8ff | withdrawn applies to closed user_input questions only; a Cancel on an approval stays answered (before: withdrawn) |
-| budget | 5dbdce50ad | verbatim move of the task-wait status helpers (25 lines) out of OrchestratorMcpService.ts into mcp/taskWaitState.ts, so N6-P3-3's one added line fits the integration branch's 3957 entry; the entry is lowered to the real 3930. This move came after the line it makes room for, because that commit predates the merge that brought the lower entry. |
-| N6-P3-4 | e74a5be389 | the A1 test runs for failed tasks too; made to close failed tasks' questions, it fails ("expected 'resolved' to equal 'pending'") |
+| Item    | Commit     | What                                                                                                                                                                                                                                                                                                                                                    |
+| ------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| N6-P3-3 | 89f7f6dd83 | only a person's or an agent's send is refused for a worktree GOAT cannot restore; server-originated sends are stored as on dev                                                                                                                                                                                                                          |
+| N6-P3-2 | c34865fec7 | the precheck leaves cloud threads alone                                                                                                                                                                                                                                                                                                                 |
+| N6-P3-5 | 1f2bd0b8ff | withdrawn applies to closed user_input questions only; a Cancel on an approval stays answered (before: withdrawn)                                                                                                                                                                                                                                       |
+| budget  | 5dbdce50ad | verbatim move of the task-wait status helpers (25 lines) out of OrchestratorMcpService.ts into mcp/taskWaitState.ts, so N6-P3-3's one added line fits the integration branch's 3957 entry; the entry is lowered to the real 3930. This move came after the line it makes room for, because that commit predates the merge that brought the lower entry. |
+| N6-P3-4 | e74a5be389 | the A1 test runs for failed tasks too; made to close failed tasks' questions, it fails ("expected 'resolved' to equal 'pending'")                                                                                                                                                                                                                       |
 
 N6-P3-4, two record sentences:
 
@@ -223,7 +224,7 @@ Owed to #3519's integrated pass (real clients):
 
 - mobile Git sheet "Create worktree" during a running turn: the toast text, and the folder and branch left behind (goat#3557);
 - a send to a thread whose worktree cannot be restored, from the web composer and the mobile composer: the error text shows, and the draft is kept;
-- a web provider switch mid-turn: the toast, and the picker's state afterwards.
+- a web provider switch mid-turn: the toast, and the picker's state afterwards (corrected 2026-11-17: the web cannot reach the C7 refusal, see C7 above; the pass checks that the turn keeps running and the pick is staged).
 
 Follow-up checks on pen-macbookair, focused only (no heavy job there before #3519's full matrix). Fresh runs on the follow-up tree:
 
