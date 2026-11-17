@@ -2,7 +2,11 @@ import { answerBy, withCaptureLock, withCaptureLockHeld } from "./CaptureLock.ts
 import { chromium, type CDPSession } from "playwright-core";
 import { expect, it, vi } from "vite-plus/test";
 import { SessionControl } from "./SessionControl.ts";
-import { answeredFinalFrame, captureFinalRecordingFrame } from "./ServerBrowserRecordingFinal.ts";
+import {
+  answeredFinalFrame,
+  captureFinalRecordingFrame,
+  encodeFinalFrame,
+} from "./ServerBrowserRecordingFinal.ts";
 
 it("does not capture private tabs or return a frame spanning a private period", async () => {
   const control = new SessionControl("agent");
@@ -131,4 +135,13 @@ it("stops without a final frame when the capture fails", async () => {
   expect(await answeredFinalFrame(Promise.reject(new Error("Page cannot capture a frame")))).toBe(
     undefined,
   );
+});
+
+it("an encoder that fails on the final frame leaves the recording to stop without it", async () => {
+  const encoder = {
+    evaluate: async (): Promise<never> => {
+      throw new Error("VideoEncoder closed");
+    },
+  };
+  await expect(encodeFinalFrame(encoder, "frame", 1280)).resolves.toBeUndefined();
 });

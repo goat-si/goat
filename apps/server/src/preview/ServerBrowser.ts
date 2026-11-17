@@ -91,7 +91,11 @@ import {
 } from "./CaptureLock.ts";
 import { downloadJournal, downloadsOf, journalDownload } from "./downloadJournal.ts";
 import { type EncoderWindow, recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
-import { answeredFinalFrame, captureFinalRecordingFrame } from "./ServerBrowserRecordingFinal.ts";
+import {
+  answeredFinalFrame,
+  captureFinalRecordingFrame,
+  encodeFinalFrame,
+} from "./ServerBrowserRecordingFinal.ts";
 import { awaitRevealedViewer, viewerArrived } from "./ServerBrowserRevealWait.ts";
 import { saveRecording } from "./ServerBrowserRecordingExport.ts";
 import {
@@ -1485,13 +1489,10 @@ const make = Effect.gen(function* () {
           hold(capture);
           const finalFrame = await answeredFinalFrame(capture);
           if (finalFrame !== undefined && !tab.control.isPrivate) {
-            await recording.encoder.evaluate(
-              ([data, width]) =>
-                (globalThis as unknown as EncoderWindow).__goatRecorder.frame(data, width),
-              [
-                finalFrame,
-                tab.page.viewportSize()?.width ?? UNATTACHED_FILL_VIEWPORT.width,
-              ] as const,
+            await encodeFinalFrame(
+              recording.encoder,
+              finalFrame,
+              tab.page.viewportSize()?.width ?? UNATTACHED_FILL_VIEWPORT.width,
             );
           }
         }
