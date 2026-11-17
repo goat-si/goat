@@ -21,6 +21,22 @@ const here = EnvironmentId.make("env-1");
 const main = ThreadId.make("main");
 const side = ThreadId.make("side");
 const other = ThreadId.make("other");
+const fork = ThreadId.make("fork");
+const forkOfFork = ThreadId.make("fork-of-fork");
+const sideOfFork = ThreadId.make("side-of-fork");
+const loopA = ThreadId.make("loop-a");
+const loopB = ThreadId.make("loop-b");
+
+// Side chats and run forks both show their source's history as inherited rows.
+const runFork = (threadId: ThreadId) => ({ type: "run", threadId, runId: "run-1" });
+const threads = new Map<ThreadId, { sideChatOf: ThreadId | null; forkedFrom: unknown }>([
+  [side, { sideChatOf: main, forkedFrom: runFork(main) }],
+  [fork, { sideChatOf: null, forkedFrom: runFork(main) }],
+  [forkOfFork, { sideChatOf: null, forkedFrom: runFork(fork) }],
+  [sideOfFork, { sideChatOf: fork, forkedFrom: runFork(fork) }],
+  [loopA, { sideChatOf: null, forkedFrom: runFork(loopB) }],
+  [loopB, { sideChatOf: null, forkedFrom: runFork(loopA) }],
+]);
 
 const items = new Map<string, Partial<OrchestrationV2TurnItem>>([
   ["main/item-1", { type: "assistant_message", messageId: MessageId.make("m1") }],
@@ -32,8 +48,7 @@ const store = Layer.mock(ProjectionStoreV2)({
   getThread: (threadId) =>
     Effect.succeed({
       id: threadId,
-      sideChatOf: threadId === side ? main : null,
-      forkedFrom: null,
+      ...(threads.get(threadId) ?? { sideChatOf: null, forkedFrom: null }),
     } as never),
   getTurnItem: ({ threadId, itemId }) =>
     Effect.succeed((items.get(`${threadId}/${itemId}`) ?? null) as OrchestrationV2TurnItem | null),
@@ -120,6 +135,33 @@ describe("a reply to a response, checked by the server before an agent reads it"
     Effect.gen(function* () {
       const text = yield* providerText(reply(), side);
       expect(text).toContain('args:{threadId: "main", itemId: "item-1"}');
+    }),
+  );
+
+  it.effect("reads a reply to a response two forks up from the thread that holds it", () =>
+    Effect.gen(function* () {
+      for (const receiving of [forkOfFork, sideOfFork]) {
+        const text = yield* providerText(reply(), receiving);
+        expect(text).toContain('args:{threadId: "main", itemId: "item-1"}');
+      }
+    }),
+  );
+
+  it.effect(
+    "leaves a reply unavailable when it names the receiving thread for an item it only inherits",
+    () =>
+      Effect.gen(function* () {
+        const text = yield* providerText(reply({ threadId: side }), side);
+        expect(text).toContain(UNAVAILABLE);
+        expect(text).not.toContain("thread.read");
+      }),
+  );
+
+  it.effect("stops at a fork loop and leaves a reply to a thread outside it unavailable", () =>
+    Effect.gen(function* () {
+      const text = yield* providerText(reply(), loopA);
+      expect(text).toContain(UNAVAILABLE);
+      expect(text).not.toContain("thread.read");
     }),
   );
 
