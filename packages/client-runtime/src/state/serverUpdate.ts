@@ -1,7 +1,9 @@
 import {
+  type EnvironmentId,
   type ServerLifecycleStreamReadyEvent,
   type ServerSelfUpdateProgressEvent,
   type ServerSelfUpdateResult,
+  WS_METHODS,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -13,7 +15,9 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
-import { isRpcClientError } from "../rpc/client.ts";
+import type * as EnvironmentRegistry from "../connection/registry.ts";
+import { isRpcClientError, subscribeDynamicWithSession } from "../rpc/client.ts";
+import type { RpcSession } from "../rpc/session.ts";
 import { IDLE_SERVER_UPDATE_STATE, type ServerUpdateState } from "./server.ts";
 
 export class ServerUpdateResumeTimeoutError extends Schema.TaggedError<ServerUpdateResumeTimeoutError>()(
@@ -65,13 +69,20 @@ export function matchesServerUpdateReadyEvent(
     : event.payload.updateOutcome?.id === result.updateId;
 }
 
+/**
+ * `acceptedAt` is the `ready.at` of the process that accepted the update. A launcher host
+ * that comes back as any other process ends the wait, so validation can reject a missing
+ * or foreign outcome instead of timing out.
+ */
 export function matchesServerUpdateResumeEvent(
   result: ServerSelfUpdateResult,
   event: ServerLifecycleStreamReadyEvent,
+  acceptedAt?: string,
 ): boolean {
   return (
     (result.method === "desktop-app" && result.desktopUpdateToken !== undefined) ||
-    matchesServerUpdateReadyEvent(result, event)
+    matchesServerUpdateReadyEvent(result, event) ||
+    (result.updateId !== undefined && acceptedAt !== undefined && event.payload.at !== acceptedAt)
   );
 }
 
@@ -80,10 +91,10 @@ export function validateServerUpdateReadyEvent(
   event: ServerLifecycleStreamReadyEvent,
 ): Effect.Effect<void, ServerUpdateTerminalError> {
   if (result.updateId === undefined) return Effect.void;
-  const outcome = event.payload.updateOutcome;
+  const reported = event.payload.updateOutcome;
+  const outcome = reported?.id === result.updateId ? reported : undefined;
   if (
-    outcome?.id === result.updateId &&
-    outcome.status === "committed" &&
+    outcome?.status === "committed" &&
     outcome.targetVersion === result.targetVersion &&
     event.payload.environment.serverVersion === result.targetVersion
   ) {
@@ -275,3 +286,28 @@ export function resolveServerUpdateProgressResult<E>(
   }
   return Effect.fail(new ServerUpdateProgressIncompleteError({ targetVersion }));
 }
+
+// A live host replays its ready on subscribe within a round trip; past this, update without a baseline.
+const SERVER_UPDATE_ACCEPTING_READY_TIMEOUT = Duration.seconds(5);
+
+/** The ready of the process a launcher update is about to reach, with the session it came on. */
+export const readAcceptingReady = (
+  environments: Pick<EnvironmentRegistry.EnvironmentRegistry["Service"], "followStream">,
+  environmentId: EnvironmentId,
+) =>
+  environments
+    .followStream(
+      environmentId,
+      subscribeDynamicWithSession(WS_METHODS.subscribeServerLifecycle, () => Effect.succeed({})),
+    )
+    .pipe(
+      Stream.filter(
+        (entry): entry is readonly [RpcSession, ServerLifecycleStreamReadyEvent] =>
+          entry[1].type === "ready",
+      ),
+      Stream.map(([session, ready]) => ({ session, at: ready.payload.at })),
+      Stream.runHead,
+      Effect.timeoutOption(SERVER_UPDATE_ACCEPTING_READY_TIMEOUT),
+      Effect.map((head) => Option.getOrUndefined(Option.flatten(head))),
+      Effect.orElseSucceed(() => undefined),
+    );

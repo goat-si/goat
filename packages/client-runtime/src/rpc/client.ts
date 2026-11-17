@@ -172,7 +172,7 @@ export type EnvironmentRpcStreamFailure<TTag extends EnvironmentStreamRpcTag> =
     ? E
     : never;
 
-const currentSession = Effect.fn("EnvironmentRpc.currentSession")(function* () {
+export const currentSession = Effect.fn("EnvironmentRpc.currentSession")(function* () {
   const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
   return yield* SubscriptionRef.get(supervisor.session).pipe(
     Effect.flatMap(
@@ -249,15 +249,20 @@ function memoryHistoryDispatchInput(input: MemoryHistoryInput, refusedReverts: b
   return legacyInput;
 }
 
-export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
+export const requestGuarded = <TTag extends EnvironmentUnaryRpcTag>(
+  tag: TTag,
+  input: EnvironmentRpcInput<TTag>,
+) => Effect.flatMap(currentSession(), (session) => requestInSession(session, tag, input));
+
+/** Sends on the given session, so a caller can pin a request to the process it read. */
+export const requestInSession = Effect.fn("EnvironmentRpc.request")(function* <
   TTag extends EnvironmentUnaryRpcTag,
->(tag: TTag, input: EnvironmentRpcInput<TTag>) {
+>(session: RpcSession, tag: TTag, input: EnvironmentRpcInput<TTag>) {
   const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
   yield* Effect.annotateCurrentSpan({
     "environment.id": supervisor.target.environmentId,
     "rpc.method": tag,
   });
-  const session = yield* currentSession();
   yield* authorizeRequest(tag, input);
   let dispatchInput = input;
   if (tag.startsWith("memory.") || tag.startsWith("siteNotes.")) {
@@ -369,16 +374,23 @@ export function runStreamGuarded<TTag extends EnvironmentStreamCommandRpcTag>(
   EnvironmentSupervisor.EnvironmentSupervisor
 > {
   return Stream.unwrap(
-    authorizeRequest(tag, input).pipe(
-      Effect.andThen(currentSession()),
-      Effect.map((session) => {
-        const method = (session.client as EnvironmentProtocolClient)[tag] as (
-          input: EnvironmentRpcInput<TTag>,
-        ) => Stream.Stream<EnvironmentRpcStreamValue<TTag>, EnvironmentRpcStreamFailure<TTag>>;
-        return method(input);
-      }),
-    ),
-  ).pipe(
+    currentSession().pipe(Effect.map((session) => runStreamInSession(session, tag, input))),
+  );
+}
+
+export function runStreamInSession<TTag extends EnvironmentStreamCommandRpcTag>(
+  session: RpcSession,
+  tag: TTag,
+  input: EnvironmentRpcInput<TTag>,
+): Stream.Stream<
+  EnvironmentRpcStreamValue<TTag>,
+  EnvironmentRpcStreamFailure<TTag> | EnvironmentAuthorizationError,
+  EnvironmentSupervisor.EnvironmentSupervisor
+> {
+  const method = (session.client as EnvironmentProtocolClient)[tag] as (
+    input: EnvironmentRpcInput<TTag>,
+  ) => Stream.Stream<EnvironmentRpcStreamValue<TTag>, EnvironmentRpcStreamFailure<TTag>>;
+  return Stream.unwrap(authorizeRequest(tag, input).pipe(Effect.map(() => method(input)))).pipe(
     Stream.withSpan("EnvironmentRpc.runStream", {
       attributes: { "rpc.method": tag },
     }),

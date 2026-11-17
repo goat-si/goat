@@ -266,6 +266,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/server/src/persistence/Migrations*`, `ProjectionStore.ts`, `apps/server/src/http.ts`, `packages/contracts/src/environment*`
 - 정책: 아래 마이그레이션 규칙.
 
+### `server-update-tests` 서버 업데이트 테스트 파일
+
+- 커밋: #3700 (사이클 261114 next3, K7 행 4)
+- 경로: `packages/client-runtime/src/state/{server.updateResume.test.ts,serverUpdate.ts,server.test.ts}`
+- 정책: upstream `state/server.test.ts`의 서버 업데이트 묶음("accepted server update recovery", "launcher update resume")은 GOAT에서 `serverUpdate.ts` 옆 `server.updateResume.test.ts`에 있다. `server.ts`가 예산에 닿아 업데이트 도우미를 `serverUpdate.ts`로 옮겼고, 테스트가 모듈을 따라갔다. upstream이 이 두 묶음을 고치면 그 hunk를 이 파일에 적용한다. 나머지 `server.test.ts` 변경은 그대로 받는다.
+
 ### `session-ended-check` 쿠키 탭의 끝난 세션 판별
 
 - 커밋: #3592

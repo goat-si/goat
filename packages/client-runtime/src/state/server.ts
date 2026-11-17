@@ -46,9 +46,12 @@ import { createHubMachinesAtoms } from "./hubMachines.ts";
 import { createHubDeviceCommands } from "./hubDeviceCommands.ts";
 import { readUsageSummary } from "./serverUsageSummary.ts";
 import {
+  currentSession,
   request,
   requestGuarded,
+  requestInSession,
   runStream,
+  runStreamInSession,
   subscribe,
   subscribeDynamicWithSession,
   type EnvironmentRpcInput,
@@ -70,6 +73,7 @@ import {
   isLegacyUpdateHandoffLoss,
   matchesServerUpdateResumeEvent,
   nudgeReconnectDuringUpdateRestart,
+  readAcceptingReady,
   resolveServerUpdateProgressResult,
   runDesktopCommitWithReconnectObserver,
   serverUpdateFailureMessage,
@@ -617,6 +621,17 @@ export function createServerEnvironmentAtoms<R, E>(
         const desktopCommitStarting = yield* Deferred.make<void>();
         const desktopReconnectObserverArmed = yield* Deferred.make<void>();
         const desktopReconnected = yield* Deferred.make<void>();
+        let accepting: { readonly session: RpcSession; readonly at: string } | undefined;
+        let acceptedAt: string | undefined;
+        // The baseline only describes the accepting process if the request rides its session,
+        // so the session read here is the one the request is sent on.
+        const acceptingSession = currentSession().pipe(
+          Effect.tap((session) =>
+            Effect.sync(() => {
+              acceptedAt = accepting?.session === session ? accepting.at : undefined;
+            }),
+          ),
+        );
         yield* Deferred.await(desktopCommitStarting).pipe(
           Effect.andThen(
             environmentRegistry.stateChanges(target.environmentId).pipe(
@@ -643,6 +658,11 @@ export function createServerEnvironmentAtoms<R, E>(
               fromVersion,
               targetVersion,
             });
+            // Only launcher updates carry an updateId. Read before the request so a ready from
+            // after it can never pose as the accepting process.
+            if (currentConfig?.environment.capabilities.serverSelfUpdate === "boot-service") {
+              accepting = yield* readAcceptingReady(environmentRegistry, target.environmentId);
+            }
             const supportsProgress =
               currentConfig?.environment.capabilities.serverSelfUpdateProgress === true;
             const updateResult: ServerSelfUpdateResult = supportsProgress
@@ -654,7 +674,17 @@ export function createServerEnvironmentAtoms<R, E>(
                   const streamExit = yield* environmentRegistry
                     .runStream(
                       target.environmentId,
-                      runStream(WS_METHODS.serverUpdateServerWithProgress, target.input),
+                      Stream.unwrap(
+                        acceptingSession.pipe(
+                          Effect.map((session) =>
+                            runStreamInSession(
+                              session,
+                              WS_METHODS.serverUpdateServerWithProgress,
+                              target.input,
+                            ),
+                          ),
+                        ),
+                      ),
                     )
                     .pipe(
                       Stream.runForEach((event) =>
@@ -694,7 +724,14 @@ export function createServerEnvironmentAtoms<R, E>(
               : yield* Effect.gen(function* () {
                   const selfUpdateMethod = currentConfig?.environment.capabilities.serverSelfUpdate;
                   const exit = yield* environmentRegistry
-                    .run(target.environmentId, request(WS_METHODS.serverUpdateServer, target.input))
+                    .run(
+                      target.environmentId,
+                      acceptingSession.pipe(
+                        Effect.flatMap((session) =>
+                          requestInSession(session, WS_METHODS.serverUpdateServer, target.input),
+                        ),
+                      ),
+                    )
                     .pipe(Effect.exit);
                   if (Exit.isSuccess(exit)) {
                     return exit.value;
@@ -760,7 +797,7 @@ export function createServerEnvironmentAtoms<R, E>(
           .pipe(
             Stream.filter(
               (event): event is ServerLifecycleStreamReadyEvent =>
-                event.type === "ready" && matchesServerUpdateResumeEvent(result, event),
+                event.type === "ready" && matchesServerUpdateResumeEvent(result, event, acceptedAt),
             ),
             Stream.runHead,
             Effect.timeoutOption(SERVER_UPDATE_RESUME_TIMEOUT),
