@@ -427,6 +427,51 @@ it.effect.each([
     }).pipe(Effect.provide(layerFor(false))),
 );
 
+it.effect(
+  "a runtime mode change mid-turn is not refused for an idle session the turn does not use",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const { threadId, runId } = yield* seedThread(true);
+      const now = yield* DateTime.now;
+      // A session of the provider the thread switched away from, still live after its background work.
+      yield* projections.apply({
+        id: EventId.make("active-turn:left-over-session"),
+        type: "provider-session.attached",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: ProviderSessionId.make("session:left-over"),
+          driver: adapter.driver,
+          providerInstanceId: otherInstanceId,
+          status: "ready",
+          cwd: "/repo",
+          model: modelSelection.model,
+          capabilities: {
+            ...CodexProviderCapabilitiesV2,
+            sessions: {
+              ...CodexProviderCapabilitiesV2.sessions,
+              supportsRuntimeModeSwitchInSession: false,
+            },
+          },
+          createdAt: now,
+          updatedAt: now,
+          lastError: null,
+        },
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.runtime-mode.set",
+        commandId: CommandId.make("set-runtime-mode-left-over"),
+        threadId,
+        runtimeMode: "approval-required",
+      });
+      assert.equal((yield* projections.getThread(threadId)).runtimeMode, "approval-required");
+      const { runs } = yield* projections.getThreadRecords(threadId, ["runs"]);
+      assert.equal(runs.find((run) => run.id === runId)?.status, "running");
+    }).pipe(Effect.provide(layerFor(false))),
+);
+
 /** The seeded turn completes, as its provider would report it. */
 const completeSeededTurn = (threadId: ThreadId, runId: RunId) =>
   Effect.gen(function* () {

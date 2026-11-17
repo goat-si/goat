@@ -1,3 +1,7 @@
+import type { OrchestrationV2ThreadProjection } from "@goat/contracts";
+
+import { isBlockingRun } from "./OrchestratorRunState.ts";
+
 /** Agent- and client-visible: why a selection change waits for the running turn. */
 const PROVIDER_SELECTION_BUSY =
   "This thread has a turn running, and this provider change would end it. Wait for the turn to finish, or press Stop, then try again.";
@@ -37,6 +41,33 @@ export const isActiveTurnRefusal = (error: {
   readonly _tag: string;
   readonly refusal?: "active_turn" | undefined;
 }): boolean => error._tag === "OrchestratorDispatchError" && error.refusal === "active_turn";
+
+type Projection = Pick<OrchestrationV2ThreadProjection, "providerSessions" | "providerThreads">;
+
+/**
+ * Whether the refused change would end a blocking run. A mode change releases only the sessions
+ * that cannot switch in place, so it waits only for a blocking run on one of those; a run with no
+ * provider thread yet is matched by its provider instance.
+ */
+export function endsTurn(
+  commandType: string,
+  runs: OrchestrationV2ThreadProjection["runs"],
+  released: Projection["providerSessions"],
+  context: Pick<Projection, "providerThreads"> | null,
+): boolean {
+  const blocking = runs.filter(isBlockingRun);
+  if (commandType !== "thread.runtime-mode.set") return blocking.length > 0;
+  return blocking.some((run) => {
+    const sessionId = context?.providerThreads.find(
+      (thread) => thread.id === run.providerThreadId,
+    )?.providerSessionId;
+    return released.some((session) =>
+      sessionId === undefined
+        ? session.providerInstanceId === run.providerInstanceId
+        : session.id === sessionId,
+    );
+  });
+}
 
 function refusalText(input: Parameters<typeof activeTurnRefusal>[0]): string | undefined {
   const { command } = input;

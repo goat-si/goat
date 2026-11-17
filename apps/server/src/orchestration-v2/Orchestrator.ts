@@ -276,7 +276,7 @@ import { makeHumanHandoffs } from "./goat/HumanHandoffs.ts";
 import { makeThreadRecordDispatches } from "./goat/ThreadRecordDispatches.ts";
 import { makeStaleQuestionWakes } from "./goat/StaleQuestionWake.ts";
 import { releaseStopHolds } from "./goat/StopHoldRelease.ts";
-import { activeTurnRefusal, isActiveTurnRefusal } from "./goat/ActiveTurnRefusals.ts";
+import { activeTurnRefusal, endsTurn, isActiveTurnRefusal } from "./goat/ActiveTurnRefusals.ts";
 import {
   makeEndNativeSubagentTrees,
   nativeSubagentRef,
@@ -3078,7 +3078,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
           ),
         );
-      if (runs.some(isBlockingRun))
+      if (endsTurn(command.type, runs, liveSessions, providerContext))
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
