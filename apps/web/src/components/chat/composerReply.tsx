@@ -82,12 +82,16 @@ export function replyHolderIsHeld(
 const readHolderShell = (environmentId: EnvironmentId, threadId: ThreadId) =>
   readThreadShell(scopeThreadRef(environmentId, threadId));
 
+/** The response a composer draft replies to, if any. */
+export const draftReplyTo = (target: ComposerThreadTarget): ResponseContextRecord | null =>
+  useComposerDraftStore.getState().getComposerDraft(target)?.replyTo ?? null;
+
 /** A draft reply whose response's thread the client no longer holds is refused with a sentence. */
 export function refuseReplyWhoseHolderIsGone(
   replyTo: ResponseContextRecord | null,
-  target: ComposerThreadTarget,
+  target: ComposerThreadTarget | null,
 ): boolean {
-  if (!replyTo || typeof target === "string") return false;
+  if (!replyTo || target === null || typeof target === "string") return false;
   const { citation } = replyTo;
   const holderShell = readHolderShell(citation.environmentId, citation.threadId);
   if (replyHolderIsHeld(target.threadId, citation.threadId, holderShell)) return false;
@@ -102,11 +106,14 @@ export function refuseReplyWhoseHolderIsGone(
   return true;
 }
 
-/** The send gate: a draft reply the agent could not read is refused with its sentence. */
+/**
+ * The send gate: a draft reply the agent could not read is refused with its sentence. `target`
+ * is the thread the send goes to, also when the composer edits a queued message there.
+ */
 export function refuseReplyThatGoesUnread(
   replyTo: ResponseContextRecord | null,
   environmentId: EnvironmentId,
-  target: ComposerThreadTarget,
+  target: ComposerThreadTarget | null,
 ): boolean {
   return (
     refuseReplyTheServerDrops(replyTo, environmentId) ||

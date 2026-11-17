@@ -123,7 +123,7 @@ import { sshStartedNotOpenedToast } from "./sshStartedNotOpenedToast";
 import { queueSideChatQuestion, startSideChatOverAnswer } from "../sideChat/sideChatFromComposer";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { sshComposerPorts, type SshComposerPorts } from "./sshComposerPorts";
-import { refuseReplyThatGoesUnread, withReplyReference } from "./composerReply";
+import { draftReplyTo, refuseReplyThatGoesUnread, withReplyReference } from "./composerReply";
 import { vcsEnvironment } from "../../state/vcs";
 import type { ComposerSendInput } from "./useComposerSend.input";
 import {
@@ -704,9 +704,9 @@ export function useComposerSend(input: ComposerSendInput) {
         previewAnnotations: sendContextPreviewAnnotations,
         direct: directAnnotation,
       });
-    const replyTo =
-      useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.replyTo ?? null;
-    if (refuseReplyThatGoesUnread(replyTo, environmentId, composerDraftTarget)) return;
+    const replyTo = draftReplyTo(composerDraftTarget);
+    const sentTo = typeof composerDraftTarget === "string" ? activeThreadRef : composerDraftTarget;
+    if (refuseReplyThatGoesUnread(replyTo, environmentId, sentTo)) return;
     // Include a same-tick annotation reference before React renders its draft.
     const promptForSend = withReplyReference(
       directAnnotation
