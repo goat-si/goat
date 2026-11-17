@@ -41,8 +41,8 @@ export const checkResponseContexts = Effect.fn("ResponseContextCheck.check")(fun
   const readable = new Set<ThreadId>([input.threadId]);
   const walked = new Set<ThreadId>([input.threadId]);
   let thread: StoredThread | null = yield* input.store.getThread(input.threadId);
-  // A side chat is a run fork too. Inherited rows keep the id of the thread that holds them, at any
-  // depth; a deleted thread is never named (thread.read refuses it), what it inherited still is.
+  // A forked side chat is a run fork too. Inherited rows keep the id of the thread that holds them
+  // at any depth; a deleted thread is never named (thread.read refuses it), what it inherited is.
   while (thread !== null) {
     const source = runForkSource(thread);
     if (source === null || walked.has(source)) break;

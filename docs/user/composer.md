@@ -176,8 +176,9 @@ On web and desktop, choose **Reply** in an assistant response's hover actions. T
 shows above the composer until you send or cancel it, and the sent message opens with a card for
 it. The agent gets where the response is and how it starts, and rereads the rest itself, so a
 reply costs the same however long the response was. Reply appears only when the thread's machine
-runs a GOAT version that supports it. Mobile shows a received reply as a chip and has no Reply
-action.
+runs a GOAT version that supports it, and, on a response a fork or side chat shows from the thread
+it started from, only while that thread still exists and is not archived. Mobile shows a received
+reply as a chip and has no Reply action.
 
 ## Recall a sent prompt
 

@@ -87,29 +87,33 @@ const items = new Map<string, Partial<OrchestrationV2TurnItem>>([
   ["orphan/item-1", { type: "assistant_message", messageId: MessageId.make("m1") }],
 ]);
 
-const threadReads: Array<ThreadId> = [];
-const store = Layer.mock(ProjectionStoreV2)({
-  getThread: (threadId) => {
-    threadReads.push(threadId);
-    return threadId === missing
-      ? Effect.fail(new Error("no such thread") as never)
-      : Effect.succeed({
-          id: threadId,
-          deletedAt: null,
-          archivedAt: null,
-          ...(threads.get(threadId) ?? { sideChatOf: null, forkedFrom: null }),
-        } as never);
-  },
-  getTurnItem: ({ threadId, itemId }) =>
-    Effect.succeed((items.get(`${threadId}/${itemId}`) ?? null) as OrchestrationV2TurnItem | null),
-  getThreadRecords: (threadId) =>
-    Effect.succeed({
-      subagents:
-        threadId === main
-          ? [{ childThreadId: ThreadId.make("review-search") }, { childThreadId: null }]
-          : [],
-    } as never),
-});
+// Each read is recorded in `reads`, for the case that counts them.
+const makeStore = (reads: Array<ThreadId> = []) =>
+  Layer.mock(ProjectionStoreV2)({
+    getThread: (threadId) => {
+      reads.push(threadId);
+      return threadId === missing
+        ? Effect.fail(new Error("no such thread") as never)
+        : Effect.succeed({
+            id: threadId,
+            deletedAt: null,
+            archivedAt: null,
+            ...(threads.get(threadId) ?? { sideChatOf: null, forkedFrom: null }),
+          } as never);
+    },
+    getTurnItem: ({ threadId, itemId }) =>
+      Effect.succeed(
+        (items.get(`${threadId}/${itemId}`) ?? null) as OrchestrationV2TurnItem | null,
+      ),
+    getThreadRecords: (threadId) =>
+      Effect.succeed({
+        subagents:
+          threadId === main
+            ? [{ childThreadId: ThreadId.make("review-search") }, { childThreadId: null }]
+            : [],
+      } as never),
+  });
+const store = makeStore();
 const identity = Layer.succeed(ServerEnvironmentIdentity, {
   getEnvironmentId: Effect.succeed(here),
 });
@@ -239,11 +243,19 @@ describe("a reply to a response, checked by the server before an agent reads it"
     "reads each thread of a long fork chain once, up to the thread that holds the response",
     () =>
       Effect.gen(function* () {
-        threadReads.length = 0;
-        const text = yield* providerText(reply(), chain.at(-1)!);
+        const reads: Array<ThreadId> = [];
+        const text = yield* builtInSkillProviderText(Option.none(), {
+          message: {
+            threadId: chain.at(-1)!,
+            text: "[Reviewer finished](goat-context://v1/response/response_m1) check it",
+            context: { records: [reply()] },
+          },
+          driver: "codex",
+          project: Effect.succeed(null),
+        }).pipe(Effect.provide(Layer.mergeAll(makeStore(reads), identity)));
         expect(text).toContain('args:{threadId: "main", itemId: "item-1"}');
-        expect(threadReads).toHaveLength(chain.length + 1);
-        expect(new Set(threadReads).size).toBe(threadReads.length);
+        expect(reads).toHaveLength(chain.length + 1);
+        expect(new Set(reads).size).toBe(reads.length);
       }),
   );
 
