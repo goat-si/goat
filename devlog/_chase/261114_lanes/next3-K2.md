@@ -322,3 +322,15 @@ PullRequestCodeTab.browser.test.tsx, upstream's hunks (8cbc95923a) and GOAT's: u
 
 Code: upstream's fold choices (an absolute Map) in PullRequestCodeTab.tsx; GOAT adds `flipFileDiffFold` in pullRequestDiff.logic.ts (upstream's toggle expression `withFileDiffFold(current, fileKey, !isFileDiffCollapsed(fileKey, override, current, viewed))` as one helper) so the tab stays under its entry: PullRequestCodeTab.tsx 1451 (entry 1452 after b3fdf2b10f; dev 1458).
 
+
+
+## e89c8ce014: a file ticked Viewed before loading a push shows Changed (C4)
+
+Contract: PullRequestSetFilesViewedInput.files[].revision optional, trimmed, non-empty, at most 256 (upstream verbatim). Server: pullRequestViewedFiles.ts records the shown revision when a press names one and reads the head only for presses without one (upstream verbatim). Web: the Code tab sends the shown file version (fileDiff.newObjectId) on the pull request's diff and none on a single commit's diff, as upstream; filesViewedStore queues { viewed, revision } and sends revision only when present.
+
+No existing test changed: GOAT's filesViewedStore.test.ts and PullRequestService.test.ts both differ from upstream's parent (102 and 1993 diff lines), so upstream's edit of the existing store case was not taken; that case still passes unchanged (a press without a revision sends { path, viewed }). New cases instead: filesViewedStore.test.ts appends "sends the version of the file a press was made on, and none for a press that names none"; PullRequestService.viewedRevision.test.ts (sibling, the main file is at its entry) holds upstream's case verbatim plus "records the head's version of a file ticked without a revision, as older clients send"; packages/contracts/src/pullRequestCompat.test.ts (new, for every K2 wire field) decodes reviewUrl and revision present and absent, through the older schema shape (the field dropped, nothing refused), and refuses an empty or overlong revision.
+
+Each way, checked by those tests: a newer client against an older server: the older input schema drops revision and records the head (today's behaviour); an older client against a newer server: no revision, head recorded (today's behaviour). Fail first, with dev's store, logic and contracts swapped back: 3 failed (the store case and both revision contract cases); the server case failed with dev's pullRequestViewedFiles.ts and contracts (dismissed expected, viewed received) while the older-client case passed there and after, as it should.
+
+Checks: typecheck @goat/web, @goat/server, @goat/contracts exit 0; lint clean on the changed files; the new and touched tests pass. PullRequestCodeTab.tsx 1454 (dev entry 1458).
+
