@@ -6,6 +6,7 @@ import * as Queue from "effect/Queue";
 import { vi } from "vite-plus/test";
 import { layerClaudeAdapterTest } from "./ClaudeAdapterTestLayer.testkit.ts";
 import { CaptureEventQueue } from "./ClaudeAdapterV2.observations.testkit.ts";
+import { claudeForkedSkillModels } from "./ClaudeForkedSkillModel.ts";
 import { CLAUDE_TEST_MODEL_SELECTION, makeClaudeTestTurnInput } from "./ClaudeTestInput.testkit.ts";
 import {
   claudeSdkFrame,
@@ -98,10 +99,35 @@ it.effect("records a forked skill's model from its transcript instead of the par
   }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
 );
 
-it.effect("leaves a forked skill's model unset when the runner cannot read transcripts", () =>
+it.effect("leaves a forked skill's model unset when the lookup finds no model", () =>
   Effect.gen(function* () {
     const fork = yield* runForkedSkill(undefined);
     assert.equal(fork?.status, "completed");
     assert.isNull(fork?.model ?? null);
   }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
+);
+
+it.effect("looks up nothing when the runner cannot read transcripts", () =>
+  Effect.gen(function* () {
+    const forked = new Map([
+      ["task-forked", { runToolUseId: null, task: { model: null, status: "completed" as const } }],
+    ]);
+    const updates = yield* claudeForkedSkillModels({
+      taskIds: forked.keys(),
+      registered: Effect.succeed(forked),
+      lookup: undefined,
+      canonical: (model) => model,
+    });
+    assert.deepEqual(updates, []);
+    // The same task with a lookup is one the absent lookup would have answered.
+    const looked = yield* claudeForkedSkillModels({
+      taskIds: forked.keys(),
+      registered: Effect.succeed(forked),
+      lookup: () => Effect.succeed("claude-haiku-4-5"),
+      canonical: (model) => model,
+    });
+    assert.deepEqual(looked, [
+      { taskId: "task-forked", model: "claude-haiku-4-5", status: "completed" },
+    ]);
+  }),
 );
