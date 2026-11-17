@@ -1365,10 +1365,14 @@ const make = Effect.gen(function* () {
   const prepareRun: ThreadLaunchService["Service"]["prepareRun"] = Effect.fn(
     "ThreadLaunchService.prepareRun",
   )(function* (input) {
+    // Read before the status, and kept: a fail is pinned to the stretch this call found.
+    let generation: number | null = null;
     const scheduled = yield* Effect.gen(function* () {
+      const read = yield* claims.generation(input.threadId, input.runId);
       const { thread, runs } = yield* threads.getThreadRecords(input.threadId, ["runs"], {
         runIds: [input.runId],
       });
+      generation = read;
       const run = runs.find((candidate) => candidate.id === input.runId);
       const workspacePreparation = run?.workspacePreparation;
       if (run?.status !== "preparing" || workspacePreparation === undefined) return;
@@ -1379,25 +1383,18 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.exit);
     if (Exit.isFailure(scheduled)) {
       const cause = Cause.squash(scheduled.cause);
+      const fail = failOwnedRun({
+        threads,
+        claims,
+        commandId: input.commandId,
+        threadId: input.threadId,
+        runId: input.runId,
+        generation,
+        failure: preparationFailure(cause),
+        cause,
+      });
       // A preparation holding the run owns its outcome.
-      yield* claims.tryClaim(
-        input.runId,
-        Effect.gen(function* () {
-          const generation = yield* claims
-            .generation(input.threadId, input.runId)
-            .pipe(Effect.orElseSucceed(() => null));
-          yield* failOwnedRun({
-            threads,
-            claims,
-            commandId: input.commandId,
-            threadId: input.threadId,
-            runId: input.runId,
-            generation,
-            failure: preparationFailure(cause),
-            cause,
-          });
-        }),
-      );
+      yield* generation === null ? fail : claims.tryClaim(input.runId, fail);
     }
   });
 
