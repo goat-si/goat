@@ -139,3 +139,46 @@ Focused: ClaudeAgentSdkQueryRunner.test.ts, ClaudeDescendants.test.ts (new), pro
 - providerProcesses.test.ts and any /proc-based case: Linux only; NOT RUN on this Mac; covered by the coordinator's goat-ci run on the READY head.
 - Real Claude turns: none planned. Live effort, steer selection and stray-job reaping are proven by the adapter harness and real fake-CLI processes; Replay cannot drive the Claude adapter (N9a's record). If aab388ddb1 stays, whether Claude actually calls the tool needs one paid turn on the cheapest Claude model in a scratch-folder project, proposed for P1.
 - Web and mobile captures for aab388ddb1: P1 rows.
+
+
+## Lane moved to pen-mac-studio (2026-11-17)
+
+The code phase runs on pen-mac-studio in thread mcp:fea82f75-6e68-4a1d-a10a-1072718f1972 (goat-thread://v1/mcp:fea82f75-6e68-4a1d-a10a-1072718f1972), replacing the plan thread mcp:0c406d59-647b-4710-992d-73fb48694f72 on cpa-macbookair, whose branch was never pushed and has no commits. Branch chase/t3-261114-next3-k5-claude-adapter, cut from origin/chase/t3-261114-next3 at c995c5427accaaa92dadac50ec756c35f4b92034 (git rev-parse HEAD; git merge --ff-only origin/chase/t3-261114-next3: "Already up to date"). pen-mac-studio is shared with K10: one heavy job at a time between the two lanes.
+
+## Coordinator ruling of 2026-11-17 21:38:37 UTC, run 1817 (sections I, III, IV, V and K5, verbatim)
+
+> I. #3696 MERGED; INTEGRATION HEAD c995c5427a
+> - The fresh C4 review of #3696 at b7672aa5f8 was APPROVE WITH NITS (six P3, no P0 to P2; report /Users/jun/handoff-in/chase/pr3696-T1b-review-b7672aa5.md). MERGED BY ME 21:29:00 UTC, dev = 8c59f73519663bdb1fff3346d1caedf06083ddf7 (goat-ci-result success on the head, run 44173778052). goat#3694 closed with it.
+> - chase/t3-261114-next3 fast-forwarded to dev 8c59f73519 (this is the one dev merge), then K10's shared pre-commit 2bc2e7761b merged by me after a line-by-line read (useComposerSend.ts:301-407 at a608046c51 equals useComposerSend.ssh.ts:54-160 byte for byte; the builder, the wrapper and the two call sites read). chase/t3-261114-next3 = c995c5427accaaa92dadac50ec756c35f4b92034 (parents 8c59f73519 and 2bc2e7761b; plain push). One wording nit for K10's own lane, no new commit on the pre-commit: the new file's doc comment says "rebuilt each render as before" while it is built per call.
+> - Every lane with no code commit runs git merge --ff-only origin/chase/t3-261114-next3 before its first commit and reports the sha. K2, which is coding, keeps its plan: one merge of the integration head after K7 lands, and it does not write into useComposerSend.ts before that merge.
+>
+> III. SHARED AT-ENTRY FILES (your list of 22:0x)
+> The pre-commit branch stays the tool for one case only: two lanes need the SAME block moved, or a lane needs room in a file before the lane that frees it lands. For the rest, a claims table:
+> 1. On card 10.028 keep one table "at-entry move-outs": file, lane, the block as path:line range at c995c5427a, the new module, lines freed. A lane writes its row BEFORE it cuts the block. You refuse a row that overlaps another lane's range and bring an overlap you cannot settle to me.
+> 2. Every lane nets zero or less in each at-entry file by its own commits (its move-out frees at least what its rows add). No lane leaves a file longer than its entry at the cut.
+> 3. code-budgets.json conflicts at a lane's merge of the integration head are settled by countLines of the merged file, never by a number above the entry at 8c59f73519.
+> 4. Same-basename entries in your list are settled by the records: K7 means packages/client-runtime/src/state/server.ts (and apps/server/src/server.ts only for rows 10 and 11, which leave K7, see VI) and apps/server/src/terminal/Manager.ts.
+> 5. Order of landing for the meeting points: K7 first in packages/contracts and packages/client-runtime (as ruled); K1's Orchestrator.ts, orchestrationV2.ts and orchestratorMcp.ts move-outs are K1's own blocks (dispatchPullRequestWatchSync, the watch.sync struct, OrchestratorMcpThreadPullRequest) and K7 and K10 claim other blocks; MessagesTimeline.tsx, MessagesTimeline.logic.ts, ThreadFeed.tsx, thread-work-log.tsx and ThreadDetailScreen.tsx: K10 before M3's O22 (M3 D3); apps/mobile/src/features/pull-requests/: K2 before M3 (M3 D7).
+>
+> IV. RULE 3, ONE STANDING AUTHORISATION
+> Rule 3 stays: no existing test expectation changes without my word. To stop one round trip per line, my word is given in advance for the MIRRORED case only, when all three hold: (1) the upstream commit being ported changes the same assertion in upstream's own copy of that test in the same way; (2) the lane quotes both hunks, upstream's and GOAT's, before and after, in its record BEFORE the commit; (3) the commit changes no other existing expectation. The fresh review checks every one; one it cannot match to upstream's hunk is a P2. Everything else still comes to me with exact before and after: GOAT-own tests with no upstream counterpart, deleted or retitled tests, moved harnesses, and anything a lane is unsure of.
+>
+> V. CAPS, PLACEMENT, T1c
+> - Coding lanes at once: seven, K4 included (K2, K7, K1, K10, M3, K4, and K5). Fresh reviews at once: two, unchanged. No further lane starts without a plan ruled by me.
+> - K5 starts now only on a Mac that host.status placement shows with at most one lane and no warning or critical pressure; the Air is not doubled up (it went critical under one lane in next). Otherwise K5 takes the slot of the first lane that reaches READY. Tell me the host.
+> - T1c, [the T1c paragraph is T1's; omitted here as not K5's].
+>
+> K5 (Claude adapter): plan ACCEPTED; start per V. READ BY ME: next3-K5.md whole; L01-retry.md:60-78. NOT READ: the upstream commits, the SDK types.
+> - D1: CONFIRMED as option C. The in-process reactor in orchestration-v2/goat/LiveModelSelection.ts on thread.model-selection-updated, nothing persisted, Orchestrator.ts untouched. Conditions: a bounded queue; one thread's slow control call never holds another thread's events (per-thread serialisation and a deadline on the call); errors are caught inside the reactor; the provider's own report is not echoed; the record says for each other adapter "not supported here, applies at the next turn".
+> - D2: port 5984bbb36e's adapter half in K5 after d6e5f2e06f.
+> - D3: aab388ddb1 LEAVES K5 and becomes its own lane (K12), started after K10 and M3 have landed their MessagesTimeline and ThreadFeed work, with a C4 plan to me first. My answers for that plan: listed for Claude only, through Claude's system text and goat_call, not in the core listing every harness loads; no permission prompt in Plan mode or read-only sandboxes; the impersonation negative stays; the name is proposed in that plan and must not read like thread.send, which sends to an agent's thread.
+> - D4: accepted, the startup barrier as upstream. Conditions: a host without /proc/sys/kernel/random/boot_id does not fail layer construction: it logs once and skips reaping; the startup probe has a deadline and never holds the server's start; the reaper never signals pid 1, its own pid or an ancestor; a dead owner's record with no survivor is removed, so the directory does not grow.
+> - fdd54b942d, one change to the plan: ONE process-table sampler per server shared by every live Claude session without a systemd scope, not one ps per session per second. It runs only while such a session lives, and the refresh before close stays per session. Measure it at about 3,000 processes (this Mac printed 621 KiB from 2,935 processes in the #3696 review, where a 512 KiB cap and a 1 s budget made ps fail): record the CPU per sample; above about 50 ms per sample lengthen the interval, and say the number. The parser takes a table of that size whole; a truncated or failed table kills nothing and logs once. The PR body's Limits say that a job an agent detached to outlive its session now stops on macOS when the session closes, as it does on Linux under systemd.
+> - R1: AUTHORISED: the six mocks in ClaudeAgentSdkQueryRunner.test.ts (:254, :328, :378, :417, :452, :482) gain initializationResult: async () => ({}), no expectation change. R2 comes with its exact before and after.
+>
+> LANE COORDINATOR, FOR K5: quote your section (and I, III, IV, V) in next3-K5.md. Order from your plan without aab388ddb1: M1, 86e2cb21c9, fdd54b942d (ONE shared sampler, measured at about 3,000 processes), e4025c8528, M2, d6e5f2e06f (option C as confirmed), then 5984bbb36e's adapter half. Write your row in the "at-entry move-outs" table on card 10.028 BEFORE you cut any block of an at-entry file (send it to me through goat_origin_report needs_input if you cannot push the card). R2 comes to the coordinator through me with its exact before and after. First report: HEAD's sha (c995c5427a) and that you have read the plan; then code.
+
+Effect on the rows above: aab388ddb1 (row 5) and R3 leave this lane (K12). Order: M1, 86e2cb21c9, fdd54b942d, e4025c8528, M2, d6e5f2e06f, 5984bbb36e adapter half.
+
+## Code log
+
