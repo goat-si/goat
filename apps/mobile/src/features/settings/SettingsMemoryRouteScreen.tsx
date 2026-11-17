@@ -1,5 +1,5 @@
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
-import { RegistryContext, useAtomValue, useAtomSet } from "@effect/atom-react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { useNavigation, useFocusEffect, type StaticScreenProps } from "@react-navigation/native";
 import {
   AuthMemoryReadScope,
@@ -37,7 +37,6 @@ import {
   memoryReportTarget,
   MEMORY_FORGET_NOTICE,
 } from "@goat/client-runtime/memory-presentation";
-import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
 import {
   memoryBrowseInput,
@@ -50,8 +49,7 @@ import {
 import { AsyncResult } from "effect/reactivity";
 import * as Option from "effect/Option";
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { AppState, Modal, FlatList, Pressable, TextInput, View } from "react-native";
-import * as Crypto from "expo-crypto";
+import { AppState, Modal, FlatList, Pressable, View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Menu } from "../../components/ui/Menu";
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
@@ -63,7 +61,6 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
-import { SettingsActionRow } from "./components/SettingsActionRow";
 import { MemorySyncDiagnostics } from "./MemorySyncDiagnostics";
 import { MemoryImportSettings } from "./MemoryImportSettings";
 import { MemoryProjectSettings } from "./MemoryProjectSettings";
@@ -71,6 +68,9 @@ import { MemoryProjectPicker } from "./MemoryProjectPicker";
 import { MemoryAdministration } from "./MemorySharingSettings";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { SettingsRow } from "./components/SettingsRow";
+import { Action, Copy, Field, failureMessage, operationId } from "./memoryScreenParts";
+import { MemoryEditor } from "./MemoryEditor";
+import { memoryBodyGapNotice, useMemoryEditSession } from "./useMemoryEditSession";
 import {
   memoryExpectedHeads,
   memoryScopeForSelection,
@@ -78,7 +78,6 @@ import {
   type MemoryScreenParams,
 } from "./SettingsMemoryRouteScreen.logic";
 
-const operationId = () => MemoryOperationId.make(Crypto.randomUUID());
 const PAGE_SIZE = 30;
 function formatMemoryTime(value: string | null) {
   if (!value) return "Unavailable";
@@ -92,47 +91,6 @@ function formatMemoryTime(value: string | null) {
         minute: "2-digit",
       });
 }
-function failureMessage(result: Parameters<typeof squashAtomCommandFailure>[0]) {
-  const failure = squashAtomCommandFailure(result);
-  return failure instanceof Error ? failure.message : "The request could not be completed.";
-}
-function Copy({ children }: { readonly children: React.ReactNode }) {
-  return (
-    <Text selectable className="p-3 text-sm text-foreground-muted">
-      {children}
-    </Text>
-  );
-}
-function Action(props: {
-  readonly label: string;
-  readonly onPress: () => void;
-  readonly disabled?: boolean;
-  readonly tone?: "danger";
-}) {
-  return <SettingsActionRow icon="brain" {...props} />;
-}
-function Field(props: {
-  readonly label: string;
-  readonly value: string;
-  readonly onChange: (value: string) => void;
-  readonly disabled?: boolean;
-  readonly multiline?: boolean;
-}) {
-  return (
-    <View className="gap-2 p-3">
-      <Text className="text-sm text-foreground-muted">{props.label}</Text>
-      <TextInput
-        accessibilityLabel={props.label}
-        value={props.value}
-        onChangeText={props.onChange}
-        editable={!props.disabled}
-        multiline={props.multiline}
-        className="rounded-lg border border-border p-3 text-foreground"
-      />
-    </View>
-  );
-}
-
 /** A dialog and its callbacks belong to one connected screen lifetime. */
 function useMemoryLifetime(environmentId: EnvironmentId) {
   const registry = useContext(RegistryContext);
@@ -779,7 +737,7 @@ function ScopedMemoryBrowser({
   if (creating && memoryEnabled)
     return (
       <MemoryEditor
-        params={params}
+        environmentId={params.environmentId}
         memorySpaceId={memorySpaceId}
         scope={scope}
         scopeLabel={
@@ -1040,10 +998,22 @@ function MemoryDetails({
   const history = AsyncResult.isSuccess(historyResult)
     ? Option.getOrNull(historyResult.value)
     : null;
-  const [editing, setEditing] = useState(false);
   const [source, setSource] = useState<MemoryReadSourceInput | null>(null);
   const canWrite = useAtomValue(memory.upsert.permissionAtom(params.environmentId));
   const canForget = useAtomValue(memory.forget.permissionAtom(params.environmentId));
+  const session = useMemoryEditSession({
+    environmentId: params.environmentId,
+    memorySpaceId,
+    memoryId,
+    item,
+    canWrite: canWrite && memoryEnabled,
+    refresh: () => registry.refresh(readAtom),
+  });
+  // Shown where the body was once one has been seen and its gap is known, or this view asked again.
+  const gapNotice =
+    session.seenBody && (session.gap !== null || session.ownRequest !== null)
+      ? memoryBodyGapNotice(session)
+      : null;
   const canReadOriginal = useEnvironmentScope(params.environmentId, AuthOrchestrationReadScope);
   const liveDestination = useMemoryLifetime(params.environmentId);
   const [confirmForget, setConfirmForget] = useState(false);
@@ -1067,7 +1037,6 @@ function MemoryDetails({
     setHadItem(item !== null);
     if (!item) {
       setSource(null);
-      setEditing(false);
       setConfirmForget(false);
     }
   }
@@ -1114,15 +1083,17 @@ function MemoryDetails({
       if (mounted.current) setPending(false);
     }
   }
-  if (editing && memoryEnabled && item?.status === "active")
+  if (session.start && memoryEnabled)
     return (
       <MemoryEditor
-        params={params}
+        environmentId={params.environmentId}
         memorySpaceId={memorySpaceId}
-        scope={item.scope}
-        item={item}
+        scope={session.start.scope}
+        start={session.start}
+        seedText={item?.status === "active" ? item.payload.text : undefined}
+        {...session.editor}
         onClose={() => {
-          setEditing(false);
+          session.close();
           registry.refresh(readAtom);
         }}
       />
@@ -1131,6 +1102,7 @@ function MemoryDetails({
     <ScreenScrollView contentInsetAdjustmentBehavior="automatic">
       <Action label="Close details" onPress={onClose} />
       {notice ? <Copy>{notice}</Copy> : null}
+      {session.notice ? <Copy>{session.notice}</Copy> : null}
       {item ? (
         <>
           <Copy>
@@ -1150,7 +1122,7 @@ function MemoryDetails({
               <Action
                 label="Edit"
                 disabled={!canWrite || !memoryEnabled || pending}
-                onPress={() => setEditing(true)}
+                onPress={() => session.begin(item)}
               />
               {item.payload.evidence.map((evidence) =>
                 evidence.sourceThread && evidence.messageIds.length > 0 ? (
@@ -1181,11 +1153,18 @@ function MemoryDetails({
           ) : null}
         </>
       ) : (
-        <Copy>
-          {AsyncResult.isFailure(result)
-            ? "Could not load this memory."
-            : "Memory unavailable or awaiting fresh access."}
-        </Copy>
+        <>
+          {AsyncResult.isFailure(result) || !gapNotice ? (
+            <Copy>
+              {AsyncResult.isFailure(result)
+                ? "Could not load this memory."
+                : "Memory unavailable or awaiting fresh access."}
+            </Copy>
+          ) : gapNotice.line ? (
+            <Copy>{gapNotice.line}</Copy>
+          ) : null}
+          {gapNotice?.showAgain ? <Action label="Show again" onPress={session.showAgain} /> : null}
+        </>
       )}
       {pending ? <Copy>Forget request pending.</Copy> : null}
       {retry ? (
@@ -1610,127 +1589,6 @@ function MemoryReport({ report }: { readonly report: Parameters<typeof presentMe
         />
       ) : null}
     </View>
-  );
-}
-
-function MemoryEditor({
-  params,
-  memorySpaceId,
-  scope,
-  scopeLabel,
-  item,
-  onClose,
-}: {
-  readonly params: MemoryScreenParams & { environmentId: EnvironmentId };
-  readonly memorySpaceId: MemorySpaceId;
-  readonly scope: MemoryScope;
-  readonly scopeLabel?: string;
-  readonly item?: Extract<MemoryItem, { status: "active" }>;
-  readonly onClose: () => void;
-}) {
-  const registry = useContext(RegistryContext);
-  const [id] = useState(() => item?.memoryId ?? MemoryId.make(Crypto.randomUUID()));
-  const draftAtom = useMemo(
-    () =>
-      memory.draftAtom({
-        environmentId: params.environmentId,
-        input: { memorySpaceId },
-        draftId: `native:${id}`,
-      }),
-    [params.environmentId, memorySpaceId, id],
-  );
-  const text = useAtomValue(draftAtom);
-  const setDraft = useAtomSet(draftAtom);
-  const allowed = useAtomValue(memory.upsert.permissionAtom(params.environmentId));
-  const upsert = useAtomCommand(memory.upsert);
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const intent = useRef<MemoryOperationId | null>(null);
-  const [retry, setRetry] = useState(false);
-  const busy = useRef(false);
-  const mounted = useRef(true);
-  useEffect(() => {
-    registry.set(draftAtom, { text: item?.payload.text ?? "", memoryIds: item ? [id] : [] });
-    return () => {
-      mounted.current = false;
-      registry.set(draftAtom, null);
-    };
-  }, [registry, draftAtom, item, id]);
-  async function save() {
-    const current = registry.get(draftAtom);
-    if (
-      !current?.trim() ||
-      busy.current ||
-      !registry.get(memory.upsert.permissionAtom(params.environmentId))
-    )
-      return;
-    intent.current ??= operationId();
-    busy.current = true;
-    setPending(true);
-    setError(null);
-    try {
-      const result = await upsert({
-        environmentId: params.environmentId,
-        input: {
-          memorySpaceId,
-          operationId: intent.current,
-          memoryId: id,
-          expectedHeads: item ? [item.revision.revisionId] : [],
-          scope,
-          assertionKind: item?.revision.assertionKind ?? "fact",
-          payload: {
-            text: current,
-            evidence: item?.payload.evidence ?? [{ origin: "user", messageIds: [] }],
-            derivedFromMemoryRevisions: item?.payload.derivedFromMemoryRevisions ?? [],
-          },
-          baseBoundary: null,
-        },
-      });
-      if (
-        !mounted.current ||
-        registry.get(draftAtom) !== current ||
-        !registry.get(memory.upsert.permissionAtom(params.environmentId))
-      )
-        return;
-      if (AsyncResult.isSuccess(result)) {
-        setError(
-          `Request ${result.value.outcome}${result.value.pendingSync ? " · Propagation pending" : ""}`,
-        );
-        intent.current = null;
-        if (result.value.outcome === "accepted" || result.value.outcome === "noop") onClose();
-      } else if (AsyncResult.isFailure(result)) {
-        setRetry(true);
-        setError(`${failureMessage(result)} Retry uses the same request.`);
-      }
-    } finally {
-      busy.current = false;
-      if (mounted.current) setPending(false);
-    }
-  }
-  return (
-    <ScreenScrollView contentInsetAdjustmentBehavior="automatic">
-      <Action label="Close editor" onPress={onClose} />
-      <Copy>Save to: {scopeLabel ?? memoryScopeLabel(scope)}</Copy>
-      {text === null ? (
-        <Copy>The draft is no longer available. Close and reopen this memory.</Copy>
-      ) : (
-        <>
-          <Field
-            label="Memory text"
-            value={text}
-            onChange={(value) => setDraft({ text: value, memoryIds: item ? [id] : [] })}
-            disabled={pending || retry || !allowed}
-            multiline
-          />
-          <Action
-            label={retry ? "Retry save request" : "Save memory"}
-            onPress={() => void save()}
-            disabled={!allowed || pending || !text.trim()}
-          />
-        </>
-      )}
-      {error ? <Copy>{error}</Copy> : null}
-    </ScreenScrollView>
   );
 }
 
