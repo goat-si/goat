@@ -8,6 +8,7 @@ export type DefaultThemeSetter = (
     readonly appearance?: string;
     readonly setAt: string;
     readonly agent?: boolean;
+    readonly stockReset?: boolean;
   },
   authorizeAtCommit?: Effect.Effect<void, ServerSettingsError>,
   prepare?: Effect.Effect<void, ServerSettingsError>,
@@ -48,7 +49,7 @@ export function makeDefaultThemeSetter(
               ? {}
               : {
                   defaultTheme: normalizeThemePreference(input.themeId),
-                  defaultThemeSetAt: input.themeId === "" ? "" : input.setAt,
+                  defaultThemeSetAt: input.themeId === "" && !input.stockReset ? "" : input.setAt,
                 }),
             ...(input.appearance === undefined
               ? {}

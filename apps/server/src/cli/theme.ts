@@ -464,7 +464,7 @@ const themeSetCommand = Command.make("set", {
 );
 
 const themeClearCommand = Command.make("clear", { baseDir: baseDirFlag }).pipe(
-  Command.withDescription("Remove the environment's theme; clients keep what they have."),
+  Command.withDescription("Remove the environment default; clients keep their current themes."),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
       const paths = yield* resolveThemePaths(flags.baseDir);

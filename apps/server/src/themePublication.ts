@@ -274,6 +274,7 @@ export const layer = Layer.effect(
                 {
                   ...(input.themeId === undefined ? {} : { themeId: id }),
                   ...(input.appearance === undefined ? {} : { appearance: input.appearance }),
+                  ...(input.themeId === "" ? { stockReset: true } : {}),
                   setAt: now,
                   agent: input.agent,
                 },

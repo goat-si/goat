@@ -98,6 +98,8 @@ reapply it, even if the name is unchanged.
 
 `goat theme clear` removes the default without changing anyone's current theme. `goat theme show` lists
 the default and published themes.
+An agent can select the stock theme for connected clients with an empty theme ID; this is different
+from clearing the environment default.
 
 ### Publish a theme
 

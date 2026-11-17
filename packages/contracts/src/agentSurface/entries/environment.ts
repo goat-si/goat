@@ -9,9 +9,9 @@ export const environmentEntries = {
     summary: "Publish and select an environment theme.",
     description: "Validate and optionally publish a theme, then select it for this environment.",
     guide:
-      "Requires settings:write and a person enabling agent theme changes. An empty themeId clears the environment default. CSS is limited to scoped, vetted styles.",
+      "Requires settings:write and a person enabling agent theme changes. An empty themeId selects the stock theme for connected clients; goat theme clear instead removes the default and leaves their current themes alone. CSS is limited to scoped, vetted styles.",
     parameters: {
-      themeId: "Built-in or published theme id, or empty to clear.",
+      themeId: "Built-in or published theme id, or empty to select the stock theme.",
       appearance: "Set light, dark, or system appearance independently or with a theme.",
       theme: "Optional theme file to publish under themeId.",
     },

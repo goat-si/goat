@@ -18,6 +18,31 @@ const theme = {
 } as const;
 
 it.layer(NodeServices.layer)("theme publication", (it) => {
+  it.effect("records a dated stock reset requested by an agent", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const base = yield* fs.makeTempDirectoryScoped({ prefix: "goat-theme-reset-" });
+        const layer = ThemePublication.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              Settings.layerTest({ enableAgentThemeWrites: true, defaultTheme: "grove" }),
+              ServerConfig.layerTest(process.cwd(), base),
+            ),
+          ),
+        );
+        yield* Effect.gen(function* () {
+          yield* (yield* ThemePublication.ThemePublicationService).set(
+            { themeId: "", agent: true },
+            Effect.void,
+          );
+          const settings = yield* (yield* Settings.ServerSettingsService).getSettings;
+          assert.equal(settings.defaultTheme, "");
+          assert.isNotEmpty(settings.defaultThemeSetAt);
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
+  );
   it.effect("can set appearance alone without changing the selected theme", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -169,7 +194,7 @@ it.layer(NodeServices.layer)("theme publication", (it) => {
           yield* service.set({ themeId: "", agent: true }, Effect.void);
           const cleared = yield* settings.getSettings;
           assert.equal(cleared.defaultTheme, "");
-          assert.equal(cleared.defaultThemeSetAt, "");
+          assert.isNotEmpty(cleared.defaultThemeSetAt);
         }).pipe(Effect.provide(layer));
       }),
     ),

@@ -45,4 +45,9 @@ describe("default theme adoption", () => {
     expect(next).not.toBe(null);
     expect(next).not.toBe(applied);
   });
+
+  it("applies the stock theme only when the environment set it", () => {
+    expect(defaultThemeToApply({ ...BASE, defaultTheme: "", defaultThemeSetAt: "" })).toBe(null);
+    expect(defaultThemeToApply({ ...BASE, defaultTheme: "" })).not.toBe(null);
+  });
 });
