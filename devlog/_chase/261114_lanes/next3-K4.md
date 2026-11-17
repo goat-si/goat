@@ -241,3 +241,47 @@ Quote it in your record.
 | apps/server/src/orchestration-v2/ThreadLaunchService.ts | :254-266 isThreadLaunchError, failureDetail, preparationFailureClass | orchestration-v2/goat/PreparationFailure.ts (existing) | 11 | 18aeb0fb91 |
 | apps/server/src/orchestration-v2/ProviderTurnStartService.ts | :189-217 ready handoffs for the run | orchestration-v2/providerTurnStartHelpers.ts (existing) | 24 | 0c4b1d8f27 |
 | apps/server/src/terminal/Manager.ts | :498-514 enqueueProcessEvent | terminal/processEventQueue.ts | 16 | goat#3690 |
+
+## 8e. The coordinator on 76d0fff5fd and on non-top-level claims, verbatim (2026-11-17 21:59:20 UTC)
+
+1. K4's QUESTION (76d0fff5fd): A. Port 76d0fff5fd and then upstream 0813f4978e (#37451) whole, as two commits in that order; K4 never reports READY between them. READ BY ME in this repository: 0813f4978e's stat (4 files: WorkspaceSearchIndex.ts +/-44, its test 16, the fff patch, pnpm-lock.yaml 3 lines) and its WorkspaceSearchIndex.ts and watchAsync hunks; 76d0fff5fd is an ancestor of 0813f4978e; GOAT's patches/@ff-labs__fff-node@0.11.0.patch on dev is the SAME blob as upstream's at 0813f4978e^ (198ac430e0). NOT RUN: anything.
+Conditions:
+- After the second commit the patch file is byte for byte upstream's: git rev-parse HEAD:patches/@ff-labs__fff-node@0.11.0.patch equals git rev-parse 0813f4978e:patches/@ff-labs__fff-node@0.11.0.patch; both hashes in the record. pnpm-lock.yaml changes only the three patch_hash lines, to 93f62a76399b…; vp i run on the lane host and the record says so.
+- C4, as you say: K4's fresh review reads the watchAsync hunk (the subscription made on the native thread; a finder destroyed while the subscription is pending leaves no handler; unwatch after destroy is a no-op). Negative cases as tests where the fake finder allows: watchAsync rejecting or answering not-ok falls back to the 2 s reuse and the next read tries again; the index closed while a subscribe is pending leaves no watcher.
+- The latency measurement on GOAT's own checkout stays, taken after the second commit.
+- 0813f4978e is newer than this cycle's cut: add it to card 10.028 as taken early by K4, so the next cycle ticks it instead of porting it again.
+- The patch hash changes for everyone: when K4 is in the integration head, tell every lane to run vp i after its merge of that head.
+
+3. CLAIMS: K4's ProviderTurnStartService.ts :189-217 as a wrapper plus a call line is accepted on the pre-commit's terms: the moved expression byte for byte inside the new function, every added line (signature, parameters, return, call) listed in the commit message and the record, no behaviour change; the review reads it. Any other claim that is not a top-level declaration follows the same terms without asking.
+
+For K4: quote both in next3-K4.md; 76d0fff5fd then 0813f4978e whole, in that order, with the conditions above; I add 0813f4978e to card 10.028 as taken early by K4.
+
+Lane coordinator (relayed): the five at-entry claims are ACCEPTED and on card 10.028 (records 6a690b1755); boundaries checked at c995c5427a, no overlap with K7's Manager.ts :409-425. Claim 4 lists every added and removed-not-re-added line, as K10's pre-commit did.
+
+## 8f. IV gains (iv), verbatim (2026-11-17 22:00:50 UTC)
+
+IV gains (iv), for every lane (relay it): where GOAT's test file is byte for byte upstream's parent of the commit being ported (git diff <sha>^ on that file empty), the file may become upstream's file at that commit, whole, deletions and retitles included; the record gives both empty diffs (before against <sha>^, after against <sha>). If GOAT's file differs from upstream's parent in any line, deletions and retitles still come to me.
+
+Quote it in next3-K4.md.
+
+## 8g. IV gains (v) and (vi), verbatim (2026-11-17 22:16:44 UTC)
+
+IV gains (v), mock scaffolding: a line added to a test's mocks so that existing cases keep loading or rendering after the lane's row adds a component, hook or import. Covered: one export added to an existing vi.mock factory, or one vi.mock of a module the lane's own row introduced. Conditions: the stub is inert (renders its children, returns undefined, or does nothing); no existing title, body, setup value or expectation changes; the line is quoted in the record before the commit; the file stays within its entry; and what the stub hides is tested in a case of its own or named in the lane's P1 rows. Still to me: a mock that returns data existing assertions read, a changed existing mock line, a stub of a module the lane did not add, and anything a lane is unsure of. The review checks each; a miss is a P2.
+
+IV gains (vi), a describe moved whole: a whole top-level describe block of an at-entry test file moved byte for byte into a sibling test file, in a commit that does nothing else, on K7's conditions a to d above (empty diff of the two ranges in the record; helpers copied byte for byte and listed, none moved or shared; the same case titles and the same total count before and after; the entry lowered; the card row before the cut; TEST_TITLES updated in the same commit when the file is listed). Still to me: a harness or helper moved or shared into a testkit, a describe split in two, a nested block, and a move that needs any line of a case to change.
+
+Quote it in next3-K4.md.
+
+### Code log, part 2 (commits after 56772fc233, each on its own line; fail-first quoted in each commit message)
+
+- 78929fd284 move-out claim 1: GitVcsDriver.ts :1662-1718 -> vcs/checkpointAuthoredPaths.ts. The dedented body diff is empty. Removed and not re-added: the property opener :1662 and its closer :1718, replaced by one call line; one import added. Entry 1765 -> 1710.
+- c570a7514b 1a4a29998b: vcs/checkpointSkipWorktreeRestore.ts. Fail first: GitVcsDriver.skipWorktreeRestore.test.ts, upstream's two cases ("expected 'later\n' to equal 'original\n'" twice). D2 conditions: "a later turn's checkpoint holds a hand-flagged file's content at that turn" covers skip-worktree and assume-unchanged and passes on the unchanged capture (GitVcsDriver.ts capture classification, :1033-1041 at c995c5427a). docs/user/composer.md "Edit an earlier prompt" now says flagged files are restored too. Entry 1710 -> 1699.
+- 9b4e2a6e73 7bd9134824: vcs/checkpointTurnStart.ts. The capture reads HEAD's reflog only for checkpoints (not strict snapshots); trailer name T3-Head-Moved-At (D1); turn-start message "goat checkpoint turn start ref=". CheckpointService looks up the previous ref before capture and passes it when ordinal > 0. Fail first: CheckpointStore.test.ts upstream case (two variants), GitVcsDriver.branchSwitch.test.ts race case, and the byte-for-byte restore case D1 requires ("expected 2 to equal 3" parents before the fix). Entry 1699 -> 1719, under the dev entry of 1765.
+- 5746c280a8 9402dc39bf: in checkpointAuthoredPaths.ts; upstream's case verbatim in CheckpointStore.test.ts. Fail first: "expected Set{ 'local.txt', 'second.txt', …(2) } to deeply equal Set{ 'local.txt', 'own.txt' }".
+- 6c0a7cf5cf move-out claim 2: GitManager.ts :264-267 and :284-400 -> git/pullRequestHeadIdentity.ts. :284-399 are byte for byte apart from export on parseRepositoryOwnerLogin (diff empty otherwise). Removed and not re-added: the blank lines :268 and :400. Added: one import block, one re-export, and export on three interfaces. Entry 3124 -> 3008.
+- 64a1fe23a4 14978e35a5: git/pullRequestWorktreeRefresh.ts plus a branch in preparePullRequestThread. Upstream's cases are in GitManager.prExistingBranch.test.ts. Fail first without the GitManager.ts change: ahead, stale-head and checkout-race. The submodule cases set GIT_ALLOW_PROTOCOL in process.env (GOAT's git inherits it) and pass -c protocol.file.allow=always on the fixture's submodule add. src/git: 10 files, 161 tests pass, no existing expectation changed. Entry 3008 -> 3042.
+- c109ddf970 a0844eaec6: the confirmTerminal option. Measured: in GOAT, the GitManager-level saving is small, because prLookupGitState already remembers a confirmed terminal answer for 5 min and the confirmation reuses the read the lookup just made. Upstream's two settlement cases are in ThreadSettlementService.cache-test-cases.ts; the second waits 2 minutes, because GOAT caches a group's lookup for two minutes (PULL_REQUEST_RECHECK_MS). Fail first: "expected 1 to equal 2". Entry 3042 -> 3057, under the dev entry of 3124.
+- f5d5b35adf move-out claim 4 on the pre-commit's terms: ProviderTurnStartService.ts :189-217 -> readyHandoffsForRun in providerTurnStartHelpers.ts. One formatter join (isCompactionCommandMessage(...) || parseGoalCommand(...) onto one line). Added lines are listed in the commit message. Entry 1581 -> 1558.
+- f666b33b84 0c4b1d8f27 (D3): workspace/checkpointRestoreReservation.ts and goat/turnStartReservation.ts; CheckpointRollbackService reserves only for file restores. Fail first: ProviderTurnStartService.restoreReservation.test.ts (both cases reached the provider path) and CheckpointRollbackService.reservation.test.ts with restoreFiles true ("expected false to be true"). Module tests: 8 pass. Entry 1558 -> 1557. Cross-server issue filed: goat#3703.
+
+Waiting: 18aeb0fb91 (claim 3 cannot be cut as claimed: failureDetail and preparationFailureClass need ThreadLaunchError, which is declared in ThreadLaunchService.ts, so moving them alone would create an import cycle); 76d0fff5fd then 0813f4978e; goat#3690.
