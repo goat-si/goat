@@ -3,6 +3,7 @@ import { useCallback, useMemo } from "react";
 
 import { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import type { AtomCommandResult } from "@goat/client-runtime/state/runtime";
+import { threadRuntimeHasInterruptibleRun } from "@goat/client-runtime/state/thread-execution";
 import {
   createVcsStatusRevalidationAtomFamily,
   type GitActionRequestInput,
@@ -38,6 +39,21 @@ function refreshFailureMessage(cause: Cause.Cause<unknown>): string {
   const error = Cause.squash(cause);
   return error instanceof Error ? error.message : "Failed to refresh git status.";
 }
+
+/**
+ * The server refuses to move a thread with a running turn to another worktree, so the phone checks first: a refused
+ * move would leave the new folder and branch behind. The same rule as the web's isWorktreeChangeBlocked.
+ */
+function turnBlocksWorktreeMove(runtime: EnvironmentThreadShell["runtime"]) {
+  return (
+    runtime?.status === "running" ||
+    runtime?.status === "waiting" ||
+    threadRuntimeHasInterruptibleRun(runtime)
+  );
+}
+
+const worktreeMoveBusy =
+  "This thread has a turn running, and moving it to another worktree would end it. Wait for the turn to finish, or press Stop, then try again.";
 
 // Selecting a thread or reconnecting its environment refreshes the checkout's
 // status once, shared by every sheet that shows it.
@@ -330,6 +346,8 @@ export function useSelectedThreadGitActions() {
         "create_worktree",
         "Creating worktree",
         async ({ thread, project }) => {
+          if (turnBlocksWorktreeMove(thread.runtime))
+            return AsyncResult.failure<never, Error>(Cause.fail(new Error(worktreeMoveBusy)));
           const result = await createWorktree({
             environmentId: thread.environmentId,
             input: {
