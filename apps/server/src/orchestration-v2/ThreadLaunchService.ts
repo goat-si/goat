@@ -1,13 +1,9 @@
-import {
-  makeWorktreePreflight,
-  ThreadLaunchBaseRefError,
-  ThreadLaunchBranchError,
-  ThreadLaunchBranchConflictError,
-} from "./WorktreePreflight.ts";
+import { makeWorktreePreflight, type WorktreePreflightError } from "./WorktreePreflight.ts";
 export {
   ThreadLaunchBaseRefError,
   ThreadLaunchBranchError,
   ThreadLaunchBranchConflictError,
+  ThreadLaunchNotRepositoryError,
 } from "./WorktreePreflight.ts";
 import { launchBranch } from "./launchBranch.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
@@ -235,17 +231,14 @@ export class ThreadLaunchService extends Context.Service<
       | ProviderCliMissingError
     >;
     /**
-     * Refuses a worktree launch before any thread exists: a blocked branch name, a branch it cannot
-     * reuse, or a base ref that does not resolve. MCP and client (ws) launches both run it.
+     * Refuses a worktree launch before any thread exists: a project that is not a Git repository, a
+     * blocked branch name, a branch it cannot reuse, or a base ref that does not resolve. MCP and client (ws) launches both run it.
      */
     readonly checkWorktreeBase: (
       input: Pick<ThreadLaunchInput, "projectId" | "workspaceStrategy"> & {
         readonly commandId?: CommandId;
       },
-    ) => Effect.Effect<
-      void,
-      ThreadLaunchBaseRefError | ThreadLaunchBranchError | ThreadLaunchBranchConflictError
-    >;
+    ) => Effect.Effect<void, WorktreePreflightError>;
     readonly retryPreparation: (
       input: ThreadLaunchPreparationInput,
     ) => Effect.Effect<

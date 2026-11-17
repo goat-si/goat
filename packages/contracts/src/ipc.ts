@@ -35,6 +35,7 @@ import type {
   DesktopAppActivationResponse,
 } from "./desktopAppActivation.ts";
 
+import type { ConfirmDialogOptions } from "./confirmDialog.ts";
 import type { ContextMenuItem } from "./contextMenu.ts";
 export { ContextMenuItemSchema } from "./contextMenu.ts";
 export type { ContextMenuItem, ContextMenuItemSchemaType } from "./contextMenu.ts";
@@ -1308,6 +1309,8 @@ export interface DesktopPreviewBridge extends AnnotationVoiceBridge {
   goBack: (tabId: string) => Promise<void>;
   goForward: (tabId: string) => Promise<void>;
   refresh: (tabId: string) => Promise<void>;
+  /** Absent in desktop apps older than Stop; the web shows Stop only when it is here. */
+  stopLoading?: (tabId: string) => Promise<void>;
   zoomIn: (tabId: string) => Promise<void>;
   zoomOut: (tabId: string) => Promise<void>;
   resetZoom: (tabId: string) => Promise<void>;
@@ -1365,14 +1368,6 @@ export interface DesktopPreviewBridge extends AnnotationVoiceBridge {
   onPointerEvent: (listener: (event: DesktopPreviewCursorEvent) => void) => () => void;
   onServerTabCapture: (listener: (event: DesktopPreviewCaptureEvent) => void) => () => void;
   onOpenLink: (listener: (event: DesktopPreviewOpenLinkEvent) => void) => () => void;
-}
-
-export type ConfirmDialogVariant = "default" | "destructive";
-
-export interface ConfirmDialogOptions {
-  readonly variant?: ConfirmDialogVariant;
-  /** Which button takes focus on open. Defaults to Cancel; destructive confirms always keep Cancel. */
-  readonly initialFocus?: "confirm" | "cancel";
 }
 
 export interface LocalApi {

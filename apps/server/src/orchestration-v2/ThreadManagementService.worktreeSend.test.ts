@@ -25,7 +25,7 @@ import { userFacingDispatchErrorMessage } from "./UserFacingErrors.ts";
 const threadId = ThreadId.make("thread:worktree-send");
 const projectId = ProjectId.make("project:worktree-send");
 const REFUSAL =
-  "The worktree of thread thread:worktree-send at /elsewhere/feature is missing, and GOAT can't recreate it: it is outside GOAT's worktrees folder. Put the folder back at that path, or move the thread to another worktree.";
+  "The worktree of thread thread:worktree-send at /elsewhere/feature is missing, and GOAT can't recreate it: GOAT only recreates worktrees at <worktrees folder>/<repository>/<name>. Put the folder back at that path, or move the thread to another worktree.";
 
 const layerFor = (refusal: string | undefined, dispatched: Array<string>) =>
   ThreadManagementService.layer.pipe(

@@ -505,19 +505,25 @@ const make = Effect.gen(function* () {
                   new OrchestratorMcpFailure({
                     code: "invalid_request",
                     message:
-                      error._tag === "ThreadLaunchBranchConflictError"
-                        ? `${error.message} No thread was created. ${branchConflictHint(error.branch)}`
-                        : error._tag === "ThreadLaunchBranchError"
-                          ? `${error.message} No thread was created. ${
-                              error.worktreePath === null
-                                ? "Pass a branch name that does not exist yet."
-                                : `Launch into that checkout with workspaceStrategy ${JSON.stringify({ type: "existing_worktree", worktreePath: error.worktreePath, branch: error.branch })}, or pass a branch name that does not exist yet.`
-                            }`
-                          : `${error.message} No thread was created. Pass a branch, tag, or commit that exists there${
-                              strategy.startFromOrigin === true
-                                ? "; the project has no origin remote to fetch it from."
-                                : ", or set startFromOrigin:true if it exists only on origin."
-                            }`,
+                      error._tag === "ThreadLaunchNotRepositoryError"
+                        ? `${error.message} No thread was created. ${
+                            error.checkFailed === undefined
+                              ? 'Use workspaceStrategy {"type":"root"}, or pass the projectId of a Git repository.'
+                              : 'Try again, or use workspaceStrategy {"type":"root"} to work in the project folder without a new worktree.'
+                          }`
+                        : error._tag === "ThreadLaunchBranchConflictError"
+                          ? `${error.message} No thread was created. ${branchConflictHint(error.branch)}`
+                          : error._tag === "ThreadLaunchBranchError"
+                            ? `${error.message} No thread was created. ${
+                                error.worktreePath === null
+                                  ? "Pass a branch name that does not exist yet."
+                                  : `Launch into that checkout with workspaceStrategy ${JSON.stringify({ type: "existing_worktree", worktreePath: error.worktreePath, branch: error.branch })}, or pass a branch name that does not exist yet.`
+                              }`
+                            : `${error.message} No thread was created. Pass a branch, tag, or commit that exists there${
+                                strategy.startFromOrigin === true
+                                  ? "; the project has no origin remote to fetch it from."
+                                  : ", or set startFromOrigin:true if it exists only on origin."
+                              }`,
                   }),
               ),
             );

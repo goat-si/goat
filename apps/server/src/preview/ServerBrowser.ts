@@ -18,17 +18,13 @@ import {
   PreviewViewportSetting as PreviewViewportSettingSchema,
   SERVER_BROWSER_AUTOMATION_CLIENT_ID,
   ThreadId,
-  type PreviewAppearancePreference,
-  type PreviewAutomationActionEvent,
   type PreviewAutomationClickInput,
-  type PreviewAutomationConsoleEntry,
   type PreviewAutomationDialogInput,
   type PreviewAutomationDragInput,
   type PreviewAutomationEvaluateInput,
   type PreviewAutomationFetchInput,
   type PreviewAutomationHoverInput,
   type PreviewAutomationNavigateInput,
-  type PreviewAutomationNetworkEntry,
   type PreviewAutomationOpenInput,
   type PreviewAutomationPressInput,
   type PreviewAutomationReloadInput,
@@ -46,8 +42,6 @@ import {
   type PreviewNavStatus,
   type PreviewReportProfilesInput,
   type PreviewSessionSnapshot,
-  type PreviewTabSession,
-  type PreviewViewportSetting,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { normalizePreviewUrl } from "@goat/shared/preview";
@@ -55,6 +49,7 @@ import { resolvePreviewViewport } from "@goat/shared/previewViewport";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import { constVoid } from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -68,7 +63,7 @@ import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
-import type { CDPSession, Dialog, Download, FileChooser, Frame, Page } from "playwright-core";
+import type { CDPSession, Download, FileChooser, Page } from "playwright-core";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -82,6 +77,7 @@ import * as ServerBrowserReadiness from "./serverBrowserReadiness.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
+import type { Recording, ServerDownload, ServerTab, ViewerState } from "./ServerBrowserTab.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import { settleInitialOpen } from "./unloadedOpen.ts";
 import * as AgentTabState from "./agentTabState.ts";
@@ -95,7 +91,11 @@ import {
 } from "./CaptureLock.ts";
 import { downloadJournal, downloadsOf, journalDownload } from "./downloadJournal.ts";
 import { type EncoderWindow, recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
-import { answeredFinalFrame, captureFinalRecordingFrame } from "./ServerBrowserRecordingFinal.ts";
+import {
+  answeredFinalFrame,
+  captureFinalRecordingFrame,
+  encodeFinalFrame,
+} from "./ServerBrowserRecordingFinal.ts";
 import { awaitRevealedViewer, viewerArrived } from "./ServerBrowserRevealWait.ts";
 import { saveRecording } from "./ServerBrowserRecordingExport.ts";
 import {
@@ -132,6 +132,8 @@ import { initialTabChannel, secretBlockedGate, tabActionGate } from "./tabAction
 import { makeOpenRunSignals } from "./openRunSignals.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 import { makeCapacity } from "./ServerBrowserCapacity.ts";
+import { makeSavedBrowserProfiles } from "./SavedBrowserProfiles.ts";
+import * as Stop from "./ServerBrowserStop.ts";
 import {
   assertReusable,
   assertStoreUsed,
@@ -156,6 +158,8 @@ const SCREENCAST_MOTION_WINDOW_MS = 300;
 const SCREENCAST_MOTION_QUALITY = 50;
 const HOST_RECONNECT_DELAY = "1 second";
 const DESKTOP_ATTACH_TIMEOUT = "10 seconds";
+// A viewer attaches once its opening still arrives or this passes; the capture keeps its lock.
+const VIEWER_STILL_WAIT = "2 seconds";
 const VIEWER_OUTPUT_LIMIT = 64;
 
 // Chromium allows three unacked frames, so 100 ms pacing caps viewers near 30 fps.
@@ -254,104 +258,6 @@ export class ServerBrowser extends Context.Service<
   } & ServerBrowserScreen.SurfaceService
 >()("goat/preview/ServerBrowser") {}
 
-interface ViewerState {
-  readonly id: string;
-  readonly canOperate: boolean;
-  readonly pressedKeys: Map<string, { key: string; code: string }>;
-  readonly pressedButtons: Map<"left" | "middle" | "right", { x: number; y: number }>;
-  readonly push: (output: ServerBrowserViewerOutput) => void;
-  readonly pause: () => Promise<void>;
-  readonly resume: () => Promise<void>;
-  scrolledAt: number;
-
-  requestedSize: { width: number; height: number; order: number } | null;
-}
-
-interface Recording {
-  readonly encoder: Page;
-  readonly session: CDPSession;
-  readonly startedAt: string;
-  readonly frames: ReturnType<typeof makeRecordingFrames>;
-}
-
-interface ServerTab {
-  readonly threadId: ThreadId;
-  readonly tabId: string;
-  readonly page: Page;
-  readonly cdp: CDPSession;
-  readonly frameSessions: Map<Frame, CDPSession>;
-  copyReads: Promise<void>;
-  copyKeyedUntil: number;
-  pendingCopyReads: number;
-  readonly createdAt: number;
-  usedAt: number;
-  readonly viewers: Set<ViewerState>;
-  viewerAttached: PromiseWithResolvers<void> | null;
-  readonly consoleEntries: Array<PreviewAutomationConsoleEntry>;
-  readonly networkEntries: Array<PreviewAutomationNetworkEntry>;
-  readonly diagnostics: ServerBrowserDiagnostics;
-  readonly actionTimeline: Array<PreviewAutomationActionEvent>;
-  readonly control: SessionControl;
-  agentOperating: boolean;
-  /** Whose input last reached this tab, and so whose popups it opens. */
-  readonly popups: AgentTabState.PopupAttribution;
-  fileChooserIntercepted: boolean;
-  readonly onFileChooser: (chooser: FileChooser) => void;
-
-  readonly isolatedContext: boolean;
-  /** The sign-in mode and store the tab was opened with; it never changes. */
-  readonly session: PreviewTabSession;
-
-  readonly desktop: { readonly close: () => Promise<void> } | null;
-  readonly profileId: string | undefined;
-  readonly openerTabId: string | undefined;
-
-  readonly downloads: Array<ServerDownload>;
-  fileChooser: {
-    readonly id: string;
-    readonly chooser: FileChooser;
-    readonly accept: string;
-    readonly offeredTo: string | null;
-  } | null;
-  dialog: Dialog | null;
-  setting: PreviewViewportSetting;
-  colorScheme: PreviewAppearancePreference;
-  zoomFactor: number;
-  /** Last usable CSS size measured on the desktop. */
-  desktopViewport: { readonly width: number; readonly height: number } | null;
-  desktopViewportRead: Promise<ServerTab["desktopViewport"]>;
-  /** A read queued behind `desktopViewportRead`, shared by every caller that waits for it. */
-  desktopViewportNext: Promise<ServerTab["desktopViewport"]> | null;
-  loading: boolean;
-  loadError: import("@goat/contracts").PreviewAutomationLoadError | undefined;
-  closing: boolean;
-  recording: Recording | null;
-  initialNavigation: Promise<void> | null;
-  initialNavigationSent: boolean;
-  navigationGeneration: number;
-  /** Moves on every main-frame navigation, same-document routes and reloads included. */
-  documentGeneration: number;
-
-  abortedNavigation: {
-    readonly url: string;
-    readonly generation: number;
-    readonly timer: ReturnType<typeof setTimeout>;
-  } | null;
-
-  recordingStart: Promise<Recording> | null;
-  captureLock: Promise<void>;
-  capturing: number;
-}
-
-interface ServerDownload {
-  readonly id: string;
-  readonly fileName: string;
-  readonly path: string;
-  readonly sizeBytes: number;
-  readonly url: string;
-  readonly completedAt: string;
-}
-
 const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const host = { platform: yield* HostProcess.Platform, arch: yield* HostProcess.Architecture };
@@ -366,8 +272,14 @@ const make = Effect.gen(function* () {
   const { runFork, recordAction, keepTypedText } = yield* makeBrowserHistorySupport;
   const popupCloseFailure = (p: Page) => closeUnadoptedPopup(p, runFork);
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
-  const { applyOpenRendering, applyRendering, applySetting, broadcastViewport, layoutSize } =
-    makeRendering(runPromise);
+  const {
+    applyOpenRendering,
+    applyRendering,
+    applySetting,
+    broadcastViewport,
+    desktopStatusViewport,
+    measureDesktopViewport,
+  } = makeRendering(runPromise);
   const blockedTabs = yield* makeBlockedTabFence();
   const openRuns = makeOpenRunSignals();
   const launchServices = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
@@ -421,7 +333,10 @@ const make = Effect.gen(function* () {
   const closedSessions = new Set<string>();
   let hostConnectionId: string | null = null;
   let viewerResizeOrder = 0;
-  const profiles = new SessionProfiles();
+  const savedProfiles = yield* makeSavedBrowserProfiles(
+    NodePath.join(config.stateDir, "server-browser", "reported-profiles.json"),
+  );
+  const profiles = new SessionProfiles(savedProfiles.restored);
 
   const contexts = new ServerBrowserContexts({
     profilesDir: NodePath.join(config.stateDir, "server-browser", "profiles"),
@@ -706,6 +621,9 @@ const make = Effect.gen(function* () {
         desktopViewport: null,
         desktopViewportRead: Promise.resolve(null),
         desktopViewportNext: null,
+        desktopViewportStale: true,
+        desktopViewportChanges: 0,
+        desktopResize: Promise.withResolvers<void>(),
         loading: false,
         loadError: undefined,
         closing: false,
@@ -714,6 +632,8 @@ const make = Effect.gen(function* () {
         initialNavigation: null,
         initialNavigationSent: false,
         navigationGeneration: 0,
+        stoppedGeneration: null,
+        pendingInitialRequestUrl: null,
         documentGeneration: 0,
         abortedNavigation: null,
         captureLock: Promise.resolve(),
@@ -732,12 +652,13 @@ const make = Effect.gen(function* () {
       };
       if (desktop) {
         // The desktop resizes and zooms its webview itself; viewers map input with the new size.
-        const remeasure = () => {
+        const remeasure = (resized = false) => {
+          AgentTabState.desktopViewportChanged(tab, resized);
           if (tab.viewers.size > 0) return broadcastViewport(tab).catch(constVoid);
         };
-        cdp.on("Page.frameResized", remeasure);
+        cdp.on("Page.frameResized", () => remeasure(true));
         // A read a navigation broke has a fresh page to measure.
-        cdp.on("Page.loadEventFired", remeasure);
+        cdp.on("Page.loadEventFired", () => remeasure());
         // Closing a dialog resizes nothing, and the host can close it without us.
         cdp.on("Page.javascriptDialogClosed", () => {
           tab.dialog = null;
@@ -755,11 +676,16 @@ const make = Effect.gen(function* () {
             observeNavigation(hop.url());
         }
         if (!isMainNavigation(request)) return;
+        const stoppedFirst = Stop.stoppedFirstRequest(tab, request.url());
         navigationGenerations.set(request, ++tab.navigationGeneration);
         tab.documentGeneration++;
         clearAbortedNavigation(tab);
         tab.loading = true;
         tab.loadError = undefined;
+        if (stoppedFirst) {
+          tab.stoppedGeneration = tab.navigationGeneration;
+          return stopLoading.settle(tab, tab.navigationGeneration);
+        }
         report(tab, {
           _tag: "Loading",
           url: ServerBrowserPage.withoutDataPayload(request.url()).slice(0, 2048),
@@ -775,6 +701,7 @@ const make = Effect.gen(function* () {
       }
       popupNavigation.track(page);
       page.on("load", () => {
+        tab.pendingInitialRequestUrl = null;
         tab.loading = false;
         void reportLoaded(tab);
       });
@@ -806,6 +733,7 @@ const make = Effect.gen(function* () {
         if (generation !== tab.navigationGeneration) return;
         // An aborted navigation is usually a download; its `download` event settles the status.
         if (errorText.includes("ERR_ABORTED")) {
+          if (tab.stoppedGeneration === generation) return stopLoading.settle(tab, generation);
           const url = request.url();
           const navigationGeneration = tab.navigationGeneration;
           clearAbortedNavigation(tab);
@@ -861,6 +789,8 @@ const make = Effect.gen(function* () {
       ) {
         const options = { waitUntil: "commit", timeout: NAVIGATION_TIMEOUT_MS } as const;
         const initialUrl = snapshot.navStatus.url;
+        tab.loading = true;
+        tab.pendingInitialRequestUrl = Stop.initialRequestUrl(initialUrl);
         const activeRun = blockedTabs.capture(tab.threadId);
         const initialChannel = initialTabChannel(
           tab,
@@ -891,6 +821,11 @@ const make = Effect.gen(function* () {
     if (tab.abortedNavigation !== null) clearTimeout(tab.abortedNavigation.timer);
     tab.abortedNavigation = null;
   };
+  const stopLoading = Stop.makeStopLoading<ServerTab>((tab) => {
+    clearAbortedNavigation(tab);
+    if (tab.page.url() === "about:blank") report(tab, { _tag: "Idle" });
+    else void reportLoaded(tab);
+  });
 
   const settleAbortedNavigation = (
     tab: ServerTab,
@@ -1289,7 +1224,11 @@ const make = Effect.gen(function* () {
             if (input.recordingFrameRate !== undefined)
               recordingFrameRate = input.recordingFrameRate;
             profiles.report(client, input);
-          }),
+            return profiles.catalog;
+          }).pipe(
+            Effect.flatMap((catalog) => (catalog ? savedProfiles.save(catalog) : Effect.void)),
+            Effect.uninterruptible,
+          ),
     ),
   );
 
@@ -1359,7 +1298,7 @@ const make = Effect.gen(function* () {
     const url = ServerBrowserPage.withoutDataPayload(tab.page.url());
     const [viewport, title] = await Promise.all([
       tab.desktop
-        ? withinStatusDeadline(layoutSize(tab), () => tab.desktopViewport)
+        ? withinStatusDeadline(desktopStatusViewport(tab), () => tab.desktopViewport)
         : tab.page.viewportSize(),
       url === "about:blank" || tab.dialog
         ? null
@@ -1444,15 +1383,18 @@ const make = Effect.gen(function* () {
           acknowledge: (sessionId) => opened.send("Page.screencastFrameAck", { sessionId }),
           encode: async (data, width) => {
             try {
+              // The encoder page dropping one frame leaves the recording going without it.
               return await channel.call(() =>
-                encoder.evaluate(
-                  ([frameData, cssWidth]) =>
-                    (globalThis as unknown as EncoderWindow).__goatRecorder.frame(
-                      frameData,
-                      cssWidth,
-                    ),
-                  [data, width] as const,
-                ),
+                encoder
+                  .evaluate(
+                    ([frameData, cssWidth]) =>
+                      (globalThis as unknown as EncoderWindow).__goatRecorder.frame(
+                        frameData,
+                        cssWidth,
+                      ),
+                    [data, width] as const,
+                  )
+                  .catch(() => true),
               );
             } catch (cause) {
               if (cause instanceof BrowserControlInterrupted && cause.reason === "blocked_url")
@@ -1550,13 +1492,10 @@ const make = Effect.gen(function* () {
           hold(capture);
           const finalFrame = await answeredFinalFrame(capture);
           if (finalFrame !== undefined && !tab.control.isPrivate) {
-            await recording.encoder.evaluate(
-              ([data, width]) =>
-                (globalThis as unknown as EncoderWindow).__goatRecorder.frame(data, width),
-              [
-                finalFrame,
-                tab.page.viewportSize()?.width ?? UNATTACHED_FILL_VIEWPORT.width,
-              ] as const,
+            await encodeFinalFrame(
+              recording.encoder,
+              finalFrame,
+              tab.page.viewportSize()?.width ?? UNATTACHED_FILL_VIEWPORT.width,
             );
           }
         }
@@ -1952,6 +1891,9 @@ const make = Effect.gen(function* () {
           assertDestination: (url) => blockedTabs.assertTab(tab, request.runId, url),
           channelFor: (destination) => actionGate(destination).channel,
         });
+      case "stopLoading":
+        await stopLoading.stop(tab, tab.cdp);
+        return statusWithTitle(tab, request.agentSessionId);
       case "navigate": {
         const navigateInput = input as PreviewAutomationNavigateInput;
         const destination = resolveNavigationUrl(navigateInput);
@@ -1976,11 +1918,16 @@ const make = Effect.gen(function* () {
         const setting = resolvePreviewViewport(input as PreviewAutomationResizeInput);
         const gate = actionGate();
         await gate();
-        await runPromise(
-          manager.resize({ threadId: tab.threadId, tabId: tab.tabId, viewport: setting }),
-        );
-        const sized = await AgentTabState.measuredResize(tab, UNATTACHED_FILL_VIEWPORT, () =>
-          applySetting(tab, setting, gate.channel),
+        const sized = await AgentTabState.measuredResize(
+          tab,
+          UNATTACHED_FILL_VIEWPORT,
+          async () => {
+            await runPromise(
+              manager.resize({ threadId: tab.threadId, tabId: tab.tabId, viewport: setting }),
+            );
+            await applySetting(tab, setting, gate.channel);
+          },
+          { measure: () => measureDesktopViewport(tab), deadlineMs },
         );
         return { tabId: tab.tabId, setting, ...sized(setting) };
       }
@@ -2209,6 +2156,8 @@ const make = Effect.gen(function* () {
         return;
       }
       if (event.type === "resized") {
+        // Desktop tabs only record the setting, so status need not wait behind an agent action.
+        if (tab.desktop) tab.setting = event.snapshot.viewport ?? FILL_PREVIEW_VIEWPORT;
         await tab.control
           .system(async () => {
             if (
@@ -2306,10 +2255,12 @@ const make = Effect.gen(function* () {
       case "navigate":
         if (typeof message.url === "string") {
           const url = normalizePreviewUrl(message.url);
+          tab.pendingInitialRequestUrl = null;
           tab.control.trackUntilHandoff(tab.page.goto(url, VIEWER_NAVIGATION_OPTIONS));
         }
         return;
       case "history":
+        tab.pendingInitialRequestUrl = null;
         tab.control.trackUntilHandoff(
           ViewerInput.num(message.delta) < 0
             ? tab.page.goBack(VIEWER_NAVIGATION_OPTIONS)
@@ -2317,11 +2268,15 @@ const make = Effect.gen(function* () {
         );
         return;
       case "reload":
+        tab.pendingInitialRequestUrl = null;
         if (message.ignoreCache === true) {
           await session.send("Page.reload", { ignoreCache: true });
           return;
         }
         tab.control.trackUntilHandoff(tab.page.reload(VIEWER_NAVIGATION_OPTIONS));
+        return;
+      case "stopLoading":
+        await stopLoading.stop(tab, session);
         return;
       case "probe": {
         const x = ViewerInput.num(message.x);
@@ -2507,7 +2462,10 @@ const make = Effect.gen(function* () {
     yield* Effect.promise(() => startScreencast(1));
     // An idle page does not repaint for a new screencast, so the viewer
     // starts from a still unless a live frame beat it.
-    if (!screencastStarted) yield* Effect.promise(pushStill);
+    if (!screencastStarted) {
+      const still = yield* Effect.forkScoped(Effect.promise(pushStill));
+      yield* Effect.timeoutOption(Fiber.await(still), VIEWER_STILL_WAIT);
+    }
     return {
       output,
       input: (raw: unknown) =>

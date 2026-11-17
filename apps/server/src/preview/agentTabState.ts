@@ -8,6 +8,7 @@ import { closedPopupMessage, type PreviewViewportSetting } from "@goat/contracts
 import type { CDPSession, Page } from "playwright-core";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
 import { downloadJournal } from "./downloadJournal.ts";
+import { fixedViewportSize } from "./ServerBrowserViewport.ts";
 
 /** How long after an agent's input a popup still counts as opened by it. */
 export const POPUP_ATTRIBUTION_MS = 2_000;
@@ -158,25 +159,86 @@ export const renderedViewport = async (cdp: Pick<CDPSession, "send">, fallback: 
     : fallback;
 };
 
-/** Applies a viewport setting and reports the size the page then has, with fill's caveat. */
+/** A desktop page that keeps its size draws nothing on a resize, so the wait gives up. */
+const DESKTOP_RESIZE_WAIT_MS = 1000;
+
+const notMeasured = () =>
+  new ServerBrowserOperationError(
+    "PreviewAutomationExecutionError",
+    "GOAT has not measured this desktop tab yet, so it cannot say what size the resize gave it. The setting is applied; show the tab (goat_preview_open show:true), then read goat_preview_status.",
+  );
+
+/** The work's answer, or null once ms pass. */
+const within = <A>(work: Promise<A>, ms: number): Promise<A | null> =>
+  Number.isFinite(ms)
+    ? new Promise<A | null>((resolve, reject) => {
+        // @effect-diagnostics-next-line globalTimers:off - The resize waits on Playwright promises.
+        const timer = setTimeout(() => resolve(null), ms);
+        work.then(
+          (value) => (clearTimeout(timer), resolve(value)),
+          (cause: unknown) => (clearTimeout(timer), reject(cause)),
+        );
+      })
+    : work;
+
+/**
+ * Applies a viewport setting and reports the size the page then has, with fill's caveat. A
+ * desktop tab reports what the desktop drew, else the last size measured, never a default.
+ */
 export const measuredResize = async (
   tab: {
     readonly desktop: object | null;
-    readonly cdp: Pick<CDPSession, "send">;
     readonly page: { viewportSize(): Size | null };
+    readonly setting: PreviewViewportSetting;
+    readonly desktopViewport: Size | null;
+    readonly desktopResize: PromiseWithResolvers<void>;
   },
   fallback: Size,
   apply: () => Promise<void>,
+  desktop: { readonly measure: () => Promise<Size | null>; readonly deadlineMs: number },
 ) => {
-  const before = tab.desktop ? await renderedViewport(tab.cdp, fallback) : undefined;
+  if (!tab.desktop) {
+    await apply();
+    const viewport = tab.page.viewportSize() ?? fallback;
+    return (setting: PreviewViewportSetting) => ({
+      viewport,
+      ...fillNote(setting, undefined, viewport),
+    });
+  }
+  const remainingMs = () => Math.max(0, desktop.deadlineMs - performance.now());
+  const before = (await within(desktop.measure(), remainingMs() / 4)) ?? tab.desktopViewport;
+  const from = fixedViewportSize(tab.setting);
+  const drawn = tab.desktopResize.promise;
   await apply();
-  const viewport = tab.desktop
-    ? await renderedViewport(tab.cdp, fallback)
-    : (tab.page.viewportSize() ?? fallback);
+  const to = fixedViewportSize(tab.setting);
+  // The desktop draws the new size after the session update; its page resize says it has.
+  // Half the time left keeps room for the read, which runs even if nothing was drawn,
+  // because a page can keep another size than the one asked for.
+  if (from?.width !== to?.width || from?.height !== to?.height)
+    await within(drawn, Math.min(DESKTOP_RESIZE_WAIT_MS, remainingMs() / 2));
+  const viewport = (await within(desktop.measure(), remainingMs())) ?? tab.desktopViewport;
+  if (!viewport) throw notMeasured();
   return (setting: PreviewViewportSetting) => ({
     viewport,
-    ...fillNote(setting, before, viewport),
+    ...fillNote(setting, before ?? undefined, viewport),
   });
+};
+
+/** A desktop page resized or loaded: status measures again, and a waiting resize sees the draw. */
+export const desktopViewportChanged = (
+  tab: {
+    desktopViewportStale: boolean;
+    desktopViewportChanges: number;
+    desktopResize: PromiseWithResolvers<void>;
+  },
+  resized: boolean,
+) => {
+  tab.desktopViewportStale = true;
+  tab.desktopViewportChanges += 1;
+  if (!resized) return;
+  const drawn = tab.desktopResize;
+  tab.desktopResize = Promise.withResolvers();
+  drawn.resolve();
 };
 
 /** The desktop sizes a filled tab to the panel showing it; with none, the size stays. */

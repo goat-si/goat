@@ -26,7 +26,11 @@ it.effect("keeps a checkout two top-level threads store through a symlinked pare
     const settled = { branch: "feature", settledAt: at(-20 * DAY_MS) };
     fixture.setThreads([
       shell({ ...settled, worktreePath: fixture.worktree }),
-      shell({ ...settled, id: ThreadId.make("other"), worktreePath: `${linkedParent}/feature` }),
+      shell({
+        ...settled,
+        id: ThreadId.make("other"),
+        worktreePath: `${linkedParent}/repo/feature`,
+      }),
     ]);
     const report = yield* fixture.service.runNow;
     expect(report.entries).toEqual([
@@ -66,8 +70,10 @@ it.live("keeps a worktree for a live session in a missing folder under its store
       const fixture = yield* cleanupFixture();
       const linkedParent = `${yield* fixture.fs.makeTempDirectoryScoped({ prefix: "cleanup-link-" })}/worktrees`;
       yield* fixture.fs.symlink(fixture.config.worktreesDir, linkedParent);
-      fixture.setThreads([shell({ branch: "feature", worktreePath: `${linkedParent}/feature` })]);
-      fixture.setOpenSessionCwd(`${linkedParent}/feature/removed-folder`);
+      fixture.setThreads([
+        shell({ branch: "feature", worktreePath: `${linkedParent}/repo/feature` }),
+      ]);
+      fixture.setOpenSessionCwd(`${linkedParent}/repo/feature/removed-folder`);
       const report = yield* fixture.service.runNow;
       expect(report.entries[0]).toMatchObject({
         outcome: "kept",
@@ -86,7 +92,7 @@ it.live.each(["before-check", "while-measuring"] as const)(
         const fixture = yield* pausedMeasurementFixture();
         const linkedParent = `${yield* fixture.fs.makeTempDirectoryScoped({ prefix: "cleanup-link-" })}/worktrees`;
         yield* fixture.fs.symlink(fixture.config.worktreesDir, linkedParent);
-        const worktree = `${linkedParent}/feature`;
+        const worktree = `${linkedParent}/repo/feature`;
         fixture.setThreads([shell({ branch: "feature", worktreePath: worktree })]);
         if (timing === "before-check")
           fixture.setProjectRoots([fixture.repo, `${worktree}/removed-checkout`]);
@@ -115,7 +121,9 @@ it.live("keeps a checkout if its symlinked parent changes during inspection", ()
       const other = `${directory}/other`;
       yield* fixture.fs.makeDirectory(other);
       yield* fixture.fs.symlink(fixture.config.worktreesDir, linkedParent);
-      fixture.setThreads([shell({ branch: "feature", worktreePath: `${linkedParent}/feature` })]);
+      fixture.setThreads([
+        shell({ branch: "feature", worktreePath: `${linkedParent}/repo/feature` }),
+      ]);
       const cleanup = yield* fixture.service.runNow.pipe(Effect.forkChild);
       yield* Deferred.await(fixture.measuring);
       yield* fixture.fs.remove(linkedParent);

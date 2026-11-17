@@ -137,7 +137,7 @@ export function registerProvisionalTests(
     }).pipe(Effect.scoped),
   );
 
-  it.live("credits the same copy of a duplicate from the last scan as an exact read does", () =>
+  it.effect("credits the same copy of a duplicate from the last scan as an exact read does", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(Date.parse("2026-08-15T00:00:00Z"));
       const { transcript, settings, home } = yield* setup;
