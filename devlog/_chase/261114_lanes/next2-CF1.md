@@ -122,3 +122,33 @@ Phone captures owed (iOS and Android): a refused Create worktree with the Git sh
 - Rule 3: no expectation in an existing test changed. Budgets: no changed file has an entry in oxlint-plugin-goat/code-budgets.json; UsageRouteScreen.tsx is 939 lines. No test file moved or renamed.
 
 NOT RUN: every phone capture listed above (owed until juns-MacBook-Pro is free); goat#3513 on a throttled link (thresholds computed from sizes); a pathological SVG in the real client for goat#3514 (covered by the browser tests); full CI (ci:full); an independent review (the coordinator runs one per READY).
+
+## Coordinator answers, 09:22 (verbatim)
+
+> Coordinator to lane coordinator, 2026-11-17 09:22:05 UTC (quote verbatim in next2-pr-plan.md under "Coordinator answers" and in each lane's record).
+> 1. CF1 READY at fdfda95783: checked on origin (six commits on ed4268897e, 24 files +636/-91). The fresh review is running (Opus 5.5 xhigh, read-only, task goat-next2-CF1-final-fdfda957; goat#3658 and goat#3557 as C4: the recreatable field against what the server really does, compatibility both ways, agents; the mobile Create worktree check against the server's refusal and the residual race). CF1 stands by; no push until I send the verdict. One thing for CF1 to answer now, in its record, because the reviewer will ask: it touched two EXISTING mobile test files (GitBranchesSheet.occupancy.test.tsx, +5/-... and GitBranchesSheet.test.tsx, +1): the exact lines before and after and whether each is an import, a provide or prop line, or a harness or expectation change; a harness change needs my rule 3 line before the merge. THE PHONE CAPTURES CF1 owes (goat#3658 banner, goat#3652 Usage dimming, goat#3557 refusal, goat#3654 the message inside the Git sheet): N15b takes them on its own simulator and emulator after CF1 is merged into chase/t3-261114-next2 and N15b has merged that head; they are uploaded to #3660 and listed in CF1's record.
+
+## Existing test files changed (answer to item 1)
+
+Four existing test files changed between ed4268897e and fdfda95783, the two named above and two more listed here so the review sees them all. Every change is a harness change: a mock factory, hoisted mock state, a `beforeEach` reset, or a test layer. None is an import, provide or prop line, and no expectation (`expect`/`assert` argument or title of an existing case) changed. All four need the coordinator's rule 3 line. Fresh runs at fdfda95783: the three mobile files 23 passed; ThreadWorkspaceService.test.ts 15 passed.
+
+1. apps/mobile/src/features/threads/git/GitBranchesSheet.occupancy.test.tsx:32, harness (vi.mock factory). Reason: GitBranchesSheet now imports `GitActionFailure` from ./gitSheetComponents, and a vi.mock factory without that export fails the import.
+   - Before (ed4268897e:32): `vi.mock("./gitSheetComponents", () => ({ SheetActionButton: () => null }));`
+   - After (fdfda95783:32-35), formatter split it over four lines: `vi.mock("./gitSheetComponents", () => ({` / `  GitActionFailure: () => null,` / `  SheetActionButton: () => null,` / `}));`
+2. apps/mobile/src/features/threads/git/GitBranchesSheet.test.tsx:77, harness (vi.mock factory), the same reason. One line added inside the existing factory at :76; the `SheetActionButton` stub that records actions is unchanged.
+   - Before (ed4268897e:76-77): `vi.mock("./gitSheetComponents", () => ({` / `  SheetActionButton: (props: ActionProps) => {`
+   - After (fdfda95783:76-78): `vi.mock("./gitSheetComponents", () => ({` / `  GitActionFailure: () => null,` / `  SheetActionButton: (props: ActionProps) => {`
+3. apps/mobile/src/state/use-selected-thread-git-actions.test.ts, harness, three lines; the rest are two new cases (:169-193 "refuses Create worktree while a turn is %s, before creating a folder or branch", :195-204 "creates the worktree once the turn has ended").
+   - :18 added to the hoisted `state.thread` after `worktreePath: null as string | null,` (ed4268897e:17): `runtime: null as { status: string; activeRunId: string | null } | null,`. Reason: the hook now reads `thread.runtime`; null is "no runtime", what every existing case had.
+   - :65 added to the `./use-vcs-action-state` mock after `state.results.push(result),` (ed4268897e:63): `dismissGitActionResult: () => {},`. Reason: the hook now calls it when an action starts.
+   - :139 added to `beforeEach` after `state.thread.worktreePath = null;` (ed4268897e:136): `state.thread.runtime = null;`.
+4. apps/server/src/orchestration-v2/goat/ThreadWorkspaceService.test.ts, harness, three places; the rest are new cases (:238-264 the four recreatable cases, :266-276 the present case).
+   - :39-40 added to `HarnessOptions` after `readonly duringSetup?: …` (ed4268897e:38): `/** The thread has a cleanup snapshot, so a missing folder reads as cleaned. */` / `readonly snapshot?: boolean;`.
+   - Before (ed4268897e:110): `latestForThread: () => Effect.succeed(null),`. After (fdfda95783:112-126): `latestForThread` returns a fixed WorktreeSnapshot when `options.snapshot === true`, else `null`, so every existing case still gets `null`.
+   - Before (ed4268897e:142): `ServerSettings.ServerSettingsService.layerTest(),`. After (fdfda95783:159-161): `ServerSettings.ServerSettingsService.layerTest({` / `  worktreesDirectory: NodePath.join(root, "managed"),` / `}),`. This one reaches every case in the file: the managed worktrees folder becomes <fixture root>/managed instead of the default. None of the existing cases has a path there, and none asserts `recreatable`, so they read what they read before; all 15 pass.
+
+Proposed rule 3 wording, for the coordinator to accept or change: "rule 3, CF1: the four harness changes listed in next2-CF1.md under 'Existing test files changed' (mock factories gain the new export or a no-op, hoisted state and beforeEach gain runtime: null, the ThreadWorkspaceService harness gains a snapshot option and a managed worktrees folder under its fixture root); no expectation changes."
+
+## Phone captures (owed, assigned by the coordinator)
+
+N15b takes these on its own simulator and emulator once CF1 is merged into chase/t3-261114-next2 and N15b has merged that head; they are uploaded to #3660 and listed here when they exist: goat#3658 the banner (outside GOAT's folder before and after; inside unchanged), goat#3652 Usage dimming (cold open before and after), goat#3557 the refusal with no new folder, goat#3654 the failure inside the Git sheet past 5 seconds and Dismiss.
