@@ -2263,6 +2263,45 @@ NOT RUN: `vp run check:changed` and the full CI run for ab59bbdacc; the next #35
 - Merge: merged into the integration branch at ab59bbdacc (#3519). Verified on origin with git ls-remote: refs/heads/chase/t3-261114-next = ab59bbdacc95f4e12ab05bde02cfaa3e2fdb7ad4.
 - goat#3416: the fix, the mechanism and the counts, with "Fixed in #3519; the issue closes when #3519 merges into dev": https://github.com/goat-si/goat/issues/3416#issuecomment-6939429334 (the earlier evidence comment: https://github.com/goat-si/goat/issues/3416#issuecomment-6939404579).
 
+## Final dev merge
+
+### Coordinator, 06:25 UTC, piece A (verbatim)
+
+> A. THE FINAL DEV MERGE (one fresh thread on pen-mac-studio in lane N3's worktree, since N3 knows the Effect 4.1 adaptation; branch chase/t3-261114-next-dev cut from 0c3d629e2c). dev is at 43a57a4a84: two commits since 229ae283d3 (9f96ccd309 "a stopped or dropped hub move or OpenCodex sync finishes what it is in the middle of and skips the rest", server; 43a57a4a84 "a hub's refusal before its first node list no longer deletes the computers behind it", client-runtime), and maybe more by the time it runs: take origin/dev as it is then and say which. Neither has run on Effect 4.1. Merge origin/dev ONCE (a merge; git merge-tree says no conflict today); typecheck all packages the merge touches and their dependents until 0; tests of dev's new commits provide NodeCrypto where 4.1 needs it (imports and provide lines only; anything more is a rule 3 request); lane N3's audits on dev's new production code (a fork into a closed scope with startImmediately or uninterruptible; a typed recovery over a mixed cause; crypto; capture, a database read, identity compare), each with a verdict; budgets at real length by the dev-merge rule; goat-rename --check; the focused tests of dev's commits; check:changed against 0c3d629e2c. Plain push of the NEW branch; report the head, the dev sha, the list of anything adapted. I read it and fast-forward. The record goes in next-N3.md (records branch).
+
+### Record
+
+- Branch: chase/t3-261114-next-dev, cut from origin/chase/t3-261114-next = 0c3d629e2c6d5cd37a500201920c9cd103385879 (checked before the merge). Head af18ef2f8cd04e1bc1634f9fc33c280610bb6947, one merge commit whose parents are 0c3d629e2c and dev 43a57a4a841d5c26fe9cb9b0407f4423981a086d. Plain push of the new branch; git ls-remote: refs/heads/chase/t3-261114-next-dev = af18ef2f8c, refs/heads/chase/t3-261114-next = 0c3d629e2c (untouched), refs/heads/dev = 43a57a4a84.
+- dev taken: origin/dev = 43a57a4a84 at the start, still 43a57a4a84 at the push. No commits beyond the two the decision names.
+- Merge: tree b13e16f26116c3073eaf5a04900938dcc7194078, equal to git merge-tree --write-tree 0c3d629e2c 43a57a4a84. No conflict, nothing resolved by hand. pnpm-lock.yaml unchanged, so no install.
+
+Dev commits since 229ae283d3, with their files:
+
+| Commit | Title | Files |
+|---|---|---|
+| 9f96ccd309 | fix(server): a stopped or dropped hub move or OpenCodex sync finishes what it is in the middle of and skips the rest; an SSH host add registers on the hub within 30 seconds or says to retry (#3628) | apps/server/src/hub/HubMembership.ts, HubMembership.move.test.ts, HubMembership.testkit.ts, OpenCodexSync.ts, OpenCodexSync.test.ts, hubMove.ts, serverJob.ts (new), serverJob.test.ts (new); apps/server/src/mcp/agentSurface.testkit.ts; apps/server/src/sshRemote/SshDeviceAdd.ts, SshDeviceAdd.test.ts |
+| 43a57a4a84 | fix(client-runtime): a hub's refusal before its first node list no longer deletes the computers behind it (#3634) | packages/client-runtime/src/connection/hubProxyDiscovery.ts, hubProxyDiscovery.test.ts; docs/user/remote-access.md |
+
+Adapted to Effect 4.1.3: nothing. No NodeCrypto line, no code change, no rule 3 request. dev's tests pass on 4.1.3 as dev wrote them.
+
+Audits over dev's new production code, one verdict each:
+
+- Fork into a scope that may be closed. apps/server/src/hub/serverJob.ts:32 Effect.forkIn(serviceScope), reached from HubMembership.ts:883 (scope taken at :177) and OpenCodexSync.ts:309 (scope at :129). Both are layer scopes that close only at shutdown. The fork has no startImmediately, and the fiber is interruptible although the caller sits in uninterruptibleMask (serverJob.ts:20): forkUnsafe makes a child interruptible unless asked otherwise, on 4.0.5 (internal/effect.ts:5535) and 4.1.3 (:5622). On a closed scope both versions interrupt the fork before it starts (4.0.5 :5633 and :5641; 4.1.3 :5724-5735), row (A) of the widened audit. SAME. On both versions, in the teardown window, the permit taken at serverJob.ts:23 is not released (its release is inside the effect that never starts) and the caller's join ends interrupted; HubMembership's and OpenCodexSync's other permit users are then shutting down too, so nothing outside shutdown is affected. apps/server/src/sshRemote/SshDeviceAdd.ts:331 Effect.forkChild forks into the running parent fiber, which cannot be closed. The child is interruptible, so its 30-second timeoutOption (:324) still ends it inside the uninterruptibleMask at :335. SAME. SshDeviceAdd.test.ts "a hub registration still waiting after 30 seconds ends unsaved instead of holding the add" and "a call cut after the desktop saved the connection still registers it on the hub" pass on 4.1.3.
+- Typed recovery over a mixed cause. None added. SshDeviceAdd.ts:318 and :347 are catchTags that dev already had on the same sources (nodeRegistration and broker.invoke), moved into the new shape with the same tags. The merge does not change how 4.1 treats them; they fall under the lane's catch audit like every other typed recovery. packages/client-runtime/src/connection/hubProxyDiscovery.ts:176 orElseSucceed over a registry state read existed before; only its predicate changed. SAME. serverJob.ts:25 tapCause with Cause.hasDies is cause-level, and Cause.ts is identical on both versions. SAME.
+- Crypto and SecureRandom. Neither commit uses Random, node:crypto, randomUUID, a hash or a digest. SAME; no NodeCrypto needed.
+- A value captured from a Map or Ref, a yield on a database read, then an identity comparison. None of that shape. hubProxyDiscovery.ts:329 compares session objects across stream elements to skip duplicates (the code before the merge compared the same identity); a new but equal session only reads the config again. OpenCodexSync.ts:314 replaces rows by alias. hubMove.ts:250-277 reads a boolean before each side effect. SAME.
+
+Budgets, by the dev-merge rule (coordinator, 02:58 UTC, quoted under "Answers of 02:58 UTC"): no file the merge touches has a line entry. All are under 1000 lines; the largest is HubMembership.ts at 949. SshDeviceAdd.ts keeps its nonNull 1 entry. node oxlint-plugin-goat/update-code-budgets.ts leaves code-budgets.json unchanged and reports no file over its entry, so every entry still equals its file.
+
+Checks on af18ef2f8c (pen-mac-studio, one heavy job at a time, none other running):
+
+- tsc --noEmit exit 0 in apps/server, packages/client-runtime and their dependents apps/web, apps/mobile, apps/desktop and infra/relay (Effect language service suggestions only).
+- Focused tests of dev's commits: apps/server serverJob.test.ts, HubMembership.move.test.ts, OpenCodexSync.test.ts, SshDeviceAdd.test.ts: 4 files, 89 passed. packages/client-runtime hubProxyDiscovery.test.ts: 29 passed.
+- node scripts/goat-rename.ts --check --limit 200: "0 lines with T3 residue in 0 files, 0 dropped paths", exit 0.
+- set -o pipefail; vp run check:changed 0c3d629e2c6d5cd37a500201920c9cd103385879: exit 0. format, lint, knip 1/2 and 2/2, graphql (apps/server), agent surface audit, agent context budget, typecheck (8 packages), test (63 files, 954 passed). The worktree was clean afterwards.
+
+NOT RUN: a full CI run (ci:full) on af18ef2f8c; a probe of runAsServerJob's closed-scope path (the verdict rests on both versions' source and the widened audit's row (A)); the real-client passes (pieces B and C of the same decision).
+
 ## NOT RUN
 
 - NOT RUN: relay PostgreSQL fixture on pen-mac-studio (`node infra/relay/scripts/test-postgres.ts check`: "pg_ctl: could not start server"). It is proven by the full CI runs: "Connect auth PostgreSQL boundaries" and the relay tests.
