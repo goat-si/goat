@@ -189,12 +189,8 @@ import {
   newPullRequestWatch,
   syncedPullRequestWatch,
 } from "./goat/PullRequestAutoWatch.ts";
-import {
-  endingWakeText,
-  pullRequestWatchNote,
-  takeHeldPullRequestContext,
-} from "./goat/PullRequestDigest.ts";
-import { pullRequestWakeMuted } from "./goat/PullRequestWatchWakes.ts";
+import { takeHeldPullRequestContext } from "./goat/PullRequestDigest.ts";
+import { makePullRequestWatchSync } from "./goat/PullRequestWatchSync.ts";
 import {
   cancelledBeforeStart,
   continuationFailedBeforePrompt,
@@ -2595,85 +2591,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
   });
 
-  // Recheck under the lock after reading the host. Record the watch first so wake events carry it.
-  const dispatchPullRequestWatchSync = Effect.fn("orchestrationV2.dispatch.pullRequestWatchSync")(
-    function* (
-      command: Extract<
-        OrchestrationV2ServerCommand,
-        { readonly type: "thread.pull-request-watch.sync" }
-      >,
-      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-      effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
-    ) {
-      const thread = yield* projectionStore
-        .getThread(command.threadId)
-        .pipe(
-          Effect.mapError(
-            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
-          ),
-        );
-      const key = normalizeThreadPullRequestKey(command);
-      const link = threadPullRequestsOf(thread).find(
-        (candidate) =>
-          candidate.source !== "stack-dismissed" && threadPullRequestKeysEqual(candidate, key),
-      );
-      if (
-        link?.watch?.startedAt !== command.startedAt ||
-        (command.wake && pullRequestWakeMuted(thread, link, command.watch !== null))
-      ) {
-        return yield* new OrchestratorDispatchError({
-          commandId: command.commandId,
-          commandType: command.type,
-          cause:
-            "The watch ended, its thread settled, or the pull request merged while it was read.",
-        });
-      }
-      yield* dispatchThreadMutation(command, events, effects);
-      if (command.dropQueuedWakes === true) yield* dropQueuedPullRequestWakes(command, events);
-      else if (command.watch?.headSha != null && command.watch.headSha !== link.watch.headSha)
-        yield* dropQueuedPullRequestWakes(command, events, command.watch.headSha);
-      if (command.wake === undefined) {
-        if (command.note === undefined) return;
-        // Kept as context: the timeline shows it, and no turn starts.
-        const ordinal = yield* projectionStore
-          .getNextTurnItemOrdinal(command.threadId)
-          .pipe(
-            Effect.mapError(
-              (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
-            ),
-          );
-        const note = pullRequestWatchNote(command, command.note, ordinal, yield* DateTime.now);
-        yield* emit(events, command)(note);
-        return;
-      }
-      yield* dispatchMessage(
-        {
-          type: "message.dispatch",
-          commandId: command.commandId,
-          threadId: command.threadId,
-          messageId: command.wake.messageId,
-          // An ending watch tells what it kept, as stored now rather than when the host was read.
-          text:
-            command.watch === null
-              ? endingWakeText(command.wake.text, link.watch, command.endedWatch)
-              : command.wake.text,
-          notification: command.wake.notification,
-          attachments: [],
-          dispatchMode: { type: "queue_after_active" },
-          createdBy: "agent",
-          creationSource: "server",
-        },
-        events,
-        effects,
-      );
-    },
-  );
-
   const { dropQueuedPullRequestWakes, settleQueuedPullRequestWakes } = makePullRequestWakeDrops({
     projectionStore,
     emit,
     dispatchQueuedRunCancel: (command, events) => dispatchQueuedRunCancel(command, events),
     OrchestratorProjectionError,
+  });
+  const { dispatchPullRequestWatchSync } = makePullRequestWatchSync({
+    projectionStore,
+    emit,
+    dispatchThreadMutation: (command, events, effects) =>
+      dispatchThreadMutation(command, events, effects),
+    dispatchMessage: (command, events, effects) => dispatchMessage(command, events, effects),
+    dropQueuedPullRequestWakes,
+    OrchestratorProjectionError,
+    OrchestratorDispatchError,
   });
 
   const { shouldAutoWatchPullRequest } = makePullRequestAutoWatch({
