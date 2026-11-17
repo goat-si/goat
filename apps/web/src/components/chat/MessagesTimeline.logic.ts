@@ -70,6 +70,11 @@ import {
   timelineEntryStartsResponse,
 } from "./timelineResponseBoundary";
 export { timelineEntryStartsResponse } from "./timelineResponseBoundary";
+import {
+  failedTimelineRunIds,
+  itemizedFailedRunIds,
+  timelineEntryFailedItem,
+} from "./timelineFailedRuns";
 import { deriveUnsettledRunId, timelineIsWorking } from "./timelineLiveRun";
 import {
   resolveGoatMcpItemCall,
@@ -951,49 +956,6 @@ function deriveActiveVisualResponseRunIds(input: {
     }
   }
   return runIds;
-}
-
-function timelineEntryFailedItem(entry: TimelineEntry) {
-  const item =
-    entry.kind === "event"
-      ? entry.projectedItem.item
-      : entry.kind === "work"
-        ? entry.entry.projectedItem?.item
-        : null;
-  return item?.type === "error" && item.status === "failed" && item.parentItemId === null
-    ? item
-    : null;
-}
-
-function failedTimelineRunIds(
-  entries: ReadonlyArray<TimelineEntry>,
-  latestRun: TimelineLatestRun | null,
-) {
-  const failed = new Set<RunId>();
-  if (latestRun?.status === "failed") failed.add(latestRun.runId);
-  for (const entry of entries) {
-    const runId = timelineEntryFailedItem(entry)?.runId;
-    if (runId) failed.add(runId);
-  }
-  return failed;
-}
-
-/** Usage-limit pauses keep their tool groups; any other failure itemizes the run's work. */
-function itemizedFailedRunIds(
-  entries: ReadonlyArray<TimelineEntry>,
-  failedRunIds: ReadonlySet<RunId>,
-) {
-  const usageLimited = new Set<RunId>();
-  const otherFailures = new Set<RunId>();
-  for (const entry of entries) {
-    const item = timelineEntryFailedItem(entry);
-    if (item?.runId) {
-      (item.failure.class === "usage_limit" ? usageLimited : otherFailures).add(item.runId);
-    }
-  }
-  return new Set(
-    [...failedRunIds].filter((runId) => !usageLimited.has(runId) || otherFailures.has(runId)),
-  );
 }
 
 function deriveTurnFolds(input: {
