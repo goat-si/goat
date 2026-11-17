@@ -284,7 +284,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
             label="Resume queue"
             disabled={resuming || busyRunId !== null}
             onPress={async () => {
-              if (busyRef.current || threadShell === null) return;
+              if (busyRef.current) return;
               busyRef.current = true;
               setResuming(true);
               const result = await resumeHeldQueue({

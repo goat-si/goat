@@ -14,6 +14,8 @@ import type {
   RuntimeMode,
   ThreadId,
 } from "@goat/contracts";
+import * as Cause from "effect/Cause";
+import { AsyncResult } from "effect/reactivity";
 import { resolveProviderInteractionMode } from "../../state/legacy-plan-mode";
 
 type Command<Input, E> = (request: {
@@ -103,9 +105,13 @@ export async function resumeThread<E>(
   return input.resumeQueue({ environmentId, input: { threadId: thread.id } });
 }
 
-/** The queue sheet's Resume queue: the composer draft's modes, as the composer's Resume. */
+/**
+ * The queue sheet's Resume queue: the composer draft's modes, as the composer's Resume. The sheet
+ * can open before the thread has loaded; that press sends nothing and says so.
+ */
 export async function resumeHeldQueue<E>(
-  input: Omit<ModeCommands<E>, "runtimeMode" | "interactionMode"> & {
+  input: Omit<ModeCommands<E>, "runtimeMode" | "interactionMode" | "thread"> & {
+    readonly thread: ResumedThread | null;
     readonly draft: {
       readonly runtimeMode?: RuntimeMode | undefined;
       readonly interactionMode?: ProviderInteractionMode | undefined;
@@ -113,10 +119,15 @@ export async function resumeHeldQueue<E>(
     readonly provider: Parameters<typeof resolveProviderInteractionMode>[0];
     readonly resumeQueue: Command<ResumeThreadQueueInput, E>;
   },
-): Promise<AtomCommandResult<unknown, E>> {
+): Promise<AtomCommandResult<unknown, E | Error>> {
   const { thread, draft } = input;
+  if (thread === null)
+    return AsyncResult.failure(
+      Cause.fail(new Error("This thread is still loading. Try again in a moment.")),
+    );
   const failed = await saveComposerModes({
     ...input,
+    thread,
     runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
     interactionMode: resolveProviderInteractionMode(
       input.provider,

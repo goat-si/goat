@@ -147,4 +147,20 @@ describe("resumeThread", () => {
     expect(fromSheet).toBe(failure);
     expect(calls.map((call) => call.command)).toEqual(["setRuntimeMode", "setRuntimeMode"]);
   });
+
+  it("the queue sheet's Resume before the thread has loaded sends nothing and says why", async () => {
+    const { calls, base } = setup();
+    const result = await resumeHeldQueue({
+      ...base,
+      thread: null,
+      draft: { runtimeMode: "approval-required" },
+      provider: undefined,
+    });
+
+    expect(calls).toEqual([]);
+    expect(result._tag).toBe("Failure");
+    expect(result._tag === "Failure" ? Cause.squash(result.cause) : null).toEqual(
+      new Error("This thread is still loading. Try again in a moment."),
+    );
+  });
 });
