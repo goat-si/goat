@@ -1,0 +1,108 @@
+import {
+  type ComposerContextId,
+  type ComposerContextRecord,
+  EnvironmentId,
+  MessageId,
+  type OrchestrationV2TurnItem,
+  ThreadId,
+  TurnItemId,
+} from "@goat/contracts";
+import { it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import { describe, expect } from "vite-plus/test";
+
+import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
+import { builtInSkillProviderText } from "./BuiltInSkillText.ts";
+import { ProjectionStoreV2 } from "./ProjectionStore.ts";
+
+const here = EnvironmentId.make("env-1");
+const main = ThreadId.make("main");
+const side = ThreadId.make("side");
+const other = ThreadId.make("other");
+
+const items = new Map<string, Partial<OrchestrationV2TurnItem>>([
+  ["main/item-1", { type: "assistant_message", messageId: MessageId.make("m1") }],
+  ["main/item-user", { type: "user_message", messageId: MessageId.make("m2") }],
+  ["other/item-9", { type: "assistant_message", messageId: MessageId.make("m9") }],
+]);
+
+const store = Layer.mock(ProjectionStoreV2)({
+  getThread: (threadId) =>
+    Effect.succeed({
+      id: threadId,
+      sideChatOf: threadId === side ? main : null,
+      forkedFrom: null,
+    } as never),
+  getTurnItem: ({ threadId, itemId }) =>
+    Effect.succeed((items.get(`${threadId}/${itemId}`) ?? null) as OrchestrationV2TurnItem | null),
+  getThreadRecords: (threadId) =>
+    Effect.succeed({
+      subagents:
+        threadId === main
+          ? [{ childThreadId: ThreadId.make("review-search") }, { childThreadId: null }]
+          : [],
+    } as never),
+});
+const identity = Layer.succeed(ServerEnvironmentIdentity, {
+  getEnvironmentId: Effect.succeed(here),
+});
+
+const reply = (
+  overrides: {
+    readonly environmentId?: EnvironmentId;
+    readonly threadId?: ThreadId;
+    readonly messageId?: MessageId;
+    readonly itemId?: string;
+    readonly subagents?: ReadonlyArray<{
+      readonly threadId: ThreadId;
+      readonly title: string;
+      readonly environmentId?: EnvironmentId;
+    }>;
+  } = {},
+): ComposerContextRecord => ({
+  version: 1,
+  kind: "response",
+  contextId: "response_m1" as ComposerContextId,
+  label: "Reviewer finished",
+  citation: {
+    version: 1,
+    environmentId: overrides.environmentId ?? here,
+    threadId: overrides.threadId ?? main,
+    messageId: overrides.messageId ?? MessageId.make("m1"),
+    text: "Reviewer finished and returned blocked.",
+    start: 0,
+    end: 39,
+    prefix: "",
+    suffix: "",
+  },
+  itemId: TurnItemId.make(overrides.itemId ?? "item-1"),
+  ...(overrides.subagents ? { subagents: overrides.subagents } : {}),
+});
+
+// null is a message without a thread; undefined would take the default.
+const providerText = (record: ComposerContextRecord, threadId: ThreadId | null = main) =>
+  builtInSkillProviderText(Option.none(), {
+    message: {
+      ...(threadId === null ? {} : { threadId }),
+      text: "[Reviewer finished](goat-context://v1/response/response_m1) check the empty state too",
+      context: { records: [record] },
+    },
+    driver: "codex",
+    project: Effect.succeed(null),
+  }).pipe(Effect.provide(Layer.mergeAll(store, identity)));
+
+const UNAVAILABLE = '<context kind="response" id="response_m1" unavailable="true"/>';
+
+describe("REVIEW N14a", () => {
+  it.effect("a side chat reply built the way the web client builds it (citation names the side chat, item is the parent's)", () =>
+    Effect.gen(function* () {
+      // TimelineAssistantRows.tsx builds citation.threadId from the route thread (the side chat)
+      // and itemId from projectedItem.sourceItemId (the parent's item, shown as inherited history).
+      const text = yield* providerText(reply({ threadId: side }), side);
+      console.log("REVIEW side chat reply provider text:", JSON.stringify(text));
+      expect(text).toContain("thread.read");
+    }),
+  );
+});
