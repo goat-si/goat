@@ -138,12 +138,24 @@ Setup: one `vp run dev` in this worktree (isolated `.goat`, ports 7095 web and 1
 - Checks on 2c0e5563f3: the MCP count tests by name (McpToolAccess.capabilities, agentSurface, toolkits/core: 68 passed; contracts agentSurface/registry: 14 passed; no tool added or removed). `vp run check:changed origin/chase/t3-261114-next2` under the token: EXIT=0. Every static step passed (format, lint, rename check, GraphQL, agent context budget, agent surface audit, knip, typecheck of 2 packages). The test step selected 32 files and passed 336 tests, so the 12:07:55 fallback was not needed. goat-ci workflow_dispatch lane all: https://github.com/goat-si/goat/actions/runs/44102140116 (queued at the time of writing).
 
 
+## N12c desktop Stop (P1 desktop row FAIL, coordinator 15:26:04 item 2 and 16:08:00 item 3)
+
+- N12b is in: the integration branch took 2c0e5563f3 as merge 3a254fa1a5 (coordinator 16:08:00 item 1). Run 44102140116, attempt 1 on 2c0e5563f3: every job green except goat-test-server 2/4, which failed ONE test (ServerBrowserPage.coverage.test.ts "lists a cross-origin frame's controls and one far below the fold, each clickable by ref", Page.captureScreenshot: Unable to capture screenshot). That is the known flake goat#3153; the coordinator logged the occurrence on it, and the test imports none of the branch's files. Attempt 2 (a re-run of that shard, started at 15:41 UTC before the 15:26:04 ruling reached me) was cancelled by the coordinator at 16:07:57 UTC.
+- The bug: on a desktop-rendered preview tab, a person's Stop made the pending `wc.loadURL` reject with ERR_ABORTED (-3), and the web showed "Could not open this address" (previewAddressError.ts).
+- Upstream: 0f13d638af's navigate (apps/desktop/src/preview/Manager.ts:2112-2130 at 0f13d638af) catches any ERR_ABORTED from loadURL as success unless will-prevent-unload fired, so upstream shows no error. GOAT replaced that with its own apps/desktop/src/preview/loadUrlAllowingRedirects.ts, which keeps ERR_ABORTED a failure on purpose (a superseding navigate() and a blocked unload) and forgives only a page redirect.
+- The fix, in that GOAT-owned file: `stopLoad(wc)` records the current load number as stopped, then calls `wc.stop()`; that load's ERR_ABORTED settles as success. Superseded loads and blocked unloads still fail. Manager.ts's `stopLoading` calls `stopLoad` in place, so the file stays at 3652 lines (its entry). Server tabs and goat#3683 are untouched.
+- Head: chase/t3-261114-next2-n12c-desktop-stop at e79c46a7ded42d16c72baef32c3c7734c97a4342, cut from 3a254fa1a5. Its one commit is a cherry-pick of 3a6d1041c9 (first made on n12b, which stays at 3a6d1041c9 with nothing more on it). `git patch-id --stable` gives c8c67b82bfca4ab8ecfebf0df03b01020de28125 for both.
+- Fail first: Manager.navigation.test.ts, new test "regression: a load the person stopped is not a failed navigation" (the existing test there is unchanged). Before the fix it failed at :216 (`expect(Exit.isSuccess(yield* Fiber.join(load))).toBe(true)`: expected false to be true). After it, five desktop preview test files pass (Manager.navigation, GuestInput, Manager, Manager.guestEvents, Manager.helpers): 76/76.
+- check:changed against origin/chase/t3-261114-next2 on e79c46a7de, under the token: EXIT=0. Format, lint, rename check, typecheck (2 packages), tests (7 files, 111 passed), agent context budget, agent surface audit and knip all passed. Token handed back. No goat-ci dispatched; the coordinator dispatches what n12c needs.
+
+
 ## Still open
 
-- N12b: goat-ci run 44102140116 on 2c0e5563f3, then the coordinator reads and merges the follow-up branch.
-- P1 rows 1 to 4 above (C23 and C25 on iOS and Android, desktop Stop IPC with N12-P3-3 and N12-P3-4, goat_preview_stop from a real agent turn); issue #3683.
+- N12c at e79c46a7de: the coordinator's read and the CI it dispatches (rule of 16:08:00 item 2).
+- P1 rows 1 to 4 above, with row 3 re-checked on n12c (Stop on a desktop-rendered tab leaves what had loaded, no error toast, the address kept); issue #3683.
 
-NOT RUN: the C23 and C25 device checks, the desktop Stop check and goat_preview_stop from a live agent turn (P1 rows 1 to 4); a test of the hard reload clearing the marker (no milestone to await); a desktop build for N12-P3-3.
+NOT RUN: the desktop Stop check on a real desktop build (P1 row 3, now with n12c); goat-ci on e79c46a7de (the coordinator dispatches); the C23 and C25 device checks and goat_preview_stop from a live agent turn (P1 rows 1, 2 and 4); a test of the hard reload clearing the marker (no milestone to await).
+
 
 ## Coordinator answers (verbatim)
 
@@ -197,4 +209,19 @@ NOT RUN: the C23 and C25 device checks, the desktop Stop check and goat_preview_
 > - L241, record only: "a busy frame does not hold a copy key back" waits on a real 1 ms setTimeout (ServerBrowserPointer.ts:66-67) under it.effect; it cannot produce a false pass, and the record already says so.
 > Then the mcp count tests by name, check:changed against origin/chase/t3-261114-next2 (the 12:07:55 rule if the selection is wide), ONE goat-ci run on the follow-up branch, report the head; I read it and merge it.
 > THE OTHER LANES: the integration head is 7023eb1ada. N15b merges it at its READY point; N4b's review runs on c3fd17ba86 (cut from 349e167a32) and is merged by me after its verdict.
+
+> Coordinator to lane coordinator, 2026-11-17 14:27:07 UTC (date -u), the part for N12 (quote verbatim in your record):
+> 2. N12b at 2c0e5563f3: I READ THE DIFF (git diff 7023eb1ada 2c0e5563f3, 7 files +97/-21): guardedNavigate and guardedHistoryNavigation clear pendingInitialRequestUrl before they navigate; the settings hard reload goes through ServerBrowserStop.hardReload, which clears it too; measuredResize throws the not-measured error when the read after the draw fails or desktopViewportChanges moved during it; the lane's own ServerBrowser.desktopSize.test.ts and stopLoading.test.ts follow. Accepted. I MERGE IT when its goat-ci run 44102140116 reports success on that sha: N12 sends me the result line and nothing else is needed. goat#3683 (P3-3) and the P1 desktop row: noted.
+
+> Coordinator to lane coordinator (2026-11-17 15:26:04 UTC), the 40-minute check. I read the lane threads and the runs myself; answers to what is waiting on me, each to be relayed verbatim.
+>
+> 2. N12, the desktop Stop row (P1 web: Stop works, then "Could not open this address" because Electron reports the cancelled load as error -3): FAIL, owner N12, on chase/t3-261114-next2-n12b-followups. A load a person stopped is not a failed load: after Stop on a desktop-rendered tab the page shows what had loaded, no error view, and the address bar keeps the address. Read how upstream's desktop handles ERR_ABORTED after its stop (the C25 commit and its did-fail-load handling) and port that; if upstream shows the same error, say so and fix it in a GOAT-owned place. A test at the level the desktop preview manager is tested today, failing first; the web path (server tabs) must be unchanged; goat#3683 (the server not settled after a desktop Stop) is touched only if the same lines fix it. Time box 45 minutes; if it is not small, an issue, the row stays FAIL in the results with the issue number, and I decide whether #3660 ships with it. Server shard 2/4 of run 44102140116 failed on ONE test, ServerBrowserPage.coverage "cross-origin frame controls" with Page.captureScreenshot: Unable to capture screenshot: that is the known flake goat#3153 (I read the log and added the occurrence to the issue); the branch does not touch that file. Do not re-run it now: the Stop fix makes a new head, and that head gets the ONE run. If the fix is deferred, re-run only the failed job of 44102140116 when the run completes.
+
+> Coordinator to lane coordinator (2026-11-17 16:08:00 UTC), the 40-minute check.
+>
+> 1. Integration branch chase/t3-261114-next2 = 3a254fa1a5bac7b0927930dd559fc0752796d2e2. It took N15bb (fast-forward to ce893ca4ea) and N12b (merge of 2c0e5563f3, tree = git merge-tree's own, no file changed on both sides). Tell N4c, SF1, N14 and N12 the new head; none needs to merge it before its review verdict.
+>
+> 2. CI IS STARVED, by load: six lidge runners, all busy, five lane-all runs plus #3682's pull request run queued behind them (its goat-scope waited 13 minutes). RULE UNTIL I LIFT IT: a follow-up branch goes into the integration branch on goat-check, goat-typecheck, goat-test-changed, goat-build and its own packages' test jobs green on the exact head, plus my read (and the narrow review where I ordered one). I then cancel the rest of that branch's run. The full suites run on the integration head, which stays the gate for dev. No lane re-runs or re-dispatches a lane-all run without asking me; no lane polls a run in a long turn.
+>
+> 3. N12, relay verbatim, send with mode steer: your follow-ups are IN at 2c0e5563f3. The desktop Stop row is still FAIL and still yours, per my 15:26:04 ruling, now as a NEW branch chase/t3-261114-next2-n12c-desktop-stop cut from 3a254fa1a5: one paragraph to me first (the upstream commit and path:line for ERR_ABORTED after a stop, where the GOAT fix goes), 45 minutes from receipt, a failing-first test at the desktop preview manager's level, then check:changed and a push; do not dispatch a lane-all run: tell me the head and I dispatch what it needs.
 
