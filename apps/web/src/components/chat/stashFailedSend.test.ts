@@ -167,12 +167,13 @@ describe("a failed send that replied to a response", () => {
     );
   });
 
-  it("leaves a reply out when the client no longer holds the thread that held its response", () => {
+  it("puts a reply back at once when the client holds no shell for the thread that held it", () => {
+    // The send gate judges it: it refuses with a sentence and keeps the text and the banner.
     using shells = sideChatOfParent({ parentLive: false });
     restoreStashedReply([shells.reply], shells.sideChat);
-    expect(
-      useComposerDraftStore.getState().getComposerDraft(shells.sideChat)?.replyTo ?? null,
-    ).toBeNull();
+    expect(useComposerDraftStore.getState().getComposerDraft(shells.sideChat)?.replyTo).toEqual(
+      shells.reply,
+    );
   });
 });
 
