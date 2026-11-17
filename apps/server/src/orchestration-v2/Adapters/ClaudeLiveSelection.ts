@@ -93,3 +93,21 @@ export const applyClaudeSelectionToRunningQuery = Effect.fn(
     ),
   );
 });
+
+/** A selection sent with a steer applies to the running turn when the live process can switch to it. */
+export function claudeSteerSelection(
+  live: {
+    readonly selection: CompiledClaudeModelSelection;
+    readonly openedPermissionMode: string;
+  },
+  steer: CompiledClaudeModelSelection | undefined,
+  turnPermissionMode: string,
+): CompiledClaudeModelSelection | undefined {
+  return steer !== undefined &&
+    live.selection.queryIdentity !== steer.queryIdentity &&
+    canApplyClaudeSelectionLive(live.selection, steer) &&
+    (live.selection.apiModelId === steer.apiModelId ||
+      live.openedPermissionMode === turnPermissionMode)
+    ? steer
+    : undefined;
+}
