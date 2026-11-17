@@ -128,7 +128,7 @@ const projectRegistrations = (probe: Probe) =>
     ),
   );
 const served = (probe: Probe) =>
-  projectRegistrations(probe).pipe(Layer.provideMerge(McpServer.McpServer.layer));
+  projectRegistrations(probe).pipe(Layer.provideMerge(McpHttpServer.layerInProcessMcpServer));
 
 /** The scope /mcp builds for a bearer token arriving on `connection`. */
 const authenticate = (
@@ -693,7 +693,7 @@ it.effect("an image tool registration (goat_screen_run) is guarded like every to
 );
 
 const catalogServer = catalog.pipe(
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   Layer.provide(
     Layer.mergeAll(
       dependencies,
