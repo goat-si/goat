@@ -60,7 +60,12 @@ import { removeLinkedWorktree } from "./vcs/worktreeRemoval.ts";
 import { makeSubmoduleRemoval } from "./storageCleanupSubmodules.ts";
 import { makeNestedWorktrees } from "./storageNestedWorktrees.ts";
 import { makeWorktreeRemovalGate } from "./storageCleanupRemoval.ts";
-import { rankWorktrees, retentionReason } from "./storageCleanupRetention.ts";
+import {
+  rankWorktrees,
+  retentionReason,
+  storageCleanupActivityAt,
+} from "./storageCleanupRetention.ts";
+export { storageCleanupActivityAt } from "./storageCleanupRetention.ts";
 import { makeWorktreeCleanupRun, removalSettingsChanged } from "./storageCleanupRun.ts";
 import { isSshProvisionedRuntime } from "./worktreeSnapshots/isSshProvisionedRuntime.ts";
 import { WorktreeCleanupPreviewState } from "./worktreeSnapshots/WorktreeCleanupPreviewState.ts";
@@ -146,19 +151,6 @@ function heldForLimitRecovery(
   )
     return false;
   return settings.autoResumeLimitedThreads || (settings.snoozeLimitedThreads && resetMs > now);
-}
-
-/** PR metadata refreshes must not reset the inactivity clock. */
-export function storageCleanupActivityAt(thread: OrchestrationV2ThreadShell): number {
-  return Math.max(
-    ...[
-      thread.createdAt,
-      thread.latestUserMessageAt,
-      thread.latestRunRequestedAt,
-      thread.latestRunStartedAt,
-      thread.latestRunCompletedAt,
-    ].flatMap((value) => (value == null ? [] : [DateTime.toEpochMillis(value)])),
-  );
 }
 
 /** Only a complete subagent chain within this worktree shares ownership. */
