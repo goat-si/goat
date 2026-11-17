@@ -22,6 +22,7 @@ const reactTests = [
   "src/features/workspace/WorkspaceToolbar.ios.test.tsx",
   "src/features/settings/WorktreeCleanupSection.test.tsx",
   "src/features/threads/ThreadWorkspaceBanner.test.tsx",
+  "src/features/threads/ThreadWorkspaceBanner.refresh.test.tsx",
   "src/features/threads/SecretRequestCard.test.tsx",
   "src/features/threads/work-shimmer-arbiter.test.tsx",
   "src/features/threads/ComposerSlot.test.tsx",

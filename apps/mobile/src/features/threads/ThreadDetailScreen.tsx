@@ -162,7 +162,7 @@ import type {
 } from "../../lib/threadActivity";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { ComposerErrorNotice } from "./ComposerErrorNotice";
-import { ThreadWorkspaceBanner } from "./ThreadWorkspaceBanner";
+import { LiveThreadWorkspaceBanner } from "./LiveThreadWorkspaceBanner";
 import { ComposerFeedback } from "./ComposerFeedback";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
 import { PendingUserInputCard } from "./PendingUserInputCard";
@@ -1538,7 +1538,7 @@ function ThreadDetailBody(
                   <SideChatParentRow thread={props.selectedThread} />
                   {!props.draftMode &&
                   props.serverConfig?.environment.capabilities.worktreeRestore === true ? (
-                    <ThreadWorkspaceBanner
+                    <LiveThreadWorkspaceBanner
                       environmentId={props.environmentId}
                       threadId={props.selectedThread.id}
                     />
