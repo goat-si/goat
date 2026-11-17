@@ -5,7 +5,7 @@ import { assert, it } from "@effect/vitest";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
-import { ProjectId, ThreadId } from "@goat/contracts";
+import { ProjectId, ThreadId, type TerminalEvent } from "@goat/contracts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -51,7 +51,10 @@ type Services =
 const withSetupShell = <A, E, R>(
   options: {
     readonly async: boolean;
-    /** The first shell shows no prompt and runs a startup child (an rc-file prompt). */
+    /**
+     * The first shell shows no prompt and runs a startup child (an rc-file prompt). The fixture
+     * reports it busy as it opens, so the runner's quiet fallback never races the manager's poll.
+     */
     readonly stuckFirstShell?: boolean;
     /** Holds the restore inside the folder's lease, before it recreates the folder. */
     readonly holdRestore?: {
@@ -146,6 +149,27 @@ const withSetupShell = <A, E, R>(
       processKillGraceMs: 1,
     });
     const latest = () => pty.processes.length - 1;
+    const listeners = new Set<(event: TerminalEvent) => Effect.Effect<void>>();
+    const subscribe: TerminalManager.TerminalManager["Service"]["subscribe"] = (
+      listener,
+      registerCleanup,
+    ) =>
+      terminals.subscribe(listener, registerCleanup).pipe(
+        Effect.map((stop) => {
+          listeners.add(listener);
+          return () => {
+            listeners.delete(listener);
+            stop();
+          };
+        }),
+      );
+    const markBusy = (opened: { readonly threadId: string; readonly terminalId: string }) =>
+      Effect.forEach(
+        [...listeners],
+        (listener) =>
+          listener({ type: "activity", ...opened, hasRunningSubprocess: true, label: "fnm" }),
+        { discard: true },
+      );
     const projects = Layer.succeed(ProjectService.ProjectService, {
       getById: () => Effect.succeedSome(project),
       getByWorkspaceRoot: () => Effect.succeedSome(project),
@@ -160,18 +184,20 @@ const withSetupShell = <A, E, R>(
           // A shell that shows its prompt once open and reports the setup command's exit code.
           Layer.succeed(TerminalManager.TerminalManager, {
             ...terminals,
+            subscribe,
             open: (input) =>
               (options.openRequested === undefined
                 ? Effect.void
                 : Deferred.succeed(options.openRequested, undefined)
               ).pipe(
                 Effect.andThen(terminals.open(input)),
-                Effect.tap(() =>
-                  Effect.sync(() => {
-                    if (options.stuckFirstShell === true && latest() === 0) return;
-                    events.push(`prompt ${latest()}`);
-                    pty.processes.at(-1)?.emitData("$ \x1b[?2004h");
-                  }),
+                Effect.tap((opened) =>
+                  options.stuckFirstShell === true && latest() === 0
+                    ? markBusy(opened)
+                    : Effect.sync(() => {
+                        events.push(`prompt ${latest()}`);
+                        pty.processes.at(-1)?.emitData("$ \x1b[?2004h");
+                      }),
                 ),
               ),
             write: (input) =>
@@ -232,7 +258,7 @@ const withSetupShell = <A, E, R>(
       finishFrom,
       firstCommand,
       secondCommand,
-      terminals,
+      terminals: { ...terminals, subscribe },
       git,
       layer,
     });
