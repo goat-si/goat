@@ -22,7 +22,7 @@ const {
   matrixFor,
   laneRun,
   planRun,
-  loopbackTests,
+  webBrowserTests,
 } = require("./goat-ci-scope.cjs");
 const fs = require("node:fs");
 const { buildImportGraph, listWorkspaceFiles } = require("./goat-ci-imports.cjs");
@@ -540,12 +540,17 @@ describe("planRun", () => {
     }
   });
 
-  it("runs only test-changed's web browser tests with loopback only, never a server test beside them", () => {
+  it("runs only the web browser files of a selection inside the namespace, never a server test beside them", async () => {
     const web = "apps/web/src/components/ReopenClosedViewShortcut.browser.test.tsx";
-    const server = "apps/server/src/hub/disposable/keyPath.test.ts";
-    assert.deepEqual(loopbackTests([server, web, "scripts/dev-runner.test.ts"]), [web]);
+    const mixed = await plan(pr(), labels([]), [
+      "apps/server/src/hub/disposable/keyPath.ts",
+      "apps/web/src/components/ReopenClosedViewShortcut.tsx",
+    ]);
+    assert.ok(mixed.changedTests.vitest.includes("apps/server/src/hub/disposable/keyPath.test.ts"));
+    assert.deepEqual(webBrowserTests(mixed.changedTests.vitest), [web]);
+    const mobile = "apps/mobile/src/features/devices/device-stream.browser.test.ts";
     assert.deepEqual(
-      loopbackTests([server, "apps/server/src/preview/ServerBrowserPage.test.ts"]),
+      webBrowserTests([mobile, "apps/server/src/preview/ServerBrowserPage.test.ts"]),
       [],
     );
   });
