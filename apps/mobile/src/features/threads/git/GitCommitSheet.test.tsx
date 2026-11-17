@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
   focused: true,
   commits: [] as Array<{ commitMessage?: string }>,
   finishCommit: null as ((result: object | null) => void) | null,
+  failureRenders: 0,
 }));
 
 vi.mock("@react-navigation/native", () => ({
@@ -80,11 +81,17 @@ vi.mock("../../../state/use-selected-thread-git-actions", () => ({
   }),
 }));
 vi.mock("../../../state/vcs", () => ({ vcsEnvironment: { status: () => null } }));
-vi.mock("./gitSheetComponents", () => ({ GitActionFailure: () => null }));
+vi.mock("./gitSheetComponents", () => ({
+  GitActionFailure: () => {
+    state.failureRenders += 1;
+    return null;
+  },
+}));
 
 const { GitCommitSheet } = await import("./GitCommitSheet");
 
 async function commitTyped(message: string) {
+  state.failureRenders = 0;
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   state.goBack.mockClear();
   state.commits = [];
@@ -106,6 +113,8 @@ it("keeps the sheet and the typed commit message when the commit fails", async (
 
   await act(async () => state.finishCommit!(null));
   expect(state.goBack).not.toHaveBeenCalled();
+  // The open sheet still holds the place where a failed action reports itself (goat#3654).
+  expect(state.failureRenders).toBeGreaterThan(0);
   expect(state.inputs.get("Commit message")!.value).toBe("fix: keep what I typed");
   act(() => root.unmount());
 });
