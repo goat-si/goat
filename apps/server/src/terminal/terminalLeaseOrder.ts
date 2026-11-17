@@ -160,5 +160,7 @@ export const makeTerminalLeaseOrder = (options: {
     return settle(run(false)).pipe(Effect.ensuring(leave));
   };
 
-  return { attempt, supersede, tryTerminalLease, withThreadLockAndLease };
+  const waitingCount = () => [...waiting.values()].reduce((count, set) => count + set.size, 0);
+
+  return { attempt, supersede, tryTerminalLease, waitingCount, withThreadLockAndLease };
 };

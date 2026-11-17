@@ -39,6 +39,7 @@ export { BoundedTerminalHistory } from "./BoundedTerminalHistory.ts";
 
 import { makeTerminalLeaseOrder, type TerminalLeaseBusy } from "./terminalLeaseOrder.ts";
 import { refuseMovedWorktree, TerminalThreadWorktree } from "./TerminalThreadWorktree.ts";
+import { registerTerminalProbe } from "./terminalProbes.ts";
 import {
   DEFAULT_TERMINAL_ID,
   DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
@@ -2175,10 +2176,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     ),
   );
 
-  const { attempt, supersede, tryTerminalLease, withThreadLockAndLease } = makeTerminalLeaseOrder({
+  const leaseOrder = makeTerminalLeaseOrder({
     resolve: (cwd) => path.resolve(cwd),
     withThreadLock,
   });
+  const { attempt, supersede, tryTerminalLease, withThreadLockAndLease } = leaseOrder;
 
   const openWithWorkspaceLease = Effect.fn("terminal.openLocked")(function* <
     E extends OrchestratorMcpFailure = never,
@@ -3084,7 +3086,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     }),
   });
 
-  return TerminalManager.of({
+  const service = TerminalManager.of({
     ...agentOperations,
     open,
     getShell,
@@ -3102,6 +3104,14 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     subscribe,
     subscribeMetadata,
   });
+  registerTerminalProbe(
+    service,
+    Effect.sync(() => ({
+      waiting: leaseOrder.waitingCount(),
+      listeners: terminalEventListeners.size,
+    })),
+  );
+  return service;
 });
 
 export const layer = (deriveConfigMap: typeof deriveProviderInstanceConfigMap) =>

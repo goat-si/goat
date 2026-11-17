@@ -20,6 +20,7 @@ import {
 import * as TerminalManager from "./Manager.ts";
 import { createManager, FakePtyAdapter, openInput } from "./Manager.testkit.ts";
 import { TerminalThreadWorktreeError } from "./TerminalThreadWorktree.ts";
+import { heldByTerminalManager } from "./terminalProbes.ts";
 
 // goat#3674: a restore holds a folder's lease and then takes the thread's terminal lock for its
 // setup terminal, so a terminal request must never wait on that lease while holding the lock.
@@ -465,5 +466,48 @@ it.layer(
           [folder.cwd, folder.other, folder.cwd],
         );
       }),
+  );
+
+  it.effect("an attach that waited keeps one listener while attached and none after it stops", () =>
+    Effect.gen(function* () {
+      const { manager } = yield* createManager();
+      const folder = yield* heldFolder;
+      const before = (yield* heldByTerminalManager(manager)).listeners;
+      const holder = yield* folder.hold(Effect.void);
+      yield* Deferred.await(folder.held);
+      const attach = yield* manager
+        .attachStream(openInput({ cwd: folder.cwd }), () => Effect.void)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.succeed(folder.release, undefined);
+      yield* Fiber.join(holder);
+      const stop = yield* Fiber.join(attach);
+      assert.strictEqual((yield* heldByTerminalManager(manager)).listeners, before + 1);
+      stop();
+      assert.strictEqual((yield* heldByTerminalManager(manager)).listeners, before);
+    }),
+  );
+
+  it.effect("no waiting request stays behind, whether it ran, was overtaken or was left", () =>
+    Effect.gen(function* () {
+      const { manager } = yield* createManager();
+      const folder = yield* heldFolder;
+      const holder = yield* folder.hold(Effect.void);
+      yield* Deferred.await(folder.held);
+      const waitFor = (terminalId: string) =>
+        Effect.exit(manager.open(openInput({ terminalId, cwd: folder.cwd }))).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+      const left = yield* waitFor("left");
+      const ran = yield* waitFor("ran");
+      const overtaken = yield* waitFor("closed");
+      assert.strictEqual((yield* heldByTerminalManager(manager)).waiting, 3);
+      yield* Fiber.interrupt(left);
+      yield* manager.close({ threadId: "thread-1", terminalId: "closed" });
+      yield* Deferred.succeed(folder.release, undefined);
+      yield* Fiber.join(holder);
+      assert.isTrue(Exit.isSuccess(yield* Fiber.join(ran)));
+      assert.isTrue(Exit.isFailure(yield* Fiber.join(overtaken)));
+      assert.strictEqual((yield* heldByTerminalManager(manager)).waiting, 0);
+    }),
   );
 });
