@@ -40,11 +40,15 @@ function prune<A>(values: Record<string, A>, keep: (id: string) => boolean) {
   return kept.length === entries.length ? values : Object.fromEntries(kept);
 }
 
+function answersKey(item: Extract<DecisionItem, { kind: "user_input" }>) {
+  return userInputDraftKey(item.ref.environmentId, item.ref.threadId, item.request.requestId);
+}
+
 export function useDecisionInbox() {
   const snapshot = useAtomValue(decisionInbox.itemsAtom);
   const [skippedIds, setSkippedIds] = useState<string[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [drafts, setDrafts] = useState<InboxDrafts>({});
+  const [localDrafts, setLocalDrafts] = useState<InboxDrafts>({});
   // Durable choices survive Skip like question drafts do, until the decision leaves the feed.
   const [decisionDrafts, setDecisionDrafts] = useState<Record<string, DecisionDraft>>({});
   const [submissions, setSubmissions] = useState<Record<string, Submission>>({});
@@ -60,6 +64,14 @@ export function useDecisionInbox() {
   });
   const ordered = orderDecisionQueue(snapshot.items, skippedIds);
   const current = ordered.find((item) => item.id === activeId) ?? ordered[0] ?? null;
+  // The thread composer keeps its answers in the same store, so either surface shows the other's.
+  const sharedAnswers = usePendingUserInputAnswers();
+  const drafts: InboxDrafts = { ...localDrafts };
+  for (const item of snapshot.items) {
+    if (item.kind !== "user_input") continue;
+    const shared = sharedAnswers[answersKey(item)];
+    if (shared) drafts[item.id] = { ...localDrafts[item.id], ...shared };
+  }
   // Initial partial results stay unpinned until loading finishes or the user acts.
   if ((!snapshot.isLoading || activeId !== null) && (current?.id ?? null) !== activeId)
     setActiveId(current?.id ?? null);
@@ -74,17 +86,16 @@ export function useDecisionInbox() {
 
   function setAnswers(id: string, answers: QuestionDrafts) {
     if (current?.id === id) setActiveId(id);
-    setDrafts((previous) => ({ ...previous, [id]: answers }));
-    // Also where the thread composer keeps answers, so Stop returns them to the thread's draft
-    // through the one shared rule.
+    setLocalDrafts((previous) => ({ ...previous, [id]: answers }));
+    // Per question, so the composer's answers to the other questions stay; Stop returns them all
+    // to the thread's draft through the one shared rule.
     const item = snapshot.items.find((candidate) => candidate.id === id);
     if (item?.kind !== "user_input") return;
-    const key = userInputDraftKey(
-      item.ref.environmentId,
-      item.ref.threadId,
-      item.request.requestId,
-    );
-    usePendingUserInputAnswers.setState((previous) => ({ ...previous, [key]: answers }));
+    const key = answersKey(item);
+    usePendingUserInputAnswers.setState((previous) => ({
+      ...previous,
+      [key]: { ...previous[key], ...answers },
+    }));
   }
 
   function setDecisionDraft(id: string, draft: DecisionDraft) {
@@ -207,7 +218,7 @@ export function useDecisionInbox() {
       const next = previous.filter(keep);
       return next.length === previous.length ? previous : next;
     });
-    setDrafts((previous) => prune(previous, keep));
+    setLocalDrafts((previous) => prune(previous, keep));
     setDecisionDrafts((previous) => prune(previous, keep));
     if (keptSubmissions !== submissions) setSubmissions(keptSubmissions);
   }
