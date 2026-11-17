@@ -2,13 +2,151 @@
 
 Lane N3 of the next catch-up PR (goat-si/goat#3519), cycle 261114. Branch chase/t3-261114-n3-effect-41 on pen-mac-studio, worked by Opus (claude-opus-5-5) through the Codex harness. Owner ruling O26 A. Class C4 (dependency move).
 
+Merged into the integration branch at 24aa0d5f70 (#3519).
+
 The lane moves GOAT from Effect 4.0.5 to 4.1.3 and alchemy from 2.0.0-beta.80 to beta.85, and ports four upstream rows that need 4.1. Its prerequisite is upstream 57cd05904d (Effect 4.1.2, alchemy beta.85), which carries the infra hunks of bc1ea26cc0. The rows are L458 aa58dc6d22 (Effect 4.1.3), L136 0f5ecef914 (an unloadable GOAT home prints its refusal), L236 e9eb473d52 (Storage Cleanup uses one lstat per entry) and L239 65e4272db1 (the non-blocking spawner). Under 4.1 the gate, the fork audit and the catch-semantics audit found seven regressions in GOAT. They are fixed test-first in six commits, described under "Regressions found and fixed under 4.1" and "Catch semantics in Effect 4.1.3 (coordinator item 6a)".
 
-Integration head contained: 5c798a3072eab155e0ae222dda3dcd33641c0bcc, merged in 65a69a24cb, plus origin/dev 1d41f2c97f, merged in 89d6b2d024. Local head when this draft was written: 9ac4aa0688. Final pushed head: 9ac4aa0688af8fb5c801ef5a8481f282422f35ee (verified on origin with git ls-remote).
+Integration head contained: 5c798a3072eab155e0ae222dda3dcd33641c0bcc, merged in 65a69a24cb, plus origin/dev 1d41f2c97f, merged in 89d6b2d024. The review round then merged origin/dev 0258ec9f22 once, in 44007ccfe9; the integration head stays 5c798a3072. First pushed head: 9ac4aa0688af8fb5c801ef5a8481f282422f35ee, which reviews A and B blocked on its red full run. Head after the fix round: ae1d6ccbc05195b6bc4f9871a970848bd2e9cdd1 (plain push from 9ac4aa0688, verified on origin with git ls-remote on 2026-11-17 at 01:18 UTC).
+
+Part 6, after full run 43994624055 failed one test: lane head on origin 07502739c5d6c79d8be6dc1b09477adf55a75d70, a plain push from ae1d6ccbc0 at 03:22 UTC on 2026-11-17. It adds 471d83782e, a verbatim move-out, and 07502739c5, the fix for a race between a memory policy rotation and a run row read, with its tests (section "The rotation race in memoryAccessInputs"). Follow-up branch chase/t3-261114-n3b-dev-merge: head 24aa0d5f70a7080483897996a13eabf62af0dbc6, the merge of the lane head into 97ee0a1608. It contains the integration head 5c798a3072, dev 229ae283d3 (merged in 5eab5daac0) and the trace test commit 97ee0a1608. Full run 44009905527 runs on that head.
+
+## Lane N3 merged at 24aa0d5f70; what remains
+
+Merged into the integration branch at 24aa0d5f70 (#3519): chase/t3-261114-next was fast-forwarded from 5c798a3072 to 24aa0d5f70a7080483897996a13eabf62af0dbc6 on 2026-11-17 at 04:25 UTC; the freeze is lifted.
+
+### Decision of 04:25 UTC (verbatim)
+
+> Coordinator decision, 2026-11-17 04:25 UTC: LANE N3 IS MERGED. chase/t3-261114-next is fast-forwarded from 5c798a3072 to 24aa0d5f70a7080483897996a13eabf62af0dbc6 (plain push, verified with git rev-parse after fetch; #3519's head is now 24aa0d5f70 and it no longer conflicts with dev: MERGEABLE). That head holds lane N3 (Effect 4.1.3, alchemy beta.85, the three small ports), the memoryAccessInputs fix 07502739c5 with its move-out, dev through 229ae283d3 (#3586, #3615) and the trace record assertion. THE FREEZE IS LIFTED.
+> Basis: three fresh narrow reviews without P0 to P2 (ae1d6ccbc0: /Users/jun/handoff-in/chase/next-N3-fix-review-ae1d6ccb.md; the follow-up branch at 97ee0a1608: next-N3b-review-97ee0a16.md; the race fix at 07502739c5 and its merge 24aa0d5f70: next-N3-race-review-07502739.md, 15 KB), and full run 44009905527 on 24aa0d5f70: attempt 1 finished with every job green (the four server shards, ssh, packages, PostgreSQL boundaries, relay, Windows, build, memory growth, typecheck, check) except goat-test, which failed ONE test of 10,944, apps/web/src/components/CommandPalette.browser.test.tsx:83. That test is the known flake goat#3416 (open since 2026-11-15, three failures on Effect 4.0.5 heads, two of them on pull requests that change only mobile), and the reviewer traced the palette close to plain React state (flushSync(close) into a useReducer dispatch; a Base UI Dialog; no Effect anywhere on the path): class (c), a failure that exists on dev. So the 30 plus 30 runs I asked for are WAIVED and no rule 3 request is needed here; add this failure's run and job to goat#3416 as a comment. Attempt 2 (the rerun of goat-test) is queued; its result goes in the record, and #3519's own full run on 24aa0d5f70 is the gate before dev in any case.
+> For N3 part 6 (records branch only now; no push to either N3 branch, both are merged):
+> 1. The records commit, with everything owed: the items of N3F-P3-1, N3B2-P3-1 and N3B2-P3-2 as ruled, and for this round (N3R-P3-2): the 03:25 ruling verbatim; the cause with path:line at this head (capture ProviderSessionManager.ts:2452, yields :2453 and :2461, check :2462-2465, the rotation consumer :2419-2436, the new object written at :421); the class and what a person sees; both tests with fail-first output and the mutant note; the probe diff, the counts and the probe lines; test (i) on 5c798a3072 with Effect 4.0.5 (3 of 3 fail: latent on dev, reachable in practice since 4.1); the Semaphore paragraph with the citation corrected as the reviewer says (on 4.0.5 the connection lock's withPermits takes a free permit inline at Semaphore.ts:297-305; on 4.1.3 withPermits :358-366 goes through takePermits, inline only when no fitting waiter is queued, :256, else it waits, :269, for a wake releaseUnsafe schedules, :322-336) and BOTH sides of the race named (the read: ProjectionStore.getThread, ProjectionStore.ts:4490-4495, called from currentAttachment, MemoryProviderAuthority.ts:86; the rotation: its prepare takes the same lock at ProviderSessionManager.ts:415 just before it writes at :421); the searched sites with verdicts; goat#3639, goat#3640, goat#3641, goat#3610, goat#3613, goat#3590, goat#3416; both full runs with every attempt; the merge line "merged into the integration branch at 24aa0d5f70 (#3519)"; the card row; #3176 rows if any name N3.
+> 2. N3R-P3-1, one TEST-ONLY follow-up commit on a new branch chase/t3-261114-n3c-followups cut from 24aa0d5f70: in "a prepare during a run row read that changes its memory access evidence", the comment of the "an archived destination" row is wrong (the credential prepared while archived already carries grant none, so that row passes without the key check): reword it to say what the row proves; and add ONE row that pins the key itself, a prepare in the SAME run that changes evidence inside the key (readOnly, or the dispatch scopes), asserting that the read shows none, with the note which mutant it fails (the unchecked captured entry). If such a row cannot be built through readPreparedRunDto without a production seam, say so and leave the comment fix alone. No expectation of an existing row changes (rule 3: additions and a comment). The docs/internals note on the Semaphore fairness (my 04:20 UTC decision) goes on the same branch as its own commit. Focused run of the file, typecheck, report the head; I read it and merge it.
+> 3. Then READY for lane N3 with the records sha. Stay available for N7 part 2 and N9b part 2, which now adapt to Effect 4.1.
+
+### Race-fix review at 07502739c5 and 24aa0d5f70 (report in full)
+
+> APPROVE WITH NITS. Lane head: 07502739c5d6c79d8be6dc1b09477adf55a75d70. Follow-up merge: 24aa0d5f70a7080483897996a13eabf62af0dbc6. Both heads were on origin when I started, and both were still there at the end (04:18 UTC).
+>
+> I found nothing at P0 to P2, so these two commits may land with lane N3. The one open item outside the commits is CI: goat-test failed once in attempt 1 on a palette browser test. That test is already tracked as flaky in goat#3416, with earlier failures on Effect 4.0.5. Attempt 2 is queued.
+>
+> **Findings**
+>
+> **P3-1. The "an archived destination" row does not pin the new key check.**
+> - **Where:** `ProviderSessionManager.test.ts:2304-2339`, with the comment at `:2336`. The production path is `ProviderSessionManager.ts:416-441` and `:584-615`, `McpSessionRegistry.ts:711-723`, and `ProviderSessionManager.ts:2463`.
+> - **Trigger:** remove the final key comparison at `:2463`. The row passes both when the method returns the captured entry unchecked and when it returns the latest entry unchecked.
+> - **Why it still passes:** the prepare that lands while the thread is archived computes `usableThread = false`. That gives grant "none", so the thread's credential is renewed with grant "none" and a `readCurrentPolicy` that keeps `usableThread = false`. After unarchive, `currentMemoryPolicy` gets "none" from the registry, and `memoryAccessInputs` returns undefined at `:2463` before the key matters.
+> - **Consequence:** the comment "only the stored prepare's destinationUsable still differs" is wrong, because the credential's grant differs too. The row proves something else: a credential issued while the destination was archived shows no access after unarchive. Only the "another run" row pins the refusal, as the commit message says, and only against returning the captured entry. Against returning the latest entry, the "another run" row also passes, because `ThreadManagementService.ts:643-645` rejects the other run id. No row covers the key's extra value: a change within the same run to the session id, readOnly or dispatch scopes. Nothing a person sees changes.
+> - **Smallest fix:** reword the comment, for example "the credential prepared while archived carries grant none", and say this in the record.
+> - **Basis:** inferred from reading the code. I did not run it.
+>
+> **P3-2. The record items are owed.**
+> - **Where:** `next-N3.md` on the records branch was last changed by 85bf223499 at 2026-11-16 21:08 UTC, before this fix. The records head is f7b7339916.
+> - **Trigger and consequence:** the round required by ruling (6) is missing. Without it, a reviewer cannot trace the fix to its cause and evidence.
+> - **Smallest fix:** add one records commit with these items:
+>   - the 03:25 ruling, verbatim;
+>   - the cause with path:line at this head (capture `:2452`, yields `:2453` and `:2461`, check `:2462-2465`, rotation consumer `:2419-2436`, new object written at `:421`);
+>   - the class and what a person sees;
+>   - both tests with their fail-first output and the mutant note;
+>   - the probe diff, the counts (3 of 9 and 3 of 8 on 4.1.3, 0 of 10 on 4.0.5) and the probe lines;
+>   - the run of test (i) on 5c798a3072 with Effect 4.0.5. The held test does not depend on the Effect version, so I expect it to fail there too: "latent on dev, reachable in practice since Effect 4.1";
+>   - the scheduler-turn paragraph;
+>   - the list of searched sites with verdicts;
+>   - goat#3639 and goat#3641.
+> - **The scheduler-turn claim matches the Effect sources.** I read it in next-pr-plan.md, and one citation needs tightening. On 4.0.5, `Semaphore.ts:250` is inside `take`. The connection lock uses `withPermits` (`nodeSqliteClient.ts:1175`), and on 4.0.5 that takes a free permit inline at `Semaphore.ts:297-305`. On 4.1.3, `withPermits` (`:358-366`) goes through `takePermits`. It takes inline only when no fitting waiter is queued (`:256`). Otherwise it waits (`:269`) for a wake that `releaseUnsafe` schedules (`:322-336`).
+> - **Name both sides of the race in the paragraph:**
+>   - The read: `ProjectionStore.getThread` (`ProjectionStore.ts:4490-4495`), called from `currentAttachment` (`MemoryProviderAuthority.ts:86`).
+>   - The rotation: its prepare takes the same lock at `ProviderSessionManager.ts:415`, just before it writes at `:421`.
+> - **Basis:** I read the records branch and the npm tarballs of both Effect versions.
+>
+> **What checks out**
+>
+> 1. **The move-out is verbatim.** I checked it with a script.
+>    - The `delegatedTaskWillWake` block, including its doc comment, is byte-identical in `delegatedTaskWake.ts`. The manager imports it at `:10`, re-exports it at `:127` and uses it at `:267`. `delegatedWake.test.ts:20/28/35` still resolves through the re-export.
+>    - `makeThreadCreatedEvent` is byte-identical in the testkit. `readPreparedRunDto` differs only by `export`.
+>    - All 27 removed manager lines and all 134 removed test lines appear in a destination. The only exceptions are the expected ones: the Receipts import becomes `../CommandReceiptStore.ts`, and `const` becomes `export const`. The other new lines are imports.
+>    - Six testkits type against `import type * as Fixture from "./ProviderSessionManager.test.ts"`. The re-export at test `:8` keeps them resolving.
+>    - No production module imports the testkit, and no test file moved.
+>    - The only goat-rename rule that names the manager is `internal-owned-comments` (`rules-internal.ts:32`, `:127-131`). It rewrites "T3" in comments, and the moved comment has none.
+>    - No test title was lost: 61 before, 61 after the move-out, 63 at the head. I compared expect and assert statements with whitespace stripped. The test file at ae1d6ccbc0 had 361. The test file plus the testkit at the head have 363. None was lost, and the two gained are the new tests' asserts.
+>
+> 2. **The fix is what the ruling decided, and nothing more.** `prepareEvidence` (`MemoryProviderAuthority.ts:25-27`) is built from `prepareAuthority` (`:16-24`), so any field added to the authority key joins the evidence key automatically. It has the one-line comment the ruling asked for. The execution authority is untouched: that file's diff adds three lines.
+>    - **(a) The key covers everything the DTO uses.** The DTO (`ThreadManagementService.ts:639-659`) reads `memoryGrantCeiling`, `runId` or `delegatedTaskId`, and `readOnly`, which are all in the key, and `currentMemoryGrant`, which comes from the policy after the yield. Through `...inputs`, `currentMemoryAccess` (`MemoryAccess.ts:43-73`) also reads `dispatchScopes`, which is in the key. The only production caller is `ThreadManagementService.ts:593`.
+>      - Fields outside the key are `threadId` (the map key itself), `interactionMode`, `turnCapabilities` and `screenBindingHints`. None of them can matter: they never reach the DTO, which is only `{access, reason}`. That also answers (d): returning the latest entry cannot show a different field.
+>    - **(b) The encoding is safe.** `prepareAuthority` builds its object in a fixed key order.
+>      - A ceiling of undefined (legacy, denies) and null (an ordinary user start) produce different keys, as they must.
+>      - A missing `dispatchScopes` and an empty list produce different keys, and they mean different things (`MemoryAccess.ts:58`).
+>      - In the array, undefined becomes null, but run and task ids are never null. All ids are string brands (`baseSchemas.ts:272/276/313`, `providerInstance.ts:24`).
+>      - `readOnly` is always a boolean in the map (`McpPrepareInput.ts:47`, `:57`).
+>      - The scope order could make two equal entries differ, which only refuses. That is the safe direction, and no writer reorders scopes.
+>    - **(c) Safety.** Nothing that grants, authorises or admits reads `memoryAccessInputs` or `prepareEvidence`. The grant is current: `currentMemoryPolicy` reads the committed policy first (`:106`), and that is exactly where the test holds. After that, the registry epoch must match (`:116`), and `currentAttachment` re-checks the projection and the attachment.
+>
+>    | Change between capture and check | Before (object identity) | After (key) |
+>    |---|---|---|
+>    | Rotation, nothing changes | No evidence shown (the bug) | Current grant shown |
+>    | Rotation lowers or disables the grant | No evidence shown | The lowered grant, or none; never higher |
+>    | Archive or delete, with a re-prepare | No evidence shown | Key differs; the credential is also "none" |
+>    | Archive or delete, no re-prepare | Entry unchanged; projection check denies | Same as before |
+>    | Switch to another provider | No evidence shown | Instance changes, session id becomes undefined (`:424-427`); refused |
+>    | Plain detach (entry kept, `:2932-2935`) | Same result as after | `currentMemoryPolicy` re-checks attachment (`:381-393`) |
+>    | Open with the same session id (`:2554`, `:2679`) | No evidence shown | Shown; the session is attached by then (`:2547`, `:2672`) |
+>    | Open with a different session id | No evidence shown | Key differs; refused |
+>    | Close or delete of the entry (`:686`) | No evidence shown | `!latest` refuses |
+>
+>    The check of the captured session's attachment at `:2453-2458` is not repeated after the yield, and it never was. With an equal key it names the same session. A stale attachment shows only when execution itself counts the credential, for example a credential reserved during a prepare, so the display stays in line with execution. The small window after `currentMemoryPolicy`'s last check existed before. An A-to-B-to-A change with a different grant would need a prepare that returns to an older run's key. "Stored" rotations and new runs (which bring new ids) do not do that. This part is inferred.
+>
+> 3. **The tests hold the read the right way.** Both use `readPreparedRunDto` with the real `ThreadManagement.layer`. The hold is a wrapped `MemoryProviderCommittedPolicy` in the test layer, keyed on the production span name (testkit `:209`), so there is no seam in production code. If someone renames the span, the tests hang until the project timeout and fail; they do not pass silently. They use only Deferreds, with no sleeps, polling, retries or timeouts.
+>    - The order is deterministic. `entered` resolves only after the capture, and `rotate` returns only when the consumer's `runForEach` pulls past its pass.
+>    - Test (i) would fail on ae1d6ccbc0 with "expected undefined to equal 'read_write'". The "stored" re-prepare reuses the credential (`:554-579`) but still writes a new object at `:421`.
+>    - In CI on 24aa0d5f70, `ProviderSessionManager.test.ts` passed 116 tests in shard 1/4, under Effect 4.1.3.
+>
+> 4. **Budgets.** I counted with the rule's own `countLines`, at 07502739c5 and again at 24aa0d5f70:
+>    - `ProviderSessionManager.ts` is 3005 lines, equal to its entry.
+>    - The test file is 5906 lines, equal to its entry.
+>    - The new or untracked files are under 1000 lines: `delegatedTaskWake.ts` 30, the testkit 246, `MemoryProviderAuthority.ts` 146.
+>    - No entry was raised or added.
+>    - The manager still has exactly three non-null assertions (`:480`, `:2155`, `:2861`) and no `as any`.
+>    - The testkit's `!` at `:89` sits under a `test/` path, which the rule exempts.
+>
+> 5. **The merge contains nothing else.** `git merge-tree --write-tree 97ee0a1608 07502739c5` gives `1ac1ac1816`, which equals the merge commit's tree. The patch-id of `97ee0a1608..24aa0d5f70` equals that of `ae1d6ccbc0..07502739c5` (`fd93eff3…`): six files.
+>
+> 6. **The NotesService site is real.** I agree with goat#3641. The defect is older than Effect 4.1: the code dates from the initial import, b59034d2b30. A concurrent notes read beats the auto-done check in two ways: the version token (`++resultSequence`, `NotesService.ts:322-323`) and the identity check at `:845`. On 4.0.5 the window is open during the file read at `:847`; 4.1 widens it through the lock. The issue's fix proposal addresses both.
+>    - My own search covered `orchestration-v2` and `mcp`. Every identity comparison I checked is a deliberate ownership or generation token:
+>      - `CodexAdapterV2.ts:1194` / `CodexMemoryDelivery.ts:61-67`
+>      - `McpSessionRegistry.ts:335`, `:518` and `:615` (the last one loops on change)
+>      - `HostStatusMcpService.ts:426`
+>      - the turn and retry-hold contexts
+>      - `ProviderSessionManager.ts:685`, which compares explicit admissions only; the rotation never writes them.
+>    - I found no missed site of the `memoryAccessInputs` kind. The lane's own list is not on the records branch, so I could not compare against it.
+>
+> 7. **CI run 44009905527 on 24aa0d5f70.**
+>    - **Attempt 1 is complete.** goat-test failed: one test of 10,944, at `CommandPalette.browser.test.tsx:83`. goat-ci-result failed because of that.
+>    - **Every other job succeeded:** goat-scope, Connect auth PostgreSQL boundaries, goat-test-shared, -desktop, -mobile, -packages, goat-smoke-linux-computer-use, goat-test-memory-growth, goat-test-server 1/4 to 4/4, goat-test-ssh, goat-typecheck, goat-test-pen-windows, goat-test-contracts, goat-test-relay, goat-build, goat-test-pen, goat-test-client-runtime, goat-check, goat-test-windows and goat-test-ingest.
+>    - **Skipped:** the two jobs gated on the event, and "goat-ci republish refresh".
+>    - **The palette close is plain React state.** I traced the path:
+>      - A document `pointermove` reaches `SidebarPointerSensor`, which imports no Effect.
+>      - Its `onStart` calls `flushSync(close)` (`CommandPalette.drag.ts:27-29`).
+>      - That calls `props.setOpen(false)` (`CommandPalette.tsx:3030`), a `useReducer` dispatch (`:291-296`).
+>      - The palette is a Base UI Dialog (`ui/command.tsx:1`, `:20`).
+>
+>      No Effect Atom, registry, client-runtime service or Stream is involved. The row leaves the DOM when the dialog unmounts its popup. That unmount timing is inferred from Base UI's exit behaviour. The test reads the DOM once without waiting.
+>    - **It also fails on dev.** goat#3416, open since 2026-11-15, documents this exact assertion on Effect 4.0.5 heads: #3413 at cbd67102638 (run 43706805241), #3457 at 3ce8c870622 (run 43764612094) and #3471 at 161c617abd7 (run 43785599970). Two of those pull requests change only mobile. The coordinator's note says no issue was found; #3416 is it. It settles the palette failure as class (c), a flake that reproduces on dev, and makes the 30 + 30 count optional.
+>
+> **Merge state.** The lane head 07502739c5 and the follow-up head 24aa0d5f70 match origin. The merge is git's own result with nothing extra. The follow-up branch review has approved, and this review finds nothing at P0 to P2. The only remaining condition is goat-ci-result: it is a failure in attempt 1, from the known flake alone. Attempt 2 was queued at 04:17:57Z with goat-test queued, and I did not see its result.
+>
+> NOT RUN: I ran no tests, because no checkout on this machine has node_modules built from this head's lockfile. That includes fail-first on ae1d6ccbc0, the two mutants, test (i) on 5c798a3072 with Effect 4.0.5, and the 30 + 30 palette runs. I also did not run typecheck, lint, knip or check:changed; CI's goat-typecheck and goat-check passed, which I read but did not run. I did not see attempt 2's result.
+>
+> APPROVE WITH NITS: 07502739c5d6c79d8be6dc1b09477adf55a75d70, merged into the follow-up branch at 24aa0d5f70a7080483897996a13eabf62af0dbc6.
+
+### Two answers on goat#3643 and the fragile OpenCodex site (verbatim)
+
+> Coordinator answers, 2026-11-17 (two small answers, recorded as given):
+> (1) goat#3643: yes, close it as a duplicate of goat#3416 with a one-line comment, AFTER this run's job link, the 30 of 30 counts on 24aa0d5f70 and on dev 229ae283d3, and the code path (plain React state: CommandPaletteResults.tsx:266, Sidebar.pointer.ts:38 and :81-94, flushSync(close), CommandPalette.tsx:296 and :3030) are added to goat#3416 as a comment: that evidence is what the eventual test fix needs.
+> (2) The "safe but fragile" site: file ONE goat issue, outside this lane, "OpenCodex managed update: the window steps' identity checks are safe only while they run inside the checking semaphore" naming hub/OpenCodexManagedUpdate.ts:141 and :580 and ocxUpdateWindow.ts:297, :390, :570, :682, saying what breaks if a step ever runs outside that semaphore (runCheck installs an equal new object, so the identity check would refuse) and proposing a one-line comment at the semaphore or a content comparison; send me the number (goat_origin_report) and cite it in the record's table. The client-runtime homeSync.ts:144 and :75 case stays record-only as you have it.
+> The identity-after-yield table and its stated limits go into the record as written.
 
 ## Rows ported
 
-These are the 37 first-parent commits from git log --first-parent origin/dev..HEAD at local head 9ac4aa0688, in branch order within each group. The final pushed head is 9ac4aa0688af8fb5c801ef5a8481f282422f35ee.
+These are the 37 first-parent commits from git log --first-parent origin/dev..HEAD at 9ac4aa0688, the first pushed head, in branch order within each group. The six commits of the review round that follow it, up to ae1d6ccbc05195b6bc4f9871a970848bd2e9cdd1, are listed under "Review round A+B". Part 6's two commits on top of ae1d6ccbc0 are the last rows of "Move-outs" and "Fixes found under 4.1".
 
 ### Move-outs (verbatim, before the code that needed the room)
 
@@ -24,6 +162,7 @@ These are the 37 first-parent commits from git log --first-parent origin/dev..HE
 | 284485011523aca9eb57442ba1893ae38a8acd68 | refactor(shared): move classifyError out of nodeSqliteClient.ts |  |
 | 1dbdd044c327226f541e3ad60255d983cd6f1400 | refactor(server): move two test helpers out of files the next merge leaves at budget |  |
 | 4a4e988fdb1f2612c5043544665d44d7043b9e17 | refactor(provider-acp): move the two subagent status predicates out of the ACP adapter |  |
+| 471d83782ef000a3c32b21e17c2bf42ed46a0508 | refactor(server): move three helpers out of ProviderSessionManager and its test | part 6, on ae1d6ccbc0, before 07502739c5; byte for byte (cmp) |
 
 ### Port rows
 
@@ -46,6 +185,7 @@ These are the 37 first-parent commits from git log --first-parent origin/dev..HE
 | ffbce8a8fad4ac94c03cbdb137cfaa3af45644a9 | fix(server): ACP Stop and Codex survivor adoption still settle after their session scope closed | fork audit |
 | f6d1b1589872e61c3131964d68599fbd955a1e6d | fix(shared): a write SQLite already rolled back fails with its SqlError again | catch audit |
 | 9ac4aa0688af8fb5c801ef5a8481f282422f35ee | fix(server): a failed Claude query open keeps its typed error when disposal also fails | catch audit |
+| 07502739c5d6c79d8be6dc1b09477adf55a75d70 | fix(server): a memory policy rotation no longer hides a run row's memory access | part 6; full run 43994624055 |
 
 ### Test-harness commits (rule 3, authorised)
 
@@ -96,6 +236,17 @@ Files each merge took from both sides (git show --cc --name-only: the result dif
 Upstream test edits carried: 57cd05904d's own test edits are carried as upstream wrote them where GOAT has the file. aa58dc6d22 and e9eb473d52 have none. 0f5ecef914's assertion goes into GOAT's "rejects an unloadable home" test; its other test edits were already carried in #3212 as bootService.render.test.ts. 65e4272db1's NonBlockingSpawner.test.ts is new; its Claude and Muse tests were already in GOAT (#2533, #3260).
 
 The port touched 442 files mechanically (an import or provider swap only) and adapted 458 files by hand. Both lists are at the end of this record.
+
+### Review round A+B (after 9ac4aa0688)
+
+| sha | subject | note |
+|---|---|---|
+| cc0f790f63 | test(server): the trace policy tests build the span GOAT writes | review A item 1, rule 3 as authorised: every case builds its spans through makeLocalFileTracer with the policy as shouldRecord and a capturing sink; the #2465 case asserts trace.parent_omitted on the trace record the sink receives. Assertions unchanged. Fail-first on 9ac4aa0688: "× marks a recorded child whose fast parent already ended (#2465)", "AssertionError: expected undefined to be true", Tests 1 failed, 6 passed (7) (n3-tracepolicy-failfirst.log); passes after. |
+| 44007ccfe9 | Merge origin/dev (0258ec9f22) into lane N3 | review B item 9; no conflicts; its tree equals git merge-tree of cc0f790f63 and 0258ec9f22 |
+| 8c4f618595 | test(server): dev's session revocation tests provide NodeCrypto on Effect 4.1 | #3586's SessionStore.durableRevocation.test.ts and SessionSocketLifetime.test.ts get the random-number service Effect 4.1 moved out of NodeServices; no expectation changed; SessionStore.ts budget entry 1124 (its real length; dev's entry is 1288) |
+| a742e67633 | test(server): a receipt gate test comment names the MCP transport layer that exists | review B item 8a: ChannelSessionReceiptGate.test.ts:438 names McpHttpServer.layerMcpTransport |
+| a5c33e36d9 | refactor(shared): the NodeServices-with-crypto test layer lives under testing | review B item 8b, see the section below |
+| ae1d6ccbc0 | chore(deps): the alchemy beta.85 patch file is upstream's byte for byte | review B item 8c, see the section below |
 
 ## Rulings
 
@@ -182,6 +333,508 @@ Rulings 1 to 5 and Sequencing are quoted from n3-rec-rulings.md, which holds the
 > (6) Two more things for the record before READY, which a read-only subagent can prepare while the gate runs: (a) the Effect 4.1.3 change in how catch treats causes that mix failures and defects: state it exactly with the Effect source file:line on both versions, then list where GOAT relies on the old behaviour in places where a wrong answer is costly: the server's last-resort handlers and guardErrors paths, the effect worker and its outbox settlement, ProviderSessionManager and the adapters' ingest-failure handlers, RunExecutionService, the channel delivery worker, the MCP transport's error mapping. For each: path:line, what a mixed cause does now, and whether an error that used to be caught and recorded can now escape as a defect (one error must never take down the server) or a defect that used to escape is now swallowed. A site that changes gets a test-first fix. If the honest answer is that this cannot be bounded by a search, say so and say what was checked. (b) File the goat issue for OpenCodexChildBootstrap.ts:850 (the setup session is not revoked when shutdown interrupts a readiness check; on both Effect versions, so it predates N3) with the path:line and what is left behind, and cite its number in the record.
 > (7) READY then carries: the head on origin, the full CI run's URL and result, the gate line, the list of rule 3 authorisations used (six assertions _tag, the removed digest test, the lstat spy line, ChannelUnlinkedAccess, channelSessionReceiptDelivery), the three audits (registration context, spawn sites, forks), the lockfile comparison, the alchemy patch hunk comparison, the native fingerprint line, and NOT RUN. The lane then gets two fresh C4 reviews (server semantics and security; packages, infra, lockfile and patches) before the merge.
 
+### Review A ruling at 9ac4aa0688 (verbatim)
+
+> N3 review A (server semantics and security) at 9ac4aa0688: BLOCK, because the full CI run on this head is red; otherwise the reviewer could not build a tool call that reads another thread's data, widens its scope or runs with the owner's permissions, found no random value or stored digest whose bytes changed, and confirmed the fork, catch and crypto claims from the Effect sources. Report /Users/jun/handoff-in/chase/next-N3-review-A-9ac4aa06.md. Review B (lockfile, patches, infra, merges, CI) is still running; its findings follow. For N3 part 4 (or a fresh thread in the same worktree):
+>
+> 1. N3A-P1 (the blocker). Full run 43953991793, job goat-test-server 2/4: apps/server/src/observability/tracePolicy.test.ts:62 "marks a recorded child whose fast parent already ended (#2465)" fails "expected undefined to be true". Cause, confirmed in both Effect sources by the reviewer and in GOAT's code by me: the policy marks the child after the child has ended (tracePolicy.ts: span.attribute("trace.parent_omitted", true) inside shouldRecord, which LocalFileSpan.end calls after setting status Ended), and Effect 4.1 ignores attribute() on an ended Tracer.NativeSpan. The test's fixture builds raw NativeSpans; production builds LocalFileSpan (packages/shared/src/observability.ts), whose attribute() writes its own map first, so the trace record GOAT writes still carries the mark. WAIT until run 43953991793 has finished (server shards 3/4 and 4/4 were still running at 21:40 UTC) and handle EVERY failure it shows in this one round.
+>
+>    Rule 3 authorisation, quote verbatim: "Coordinator authorisation, 2026-11-16, rule 3, lane N3, apps/server/src/observability/tracePolicy.test.ts: the fixture that builds the test's spans may change from a raw Tracer.NativeSpan to the span production uses (a LocalFileSpan obtained through makeLocalFileTracer with the policy as shouldRecord and a capturing sink, or the smallest equivalent that goes through LocalFileSpan), for every case in the file. No expectation changes: 'marks a recorded child whose fast parent already ended (#2465)' still asserts that the child carries trace.parent_omitted true, and it is BETTER if it asserts it on the trace record the sink receives, since that is what GOAT writes. Conditions: (a) the commit shows the test failing on 9ac4aa0688 with its message and passing after; (b) every other case in the file keeps its assertions; (c) the record states the behaviour change in plain words (Effect 4.1 drops an attribute set on an ended native span; GOAT's local trace file is unaffected because LocalFileSpan keeps its own map; a delegate tracer such as an OTLP exporter does not receive trace.parent_omitted, and say whether it ever did in time on 4.0.5); (d) search apps/server and packages for every other place that sets an attribute, adds an event or adds links on a span that may already have ended (span.attribute after end, annotateCurrentSpan in a finalizer or onExit that runs after the span closed, the trace policy, the memory-growth sampler, SQL lock-wait annotations) and list each with path:line and what 4.1 does there; a site that loses data GOAT writes or shows gets a test-first fix."
+>
+> 2. The lesson for the gate: check:changed runs only the tests beside changed files, and this lane changes the runtime under ALL of them. Before the next full CI run, run the WHOLE apps/server test suite and the packages suites locally on the fixed head on pen-mac-studio (vp test over apps/server and packages, the same shards CI runs: say the exact commands and counts), with the known failures cited as before, so the next full run is expected green. If that is too long for one sitting, split it by CI shard and report each.
+>
+> 3. N3A-P2 (record; no code change). apps/server/src/mcp/toolkits/retryKeys.test.ts:233, :239 and toolkits/project/handlers.goatclaw.test.ts:76 are NOT unchanged against 5c798a3072: commit 0793dd3a0c swapped McpServer.McpServer.layer for layerInProcessMcpServer in both and added NodeCrypto.layer in retryKeys. I accept them as setup-only changes with no expectation changed (after f8eeb86c21 that layer is McpServer.layer plus a middleware that only retypes the context, and both tests failed with this harness until 373b22790b, so the swap did not hide the bug). Correct the record: remove "pass unchanged" at next-N3.md:717 and :1074 and in 373b22790b's description there; list the three lines before and after in the rule 3 table under this sentence: "Coordinator confirmation, 2026-11-16: the three harness lines are setup only and authorised after the fact; the expectations of both files are unchanged."
+>
+> 4. N3A-P3 (record, and one issue): existing PR read cache files (pr-v2<hex>) are not read after the upgrade because Effect 4.1 Persistence stores keys as <storeId>:<key>: each PR is fetched once more and the old files are pruned after a day; the fork-into-a-closed-scope and catch changes are already in Effect 4.1.2, not new in 4.1.3 (commit 0793dd3a0c alone is affected: matters for bisecting); apps/server/src/process/NonBlockingSpawner.ts:22-52 (upstream's code, L239): while a mount hangs, each spawn attempt leaves an entry in directoryTails and waiting that never resolves: file a goat issue (every buffer has a limit: cap waiting, or fail fast while a check for the same directory is already hung) and send me the number; .repos/effect-smol is still at 4.0.1: say in the record whether vpr sync:repos is owed with this bump (AGENTS.md asks for it) and do it in this lane if it is a plain sync with no code effect, else file it.
+>
+> 5. Then: one push with the fixes (plain push, no force), the whole-suite local run of item 2, ONE new manual full CI run (URL and time to me at dispatch), the records commit, READY. A narrow fresh review of the delta since 9ac4aa0688 runs before the merge. The freeze stands.
+
+### Review B ruling at 9ac4aa0688 (verbatim)
+
+> N3 review B (lockfile, patches, infra, moves, budgets, merges, CI) at 9ac4aa0688: BLOCK on the same single point as review A, the red full CI run (tracePolicy.test.ts); everything else in part B checks out. Report /Users/jun/handoff-in/chase/next-N3-review-B-9ac4aa06.md. B confirms by script: every effect, @effect, alchemy, @alchemy.run and @distilled.cloud package equals upstream's lockfile at 57cd05904d and aa58dc6d22 (apart from @effect/tsgo, correctly left out); 57 versions added and 187 removed against 5c798a3072, all reachable only from those families; 39 of 39 patch hashes equal their files; lane N9b's rows survive; the patches against the published tarballs; infra with no deploy; 195 budget entries lowered or removed, none raised; six of ten merges equal git's own and the other four are disclosed adaptations; the native fingerprint; the same job list as the run that passed on 5c798a3072. Added to the fix round already ruled after review A (same single push, same order):
+>
+> 6. N3B-P3-1 (records branch). devlog/_chase/010_fork_delta.md gets one entry per GOAT fix that lives in a file shared with upstream, so the next chase does not drop it: the registration-context hook in apps/server/src/mcp/McpHttpServer.ts (:480, :511: the server's own services win over the caller's: an authorisation guard), toleratingFinishedRollback in packages/shared/src/nodeSqliteClient.ts (:1260; the existing entry at fork delta :159 says to take upstream's file and re-apply only the Node range check: extend it), forkInScope in packages/provider-acp/src/server/adapter.ts (:8251) and in the other two call sites, and packages/shared/src/forkInScope.ts itself as a GOAT module.
+>
+> 7. N3B-P3-2. .repos/effect-smol is at 4.0.1 (it still has src/Crypto.ts) and .repos/alchemy-effect is as old; AGENTS.md says to run vpr sync:repos when the matching dependency moves, and an agent that follows the vendored patterns now learns 4.0 behaviour (forks into a closed scope that run, the old catch rule, writes to ended spans). Thread worktrees leave .repos out, so do this in a way that fits the repository: if vpr sync:repos is a plain, reviewable update of vendored reference files with no code effect, make it ONE separate commit at the end of this round; if it is large or needs the main checkout, file a goat issue instead, cite it in the record, and send me the number.
+>
+> 8. N3B-P3-3 (code nits and record). (a) apps/server ChannelSessionReceiptGate.test.ts:438 still names McpHttpServer.layer, which f7d7009622 removed: fix the name in the test's text (no expectation changes). (b) packages/shared/src/nodeServicesWithCrypto.ts is exported from @goat/shared but imports @effect/platform-node, which shared declares only as a dev dependency: only tests and two dev scripts use it today: either move it to a testkit-style subpath that says so, or declare the dependency properly; say which and why (knip and the package's exports map must agree). (c) Record: the sentence "every package in these families matches upstream" names @effect/tsgo 0.67.1 and its seven platform packages as left out because upstream's 95e53a54dbd is not ported; the alchemy@2.0.0-beta.85.patch carries upstream's hunk with short index lines, so its lockfile hash is 79807d61... where upstream's is 07cc8c7e...: say "same hunk, different patch file bytes" instead of "carried unchanged", or regenerate the patch file so the bytes and the hash equal upstream's plus GOAT's Artifacts hunk (preferred if it is mechanical).
+>
+> 9. Dev. origin/dev has moved to 0258ec9f22 (it includes #3586: auth SessionStore.ts, DurableRevocations.ts and tests that fork with startImmediately, none of which has ever run on Effect 4.1). Merge origin/dev ONCE in this round, before the whole-suite run: set SessionStore.ts's budget entry to the file's real length in the merged tree (the reviewer counts 1124; this lane had lowered it to 1108; dev's entry is 1288: nothing is raised above dev's), adapt #3586's files to 4.1, and extend the fork re-audit and the ended-span search to them (DurableRevocations.ts:65 is a plain forkScoped at layer build; the tests' startImmediately forks need a look). The integration head stays 5c798a3072: do not merge chase/t3-261114-next again (it has not moved).
+>
+> 10. Both reviewers note that none of the three audits looked for GOAT code that annotates a span after it ends, and that Effect 4.1 guards event and addLinks the same way as attribute: that is condition (d) of the tracePolicy authorisation; make it its own short section in the record with every site and verdict.
+>
+> The order stands: wait for run 43953991793 to finish, fix everything in one round, the whole apps/server and packages suites locally, one push, ONE new full CI run, records, READY, then a narrow fresh review of the delta since 9ac4aa0688. The freeze stands.
+
+### The vendored reference sync is not in this lane (2026-11-16 22:05 UTC; verbatim)
+
+> Coordinator decision, 2026-11-16 22:05 UTC, lane N3, item 7 (the vendored reference sync): NOT in this lane. Part 4 reports that the sync works but its alchemy-effect part touches about 24,000 files; a commit of that size inside #3519 would bury the port in the diff, slow every check and make the squash unreadable, and the references are read-only material that no build uses. File a goat issue "sync .repos/effect-smol and .repos/alchemy-effect to the versions GOAT now pins (Effect 4.1.3, alchemy beta.85)" saying why it matters (agents follow the vendored patterns; the 4.0 copies teach forks into a closed scope that run, the old catch rule and writes to ended spans, none of which typecheck catches) and that it goes as its own pull request to dev right after #3519 merges; cite the number in the record and send it to me. No .repos change in the lane's push.
+>
+> Also for part 5: goat#3610 (NonBlockingSpawner's unbounded wait queue) noted. The remaining order from part 4's handoff stands: nodeServicesWithCrypto's home, the alchemy patch bytes, the record (review B's ruling, the ended-span section, the dev merge, both CI results), the whole server suite and the package suites locally, one push, one new full CI run with its URL and time to me, the records commit with the fork-delta entries, READY.
+
+The coordinator's relay of the same decision to part 5 (verbatim):
+
+> NO .repos change in lane N3, not even effect-smol alone. One goat issue covers both references (effect-smol to effect@4.1.3, alchemy-effect to v2.0.0-beta.85, with scripts/sync-reference-repos.ts as the way to do it and the reason it matters for agents), cited in the record, number to me; it goes as its own pull request to dev right after #3519 merges, where a diff of that size is reviewable as what it is. Reason for not splitting: the effect-smol half is a minor-version diff of a whole monorepo too, and any vendored-reference commit inside #3519 hides the port in the diff. Part 5 need not wait for anything else from me: finish items 8b and 8c, the record, the whole server and package suites locally, push once, dispatch the one full run and send its URL and time.
+
+Done: no .repos change is on the branch (git diff origin/dev...HEAD -- .repos and git diff 9ac4aa0688 HEAD -- .repos are both empty; the two sync commits part 4 made locally were dropped before any push). Issue: goat#3613 (https://github.com/goat-si/goat/issues/3613), sent to the coordinator.
+
+## Fix-round review verdict and what remains
+
+The coordinator's ruling on the fresh narrow review of the fix round (verbatim):
+
+> N3 fix-round review (fresh narrow, Opus 5.5 xhigh) at ae1d6ccbc05195b6bc4f9871a970848bd2e9cdd1: APPROVE WITH NITS, nothing at P0 to P2, conditional on full run 43994624055 ending with goat-ci-result SUCCESS on this head. Report /Users/jun/handoff-in/chase/next-N3-fix-review-ae1d6ccb.md (12 KB). It confirms by script that all 20 assert statements and all 7 test names of tracePolicy.test.ts are unchanged, that the old fixture fails for the stated Effect 4.1 reason and the new one passes for production's reason, that no other write to an ended span needs a fix (its own search), that the dev merge equals git's own tree and dev's #3586 has no fork, catch or crypto problem on 4.1, that the test layer has no production importer, that the alchemy patch is upstream's blob at aa58dc6d22 with only the 25 hash occurrences changed in the lockfile, and that no budget entry was raised. For N3 part 5:
+>
+> 1. NO PUSH to chase/t3-261114-n3-effect-41 while run 43994624055 is in flight or after it: the head that the run and the review certify is ae1d6ccbc0. When goat-ci-result is SUCCESS on it, the coordinator merges the lane into chase/t3-261114-next (a fast-forward: the head contains 5c798a3072) and lifts the freeze. If any job fails, send me the job, the test and the message at once; do not push a fix before I answer.
+>
+> 2. N3F-P3-1 (the records commit you already plan, records branch only). Every item below must be in it, since none is on origin yet: the rule 3 table row for tracePolicy.test.ts with the authorisation verbatim, the fail and pass output and the plain-words behaviour sentence; the three harness lines in retryKeys.test.ts and handlers.goatclaw.test.ts before and after with the coordinator's confirmation sentence, and "pass unchanged" removed at next-N3.md:717 and :1074 (the quote at :155 is mine and stays); the ended-span section (the reviewer's list of sites may be used with its path:line); the PR read cache note; "already in Effect 4.1.2" at :1016 and :1091; goat#3610, goat#3590 and goat#3613 (no .repos change in the lane); the @effect/tsgo sentence; the dev merge 44007ccfe9 (equal to git's own merge tree 82d20fbbad) and 8c4f618595; both full runs with their results; the local whole-suite run with its commands and counts per shard. Correct :485: the alchemy patch file is now upstream's file from aa58dc6d22 byte for byte (upstream added it in 87f3d93dea; lockfile hash 07cc8c7e...), no longer "GOAT's, carried unchanged". Correct the importer count: 32, not 33 as a5c33e36d9's message says (say so in the record; the commit stays). The fork-delta entries: the registration-context hook in McpHttpServer.ts, toleratingFinishedRollback in nodeSqliteClient.ts (extend the existing entry), forkInScope (the GOAT module and its three call sites): say in the record in which commit and file they reach dev, because the next chase reads devlog/_chase/010_fork_delta.md in the repository, not the records branch alone.
+>
+> 3. N3F-P3-2 (one test-only follow-up commit, AFTER the merge, not on this head): in "marks a recorded child whose fast parent already ended (#2465)", build the tracer with the policy as shouldRecord and a sink that collects what push receives, and ALSO assert trace.parent_omitted true on the record the sink received for the child; the existing assertion on the span stays, no expectation is removed or changed (rule 3: an added assertion). Show it failing when LocalFileSpan.end is changed on a scratch copy to build the record before the policy runs, and passing on the real code. Make it on a new branch chase/t3-261114-n3b-trace-sink cut from the integration head I send you after the merge; a focused run of that file only; report the head; I read it and merge it. Not a block for the merge.
+>
+> 4. Then READY with the run's result and the records sha. Stay available: lanes N7 part 2 and N9b part 2 merge the post-N3 head next and may ask about the 4.1 adaptation points the reviews listed.
+
+Where each item of N3F-P3-1 is in this record:
+
+| item | where |
+|---|---|
+| tracePolicy.test.ts: authorisation, fail and pass output, behaviour in plain words | the authorisation, verbatim, under "Review A ruling at 9ac4aa0688"; the row in "Test-harness changes under rule 3"; the fail and pass output under "Review round A+B" (cc0f790f63); the behaviour sentence in "Review A notes" and at the top of "Spans written after they end" |
+| the three harness lines in retryKeys.test.ts and handlers.goatclaw.test.ts | "Test-harness changes under rule 3", with the coordinator's confirmation sentence. "Pass unchanged" is removed outside the coordinator's own quotes. |
+| spans written after they end | its own section, "Spans written after they end", with every site and its path:line, including event, addLinks and the dev 0258ec9f22 files |
+| PR read cache, "already in 4.1.2", goat#3610 | "Review A notes"; the fork and catch audit texts now also say 4.1.2 |
+| goat#3590, goat#3613 | goat#3590 under the audits; goat#3613 under the item 7 decision and in "Review A notes". No .repos change is in the lane. |
+| @effect/tsgo | "Lockfile and pins" |
+| dev merge 44007ccfe9 and 8c4f618595 | "Dev merge 0258ec9f22 (review B item 9)" and "Review round A+B". 44007ccfe9's tree is 82d20fbbad, equal to git merge-tree of cc0f790f63 and 0258ec9f22. |
+| both full runs | "Full CI run" |
+| the local whole-suite run | "Whole-suite local run (review A item 2)" |
+| the alchemy patch file | "Alchemy patch, hunk by hunk": now upstream's file from aa58dc6d22, byte for byte (upstream added it in 87f3d93dea; lockfile hash 07cc8c7e...) |
+
+Importer count: a5c33e36d9's message says 33 importers. The right number is 32 (30 tests and testkits plus the two dev scripts), and the 33rd file the old path matched was the fork-delta line. The commit stays as it is; "Review B items 8b and 8c" gives 32.
+
+Fork-delta entries and how they reach dev: the records commit that carries this text adds them to `devlog/_chase/010_fork_delta.md` on chase/t3-261114-next-records:
+
+- area `mcp-registration-context`: the registration-context hook in McpHttpServer.ts (:480, :511) and the GOAT file registrationContext.ts;
+- area `fork-in-scope`: the GOAT module packages/shared/src/forkInScope.ts and its call sites, which are provider-acp adapter.ts:8251 (an upstream file) and CodexSurvivorContinuation.ts:477 (a GOAT file), plus the same kind of fix by a closed-scope check in finiteProviderRequest.ts (a GOAT file);
+- area `node-pin`: a new bullet for toleratingFinishedRollback (nodeSqliteClient.ts:1260, helper in nodeSqliteErrors.ts), and its policy now names that hook beside the range check.
+
+The lane branch itself carries only the shared test layer's line (010_fork_delta.md:58, from 0793dd3a0c, with the path updated in a5c33e36d9), and it reaches dev with #3519. The records branch is not merged into the integration branch (85bf223499 is not an ancestor of 5c798a3072), so the three entries reach dev only when the coordinator carries the records branch's 010_fork_delta.md into #3519. Until then the next chase does not see them in the repository. READY says so.
+
+N3F-P3-2: the sink assertion for "marks a recorded child whose fast parent already ended (#2465)" goes in after the merge, on chase/t3-261114-n3b-trace-sink cut from the integration head the coordinator sends, as one test-only commit.
+
+## The dev conflict from #3615 and N3's follow-up branch
+
+The coordinator's decision (verbatim):
+
+> Coordinator decision, 2026-11-17 01:45 UTC, the dev conflict on #3519: origin/dev moved to 229ae283d3 with #3615 "feat: Revoke others keeps the desktop app's own session and Pen sessions", and #3519 is now CONFLICTING. Trial merges here (git merge-tree): chase/t3-261114-next (5c798a3072) against dev conflicts in apps/web/src/components/settings/ConnectionsSettings.logic.test.ts; the N3 head ae1d6ccbc0 against dev conflicts in that file and in apps/server/src/auth/EnvironmentAuthAdmin.test.ts and apps/server/src/auth/SessionStore.durableRevocation.test.ts (N3's NodeCrypto lines against #3615's edits); SessionStore.ts, EnvironmentAuth.ts, http.ts and ConnectionsSettings.logic.ts merge by themselves. #3615 is new server auth code that has never run on Effect 4.1. This does NOT change the head under CI: ae1d6ccbc0 stays as it is and merges into the integration branch when run 43994624055 is green. The dev merge is the first commit of N3's follow-up branch, with the test-only commit already ruled (N3F-P3-2):
+>
+> 1. Branch chase/t3-261114-n3b-dev-merge (this name replaces chase/t3-261114-n3b-trace-sink), cut from ae1d6ccbc0, which will be the integration head after the fast-forward. N3 part 5 may prepare it locally NOW while the run is in flight, and may push this NEW branch when it is ready (it does not touch the N3 branch). I merge it into chase/t3-261114-next only after N3 itself is merged.
+>
+> 2. Merge origin/dev ONCE (229ae283d3 or newer; say which; a merge, not a rebase). Resolve the three test files by keeping BOTH sides: every expectation dev's #3615 added or changed and every expectation the integration side has; N3's side contributes only provide lines and imports there. No expectation is dropped or reworded: list each conflict hunk with both sides and the result in the record (rule 3: a merge that keeps both sides is not a changed expectation; anything else stops and asks me with the exact before and after).
+>
+> 3. Adapt #3615 to Effect 4.1 as for #3586: its tests get NodeCrypto where 4.1 needs it; extend the three audits to the files #3615 adds or changes (a fork into a scope that may be closed with startImmediately or uninterruptible; a typed catch over a cause that can mix a failure with a defect; crypto and SecureRandom, with stored or compared bytes unchanged: session ids, token digests, anything #3615 hashes or compares). Any site that needs a fix gets a test first. Budgets: every entry the merge touches at its real length by countLines, none raised above dev's or the lane's entry (SessionStore.ts was 1124).
+>
+> 4. Then the N3F-P3-2 commit as ruled (the sink assertion added, nothing removed).
+>
+> 5. Checks: typecheck of server, web, shared and contracts; goat-rename --check; format and lint; the focused files (the three conflicted tests, every auth test file #3615 touches, tracePolicy.test.ts); check:changed against ae1d6ccbc0. No full CI run for this branch: #3519's own run on the integration head covers it after the merge.
+>
+> 6. Report: the head, the dev sha merged, the conflict table, the audit lines, the checks, NOT RUN. A narrow fresh review reads it before I merge it, because it is auth code on a new runtime.
+>
+> Meanwhile nothing changes for the others: N7 part 2 and N9b part 2 start on my word after N3 is merged, from the post-N3 head ae1d6ccbc0; they do not wait for this branch (their files do not overlap #3615's) and merge the integration head again before their READY.
+
+The follow-up branch chase/t3-261114-n3b-dev-merge is cut from ae1d6ccbc0 and carries the dev merge and the N3F-P3-2 commit. Its own report goes to the coordinator; chase/t3-261114-n3-effect-41 stays at ae1d6ccbc0.
+
+Report for chase/t3-261114-n3b-dev-merge, head 97ee0a16086d40833fea0613c539561888dcc88c (pushed 2026-11-17, plain, new branch; chase/t3-261114-n3-effect-41 stays at ae1d6ccbc0):
+
+- 5eab5daac0: merge of origin/dev 229ae283d3ad2261d5883889ebaec13f1d630ce3 (dev was there when I fetched; first parent ae1d6ccbc0). It brings #3615 and the two mobile commits #3606 and #3614.
+- 97ee0a1608: N3F-P3-2, the sink assertion.
+
+Each conflicted file had one conflict hunk (git merge-file --diff3 on the three blobs; base 0258ec9f22, the merge base of ae1d6ccbc0 and 229ae283d3). Ours is the lane side, theirs is dev's #3615:
+
+| file (hunk start at ae1d6ccbc0) | ours (lane, ae1d6ccbc0) | theirs (dev #3615, 229ae283d3) | result |
+|---|---|---|---|
+| apps/server/src/auth/EnvironmentAuthAdmin.test.ts:86 | the tail of the file's last test, from `expect(issued.method)` to its closing `);`, re-indented one level because N3 wraps the tests in `it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))` | the same tail at the old indent, then the new test "Revoke others keeps the desktop session minted by the bootstrap exchange and ends look-alikes (contract)" | dev's file plus N3's NodeCrypto import and layer line, then formatted. Apart from re-wrapping, it differs from dev's file only in those two lines. Both new imports (N3's NodeCrypto, dev's `onMainListenerAuth`) merged by themselves outside the hunk. |
+| apps/server/src/auth/SessionStore.durableRevocation.test.ts:7 | import `effect/Layer` | import `effect/Exit` | both imports. The rest merged by itself, with dev's new imports, cases and shapes and N3's four provide lines. |
+| apps/web/src/components/settings/ConnectionsSettings.logic.test.ts:606 | new describe "unsavedSshHostSuggestions" (two tests) | new describe "revokeOthersToast reads what the server kept, never the list on screen" (it.each of seven) | both blocks, the integration side's first. |
+
+The expect and assert counts equal ours plus theirs minus base in every conflicted file: EnvironmentAuthAdmin 22 (20, 22, base 20), durableRevocation 19 (14, 19, base 14), ConnectionsSettings.logic 72 (71, 68, base 67). No expectation was dropped or reworded.
+
+Effect 4.1 adaptation of #3615: only its tests change. They now provide NodeCrypto where 4.1 needs SecureRandom: three provides in SessionStore.durableRevocation.test.ts (:162, :193, :231) and the test layer of SessionStore.revokeOthers.test.ts (:27, plus its import at :1). Typecheck failed with "missing ... SecureRandom" before and is 0 after.
+
+Audits over #3615's production files (EnvironmentAuth.ts, SessionStore.ts, http.ts, revokeOthersKeeps.ts, sessionClientMetadata.ts, persistence/AuthSessions.ts, contracts auth.ts and environmentHttp.ts, web primary/auth.ts):
+
+- Forks: none added, so SAME.
+- Typed catch: none added. The one recovery is `Effect.catchCause` at SessionStore.ts:1045, on `listUnrevoked` inside the uninterruptible press. It works on the whole cause, which 4.1 left unchanged, and reads the tag through `Cause.findErrorOption`, falling back to "defect". SAME.
+- Crypto and SecureRandom: none added. #3615 hashes, generates and compares no bytes, and session ids and token digests come from SessionStore paths that existed before, which the lane already audited. SAME.
+- Typed catch, a second site the bullet above missed (N3B2-P3-2, found by the follow-up review): the withTransaction at apps/server/src/persistence/AuthSessions.ts:727 reaches the typed catchIf at apps/server/src/auth/http.ts:578. If the body fails and the ROLLBACK then fails too, Effect 4.1 turns the coded error into a bare internal error; which sessions end does not change. The full text is under "Catch semantics in Effect 4.1.3", subsection "Second site from #3615"; goat#3640.
+
+Budgets at real length by countLines, none above dev's entry: SessionStore.ts 1162 (lane 1124, dev 1288; dev's #3615 adds the lines), EnvironmentAuth.ts 1141 (lane 1140, dev 1454; dev's +1 line plus N3's import line), and ConnectionsSettings.tsx lowered to 1422. node oxlint-plugin-goat/update-code-budgets.ts exit 0. Raising the lane's own entries to the merged lengths follows the #3586 precedent (1108 to 1124); the coordinator decides whether this reading of "none raised above dev's or the lane's entry" is right.
+
+The coordinator's answer, paragraph (B) of the 02:58 UTC answers (verbatim; the whole answer is quoted under "The rotation race in memoryAccessInputs"):
+
+> (B) The budget question on chase/t3-261114-n3b-dev-merge: your reading is right and no move-out is needed. The rule, stated exactly: after a merge of dev, an entry follows the merged file's real length by countLines when (1) every added line is dev's own (the file equals git's automatic merge) and (2) the entry stays at or below dev's entry. SessionStore.ts 1124 to 1162 (dev 1288) and EnvironmentAuth.ts 1140 to 1141 (dev 1454) meet both, as #3586 did; ConnectionsSettings.tsx 1425 to 1422 is a lowering. My sentence "none raised above dev's or the lane's entry" was loose: what is forbidden is an entry above dev's, and any line the LANE adds to a file at its entry without a move-out first. Quote this paragraph in the record beside the three entries. The fresh reviewer verifies both conditions.
+
+By that answer the three entries meet both conditions, and the follow-up review verified both (its ruling is under "Follow-up branch review verdict").
+
+Checks on 97ee0a1608:
+
+- typecheck 0 for goat (apps/server), @goat/web, @goat/contracts and @goat/shared;
+- node scripts/goat-rename.ts --check: 0;
+- format and lint through the commit hooks, and in check:changed;
+- focused tests: apps/server's EnvironmentAuth, EnvironmentAuthAdmin, SessionSocketLifetime, SessionStore.durableRevocation, SessionStore.revokeOthers, SessionStore, persistence/RepositoryErrorCorrelation and tracePolicy, 8 files, 88 tests passed; apps/web's ConnectionsSettings.logic and AuthorizedClientsSettings.browser, 2 files, 73 tests passed;
+- `set -o pipefail; node scripts/check-changed.ts ae1d6ccbc0`: exit 0. The static phase passed (format, lint, graphql, both knip passes, the agent surface audit, the context budget and typecheck of 39 packages), and so did the tests beside the changed files: 136 files in 838.2 s.
+
+N3F-P3-2 proof: with LocalFileSpan.end changed in the working tree to build the record before the policy, the case fails at the new assertion, tracePolicy.test.ts:110, "AssertionError: expected undefined to be true" (1 failed, 6 passed; n3b-tracesink-failfirst.log). After restoring the file (git checkout), all 7 pass (n3b-tracesink-pass.log). All earlier assertions of the file are unchanged; two are added.
+
+Rule 3 row for tracePolicy.test.ts on this branch:
+
+| change | authority | evidence |
+|---|---|---|
+| tracePolicy.test.ts "marks a recorded child whose fast parent already ended (#2465)" (97ee0a1608): the case also builds a tracer with the policy as shouldRecord and a sink that collects what push receives, and asserts that only the child is recorded and that its record carries trace.parent_omitted. Two asserts are added; none is removed or changed. | N3F-P3-2, item 3 of the fix-round ruling (quoted under "Fix-round review verdict and what remains"): an added assertion | fails at tracePolicy.test.ts:110 with LocalFileSpan.end changed in the working tree to build the record before the policy runs; passes on the real code |
+
+Fail, with the record built before the policy (n3b-tracesink-failfirst.log):
+
+```text
+   × marks a recorded child whose fast parent already ended (#2465) 4ms
+AssertionError: expected undefined to be true
+      Tests  1 failed | 6 passed (7)
+```
+
+Pass, on the real code (n3b-tracesink-pass.log):
+
+```text
+ Test Files  1 passed (1)
+      Tests  7 passed (7)
+```
+
+NOT RUN for this branch: a full CI run (by the decision); a real-client pass of the Authorized clients settings; the native fingerprint (no native input changed, and dev's two mobile commits are JS only).
+
+Merge of the lane head (part 6, by the 03:25 UTC decision): 24aa0d5f70a7080483897996a13eabf62af0dbc6 merges chase/t3-261114-n3-effect-41 at 07502739c5 into 97ee0a1608, as a merge, and was pushed plain. Its tree 1ac1ac1816 equals the tree of `git merge-tree --write-tree 97ee0a1608 07502739c5`, so it is git's own result, with no conflicts. Checks on the merged tree: typecheck of goat (apps/server) exit 0; node scripts/goat-rename.ts --check exit 0; lint exit 0; the ProviderSessionManager memory cases, 24 passed. The same decision replaces "no full CI run for this branch": full run 44009905527 runs on this head (see "Full CI run").
+
+NOT RUN on 24aa0d5f70 locally: typecheck of web, shared and contracts and the focused auth and web files (the merge changes none of their inputs since 97ee0a1608, where they ran); check:changed; the whole server suite and the relay PostgreSQL files (full run 44009905527 covers them).
+
+
+## Follow-up branch review verdict
+
+The coordinator's ruling on the narrow fresh review of chase/t3-261114-n3b-dev-merge at 97ee0a1608 (verbatim, from n3-n3b-review-ruling.txt):
+
+> N3 follow-up branch review (fresh narrow, Opus 5.5 xhigh, C4) at 97ee0a16086d40833fea0613c539561888dcc88c: APPROVE WITH NITS, nothing at P0 to P2. Report /Users/jun/handoff-in/chase/next-N3b-review-97ee0a16.md (10 KB). It confirms: the merge tree differs from git's own merge-tree result in exactly the five named files, so every production file is git's automatic merge; by a parsed comparison every expect and assert statement of both sides is in the merged tests (22, 19, 72, and 15 in revokeOthers) with no title lost; #3615 forks nothing, adds no crypto, and "Revoke others" ends the same sessions as on dev (the caller's own session and the desktop and Pen sessions are excluded twice, in the SQL and in the classified set; no step forks or relies on a typed catch); the trace test adds two asserts and removes none; the three budget entries equal countLines and both conditions of the dev-merge rule hold. For N3 part 6:
+> 1. No code change on the follow-up branch from this review. It stays at 97ee0a1608 until it merges the lane branch with the memoryAccessInputs fix, as ruled at 03:25 UTC; then ONE full run on its new head.
+> 2. N3B2-P3-1 (records commit): the follow-up round in next-N3.md: the dev sha 229ae283d3; the three conflict hunks with both sides and the result (the reviewer's wording may be used); #3615's NodeCrypto provide lines (SessionStore.durableRevocation.test.ts:162, :193, :231; SessionStore.revokeOthers.test.ts:27); the audit lines; the three budget changes with the dev-merge rule quoted; the rule 3 row for tracePolicy.test.ts with fail and pass output; the checks and NOT RUN.
+> 3. N3B2-P3-2 (record, one audit sentence, plus one issue): the mixed-cause audit names only SessionStore.ts:1045, but #3615 adds a second site: the withTransaction at apps/server/src/persistence/AuthSessions.ts:727 fails through mapError at SessionStore.ts:1028-1031 and EnvironmentAuth.ts:809-810 into the typed catchIf at apps/server/src/auth/http.ts:578. If the body fails AND the ROLLBACK then fails with anything but "no transaction is active", Effect 4.1 does not recover the typed failure: the client gets an internal error without the reason client_session_revoke_failed and without the trace id (the server still logs the request failure). Which sessions end does not change: nothing commits and settleEnded runs only after the transaction returns. Add it to the catch audit with that wording. Because the same shape exists for every handler that maps a transaction's typed failure to a coded error, file ONE goat issue "on Effect 4.1 a failed rollback after a failed transaction body turns a coded HTTP error into a bare internal error" naming this site and the lane's catch audit list, proposing a single place to fix it (the transaction helper keeping the body's typed failure as the primary cause), outside this lane; send me the number.
+
+Where its items are: item 1, the follow-up branch got no code change from the review, and its only new commit since is the merge 24aa0d5f70 of the lane head; item 2 (N3B2-P3-1), "The dev conflict from #3615 and N3's follow-up branch"; item 3 (N3B2-P3-2), the subsection "Second site from #3615" under "Catch semantics in Effect 4.1.3", and goat#3640.
+
+## The rotation race in memoryAccessInputs (ProviderSessionManager.test.ts:2350)
+
+Full run 43994624055 failed one test at ae1d6ccbc0 (see "Full CI run"). The cause is a race in production code that Effect 4.1 made reachable, class (a). It is fixed test-first on the lane branch in 07502739c5, after the verbatim move-out 471d83782e.
+
+### Decision of 02:50 UTC: cause before merge (verbatim)
+
+> Coordinator decision, 2026-11-17 02:50 UTC, lane N3, full run 43994624055 on ae1d6ccbc0: FAILURE in one job, goat-test-server 1/4 (runner lidge-goat-03), one test of 5,867: apps/server/src/orchestration-v2/ProviderSessionManager.test.ts:2350, "current memory DTO denies an archived destination before a deferred detach", "AssertionError: expected undefined to equal 'read_write'", the FIRST assertion of the case, right after manager.open, before the archive event. Every other job passed (23 success). What I checked here: the test file's only changes since 5c798a3072 are NodeCrypto provide lines elsewhere in the file; the same shard passed on 9ac4aa0688 in run 43953991793 and in the lane's local whole-suite run on this head; the last six failed full runs on dev do not fail this test (the name appears once, as a passing line, in 42499260617); no goat issue names it. So it is an intermittent failure with no history before Effect 4.1. I have rerun the failed job (attempt 2 of the same run) for one more data point only. A PASS ON THE RERUN DOES NOT RELEASE THE MERGE: this lane changes the scheduler under every test, it has already found two cases where 4.1 reordered work (ChannelUnlinkedAccess, the receipt delivery harness), and this assertion is about memory access evidence. N3 does not merge until the cause is named. For N3 part 5 (or a fresh thread in the same worktree if its context is short; the follow-up branch 97ee0a1608 stays as it is):
+> 1. Find the cause; do not push anything to chase/t3-261114-n3-effect-41. The result is undefined, not "none", so by apps/server/src/orchestration-v2/ThreadManagementService.ts:620-660 the DTO decorator returned the saved record: either the destination check failed (projection.thread.id, deletedAt, archivedAt, providerInstanceId against the run's instance) or manager.memoryAccessInputs(threadId, instanceId) returned undefined or did not match the run id, task id or ceiling (ProviderSessionManager.ts:2466 and what it reads: the MCP session registry's liveness and attachment, the prepared config, the projection). Say which, with evidence: reproduce it (the file alone repeated; the file under the shard's load and worker count; the shard's file order before it on Linux if you can; a scratch copy with one scheduler turn added or removed between manager.open and the read, as you did for the channel order finding), or prove it from the code.
+> 2. Classify it, each with what a user sees:
+>    (a) a production ordering the port changed (for example manager.open returning before the state the DTO reads is committed, a forked write that 4.0.5 ran inline, a registry attach that now takes one more turn): this is a regression: fix test-first in production code, with the test title saying what it pins; say which other callers read the same state right after open (the thread read path that shows memory access on a run row, scheduled tasks' currentMemoryAccess);
+>    (b) the test's own ordering (it reads before something it never awaited, which 4.0.5 happened to schedule first): a harness change needs a rule 3 request with the exact before and after and the reason the assertion stays exact; no retry, no sleep, no polling loop, no yieldNow loop;
+>    (c) the same failure reproduces on 5c798a3072 with Effect 4.0.5 on that Mac (same commands, same repeat count): a pre-existing flake: file a goat issue with the log lines and both reproductions, and send me the number; then the rerun's result decides.
+> 3. Report to me before any push: the cause, the class, the evidence, the proposed change (file and lines), and the rerun's result if you saw it. If the fix is production code, it goes on the lane branch as one commit after my answer, and the lane then needs ONE more full run and a narrow review of that commit; the follow-up branch is rebuilt on it by a merge.
+> 4. If you cannot reproduce it in a bounded effort (say 200 repeats of the file alone and 20 of the shard slice around it, on both Effect versions), say so with the counts: I then decide between an issue with quarantine-free acceptance and more instrumentation; do not conclude "flake" yourself.
+> The freeze stands. N7 part 2 and N9b part 2 keep waiting.
+
+### Answers of 02:58 UTC: the first diagnosis, the dev-merge budget rule, the follow-up review (verbatim)
+
+> Coordinator answers, 2026-11-17 02:58 UTC, lane N3.
+> (A) The failed test (run 43994624055 attempt 1). The 02:50 UTC decision stands: no merge until the cause is named. On part 5's first diagnosis: points (a) and (b) I had already checked and agree with. Point (c) is a hypothesis, not yet a cause: prepareMcpSession sets destinationUsable from projectionStore.getThread(threadId).pipe(Effect.option) (ProviderSessionManager.ts:440-446), so a typed read failure there would give exactly this result, but nothing shows that the read failed. The disk line does not show it: "Error: There is not enough space on the disk. (os error 112)" is in the job log at 02:13:56Z, and the test failed at 01:48:37Z, 25 minutes earlier, with no I/O, SQLite or disk line anywhere near it (I read attempt 1's log: the only matching line in 8,221 is that one). Also Effect.option is one of the typed recoveries whose behaviour on mixed causes changed in 4.1, and a read that fails only under load can be a lock the port reordered, so "the same on 4.0.5 and 4.1" has to be shown, not assumed. What settles it, in this order: (1) say which typed errors getThread can fail with in this test's layer (the test database, its lock and busy handling) and what would have to happen at the same time for one to occur right after sink.write and manager.open; (2) make the failure visible on a scratch copy only (log the Option.none cause, or replace Effect.option by a tap on the error) and run the file under load on both versions as ruled (200 repeats alone, 20 of the shard slice), reporting counts; (3) if it reproduces on 4.0.5 too it is class (c): file the issue with both reproductions and send me the number; if only on 4.1 it is class (a) or (b) as ruled; if it never reproduces, report the counts and I decide. In every case add to the issue or the record what a user would see if this happened in production: a run row that shows no memory access state for a session that has it (display only, or does anything else read destinationUsable: say which).
+> One thing that IS worth a goat issue regardless of the class, and please file it now and send me the number: prepareMcpSession turns any failure of the thread read into "destination not usable" silently (Effect.option, no log). A failed read and an archived thread are different facts, and the silent form is why this failure has no evidence. The issue proposes a warning log with the cause on the failure branch (no behaviour change), outside this lane.
+> Attempt 2 of the run (my rerun of the failed job) was still queued at 02:55 UTC. Its result is a data point only.
+> (B) The budget question on chase/t3-261114-n3b-dev-merge: your reading is right and no move-out is needed. The rule, stated exactly: after a merge of dev, an entry follows the merged file's real length by countLines when (1) every added line is dev's own (the file equals git's automatic merge) and (2) the entry stays at or below dev's entry. SessionStore.ts 1124 to 1162 (dev 1288) and EnvironmentAuth.ts 1140 to 1141 (dev 1454) meet both, as #3586 did; ConnectionsSettings.tsx 1425 to 1422 is a lowering. My sentence "none raised above dev's or the lane's entry" was loose: what is forbidden is an entry above dev's, and any line the LANE adds to a file at its entry without a move-out first. Quote this paragraph in the record beside the three entries. The fresh reviewer verifies both conditions.
+> (C) The narrow fresh review of the follow-up branch is running: goat-nextN3b-final-97ee0a16 at 97ee0a1608 (brief /Users/jun/handoff-in/chase/briefs/next-N3b-97ee0a16.md). It derives the per-hunk conflict table itself; part 5 still owes that table in the record (each conflict hunk with both sides and the result) at its records commit, not before.
+
+### Decision of 03:25 UTC: fix and process (verbatim)
+
+> Coordinator decision, 2026-11-17 03:25 UTC, lane N3, the ProviderSessionManager.test.ts:2350 failure: the cause is accepted as named, class (a), and goat#3639 is noted. What I read at ae1d6ccbc0 agrees with it: memoryAccessInputs (ProviderSessionManager.ts:2466-2488) captures the prepared entry, yields on Ref.get(sessions) and currentMemoryPolicy(threadId), and then refuses on object identity (:2486), while the rotation consumer forked at layer build (:2444-2462) re-prepares every prepared thread with "stored", and prepareMcpSession always writes a NEW object at :446, equal in content. So a rotation pass between the capture and the check turns evidence into "unknown". The check is an outlier in its own neighbourhood: the execution authority beside it already says "Reprepares may clone equivalent metadata without changing its authority" and compares content through prepareAuthority (MemoryProviderAuthority.ts:15-24, used at :44 and :57). Answers:
+> (1) THE FIX: the content comparison, in memoryAccessInputs, and through ONE shared definition, not a second field list. In MemoryProviderAuthority.ts (a GOAT module) export a sibling of prepareAuthority for the DTO's evidence: the same six authority fields plus runId and delegatedTaskId, since ThreadManagementService.ts:641-646 matches on those; build it from prepareAuthority so a field added to the authority key is in the evidence key by construction (a one-line comment says why the two ids are added). memoryAccessInputs captures that key with the entry and, after currentMemoryPolicy, refuses when the latest entry is missing or its key differs; it returns the LATEST entry with the current grant. Not the alternative: keeping the old object in prepareMcpSession would make identity mean "content unchanged" at one of three write sites (:446, :2577, :2702) and leave the next identity reader with the same trap. ProviderSessionManager.ts must not grow past its budget entry: if the hunk adds lines there, move code out first (verbatim, its own commit), as ruled before.
+> (2) TESTS, test first, in ProviderSessionManager.test.ts, no sleeps, no polling, no yieldNow loops: (i) "a memory policy rotation during a run row read keeps the current memory access evidence": hold memoryAccessInputs inside currentMemoryPolicy with a Deferred, publish a rotation that re-prepares the thread, release, and assert read_write on the run row (it fails on ae1d6ccbc0 with "expected undefined to equal 'read_write'"); (ii) the refusal stays pinned: the same hold, but the prepare that lands in between changes the evidence (another run id, and separately a destination archived so destinationUsable is false): the read returns no evidence. Both through the public shape the existing cases use (readPreparedRunDto), not private calls. Say in the commit message the fail-first output of (i), and run (i) once on 5c798a3072 with Effect 4.0.5 too: if it fails there as well, the record says "latent on dev, reachable in practice since Effect 4.1"; if it cannot be forced there, say why.
+> (3) THE UNFORCED COUNTS (200 and 20 on each version) are WAIVED: the mechanism is shown at the identity check with the probes, forced on 4.1 and absent on 4.0.5 under the same forced step. Keep /Users/jun/handoff-in/chase/n3-psm-scratch-probe.diff and put the probe diff, the counts (3 of 9 and 3 of 8 on 4.1.3; 0 of 10 on 4.0.5) and the probe lines in the record.
+> (4) Two bounded follow-ups for the record, because this is a property of the port and not of one file: (i) name the operation inside this read that takes a scheduler turn on 4.1.3 and did not on 4.0.5 (Ref.get, the Effect.fn span, the registry read, a Semaphore or KeyedLock: which one, with the Effect source line), one paragraph; (ii) search apps/server/src and packages for the same shape, a value captured from a mutable Map or Ref, a yield, then an object-identity comparison against a fresh read (!== or === on the captured object after a yield*), and list each site with path:line and a verdict; a site that can lose data a person sees or a decision GOAT makes gets its own goat issue or a test-first fix in this commit series, your call per site, reported to me.
+> (5) PROCESS, one push and ONE full run for everything that is left: (a) the fix lands on chase/t3-261114-n3-effect-41 on top of ae1d6ccbc0 (a move-out commit if needed, then the test-and-fix commit); focused: ProviderSessionManager.test.ts whole file, the ThreadManagementService and memory suites that read currentMemoryAccess, ScheduledTaskService's memory cases; typecheck server; check:changed; plain push. (b) chase/t3-261114-n3b-dev-merge then merges the lane branch (a merge, not a rebase; it must be git's own result: say so) and is pushed. (c) Dispatch ONE manual full CI run on the FOLLOW-UP branch's new head (it contains the lane head, dev 229ae283d3 and the trace test), URL and time to me at dispatch. If my findings on the follow-up branch (review goat-nextN3b-final-97ee0a16, running) reach you before you dispatch, fix them in the same push first. (d) When that run is green and both narrow reviews (the follow-up branch, and this fix commit) have no P0 to P2, I fast-forward chase/t3-261114-next to that head: N3 and its follow-up land together and #3519 stops conflicting with dev. Run 43994624055's attempt 2 no longer matters; do not wait for it.
+> (6) Record: this section verbatim; the cause with path:line; the class and what a person sees (a run row or task record read during a memory access toggle showed no current memory access state for a session that has it; display only; grants and authority never used this check); the tests with fail-first; items (3) and (4); goat#3639.
+
+### Cause
+
+Line numbers in this subsection are at ae1d6ccbc0.
+
+memoryAccessInputs (apps/server/src/orchestration-v2/ProviderSessionManager.ts:2466-2488) captured the thread's prepared entry with memoryPrepareInputs.get(threadId). It then yielded twice, on Ref.get(sessions) and on currentMemoryPolicy(threadId), and refused unless the map still held the same object (:2486). The rotation consumer, forked when the layer is built (:2444-2462), re-prepares every prepared thread with "stored". subscribeRotations replays the current snapshot first (apps/server/src/serverSettings.ts:425-429), so one pass runs soon after the layer starts, with no settings change. prepareMcpSession always writes a new object at :446, equal in content. When the pass's write lands between the capture and the check, the identity check fails and memoryAccessInputs returns undefined. The DTO decorator (apps/server/src/orchestration-v2/ThreadManagementService.ts:620-660) then returns the saved record without current memory access, which is the "expected undefined to equal 'read_write'" of the failed test.
+
+The failed test, "current memory DTO denies an archived destination before a deferred detach", is at ProviderSessionManager.test.ts:2350 at ae1d6ccbc0 and at :2194 at 07502739c5, after the move-out.
+
+At the merged head (24aa0d5f70, the same file as 07502739c5): the capture is at ProviderSessionManager.ts:2452, the yields at :2453 and :2461, the check at :2462-2465, the rotation consumer at :2419-2436, and prepareMcpSession writes the new object at :421.
+
+### Class and what a person sees
+
+Class (a): a production ordering the port changed. The race is latent on dev, and Effect 4.1 makes it reachable in practice (the 4.0.5 runs under "Tests" and "Probe"). What a person sees: a run row or task record read during a memory access toggle showed no current memory access state for a session that has it. It is display only: grants and authority never used this check. The execution authority beside it already compared content, through prepareAuthority (apps/server/src/orchestration-v2/MemoryProviderAuthority.ts:15-24).
+
+### Fix
+
+Line numbers at 07502739c5:
+
+- apps/server/src/orchestration-v2/MemoryProviderAuthority.ts:25-27 exports prepareEvidence beside prepareAuthority (:16): the JSON of prepareAuthority plus runId and delegatedTaskId, with a one-line comment that the DTO matches on both ids. A field added to the authority key is in the evidence key by construction.
+- apps/server/src/orchestration-v2/ProviderSessionManager.ts:2452 captures prepareEvidence(prepared) before memoryAccessInputs' first yield. After currentMemoryPolicy (:2461), :2462-2464 refuse when the latest entry is missing or its key differs, and :2465 returns the latest entry with the current grant.
+
+471d83782e first moved three blocks out, byte for byte (checked with cmp): delegatedTaskWillWake to apps/server/src/orchestration-v2/delegatedTaskWake.ts, and readPreparedRunDto and makeThreadCreatedEvent to apps/server/src/orchestration-v2/test/ProviderSessionManagerMemoryDto.testkit.ts. Both files were at their budget entries, and the entries stayed unchanged in that commit. After the fix they follow the real lengths: ProviderSessionManager.ts 3028 -> 3005 and ProviderSessionManager.test.ts 5975 -> 5906. No entry was raised.
+
+### Tests
+
+In ProviderSessionManager.test.ts at 07502739c5. Each case holds memoryAccessInputs inside currentMemoryPolicy with a Deferred (makeMemoryReadHold, test/ProviderSessionManagerMemoryDto.testkit.ts:194) and reads through readPreparedRunDto (testkit :33), the public shape the existing cases use. No sleeps, polling or yieldNow loops.
+
+- (i) "a memory policy rotation during a run row read keeps the current memory access evidence" (:2287): starts the read, waits until it is inside currentMemoryPolicy, publishes a rotation that re-prepares the thread, releases the read and asserts read_write. It fails on the unfixed code and passes after, 5 of 5.
+- (ii) "a prepare during a run row read that changes its memory access evidence (another run | an archived destination) shows none" (:2303-2304): the same hold, with a prepare in between that changes the evidence. It passes before and after the fix. A mutant that returns the captured entry unchecked fails the "another run" case with "expected { access: 'read_write', …(1) } to equal undefined". The archived case is also refused by currentMemoryPolicy's grant, so that refusal is pinned at both layers.
+
+Per the race-fix review (P3-1), the "an archived destination" row passes even without the key check: the credential prepared while archived already carries grant none, so after unarchive currentMemoryPolicy returns none before the key matters. That row proves that a credential issued while the destination was archived shows no access after unarchive. Only the "another run" row pins the refusal, and only against returning the captured entry. The follow-up branch chase/t3-261114-n3c-followups (test-only) rewords that row's comment and adds a row that changes evidence inside the key in the same run (head f848a4dcd2ecb457d7cb15d801771709c6afd094 on origin: 653864850b moves makeBrowserAccessProject verbatim to orchestration-v2/test/ProviderSessionManagerBrowserAccess.testkit.ts (byte-identical by cmp; the test file stood at its entry 5906); 823ffe7d2f adds the row "a read-only prepare in the same run" (same run, task and grant, readOnly changed inside the key) and rewords the archived row's comment, budget 5906 -> 5903, no existing expectation changed; mutants on a scratch copy: returning the captured entry unchecked fails "another run" and the new row, returning the latest entry without the key comparison fails only the new row; f848a4dcd2 adds the docs note "Reads under the database connection lock" to docs/internals/effect-services.md (04:20 UTC decision); checks: ProviderSessionManager.test.ts and .delegatedWake.test.ts 118 passed, typecheck server 0, goat-rename 0, lint 0, context-budget --check 0).
+
+Fail-first of (i) on the unfixed code (n3p6-psm-failfirst.log):
+
+```text
+   × a memory policy rotation during a run row read keeps the current memory access evidence 362ms
+AssertionError: expected undefined to equal 'read_write'
+      Tests  1 failed | 2 passed | 113 skipped (116)
+```
+
+(i) on 5c798a3072 with Effect 4.0.5, in the baseline worktree with the case added (n3p6-psm-405-baseline-test.ts), fails 3 of 3 with the same message (n3p6-psm-405-baseline.log):
+
+```text
+   × a memory policy rotation during a run row read keeps the current memory access evidence 397ms
+AssertionError: expected undefined to equal 'read_write'
+      Tests  1 failed | 113 skipped (114)
+```
+
+So the race is latent on dev, reachable in practice since Effect 4.1: held by the Deferred it fails on both versions, and under the probe's milder forcing only 4.1.3 reaches it.
+
+### Probe (item (3) of the 03:25 UTC decision)
+
+The scratch probe, n3-psm-scratch-probe.diff (kept as ruled), logs each write to the prepared entry and each refusal in memoryAccessInputs, and makes the rotation consumer's first (snapshot) pass wait until a thread is prepared. It was applied to a scratch working tree and removed afterwards; no commit carries it.
+
+```diff
+diff --git a/apps/server/src/orchestration-v2/ProviderSessionManager.ts b/apps/server/src/orchestration-v2/ProviderSessionManager.ts
+index f8c4b4bc97..9cfdbb7b3c 100644
+--- a/apps/server/src/orchestration-v2/ProviderSessionManager.ts
++++ b/apps/server/src/orchestration-v2/ProviderSessionManager.ts
+@@ -451,6 +451,7 @@ export const layerWithOptions = (
+                       ? previousInput.providerSessionId
+                       : undefined,
+                 });
++                process.getBuiltinModule("node:fs").appendFileSync("/tmp/n3dbg.txt", ["prepare-set", reusePreparedInput, String(memoryPrepareInputs.get(threadId)?.providerSessionId)].join(" ") + "\n");
+                 const readOnly = preparedInput.readOnly === true;
+                 const threadReadAllowed = usableThread;
+                 const committed = Option.isSome(memoryPolicy)
+@@ -2444,18 +2445,19 @@ export const layerWithOptions = (
+       if (memoryRotations !== undefined) {
+         yield* memoryRotations.pipe(
+           Stream.runForEach(() =>
+-            Effect.forEach(
++            Effect.andThen(Effect.promise(async () => { while (memoryPrepareInputs.size === 0) await new Promise((r) => setTimeout(r, 0)); }), () => Effect.forEach(
+               Array.from(memoryPrepareInputs.keys()),
+               (threadId) =>
+                 Effect.gen(function* () {
+                   const input = memoryPrepareInputs.get(threadId);
++                  process.getBuiltinModule("node:fs").appendFileSync("/tmp/n3dbg.txt", ["rotation-pass", String(threadId), String(input?.providerSessionId)].join(" ") + "\n");
+                   if (!input || (yield* mcpSessions.read(threadId)) === undefined) return;
+                   const prepared = yield* prepareMcpSession(input, "stored");
+                   if (prepared.mcpCredentialId)
+                     dropMcpCredentialReservation(threadId, prepared.mcpCredentialId);
+                 }),
+               { discard: true },
+-            ),
++            )),
+           ),
+           Effect.forkScoped,
+         );
+@@ -2472,19 +2474,26 @@ export const layerWithOptions = (
+               prepared?.providerInstanceId !== providerInstanceId ||
+               !prepared.destinationUsable ||
+               prepared.providerSessionId === undefined
+-            )
++            ) {
++              process.getBuiltinModule("node:fs").appendFileSync("/tmp/n3dbg.txt", "mai-undef-1 usable=" + String(prepared?.destinationUsable) + " psid=" + String(prepared?.providerSessionId !== undefined) + "\n");
+               return undefined;
++            }
+             const entry = (yield* Ref.get(sessions)).get(sessionKey(prepared.providerSessionId));
+             if (
+               entry?.runtime.instanceId !== providerInstanceId ||
+               !entry.attachedThreadIds.has(threadId)
+-            )
++            ) {
++              process.getBuiltinModule("node:fs").appendFileSync("/tmp/n3dbg.txt", "mai-undef-2\n");
+               return undefined;
++            }
+             // Use execution's current authority, including registry expiry and
+             // revocation, rather than reconstructing it from prepare metadata.
+             const policy = yield* currentMemoryPolicy(threadId);
+-            if (policy.grant === "none" || memoryPrepareInputs.get(threadId) !== prepared)
++            if (policy.grant === "none" || memoryPrepareInputs.get(threadId) !== prepared) {
++              process.getBuiltinModule("node:fs").appendFileSync("/tmp/n3dbg.txt", "mai-undef-3 grant=" + policy.grant + " replaced=" + String(memoryPrepareInputs.get(threadId) !== prepared) + "\n");
+               return undefined;
++            }
++            process.getBuiltinModule("node:fs").appendFileSync("/tmp/n3dbg.txt", "mai-ok\n");
+             return { ...prepared, currentMemoryGrant: policy.grant };
+           }),
+         mcpCredentialRotations: Option.isSome(admission)
+@@ -2703,6 +2712,7 @@ export const layerWithOptions = (
+                         ...preparedInput,
+                         providerSessionId: input.providerSessionId,
+                       });
++                    process.getBuiltinModule("node:fs").appendFileSync("/tmp/n3dbg.txt", ["open-set", String(input.providerSessionId)].join(" ") + "\n");
+                     // The entry now guards the credential via its recorded id, so
+                     // the pre-open reservation can be dropped.
+                     yield* dropReservation;
+```
+
+Counts, test :2350 with the probe: on Effect 4.1.3, 3 of 9 runs and then 3 of 8 runs fail with the CI assertion. On Effect 4.0.5, in the baseline worktree at 5c798a3072, 0 of 10 fail.
+
+Probe lines: a failing run ends with `mai-undef-3 grant=read_write replaced=true`, the identity refusal, with the grant still read_write and the entry replaced. A passing run prints `mai-ok` before `rotation-pass`: the read finished before the rotation pass started.
+
+The unforced counts (200 runs of the file alone and 20 of the shard slice, on each version) were waived by the 03:25 UTC decision.
+
+### (4i) The step that takes a scheduler turn on 4.1.3
+
+The turn is taken at the SQLite connection lock, where the two sides of the race meet (line numbers at 07502739c5). The read is ProjectionStore.getThread (apps/server/src/orchestration-v2/ProjectionStore.ts:4490-4495), called from currentAttachment (apps/server/src/orchestration-v2/MemoryProviderAuthority.ts:86) inside currentMemoryPolicy. The rotation's prepareMcpSession takes the same lock at ProviderSessionManager.ts:415, just before it writes the new entry at :421. Both wait on target.lock.withPermits(1) (packages/shared/src/nodeSqliteClient.ts:1175). In Effect 4.1.3, withPermits (effect src/Semaphore.ts:358-366) goes through takePermits, which takes a permit inline only when no fitting waiter is queued (:256); otherwise the fiber waits (:269) for a wake that releaseUnsafe schedules (:322-336), on a later scheduler turn. In Effect 4.0.5, the connection lock's withPermits took a free permit inline (src/Semaphore.ts:297-305), and a woken waiter re-checked and could lose it (waitForPermits :217-233, release's observer loop :273). (Citation corrected per the race-fix review, P3-2.) So on 4.1.3 the rotation fiber runs on to prepareMcpSession's write while the read waits. It is not Ref.get, the Effect.fn span or the registry read: in the failing trace those steps completed before the rotation's write.
+
+Evidence: step markers on top of the probe (n3p6-4i/n3p6-probe4i.cjs adds them to ProviderSessionManager.ts and MemoryProviderAuthority.ts on a scratch copy of ae1d6ccbc0, restored afterwards), test :2350 run 10 times on 4.1.3. Run 9 failed (n3p6-4i/n3p6-4i-dbg-9.txt). In it, `prepare-set stored` lands between `ca-after-holds1` and `ca-after-getThread`:
+
+```text
+prepare-set false undefined
+open-set provider-session:provider-instance:codex:thread:memory-archive-before-detach:40636f10-c09b-4069-9eb8-143c74ba171b
+rotation-pass memory-archive-before-detach provider-session:provider-instance:codex:thread:memory-archive-before-detach:40636f10-c09b-4069-9eb8-143c74ba171b
+mai-after-sessions
+mai-before-policy
+cmp-after-read
+cmp-after-config
+cmp-after-registry
+ca-after-holds1
+prepare-set stored provider-session:provider-instance:codex:thread:memory-archive-before-detach:40636f10-c09b-4069-9eb8-143c74ba171b
+ca-after-getThread
+cmp-after-attachment
+mai-after-policy
+mai-undef-3 grant=read_write replaced=true
+```
+
+A passing run (n3p6-4i/n3p6-4i-dbg-1.txt, first 14 lines) finishes the read (`mai-ok`) before `rotation-pass`:
+
+```text
+prepare-set false undefined
+open-set provider-session:provider-instance:codex:thread:memory-archive-before-detach:847ab581-2a04-4679-a8ac-829ddb42fe72
+mai-after-sessions
+mai-before-policy
+cmp-after-read
+cmp-after-config
+cmp-after-registry
+ca-after-holds1
+ca-after-getThread
+cmp-after-attachment
+mai-after-policy
+mai-ok
+cmp-after-read
+rotation-pass memory-archive-before-detach provider-session:provider-instance:codex:thread:memory-archive-before-detach:847ab581-2a04-4679-a8ac-829ddb42fe72
+```
+
+### (4ii) The same shape elsewhere
+
+A read-only search (n3p6-identity-audit.md) looked for a value captured from a mutable Map or Ref, a yield, then an object-identity comparison against a fresh read. Its scope, verbatim:
+
+> Scope: apps/server/src and packages/*/src at branch chase/t3-261114-n3-effect-41, excluding *.test.ts, *.testkit.ts, test/ dirs, node_modules and .repos. Read only: nothing was edited, built or tested. The fixed ProviderSessionManager memoryAccessInputs site is excluded.
+
+Its searches, verbatim:
+
+> Common filter on every command: `-g '!*.test.ts' -g '!*.testkit.ts' -g '!**/test/**' -g '!**/node_modules/**' -g '!.repos/**' apps/server/src packages/*/src`
+>
+> | # | rg pattern | hits |
+> |---|---|---|
+> | a | `rg -n '\.get\([^)]*\) (!==\|===) '` | 320 (221 after dropping comparisons against undefined/null/true/false/string/number literals) |
+> | b | `rg -n '(!==\|===) (yield\* )?Ref\.get'` | 0 |
+> | c | `rg -n 'Ref\.get\([^)]*\)\) (!==\|===)'` | 48 |
+> | d | `rg -n '(!==\|===) [a-zA-Z_.]+\.get\('` | 11 |
+> | e | `rg -n 'Object\.is\('` | 3 |
+> | f | `rg -n '(!==\|===) (yield\* )?(SynchronizedRef\|SubscriptionRef)\.get'` | 0 |
+> | g | `rg -n '\.current (!==\|===) '` | 39 |
+> | h | `rg -n 'Ref\.(update\|modify\|getAndUpdate\|updateAndGet)\([a-zA-Z.]+, \(?[a-z]+\)? =>\s*\(?[a-z]+ (===\|!==) [a-zA-Z]'` | 2 |
+> | i | `rg -n '\b(latest\|current\|fresh\|after\|live\|now\|reread\|still)[A-Za-z]* (!==\|===) (registered\|expected\|captured\|previous\|before\|snapshot\|entry\|record\|state\|selected\|prepared\|observed\|initial\|original)[A-Za-z]*\b'` | 13 |
+>
+> Most hits compare primitives: ids, run/turn ids, revisions, sequences, generations, epochs, hashes, SSH config strings, OAuth `state`, or credential ids (ProviderSessionManager.ts:390, :473, :1205, :1494 compare strings). Others are pure functions with no yield between read and compare (DesktopObserveLatency.ts:423, threadShell.ts:217/:274, presentation.ts:66, shell.ts:600, provider-devin-cloud adapter.ts:27 and task.ts:183/:315, client-runtime state/runtime.ts:536 inside one synchronous Atom transform, serverConfigProjection.ts:29, serverSettings.ts:1162). Neither group is listed below. Every object-identity comparison with a suspension in between is listed.
+
+Counts of comparison lines: AT RISK, 3 lines at 2 sites; SAFE with no equal-content writer, 3; SAFE by intended identity, 166 (62 lines read one by one plus 104 per-operation token sites).
+
+Its table of sites, verbatim:
+
+> | path:line | captured, and from what | yield in between | writer, and can it replace with an equal new object while the reader is suspended | verdict | if AT RISK: wrong outcome |
+> |---|---|---|---|---|---|
+> | apps/server/src/notes/NotesService.ts:845 (isCurrent, checked at :846 and again at :850) | `result` = `note.threads.at(-1).lastResult`, which `linked()` (NotesService.ts:161) returns from the read model, i.e. the object in `resultCache` at that moment. Passed in by NoteAutoDone.ts:50 (`settle`) and NoteAutoDone.ts:103 (`reconcileCached`). `version` is read from `resultVersions` under the lock. | `lock.withPermits(1)` + `rereadOnConflict` (NotesService.ts:838-840) and `yield* optionalLoad(name)`, a note file read (:847), between the first and second `isCurrent()` | `lookupResult` (NotesService.ts:314-331) sets `resultCache` to a new `ThreadResult` and bumps `resultVersions` on every call. `results.latest` builds a new object every time: a SQL read for local threads (NoteResults.ts:58) or a decoded remote read (:66). `enrich` (:342) calls `lookupResult` for every linked thread on every note list/read (:647, :653, :699, :752, :795, :831, :915), so any client or MCP read of notes during the window replaces the entry with a new object of equal content. | **AT RISK** | A note whose last linked thread finished with `completed/succeeded` stays in **Doing** and does not auto-move to Done when a notes list or read runs at the same moment. `complete` returns `false` for an unchanged result. For remote threads the follower loop retries (NoteAutoDone.ts:59-76). For local threads (`host === null`) `follow` returns immediately, so nothing retries until another thread event or note change runs `settle`/`reconcileCached` again. The `resultVersions` check fails the same way, because the version is re-minted on reads. Comparing `runStatus`/`outcome`/`runId` would decide this correctly. |
+> | packages/client-runtime/src/goatBot/homeSync.ts:144 and :75 (plain JS with promises, not Effect) | `:144` captures `snapshot = snapshots.get(environmentId)` before `write()` (:134). `:75` compares a recorded `awaitingReadback` snapshot with the newly supplied `target.home`. | `void write(environmentId, claim).then(...)`, an RPC promise (:135-136) | `update()` stores `target.home` from the caller (`snapshots.set`, :59) on every call. The web hook (apps/web/src/components/goatBot/useGoatBotHome.ts:98) and the mobile worker call it on every render or effect run with the current environment targets. I did not confirm whether `target.home` keeps its identity across environment updates with an unchanged claim. | **AT RISK (low, conditional)** | If a target home object is rebuilt with equal content: during a write, `:144` skips `awaitingReadback.set`; after one, `:75` treats a re-render as the readback. Either way the controller stops waiting for readback, and the planner may send a second claim write to an environment that already received one. The write is idempotent, so the cost is an extra RPC and retry attempt with no wrong claim. |
+> | apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts:6558 (`latest !== registered` inside `Ref.modify`) | `registered = (yield* Ref.get(sessionSubagentsByTaskId)).get(taskId)` (:6531) | `yield* DateTime.now` (:6543) | Every write builds a new subagent record from the current one (`{...registered, task}` :6553, upsert :5030-5044, resume :4407), each carrying `updatedAt: now`. The writer at :6556 is itself the compare-and-set. | SAFE intended identity | Compare-and-set on a record version. Applying a frame computed from a superseded record would overwrite newer state. Workflow snapshots in `task_progress` are cumulative, so a refused frame is replaced by the next one. |
+> | ClaudeAdapterV2.ts:4490, :4718, :4797, :5186 | `input.coordinator`, the record just installed by the caller (upsert :5030 or progress :6556) | member loop (`yield* Ref.get(workflowMemberStates)`, emits), transcript drain `readNext` file reads (:4716), `emitProviderEvent` | Same writers as above. Any later write for the task replaces the record, and `mergeClaudeWorkflowProgress` carries the previous workflow forward (claudeWorkflowProgress.ts:138-147), so the superseding writer runs `projectClaudeWorkflowMembers` itself (:5181-5186 / :6570). | SAFE intended identity | The newest coordinator owns the projection, and a stale projection stops early. Per-member transcript cursors persist only through `workflowMemberStates`, so the newer projection re-reads from the last stored cursor. |
+> | ClaudeAdapterV2.ts:9943, :9944, :10193, :9765 | `activeTurn` context and `queryContext` captured per turn/query | stream processing and finalization yields | `activeTurn` is set once per turn (:9762). `queryContext` is installed once per query start (:9497 returns the new `context`), and handed-off fields are mutated in place. | SAFE intended identity | Per-turn/per-query ownership objects. Nothing copies them back into the Ref. |
+> | apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts:1194 | `selected = memoryByThread.get(threadId)` (:1176) | `memorySnapshots.revalidate(...)` (:1181-1193) | `CodexMemoryDelivery.retain` (CodexMemoryDelivery.ts:62-72) writes a new `DeliveredMemory` with `generation: ++generation` on each turn delivery. A replacement therefore means a new turn delivered memory together with its own additionalContext. | SAFE intended identity | Restoring the old compaction context is superseded by the newer delivery. `restoreKey` includes the generation (:1177). |
+> | apps/server/src/orchestration-v2/Adapters/CodexMemoryDelivery.ts:75 | `selected` created by the same `retain` call | derived cache release callback (async) | `retain` only | SAFE intended identity | Release drops only its own delivery. |
+> | apps/server/src/memory/MemorySnapshot.ts:547, :550, :579 | `entry` from `entries.get(key)` | `packWithLineage`, `capture`, `currentPolicy`, `admit` (:522-575) | `entries` keys are fresh `Symbol()`s (:406, :555) and an existing key is never rewritten, only deleted. | SAFE no equal-content writer | n/a |
+> | apps/server/src/mcp/McpSessionRegistry.ts:335, :518, :615 | captured credential `record` / `tombstone` / `live` | `record.isAttached` probe (:509, :609), `currentTimeMillis` | A touch writes `{...record, lastAliveAt}` (:570, :660, :666), a new object by design. | SAFE intended identity | The comments say "unless it was replaced or touched meanwhile". Refusal keeps the credential alive (conservative), and `inspect` loops (`continue`). |
+> | apps/server/src/device/DeviceService.ts:280, :381, :450, :615, :815, :869 | `host` service instance | host operations, `readDeviceSettings` | `hosts.set` only for an id that is not configured yet (:1017, :1032, :1057), creating a new scoped instance after the old scope closed. | SAFE intended identity | The instance identity is the configuration incarnation. |
+> | apps/server/src/orchestration-v2/ProviderRetryStallWatch.ts:57, :65 | `item` given to the stall timer | `input.isCurrent`, `projectionStore.getProviderControlContext` (:60-64) | `track` (:117-125) writes a new `retryItem` copy on every running retry `turn_item.updated`, including repeats with equal content. | SAFE intended identity | Every such write also re-arms the timer with the new item (`update`, :195-213), so a refused stop is retried after one fresh window. A re-emitted retry row is itself activity. |
+> | apps/server/src/hub/OpenCodexManagedUpdate.ts:141; apps/server/src/hub/ocxUpdateWindow.ts:297, :390, :570, :682 | `expected` / `pendingState` / `current` `State` objects | `stateLock.withPermit`, file writes, host admission and parity probes | `writeState` always installs a new State. Two sites re-read the file and `Ref.set(state, current)`, installing a new object with **equal content**: `runCheck` (OpenCodexManagedUpdate.ts:580) and `enforceOverrun` (:186). | SAFE intended identity (fragile) | `runCheck` runs under the `checking` semaphore (:774-776), and window steps run inside it, so no step is suspended across its reload. `enforceOverrun` (the concurrent admission guard, :769, :791) reaches `Ref.set` only after `releaseOverrun` returns true (ocxUpdateWindow.ts:258-279): a real overrun or an expired recovery hold, which must abort the step by design. **Trap:** a future `mutateIfCurrent` caller outside `checking` would refuse wrongly after the reload at :580. Filed as goat#3644 (per the coordinator's answer (2)). |
+> | packages/ssh/src/tunnel.ts:2322, :3353, :4160, :4248, :4251, :4259, :4268, :4294 | `intent = pendingReplacements.get(key)`; `observed = statuses.get(key)` | `process.isRunning`, `waitForHttpReady`, `validateManagedPin`, `flights.join` + `withTargetLock` | The ensure path rebuilds `intent` on every preparation (:2837-2882; `{...intent, pending}` :2871, `{...intent, archiveFailure}` :2882), including "sameIntent" with equal content. Statuses are new snapshot objects on every publish. | SAFE intended identity | Rewrites happen only inside a fresh preparation under `withTargetLock`, and that preparation ends in `publishResult` with its own status. The superseded probe or publish returns the newer snapshot, and the 1-minute retry loop (:3330-3355) picks up the new intent next time. |
+> | CodexAdapterV2.ts:7634, :7658, :7832, :7866; CodexTurnStartGuard.ts:208; CodexQueuedTurnStop.ts:86, :147; CodexSurvivorSettlement.ts:66 | `ActiveCodexTurnContext` | interrupt and stop flows | `activeTurns` gets one mutable context per native turn (:1756, :2339, :2395, guarded by `nativeTurnIds.has` at :1740), updated in place (for example `context.preOutputRetryAttempt`) and never copied back. | SAFE intended identity | n/a |
+> | packages/provider-acp/src/server/adapter.ts:6912, :7542 | ACP `activeTurn` context; `compactionMarkers` value | prompt round trip | The context is created per turn. Markers are `symbol`s (:980). | SAFE intended identity | n/a |
+> | packages/client-runtime/src/state/shell.ts:334, :464 | `RpcSession` | hydrate / omission probe | `supervisor.session` is set once per connection lease (supervisor.ts:1094). | SAFE intended identity | The session identity is the connection incarnation. |
+> | apps/server/src/cloud/ManagedEndpointRuntime.ts:609 | `connector` instance | `Ref.get(http2Ref)`, `Clock` | set per spawned connector | SAFE intended identity | n/a |
+> | apps/server/src/cua/ComputerUseLeaseProxy.ts:267, :304, :388, :415, :421, :427, :431, :765, :774, :807; ComputerUseLeaseProxyUnanswered.ts:312; apps/server/src/cua/linuxHelperHost/LinuxHelperHost.ts:286, :495 | `Running` process incarnation (`lifecycle.current`, `current`) | I/O with the proxy or helper | assigned only when a new process starts (ComputerUseLeaseProxyLifecycle.ts:80) | SAFE intended identity | n/a |
+> | apps/server/src/cua/ComputerUseLeaseProxyRefusal.ts:175 (reverse shape) | `before = new Map(input.listed)` | `yield* input.listApps` | `listApps` writes a new entry for every pid it sees | SAFE intended identity | Reverse use: the rewrite is the signal ("a listing that left the pid's entry as it was did not see the pid again"). |
+> | Per-operation tokens (104 lines): packages/pen-protocol/src/client/pairingFlow.ts:171, packages/client-runtime/src/queuedRunEdit.ts:201, :208, packages/effect-acp/src/client.ts:1228, packages/provider-core/src/server/ProviderLatestVersions.ts:67, packages/provider-core/src/server/managedProvider.ts:315, packages/ssh/src/runtimeExecutable.ts:154, packages/ssh/src/tunnel.ts:3010, :3161, :3303, :3457, :3505, :3506, :3532, :3594, :4266, :4398, packages/ssh/src/ensureFlight.ts:115, packages/ssh/src/master.ts:135, packages/ssh/src/keyedSingleFlight.ts:23, packages/ssh/src/existingServer.ts:237, packages/ssh/src/preparationRetry.ts:102, packages/client-runtime/src/relay/accountDeletion.ts:71, packages/client-runtime/src/clock.ts:146, packages/client-runtime/src/storageMigration.ts:61, packages/client-runtime/src/goatBot/fileReads.ts:99, packages/client-runtime/src/goatBot/homeSync.ts:137, :148, packages/client-runtime/src/state/runtime.ts:236, :241, :255, :260, :306, packages/client-runtime/src/state/threadHistoryController.ts:79, packages/client-runtime/src/state/threadUndo.ts:21, packages/client-runtime/src/state/server.ts:568, packages/provider-muse/src/server/adapter.ts:1200, apps/server/src/channels/ChannelTransport.ts:73, apps/server/src/mcp/HostStatusMcpService.ts:426, apps/server/src/pullRequest/PullRequestReviewGuideService.ts:514, :517, apps/server/src/memory/MemorySyncService.ts:1807, apps/server/src/memory/imports/MemoryImportReader.ts:568, apps/server/src/process/agentMemoryGuard.ts:204, apps/server/src/process/NonBlockingSpawner.ts:50, apps/server/src/process/agentScope.ts:273, apps/server/src/orchestration-v2/QuestionEscalationService.ts:377, apps/server/src/mcp/LaunchWatchService.ts:1379, apps/server/src/secrets/secretResolver.ts:91, :104, apps/server/src/orchestration-v2/ShellSnapshotLoads.ts:49, apps/server/src/orchestration-v2/Adapters/CodexRetryTimers.ts:25, apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts:6024, :6912, :7537, apps/server/src/provider/ProviderRegistry.ts:856, :878, apps/server/src/orchestration-v2/Adapters/CodexSurvivorContinuation.ts:777, :816, :829, :876, apps/server/src/orchestration-v2/Adapters/CodexThreadClosings.ts:30, apps/server/src/orchestration-v2/Adapters/CodexSurvivorFenceMaintenance.ts:58, :206, :213, :243, :263, apps/server/src/orchestration-v2/Adapters/CodexSurvivorRequestStops.ts:82, apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts:10623, :10640, apps/server/src/remoteReports/RemoteDispatchCoordinator.ts:227, apps/server/src/project/ProjectCloneTracker.ts:149, apps/server/src/project/WorktreeSetupTracker.ts:265, apps/server/src/project/ProjectEnrichmentService.ts:129, apps/server/src/cua/ComputerUsePrimitiveChannel.ts:380, apps/server/src/cua/ComputerUseLeaseProxyThread.ts:278, :509, apps/server/src/cua/ComputerUseLeaseProxyUnanswered.ts:187, :256, :258, :367, :383, :394, :414, apps/server/src/cua/ComputerUseLeaseProxyHandshake.ts:184, apps/server/src/cua/linuxHelper/gnomeVersion.ts:31, apps/server/src/cua/linuxHelper/linuxSignals.ts:176, apps/server/src/speech/SpeechModelStore.ts:150, apps/server/src/relay/AgentAwarenessRelay.ts:774, :781, apps/server/src/preview/ServerBrowserContexts.ts:245, :257, :352, :374, :394, apps/server/src/preview/PreviewAgentActivity.ts:64, apps/server/src/screenCode/ScreenRunService.ts:253, apps/server/src/preview/BrowserClaimHandoffs.ts:209, apps/server/src/preview/ServerBrowserClipboard.ts:47, apps/server/src/preview/snapshotRetry.ts:90, apps/server/src/preview/ServerBrowser.ts:549, apps/server/src/preview/BrowserOriginGrants.ts:444, apps/server/src/preview/DesktopBrowserChannel.ts:212, :213 | a Deferred, fiber, Symbol, flight/lane/loop record, registration, request target, tab, CDP session or claim entry created by the same operation | awaits, sleeps, locks, I/O | Written once per operation. A replacement always comes from a new operation (shape `if (m.get(k) === mine) m.delete(k)` or `if (m.get(k) !== mine) return`). | SAFE intended identity | Ownership markers. Classified from the matched line and the creator in the same function; I did not open every writer. |
+
+homeSync.ts:144 and :75 stay record-only (coordinator answer (2)).
+
+Verdicts and what follows:
+
+- apps/server/src/notes/NotesService.ts:845: AT RISK. A note stays in Doing when a notes read lands while auto-done decides. It does not depend on the Effect version. Filed as goat#3641; no fix in this lane.
+- packages/client-runtime/src/goatBot/homeSync.ts:144 and :75: low risk, unconfirmed. The worst case is an extra idempotent claim write. Recorded here only.
+- apps/server/src/hub/OpenCodexManagedUpdate.ts:580: fragile but safe today, because the steps that could be suspended across its reload run under the same semaphore.
+
+Its limits, verbatim:
+
+> A grep finds a comparison only when the captured value and the fresh read appear on the same line. These go unseen:
+>
+> - comparisons wrapped in helpers or closures (`isCurrent()`, `owns`, `sameView`, `samePin`, `holdsFence`, `stillOwned`-style predicates), unless the helper's own body matched;
+> - bare identifier comparisons where the fresh read sits in an earlier statement (search i found `latest !== registered` only by its name);
+> - `Equal.equals`/`Hash` on Data classes;
+> - membership by object key in Set/WeakMap/WeakSet (`replied.has(target)`, `attachments.get(entry)`), which was not searched systematically;
+> - expressions split across lines;
+> - React refs and component state in apps/web and apps/mobile (outside scope).
+>
+> Verdicts rest on reading the writer sites named in each row. For the token group I relied on the matched line plus its creator in the same function. Whether `target.home` (homeSync) is referentially stable across environment updates was not traced. NOT RUN: tests, typecheck, any runtime reproduction.
+
+### Issues from this round
+
+- goat#3639: prepareMcpSession turns a failed thread read into "destination not usable" with Effect.option and no log (ProviderSessionManager.ts:440-446 at ae1d6ccbc0). The issue proposes a warning log with the cause, outside this lane.
+- goat#3641: the NotesService.ts:845 site above.
+
+### Checks and gate
+
+On the lane head 07502739c5:
+
+- Focused tests, 8 files, 276 passed: apps/server/src/orchestration-v2/ProviderSessionManager.test.ts (the whole file), ProviderSessionManager.delegatedWake.test.ts, MemoryProviderAuthority.test.ts, ThreadManagementService.memoryAccess.test.ts and ThreadManagementService.test.ts in the same directory, apps/server/src/memory/MemoryAccess.test.ts, apps/server/src/scheduledTasks/ScheduledTaskService.memoryGrantCeiling.test.ts and apps/server/src/channels/ChannelScenarios.test.ts.
+- Typecheck of goat (apps/server): exit 0.
+- node scripts/goat-rename.ts --check: exit 0.
+- `set -o pipefail; node scripts/check-changed.ts ae1d6ccbc0`, the script behind `vp run check:changed`: exit 0 (n3p6-cc.log). The static phase passed format, lint, knip 1/2 and 2/2, graphql, the agent surface audit, the agent context budget and typecheck of 3 packages. The tests beside the changed files passed:
+
+```text
+ Test Files  71 passed (71)
+      Tests  1034 passed (1034)
+cc_exit=0
+```
+
+The part 6 NOT RUN items are under "NOT RUN".
+
+## What the port changes for every reader
+
+On Effect 4.1.3 a free Semaphore permit is not taken inline while a waiter is queued: withPermits (effect src/Semaphore.ts:358-366) goes through takePermits, which takes a permit inline only when no fitting waiter is queued (:256); otherwise the fiber waits (:269) for a wake that releaseUnsafe schedules (:322-336), on a later scheduler turn. On 4.0.5 withPermits took a free permit inline (src/Semaphore.ts:297-305), ahead of a woken waiter (citation corrected per the race-fix review, P3-2). So any read behind the SQLite connection lock (target.lock.withPermits(1), packages/shared/src/nodeSqliteClient.ts:1175) can take one more scheduler turn than on 4.0.5, and other fibers run in that turn. Code that captures a value, yields on a database read and then compares object identity can now observe a concurrent equal rewrite. This lane met it in three places: the channel conversation order (ChannelUnlinkedAccess.test.ts, see "Channel order finding"), the receipt delivery harness (channelSessionReceiptDelivery.test.ts: the ninth send needs one more turn after the clock moves), and memoryAccessInputs (see "The rotation race in memoryAccessInputs", item (4i)). The search for the same shape elsewhere is item (4ii) there. The durable note for maintainers goes into docs/internals (the effect-services page, where it describes reads under the connection lock) as one docs commit after the merge, on the next follow-up branch cut from the integration head; it is a follow-on row in next-pr-plan.md.
+
+### Decision of 04:20 UTC (verbatim)
+
+> Coordinator decision, 2026-11-17 04:20 UTC, lane N3, the Semaphore fairness finding: it goes in the record now, in the section on what the port changes for every reader (one paragraph: on Effect 4.1.3 a free permit is not taken inline while a waiter is queued, so any read behind the SQLite connection lock can take one more scheduler turn than on 4.0.5; code that captures a value, yields on a database read and then compares object identity can now observe a concurrent equal rewrite; the three places this lane met it: the channel conversation order, the receipt delivery harness, memoryAccessInputs). No push for it. The durable note for maintainers (docs/internals, where the effect-services page describes reads under the connection lock) is one docs commit AFTER the merge, on the next follow-up branch cut from the integration head, together with nothing else; add it to next-pr-plan.md as a follow-on row so it is not lost.
+
 ## Decisions and adaptations
 
 - Budget ruling step 2: shared layer packages/shared/src/nodeServicesWithCrypto.ts (export ./nodeServicesWithCrypto in packages/shared/package.json) is `Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)`. 32 files that were at their budget import it in place of @effect/platform-node/NodeServices (list under Code budgets).
@@ -208,7 +861,7 @@ The lockfile moves only what ruling 1 allows: effect, @effect/*, alchemy, @alche
 | transitives of the moves | workerd, @cloudflare/workerd-*, @cloudflare/workers-types, rolldown and its bindings, @oxc-project/types, @puppeteer/browsers, mime, modern-tar |
 | removed second copies | versions only alchemy beta.80 pulled in: aws-sdk, smithy, octokit, mongodb, sharp, esbuild 0.25.12, drizzle-kit and drizzle-orm rc.5-ab785fc, graphql 16.11.0, libsodium, and @distilled.cloud doppler, fly-io, gcp, hetzner, infisical, neon, prisma, railway, stripe and zerossl. Where a name remains (drizzle-orm, drizzle-kit, esbuild, sharp, graphql), its other version stays. |
 
-Comparison with upstream: at 57cd05904d, all 31 effect, @effect/*, alchemy, @alchemy.run/* and @distilled.cloud/* packages in pnpm-lock.yaml have upstream's versions. At aa58dc6d22 every package of those families still matches. Three transitive versions differ because a resolution today picks newer patch releases: @cloudflare/workers-types 5.20261115.1 (upstream 5.20261026.1), @puppeteer/browsers 3.2.7 (3.2.6) and mime 4.1.2 (4.1.1).
+Comparison with upstream: at 57cd05904d, all 31 effect, @effect/*, alchemy, @alchemy.run/* and @distilled.cloud/* packages in pnpm-lock.yaml have upstream's versions. At aa58dc6d22 every package of those families still matches. Three transitive versions differ because a resolution today picks newer patch releases: @cloudflare/workers-types 5.20261115.1 (upstream 5.20261026.1), @puppeteer/browsers 3.2.7 (3.2.6) and mime 4.1.2 (4.1.1). "Every package" means every package of those families that GOAT's lockfile has: upstream's lockfile at aa58dc6d22 also has @effect/tsgo 0.67.1 and its seven platform packages (@effect/tsgo-darwin-arm64, -darwin-x64, -linux-arm, -linux-arm64, -linux-x64, -win32-arm64, -win32-x64), which come from upstream 95e53a54dbd. N3 does not port that commit (it is not one of the lane's rows), so they are left out on purpose.
 
 | pin | value and reason |
 |---|---|
@@ -482,7 +1135,7 @@ GOAT's patches/alchemy@2.0.0-beta.80.patch, re-ported onto beta.85 (ruling 1 (c)
 |---|---|
 | lib/Drizzle/Postgres.d.ts and .js, src/Drizzle/Postgres.ts (pgClient options) | dropped: beta.84 and later take config.client (@alchemy.run/drizzle lib/Postgres.d.ts:58). The caller moved to `{ client: { prepare: false } }`. |
 | lib/Test/Vitest.js, src/Test/Vitest.ts (vitest to vite-plus/test) | moved: now upstream's patches/@alchemy.run__test@2.0.0-beta.85.patch (lib/Vitest.js), taken verbatim |
-| lib/Artifacts.js (settle waiters on failure, GOAT's) | carried unchanged into patches/alchemy@2.0.0-beta.85.patch. beta.85's lib/Artifacts.js is the same blob, 648209c, and still calls Deferred.succeed only on success. |
+| lib/Artifacts.js (settle waiters on failure, GOAT's) | carried: the same hunk upstream carries. beta.85's lib/Artifacts.js is the same blob, 648209c, and still calls Deferred.succeed only on success. Until ae1d6ccbc0 GOAT's patch file had the hunk with shortened index lines (index 648209c..c66b543), so its pnpm patch hash was 79807d61... where upstream's is 07cc8c7e...: same hunk, different patch file bytes. ae1d6ccbc0 makes patches/alchemy@2.0.0-beta.85.patch upstream's file at aa58dc6d22 byte for byte (upstream added it in 87f3d93dea), and the lockfile's 25 references carry upstream's hash 07cc8c7e14b3b9af143ddd40a059f117c27e55139fbf20bd5dde2eb30509cedd. |
 | lib/Drizzle/Schema.js and src (reconstruct check, GOAT's) | dropped: @alchemy.run/drizzle beta.85 lib/Schema.js:233 readPreviousSnapshot calls kit.reconstruct natively |
 
 patches/@effect__vitest@4.1.2.patch is upstream's, taken in the port commit.
@@ -714,7 +1367,7 @@ How Effect 4.1 orders them: McpServer's makeInvoke runs a handler with the call'
 | goatclaw/DecisionService.ts:97, DecisionRouting.ts:160, DecisionInbox.ts:749 | PermissionProfiles | per decision, the server's profiles service | no | inner provide; also the server's registration value |
 | channels: ChannelReceptionService.ts:450 viewerNow, :1022-1025, :1128-1131 | requester scopes, recent-thread visibility | per pass, recomputed live from the link (scopesNow, identityNow) | no: function arguments, not Effect context | n/a (not context) |
 
-Production never provides McpInvocationContext, KeyedAdmission, AdmittedLimits or PermissionProfiles in a registration layer (rg over apps/server/src and packages, tests and testkits excluded: no Layer.succeed/effect of them), so the registration-wins rule changes nothing in production and only makes a server-built value win if one ever is added. No site lets a caller-supplied value replace a server-built one: request-time values come from the auth middleware or server code. The failures were test layers that set these at registration and relied on 4.0's order (retryKeys.test.ts:117, handlers.goatclaw.test.ts:55-67); both pass unchanged after 373b22790b.
+Production never provides McpInvocationContext, KeyedAdmission, AdmittedLimits or PermissionProfiles in a registration layer (rg over apps/server/src and packages, tests and testkits excluded: no Layer.succeed/effect of them), so the registration-wins rule changes nothing in production and only makes a server-built value win if one ever is added. No site lets a caller-supplied value replace a server-built one: request-time values come from the auth middleware or server code. The failures were test layers that set these at registration and relied on 4.0's order (retryKeys.test.ts:117, handlers.goatclaw.test.ts:55-67); both pass after 373b22790b with their expectations unchanged. Their harness setup did change in the port commit 0793dd3a0c (three lines, listed under Test-harness changes under rule 3).
 
 ### (b) Spawn sites
 
@@ -1013,7 +1666,7 @@ apps/server/src/screenCode/ScreenRunSupervisor.ts:162 | sets env
 
 ### (c) Forks
 
-Effect 4.1.3 changed Effect.forkIn. On a closed scope it now returns a fiber that never started and is interrupted at once (effect@4.1.3 src/internal/effect.ts:5724-5735). 4.0.5 still ran a fork with startImmediately up to its first async step, then interrupted it, so the effect's own ensuring, onExit and onInterrupt ran. A fork that was also uninterruptible ran to completion. A scope reads Closed before its finalizers run (effect.ts:4040-4055), so a "closed" window covers the whole teardown. The audit (n3-forkin-audit.md) read every site where this matters and judged the rest from the version semantics.
+Effect 4.1 changed Effect.forkIn; the change is already in 4.1.2 (effect 4.1.2 src/internal/effect.ts:5697-5708), not new in 4.1.3, so 0793dd3a0c alone is affected, and the 4.1.3 line numbers below are the same code. On a closed scope it now returns a fiber that never started and is interrupted at once (effect@4.1.3 src/internal/effect.ts:5724-5735). 4.0.5 still ran a fork with startImmediately up to its first async step, then interrupted it, so the effect's own ensuring, onExit and onInterrupt ran. A fork that was also uninterruptible ran to completion. A scope reads Closed before its finalizers run (effect.ts:4040-4055), so a "closed" window covers the whole teardown. The audit (n3-forkin-audit.md) read every site where this matters and judged the rest from the version semantics.
 
 First pass, the 27 forkIn sites with startImmediately: true, plus forkScoped with startImmediately: true:
 
@@ -1071,12 +1724,24 @@ Gate 5 caught the failures behind 0728a1e058, 373b22790b and f8eeb86c21: tests t
 | 0728a1e058, Codex request after the session closed | finiteProviderRequest.ts:41-44 forked every Codex request into the session scope. When the app-server exits, ProviderSessionManager closes that scope. RunExecutionService's ingest-failure handler then calls interruptTurn, the guarded turn/interrupt request comes back as a bare interrupt, and the handler dies before it writes the failed run. The fix forks only while the scope is open and otherwise runs the request in place under the same deadline. A standalone node script shows the change: 4.0.5 gives Fail("ended") and 4.1.3 gives Interrupt. | After an unexpected Codex app-server exit during a turn, the thread stayed "running". | CodexAppServerExit.test.ts "a request after its session closed fails with the client's error, not an interrupt", n3-finite-failfirst.log: `Error: All fibers interrupted without error`. Both CodexAppServerIsolation.integration.test.ts scenarios hung in gate 5 (n3-gate5.log: `Error: Test timed out in 120000ms.`) and pass 2/2 after the fix. |
 | ffbce8a8fa, ACP Stop after the session closed | ACP interruptTurn (adapter.ts:8261) forks with uninterruptible and startImmediately into sessionScope. On 4.1 nothing runs when that scope is closed: runtimeTransitionPermit (taken at :7960) is never released, and the caller's Fiber.join yields a bare Interrupt that the mapError at :8273 does not convert. The fix uses forkInScope. | A Stop sent during session release or retirement got an interruption instead of ProviderAdapterInterruptError or ProviderAdapterInterruptTimeoutError. Every later interruptTurn and respondToRuntimeRequest on that runtime blocked until the caller's timeout. | AcpClosedSessionStop.test.ts "a Stop sent after its ACP session closed gets an outcome, not a bare interrupt", n3-acp-failfirst.log: `AssertionError: expected true to be false` (AcpClosedSessionStop.test.ts:74, `assert.isFalse(Exit.isFailure(stopped) && Cause.hasInterruptsOnly(…`) |
 | ffbce8a8fa, Codex survivor adopted after the session closed | adoptSurvivor (CodexSurvivorContinuation.ts:476) settles done only from an ensuring inside the forked effect, and sessionLost (:268) waits on every waiting entry's done (:277). On 4.1 the fork never starts on a closed scope, so done never settles. The fix uses forkInScope. | sessionLost hung, so dead survivor fences and goal fences were never cleared, and a thread fenced by a dead survivor stayed blocked until the server restarted. | CodexSurvivorContinuation.test.ts "a survivor adopted after its session closed still settles the wait session loss awaits", n3-surv-failfirst.log: `AssertionError: expected false to be true` |
-| 373b22790b, registration context | Effect 4.1's McpServer runs a handler with the call's context over the services captured at registration. 4.0.5 applied the registration context innermost (details under audit (a)). The fix restores the 4.0 order in apps/server/src/mcp/registrationContext.ts and McpHttpServer.ts:126, :480 and :510-512. | None in production today: production never provides McpInvocationContext, KeyedAdmission, AdmittedLimits or PermissionProfiles at registration. The fix keeps the rule that a value the server built wins over one supplied with the call. | No separate log. The existing tests failed in gate 5 (n3-gate5.log) and pass unchanged after the fix. retryKeys.test.ts (6): `AssertionError: expected [ { type: 'text', …(1) } ] to deeply equal [ ObjectContaining{…} ]`. handlers.goatclaw.test.ts (3): `TypeError: .toMatch() expects to receive a string, but got undefined` (handlers.goatclaw.test.ts:226:64). |
+| 373b22790b, registration context | Effect 4.1's McpServer runs a handler with the call's context over the services captured at registration. 4.0.5 applied the registration context innermost (details under audit (a)). The fix restores the 4.0 order in apps/server/src/mcp/registrationContext.ts and McpHttpServer.ts:126, :480 and :510-512. | None in production today: production never provides McpInvocationContext, KeyedAdmission, AdmittedLimits or PermissionProfiles at registration. The fix keeps the rule that a value the server built wins over one supplied with the call. | No separate log. The existing tests failed in gate 5 (n3-gate5.log) and pass after the fix with their expectations unchanged (their harness setup changed in 0793dd3a0c; see Test-harness changes under rule 3). retryKeys.test.ts (6): `AssertionError: expected [ { type: 'text', …(1) } ] to deeply equal [ ObjectContaining{…} ]`. handlers.goatclaw.test.ts (3): `TypeError: .toMatch() expects to receive a string, but got undefined` (handlers.goatclaw.test.ts:226:64). |
 | f8eeb86c21, in-process MCP | layerInProcessMcpServer (McpHttpServer.ts:1030) died when a call carried no McpInvocationContext. It now passes the caller's context through unchanged. | An in-process call (ToolDispatch's goat_call and goat_eval steps, channels) that left out McpInvocationContext or McpServerClient ended in InternalError before the handler ran, even when the tool reads neither. Now a tool that reads a service its caller left out dies on use, as under Effect 4.0 (commit message of f8eeb86c21). | No separate log. agentSurface.test.ts "publishes closed top-level schemas and refuses unknown keys for the whole catalog" and advertisedJsonSchema.registration.test.ts failed in gate 5 (n3-gate5.log): `effect/ai/McpSchema/InternalError: Internal error` (effect McpServer.ts:802). Both pass after the fix. |
 
 ## Test-harness changes under rule 3
 
 No expectation changed apart from the authorised items below.
+
+Coordinator confirmation, 2026-11-16: the three harness lines are setup only and authorised after the fact; the expectations of both files are unchanged.
+
+| file:line (at 9ac4aa0688) | before (5c798a3072) | after (0793dd3a0c) |
+|---|---|---|
+| apps/server/src/mcp/toolkits/retryKeys.test.ts:233 | `Layer.provideMerge(McpServer.McpServer.layer),` | `Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),` |
+| apps/server/src/mcp/toolkits/retryKeys.test.ts:239 | `Layer.provideMerge(NodeServices.layer),` | `Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),` |
+| apps/server/src/mcp/toolkits/project/handlers.goatclaw.test.ts:76 | `Layer.provideMerge(McpServer.McpServer.layer),` | `Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),` |
+
+After f8eeb86c21, layerInProcessMcpServer is McpServer.layer plus a middleware that only retypes the context, and both tests failed with this harness until 373b22790b, so the swap did not hide the bug (review A, N3A-P2).
+
+tracePolicy.test.ts (cc0f790f63), under the coordinator's rule 3 authorisation for that file: the span fixture builds the span GOAT writes (LocalFileSpan through makeLocalFileTracer with a capturing sink) instead of a raw Tracer.NativeSpan, for the four cases that build spans; those four became it.effect tests to obtain the tracer (the repository's lint forbids Effect.runSync in tests); every assertion is unchanged. Failed on 9ac4aa0688 with "expected undefined to be true" (n3-tracepolicy-failfirst.log, the same failure as full run 43953991793 job goat-test-server 2/4), passes after (7/7). The policy is not passed as shouldRecord because the tests call it after each span ends and in a different order from the ends; moving the decision into end() would change what two cases test.
 
 | change | authority | evidence |
 |---|---|---|
@@ -1088,7 +1753,7 @@ No expectation changed apart from the authorised items below.
 
 ## Catch semantics in Effect 4.1.3 (coordinator item 6a)
 
-Effect 4.1.3 lets defects win over typed failures. When a cause mixes a failure and a defect, every typed recovery (catch, catchIf, catchTag, catchTags, orElseSucceed, match, option, result, ignore, retry) now treats it as unrecoverable and rewrites each failure into a defect. Cause-level APIs (catchCause, catchCauseIf, Effect.exit, Cause.squash, Cause.findError, Cause.hasInterruptsOnly, tapError) are unchanged. Such causes arise when a finalizer dies after a typed failure, or from raceAll. The read-only audit (n3-catch-audit.md, run at 65a69a24cb) checked every site the coordinator named. It found one change with a confirmed producer in GOAT, one smaller adapter case, and no path by which the change can take down the server or stop the effect worker's or channel worker's run loops.
+Effect 4.1 lets defects win over typed failures; the change is already in 4.1.2 (findRecoverableError, effect 4.1.2 src/internal/effect.ts:184-200), not new in 4.1.3, and the 4.1.3 references below are the same code. When a cause mixes a failure and a defect, every typed recovery (catch, catchIf, catchTag, catchTags, orElseSucceed, match, option, result, ignore, retry) now treats it as unrecoverable and rewrites each failure into a defect. Cause-level APIs (catchCause, catchCauseIf, Effect.exit, Cause.squash, Cause.findError, Cause.hasInterruptsOnly, tapError) are unchanged. Such causes arise when a finalizer dies after a typed failure, or from raceAll. The read-only audit (n3-catch-audit.md, run at 65a69a24cb) checked every site the coordinator named. It found one change with a confirmed producer in GOAT, one smaller adapter case, and no path by which the change can take down the server or stop the effect worker's or channel worker's run loops.
 
 The version table and truth table, verbatim from the audit:
 
@@ -1214,6 +1879,103 @@ The audit's stated limits, verbatim:
 >
 > NOT RUN: vp test, typecheck, or anything inside the worktree, per the brief. The experiments ran from /tmp/n3-catch and loaded the store copies of effect plus GOAT's nodeSqliteClient.ts read-only.
 
+
+### Second site from #3615
+
+The follow-up review found that #3615 adds a second site (N3B2-P3-2). In the ruling's wording: the withTransaction at apps/server/src/persistence/AuthSessions.ts:727 fails through mapError at SessionStore.ts:1028-1031 and EnvironmentAuth.ts:809-810 into the typed catchIf at apps/server/src/auth/http.ts:578. If the body fails AND the ROLLBACK then fails with anything but "no transaction is active", Effect 4.1 does not recover the typed failure: the client gets an internal error without the reason client_session_revoke_failed and without the trace id (the server still logs the request failure). Which sessions end does not change: nothing commits and settleEnded runs only after the transaction returns. Every handler that maps a transaction's typed failure to a coded error has the same shape. goat#3640 proposes one place to fix it, the transaction helper keeping the body's typed failure as the primary cause, outside this lane.
+
+## Review A notes (N3A-P1, P3)
+
+- Trace marks after a span ends: Effect 4.1 ignores attribute() on an ended Tracer.NativeSpan (effect 4.1.2 src/Tracer.ts:770-773; 4.0.5 :759-761 had no check). GOAT's trace policy sets trace.parent_omitted inside shouldRecord, which LocalFileSpan.end calls after the span ended (apps/server/src/observability/tracePolicy.ts:75). GOAT's local trace file is unaffected: LocalFileSpan keeps its own attribute map and writes the record from it (packages/shared/src/observability.ts:507-529). A delegate tracer such as an OTLP exporter does not receive trace.parent_omitted on 4.1, and it never did in time on 4.0.5 either: Effect's OtlpTracer converts and queues a span inside end() (effect 4.0.5 src/observability/OtlpTracer.ts:102-104, :283-290), and LocalFileSpan ends its delegate before it calls the policy. The search for other attributes, events or links set on a span that may already have ended is in n3-span-after-end-audit.md (section below).
+- PR read cache: Effect 4.1 Persistence stores keys as <storeId>:<key> (effect 4.1.2 Persistence.ts:897, :915), so cache files written by 4.0.5 as pr-v2<hex> (PullRequestReadCache.ts:32, :139) are not read after the upgrade: each pull request is fetched from GitHub once more on first use, and upstream's wider filename pattern prunes the old files after a day. A cache only; nothing is lost.
+- Version attribution: the fork-into-a-closed-scope change (effect 4.1.2 src/internal/effect.ts:5697-5708) and the catch change (findRecoverableError, :199) are already in Effect 4.1.2, not new in 4.1.3. Commit 0793dd3a0c (4.1.2) alone is affected; this matters only when bisecting, since both commits land together. Where this record says 4.1.3 for those two changes, read 4.1.2 and later.
+- NonBlockingSpawner (apps/server/src/process/NonBlockingSpawner.ts:22-52, upstream's code from 65e4272db1): while a mount hangs, each spawn attempt leaves an entry in directoryTails and waiting that never resolves. Filed as goat#3610 (https://github.com/goat-si/goat/issues/3610).
+- Reference repos: vpr sync:repos is owed with this bump (.repos/effect-smol is at 4.0.1, .repos/alchemy-effect behind beta.85). scripts/sync-reference-repos.ts works on this tree (effect-smol to effect@4.1.3, alchemy-effect to v2.0.0-beta.85), but the alchemy-effect part touches about 24,000 files, so by the coordinator's decision of 22:05 UTC (quoted under Rulings) it is not in this lane: goat#3613 (https://github.com/goat-si/goat/issues/3613) carries it as its own pull request to dev right after #3519 merges. No .repos change is in the lane's push.
+
+## Spans written after they end (review A condition (d), review B item 10)
+
+Effect 4.1 ignores attribute, event and addLinks on a span that has already ended, for Tracer.NativeSpan and for the OTLP tracer's spans alike, and its tracer logger no longer turns a log into an event on an ended span. The audit below lists every place in apps/server and packages that writes to a span which may already have ended, with its verdict. The only such write is the trace policy's trace.parent_omitted; it still reaches GOAT's trace file, because LocalFileSpan keeps its own attribute map and has no Ended check (packages/shared/src/observability.ts:524, :533, :543). No site loses data GOAT writes or shows, so no code changed; cc0f790f63 makes the trace policy test build that span. An OTLP exporter did not receive trace.parent_omitted on 4.0.5 either: 4.0.5's OtlpTracer exports a span at end() (OtlpTracer.ts:102-104, :283-290), and LocalFileSpan ends its delegate before it runs the policy.
+
+The audit was extended to origin/dev 0258ec9f22 (merge 44007ccfe9, #3586: SessionStore.ts, DurableRevocations.ts and their tests). It found no write to a span after it ends there, and the fork verdicts are unchanged (n3-dev2-reaudit.txt, verbatim):
+
+> Fork and ended-span re-audit over origin/dev 0258ec9f22 (merge 44007ccfe9; 17 production files, list n3-dev2-files.txt): DurableRevocations.ts:65 plain Effect.forkScoped at layer build (scope open) SAME; client-runtime hubProxyDiscovery.ts:489 plain forkScoped at build SAME; client-runtime connection/driver.ts:246 Effect.annotateCurrentSpan on the live current span SAME (4.1 skips only ended spans). Tests: SessionStore.test.ts:136,:140,:143,:164,:805 and SessionStore.durableRevocation.test.ts:45,:89,:121,:161 fork with startImmediately into the open test scope (Effect.scoped) SAME. Adaptation: SessionSocketLifetime.test.ts:202 and SessionStore.durableRevocation.test.ts:68,:97,:138,:179 provide NodeCrypto.layer beside NodeServices.layer (Effect 4.1 moved SecureRandom out of NodeServices; typecheck failed with "missing SecureRandom" before); no expectation changed; the four #3586 test files pass on 4.1 (85 tests). SessionStore.ts budget set to its merged length 1124 (dev entry 1288).
+
+The audit in full (n3-span-after-end-audit.md):
+
+
+#### N3 audit: span writes after end (Effect 4.0.5 → 4.1.3)
+
+Worktree: chase-t3-261114-n3-effe-903d2903df35ae49 at 11904b0639 (resolves effect@4.1.3 via catalog, pnpm-workspace.yaml:76).
+Read-only audit. NOT RUN: any test, typecheck or runtime check (instructed). One claim marked (inference) below was not verified at runtime.
+
+#### Verdict
+
+No GOAT site needs a fix. The only GOAT code that writes to a span after it ended is the trace policy (tracePolicy.ts:75). It writes to LocalFileSpan, which has no end check, so trace.parent_omitted still reaches the local trace file. On 4.1.3 the forwarded delegate call is dropped. On 4.0.5 that call reached the delegate, but nothing exported or read it there either. Every other site writes while its span is still open, or only reads ended spans.
+
+#### 1. What Effect changed
+
+| Method | 4.0.5 | 4.1.3 |
+|---|---|---|
+| Tracer.NativeSpan.end | Tracer.ts:750, no check (re-end overwrites) | Tracer.ts:761, returns if Ended |
+| NativeSpan.attribute | Tracer.ts:759, no check | Tracer.ts:771, ignored if Ended |
+| NativeSpan.event | Tracer.ts:763, no check | Tracer.ts:776, ignored if Ended |
+| NativeSpan.addLinks | Tracer.ts:767, no check | Tracer.ts:781, ignored if Ended |
+| OtlpTracer SpanImpl end / attribute / event / addLinks (observability/OtlpTracer.ts) | :283 / :293 / :297 / :301, no checks | :284 / :295 / :300 / :305, all ignored if Ended |
+| internal/effect.ts annotateCurrentSpan | :6274, writes to any span | :6367, skips when span.status is Ended (applies to every Span impl, LocalFileSpan included) |
+| internal/effect.ts tracerLogger (log → span event) | :6917, writes to any non-external span | :7010, skips Ended (applies to every impl) |
+| internal/effect.ts endSpan | :6156, already skipped Ended | :6249, same |
+
+Spec text: 4.1.3 Tracer.ts:328-336 says that implementations should ignore end/attribute/event/addLinks once a span is Ended, that an ended span can still be read and used as a parent, and that Effect does not record logs or annotateCurrentSpan attributes on an ended span.
+OtlpTracer also changed the success status from StatusCode.Ok to Unset (4.1.3 :331, :344). This is unrelated to post-end writes and is noted only because it is the remaining OtlpTracer diff.
+Already true on 4.0.5: OtlpTracer serializes the span in end() (4.0.5 OtlpTracer.ts:104 'exporter.push(makeOtlpSpan(span))'). OTLP export has never carried anything written after end.
+
+#### 2. GOAT's span object at runtime
+
+Observability.ts:65-93 builds the server tracer as HeapAttribution(LocalFileTracer(delegate)). The delegate is the OtlpTracer SpanImpl when otlpTracesUrl is set, and a NativeSpan otherwise (observability.ts:564-568). Every server span is therefore a LocalFileSpan, and HeapAttribution patches its end().
+LocalFileSpan (packages/shared/src/observability.ts:458-547) keeps its own status, attributes and events. Its attribute, event and addLinks methods (:524, :533, :543) have no Ended check. end() (:507) does the following in order:
+
+1. sets status to Ended (:509)
+2. calls delegate.end (:515)
+3. calls shouldRecord(this, events) (:518)
+4. pushes spanToTraceRecord(this) (:520), which copies the attributes, events and links at that moment (:441-453)
+
+Anything written after step 4 never reaches the file, and that was equally true on 4.0.5.
+Readers ("shows"): TraceDiagnostics.ts and cli/trace.ts read file records only. tracePolicy reads the LocalFileSpan maps during end. No UI, agent tool or service reads a span's maps after its end.
+
+#### 3. Sites
+
+| # | Site | Span object | Can run after end? | 4.0.5 | 4.1.3 | Data lost / shown | Verdict |
+|---|---|---|---|---|---|---|---|
+| 1 | apps/server/src/observability/tracePolicy.ts:75 'span.attribute("trace.parent_omitted", true)' inside shouldRecord | LocalFileSpan ('this', observability.ts:518) | Always: status is already Ended (:509) and delegate.end already ran (:515) | Written to the LocalFileSpan map, so it appeared in the pushed record. The delegate call reached NativeSpan (never read) or OTLP SpanImpl (already serialized at end) | Written to the LocalFileSpan map (no check), so it still appears in the pushed record. The delegate call is ignored | Nothing lost: the file record is unchanged and OTLP never had it | CHANGED-HARMLESS. Only the delegate no-op changed. The test fixture was already moved from raw NativeSpan to makeLocalFileTracer in cc0f790f63; with the NativeSpan fixture on 4.1.3 the mark read undefined. Keep that fixture, because it catches anyone who adds an Ended check to LocalFileSpan.attribute for spec parity. Such a check would silently drop the mark unless the policy writes it before status flips |
+| 2 | apps/server/src/observability/HeapAttribution.ts:50 'memory.heap_growth_bytes' in the patched end (:46-54) | LocalFileSpan (wraps the local tracer, Observability.ts:89) | No: attribute is set at :50 before calling the original end at :54, while status is still Started | Recorded, and read by the policy at tracePolicy.ts:43 | Same | None | SAME |
+| 3 | packages/shared/src/nodeSqliteClient.ts:89-108 annotateAcquired (db.connection, db.lock_wait_ms, db.lock_owner_at_start.*) | LocalFileSpan named "sqlite" or "sql.transaction" (fiber ParentSpan) | No. Call at :1164 runs in the borrower's useConnection before 'use(connection)'. The statement span is open because Statement.withConnection is a useSpan (effect 4.1.3 sql/Statement.ts:1484) and provides that span as ParentSpan around the borrower (:1528). Call at :1283 runs at the start of the transaction body, inside sql.transaction | Recorded, and read by the policy at tracePolicy.ts:47 | Same | None | SAME. Aside: 4.1.3 now also writes db.client.connection.wait_time_ms itself (internal/sql.ts:35-38) when SpanPropagationEnabled and timing are on, which overlaps db.lock_wait_ms. This is not a post-end issue |
+| 4 | packages/shared/src/slowSqlOperations.ts:55-65 connectionOwner | reads the ParentSpan chain | Reads only: name, parent, traceId, spanId | — | — | None | SAME (no writes) |
+| 5 | apps/server/src/vcs/GitVcsDriverCore.ts:485-497 addCurrentSpanEvent ('span.event' on Effect.currentSpan) | LocalFileSpan "handleTraceLine" (Effect.fn at :540) | No. Callers at :574 and :589 run inside handleTraceLine, whose span is open. finalizeTrace2Monitor (:645, registered with addFinalizer at :659) runs when the scope closes after the runGitCommand span ended (Effect.scoped is applied outside it at :943/:946), but it opens its own spans under that ended parent (allowed), so the event lands on a live span | Recorded on handleTraceLine | Same | None | SAME. The comment at :486 ("annotates the existing operation span") is inaccurate, since the event goes on handleTraceLine. This predates the upgrade |
+| 6 | apps/server/src/persistence/DatabaseStorage.ts:163 'Effect.ensuring(annotateCurrentSpan("db.reclaimed_pages"))' | LocalFileSpan "DatabaseStorage.reclaim" | No: ensuring is inside withSpan (:166), so it runs before the span ends | Recorded | Same | None | SAME |
+| 7 | packages/client-runtime/src/rpc/protocol.ts:63, :67, :82 (connection.slow; ensuring at :82) | client tracer span "environment.websocket.silence" | No: withSpan (:83) wraps the loop and its ensuring; forkScoped is outside | — | Same | None | SAME |
+| 8 | packages/client-runtime/src/connection/supervisor.ts:713-739, :1292-1336 (held attemptSpan) | relay OTLP SpanImpl via nonInterferingTracer | The held reference outlives the span, but it is only used as a linkSpans target (:732, :1335). That reads traceId and spanId, which 4.1.3 explicitly allows. onExit(annotateAttemptOutcome) at :725 is inside withSpan (:726) | — | Same | None | SAME |
+| 9 | packages/shared/src/relayTracing.ts:136-148 nonInterferingTracer | wraps the OTLP span's end | Only patches end; makes no writes | — | — | None | SAME |
+| 10 | Logs from fibers that outlive their span (tracerLogger, active when no OTLP logs URL is set: apps/server/src/serverLogger.ts:39-41). Examples: forkScoped loops started inside an Effect.fn constructor (makeGitVcsDriverCore :789) or a span-wrapped layer | LocalFileSpan of the span active at fork time (fiber.cache.span) | Yes, by design | The event was appended to the ended LocalFileSpan.events (and the delegate's) after the record was pushed, so it never reached the file. (inference) Those arrays then grew for the life of the forked fiber | Dropped at internal/effect.ts:7010 before reaching the span | File unchanged; the in-memory growth stops | CHANGED-HARMLESS (and slightly beneficial) |
+| 11 | All about 100 non-test Effect.annotateCurrentSpan calls in apps/server/src and packages/*/src (rg list) | LocalFileSpan on the server, client tracer spans in client-runtime | Checked the cases that could plausibly run late: forkScoped loops (SecretRequests.ts:620, :637; HeldHooksWaker.ts:21) each run inside their own withSpan or Effect.fn. ws.ts handlers (:1819-2456) annotate the RPC span before andThen. Orchestrator.ts:13125/13155 and ScheduledTaskService.ts:1692 run inside their Effect.fn. No ensuring/onExit/onInterrupt/addFinalizer site annotates outside its span (only rows 6, 7 and 8 match that shape) | Even a late call landed in the LocalFileSpan map after the push, so it never reached the file | Skipped by the generic check at :6367 | None | SAME |
+| 12 | provider-opencode/src/server/driver.ts:675 Effect.annotateSpans | annotations for future child spans | No: these apply at span creation | — | — | None | SAME |
+
+LocalFileSpan.end itself has no Ended check, so a second end() would push a duplicate record. Effect's endSpan has guarded against this since 4.0.5 (:6156), and no GOAT code calls end() directly apart from HeapAttribution's pass-through. SAME.
+
+#### 4. Smallest follow-ups (optional, none blocking)
+
+- None required.
+- If a reviewer wants LocalFileSpan to follow the 4.1 spec (ignore writes after end), move the trace.parent_omitted decision ahead of the status flip, or set it with 'this.attributes.set' inside end. The existing makeLocalFileTracer-based tracePolicy.test.ts case for parent_omitted is the guard test; no new test is needed.
+
+## Review B items 8b and 8c
+
+8b, nodeServicesWithCrypto's home: moved to a testing subpath. The module is now packages/shared/src/testing/nodeServicesWithCrypto.ts, exported as @goat/shared/testing/nodeServicesWithCrypto (a5c33e36d9). Why: it imports @effect/platform-node, which @goat/shared declares only as a dev dependency, and every importer is a test, a testkit or a dev script (32 files: apps/server and apps/desktop tests, ClaudeAdapterV2.testkit.ts, packages/ssh, provider-core and provider-acp-registry tests, scripts/mobile-native-client.ts and apps/server/scripts/record-codex-app-server-replay-fixture.ts). The repository already does this for packages/shared/src/testing/loopbackHttpServer.ts, which imports platform-node behind a ./testing/* export. Declaring platform-node as a runtime dependency of @goat/shared instead would put it under every shared consumer for a helper no production path uses. The exports map has only the testing key, and knip agrees: vp run knip:check exit 0. Typecheck: 0 errors in @goat/shared, goat (apps/server), @goat/desktop, @goat/ssh, @goat/provider-core, @goat/provider-acp-registry and @goat/scripts. The fork-delta line about the shared layer (devlog/_chase/010_fork_delta.md:58) names the new path.
+
+8c, the alchemy patch bytes: regenerated (ae1d6ccbc0); see the patch table above. vp i --frozen-lockfile exit 0, then a plain vp i left the lockfile unchanged, the installed alchemy beta.85 sits under patch_hash=07cc8c7e... with the hunk applied, and the infra/relay and infra/task-cache typechecks exit 0.
+
+## Dev merge 0258ec9f22 (review B item 9)
+
+44007ccfe9 merges origin/dev at 0258ec9f22 once, with no conflicts; its tree equals git's own merge. It brings #3586 (auth SessionStore.ts, DurableRevocations.ts and their tests), which had never run on Effect 4.1. Adaptations, all in 8c4f618595: SessionStore.durableRevocation.test.ts and SessionSocketLifetime.test.ts provide NodeCrypto, because Effect 4.1 moved SecureRandom out of NodeServices; no expectation changed. All 85 tests of #3586's files pass on 4.1. The budget entry for SessionStore.ts is 1124, the file's real length in the merged tree, below dev's 1288; node oxlint-plugin-goat/update-code-budgets.ts exit 0. Typecheck after the merge: 0 errors in apps/server, shared, web, mobile and contracts. The fork re-audit and the ended-span search over dev's 17 changed production files are in the section above. DurableRevocations.ts:65 is a plain forkScoped at layer build, the same on both versions. The integration head stays 5c798a3072; chase/t3-261114-next was not merged again.
+
 ## Channel order finding
 
 Conversations run concurrently by design (ChannelRuntime.ts:134-156), and their relative order was never a contract. Order inside one conversation is enforced by the ledger (ChannelLedger.ts:1001-1014), and ChannelScenarios.test.ts:708 passes on 4.1 (n3-inorder.log: 1 passed). Two people writing at the same moment in different conversations may be answered in the other relative order.
@@ -1247,6 +2009,19 @@ These fail at the baseline 44d7d60d20 on Effect 4.0.5 on the same Mac, or are kn
 | goat#3425 | GrokTextGeneration.test.ts, 16 tests, "Grok ACP request failed" | the fake CLI says "exec: node: not found"; the same 16 fail at the baseline |
 | goat#3403 | packages/ssh launchListenerScripts.test.ts (Windows PowerShell wait) | passes at the baseline and in an isolated run on N3; fails under gate load |
 | [goat#3590](https://github.com/goat-si/goat/issues/3590) (new, filed by N3) | apps/server/src/opencodex/OpenCodexChildBootstrap.ts:850 | Found by the fork audit, not by a test. An ensuring forks releaseAdmission (sshDispatch.revokeChildSetupSessions, :323-327) into serviceScope. When shutdown interrupts an in-flight readiness check, the revoke never runs, so a Child setup session minted for that check is not revoked. Same on 4.0.5 and 4.1.3; forkDetach is the likely fix. |
+
+## Issues filed by N3
+
+goat#3590 is in the table above. The others:
+
+- [goat#3610](https://github.com/goat-si/goat/issues/3610): NonBlockingSpawner's wait queue grows without bound while a mount hangs.
+- [goat#3613](https://github.com/goat-si/goat/issues/3613): the vendored reference sync (.repos) for this bump, as its own pull request to dev after #3519.
+- [goat#3639](https://github.com/goat-si/goat/issues/3639): prepareMcpSession hides a failed thread read with Effect.option and logs nothing.
+- [goat#3640](https://github.com/goat-si/goat/issues/3640): on Effect 4.1 a failed rollback after a failed transaction body turns a coded HTTP error into a bare internal error.
+- [goat#3641](https://github.com/goat-si/goat/issues/3641): a note stays in Doing when a notes read lands while auto-done decides (NotesService.ts:845).
+- [goat#3644](https://github.com/goat-si/goat/issues/3644): OpenCodex managed update: the window steps' identity checks are safe only while they run inside the checking semaphore.
+- [goat#3643](https://github.com/goat-si/goat/issues/3643): the CommandPalette drag browser test's synchronous DOM read after drag start, which failed once in full run 44009905527; closed as a duplicate of goat#3416 (see "Full run 44009905527: the palette browser test").
+- [goat#3416](https://github.com/goat-si/goat/issues/3416) (existing, not filed by N3): the CommandPalette drag test flake; N3 added run 44009905527's evidence as a comment.
 
 ## Native fingerprint
 
@@ -1319,6 +2094,45 @@ Fork re-audit over the merged lanes (n3-forkin-reaudit-merge.txt), verbatim:
 
 > Fork re-audit over the merged lanes (44d7d60d20..5c798a3072): 41 production files changed (list /tmp/n3-newfiles.txt). No Effect.forkIn/forkScoped with startImmediately or uninterruptible other than the fixed ACP interruptTurn site (adapter.ts:8251, forkInScope). Plain interruptible forkIn/forkScoped sites (LaunchWatchService.ts:736,:1517; ThreadManagementService.ts:1353,:1737; RemoteDispatchCoordinator.ts:1181,:1197,:1219; provider-pi adapter.ts:321,:956,:1440,:1689,:2235,:2348,:3308; Orchestrator.ts:13120; provider-cursor adapter.ts:2018; provider-acp adapter.ts:1907,:2874,:2888,:5525,:6872,:7520,:7663): SAME on 4.0.5 and 4.1.3 (a plain fork into a closed scope never ran on either). FiberMap.run RemoteDispatchCoordinator.ts:949: covered by the widened audit (CHANGED-HARMLESS at close).
 
+## Whole-suite local run (review A item 2)
+
+Review A item 2 asked for the whole apps/server suite and the package suites, run locally by CI's own commands, because check:changed runs only the tests beside changed files while this lane changes the runtime under all of them. It ran on ae1d6ccbc05195b6bc4f9871a970848bd2e9cdd1 on pen-mac-studio, one job at a time from one script (/tmp/n3p5-suites.sh), from 2026-11-16T22:07:32Z to 2026-11-17T00:56:17Z. No other check:changed or full vitest was running when it started.
+
+| job | command (as in goat-ci.yml) | files | tests | exit |
+|---|---|---|---|---|
+| server 1/4 | `vp run --filter goat test --shard 1/4` | 524 passed, 1 skipped | 5861 passed, 6 skipped | 0 |
+| server 2/4 | `vp run --filter goat test --shard 2/4` | 1 failed, 523 passed, 3 skipped | 4 failed, 5963 passed, 13 skipped | 1 (goat#3238) |
+| server 3/4 | `vp run --filter goat test --shard 3/4` | 1 failed, 521 passed, 4 skipped | 16 failed, 5283 passed, 9 skipped | 1 (goat#3425) |
+| server 4/4 | `vp run --filter goat test --shard 4/4` | 525 passed, 2 skipped | 6713 passed, 14 skipped | 0 |
+| packages (24 suites from goat-ci-scope.cjs packageSuites) | `vp run --fail-if-no-match --log grouped --filter <each> test` | 378 passed, 1 skipped | 4090 passed, 3 skipped | 0 |
+| ssh | `vp run --filter @goat/ssh test` | 2 failed, 90 passed | 2 failed, 1618 passed, 14 skipped | 1 (goat#3363, goat#3403) |
+| desktop | `vp run --filter @goat/desktop test` | 219 passed, 5 skipped | 1945 passed, 50 skipped | 0 |
+| contracts | `vp run --filter @goat/contracts test` | 118 passed | 974 passed | 0 |
+| client-runtime | `vp run --filter @goat/client-runtime test` | 307 passed | 3930 passed | 0 |
+| shared | `vp run --filter @goat/shared test` | 177 passed, 1 skipped | 2281 passed, 5 skipped | 0 |
+| ingest | `vp run --filter @goat/ingest test` | 3 passed | 17 passed | 0 |
+| relay | `vp run --filter goat-relay test` | 62 passed | 390 passed | 0 |
+| web | `vp run --filter @goat/web test` | 982 passed | 10930 passed | 0 |
+| mobile | `vp test run --root apps/mobile --config vite.config.ts` | 494 passed | 5538 passed | 0 |
+| pen-protocol, pen-relay, pen-login | `vp run --filter @goat/pen-<name> test` | 22, 4 and 6 passed | 458, 37 and 55 passed | 0 |
+| memory growth | `GOAT_MEMORY_GROWTH=1 vp test run src/memory/MemoryImport.growth.test.ts src/memory/MemoryReceive.growth.test.ts` (apps/server) | 2 passed | 3 passed | 0 |
+
+Every failure is a known issue that fails the same way at 5c798a3072 with Effect 4.0.5 on this Mac:
+
+- server 2/4: apps/server src/cli/app.test.ts, the 4 "resolves relative {bootstrap, cwd, env, flag} against the inaccessible original cwd" tests (goat#3238).
+- server 3/4: src/textGeneration/GrokTextGeneration.test.ts, 16 tests (goat#3425).
+
+  The 20 failing test names of the two shards equal the baseline log n3-base-5c79-server.log, taken at 5c798a3072 on Effect 4.0.5; a diff of the sorted name lists is empty.
+- ssh: runtimeFactsScripts.test.ts "reads a built runner in one call and parses only the lines before its end line" (goat#3363), and launchListenerScripts.test.ts "waits for a launched server's listener inside one PowerShell start, held to the deadline", which fails only under full-run load (goat#3403). Both are the same as in gate 7 and its baseline.
+
+goat#3238 stops: three hung serverCwd fixtures in server 2/4 were stopped only by PIDs traced to this run's script (PID 92363). PID 85433 (relative-flag, ran 28 minutes) ignored SIGTERM and got SIGKILL; PIDs 27285 (relative-env, 4:12) and 33667 (relative-bootstrap, 4:04) got SIGKILL. Each chain ran <pid> < 85163 (worker) < 49355 (vitest) < 49294 < 49293 (vp run) < 92363. The record of the stops is n3p5-suite-stops.txt.
+
+tracePolicy.test.ts, the one failure of full run 43953991793, passes in this run.
+
+check:changed on the same head against 9ac4aa0688 (`set -o pipefail; node scripts/check-changed.ts 9ac4aa0688`, the script behind `vp run check:changed`): exit 0. Its static phase passed 42 of 42 tasks: unused patches, format, lint, graphql, the agent context budget, the agent surface audit, knip in both passes and typecheck of 42 packages. The tests beside the 111 files changed since 9ac4aa0688 also passed: 288 files in 1209.7 s. node scripts/goat-rename.ts --check: 0 lines with T3 residue.
+
+Native fingerprint on ae1d6ccbc0, with the same expo fingerprint call scripts/mobile-native-client.ts uses: ios 8564b56fd13c1993bd87c435a085a68bcc431c18, android ed49dd54bfdbaa8565dd1af1a69d0f1ec8ab09fc, the same as 9ac4aa0688. The review round changes no native input; 8b changes only the import path inside scripts/mobile-native-client.ts. The relay's PostgreSQL files (`infra/relay/postgres.vite.config.ts`) and the job "Connect auth PostgreSQL boundaries" need a PostgreSQL cluster that pen-mac-studio cannot start, so they are proven by the new full CI run.
+
 ## Gate
 
 Gate 7, the one gate, on 9ac4aa0688af8fb5c801ef5a8481f282422f35ee (integration head 5c798a3072 merged once, origin/dev 1d41f2c97f, the two catch fixes), pen-mac-studio, `set -o pipefail; vp run check:changed`, started 2026-11-16T18:13:46Z, exit 1 at 2026-11-16T20:13:35Z (log n3-gate7.log).
@@ -1340,19 +2154,60 @@ Gate 6 ran on 9d98d71774, the merged and adapted tree before the two catch fixes
 
 For reference, gate 5 on 19fe33fdee (integration 44d7d60d20, dev 26847e90dc), log n3-gate5.log: format, lint, knip, graphql, the agent surface audit, the agent context budget and typecheck (42 packages) passed. Tests: 10 failed files, 1727 passed and 5 skipped; 37 failed, 25402 passed and 21 skipped. The new failures are fixed above, and the rest are the pre-existing failures listed. Gates 1 to 4 were stopped as stale when the integration head moved.
 
+Part 6 gate, on the lane head 07502739c5d6c79d8be6dc1b09477adf55a75d70 (ae1d6ccbc0 plus the move-out and the fix): `set -o pipefail; node scripts/check-changed.ts ae1d6ccbc0`, the script behind `vp run check:changed`, exit 0 (log n3p6-cc.log). The static phase passed (format, lint, knip 1/2 and 2/2, graphql, the agent surface audit, the agent context budget, typecheck of 3 packages), and so did the tests beside the changed files: 71 files, 1034 tests.
+
 ## Full CI run
 
-Full CI run: https://github.com/goat-si/goat/actions/runs/43953991793, workflow_dispatch on chase/t3-261114-n3-effect-41 at 9ac4aa0688af8fb5c801ef5a8481f282422f35ee, dispatched 2026-11-16T20:50:55Z. Result: queued when this record was pushed (2026-11-16, while the coordinator's C4 reviews run); the result is added in a follow-up records commit and cited in READY.
+First full run: https://github.com/goat-si/goat/actions/runs/43953991793, workflow_dispatch on chase/t3-261114-n3-effect-41 at 9ac4aa0688af8fb5c801ef5a8481f282422f35ee, dispatched 2026-11-16T20:50:55Z. Result: failure. The only failed job was goat-test-server 2/4, with apps/server/src/observability/tracePolicy.test.ts:62 "marks a recorded child whose fast parent already ended (#2465)": "AssertionError: expected undefined to be true" (1 failed, 5725 passed), plus goat-ci-result, which follows it. Every other job passed, including "Connect auth PostgreSQL boundaries", the relay tests and Windows. Reviews A and B blocked on it, and cc0f790f63 fixes it (see "Review round A+B" and "Spans written after they end").
+
+Second full run, after the fix round: https://github.com/goat-si/goat/actions/runs/43994624055, workflow_dispatch on chase/t3-261114-n3-effect-41 at ae1d6ccbc05195b6bc4f9871a970848bd2e9cdd1, dispatched 2026-11-17T01:18:58Z. No other full run of ours was queued or running at dispatch. Result: failure in one job, goat-test-server 1/4 (runner lidge-goat-03), one test: apps/server/src/orchestration-v2/ProviderSessionManager.test.ts:2350 "current memory DTO denies an archived destination before a deferred detach", "AssertionError: expected undefined to equal 'read_write'", plus goat-ci-result, which follows it. The 23 other jobs passed. The cause is the race in memoryAccessInputs that Effect 4.1 made reachable, fixed in 07502739c5 (see "The rotation race in memoryAccessInputs"). The coordinator reran the failed job as attempt 2; by the 03:25 UTC decision its result no longer matters, and this record does not use it.
+
+Third full run, after part 6: https://github.com/goat-si/goat/actions/runs/44009905527, workflow_dispatch on chase/t3-261114-n3b-dev-merge at 24aa0d5f70a7080483897996a13eabf62af0dbc6, dispatched 2026-11-17T03:23:51Z. The head contains the lane head 07502739c5, dev 229ae283d3 and the trace test 97ee0a1608. No other full run of ours was queued or running at dispatch. It must cover Connect auth PostgreSQL boundaries and the relay tests. Result: attempt 1 completed failure: every job passed (goat-scope, Connect auth PostgreSQL boundaries, goat-test-shared, -desktop, -mobile, -packages, goat-smoke-linux-computer-use, goat-test-memory-growth, goat-test-server 1/4 to 4/4, goat-test-ssh, goat-typecheck, goat-test-pen-windows, goat-test-contracts, goat-test-relay, goat-build, goat-test-pen, goat-test-client-runtime, goat-check, goat-test-windows, goat-test-ingest; the two event-gated jobs and goat-ci republish refresh skipped) except goat-test, whose only failed test is CommandPalette.browser.test.tsx:83 (the known flake goat#3416; see "Full run 44009905527: the palette browser test"); attempt 2 (rerun of the failed job): still queued at 2026-11-17T04:33Z (no runner had picked up goat-test since 04:17:57Z); its result is on the run page, and #3519's own full run on 24aa0d5f70 is the gate before dev (04:25 UTC decision).
 
 The integration head this branch contains, 5c798a3072, had its own full run SUCCESS before N3 merged it: https://github.com/goat-si/goat/actions/runs/43922119605 (28 jobs: 26 passed, 2 skipped, none failed; goat-ci-result SUCCESS).
 
+## Full run 44009905527: the palette browser test
+
+### Decision of 04:10 UTC (verbatim)
+
+> Coordinator decision, 2026-11-17 04:10 UTC, lane N3, full run 44009905527 on 24aa0d5f70 (the follow-up branch with the fix merged). What I read on origin: the lane branch is at 07502739c5 (471d83782e the move-out, 07502739c5 the fix), the follow-up branch at 24aa0d5f70a7080483897996a13eabf62af0dbc6, whose tree equals git's own merge of 97ee0a1608 and 07502739c5 (1ac1ac1816); the run was dispatched 03:23:50Z. At 04:05 UTC it has 20 jobs passed and ONE FAILED: goat-test (runner lidge-goat-03, the same runner as the last failure), one test of 10,944: apps/web/src/components/CommandPalette.browser.test.tsx:83, "CommandPalette open intents > drags a searched thread into the current composer without navigating", "AssertionError: expected <div data-highlighted ...> to be null"; server shards 2/4, 3/4 and 4/4 still running. The file is unchanged by the lane and by the dev merge; goat-test passed on 9ac4aa0688 and ae1d6ccbc0; I found no goat issue for it. The failing line is a synchronous expect(page.getByRole(...).query()).toBeNull() right after act() dispatches pointerdown and pointermove, which the repository's own rule for browser tests does not allow (assert through expect.element or vi.waitFor). The same standard as for the server test applies, in proportion. For N3 part 6:
+> 1. When the run has finished: if this is the only failed test, rerun the failed job yourself (gh run rerun 44009905527 -R goat-si/goat --failed) and tell me the attempt and its result; any other failure comes to me first with the job, the test and the message.
+> 2. Classify the palette failure, bounded: (i) read how the palette row disappears on drag start (apps/web/src/components/CommandPalette.tsx and what it calls): plain React state set in the pointer handler, or anything Effect-driven (an Effect Atom or registry update, a client-runtime service, a Stream) whose commit could now take one more turn on Effect 4.1; (ii) run that one file 30 times on 24aa0d5f70 and 30 times on dev 229ae283d3 (Effect 4.0.5) on pen-mac-studio, alone, and report the counts; (iii) class (a) the port changed when the UI commits (a real regression: a person would see the row linger while dragging: fix test-first and tell me before pushing), (b) the test reads the DOM without waiting and the product is right (a rule 3 request: the one assertion becomes await expect.element(row).not.toBeInTheDocument() or the file's existing idiom, same expectation), or (c) it reproduces on dev too (a goat issue with both counts). If it reproduces on neither in 30 runs and the path is plain React state, file the issue for the synchronous assertion with the CI log lines and say so: then the rerun's result decides for this run, and the test fix goes to dev on its own.
+> 3. The narrow fresh review of the two commits is running: goat-nextN3-race-final-07502739 (brief /Users/jun/handoff-in/chase/briefs/next-N3-race-07502739.md). It also reads the notes auto-done site (NotesService.ts:845) your search found: send me that issue's number and the list of the other sites with verdicts.
+> 4. Merge condition, unchanged in kind: goat-ci-result SUCCESS on 24aa0d5f70 (after the rerun, with the palette failure classified), and the two narrow reviews without P0 to P2 (the follow-up branch's is in: approved). Then I fast-forward chase/t3-261114-next to 24aa0d5f70. No push to either branch meanwhile unless I rule a fix.
+> Note: dev moved to 9f96ccd309 (one server commit, hub move and OpenCodex sync); git merge-tree of the follow-up head with it is clean, so #3519 will not conflict after the fast-forward. Do not merge dev again in this round.
+### What failed
+
+Attempt 1 of https://github.com/goat-si/goat/actions/runs/44009905527 finished as a failure with one failed job, goat-test (runner lidge-goat-03), besides the goat-ci-result aggregate. Its only failed test, from the job log (n3p6-ci-44009905527-goattest.log):
+
+```text
+ × drags a searched thread into the current composer without navigating 159ms
+ FAIL  browser (chromium) src/components/CommandPalette.browser.test.tsx > CommandPalette open intents > drags a searched thread into the current composer without navigating
+AssertionError: expected <div data-highlighted …(5)>…(4)</div> to be null
+ ❯ src/components/CommandPalette.browser.test.tsx:83:76
+ Test Files  1 failed | 982 passed (983)
+      Tests  1 failed | 10943 passed (10944)
+```
+
+### Classification
+
+- (i) The path is plain React state; nothing Effect-driven commits it. CommandPaletteResults.tsx:266 starts startPaletteThreadDrag (CommandPalette.drag.ts), which creates a SidebarPointerSensor that listens for pointermove on the document (Sidebar.pointer.ts:38). Past its 6 px threshold (:81-94), onStart runs flushSync(close), and close dispatches SetOpen false to the palette's useReducer (CommandPalette.tsx:296, :3030). The test moves the pointer about 14 px inside act(), then reads the DOM once with a synchronous query (:83), which AGENTS.md does not allow in browser tests.
+- (ii) The file alone on pen-mac-studio: 30 of 30 passed on 24aa0d5f70 (Effect 4.1.3), and 30 of 30 passed on dev 229ae283d3 (Effect 4.0.5, in the baseline worktree detached to dev after vp i --frozen-lockfile). The file and the palette code are identical on both.
+- (iii) Class (c), per the 04:25 UTC decision: the failure is the known flake goat#3416 (open since 2026-11-15; three failures of this assertion on Effect 4.0.5 heads: #3413 run 43706805241, #3457 run 43764612094, #3471 run 43785599970), so the 30 plus 30 runs were waived after they had been run (both 30 of 30). This run's job, the counts and the code path are a comment on goat#3416 (https://github.com/goat-si/goat/issues/3416#issuecomment-6938321533); goat#3643, filed before #3416 was known, is closed as its duplicate. The rerun: gh run rerun 44009905527 --failed at 2026-11-17T04:17:55Z, attempt 2: still queued at 2026-11-17T04:33Z (no runner had picked up goat-test since 04:17:57Z); its result is on the run page, and #3519's own full run on 24aa0d5f70 is the gate before dev (04:25 UTC decision).
+
 ## NOT RUN
 
-- NOT RUN: relay PostgreSQL fixture on pen-mac-studio (`node infra/relay/scripts/test-postgres.ts check`: "pg_ctl: could not start server"). It must pass in the manual full CI run: "Connect auth PostgreSQL boundaries" and the relay tests.
+- NOT RUN: relay PostgreSQL fixture on pen-mac-studio (`node infra/relay/scripts/test-postgres.ts check`: "pg_ctl: could not start server"). It is proven by the full CI runs: "Connect auth PostgreSQL boundaries" and the relay tests.
 - NOT RUN: NonBlockingSpawner.test.ts on Linux locally (no Linux host); it runs in hosted CI.
 - NOT RUN: any alchemy deploy, plan or destroy (ruling 1 (e)).
 - NOT RUN: a real-client pass (no user-visible frontend change).
-- NOT RUN: launchListenerScripts.test.ts under full-run load at 5c798a3072 on Effect 4.0.5 (run alone it passes on both; its gate failure is the load-only goat#3403).
+- NOT RUN: launchListenerScripts.test.ts under full-run load at 5c798a3072 on Effect 4.0.5 (run alone it passes on both; its failure in the gate and in the whole-suite run is the load-only goat#3403).
+- NOT RUN: the vendored reference sync (.repos), by the coordinator's decision; goat#3613.
+- NOT RUN: knip --production (not a CI check; it reports 3,358 lines of findings on this tree, none naming the moved test layer).
+- NOT RUN (part 6): the relay PostgreSQL files and "Connect auth PostgreSQL boundaries" locally (pg_ctl cannot start on pen-mac-studio); full run 44009905527 covers them.
+- NOT RUN (part 6): the whole server suite locally on 07502739c5 or 24aa0d5f70; only check:changed and the focused files ran. Full run 44009905527 covers it.
+- NOT RUN (part 6): a real-client pass (no UI change).
+- NOT RUN (part 6): unforced repeat counts for the rotation race (200 runs of the file alone and 20 of the shard slice on each Effect version), waived by the 03:25 UTC decision.
 
 ## Appendix: files the port touched
 
