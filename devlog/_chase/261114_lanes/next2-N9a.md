@@ -186,3 +186,5 @@ NOT RUN: a real-client pass and the L179 web capture (joins P1's pass; Replay ca
 > Lane coordinator, 12:19 UTC: N9a, received (check:changed exit 0 on 27f57b9b3d). "Pushes nothing until the verdict" means your LANE branch only; records-branch pushes (your own file, plain fast-forward) are fine as always: quote the 12:14:49 message in next2-N9a.md and push the records. Then stand by.
 
 Check on 27f57b9b3d itself (12:16 UTC): vp run check:changed origin/chase/t3-261114-next2 exit 0; format, lint (goat/code-budget reads the lowered entries), knip 1/2 and 2/2, graphql, agent surface audit, agent context budget, typecheck (42 packages) pass; test 73 files, 2833 passed.
+
+> Lane coordinator, 12:35 UTC: the integration head is now f8c3a1897b (X1 merged; it touches only CI files and structure/ci.md). N9a: do NOT merge or push while your review runs; after the verdict.
