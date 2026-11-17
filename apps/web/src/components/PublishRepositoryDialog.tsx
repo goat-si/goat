@@ -175,7 +175,7 @@ export function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
   const publishProviderLabel = currentPublishProvider.label;
   const publishWizardSteps = ["Provider", "Repository", "Summary"] as const;
   const publishWizardStepSummaries = [
-    publishProviderLabel,
+    offeredPublishProviderOptions.length > 0 ? publishProviderLabel : null,
     publishResult?.repository.nameWithOwner ?? null,
     null,
   ] as const;
@@ -331,6 +331,14 @@ export function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
                 );
               })}
             </RadioGroup>
+            {props.offerSettings !== undefined && offeredPublishProviderOptions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No host is offered for publishing.{" "}
+                <Button size="xs" variant="link" onClick={openSourceControlSettings}>
+                  Open Settings &gt; Source control
+                </Button>
+              </p>
+            ) : null}
           </div>
 
           <div className={cn("space-y-5", publishWizardStep !== 1 && "hidden")}>
