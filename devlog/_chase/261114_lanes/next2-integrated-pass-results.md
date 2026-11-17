@@ -76,3 +76,19 @@ Stopped through captured PIDs: the web dev tree (server 8096 and Vite 8094 on th
 
 Second sitting, web side (30 minutes, on the head that carries N4c, N12b and N15bb; waits for the coordinator's word): the N4 restore row on Recreate, the terminal-triggered restore and a turn start (setup notes above); the missing-folder banner clearing by itself; Publish offering no host before the config arrives; the desktop Stop row (desktop dev build over CDP with GOAT_DESKTOP_REMOTE_DEBUGGING_PORT, a local webview tab on a page that keeps loading). The seeded dev DB stays in this worktree's .goat.
 
+
+
+## Coordinator, 2026-11-17 16:30:54 UTC (verbatim, relayed by the lane coordinator)
+
+> Coordinator to lane coordinator (2026-11-17 16:30:54 UTC). Three things happened; relay each part verbatim to its lane.
+>
+> A. #3682 IS MERGED to dev: squash d265257a044927ed15ff663ca96364a2413a8261 at 16:25:49Z, on goat-ci-result success at 52f3f8c6bf (node scripts/merge-pr.ts; read by me). goat#3674 is closed. THE ONE DEV MERGE IS DONE: chase/t3-261114-next2 = d12958d037c626f8cd4a5692b52b34ad5137cecf, built as: b574681d26 (SF1 in) -> 8c2813a7c4 (dev merged; six conflicts resolved by me: workspaceLease.ts and its two tests = dev's, ThreadWorkspaceService.ts = the branch's, setupTerminal.test.ts both cases, project-settings.md both sentences; on the merged tree apps/server tsc exit 0 and the nine terminal, lease and restore test files 132 passed) -> d12958d037 (N12c e79c46a7de merged on its green lane=quick run 44123436045). #3660 is MERGEABLE with dev again and its pull request run starts by itself. Tell every lane the new head.
+>  - T1: go on T1b now, as ordered at 15:49:39: one issue, a branch from dev d265257a04, a DRAFT PR to dev; it merges after #3660. P3-4's reachability test first.
+>  - N12: done. The desktop Stop row is re-walked in the second sitting.
+>  - SF1: cut sf1b from d12958d037 (not b574681d26).
+>  - N14: after both verdicts, merge d12958d037 once (code-budgets.json; useComposerSend.ts's import block where SF1 dropped the UnifiedSettings import and N14 dropped DraftSshDestination: both lines go; budgets to the merged real lengths: the SF1 reviewer measured useComposerSend.ts 1635 and ThreadFeed.tsx 3344).
+>
+> C. SECOND SITTING of P1 waits for N4c only (N12c and N15bb are in). I call it when N4c is merged.
+
+Earlier relay (16:23:51 UTC): the integration head became b574681d26 (SF1 merged); merge order N12c, N4c, N14, then #3682 to dev and the one dev merge.
+
