@@ -80,6 +80,8 @@ export function GitActionProgressOverlay(props: {
         }
         busy={progress.phase === "running"}
         action={openLabel ? { label: openLabel, onPress: handlePress } : undefined}
+        // A failure stays until dismissed, so its banner shows the close button.
+        onDismiss={progress.phase === "error" ? onDismiss : undefined}
       />
     </Animated.View>
   );
