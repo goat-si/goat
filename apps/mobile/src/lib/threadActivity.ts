@@ -1,6 +1,7 @@
 import { LIVE_ACTIVITY_ROW_ID, thinkingRow, type ThinkingRow } from "./threadThinkingRow";
 export { LIVE_ACTIVITY_ROW_ID } from "./threadThinkingRow";
 import { itemIcon, type ThreadActivityIcon } from "./threadActivityIcons";
+import { itemPreview } from "./threadItemPreview";
 import {
   setPendingUserInputCustomAnswer as setSharedCustomAnswer,
   type PendingUserInputDraftAnswer,
@@ -38,6 +39,7 @@ import {
   resolveWorkEntryToolPresentation,
   summarizeToolGroup,
   toolGroupSummaryKind,
+  workEntriesViewedImagePaths,
   workEntryCommandActions,
   type ToolGroupSummaryKind,
   type WorkLogPresentationEntry,
@@ -226,6 +228,14 @@ type ThreadFeedEntryContent =
       readonly live: boolean;
       readonly shimmer: boolean;
       readonly thought?: string;
+    }
+  | {
+      /** Images the agent opened in the tool group above, kept visible while the group is collapsed. */
+      readonly type: "viewed-images";
+      readonly id: string;
+      readonly createdAt: string;
+      readonly runId: RunId | null;
+      readonly paths: ReadonlyArray<string>;
     }
   | {
       readonly type: "run-fold";
@@ -512,59 +522,6 @@ function itemSummary(
       return "User message";
     case "assistant_message":
       return "Assistant message";
-  }
-}
-
-function itemPreview(item: OrchestrationV2TurnItem): string | null {
-  switch (item.type) {
-    case "reasoning":
-      return item.text || null;
-    case "command_execution":
-      return item.input || null;
-    case "file_change":
-      return item.fileName;
-    case "file_search":
-      return item.pattern ?? null;
-    case "web_search":
-      return item.patterns?.join(", ") ?? null;
-    case "approval_request":
-      return item.prompt ?? null;
-    case "user_input_request":
-      return item.questions.map((question) => question.question).join(" · ") || null;
-    case "checkpoint":
-      return item.files.length === 1
-        ? (item.files[0]?.path ?? null)
-        : `${item.files.length} changed files`;
-    case "run_interrupt_request":
-    case "run_interrupt_result":
-      return item.message || null;
-    case "system_notice":
-      return item.message.split("\n").slice(1).join("\n").trim() || null;
-    case "error":
-      return providerErrorPresentation(item).detail;
-    case "compaction":
-    case "handoff":
-      return item.summary ?? null;
-    case "fork":
-    case "thread_created":
-      return item.targetThreadId;
-    case "human_handoff":
-      return item.handoff.reason;
-    case "secret_request":
-      return item.reason || null;
-    case "subagent":
-      return item.result ?? item.progress ?? item.prompt;
-    case "dynamic_tool":
-      return null;
-    case "notification":
-      return item.detail ?? null;
-    case "proposed_plan":
-      return item.markdown || null;
-    case "todo_list":
-      return `${item.steps.filter((step) => step.status === "completed").length}/${item.steps.length} completed`;
-    case "user_message":
-    case "assistant_message":
-      return item.text || null;
   }
 }
 
@@ -1196,7 +1153,10 @@ const supersededReasoningGroups = new WeakMap<ThreadFeedActivityGroup, ThreadFee
 const trailingReasoningGroups = new WeakMap<ThreadFeedActivityGroup, ThreadFeedActivityGroup>();
 
 function settleSupersededReasoning(
-  entry: Exclude<ThreadFeedEntry, { readonly type: "run-fold" | "work-toggle" | "thinking" }>,
+  entry: Exclude<
+    ThreadFeedEntry,
+    { readonly type: "run-fold" | "work-toggle" | "thinking" | "viewed-images" }
+  >,
   tail: boolean,
 ) {
   if (entry.type !== "activity-group") return entry;
@@ -1329,12 +1289,20 @@ export function deriveThreadFeedPresentation(
   const lastEntryByRun = new Map<RunId, number>();
 
   const retainedFeed: Array<
-    Exclude<ThreadFeedEntry, { readonly type: "run-fold" | "work-toggle" | "thinking" }>
+    Exclude<
+      ThreadFeedEntry,
+      { readonly type: "run-fold" | "work-toggle" | "thinking" | "viewed-images" }
+    >
   > = [];
   const retainedFeedIndices: number[] = [];
   for (let index = start; index < feed.length; index += 1) {
     const entry = feed[index]!;
-    if (entry.type === "run-fold" || entry.type === "work-toggle" || entry.type === "thinking")
+    if (
+      entry.type === "run-fold" ||
+      entry.type === "work-toggle" ||
+      entry.type === "thinking" ||
+      entry.type === "viewed-images"
+    )
       continue;
     retainedFeed.push(entry);
     retainedFeedIndices.push(index);
@@ -1583,7 +1551,10 @@ function isWorkLogFeedRow(row: ThreadFeedEntry | undefined): boolean {
 
 function appendPresentedFeedEntry(
   result: ThreadFeedEntry[],
-  entry: Exclude<ThreadFeedEntry, { readonly type: "run-fold" | "work-toggle" | "thinking" }>,
+  entry: Exclude<
+    ThreadFeedEntry,
+    { readonly type: "run-fold" | "work-toggle" | "thinking" | "viewed-images" }
+  >,
   expandedWorkGroupIds: ReadonlySet<string>,
   activeRunId: RunId | null,
   isWorking: boolean,
@@ -1653,17 +1624,29 @@ function appendActivityGroupRows(
 
   let groupableRun: ThreadFeedActivity[] = [];
   const flushGroupableRun = (isTrailingRun: boolean) => {
-    if (groupableRun.length === 0) return;
+    const first = groupableRun[0];
+    if (first === undefined) return;
+    const groupId = `work-group:${groupAnchorIdByActivityId.get(first.id) ?? first.id}`;
     appendToolGroupRows(
       result,
       entry,
       groupableRun,
-      `work-group:${groupAnchorIdByActivityId.get(groupableRun[0]!.id) ?? groupableRun[0]!.id}`,
+      groupId,
       expandedWorkGroupIds,
       activeRunId,
       isWorking,
       activeTail && isTrailingRun,
     );
+    const paths = workEntriesViewedImagePaths(groupableRun.map((activity) => activity.workEntry));
+    if (paths.length > 0) {
+      result.push({
+        type: "viewed-images",
+        id: `${groupId}:viewed-images`,
+        createdAt: first.createdAt,
+        runId: first.runId,
+        paths,
+      });
+    }
     groupableRun = [];
   };
   for (const activity of activities) {

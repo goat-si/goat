@@ -14,17 +14,12 @@ import {
   useQuestionAttachmentPreparation,
 } from "../../questionAttachments";
 import type {
-  KeybindingCommand,
-  AssistantCitation,
   ChatAttachment as ContractChatAttachment,
   ChatFileAttachment,
   EnvironmentId,
   ModelSelection,
   ProjectId,
-  PreviewAnnotationPayload,
-  PreviewTabContextRecord,
   ProviderApprovalDecision,
-  ThreadContextRecord,
   ProviderInteractionMode,
   ResolvedKeybindingsConfig,
   RuntimeMode,
@@ -288,7 +283,6 @@ import { useSoftwareKeyboardOpen } from "../../hooks/useSoftwareKeyboardOpen";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { usePanelAnimationSettings } from "../../panelAnimations";
 import { readEnvironmentScope, readPreparedConnection } from "../../state/session";
-import type { ReviewCommentContext } from "../../reviewCommentContext";
 import { useComposerRestingTransition } from "./useComposerRestingTransition";
 import { ComposerCommandMenuLayer } from "./ComposerCommandMenuLayer";
 import { useRestingComposerControlsLayout } from "./useRestingComposerControlsLayout";
@@ -304,6 +298,9 @@ import {
 } from "./preparingComposerImages";
 import { ComposerControlsBar } from "./ComposerControlsBar";
 import { composerCommandKeyHandler } from "./composerCommandKey";
+import { useReplyBannerItems } from "./composerReply";
+import { useComposerReplyTarget } from "./composerReplyTarget";
+import type { ChatComposerHandle } from "./chatComposerHandle";
 
 function consumePasteAsTextShortcut(deadline: { current: number }): boolean {
   const armed = Date.now() <= deadline.current;
@@ -313,68 +310,7 @@ function consumePasteAsTextShortcut(deadline: { current: number }): boolean {
 
 const runtimeModeOptions = runtimeModes.map((mode) => ({ mode, ...runtimeModeConfig[mode] }));
 
-export interface ChatComposerHandle {
-  focusAtEnd: () => void;
-  focusAt: (cursor: number) => void;
-  restoreAfterTimelineReachedEnd: () => void;
-  collapseForTimelineScrollKey: (key: string) => void;
-  addDroppedFiles: (files: File[]) => void;
-  addDroppedFolders: (folders: File[]) => void;
-  hasPendingAttachments: () => boolean;
-  insertTextAtEnd: (
-    text: string,
-    options?: { ensureLeadingBoundary?: boolean; clipboardData?: DataTransfer },
-  ) => boolean;
-  pasteTextAtEnd: (text: string, options?: { bypassAutoAttachment?: boolean }) => boolean;
-  citeAssistantText: (
-    citation: AssistantCitation,
-    sourceAnchor: AssistantCitationSourceAnchor,
-  ) => boolean;
-  openModelPicker: () => void;
-  stepReasoningEffort: (direction: 1 | -1) => void;
-  toggleModelPicker: () => void;
-  openControl: (command: KeybindingCommand) => void;
-  isModelPickerOpen: () => boolean;
-  isCaretAtStart: () => boolean;
-  compactContext: () => void;
-  readSnapshot: () => {
-    value: string;
-    cursor: number;
-    expandedCursor: number;
-    contextIds: string[];
-  };
-  resetCursorState: (options?: {
-    cursor?: number;
-    prompt?: string;
-    detectTrigger?: boolean;
-  }) => void;
-  addTerminalContext: (selection: TerminalContextSelection) => void;
-  getSendContext: () => {
-    answeringPendingUserInput: boolean;
-    prompt: string;
-    images: ComposerImageAttachment[];
-    files: ComposerFileAttachment[];
-    terminalContexts: TerminalContextDraft[];
-    previewAnnotations: PreviewAnnotationPayload[];
-    reviewComments: ReviewCommentContext[];
-    threadContexts: ThreadContextRecord[];
-    previewTabs: PreviewTabContextRecord[];
-    threadContextRoutingEnvironmentId: EnvironmentId;
-    selectedPromptEffort: string | null;
-    selectedModelOptionsForDispatch: unknown;
-    selectedModelSelection: ModelSelection;
-    multipleModelSelections: ReadonlyArray<ModelSelection> | null;
-    providerAvailable: boolean;
-    selectedProvider: ProviderDriverKind;
-    selectedModel: string;
-    selectedProviderModels: ReadonlyArray<ServerProvider["models"][number]>;
-    interactionMode: ProviderInteractionMode;
-    interactionModeEnabled: boolean;
-    shownPendingApprovalIds: ReadonlyArray<RuntimeRequestId>;
-  };
-  validateProviderInput: (providerInput: string) => boolean;
-  setMultipleModelSelections: (selections: ReadonlyArray<ModelSelection>) => void;
-}
+export type { ChatComposerHandle };
 
 export interface ChatComposerProps {
   sshWorktreeSelected?: boolean;
@@ -862,6 +798,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           : uploadGate.blockReason
       : null);
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
+  const setComposerDraftReplyTo = useComposerDraftStore((store) => store.setReplyTo);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const removeComposerDraftImage = useComposerDraftStore((store) => store.removeImage);
   const addComposerDraftFiles = useComposerDraftStore((store) => store.addFiles);
@@ -1129,6 +1066,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
   const pasteAsTextShortcutUntilRef = useRef(0);
   const composerFormRef = useRef<HTMLFormElement>(null);
+  const composerReplyTargetRef = useComposerReplyTarget(composerFormRef, composerRef);
   const composerSurfaceRef = useRef<HTMLDivElement>(null);
   const providerInputRejectedRef = useRef(false);
   const composerSelectLockRef = useRef(false);
@@ -2321,7 +2259,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setIsTasksDrawerOpen((open) => !open);
   };
   const toggleTasksDrawerStable = useStableCallback(toggleTasksDrawer);
-  const hasBannerItems = props.bannerItems.length > 0;
+  const replyBannerItems = useReplyBannerItems(composerDraftTarget, composerDraft?.replyTo ?? null);
+  const bannerItems = [...props.bannerItems, ...replyBannerItems];
+  const hasBannerItems = bannerItems.length > 0;
   const hasBlockingComposerTopDrawer =
     activePendingApproval !== null || pendingUserInputs.length > 0;
   const showInlineTasksBadge =
@@ -2569,9 +2509,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         content: activityStackContent,
       }
     : null;
-  const bannerStackItems = activityStackItem
-    ? [activityStackItem, ...props.bannerItems]
-    : props.bannerItems;
+  const bannerStackItems = activityStackItem ? [activityStackItem, ...bannerItems] : bannerItems;
   const [tasksDrawerThreadId, setTasksDrawerThreadId] = useState(activeThreadId);
   if (
     isTasksDrawerOpen &&
@@ -3081,6 +3019,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           "cursor",
           { ensureLeadingBoundary: true, citationCommentAnchor: sourceAnchor },
         ),
+      replyToResponse: (response) => {
+        // An open question owns the composer, and its answer would not carry the reply.
+        if (pendingUserInputs.length > 0 || projectSelectionRequired) return false;
+        setComposerDraftReplyTo(composerDraftTarget, response);
+        focusComposer();
+        return true;
+      },
       openModelPicker: openModelPickerStable,
       stepReasoningEffort: (direction) => {
         if (noProviderAvailable || pendingUserInputs.length > 0 || isEditingQueuedMessage) {
@@ -3291,6 +3236,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       isLiteralPendingAnswer,
       pendingUserInputs.length,
       projectSelectionRequired,
+      setComposerDraftReplyTo,
       applyPromptReplacementStable,
       isComposerModelPickerOpen,
       openModelPickerStable,
@@ -3367,7 +3313,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   return (
     <form
-      ref={composerFormRef}
+      ref={composerReplyTargetRef}
       onSubmit={submitComposerStable}
       onPointerDownCapture={(event) => {
         const target = event.target;

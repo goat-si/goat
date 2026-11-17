@@ -288,6 +288,7 @@ export const QrCodeIcon = /* @__PURE__ */ solarIcon(solar.qrCode, "QrCodeIcon");
 export const QuoteIcon = /* @__PURE__ */ solarIcon(solar.quote, "QuoteIcon");
 export const RadioTowerIcon = /* @__PURE__ */ solarIcon(solar.station, "RadioTowerIcon");
 export const RedoIcon = /* @__PURE__ */ solarIcon(solar.undoRight, "RedoIcon");
+export const ReplyIcon = /* @__PURE__ */ solarIcon(solar.undoLeft, "ReplyIcon");
 export const RefreshCwIcon = /* @__PURE__ */ solarIcon(solar.refresh, "RefreshCwIcon");
 export const RocketIcon = /* @__PURE__ */ solarIcon(solar.rocket, "RocketIcon");
 export const RotateCcwIcon = /* @__PURE__ */ solarIcon(solar.restart, "RotateCcwIcon");
@@ -361,3 +362,16 @@ export const WorkflowIcon = /* @__PURE__ */ solarIcon(solar.structure, "Workflow
 export const WrenchIcon = /* @__PURE__ */ solarIcon(solar.settingsMinimalistic, "WrenchIcon");
 export const XIcon = /* @__PURE__ */ solarIcon(solar.close, "XIcon");
 export const ZapIcon = /* @__PURE__ */ solarIcon(solar.bolt, "ZapIcon");
+export const TableIcon = /* @__PURE__ */ solarIcon(solar.table, "TableIcon");
+export const ChevronsDownUpIcon = /* @__PURE__ */ solarIcon(
+  solar.chevronsDownUp,
+  "ChevronsDownUpIcon",
+);
+export const PanelLeftCloseIcon = /* @__PURE__ */ solarIcon(
+  solar.panelLeftClose,
+  "PanelLeftCloseIcon",
+);
+export const LockOpenIcon = /* @__PURE__ */ solarIcon(solar.lockUnlocked, "LockOpenIcon");
+export const ListPlusIcon = /* @__PURE__ */ solarIcon(solar.listPlus, "ListPlusIcon");
+export const VolumeIcon = /* @__PURE__ */ solarIcon(solar.volumeLoud, "VolumeIcon");
+export const VolumeOffIcon = /* @__PURE__ */ solarIcon(solar.volumeCross, "VolumeOffIcon");

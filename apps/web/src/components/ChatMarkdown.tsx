@@ -27,7 +27,6 @@ import {
   COMPOSER_CONTEXT_CLIPBOARD_MIME,
   encodeComposerContextClipboardHtml,
 } from "@goat/shared/composerContextClipboard";
-import { SparklesIcon } from "~/components/solar";
 import {
   AssetWorkspaceAssetNotFoundError,
   AuthPreviewOperateScope,
@@ -42,10 +41,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
-import {
-  codexArtifactTemplatePresentationLabel,
-  type CodexArtifactTemplate,
-} from "@goat/shared/codexArtifactTemplates";
+import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates";
 import {
   classifyMarkdownImageSource,
   markdownImageSourceFragment,
@@ -76,10 +72,11 @@ import type {
 import { createIncrementalMarkdownPlugin } from "../markdown-incremental";
 import type { Pluggable, PluggableList } from "unified";
 import { defaultUrlTransform } from "react-markdown";
+import { CodexArtifactTemplateCard } from "./chat/CodexArtifactTemplateCard";
 import { parseAssistantCitationHref } from "@goat/shared/assistantCitations";
 import { parseComposerContextHref } from "@goat/shared/composerContextReferences";
 import { parseThreadLinkHref } from "@goat/shared/threadLinks";
-import { AssistantCitationChip } from "./chat/AssistantCitationChip";
+import { AssistantCitationEmbed } from "./chat/AssistantCitationChip";
 import { MarkdownThreadLink } from "./chat/MarkdownThreadLink";
 import { mathKind } from "@goat/shared/markdownMath";
 import remarkMath from "remark-math";
@@ -105,7 +102,6 @@ import {
   showExternalLinkContextMenu,
 } from "./chat/externalLinkContextMenu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
-import { Button } from "./ui/button";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { recordVisitForThread } from "../browserHistoryStore";
 import {
@@ -217,7 +213,6 @@ import {
   openMarkdownLinkInSystemBrowser,
   reportMarkdownExternalOpenFailure,
 } from "./chat/markdownSystemBrowserLink";
-import { ARTIFACT_TEMPLATE_ICON_BY_KIND } from "./chat/artifactTemplateIcons";
 const isAssetNotFoundError = Schema.is(AssetWorkspaceAssetNotFoundError);
 interface ChatMarkdownProps {
   renderInsights?: boolean;
@@ -255,54 +250,12 @@ export interface ChatMarkdownContextReference {
   kind: string;
   contextId: string;
   label: string;
+  /** Whether it starts or ends its block, for a reference that renders as a block. */
+  leading?: boolean;
+  trailing?: boolean;
 }
 const EMPTY_MARKDOWN_SKILLS: ReadonlyArray<ServerProviderSkill> = [];
 const EMPTY_REMARK_PLUGINS: NonNullable<ReactMarkdownOptions["remarkPlugins"]> = [];
-function CodexArtifactTemplateCard(props: {
-  readonly template: CodexArtifactTemplate;
-  readonly onUse?: ((template: CodexArtifactTemplate) => void) | undefined;
-}) {
-  const Icon = ARTIFACT_TEMPLATE_ICON_BY_KIND[props.template.artifactKind];
-  const presentationLabel = codexArtifactTemplatePresentationLabel(props.template.artifactKind);
-  return (
-    <div
-      role="group"
-      aria-label={`${props.template.displayName} template`}
-      data-chat-markdown-artifact-template
-      className="my-[0.65rem] flex w-full min-w-0 items-center gap-3 rounded-xl border border-border/70 bg-card/60 px-3 py-2.5 text-foreground shadow-xs"
-      data-artifact-kind={props.template.artifactKind}
-      data-markdown-copy={`${props.template.displayName} (${presentationLabel})\n\n`}
-      data-skill-name={props.template.skillName}
-    >
-      <div className="flex min-w-0 flex-1 items-center gap-3">
-        <span className="relative flex size-9 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-background text-muted-foreground shadow-xs">
-          <Icon aria-hidden className="size-5" />
-          <span className="absolute -right-1 -bottom-1 flex size-4 items-center justify-center rounded-full border border-background bg-primary text-primary-foreground shadow-xs">
-            <SparklesIcon aria-hidden className="size-2.5" />
-          </span>
-        </span>
-        <div className="min-w-0">
-          <div className="truncate text-sm font-medium text-foreground">
-            {props.template.displayName}
-          </div>
-          <div className="text-xs text-muted-foreground">{presentationLabel}</div>
-        </div>
-      </div>
-      {props.onUse ? (
-        <Button
-          data-thread-find-ignore
-          type="button"
-          size="sm"
-          variant="outline"
-          className="shrink-0"
-          onClick={() => props.onUse?.(props.template)}
-        >
-          Use template
-        </Button>
-      ) : null}
-    </div>
-  );
-}
 const WINDOWS_DRIVE_PATH_REGEX = /^[A-Za-z]:[\\/]/;
 
 function normalizeMarkdownLinkHrefKey(href: string): string {
@@ -874,6 +827,15 @@ const ChatMarkdownRendererContext = React.createContext<
 // Isolate streamed source text from the renderer context; only offset-based renderers need it.
 const ChatMarkdownTextContext = React.createContext("");
 
+// A quote card is a block. These say nothing else shares its paragraph or list item on that side.
+const LIST_MARKER = String.raw`(?:[-*+]|\d+[.)])[ \t]+`;
+const CITATION_LEADS_BLOCK = new RegExp(
+  String.raw`(?:(?:^|\n[ \t]*\n)[ \t>]*(?:${LIST_MARKER})?|\n[ \t>]*${LIST_MARKER})$`,
+);
+const CITATION_ENDS_BLOCK = new RegExp(
+  String.raw`^[ \t]*(?:$|\n[ \t]*(?:\n|$)|\n[ \t>]*${LIST_MARKER})`,
+);
+
 function markdownHeadingRenderer(level: 1 | 2 | 3 | 4 | 5 | 6) {
   const Tag = `h${level}` as const;
   return function MarkdownHeading({
@@ -1016,7 +978,13 @@ const CHAT_MARKDOWN_COMPONENTS = {
     } = use(ChatMarkdownRendererContext);
     const text = use(ChatMarkdownTextContext);
     const citation = href ? parseAssistantCitationHref(href) : null;
-    if (citation) return <AssistantCitationChip citation={citation} />;
+    const before = node?.position?.start.offset;
+    const after = node?.position?.end.offset;
+    const leading = before !== undefined && CITATION_LEADS_BLOCK.test(text.slice(0, before));
+    const trailing = after !== undefined && CITATION_ENDS_BLOCK.test(text.slice(after));
+    if (citation) {
+      return <AssistantCitationEmbed citation={citation} leading={leading} trailing={trailing} />;
+    }
     const linkedThreadId = href ? parseThreadLinkHref(href) : null;
     if (linkedThreadId) {
       const label = hastPlainTextDeep(node) || linkedThreadId;
@@ -1030,7 +998,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
     if (contextReference) {
       const label = hastPlainTextDeep(node) || contextReference.contextId;
       return renderContextReference ? (
-        renderContextReference({ ...contextReference, label })
+        renderContextReference({ ...contextReference, label, leading, trailing })
       ) : (
         <span>{label}</span>
       );

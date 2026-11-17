@@ -41,7 +41,6 @@ const NOOP_USE_ARTIFACT_TEMPLATE = () => {};
 const NOOP_OPEN_ATTACHMENT = (_attachment: ChatFileAttachment) => {};
 
 import { resolveChatListAnchoredEndSpace } from "@goat/shared/chatList";
-import { observeVisibleAnimation } from "../../lib/visibleAnimation";
 import {
   memo,
   use,
@@ -63,14 +62,7 @@ import { type TimelineEntry } from "../../session-logic";
 import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates";
 import { type ChatFileAttachment, type TurnDiffSummary } from "../../types";
 import type { OpenTurnDiff } from "../../diffPanelStore";
-import {
-  ArrowRightIcon,
-  BotIcon,
-  CircleAlertIcon,
-  MinimizeIcon as Minimize2Icon,
-} from "~/components/solar";
-import { ChevronDown, ChevronRight } from "~/components/solar/nodes";
-import { MorphIcon } from "~/components/MorphIcon";
+import { BotIcon, ChevronDownIcon, ChevronRightIcon } from "~/components/solar";
 import { WorkHistorySkeleton } from "./WorkHistorySkeleton";
 import { ExpandedImagePreview } from "./ExpandedImagePreview";
 import {
@@ -117,7 +109,8 @@ import {
   TimelineRowActivityCtx,
   type TimelineRow,
 } from "./timelineRowContext";
-import { TimelineRowTimestamp, ActivityShimmerOverlay } from "./TimelineRowParts";
+import { TimelineRowTimestamp } from "./TimelineRowParts";
+import { ContextCompactionTimelineRow } from "./ContextCompactionTimelineRow";
 import {
   WorkGroupSection,
   WorkingTimelineRow,
@@ -125,6 +118,7 @@ import {
   LiveWorkEntryTimelineRow,
   WorkGroupToggleTimelineRow,
 } from "./TimelineWorkGroupRows";
+import { ViewedImagesTimelineRow } from "./TimelineWorkEntryRow";
 import { UserMessageRow } from "./TimelineUserMessageRow";
 import {
   AssistantTimelineRow,
@@ -1430,7 +1424,8 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
                 row.kind === "thread-cards" ||
                 row.kind === "attempt-fold" ||
                 row.kind === "html-render" ||
-                row.kind === "mcp-app"
+                row.kind === "mcp-app" ||
+                row.kind === "viewed-images"
               ? "pb-2"
               : "pb-4",
         (row.kind === "message" && row.message.role === "assistant") ||
@@ -1479,6 +1474,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "assistant-meta" ? <AssistantMetaTimelineRow row={row} /> : null}
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
       {row.kind === "html-render" ? <HtmlRenderTimelineRow row={row} /> : null}
+      {row.kind === "viewed-images" ? <ViewedImagesTimelineRow row={row} /> : null}
       {row.kind === "mcp-app" ? <McpAppTimelineRow row={row} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
       {row.kind === "worktree-setup" ? <WorktreeSetupTimelineRow row={row} /> : null}
@@ -1488,58 +1484,6 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
     </div>
   );
 });
-
-function ContextCompactionTimelineRow({
-  row,
-}: {
-  row: Extract<TimelineRow, { kind: "context-compaction" }>;
-}) {
-  const label =
-    row.title && row.label.startsWith("Context compacted")
-      ? row.title + row.label.slice("Context compacted".length)
-      : row.label;
-  const content = (
-    <span className="flex min-w-0 items-center gap-1.5">
-      {row.failed ? (
-        <CircleAlertIcon aria-hidden="true" className="size-3 shrink-0" />
-      ) : (
-        <Minimize2Icon aria-hidden="true" className="size-3" />
-      )}
-      {row.tokenCounts ? (
-        <>
-          {row.title ?? "Context compacted"} {row.tokenCounts.before}
-          <ArrowRightIcon aria-hidden="true" className="size-3" />
-          {row.tokenCounts.after} tokens
-        </>
-      ) : (
-        label
-      )}
-      {row.failure ? (
-        <span className="min-w-0 truncate opacity-80">&middot; {row.failure}</span>
-      ) : null}
-    </span>
-  );
-  return (
-    <div
-      role="separator"
-      aria-label={row.failure ? `${label}: ${row.failure}` : label}
-      className={cn(
-        "mx-auto flex w-full max-w-(--chat-content-max-width) items-center gap-3 py-1 text-xs",
-        row.failed ? "text-destructive" : "text-muted-foreground",
-      )}
-    >
-      <span className={cn("h-px flex-1", row.failed ? "bg-destructive/30" : "bg-border/70")} />
-      <span
-        ref={row.active ? observeVisibleAnimation : undefined}
-        className="relative min-w-0 overflow-hidden"
-      >
-        {content}
-        {row.active ? <ActivityShimmerOverlay>{content}</ActivityShimmerOverlay> : null}
-      </span>
-      <span className={cn("h-px flex-1", row.failed ? "bg-destructive/30" : "bg-border/70")} />
-    </div>
-  );
-}
 
 function useDeferredWorkLoading(
   row: { expanded: boolean; deferredWorkItemIds?: ReadonlyArray<string> },
@@ -1601,7 +1545,11 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
             {row.label}
             {error ? ` · ${error}` : ""}
           </span>
-          <MorphIcon className="size-3.5" icon={row.expanded ? ChevronDown : ChevronRight} />
+          {row.expanded ? (
+            <ChevronDownIcon className="size-3.5" />
+          ) : (
+            <ChevronRightIcon className="size-3.5" />
+          )}
         </button>
         <TimelineRowTimestamp
           createdAt={row.createdAt}
@@ -1631,10 +1579,11 @@ function AttemptFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "at
         aria-busy={loading}
         className="flex w-full cursor-pointer select-none items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-2.5 py-2 text-left transition-colors hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
       >
-        <MorphIcon
-          className="size-3.5 shrink-0 text-muted-foreground"
-          icon={row.expanded ? ChevronDown : ChevronRight}
-        />
+        {row.expanded ? (
+          <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        )}
         <span className="text-xs font-medium text-foreground/80">
           {row.label}
           {error ? ` · ${error}` : ""}

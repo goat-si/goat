@@ -103,6 +103,7 @@ function stashSendSnapshot(snapshot: ComposerSendSnapshot, environmentId: Enviro
     });
   }
   const records: ComposerContextRecord[] = [
+    ...(snapshot.replyTo ? [snapshot.replyTo] : []),
     ...snapshot.threadContexts,
     ...snapshot.terminalContexts.map(terminalContextRecord),
     ...snapshot.reviewComments.map(reviewCommentContextRecord),
@@ -119,7 +120,7 @@ function stashSendSnapshot(snapshot: ComposerSendSnapshot, environmentId: Enviro
   const result = stash.stashEntry({
     id: entryId,
     createdAt: new Date().toISOString(),
-    prompt: snapshot.messageText,
+    prompt: snapshot.draftText,
     attachments: [],
     ...(files.length > 0 ? { files } : {}),
     droppedImageNames: [],

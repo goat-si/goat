@@ -2,12 +2,15 @@ import type {
   CloudRunCard as CloudRunCardModel,
   CloudRunStage,
 } from "@goat/client-runtime/state/cloud-task";
-import { ExternalLinkIcon, RotateCcwIcon } from "~/components/solar";
+import {
+  ExternalLinkIcon,
+  RotateCcwIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+} from "~/components/solar";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
-import { ChevronDown, ChevronRight } from "~/components/solar/nodes";
 import { useState } from "react";
 
-import { MorphIcon } from "~/components/MorphIcon";
 import { Button } from "~/components/ui/button";
 import { MiddleTruncate } from "~/components/ui/middle-truncate";
 import { observeVisibleAnimation } from "~/lib/visibleAnimation";
@@ -202,7 +205,7 @@ export function CloudRunCard({
           aria-expanded={detailsOpen}
           onClick={() => setDetailsOpen((open) => !open)}
         >
-          <MorphIcon aria-hidden icon={detailsOpen ? ChevronDown : ChevronRight} />
+          {detailsOpen ? <ChevronDownIcon aria-hidden /> : <ChevronRightIcon aria-hidden />}
           Details
         </Button>
       </div>

@@ -42,6 +42,7 @@ import { BackgroundThreadAnnouncer } from "./BackgroundThreadAnnouncer";
 import LegacyThreadSidebar from "./LegacySidebar";
 import { HistorySwipeNavigation } from "./HistorySwipeNavigation";
 import ThreadSidebar from "./Sidebar";
+import { SidebarFolderDrop } from "./sidebar/SidebarFolderDrop";
 import { SettingsSearchShortcut } from "./settings/SettingsSearchShortcut";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import {
@@ -521,10 +522,14 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
                 <SidebarChromeHeader isElectron={isElectron} />
                 <SettingsSidebarNav pathname={pathname} placement="app-sidebar" />
               </>
-            ) : legacySidebarEnabled === null ? null : legacySidebarEnabled ? (
-              <LegacyThreadSidebar routeReveal={sidebarRouteReveal} />
-            ) : (
-              <ThreadSidebar routeReveal={sidebarRouteReveal} />
+            ) : legacySidebarEnabled === null ? null : (
+              <SidebarFolderDrop>
+                {legacySidebarEnabled ? (
+                  <LegacyThreadSidebar routeReveal={sidebarRouteReveal} />
+                ) : (
+                  <ThreadSidebar routeReveal={sidebarRouteReveal} />
+                )}
+              </SidebarFolderDrop>
             )}
             <SidebarRail onDoubleClick={resetSidebarWidth} />
           </Sidebar>

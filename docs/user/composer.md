@@ -155,8 +155,10 @@ On web and desktop, select text within one assistant response and choose
 **Cite in composer**. You can add a comment about the quote and write instructions
 around it.
 
-Select the quote in a draft or sent message to return to its source. If the source
-is unavailable or has changed, the saved quote remains readable.
+In a sent message the quote shows as a card, with your comment under it. Click the card, or the
+quote in a draft, to return to its source. If the source is unavailable or has changed, the saved
+quote remains readable. Find in a thread matches your comment and skips the quoted text, which
+stays findable in the response it came from.
 
 The chip shows your comment when it has one, or a short quote preview otherwise. Use the pencil
 button to add or change the comment. To remove the citation, place the caret beside its chip and
@@ -167,6 +169,16 @@ The quoted text and comment count toward the message limit.
 
 Mobile displays saved quotes and comments, but does not create citations or
 navigate to their sources.
+
+## Reply to a response
+
+On web and desktop, choose **Reply** in an assistant response's hover actions. The response
+shows above the composer until you send or cancel it, and the sent message opens with a card for
+it. The agent gets where the response is and how it starts, and rereads the rest itself, so a
+reply costs the same however long the response was. Reply appears only when the thread's machine
+runs a GOAT version that supports it, and, on a response a fork or side chat shows from the thread
+it started from, only while that thread still exists and is not archived. Mobile shows a received
+reply as a chip and has no Reply action.
 
 ## Recall a sent prompt
 

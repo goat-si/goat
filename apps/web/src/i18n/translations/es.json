@@ -70,5 +70,16 @@
   "7e4d81ca21a72019": "Confirmación al desfijar",
   "1d5052cbe70d0b28": "Confirmación al archivar",
   "d5dd27a4eb853248": "Confirmación al eliminar",
-  "86b43caa9ff41ea2": "Atajo para salir"
+  "86b43caa9ff41ea2": "Atajo para salir",
+  "7bfe35051f932b93": "Necesita aprobación",
+  "b67d6bd5c4e311b7": "Necesita tu respuesta",
+  "624506a403296638": "Trabajando",
+  "0cb9ffcd1fb46b0c": "Solo estado",
+  "cf0f7fc3df26fa75": "Estado y mensajes",
+  "3bf40445a706e4c9": "Todo",
+  "a3048aaa541b7744": "Actividad",
+  "216ed20b6f40fa6f": "Anuncios del lector de pantalla",
+  "0ce04933a7047deb": "Título de ventana para lectores de pantalla",
+  "a0bb7e0657eef5b7": "Lo que oye un lector de pantalla del hilo abierto: cuando un turno empieza, te necesita y termina. «Estado y mensajes» añade lo que el agente escribe antes de su último mensaje. «Todo» añade cada paso.",
+  "364dd15f43025a40": "Empieza el título de la ventana con el estado del hilo, como «Necesita aprobación», y su nombre, para que los lectores de pantalla los lean primero al cambiar de aplicación. Las barras de tareas, las pantallas compartidas y los registradores de tiempo también lo ven."
 }
