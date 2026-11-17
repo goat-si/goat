@@ -35,8 +35,42 @@ export const ThreadWorkspaceStatus = Schema.Struct({
   snapshot: Schema.NullOr(WorktreeSnapshot),
   /** The folder is back and checks out, but the setup of an interrupted restore has not finished. */
   setupIncomplete: Schema.optionalKey(Schema.Boolean),
+  /**
+   * Sent on "missing" and "cleaned": false when the folder is outside GOAT's worktrees folder, so neither Restore,
+   * Recreate nor a send brings it back. Absent from older servers, which clients read as recreatable.
+   */
+  recreatable: Schema.optionalKey(Schema.Boolean),
 });
 export type ThreadWorkspaceStatus = typeof ThreadWorkspaceStatus.Type;
+
+/**
+ * What the banner for a missing or cleaned-up worktree tells a person and whether it offers Restore or Recreate:
+ * exactly what the server will do. Each client keeps its own title.
+ */
+export function describeThreadWorkspaceRecovery(
+  status: Pick<ThreadWorkspaceStatus, "worktreePath" | "branch" | "recreatable"> & {
+    readonly state: "missing" | "cleaned";
+  },
+): { readonly body: string; readonly inPlace: boolean } {
+  if (status.recreatable === false) {
+    const back =
+      status.worktreePath === null
+        ? "Put the folder back"
+        : `Put the folder back at ${status.worktreePath}`;
+    const verb = status.state === "cleaned" ? "restore" : "recreate";
+    return {
+      body: `GOAT can't ${verb} it: it is outside GOAT's worktrees folder. ${back}, or start in a new worktree.`,
+      inPlace: false,
+    };
+  }
+  return {
+    body:
+      status.state === "cleaned"
+        ? "Restore brings back its files from the snapshot taken before cleanup. Sending a message restores it too."
+        : `Recreate rebuilds it from ${status.branch ?? "its branch"}. Sending a message does the same.`,
+    inPlace: true,
+  };
+}
 
 export const ThreadWorkspaceStatusInput = Schema.Struct({ threadId: ThreadId });
 export type ThreadWorkspaceStatusInput = typeof ThreadWorkspaceStatusInput.Type;

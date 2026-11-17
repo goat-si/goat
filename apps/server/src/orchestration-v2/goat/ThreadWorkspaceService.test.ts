@@ -36,6 +36,8 @@ interface HarnessOptions {
   readonly dispatchFails?: boolean;
   readonly setupExitCode?: number | null;
   readonly duringSetup?: (worktreePath: string) => void;
+  /** The thread has a cleanup snapshot, so a missing folder reads as cleaned. */
+  readonly snapshot?: boolean;
 }
 
 const harness = Effect.fn("ThreadWorkspaceTest.harness")(function* (
@@ -107,7 +109,22 @@ const harness = Effect.fn("ThreadWorkspaceTest.harness")(function* (
     } as unknown as ThreadManagement.ThreadManagementService["Service"]),
     Layer.succeed(WorktreeSnapshotStore, {
       capture: () => Effect.die("unused"),
-      latestForThread: () => Effect.succeed(null),
+      latestForThread: () =>
+        Effect.succeed(
+          options.snapshot === true
+            ? {
+                threadId,
+                worktreePath: thread.worktreePath ?? "",
+                branch: thread.branch,
+                baseRef: null,
+                headSha: "0".repeat(40),
+                snapshotRef: `refs/goat/snapshots/${threadId}/1`,
+                snapshotSha: "1".repeat(40),
+                createdAt: "2026-11-17T00:00:00.000Z",
+                reason: "idle",
+              }
+            : null,
+        ),
       markRestored: () => Effect.void,
       deleteForThread: () => Effect.succeed(0),
       purgeDeletedThreads: () => Effect.succeed(0),
@@ -139,7 +156,9 @@ const harness = Effect.fn("ThreadWorkspaceTest.harness")(function* (
           }),
         ),
     }),
-    ServerSettings.ServerSettingsService.layerTest(),
+    ServerSettings.ServerSettingsService.layerTest({
+      worktreesDirectory: NodePath.join(root, "managed"),
+    }),
     ServerConfig.layerTest(process.cwd(), { prefix: "thread-workspace-test-" }),
   );
   const layer = ThreadWorkspace.layer.pipe(
@@ -215,6 +234,46 @@ it.effect.each([
       assert.equal(status.state, state);
       assert.equal(status.setupIncomplete, state === "present" ? true : undefined);
     }).pipe(Effect.scoped),
+);
+
+it.effect.each([
+  { state: "missing", place: "GOAT's worktrees folder", recreatable: true },
+  { state: "missing", place: "another folder", recreatable: false },
+  { state: "cleaned", place: "GOAT's worktrees folder", recreatable: true },
+  { state: "cleaned", place: "another folder", recreatable: false },
+] as const)(
+  "says a $state worktree in $place is recreatable only where restoring it would not be refused",
+  ({ state, recreatable }) =>
+    Effect.gen(function* () {
+      const at = (root: string) =>
+        storageShell({
+          branch: "feature",
+          worktreePath: recreatable
+            ? NodePath.join(root, "managed", "repo", "feature")
+            : NodePath.join(root, "elsewhere", "feature"),
+        });
+      const { layer } = yield* harness(at, { snapshot: state === "cleaned" });
+      const service = yield* ThreadWorkspace.ThreadWorkspaceService.pipe(Effect.provide(layer));
+      const status = yield* service.status(threadId);
+      assert.deepInclude(status, { state, recreatable });
+      if (!recreatable) {
+        const refused = yield* Effect.flip(service.restore({ threadId, mode: "restore" }));
+        assert.equal(refused.detail, "GOAT only restores worktrees in its worktrees folder.");
+      }
+    }).pipe(Effect.scoped),
+);
+
+it.effect("leaves recreatable out for a worktree that is present, wherever it is", () =>
+  Effect.gen(function* () {
+    const at = (root: string) =>
+      storageShell({ branch: "feature", worktreePath: NodePath.join(root, "elsewhere") });
+    const { layer, repo, root, git } = yield* harness(at);
+    git(repo, "worktree", "add", "-q", "-b", "feature", NodePath.join(root, "elsewhere"));
+    const service = yield* ThreadWorkspace.ThreadWorkspaceService.pipe(Effect.provide(layer));
+    const status = yield* service.status(threadId);
+    assert.equal(status.state, "present");
+    assert.notProperty(status, "recreatable");
+  }).pipe(Effect.scoped),
 );
 
 it.effect("will not replace the worktree of a thread that is running", () =>
