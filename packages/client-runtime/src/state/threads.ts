@@ -62,6 +62,7 @@ import * as StreamDiagnostics from "./threadStreamDiagnostics.ts";
 import { threadStreamFailureMessage } from "./threadTextAppends.ts";
 import { makeThreadRequestsResolvedAnnouncer } from "./threadRequests.ts";
 import { EMPTY_ENVIRONMENT_THREAD_STATE, type EnvironmentThreadState } from "./threadState.ts";
+import { makeThreadSubscriptionRecovery } from "./threadSubscriptionRecovery.ts";
 import {
   formatHistoryError,
   matchesThreadSnapshot,
@@ -869,16 +870,18 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     yield* noteStatus;
   });
 
+  const recovery = yield* makeThreadSubscriptionRecovery({
+    setStreamError,
+    logAttributes: { environmentId, threadId },
+  });
   yield* markSynchronizing;
   yield* Effect.forkScoped(
     subscribeThreadItems(
       threadId,
       Effect.fn("EnvironmentThreadState.makeSubscribeInput")(function* (session) {
         let current = yield* SubscriptionRef.get(state);
-        // A prior definitive miss (or delete event) already cleared this thread.
-        // Park the subscription attempt without opening the socket so we do not
-        // retry forever against a known-missing id.
-        if (current.status === "deleted") {
+        // A delete event already cleared this thread. Park without opening the socket.
+        if (current.status === "deleted" && recovery.parksDeleted()) {
           return yield* Effect.never;
         }
 
@@ -909,6 +912,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             yield* snapshotLoader.load(prepared, threadId);
           switch (httpResult._tag) {
             case "present": {
+              yield* recovery.found;
               if (canLoadHistory && httpResult.history !== undefined) {
                 yield* Ref.set(acceptsBoundedSocketSnapshots, true);
               }
@@ -942,9 +946,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               break;
             }
             case "missing": {
-              yield* setDeleted();
+              if (current.status !== "deleted") yield* setDeleted();
               // A 404 also means "not created yet". Only a delete event may outlive this mount.
               if (resumeCache?.owner === owner) resumeCache.snapshot = undefined;
+              yield* recovery.missed;
               return yield* Effect.never;
             }
             case "unavailable": {
@@ -984,12 +989,15 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         };
       }),
       {
-        onDefect: () => setStreamError("Could not synchronize the thread."),
+        onDefect: recovery.onDefect,
         onExpectedFailure: (cause) => setStreamError(threadStreamFailureMessage(cause)),
-        retryExpectedFailureAfter: "250 millis",
-        resubscribe: foregroundResubscriptions,
+        retryExpectedFailureAfter: recovery.retryExpectedFailureAfter,
+        resubscribe: Stream.merge(foregroundResubscriptions, recovery.resubscriptions),
       },
-    ).pipe(Stream.runForEachArray(applyItems)),
+    ).pipe(
+      Stream.runForEachArray((items) => Effect.andThen(applyItems(items), recovery.applied)),
+      recovery.restartAfterDefect,
+    ),
   );
 
   return state;

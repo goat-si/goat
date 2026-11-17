@@ -703,7 +703,7 @@
   "packages/client-runtime/src/state/threadInbox.ts": { "nonNull": 2 },
   "packages/client-runtime/src/state/threadSort.ts": { "nonNull": 7 },
   "packages/client-runtime/src/state/threads-sync.test.ts": { "lines": 2099 },
-  "packages/client-runtime/src/state/threads.ts": { "lines": 1071 },
+  "packages/client-runtime/src/state/threads.ts": { "lines": 1079 },
   "packages/client-runtime/src/state/usageProgress.ts": { "nonNull": 2 },
   "packages/client-runtime/src/work-log/commandLabel.ts": { "lines": 1435, "nonNull": 19 },
   "packages/client-runtime/src/work-log/embeddedScripts.ts": { "nonNull": 10 },
