@@ -1,3 +1,5 @@
+import { EnvironmentId, MessageId, ThreadId } from "@goat/contracts";
+import { serializeAssistantCitation } from "@goat/shared/assistantCitations";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import "~/index.css";
@@ -39,5 +41,40 @@ describe("folding a long user message", () => {
     const foldedHeight = long!.offsetHeight;
     await click(screen.button("Show full message"));
     expect(long!.offsetHeight).toBeGreaterThanOrEqual(foldedHeight * 2);
+  });
+});
+
+describe("folding by what the message shows", () => {
+  const quote = "A long assistant paragraph that the user quoted. ".repeat(40);
+  const card = serializeAssistantCitation({
+    version: 1,
+    environmentId: EnvironmentId.make("environment"),
+    threadId: ThreadId.make("thread"),
+    messageId: MessageId.make("source"),
+    text: quote,
+    start: 0,
+    end: quote.length,
+    prefix: "",
+    suffix: "",
+  });
+
+  it("measures quotes by their cards: two do not fold, ten do", async () => {
+    await using screen = await renderTimeline([
+      message(card.repeat(2), {}, "two-cards"),
+      message(card.repeat(10), {}, "ten-cards"),
+    ]);
+    await vi.waitFor(() => expect(screen.buttons("Show full message")).toHaveLength(1));
+    const [two, ten] = [
+      ...screen.container.querySelectorAll<HTMLElement>("[data-user-message-body]"),
+    ];
+    expect(two!.dataset.userMessageCollapsible).toBe("false");
+    expect(ten!.dataset.userMessageCollapsible).toBe("true");
+  });
+
+  it("folds one long paragraph", async () => {
+    await using screen = await renderTimeline([
+      message(`Can you expand on this? ${"More text. ".repeat(60)}`, {}, "paragraph"),
+    ]);
+    await vi.waitFor(() => expect(screen.buttons("Show full message")).toHaveLength(1));
   });
 });
