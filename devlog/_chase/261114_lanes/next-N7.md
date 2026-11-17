@@ -2,6 +2,8 @@
 
 Lane branch: `chase/t3-261114-n7-mcp-reads`, based on dev `5688d26760`, merged with the integration branch `chase/t3-261114-next` at `b2fb30748a` and with dev `97c0dd32c4` last (head `6162bd8be32e8813a7e93cbae223fdccaced0a8e`, verified on origin). N3 and N6 were not on the integration branch at the gate. Host pen-macbookpro2. Rows from #3176: `9b352a04de`, `a4d0a06e7f` (code half), `b7a224c7dd` (code half), `85b160658f`, `4aec277f79`, `5e2438ce94`. Not ported in this push: `591188471a` (needs C9 from lane N6, not on the integration branch), L13 `4aab23cd72` and `18866e52e4` (decided FULL, below; port follows as a second push of this lane).
 
+Part 2 (`chase/t3-261114-n7b-scheduler`, rows `4aab23cd72`, `18866e52e4`, `591188471a`): merged into the integration branch at dd6096a168 (#3519).
+
 ## Rows and commits
 
 | row | upstream | GOAT commit | result |
@@ -493,4 +495,17 @@ Coordinator ruling (verbatim):
 - `check:changed` on dd6096a168 (ruled unnecessary: one web test line neither this lane nor its files touch).
 - Focused suites on 8d5f7a37ef and dd6096a168 separately (check:changed on 8d5f7a37ef covers them).
 - Web, desktop and mobile captures (owed to #3519's integrated pass, list in Part 2); PostgreSQL relay tests; full CI (ci:full).
+
+
+### Lane N7 part 2 merged at dd6096a168; N9b part 2 merges it
+
+Coordinator decision (verbatim):
+
+> Coordinator decision, 2026-11-17 05:50 UTC: LANE N7 PART 2 IS MERGED. chase/t3-261114-next = dd6096a1685b31e5b164fd9751d5fa4c23ab7c52 (fast-forward from ab59bbdacc, verified on origin; #3519 MERGEABLE). What I checked myself before the push: the first merge (76a43a3eec) differs from git's own merge only in oxlint-plugin-goat/code-budgets.json, the second and third equal git's own trees (789240032e, 0776b57d1e); the only files changed on both sides since the merge base are ServerEnvironment.ts, OrchestratorMcpService.ts, scheduleReconcile.test.ts, ScheduledTaskService.ts, agent-surface-audit.md and code-budgets.json; the eight budget entries that differ from the integration side each equal the file's countLines and are at or below dev's (my own script). The lane's code was accepted at 673fd197ad and is unchanged. A narrow fresh review of the merge under Effect 4.1 runs now as a check AFTER the merge (goat-nextN7b-merge-dd6096a1: the five both-sides files, the first-run bind and the reconcile under the new scheduler, the scheduling-dependent tests); if it finds anything at P0 to P2, the fix is a follow-up commit on a branch cut from the integration head before #3519's final review. For N7 part 2 (mcp:ae0dbf69): the records line "merged into the integration branch at dd6096a168 (#3519)" in next-N7.md, the card row and the #3176 rows of the lane ("merged into the integration branch at dd6096a168 (#3519)", unticked); then stay available for the review's findings.
+> For N9b part 2 (mcp:76435a27): THE INTEGRATION HEAD THAT CONTAINS N7 PART 2 IS dd6096a1685b31e5b164fd9751d5fa4c23ab7c52. Merge it now (a merge, not a rebase), as ruled: both lanes edit Orchestrator.ts: keep both sides at the top of dispatchMessage and everywhere else, the entry at the combined file's real length by countLines (the earlier reviewer's figure was 13528; say what you get and why if it differs); OrchestratorMcpService.ts, ThreadManagementService.ts and the contracts files the same way; say for every file whether the result is git's automatic merge or a hand resolution, and list each hand-resolved hunk with both sides and the result. Then: typecheck server, shared, contracts, web, mobile; the focused orchestration files (SteeringDeclined and the steering suites, ThreadStop, RestartContinuation, delegatedForceStop, the scheduler's threadMode and reconcile tests, ThreadManagementService tests) and TextGeneration; goat-rename --check; check:changed against dd6096a168; push; READY with the head. Your narrow fresh review (goat-nextN9b2-final-19a0127f at 19a0127f5b) is still running; I check this last merge against its lines myself.
+
+- Merge: part 2 merged into the integration branch at dd6096a168 (#3519). Checked on origin with `git ls-remote`: refs/heads/chase/t3-261114-next = dd6096a1685b31e5b164fd9751d5fa4c23ab7c52, the lane head itself.
+- #3176: the lane's three rows (`4aab23cd72` via 847a6b9450, `18866e52e4` via 92115ee40f, `591188471a` via 02cf071a7f) now read "merged into the integration branch at dd6096a168 (#3519)", unticked; the body was read back after the edit.
+- Card 10.026: row N7 updated.
+- Open: the post-merge review goat-nextN7b-merge-dd6096a1; any finding at P0 to P2 gets a follow-up commit on a branch cut from the integration head.
 
