@@ -676,3 +676,111 @@ What a parent shows, before and after, for a child (subagent) that is live:
 
 The child's own row also refreshes live once the turn-item filter keeps these updates. A coordinating agent gets nothing new: userOnly is a flag on the summary, and no wire field carries a secret value.
 
+
+
+## Row 7 (6641231797): build notes and rule 3 (quoted before the commit)
+
+- f64a05819a move-out, claim 5 (corrected range): orchestrationV2.ts:624-653 -> contracts/src/goalCommand.ts:1-30, byte for byte, with a one-line re-export at :624. 4438 -> 4409. Entry lowered.
+- Row 7 code: PendingRuntimeRequestSummary gains `userOnly` (optional boolean; orchestrationV2.ts 4409 -> 4411, the lane nets -27 against 4438); ProjectionPendingRequest.ts sets it for secret_request and human_handoff; packages/shared/src/agentAwareness.ts gains turnItemCanChangeUserWait (secret_request, human_handoff, user_message); ShellStream.ts keeps subagent turn-item updates that match it; AgentAwarenessRelay.ts publishes them; client-runtime threadShell.ts rolls a user-only child card up to its parents as user_input (approvals still win). GOAT's SubagentWaits needs no change: subagentRequestAwareness already gives waiting_for_input for a blocking child request.
+- Tests, all failing on the base: threadShell.test.ts (upstream's "flags the parent while a live subagent waits on a secret card", a new case), apps/server/src/orchestration-v2/ProjectionPendingRequest.test.ts (new: secret card and handoff get userOnly), ShellStream.test.ts (new case "keeps subagent turn-item updates that can start or end a user-only wait": secret_request, human_handoff and user_message kept, assistant_message filtered), apps/server/src/relay/AgentAwarenessRelay.userWait.test.ts (new: the parent is published as waiting_for_input when its subagent's secret card or handoff appears). After: threadShell 15; ShellStream, ProjectionPendingRequest, the three relay files and SubagentWaits 60; shared agentAwareness 29; ProjectionStore, ProjectionSettlement, ThreadSettlementSnooze and OrchestratorMcpService.lazyThreads 87; web ThreadNotificationCoordinator.logic 26. Typecheck exits 0 for contracts, shared, client-runtime, server, web and mobile.
+- Not taken from upstream: its link_request item (GOAT has none); its ProjectionStore.test.ts assertions (that file is at its entry; ProjectionPendingRequest.test.ts covers the summary); its delegated cross-environment roll-up types (GOAT's threadShell.ts has no delegated roll-up of that shape); its AgentAwarenessRelay changes to subagentAwaitsApproval/waitsForInput (GOAT's SubagentWaits already reports input waits).
+
+### Rule 3: ShellStream.test.ts under IV (i) (helper) and the standing mirrored case (the idle literal)
+
+Upstream's own copy changes its `stored` helper to carry a payload, and the idle-subagent event literal the same way (plus new assertions in the first case, which GOAT does not take; GOAT's new assertions are a separate new case because its item types differ):
+
+```diff
+@@ -38,8 +38,8 @@ const emptyShellSnapshot = {
+ } as OrchestrationV2ShellSnapshot;
+ 
+ describe("subagent shell events", () => {
+-  const stored = (threadId: string, type: string) =>
+-    ({ event: { threadId, type } }) as ApplicationStoredEvent;
++  const stored = (threadId: string, type: string, itemType = "command_execution") =>
++    ({ event: { threadId, type, payload: { type: itemType } } }) as ApplicationStoredEvent;
+ 
+   it("keeps regular threads and subagent state changes while omitting subagent transcript updates", () => {
+     const subagents = new Set(["child"]);
+@@ -49,6 +49,14 @@ describe("subagent shell events", () => {
+     expect(
+       shouldPublishShellApplicationEvent(stored("child", "turn-item.updated"), subagents),
+     ).toBe(false);
++    for (const itemType of ["secret_request", "link_request", "user_message"]) {
++      expect(
++        shouldPublishShellApplicationEvent(
++          stored("child", "turn-item.updated", itemType),
++          subagents,
++        ),
++      ).toBe(true);
++    }
+     expect(shouldPublishShellApplicationEvent(stored("child", "node.updated"), subagents)).toBe(
+       false,
+     );
+@@ -198,7 +206,13 @@ describe("omitIdleSubagentShells", () => {
+     expect(omitted.threads.map((thread) => thread.id)).toEqual(["root"]);
+     expect(
+       shouldPublishShellApplicationEvent(
+-        { event: { threadId: "idle", type: "turn-item.updated" } } as ApplicationStoredEvent,
++        {
++          event: {
++            threadId: "idle",
++            type: "turn-item.updated",
++            payload: { type: "command_execution" },
++          },
++        } as ApplicationStoredEvent,
+         omitted.subagentThreadIds,
+       ),
+     ).toBe(false);
+```
+
+GOAT's copy: the same helper change (GOAT's helper lines equal upstream's parent, only shifted by three lines), the same payload added to the idle literal (GOAT's surrounding line passes `new Set(omitted.subagentThreadIds)`, unchanged), and the new case:
+
+```diff
+@@ -41,8 +41,26 @@ const emptyShellSnapshot = {
+ } as OrchestrationV2ShellSnapshot;
+ 
+ describe("subagent shell events", () => {
+-  const stored = (threadId: string, type: string) =>
+-    ({ event: { threadId, type } }) as ApplicationStoredEvent;
++  const stored = (threadId: string, type: string, itemType = "command_execution") =>
++    ({ event: { threadId, type, payload: { type: itemType } } }) as ApplicationStoredEvent;
++
++  it("keeps subagent turn-item updates that can start or end a user-only wait", () => {
++    const subagents = new Set(["child"]);
++    for (const itemType of ["secret_request", "human_handoff", "user_message"]) {
++      expect(
++        shouldPublishShellApplicationEvent(
++          stored("child", "turn-item.updated", itemType),
++          subagents,
++        ),
++      ).toBe(true);
++    }
++    expect(
++      shouldPublishShellApplicationEvent(
++        stored("child", "turn-item.updated", "assistant_message"),
++        subagents,
++      ),
++    ).toBe(false);
++  });
+ 
+   it("keeps regular threads and subagent state changes while omitting subagent transcript updates", () => {
+     const subagents = new Set(["child"]);
+@@ -301,7 +319,13 @@ describe("omitIdleSubagentShells", () => {
+     expect(omitted.threads.map((thread) => thread.id)).toEqual(["root"]);
+     expect(
+       shouldPublishShellApplicationEvent(
+-        { event: { threadId: "idle", type: "turn-item.updated" } } as ApplicationStoredEvent,
++        {
++          event: {
++            threadId: "idle",
++            type: "turn-item.updated",
++            payload: { type: "command_execution" },
++          },
++        } as ApplicationStoredEvent,
+         new Set(omitted.subagentThreadIds),
+       ),
+     ).toBe(false);
+```
+
+No existing title, expectation or other setup changes.
+
