@@ -36,11 +36,10 @@ export const hiddenTrackedChange = Effect.fn("WorktreeSnapshot.hiddenTrackedChan
     if (result.stdoutTruncated) return yield* fail("Git output exceeded snapshot inspection limit");
     return result.stdout;
   });
-  const sparse = (yield* run(["config", "--type=bool", "--default=false", "core.sparseCheckout"]))
-    .trim()
-    .startsWith("true");
-  // Sparse checkouts flag every file outside the cone; Git 2.37+ unflags those it finds on disk.
-  const hiddenTag = sparse ? /^[a-z]$/ : /^(?:S|[a-z])$/;
+  // Skip-worktree counts in sparse checkouts too: Git before 2.37, or with
+  // sparse.expectFilesOutsideOfPatterns, keeps an edited file outside the patterns flagged. Files
+  // outside the patterns that are not on disk are skipped below, one lstat each.
+  const hiddenTag = /^(?:S|[a-z])$/;
   const flagged = (yield* run(["ls-files", "-s", "-v", "-z"])).split("\0").flatMap((record) => {
     const [, tag = "", mode = "", id = "", file = ""] =
       /^(\S) (\d+) ([0-9a-f]+) \d\t(.*)$/s.exec(record) ?? [];

@@ -61,3 +61,41 @@ it.live.each([
     }),
   ),
 );
+
+// A sparse checkout leaves files outside its patterns skip-worktree; with
+// sparse.expectFilesOutsideOfPatterns (or Git before 2.37) an edit there stays flagged and unseen.
+const sparseWorktree = (edit: string | null) =>
+  Effect.gen(function* () {
+    const fixture = yield* cleanupFixture();
+    const { fs, worktree, command } = fixture;
+    yield* command(worktree, ["config", "sparse.expectFilesOutsideOfPatterns", "true"]);
+    yield* command(worktree, ["sparse-checkout", "set", "--no-cone", "/.gitignore"]);
+    expect(yield* fs.exists(`${worktree}/tracked.txt`)).toBe(false);
+    if (edit !== null) yield* fs.writeFileString(`${worktree}/tracked.txt`, edit);
+    // Git status does not show it, which is why the snapshot step must.
+    const status = (yield* command(worktree, ["status", "--porcelain"])).stdout;
+    return { ...fixture, status, report: yield* fixture.service.runNow };
+  });
+
+it.live("keeps an edit to a tracked file outside a sparse checkout's patterns", () =>
+  runCleanupTest(
+    Effect.gen(function* () {
+      const { fs, worktree, status, report } = yield* sparseWorktree("hidden edit\n");
+      expect(status).toBe("");
+      expect(report.entries[0]).toMatchObject({
+        outcome: "kept",
+        reason: expect.stringContaining("hidden from git status (tracked.txt)"),
+      });
+      expect(yield* fs.readFileString(`${worktree}/tracked.txt`)).toBe("hidden edit\n");
+    }),
+  ),
+);
+
+it.live("removes a sparse worktree whose files outside its patterns are not on disk", () =>
+  runCleanupTest(
+    Effect.gen(function* () {
+      const { report } = yield* sparseWorktree(null);
+      expect(report.entries[0]).toMatchObject({ outcome: "removed" });
+    }),
+  ),
+);
