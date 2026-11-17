@@ -1,6 +1,7 @@
 import { EnvironmentId, MessageId, ThreadId } from "@goat/contracts";
 import { serializeAssistantCitation } from "@goat/shared/assistantCitations";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { page } from "vite-plus/test/browser";
 
 import "~/index.css";
 
@@ -44,6 +45,20 @@ describe("folding a long user message", () => {
   });
 });
 
+/** Whether a person can see the sentence: it lies inside the body's shown box, not under the fold. */
+function lastSentenceShown(body: HTMLElement, sentence: string): boolean {
+  const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+    const at = node.textContent?.lastIndexOf(sentence) ?? -1;
+    if (at < 0) continue;
+    const range = document.createRange();
+    range.setStart(node, at);
+    range.setEnd(node, at + sentence.length);
+    return range.getBoundingClientRect().bottom <= body.getBoundingClientRect().bottom;
+  }
+  return false;
+}
+
 describe("folding by what the message shows", () => {
   const quote = "A long assistant paragraph that the user quoted. ".repeat(40);
   const card = serializeAssistantCitation({
@@ -72,9 +87,19 @@ describe("folding by what the message shows", () => {
   });
 
   it("folds one long paragraph", async () => {
+    // A phone-width column; a message folds only when its full height is twice the folded height.
+    await page.viewport(414, 896);
     await using screen = await renderTimeline([
-      message(`Can you expand on this? ${"More text. ".repeat(60)}`, {}, "paragraph"),
+      message(`Can you expand on this? ${"More text. ".repeat(200)}The end.`, {}, "long-paragraph"),
+      message(`Can you expand on this? ${"More text. ".repeat(60)}The end.`, {}, "short-paragraph"),
     ]);
     await vi.waitFor(() => expect(screen.buttons("Show full message")).toHaveLength(1));
+    const [long, short] = [
+      ...screen.container.querySelectorAll<HTMLElement>("[data-user-message-body]"),
+    ];
+    expect(long!.dataset.userMessageCollapsed).toBe("true");
+    expect(lastSentenceShown(long!, "The end.")).toBe(false);
+    expect(short!.dataset.userMessageCollapsible).toBe("false");
+    expect(lastSentenceShown(short!, "The end.")).toBe(true);
   });
 });
