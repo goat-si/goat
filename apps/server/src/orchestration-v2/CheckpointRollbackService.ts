@@ -6,6 +6,7 @@ import {
   type OrchestrationV2DomainEvent,
   ProviderThreadId,
   ThreadId,
+  TurnItemId,
   VcsProcessExitError,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
@@ -35,6 +36,7 @@ import * as ProjectStore from "./ProjectStore.ts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import { makeSetAsideFolder, setAsideSentence } from "./goat/setAsideFolder.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 
 export const ROLLBACK_FAILED_MESSAGE =
@@ -136,6 +138,7 @@ export const layer: Layer.Layer<
     const path = yield* Path.Path;
     const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
+    const setAside = yield* makeSetAsideFolder;
 
     const execute = Effect.fn("orchestrationV2.checkpointRollback.execute")(function* (input: {
       readonly threadId: ThreadId;
@@ -218,41 +221,53 @@ export const layer: Layer.Layer<
               };
             });
 
-      const { worktreePath, branch } = context.thread;
-      // Recreated only where the server would have made it, as turn start does.
-      if (
-        worktreePath != null &&
-        branch != null &&
-        !(yield* fileSystem.exists(worktreePath)) &&
-        (yield* isManagedWorktreePath(worktreePath))
-      ) {
-        const project = yield* projects.get(context.thread.projectId);
-        if (Option.isSome(project)) {
-          yield* gitWorkflow.pruneWorktrees({ cwd: project.value.workspaceRoot });
-          yield* gitWorkflow.createWorktree({
-            cwd: project.value.workspaceRoot,
-            refName: branch,
-            path: worktreePath,
-          });
-        }
-      }
-
-      if (
-        input.restoreFiles !== false &&
-        !(yield* isCheckpointRestoreIsolated(context.thread, scope, {
-          fileSystem,
-          projections,
-          projects,
-          path,
-        }))
-      ) {
-        return yield* new CheckpointRollbackExecutionError({
+      const restoreFiles = input.restoreFiles !== false;
+      const isolated = isCheckpointRestoreIsolated(context.thread, scope, {
+        fileSystem,
+        projections,
+        projects,
+        path,
+      });
+      const sharedWorkspace = () =>
+        new CheckpointRollbackExecutionError({
           reason: "shared-workspace",
           threadId: input.threadId,
           providerThreadId: input.providerThreadId,
           checkpointId: input.checkpointId,
         });
+
+      const { worktreePath, branch } = context.thread;
+      let setAsidePath: string | null = null;
+      // Recreated only where the server would have made it, as turn start does.
+      if (worktreePath != null && branch != null) {
+        // A failed removal can leave the folder without its checkout; only a file restore replaces it.
+        const leftover = restoreFiles && (yield* setAside.lostCheckout(worktreePath));
+        if (
+          (leftover || !(yield* fileSystem.exists(worktreePath))) &&
+          (yield* isManagedWorktreePath(worktreePath))
+        ) {
+          const project = yield* projects.get(context.thread.projectId);
+          if (Option.isSome(project)) {
+            const recreate = gitWorkflow.pruneWorktrees({ cwd: project.value.workspaceRoot }).pipe(
+              Effect.andThen(
+                gitWorkflow.createWorktree({
+                  cwd: project.value.workspaceRoot,
+                  refName: branch,
+                  path: worktreePath,
+                }),
+              ),
+            );
+            if (leftover) {
+              if (!(yield* isolated)) return yield* sharedWorkspace();
+              setAsidePath = (yield* setAside.around(worktreePath, recreate)).setAsidePath;
+            } else {
+              yield* recreate;
+            }
+          }
+        }
       }
+
+      if (restoreFiles && !(yield* isolated)) return yield* sharedWorkspace();
 
       const modelSelection = context.thread.modelSelection;
       const resolvedRuntimePolicy = yield* runtimePolicy.resolve({
@@ -292,7 +307,7 @@ export const layer: Layer.Layer<
               target: rollbackTarget,
               providerThreadTurns,
             });
-      if (input.restoreFiles !== false) yield* checkpoints.restore({ scope, checkpoint });
+      if (restoreFiles) yield* checkpoints.restore({ scope, checkpoint });
       if (staleCheckpoints.length > 0) {
         yield* checkpoints.deleteStaleRefs({ scope, checkpoints: staleCheckpoints });
       }
@@ -326,6 +341,34 @@ export const layer: Layer.Layer<
               },
             }),
           );
+          if (setAsidePath !== null && branch != null) {
+            const eventId = yield* ids.allocate.event({ threadId: input.threadId });
+            events.push({
+              id: eventId,
+              type: "turn-item.updated",
+              threadId: input.threadId,
+              occurredAt: now,
+              payload: {
+                id: TurnItemId.make(`worktree-set-aside:${eventId}`),
+                threadId: input.threadId,
+                runId: null,
+                nodeId: null,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                // EventSink allocates the real position.
+                ordinal: 0,
+                status: "completed",
+                title: "Worktree recreated",
+                startedAt: now,
+                completedAt: now,
+                updatedAt: now,
+                type: "system_notice",
+                message: `The worktree folder had lost its checkout, so GOAT made a new checkout of ${branch} there. ${setAsideSentence(setAsidePath)}`,
+              },
+            });
+          }
           for (const staleCheckpoint of staleCheckpoints) {
             events.push(
               yield* makeEvent({
