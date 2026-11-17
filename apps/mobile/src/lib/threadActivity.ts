@@ -91,7 +91,7 @@ import * as DateTime from "effect/DateTime";
 import { groupAdjacentActivities } from "./threadActivityGroups";
 import {
   activityGroupForVisibility,
-  answersBeforeSteers,
+  finalAnswerIds,
   DEFAULT_THREAD_FEED_DISPLAY,
   liveAnswerPreview,
   type ThreadFeedDisplay,
@@ -830,7 +830,7 @@ function deriveThreadFeedRunFolds(
   feedFailedRunIds: ReadonlySet<RunId>,
 ): ReadonlyMap<string, ThreadFeedRunFold> {
   const terminalAssistantMessageIdByRun = new Map<RunId, string>();
-  const retainedAnswerIds = answersBeforeSteers(feed);
+  const retainedAnswerIds = finalAnswerIds(feed);
   const interruptedRunIds = new Set<RunId>();
   const failedRunIds = new Set(feedFailedRunIds);
   const promptIndexByRunId = new Map<RunId, number>();
