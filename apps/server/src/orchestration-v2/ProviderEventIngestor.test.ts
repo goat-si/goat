@@ -1,3 +1,4 @@
+import { fromRunner } from "@goat/provider-core/server/textGenerationOperations";
 import { ingestCompletedProviderTurn } from "./testkit/ingestCompletedProviderTurn.ts";
 import {
   modelSelection,
@@ -206,13 +207,7 @@ it.effect("takes a hub's reset for an unreset usage_limit, then refreshes the sn
         enabled: true,
         displayName: undefined,
         orchestrationAdapter: adapter,
-        textGeneration: {
-          generateBranchName: () => Effect.die("unused"),
-          generateCommitMessage: () => Effect.die("unused"),
-          generatePrContent: () => Effect.die("unused"),
-          generateThreadTitle: () => Effect.die("unused"),
-          generateReviewGuide: () => Effect.die("unused"),
-        },
+        textGeneration: fromRunner("fixture", () => Effect.die("unused"), { memory: false }),
         snapshot: {
           refreshUsage: Deferred.succeed(refreshed, undefined).pipe(Effect.asVoid),
           getSnapshot: Effect.succeed({

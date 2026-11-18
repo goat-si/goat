@@ -620,7 +620,6 @@ const make = Effect.gen(function* () {
       const generated = yield* Effect.scoped(
         Effect.gen(function* () {
           const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "memory-generation-" });
-          const generate = generation.generateMemorySummary;
           const holdKey = yield* hold.keyFor(meta.modelSelection);
           return yield* generateSummaryChunks({
             first: source,
@@ -647,17 +646,15 @@ const make = Effect.gen(function* () {
               readSource({ ...work, metadata: { ...meta, fromSequence } }),
             renewClaim,
             generate: (input) =>
-              generate
-                ? hold
-                    .guard(holdKey, redacted(generate(input)))
-                    .pipe(
-                      Effect.mapError((cause) =>
-                        cause._tag === "MemoryGenerationHeld"
-                          ? new MemoryWorkerError({ code: "unavailable", cause })
-                          : new MemoryWorkerError({ code: safeCode(cause), cause }),
-                      ),
-                    )
-                : Effect.fail(new MemoryWorkerError({ code: "unsupported_operation" })),
+              hold
+                .guard(holdKey, redacted(generation.generateMemorySummary(input)))
+                .pipe(
+                  Effect.mapError((cause) =>
+                    cause._tag === "MemoryGenerationHeld"
+                      ? new MemoryWorkerError({ code: "unavailable", cause })
+                      : new MemoryWorkerError({ code: safeCode(cause), cause }),
+                  ),
+                ),
             sameExecution: (execution) =>
               execution.environmentId === environmentId &&
               execution.providerInstanceId === meta.modelSelection.instanceId &&

@@ -265,18 +265,25 @@ it.layer(layer)("OpenCode v2 memory generation", (it) => {
     ({ operation, context, code }) =>
       Effect.gen(function* () {
         let acquisitions = 0;
+        const external = context === memoryContext;
+        const acquire = () =>
+          Effect.sync(() => {
+            acquisitions++;
+          }).pipe(Effect.andThen(Effect.die("Uncertified server must not be acquired.")));
         const server = OpenCode2Server.OpenCode2Server.of({
-          withConnection: () =>
-            Effect.sync(() => {
-              acquisitions++;
-            }).pipe(Effect.andThen(Effect.die("Uncertified server must not be acquired."))),
+          supportsMemoryConnection: !external,
+          withMemoryConnection: acquire,
+          withConnection: acquire,
           forget: Effect.void,
         });
         const textGeneration = yield* OpenCode2TextGeneration.make(
-          context === undefined
-            ? {}
-            : { memoryRunnerContext: context, external: context === memoryContext },
+          context === undefined ? {} : { memoryRunnerContext: context },
         ).pipe(Effect.provideService(OpenCode2Server.OpenCode2Server, server));
+        const supported = code === "identity_mismatch";
+        assert.deepEqual(yield* textGeneration.memoryCapabilities, {
+          summary: supported,
+          conflict: supported,
+        });
         const failure = yield* Effect.flip(
           operation === "resolveMemoryConflict"
             ? textGeneration.resolveMemoryConflict!(memoryConflict).pipe(
@@ -301,12 +308,12 @@ it.layer(layer)("OpenCode v2 memory generation", (it) => {
           });
         const server = OpenCode2Server.OpenCode2Server.of({
           withConnection: () => Effect.die("Memory uses its own isolated server."),
+          supportsMemoryConnection: true,
           withMemoryConnection: () => Effect.fail(startError),
           forget: Effect.void,
         });
         const textGeneration = yield* OpenCode2TextGeneration.make({
           memoryRunnerContext: memoryContext,
-          external: false,
         }).pipe(Effect.provideService(OpenCode2Server.OpenCode2Server, server));
         const invoke = () =>
           Effect.flip(
@@ -443,6 +450,7 @@ it.layer(layer)("OpenCode v2 memory generation", (it) => {
       external: false,
     };
     const server = OpenCode2Server.OpenCode2Server.of({
+      supportsMemoryConnection: true,
       withMemoryConnection: (_operation, _providerId, use) => use(connection),
       withConnection: () => Effect.die("Memory must never borrow the shared server."),
       forget: Effect.void,
@@ -464,6 +472,7 @@ it.layer(layer)("OpenCode v2 memory generation", (it) => {
   it.effect.each(operations)("%s succeeds with session deny-all and runner metadata", (operation) =>
     Effect.gen(function* () {
       const { generation, state } = yield* fixture("success", operation);
+      assert.deepEqual(yield* generation.memoryCapabilities, { summary: true, conflict: true });
       const result = yield* invoke(generation, operation);
       assert.isNotNull(result.result);
       assert.equal(result.result?.text, output.text);

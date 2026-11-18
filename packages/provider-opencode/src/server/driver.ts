@@ -597,7 +597,6 @@ export const OpenCodeDriver: ProviderDriver<
         },
       }).pipe(Effect.provideService(OpenCodeServerOwner.OpenCodeServerOwner, serverOwner)),
       yield* OpenCode2TextGeneration.make({
-        external: effectiveConfig.serverUrl.trim().length > 0,
         memoryRunnerContext: {
           providerInstanceId: instanceId,
           ...(host.environmentId === undefined ? {} : { environmentId: host.environmentId }),

@@ -6,6 +6,7 @@ import { usesAuthlessCodexHome } from "../provider/CodexHomeRouteConfig.ts";
 import { defaultInstanceIdForDriver, ProviderDriverKind } from "@goat/contracts";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import {
+  memoryRunnerCapabilities,
   withMemoryExecution,
   type MemoryGenerationRunnerContext,
 } from "@goat/provider-core/server/memoryGenerationRunner";
@@ -665,7 +666,12 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     "CodexTextGeneration",
     (request) => runCodexJson(request).pipe(Effect.map((selected) => selected.result)),
     {
-      memoryRunner: withMemoryExecution(memoryRunnerContext, CODEX_DRIVER, runCodexJson),
+      memory: {
+        capabilities: memoryRunnerCapabilities("codex", memoryRunnerContext, {
+          available: Effect.succeed(codexConfig.enabled),
+        }),
+        run: withMemoryExecution(memoryRunnerContext, CODEX_DRIVER, runCodexJson),
+      },
       channelReception: true,
     },
   );

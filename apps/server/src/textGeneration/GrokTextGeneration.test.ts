@@ -26,7 +26,7 @@ import type { MemoryGenerationRunnerContext } from "@goat/provider-core/server/m
 import { GrokSettings } from "@goat/provider-grok/settings";
 
 import * as ServerConfig from "../config.ts";
-import * as TextGeneration from "./TextGeneration.ts";
+import type { ProviderTextGeneration } from "@goat/provider-core/server/textGeneration";
 import { makeGrokTextGeneration } from "@goat/provider-grok/testing";
 import { execScriptSource, writeFakeCli } from "@goat/provider-testing/fakeCli";
 const decodeGrokSettings = Schema.decodeSync(GrokSettings);
@@ -90,11 +90,12 @@ const sessionId = "grok-text-session";`,
 function withFakeAcpGrok<A, E, R>(
   env: Record<string, string>,
   effectFn: (
-    textGeneration: TextGeneration.TextGeneration["Service"],
+    textGeneration: ProviderTextGeneration,
     tempDir: string,
     feed: RequestFeed,
   ) => Effect.Effect<A, E, R>,
   memoryRunnerContext?: MemoryGenerationRunnerContext,
+  runtimePath?: string,
 ) {
   return Effect.gen(function* () {
     const tempDir = yield* Effect.acquireRelease(
@@ -118,7 +119,11 @@ function withFakeAcpGrok<A, E, R>(
     const config = decodeGrokSettings({ binaryPath });
     const textGeneration = yield* makeGrokTextGeneration(
       config,
-      { HOME: tempDir, GROK_HOME: NodePath.join(tempDir, "profile") },
+      {
+        HOME: tempDir,
+        GROK_HOME: NodePath.join(tempDir, "profile"),
+        ...(runtimePath === undefined ? {} : { PATH: runtimePath }),
+      },
       memoryRunnerContext === undefined ? {} : { memoryRunnerContext },
     );
     return yield* effectFn(textGeneration, tempDir, feed);
@@ -418,6 +423,28 @@ it.layer(layerGrokTextGenerationTest)("Grok memory generation", (it) => {
           });
         }),
       memoryContext,
+    ),
+  );
+  it.effect.each(operations)("declares and runs Grok memory operation %s", (operation) =>
+    withFakeAcpGrok(
+      {
+        GOAT_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify(
+          operation === "resolveMemoryConflict"
+            ? { ...output, judgment: "Synthetic" }
+            : { summary: output },
+        ),
+      },
+      (generation) =>
+        Effect.gen(function* () {
+          expect(yield* generation.memoryCapabilities).toEqual({ summary: true, conflict: true });
+          const result =
+            operation === "resolveMemoryConflict"
+              ? yield* generation.resolveMemoryConflict(memoryConflict)
+              : yield* generation.generateMemorySummary(memorySummary);
+          expect(result.result?.text).toBe(output.text);
+        }),
+      memoryContext,
+      [NodePath.dirname(process.execPath), process.env.PATH].join(NodePath.delimiter),
     ),
   );
   it.effect.each(

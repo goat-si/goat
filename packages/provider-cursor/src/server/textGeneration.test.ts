@@ -591,6 +591,7 @@ describe("CursorTextGeneration", () => {
           { id: "fastMode", value: true },
         ],
       });
+      expect(yield* generation.memoryCapabilities).toEqual({ summary: true, conflict: true });
       const generated = yield* runMemory(generation, operation, selection);
       expect(generated.result?.text).toBe(memoryOutput.text);
       expect(generated.execution).toEqual({
@@ -784,6 +785,7 @@ describe("CursorTextGeneration", () => {
           undefined,
           memoryContext,
         );
+        expect(yield* disabled.memoryCapabilities).toEqual({ summary: false, conflict: false });
         expect((yield* runMemory(disabled, operation).pipe(Effect.flip)).detail).toContain(
           "disabled",
         );
@@ -805,6 +807,7 @@ describe("CursorTextGeneration", () => {
           undefined,
           memoryContext,
         );
+        expect(yield* custom.memoryCapabilities).toEqual({ summary: false, conflict: false });
         expect((yield* runMemory(custom, operation).pipe(Effect.flip)).detail).toContain(
           "custom ~/.cursor/sandbox.json",
         );

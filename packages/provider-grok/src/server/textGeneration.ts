@@ -15,6 +15,7 @@ import type * as EffectAcpErrors from "effect-acp/errors";
 import { ProviderDriverKind, TextGenerationError } from "@goat/contracts";
 import {
   MemoryGenerationRunnerError,
+  memoryRunnerCapabilities,
   withMemoryExecution,
   type MemoryGenerationRunnerContext,
 } from "@goat/provider-core/server/memoryGenerationRunner";
@@ -294,11 +295,14 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
       runGrokSelected(request).pipe(Effect.map((selected) => selected.result)),
     ),
     {
-      memoryRunner: withMemoryExecution(
-        options.memoryRunnerContext,
-        ProviderDriverKind.make("grok"),
-        runGrokSelected,
-      ),
+      memory: {
+        capabilities: memoryRunnerCapabilities("grok", options.memoryRunnerContext),
+        run: withMemoryExecution(
+          options.memoryRunnerContext,
+          ProviderDriverKind.make("grok"),
+          runGrokSelected,
+        ),
+      },
     },
   );
 });

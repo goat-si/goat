@@ -652,6 +652,11 @@ it.layer(layerOpenCodeTextGenerationTest)("OpenCode v1 memory generation", (it) 
                 ],
               },
             };
+            const supported = code === "identity_mismatch";
+            expect(yield* textGeneration.memoryCapabilities).toEqual({
+              summary: supported,
+              conflict: supported,
+            });
             const failure = yield* Effect.flip(
               operation === "resolveMemoryConflict"
                 ? textGeneration.resolveMemoryConflict!(memoryConflict).pipe(
@@ -717,6 +722,7 @@ it.layer(layerOpenCodeTextGenerationTest)("OpenCode v1 memory generation", (it) 
         (generation) =>
           Effect.gen(function* () {
             setOutput(operation);
+            expect(yield* generation.memoryCapabilities).toEqual({ summary: true, conflict: true });
             const generated = yield* invoke(generation, operation);
             expect(generated.result).not.toBeNull();
             expect(generated.result?.text).toBe(output.text);

@@ -680,8 +680,6 @@ const make = Effect.gen(function* () {
           heads,
           modelSelection: row.ticket.frozenDefaultModelSelection,
         }).pipe(Effect.mapError(() => new M.MemoryHubError({ code: "invalid_output" })));
-        const model = generation.resolveMemoryConflict;
-        if (!model) return yield* new M.MemoryHubError({ code: "route_unavailable" });
         const renew = Effect.gen(function* () {
           while (true) {
             yield* Effect.sleep("30 seconds");
@@ -699,7 +697,7 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             // Renewal failure interrupts the provider, including a hung one-shot execution.
             return yield* Effect.raceFirst(
-              hold.guard(holdKey, redacted(model(input))).pipe(
+              hold.guard(holdKey, redacted(generation.resolveMemoryConflict(input))).pipe(
                 // A held model or a refusal that repeats retires this attempt without a failure
                 // report (generation_failed is definitive but unreported): its lease is released
                 // and the conflict is claimed again once the model is no longer held.

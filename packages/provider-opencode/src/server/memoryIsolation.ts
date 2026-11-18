@@ -10,6 +10,17 @@ import {
   type MemoryOperationName,
 } from "@goat/provider-core/server/memoryGenerationRunner";
 
+/** External servers are not controlled by the instance owner. */
+export const requireOpenCodeMemoryIsolation = (operation: MemoryOperationName) =>
+  Effect.fail(
+    new TextGenerationError({
+      operation,
+      detail:
+        "OpenCode memory generation cannot isolate configuration on a user-specified external server.",
+      cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
+    }),
+  );
+
 const Auth = Schema.Record(Schema.String, Schema.Unknown);
 const decodeAuth = Schema.decodeUnknownEffect(Schema.fromJsonString(Auth));
 const encodeAuth = Schema.encodeSync(Schema.fromJsonString(Auth));

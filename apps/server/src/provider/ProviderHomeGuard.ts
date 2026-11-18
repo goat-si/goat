@@ -1,6 +1,9 @@
 import { TextGenerationError, type ServerProvider } from "@goat/contracts";
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
-import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGenerationRunner";
+import {
+  MemoryGenerationRunnerError,
+  noMemoryGeneration,
+} from "@goat/provider-core/server/memoryGenerationRunner";
 import {
   ProviderAdapterProtocolError,
   type ProviderAdapterV2SessionRuntime,
@@ -102,6 +105,9 @@ export function guardProviderHomeInstance(
   const refuseMemory = home !== undefined && driver === "opencode";
   const { generateChannelReception, resolveMemoryConflict, generateMemorySummary } = text;
   const textGeneration: ProviderTextGeneration = {
+    memoryCapabilities: refuseMemory
+      ? noMemoryGeneration.memoryCapabilities
+      : text.memoryCapabilities,
     generateCommitMessage: lease("generateCommitMessage", text.generateCommitMessage),
     generatePrContent: lease("generatePrContent", text.generatePrContent),
     generateBranchName: lease("generateBranchName", text.generateBranchName),
@@ -110,20 +116,12 @@ export function guardProviderHomeInstance(
     ...(generateChannelReception === undefined
       ? {}
       : { generateChannelReception: lease("generateChannelReception", generateChannelReception) }),
-    ...(resolveMemoryConflict === undefined
-      ? {}
-      : {
-          resolveMemoryConflict: refuseMemory
-            ? () => unsupportedMemory("resolveMemoryConflict")
-            : lease("resolveMemoryConflict", resolveMemoryConflict),
-        }),
-    ...(generateMemorySummary === undefined
-      ? {}
-      : {
-          generateMemorySummary: refuseMemory
-            ? () => unsupportedMemory("generateMemorySummary")
-            : lease("generateMemorySummary", generateMemorySummary),
-        }),
+    resolveMemoryConflict: refuseMemory
+      ? () => unsupportedMemory("resolveMemoryConflict")
+      : lease("resolveMemoryConflict", resolveMemoryConflict),
+    generateMemorySummary: refuseMemory
+      ? () => unsupportedMemory("generateMemorySummary")
+      : lease("generateMemorySummary", generateMemorySummary),
   };
   const observe = <S extends ServerProvider>(snapshot: S): S =>
     home === undefined

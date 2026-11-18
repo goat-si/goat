@@ -162,6 +162,7 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
         },
         (generation) =>
           Effect.gen(function* () {
+            expect(yield* generation.memoryCapabilities).toEqual({ summary: true, conflict: true });
             const generated =
               operation === "resolveMemoryConflict"
                 ? yield* generation.resolveMemoryConflict!(memoryConflict)

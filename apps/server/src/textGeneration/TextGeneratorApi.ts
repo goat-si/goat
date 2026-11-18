@@ -155,5 +155,6 @@ export const apiTextGeneration = (
   return TextGenerationOperations.fromRunner(
     "TextGeneratorApi",
     TextGenerationOperations.withoutInvestigation("The configured model API", run),
+    { memory: false },
   );
 };

@@ -299,24 +299,11 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
       ),
     );
   const textGeneration: ProviderInstance["textGeneration"] = {
+    memoryCapabilities: nativeGeneration.memoryCapabilities,
     resolveMemoryConflict: (value) =>
-      nativeGeneration.resolveMemoryConflict === undefined
-        ? Effect.fail(
-            new TextGenerationError({
-              operation: "resolveMemoryConflict",
-              detail: "unsupported_operation",
-            }),
-          )
-        : protect("resolveMemoryConflict", nativeGeneration.resolveMemoryConflict(value)),
+      protect("resolveMemoryConflict", nativeGeneration.resolveMemoryConflict(value)),
     generateMemorySummary: (value) =>
-      nativeGeneration.generateMemorySummary === undefined
-        ? Effect.fail(
-            new TextGenerationError({
-              operation: "generateMemorySummary",
-              detail: "unsupported_operation",
-            }),
-          )
-        : protect("generateMemorySummary", nativeGeneration.generateMemorySummary(value)),
+      protect("generateMemorySummary", nativeGeneration.generateMemorySummary(value)),
     generateCommitMessage: (value) =>
       protect("generateCommitMessage", nativeGeneration.generateCommitMessage(value)),
     generatePrContent: (value) =>

@@ -1,3 +1,4 @@
+import { fromRunner } from "@goat/provider-core/server/textGenerationOperations";
 import { codexHomeHintRegression } from "./CodexHomeHint.testkit.ts";
 import {
   mockHandle,
@@ -800,7 +801,7 @@ it.layer(
                 applyUsageLimits: () => Effect.void,
               },
               orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-              textGeneration: {} as ProviderInstance["textGeneration"],
+              textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
             } satisfies ProviderInstance;
             const layerInstanceRegistry = Layer.succeed(
               ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -937,7 +938,7 @@ it.layer(
               applyUsageLimits: () => Effect.void,
             },
             orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-            textGeneration: {} as ProviderInstance["textGeneration"],
+            textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
           } satisfies ProviderInstance;
           const layerInstanceRegistry = Layer.succeed(
             ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -1038,7 +1039,7 @@ it.layer(
               applyUsageLimits: () => Effect.void,
             },
             orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-            textGeneration: {} as ProviderInstance["textGeneration"],
+            textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
           } satisfies ProviderInstance;
           const layerInstanceRegistry = Layer.succeed(
             ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -1323,7 +1324,7 @@ it.layer(
                 Effect.as(provider),
               ),
             orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-            textGeneration: {} as ProviderInstance["textGeneration"],
+            textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
           };
           const layerInstanceRegistry = Layer.succeed(
             ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -1418,7 +1419,7 @@ it.layer(
           },
           snapshotForCwd: () => Ref.get(scanResult),
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-          textGeneration: {} as ProviderInstance["textGeneration"],
+          textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
         };
         const layerInstanceRegistry = Layer.succeed(
           ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -1537,7 +1538,7 @@ it.layer(
               applyUsageLimits: () => Effect.void,
             },
             orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-            textGeneration: {} as ProviderInstance["textGeneration"],
+            textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
           },
         ] satisfies ReadonlyArray<ProviderInstance>;
         const instanceRegistryLayer = Layer.succeed(
@@ -1646,7 +1647,7 @@ it.layer(
             applyUsageLimits: () => Effect.void,
           },
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-          textGeneration: {} as ProviderInstance["textGeneration"],
+          textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
         });
         const instances = [
           makeInstance(
@@ -1775,7 +1776,7 @@ it.layer(
             applyUsageLimits: () => Effect.void,
           },
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-          textGeneration: {} as ProviderInstance["textGeneration"],
+          textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
         } satisfies ProviderInstance;
         const instanceRegistryLayer = Layer.succeed(
           ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -1898,7 +1899,7 @@ it.layer(
             applyUsageLimits: () => Effect.void,
           },
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-          textGeneration: {} as ProviderInstance["textGeneration"],
+          textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
         } satisfies ProviderInstance;
         const layerInstanceRegistry = Layer.succeed(
           ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -1998,7 +1999,7 @@ it.layer(
             applyUsageLimits: () => Effect.void,
           },
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-          textGeneration: {} as ProviderInstance["textGeneration"],
+          textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
         } satisfies ProviderInstance;
         const layerInstanceRegistry = Layer.succeed(
           ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -2186,7 +2187,7 @@ it.layer(
               applyUsageLimits: () => Effect.void,
             },
             orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-            textGeneration: {} as ProviderInstance["textGeneration"],
+            textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
           } satisfies ProviderInstance;
           const layerInstanceRegistry = Layer.succeed(
             ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -2289,7 +2290,7 @@ it.layer(
             applyUsageLimits: () => Effect.void,
           },
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-          textGeneration: {} as ProviderInstance["textGeneration"],
+          textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
         } satisfies ProviderInstance;
         const layerInstanceRegistry = Layer.succeed(
           ProviderInstanceRegistry.ProviderInstanceRegistry,

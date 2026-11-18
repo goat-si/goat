@@ -1,5 +1,6 @@
 import { sdkBackendMatches } from "./cloud/credentials.ts";
 import {
+  memoryRunnerCapabilities,
   withMemoryExecution,
   type MemoryGenerationRunnerContext,
 } from "@goat/provider-core/server/memoryGenerationRunner";
@@ -66,6 +67,15 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
 ) {
   const fs = yield* FileSystem.FileSystem;
   const sdk = yield* CursorSdk.CursorSdk;
+  const home = yield* HostProcess.HomeDirectory;
+  const customSandbox = fs.exists(`${home}/.cursor/sandbox.json`);
+  const cursorAvailable = Effect.gen(function* () {
+    const environment = yield* currentEnvironment;
+    if (!sdkBackendMatches(environment.CURSOR_BACKEND_URL)) return false;
+    if (sdk.agentTransportRefusal && (yield* sdk.agentTransportRefusal(environment)) !== undefined)
+      return false;
+    return !(yield* customSandbox);
+  }).pipe(Effect.orElseSucceed(() => false));
 
   const resolveCursorApiKey = Effect.fn("CursorTextGeneration.resolveCursorApiKey")(function* (
     operation: TextGenerationOperations.Operation,
@@ -115,7 +125,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       }
       const { Agent } = yield* Effect.try(sdk.load);
       // sandbox.json expands writable paths independently of settingSources; the public API cannot override it.
-      if (yield* fs.exists(`${yield* HostProcess.HomeDirectory}/.cursor/sandbox.json`)) {
+      if (yield* customSandbox) {
         return yield* new TextGenerationError({
           operation,
           detail:
@@ -319,11 +329,16 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       runCursorSelected(request).pipe(Effect.map((selected) => selected.result)),
     ),
     {
-      memoryRunner: withMemoryExecution(
-        memoryRunnerContext,
-        ProviderDriverKind.make("cursor"),
-        runCursorSelected,
-      ),
+      memory: {
+        capabilities: memoryRunnerCapabilities("cursor", memoryRunnerContext, {
+          available: cursorSettings.enabled ? cursorAvailable : Effect.succeed(false),
+        }),
+        run: withMemoryExecution(
+          memoryRunnerContext,
+          ProviderDriverKind.make("cursor"),
+          runCursorSelected,
+        ),
+      },
     },
   );
 });

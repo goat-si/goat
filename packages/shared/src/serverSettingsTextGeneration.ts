@@ -24,6 +24,7 @@ import {
   resolveSelectableModel,
 } from "./model.ts";
 import { isTextGenerationQuotaExhausted } from "./textGenerationFallback.ts";
+import { declareMemoryGeneration } from "./memoryGenerationCapabilities.ts";
 
 // Settings from an older server, or partial test settings, may lack textGenerators.
 function textGenerator(settings: ServerSettings, instanceId: ModelSelection["instanceId"]) {
@@ -230,20 +231,27 @@ export const isReviewGuideDriver = (driver: ProviderDriverKind): boolean =>
 
 export type MemoryGenerationOperation = "summary" | "conflict";
 
-const LEGACY_MEMORY_DRIVERS: ReadonlySet<string> = new Set([
-  "antigravity",
-  "claudeAgent",
-  "codex",
-  "cursor",
-  "grok",
-  "opencode",
-]);
-
 export function supportsMemoryGeneration(
+  settings: Pick<ServerSettings, "providerInstances">,
   provider: ServerProvider,
   operation: MemoryGenerationOperation,
 ): boolean {
-  return provider.memoryGeneration?.[operation] ?? LEGACY_MEMORY_DRIVERS.has(provider.driver);
+  if (provider.memoryGeneration !== undefined) return provider.memoryGeneration[operation];
+  if (provider.supportsTextGeneration === false) return false;
+  const instances = settings.providerInstances ?? {};
+  const instance = Object.hasOwn(instances, provider.instanceId)
+    ? instances[provider.instanceId]
+    : undefined;
+  if (instance === undefined && provider.instanceId !== defaultInstanceIdForDriver(provider.driver))
+    return false;
+  if (instance !== undefined && instance.driver !== provider.driver) return false;
+  const config = instance?.config === undefined ? {} : instance.config;
+  if (config === null || typeof config !== "object" || Array.isArray(config)) return false;
+  const route = provider.homeRoute?.modelRoute;
+  return declareMemoryGeneration(provider.driver, {
+    modelRoute: route === "opencodex" ? route : Reflect.get(config, "modelRoute"),
+    serverUrl: Reflect.get(config, "serverUrl"),
+  })[operation];
 }
 
 type RoutingScope = {
@@ -284,7 +292,7 @@ export function isTextGenerationEligible(
     (scope.purpose === undefined ||
       (scope.purpose === "reviewGuide"
         ? isReviewGuideDriver(provider.driver)
-        : supportsMemoryGeneration(provider, scope.purpose)))
+        : supportsMemoryGeneration(settings, provider, scope.purpose)))
   );
 }
 

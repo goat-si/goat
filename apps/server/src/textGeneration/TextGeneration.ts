@@ -2,8 +2,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type { ModelSelection, ProviderInstanceId } from "@goat/contracts";
-import { unsupportedMemoryOperation } from "@goat/provider-core/server/memoryGenerationRunner";
-import type { ProviderTextGeneration } from "@goat/provider-core/server/textGeneration";
+import type { TextGenerationOperations } from "@goat/provider-core/server/textGeneration";
 import { TextGenerationError } from "@goat/contracts";
 
 import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.ts";
@@ -38,7 +37,7 @@ export type {
   MemoryGenerationExecution,
 } from "@goat/provider-core/server/textGeneration";
 
-export class TextGeneration extends Context.Service<TextGeneration, ProviderTextGeneration>()(
+export class TextGeneration extends Context.Service<TextGeneration, TextGenerationOperations>()(
   "goat/textGeneration/TextGeneration",
 ) {}
 
@@ -149,19 +148,11 @@ export const make = Effect.gen(function* () {
   const ungated = {
     resolveMemoryConflict: (input) =>
       resolveAgent("resolveMemoryConflict", input.modelSelection.instanceId).pipe(
-        Effect.flatMap(
-          (textGeneration) =>
-            textGeneration.resolveMemoryConflict?.(input) ??
-            unsupportedMemoryOperation("resolveMemoryConflict"),
-        ),
+        Effect.flatMap((textGeneration) => textGeneration.resolveMemoryConflict(input)),
       ),
     generateMemorySummary: (input) =>
       resolveAgent("generateMemorySummary", input.modelSelection.instanceId).pipe(
-        Effect.flatMap(
-          (textGeneration) =>
-            textGeneration.generateMemorySummary?.(input) ??
-            unsupportedMemoryOperation("generateMemorySummary"),
-        ),
+        Effect.flatMap((textGeneration) => textGeneration.generateMemorySummary(input)),
       ),
     generateCommitMessage: Effect.fn("TextGeneration.generateCommitMessage")(function (input) {
       return resolveText("generateCommitMessage", input.modelSelection.instanceId).pipe(

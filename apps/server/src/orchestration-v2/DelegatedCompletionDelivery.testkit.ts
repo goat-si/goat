@@ -1,3 +1,4 @@
+import { fromRunner } from "@goat/provider-core/server/textGenerationOperations";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -89,7 +90,7 @@ const providerInstance = {
   enabled: true,
   snapshot: { getSnapshot: Effect.succeed({}) } as unknown as ProviderInstance["snapshot"],
   orchestrationAdapter,
-  textGeneration: {} as ProviderInstance["textGeneration"],
+  textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
 } satisfies ProviderInstance;
 
 const layerTestProviderInstanceRegistry = Layer.succeed(

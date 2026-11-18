@@ -65,6 +65,42 @@ it("legacy Pi snapshots are ineligible for memory and guides", () => {
   expect(resolveReviewGuideModelSelection(settings, capable, null, 0)).toBeNull();
 });
 
+it.each([{ modelRoute: "opencodex" }, { serverUrl: "https://opencode.example" }])(
+  "legacy OpenCode snapshots use the configured route %j for both memory operations",
+  (config) => {
+    const openCode = createModelSelection(ProviderInstanceId.make("opencode"), "openai/gpt-5");
+    const codex = settings.textGenerationModelSelection;
+    const snapshots = [
+      {
+        ...piProvider({}),
+        instanceId: openCode.instanceId,
+        driver: ProviderDriverKind.make("opencode"),
+        models: [],
+      },
+      {
+        ...piProvider({}),
+        instanceId: codex.instanceId,
+        driver: ProviderDriverKind.make("codex"),
+        models: [],
+      },
+    ];
+    const configured = {
+      ...settings,
+      memoryModelSelection: openCode,
+      providerInstances: {
+        [openCode.instanceId]: {
+          driver: ProviderDriverKind.make("opencode"),
+          enabled: true,
+          config,
+        },
+      },
+    };
+    for (const operation of ["summary", "conflict"] as const) {
+      expect(resolveMemoryModelSelection(configured, snapshots, 0, operation)).toEqual(codex);
+    }
+  },
+);
+
 it("summary and conflict routes each require their own memory operation", () => {
   const claude = createModelSelection(ProviderInstanceId.make("claudeAgent"), "claude-haiku-5-5");
   const summaryOnly = {

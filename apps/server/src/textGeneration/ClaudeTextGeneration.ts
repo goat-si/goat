@@ -2,6 +2,7 @@ import { collectStreamAsString } from "@goat/provider-core/server/snapshotProbe"
 import { ProviderDriverKind } from "@goat/contracts";
 import {
   MemoryGenerationRunnerError,
+  memoryRunnerCapabilities,
   withMemoryExecution,
   type MemoryGenerationRunnerContext,
 } from "@goat/provider-core/server/memoryGenerationRunner";
@@ -452,11 +453,16 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     "ClaudeTextGeneration",
     (request) => runClaudeJson(request).pipe(Effect.map((selected) => selected.result)),
     {
-      memoryRunner: withMemoryExecution(
-        memoryRunnerContext,
-        ProviderDriverKind.make("claudeAgent"),
-        runClaudeJson,
-      ),
+      memory: {
+        capabilities: memoryRunnerCapabilities("claudeAgent", memoryRunnerContext, {
+          available: Effect.succeed(claudeSettings.enabled),
+        }),
+        run: withMemoryExecution(
+          memoryRunnerContext,
+          ProviderDriverKind.make("claudeAgent"),
+          runClaudeJson,
+        ),
+      },
       channelReception: true,
     },
   );

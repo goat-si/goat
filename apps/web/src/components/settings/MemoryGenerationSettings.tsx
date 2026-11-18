@@ -39,7 +39,7 @@ export function MemoryGenerationSettings({
         providers.filter(
           (provider) =>
             provider.supportsTextGeneration !== false &&
-            supportsMemoryGeneration(provider, "summary"),
+            supportsMemoryGeneration(settings, provider, "summary"),
         ),
       ),
       settings,
