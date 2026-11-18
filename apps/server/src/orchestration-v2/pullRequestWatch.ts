@@ -123,7 +123,11 @@ export function evaluatePullRequestWatch(
   // A read without a head says nothing about pushes, so it keeps the last known one.
   const headSha = detail.headSha ?? watch.headSha;
   const headMoved = watch.headSha !== null && headSha !== watch.headSha;
-  const checksBaseline = watch.awaitingBaseline !== undefined && !headMoved;
+  // A kept "checks" baseline waits on checks only until a read has shown a head; past that, only
+  // approvals wait for a lookup that failed, so a check failing on that head is still reported.
+  const approvalBaseline = watch.awaitingBaseline !== undefined && !headMoved;
+  const checksBaseline =
+    approvalBaseline && (watch.awaitingBaseline === "all" || watch.headSha === null);
   const checksMode = (mode: PullRequestWatchWakeMode) => (checksBaseline ? "ignore" : mode);
 
   // Hosts can return no checks on read failure; preserve prior state.
@@ -158,7 +162,7 @@ export function evaluatePullRequestWatch(
   if (newlyAwaiting.length > 0) {
     sort(
       { kind: "checks-awaiting-approval", checks: newlyAwaiting },
-      checksMode(policy.checksFailed),
+      approvalBaseline ? "ignore" : policy.checksFailed,
     );
   }
   awaitingApproval = [...new Set([...awaitingApproval, ...newlyAwaiting.map(approvalKey)])].slice(
@@ -324,7 +328,7 @@ export function evaluatePullRequestWatch(
       wakes,
       ...(watch.automatic === true ? { automatic: true } : {}),
       // Only a read that cannot be trusted to show the checks leaves the baseline to the next one.
-      ...(checksBaseline &&
+      ...(approvalBaseline &&
         (unread || (detail.headSha === undefined && checks.length === 0)) && {
           awaitingBaseline: "checks" as const,
         }),

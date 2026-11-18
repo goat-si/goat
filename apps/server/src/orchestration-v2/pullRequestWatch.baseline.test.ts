@@ -231,7 +231,7 @@ describe("evaluatePullRequestWatch on a watch awaiting its baseline", () => {
     },
   );
 
-  it("keeps the check baseline through a read whose approval lookup failed", () => {
+  it("keeps the approval baseline through a read whose approval lookup failed", () => {
     const bot = check("bot", "success");
     const unavailable = { ...check("Workflow approval status", "pending"), placeholder: true };
     const partial = evaluate(
@@ -242,9 +242,41 @@ describe("evaluatePullRequestWatch on a watch awaiting its baseline", () => {
     assert.deepEqual(partial.changes, []);
     assert.equal(partial.next.awaitingBaseline, "checks");
     const approval = { ...check("CI", "action-required"), url: run(1) };
-    for (const checks of [[bot], [bot, approval]]) {
-      assert.deepEqual(evaluate(partial.next, detail({ checks }), noRemarks).changes, []);
-    }
+    // The read showed a head, so the checks are known from here on; only approvals still wait.
+    assert.deepEqual(evaluate(partial.next, detail({ checks: [bot] }), noRemarks).changes, [
+      { kind: "checks-passed", count: 1, required: false },
+    ]);
+    assert.deepEqual(
+      evaluate(partial.next, detail({ checks: [bot, approval] }), noRemarks).changes,
+      [],
+    );
+  });
+
+  it("a fork whose approval lookup always fails reports a check that starts failing after the baseline", () => {
+    // A head SHA with the approval read unavailable ends the check baseline; approvals keep waiting.
+    const unavailable = { ...check("Workflow approval status", "pending"), placeholder: true };
+    const first = evaluate(
+      watch({ awaitingBaseline: "all" }),
+      detail({ checks: [unavailable] }),
+      noRemarks,
+    );
+    assert.deepEqual(first.changes, []);
+    const failing = check("test", "failure");
+    assert.deepEqual(
+      evaluate(first.next, detail({ checks: [failing, unavailable] }), noRemarks).changes,
+      [{ kind: "checks-failed", failed: [failing] }],
+    );
+    // A check already failing at the first read stays recorded, never reported.
+    const already = evaluate(
+      watch({ awaitingBaseline: "all" }),
+      detail({ checks: [failing, unavailable] }),
+      noRemarks,
+    );
+    assert.deepEqual(already.changes, []);
+    assert.deepEqual(
+      evaluate(already.next, detail({ checks: [failing, unavailable] }), noRemarks).changes,
+      [],
+    );
   });
 
   it("reports pending advisory checks finishing after a required-check baseline", () => {
