@@ -1,14 +1,4 @@
-/**
- * Pauses memory generation for a model whose provider rejects every request the same way,
- * such as an output schema the provider refuses or a sign-in it needs. Without it, each queued
- * summary fails on its own schedule and the same rejection repeats once per item.
- *
- * A hold belongs to one model selection on one provider version: changing the model, its
- * provider, or the provider's CLI version starts clean. Holds live in memory, so a restart allows
- * one new attempt.
- *
- * @module MemoryGenerationHold
- */
+/** Holds are local to a server process and keyed by model selection and provider version. */
 import * as M from "@goat/contracts";
 import {
   classifyTextGenerationFailure,
@@ -224,7 +214,10 @@ export const make = Effect.gen(function* () {
       const entries = new Map(current.entries).set(key, { ...hold, probing: true });
       return [true, { ...current, entries }];
     }).pipe(
-      Effect.flatMap((probe) => (typeof probe === "boolean" ? Effect.succeed(probe) : probe)),
+      Effect.filterOrElse(
+        (probe) => typeof probe === "boolean",
+        (error) => error,
+      ),
     );
 
   // Settlement shares the guard's span and releases probe ownership in the same update.
