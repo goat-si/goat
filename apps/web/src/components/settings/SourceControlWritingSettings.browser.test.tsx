@@ -167,6 +167,37 @@ it.each(["API writer fallback", "saved text generation model"])(
   },
 );
 
+it("copies the hidden Codex route when enabling a separate guide model with an API writer", async () => {
+  const codex = provider({ instanceId: "codex", models: ["gpt-6-astra", "gpt-6-luna"] });
+  const api = createModelSelection(ProviderInstanceId.make("text-api"), "api-model");
+  const guide = createModelSelection(codex.instanceId, "gpt-6-luna");
+  state.updateSettings.mockReset();
+  state.styles = [];
+  state.providers = [codex];
+  state.scopedSettings = {
+    ...DEFAULT_UNIFIED_SETTINGS,
+    reviewGuidesEnabled: true,
+    sourceControlWriterModelSelection: api,
+    textGenerators: {
+      [api.instanceId]: {
+        kind: "openaiCompatible",
+        baseUrl: "https://model.example/v1",
+        apiKey: "",
+        enabled: true,
+      },
+    },
+    providerModelPreferences: {
+      [codex.instanceId]: { hiddenModels: [guide.model], modelOrder: [] },
+    },
+  };
+
+  await using screen = await render(content());
+  await screen.getByRole("switch", { name: "Use a separate review guide model" }).click();
+  expect(state.updateSettings).toHaveBeenCalledExactlyOnceWith({
+    reviewGuideModelSelection: guide,
+  });
+});
+
 function setupHiddenWriter(separate: boolean) {
   const codex = provider({ instanceId: "codex", models: ["gpt-6-astra", "gpt-6-luna"] });
   const selection = createModelSelection(codex.instanceId, "gpt-6-luna");

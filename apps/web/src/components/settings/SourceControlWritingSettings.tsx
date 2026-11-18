@@ -176,6 +176,8 @@ export function SourceControlWritingSettingsSection() {
   const reviewGuideInstanceEntry = instanceEntries.find(
     (entry) => entry.instanceId === reviewGuideSelection.instanceId,
   );
+  const canEnableReviewGuideModel =
+    reviewGuideInstanceEntry?.enabled === true && reviewGuideInstanceEntry.isAvailable;
 
   return (
     <SettingsSection id="source-control-text-generation" title="Text generation">
@@ -481,7 +483,8 @@ export function SourceControlWritingSettingsSection() {
                 </span>
               ) : (
                 <div className="flex flex-wrap items-center justify-end gap-2">
-                  {(usesReviewGuideModel || mixedReviewGuideModel) && canEnableDedicatedModel ? (
+                  {(usesReviewGuideModel || mixedReviewGuideModel) &&
+                  (canEnableDedicatedModel || canEnableReviewGuideModel) ? (
                     <ProviderModelPicker
                       environmentId={environmentId}
                       activeInstanceId={reviewGuideSelection.instanceId}
@@ -511,7 +514,7 @@ export function SourceControlWritingSettingsSection() {
                     />
                   ) : null}
                   {usesReviewGuideModel &&
-                  canEnableDedicatedModel &&
+                  canEnableReviewGuideModel &&
                   !mixedReviewGuideModel &&
                   reviewGuideInstanceEntry ? (
                     <TraitsPicker
@@ -538,15 +541,15 @@ export function SourceControlWritingSettingsSection() {
                   <Switch
                     mixed={mixedReviewGuideModel}
                     checked={mixedReviewGuideModel ? false : usesReviewGuideModel}
-                    disabled={!usesReviewGuideModel && !canEnableDedicatedModel}
+                    disabled={!usesReviewGuideModel && !canEnableReviewGuideModel}
                     onCheckedChange={(checked) => {
                       if (!checked) {
                         updateSettings({ reviewGuideModelSelection: null });
                         return;
                       }
                       const reason = writerModelDisabledReason(
-                        activeSelection.instanceId,
-                        activeSelection.model,
+                        reviewGuideSelection.instanceId,
+                        reviewGuideSelection.model,
                         { includeHidden: true },
                       );
                       if (reason) {
@@ -557,13 +560,7 @@ export function SourceControlWritingSettingsSection() {
                         });
                         return;
                       }
-                      updateSettings({
-                        reviewGuideModelSelection: createModelSelection(
-                          activeSelection.instanceId,
-                          activeSelection.model,
-                          activeSelection.options,
-                        ),
-                      });
+                      updateSettings({ reviewGuideModelSelection: reviewGuideSelection });
                     }}
                     aria-label="Use a separate review guide model"
                   />
