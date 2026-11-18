@@ -92,10 +92,21 @@ it("joins missing glyphs only across runs styled alike, with clusters into the j
 
 it("paints readable Japanese when the missing CJK asset returns the app shell", async () => {
   const text = "日本語";
+  const fallbackFamily = "MS Gothic";
+  // The canvas gets a three-glyph Noto Sans JP subset under the Word family name.
+  const fallbackUrl = new URL(
+    "../../../../test/fixtures/fonts/word-preview-japanese.woff",
+    import.meta.url,
+  );
+  const fallback = await new FontFace(fallbackFamily, `url("${fallbackUrl.href}")`).load();
+  document.fonts.add(fallback);
+  using _fallback = {
+    [Symbol.dispose]: () => document.fonts.delete(fallback),
+  };
   const zip = await JSZip.loadAsync(await document_());
   zip.file(
     "word/document.xml",
-    `<w:document ${ns}><w:body><w:p><w:r><w:rPr><w:rFonts w:ascii="MS Gothic" w:hAnsi="MS Gothic" w:eastAsia="MS Gothic"/><w:lang w:eastAsia="ja-JP"/><w:sz w:val="48"/><w:color w:val="B03A22"/></w:rPr><w:t>${text}</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`,
+    `<w:document ${ns}><w:body><w:p><w:r><w:rPr><w:rFonts w:ascii="${fallbackFamily}" w:hAnsi="${fallbackFamily}" w:eastAsia="${fallbackFamily}"/><w:lang w:eastAsia="ja-JP"/><w:sz w:val="48"/><w:color w:val="B03A22"/></w:rPr><w:t>${text}</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`,
   );
   const fetchAsset = globalThis.fetch;
   const missing: string[] = [];
@@ -115,7 +126,14 @@ it("paints readable Japanese when the missing CJK asset returns the app shell", 
     await zip.generateAsync({ type: "uint8array" }),
     document.fonts,
   );
-  using fillText = vi.spyOn(OffscreenCanvasRenderingContext2D.prototype, "fillText");
+  const drawText = OffscreenCanvasRenderingContext2D.prototype.fillText;
+  const paintedFonts: string[] = [];
+  using fillText = vi
+    .spyOn(OffscreenCanvasRenderingContext2D.prototype, "fillText")
+    .mockImplementation(function (this: OffscreenCanvasRenderingContext2D, ...args) {
+      paintedFonts.push(this.font);
+      drawText.apply(this, args);
+    });
   const page = await opened.paint(0, 1, 1, new AbortController().signal);
 
   expect(missing.some((url) => url.includes("NotoSansJP-Regular"))).toBe(true);
@@ -128,6 +146,7 @@ it("paints readable Japanese when the missing CJK asset returns the app shell", 
     const actualStrokes = maxInkStrokes(pixels);
     expect(actualStrokes).toBeGreaterThan(0);
     expect(fillText.mock.calls.map(([painted]) => painted).join("")).toContain(text);
+    expect(paintedFonts.every((font) => font.includes(fallbackFamily))).toBe(true);
 
     const layoutPage = opened.pages()[0];
     if (!layoutPage) throw new Error("Expected the Japanese page's layout");
