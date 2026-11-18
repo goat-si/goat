@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import {
   defaultInstanceIdForDriver,
   type ModelSelection,
@@ -8,9 +9,11 @@ import {
 import type { UnifiedSettings } from "@goat/contracts/settings";
 import { normalizeModelSlug } from "@goat/shared/model";
 
-import type {
-  ComposerThreadDraftState,
-  ProviderOptionSelectionsByProvider,
+import {
+  type ComposerThreadTarget,
+  type ComposerThreadDraftState,
+  type ProviderOptionSelectionsByProvider,
+  useComposerDraftStore,
 } from "./composerDraftStore";
 import {
   readInstanceCustomModels,
@@ -181,4 +184,30 @@ function withFallbackInstanceOptions(input: {
     return modelOptions;
   }
   return { ...modelOptions, [selectedInstanceId]: requestedOptions };
+}
+
+interface ComposerDraftModelState {
+  activeProvider: ProviderInstanceId | null;
+  modelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
+}
+
+const EMPTY_COMPOSER_DRAFT_MODEL_STATE = Object.freeze<ComposerDraftModelState>({
+  activeProvider: null,
+  modelSelectionByProvider: Object.freeze({}),
+});
+
+export function useComposerDraftModelState(
+  threadRef: ComposerThreadTarget,
+): ComposerDraftModelState {
+  return useComposerDraftStore(
+    useShallow((state) => {
+      const draft = state.getComposerDraft(threadRef);
+      return draft
+        ? {
+            activeProvider: draft.activeProvider,
+            modelSelectionByProvider: draft.modelSelectionByProvider,
+          }
+        : EMPTY_COMPOSER_DRAFT_MODEL_STATE;
+    }),
+  );
 }

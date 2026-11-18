@@ -1,5 +1,8 @@
-import { type DraftId, useComposerDraftModelState } from "../../composerDraftStore";
-import { deriveEffectiveComposerModelState } from "../../composerModelState";
+import { type DraftId } from "../../composerDraftStore";
+import {
+  deriveEffectiveComposerModelState,
+  useComposerDraftModelState,
+} from "../../composerModelState";
 import {
   type ModelSelection,
   type ProjectId,

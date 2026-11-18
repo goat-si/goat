@@ -100,7 +100,6 @@ import {
   createComposerPersistStorage,
   type ComposerPersistState,
 } from "./composerDraftPersistStorage";
-import { useShallow } from "zustand/react/shallow";
 import {
   replaceComposerContextReferences,
   toComposerContextId,
@@ -608,11 +607,6 @@ export interface ComposerDraftStoreState extends PreviewTabDraftActions {
   moveComposerPromptAndImages: (from: ComposerThreadTarget, to: ComposerThreadTarget) => void;
 }
 
-interface ComposerDraftModelState {
-  activeProvider: ProviderInstanceId | null;
-  modelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
-}
-
 function cloneModelSelection(selection: ModelSelection): DeepMutable<ModelSelection> {
   return {
     ...selection,
@@ -689,11 +683,6 @@ Object.freeze(EMPTY_REVIEW_COMMENTS);
 Object.freeze(EMPTY_THREAD_CONTEXTS);
 const EMPTY_MODEL_SELECTION_BY_PROVIDER: Partial<Record<ProviderDriverKind, ModelSelection>> =
   Object.freeze({});
-const EMPTY_COMPOSER_DRAFT_MODEL_STATE = Object.freeze<ComposerDraftModelState>({
-  activeProvider: null,
-  modelSelectionByProvider: EMPTY_MODEL_SELECTION_BY_PROVIDER,
-});
-
 const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   prompt: "",
   images: EMPTY_IMAGES,
@@ -4268,22 +4257,6 @@ export function useComposerThreadDraft(threadRef: ComposerThreadTarget): Compose
 export function useThreadHasUnsentDraft(threadRef: ScopedThreadRef): boolean {
   return useComposerDraftStore((state) =>
     composerDraftHasUserContent(getComposerDraftState(state, threadRef)),
-  );
-}
-
-export function useComposerDraftModelState(
-  threadRef: ComposerThreadTarget,
-): ComposerDraftModelState {
-  return useComposerDraftStore(
-    useShallow((state) => {
-      const draft = getComposerDraftState(state, threadRef);
-      return draft
-        ? {
-            activeProvider: draft.activeProvider,
-            modelSelectionByProvider: draft.modelSelectionByProvider,
-          }
-        : EMPTY_COMPOSER_DRAFT_MODEL_STATE;
-    }),
   );
 }
 
