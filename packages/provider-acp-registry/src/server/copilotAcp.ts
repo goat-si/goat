@@ -68,7 +68,7 @@ type CopilotToolIdentity =
   | { readonly kind: "mcp"; readonly server: string; readonly tool: string }
   | { readonly kind: "search" };
 
-const COPILOT_SEARCH_TOOLS = new Set(["glob", "grep"]);
+const COPILOT_SEARCH_TOOLS = new Set(["glob", "grep", "rg"]);
 const COPILOT_MAX_SEEN_CALLS = 8192;
 const COPILOT_MAX_SESSION_CALLS = 256;
 const COPILOT_MAX_TOTAL_CALLS = 4096;
