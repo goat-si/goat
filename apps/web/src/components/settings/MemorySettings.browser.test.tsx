@@ -1,3 +1,4 @@
+import { MemoryForgetControl } from "./MemoryForgetControl";
 import {
   id,
   item,
@@ -398,12 +399,7 @@ vi.mock("./settingsLayout", () => ({
 }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }));
 import { RegistryContext } from "@effect/atom-react";
-import {
-  MemorySettings,
-  MemoryForgetControl,
-  MemoryAdministration,
-  MemoryRevertControl,
-} from "./MemorySettings";
+import { MemorySettings, MemoryAdministration, MemoryRevertControl } from "./MemorySettings";
 import { validateMemorySettingsSearch } from "./MemorySettings.logic";
 import { settingsContentScopeKey } from "./settingsScopeNavigation";
 let root: Root;
@@ -2811,4 +2807,4 @@ it("confirms a memory selection once and reports each result while the conversat
 });
 
 it("moves a memory from its details and refreshes the old scope", () =>
-  exerciseMemoryMove({ state, success, supportedScreen, click, chooseOption }));
+  exerciseMemoryMove({ state, success, supportedScreen, click, chooseOption, container }));

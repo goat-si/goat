@@ -93,7 +93,9 @@ export async function exerciseMemoryMove({
   supportedScreen,
   click,
   chooseOption,
+  container,
 }: {
+  container: HTMLElement;
   state: {
     threads: { id: string; title: string; environmentId: string }[];
     queries: Map<string, unknown>;
@@ -107,9 +109,9 @@ export async function exerciseMemoryMove({
     followNavigation: boolean,
     originFilter: boolean,
     scopeMoves: boolean,
-  ) => Promise<unknown>;
+  ) => Promise<{ render: () => Promise<void> }>;
   click: (label: string) => Promise<void>;
-  chooseOption: (label: string, value: string) => Promise<void>;
+  chooseOption: (label: string, value: string, section?: string) => Promise<void>;
 }) {
   state.threads = [
     { id: "move-thread", title: "Move conversation", environmentId: "remote-owner" },
@@ -123,10 +125,13 @@ export async function exerciseMemoryMove({
     state.queries.set("list", Option.some({ items: [], projectionWatermark: 2, nextCursor: null }));
     return success({ outcome: "accepted", pendingSync: false });
   });
-  await supportedScreen(true, false, false, true);
+  const { render } = await supportedScreen(true, false, false, true);
+  expect(
+    [...container.querySelectorAll("button")].some((button) => button.textContent === "Open"),
+  ).toBe(true);
   await click("Move to…");
-  await chooseOption("Memory scope", "thread");
-  await chooseOption("Memory thread", "move-thread");
+  await chooseOption("Memory scope", "thread", '[aria-label="Move memories"]');
+  await chooseOption("Memory thread", "move-thread", '[aria-label="Move memories"]');
   await click("Move memory");
   expect(state.calls).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -140,4 +145,8 @@ export async function exerciseMemoryMove({
     }),
   );
   expect(state.refresh).toHaveBeenCalled();
+  await render();
+  expect(
+    [...container.querySelectorAll("button")].some((button) => button.textContent === "Open"),
+  ).toBe(false);
 }

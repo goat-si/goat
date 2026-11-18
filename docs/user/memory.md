@@ -18,6 +18,8 @@ To share memory, use **Add device** in the hub’s Memory settings. Every device
 
 Choose **Remember something**, enter what you want to keep, and choose its scope: **All projects** for memories shared across conversations, **Project** for one project, or **Thread** for one conversation. Imports use the same scopes.
 
+To change an existing memory's scope, open its details or select several memories and choose **Move to…**. Moving keeps the memory's history and evidence. All active devices in the memory hub must be updated before you can move memories between scopes.
+
 For project memories, use a shared project binding to share an identity across projects, or return to the repository binding. Changing the binding affects future memories; existing memories keep their scope. Preview an import again after changing its scope or binding.
 
 Search for a memory, open it to read its history, or use **Edit** to change it. Editing keeps it where it was saved. Memory text hides after a minute on screen; choose **Show again** to read it. An edit you have changed keeps your text.

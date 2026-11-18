@@ -90,11 +90,14 @@ export async function exerciseMemoryMove(
         repositoryKey: null,
         version: 1,
       }));
-      harness.responses.set(WS_METHODS.memoryMove, (input) => ({
-        ...receipt(input),
-        outcome: "accepted",
-        pendingSync: false,
-      }));
+      harness.responses.set(WS_METHODS.memoryMove, (input) => {
+        harness.responses.set(WS_METHODS.memoryList, () => ({
+          items: [],
+          nextCursor: null,
+          projectionWatermark: 2,
+        }));
+        return { ...receipt(input), outcome: "accepted", pendingSync: false };
+      });
     },
     { protocolVersion: 1, scopeMoves: true },
   );
@@ -103,6 +106,7 @@ export async function exerciseMemoryMove(
   await view.click("Move to…");
   await view.click("Move project");
   await view.click("Move memory");
+  expect(view.container.textContent).not.toContain("Synthetic memory body");
   expect(h.calls.find((call) => call.method === WS_METHODS.memoryMove)?.input).toMatchObject({
     fromScope: { kind: "user" },
     toScope: { kind: "project", projectKey: { kind: "explicit", sharedProjectId: "move-key" } },

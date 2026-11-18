@@ -1,3 +1,4 @@
+import { MemoryMoveControl } from "./MemoryMoveControl";
 import type { MemorySyncStatus } from "@goat/contracts";
 import {
   presentMemorySync,
@@ -16,6 +17,8 @@ import {
 } from "@goat/contracts";
 import {
   memoryForgetRequest,
+  memoryMoveCandidate,
+  type MemoryMoveCandidate,
   MEMORY_FORGET_SELECTION_LIMIT,
 } from "@goat/client-runtime/memory-browsing";
 import {
@@ -95,7 +98,7 @@ export function MemoryOriginPicker({
 type BulkState = {
   key: string;
   selecting: boolean;
-  selected: ReadonlyMap<MemoryId, MemoryForgetInput>;
+  selected: ReadonlyMap<MemoryId, { forget: MemoryForgetInput; move: MemoryMoveCandidate | null }>;
   confirmation: boolean;
   busy: boolean;
   results: readonly MemoryBatchForgetResult[];
@@ -113,6 +116,8 @@ const emptyBulk = (key: string): BulkState => ({
 export function useWebMemoryBatch(
   environmentId: EnvironmentId,
   enabled: boolean,
+  canMove: boolean,
+  memorySpaceId: MemorySpaceId,
   filterKey: string,
   refresh: () => void,
 ) {
@@ -132,15 +137,16 @@ export function useWebMemoryBatch(
       if (selected.size >= MEMORY_FORGET_SELECTION_LIMIT) return;
       const request = memoryForgetRequest(item, MemoryOperationId.make(randomUUID()));
       if (!request) return;
-      selected.set(item.memoryId, request);
+      selected.set(item.memoryId, { forget: request, move: memoryMoveCandidate(item) });
     }
     patch({ selected });
   }
   async function submit() {
     if (!allowed || !state.confirmation || state.busy) return;
     patch({ confirmation: false, busy: true });
-    const results = await forgetMemorySelection([...state.selected.values()], (input) =>
-      forget({ environmentId, input }),
+    const results = await forgetMemorySelection(
+      [...state.selected.values()].map((item) => item.forget),
+      (input) => forget({ environmentId, input }),
     );
     if (!registry.get(memoryEnvironment.forget.permissionAtom(environmentId))) return;
     patch({
@@ -149,7 +155,10 @@ export function useWebMemoryBatch(
       selected: new Map(
         results
           .filter((result) => result.status === "Failed")
-          .map(({ request }) => [request.memoryId, request]),
+          .flatMap(({ request }) => {
+            const item = state.selected.get(request.memoryId);
+            return item ? [[request.memoryId, item] as const] : [];
+          }),
       ),
     });
     refresh();
@@ -176,7 +185,7 @@ export function useWebMemoryBatch(
     controls: !allowed ? null : (
       <>
         <SettingsRow
-          title="Forget several memories"
+          title="Manage several memories"
           control={
             <div className="flex flex-wrap gap-2">
               <Button
@@ -187,6 +196,19 @@ export function useWebMemoryBatch(
               >
                 {state.selecting ? "Done selecting" : "Select memories"}
               </Button>
+              {state.selecting && canMove ? (
+                <MemoryMoveControl
+                  environmentId={environmentId}
+                  memorySpaceId={memorySpaceId}
+                  candidates={[...state.selected.values()].flatMap(({ move }) =>
+                    move ? [move] : [],
+                  )}
+                  onMoved={(allMoved) => {
+                    if (allMoved) set(emptyBulk(key));
+                    refresh();
+                  }}
+                />
+              ) : null}
               {state.selecting ? (
                 <Button
                   size="sm"
