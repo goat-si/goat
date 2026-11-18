@@ -1,3 +1,4 @@
+import { retainWithheldDiffPaths } from "@goat/client-runtime/state/pull-requests";
 import type { ChangeRequestTerminology } from "@goat/client-runtime/source-control-clients";
 import {
   EnvironmentId,
@@ -99,6 +100,7 @@ export function usePullRequestDiff(
   };
   const key = JSON.stringify(target);
   const firstPageAtom = composerPullRequests.diff(target);
+  const currentFirstPage = useEnvironmentQuery(firstPageAtom).data;
   const refreshFirstPage = useAtomRefresh(firstPageAtom);
   const { refreshing, onRefresh } = usePullToRefresh(firstPageAtom);
   const [state, setState] = useState<{
@@ -118,7 +120,7 @@ export function usePullRequestDiff(
   if (state.key !== key || state.pages !== pages) setState({ key, cursor, pages });
 
   const paged = getCachedPullRequestDiffPages(pages, key, terminology);
-  const firstPage = pages[0]?.result;
+  const firstPage = pages[0]?.result ?? currentFirstPage;
   const revision = firstPage?.revision;
   const fileTarget = params.commit ? target : { ...target, input: { ...target.input, revision } };
   const fileKey = JSON.stringify(fileTarget);
@@ -135,24 +137,42 @@ export function usePullRequestDiff(
       ? NO_WITHHELD_ANSWERS
       : composerPullRequests.withheldDiffs(JSON.stringify({ target: fileTarget, paths })),
   );
-  const refreshWithheldFile = (path: string) =>
-    registry.refresh(
-      composerPullRequests.withheldDiff({
-        ...fileTarget,
-        input: { ...fileTarget.input, path },
-      }),
-    );
+  const retained = retainWithheldDiffPaths(paths, (index) => {
+    const answer = answers[index];
+    return answer?._tag === "Success" ? answer.value : undefined;
+  });
+  if (retained !== paths) setLoads({ key: fileKey, paths: retained });
+  const offset = paths.length - retained.length;
   const loadWithheldFile = (path: string) => {
     if (!readable) return;
-    refreshWithheldFile(path);
-    if (!paths.includes(path)) setLoads({ key: fileKey, paths: [...paths, path] });
+    if (retained.includes(path)) {
+      registry.refresh(
+        composerPullRequests.withheldDiff({
+          ...fileTarget,
+          input: { ...fileTarget.input, path },
+        }),
+      );
+      return;
+    }
+    setLoads((current) => {
+      const selected = current.key === fileKey ? current.paths : NO_PATHS;
+      return selected.includes(path)
+        ? current
+        : {
+            key: fileKey,
+            paths: retainWithheldDiffPaths([...selected, path], () => undefined),
+          };
+    });
   };
+  const loadedPaths = retained.filter((_, index) => answers[offset + index]?._tag === "Success");
+  const withheldOverlayKey =
+    loadedPaths.length === 0 ? undefined : JSON.stringify([fileKey, loadedPaths]);
   const withheldRefetching = answers.some((result) => result.waiting);
   const parsed = useMemo(() => {
     if (!paged) return paged;
     const states = new Map<string, WithheldFileLoad>();
-    paths.forEach((path, index) => {
-      const answer = answers[index];
+    retained.forEach((path, index) => {
+      const answer = answers[offset + index];
       if (answer?._tag === "Success" && !answer.waiting) {
         states.set(path, { status: "loaded", result: answer.value });
       } else {
@@ -162,7 +182,7 @@ export function usePullRequestDiff(
       }
     });
     return withWithheldFiles(paged, states, readable, fileKey);
-  }, [answers, fileKey, paged, paths, readable]);
+  }, [answers, fileKey, offset, paged, readable, retained]);
   const patch = useMemo(() => pages.map((page) => page.result.patch).join("\n"), [pages]);
   const nextCursor = pages.at(-1)?.result.nextCursor ?? null;
   const canLoadMore =
@@ -178,20 +198,19 @@ export function usePullRequestDiff(
       return;
     }
     setState({ key, cursor: null, pages: NO_PAGES });
-    paths.forEach(refreshWithheldFile);
     refreshFirstPage();
-  }, [cursor, error, refreshPage, key, paths, refreshWithheldFile, refreshFirstPage, setState]);
+  }, [cursor, error, refreshPage, key, refreshFirstPage, setState]);
   const onPullRefresh = useCallback(() => {
     setState({ key, cursor: null, pages: NO_PAGES });
-    paths.forEach(refreshWithheldFile);
     onRefresh();
-  }, [key, onRefresh, paths, refreshWithheldFile, setState]);
+  }, [key, onRefresh, setState]);
   return {
     ...query,
     refresh,
     parsed,
     loadWithheldFile,
     withheldRefetching,
+    withheldOverlayKey,
     patch,
     nextCursor,
     canLoadMore,

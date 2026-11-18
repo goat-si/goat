@@ -22,6 +22,42 @@ export class EnvironmentHttpConnectionNotReadyError extends Data.TaggedError(
   "EnvironmentHttpConnectionNotReadyError",
 )<{ readonly message: string }> {}
 
+const WITHHELD_FILES_LIMIT = 8;
+const WITHHELD_BYTES_LIMIT = 8 * 1024 * 1024;
+const WITHHELD_ROWS_LIMIT = 24_000;
+const patchRows = new WeakMap<PullRequestDiffResult, number>();
+
+export function retainWithheldDiffPaths(
+  paths: readonly string[],
+  patchAt: (index: number) => PullRequestDiffResult | undefined,
+): readonly string[] {
+  let bytes = 0;
+  let rows = 0;
+  let start = paths.length;
+  const first = Math.max(0, paths.length - WITHHELD_FILES_LIMIT);
+  while (start > first) {
+    const result = patchAt(start - 1);
+    if (result !== undefined) {
+      bytes += result.patch.length * 2;
+      const cached = patchRows.get(result);
+      let count = cached ?? Number(result.patch.length > 0);
+      if (cached === undefined) {
+        for (
+          let at = result.patch.indexOf("\n");
+          at !== -1;
+          at = result.patch.indexOf("\n", at + 1)
+        )
+          count++;
+        patchRows.set(result, count);
+      }
+      rows += count;
+      if (bytes > WITHHELD_BYTES_LIMIT || rows > WITHHELD_ROWS_LIMIT) break;
+    }
+    start--;
+  }
+  return start === 0 ? paths : paths.slice(start);
+}
+
 export function createPullRequestDiffQueries<R, E>(
   runtime: Atom.AtomRuntime<
     EnvironmentRegistry | PullRequestDiffLoader.PullRequestDiffLoader | R,
@@ -118,7 +154,8 @@ export function createPullRequestDiffQueries<R, E>(
 
   const withheldDiff = createEnvironmentQueryAtomFamily(runtime, {
     label: "environment-data:pull-requests:withheld-diff",
-    staleTimeMs: 60_000,
+    idleTtlMs: 0,
+    staleTimeMs: Number.POSITIVE_INFINITY,
     execute: loadDiff,
   });
   const withheldDiffs = Atom.family((key: string) => {

@@ -1,3 +1,4 @@
+import { retainWithheldDiffPaths } from "@goat/client-runtime/state/pull-requests";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { PullRequestDiffResult } from "@goat/contracts";
 import { hasCutLines } from "@goat/shared/diffCutLines";
@@ -51,13 +52,29 @@ export function useWithheldPullRequestFiles(
       ? NO_WITHHELD_ANSWERS
       : pullRequestEnvironment.withheldDiffs(JSON.stringify({ target, paths })),
   );
-  const query = (path: string) =>
-    pullRequestEnvironment.withheldDiff({ ...target, input: { ...target.input, path } });
-  const refresh = () => paths.forEach((path) => registry.refresh(query(path)));
+  const retained = retainWithheldDiffPaths(paths, (index) => {
+    const answer = answers[index];
+    return answer?._tag === "Success" ? answer.value : undefined;
+  });
+  if (retained !== paths) setSelection({ scope, paths: retained });
+  const offset = paths.length - retained.length;
   const load = (path: string | undefined) => {
     if (!readable || path === undefined) return;
-    registry.refresh(query(path));
-    if (!paths.includes(path)) setSelection({ scope, paths: [...paths, path] });
+    if (retained.includes(path)) {
+      registry.refresh(
+        pullRequestEnvironment.withheldDiff({ ...target, input: { ...target.input, path } }),
+      );
+      return;
+    }
+    setSelection((current) => {
+      const selected = current.scope === scope ? current.paths : NO_PATHS;
+      return selected.includes(path)
+        ? current
+        : {
+            scope,
+            paths: retainWithheldDiffPaths([...selected, path], () => undefined),
+          };
+    });
   };
 
   const overlay = (() => {
@@ -65,8 +82,8 @@ export function useWithheldPullRequestFiles(
     const identities = new WeakMap<FileDiffMetadata, string>();
     const cutFiles = new WeakSet<FileDiffMetadata>();
     const replacements = new Map<string, { file: FileDiffMetadata; cut: boolean }>();
-    paths.forEach((path, index) => {
-      const result = answers[index];
+    retained.forEach((path, index) => {
+      const result = answers[offset + index];
       if (result?._tag !== "Success" || result.waiting) {
         statuses.set(path, result?._tag === "Failure" && !result.waiting ? "error" : "loading");
         return;
@@ -104,6 +121,5 @@ export function useWithheldPullRequestFiles(
       overlay.identities.get(file) ?? buildFileDiffRenderKey(file),
     waiting: answers.some((answer) => answer.waiting),
     load,
-    refresh,
   };
 }

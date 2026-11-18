@@ -330,12 +330,12 @@ function PullRequestCodeTab({
       return { key: scopeKey, cursor, slices: [...slices.slice(0, index), next] };
     });
   }
-  const refreshFirstDiffPage = useAtomRefresh(
-    pullRequestEnvironment.diff({
-      environmentId,
-      input: { ...reference, ...(commit === null ? {} : { commit }) },
-    }),
-  );
+  const firstPageAtom = pullRequestEnvironment.diff({
+    environmentId,
+    input: { ...reference, ...(commit === null ? {} : { commit }) },
+  });
+  const currentFirstPage = useEnvironmentQuery(firstPageAtom).data;
+  const refreshFirstDiffPage = useAtomRefresh(firstPageAtom);
   const reviewKey = referenceKey;
   const pendingComments = usePendingReviewComments(reference);
   const addComment = usePullRequestReviewStore((store) => store.addComment);
@@ -376,7 +376,7 @@ function PullRequestCodeTab({
     `pull-request:${scopeKey}:${resolvedTheme}:${ignoreWhitespace}`,
     ignoreWhitespace,
   );
-  const firstPage = loadedSlices[0]?.source;
+  const firstPage = loadedSlices[0]?.source ?? currentFirstPage;
   const revision = firstPage?.revision;
   const withheldReadable =
     firstPage?.withheldFilesReadable === true && (commit !== null || revision !== undefined);
@@ -386,7 +386,6 @@ function PullRequestCodeTab({
     pagedFiles,
   );
   const { files: loadedFiles, fileKey: fileRenderKey } = withheld;
-  const refreshWithheld = useEffectEvent(withheld.refresh);
   const appliedRefreshToken = useRef(refreshToken);
   useEffect(() => {
     if (appliedRefreshToken.current === refreshToken) return;
@@ -396,7 +395,6 @@ function PullRequestCodeTab({
     // applied page is forgotten too.
     setAppliedPage(null);
     refreshFirstDiffPage();
-    refreshWithheld();
     refreshFilesViewed();
   }, [refreshToken, scopeKey, refreshFirstDiffPage, refreshFilesViewed]);
   const appliedBackgroundRefreshToken = useRef(backgroundRefreshToken);
@@ -406,7 +404,6 @@ function PullRequestCodeTab({
     // Keeping slices mounted preserves scroll; the page merge invalidates changed pages.
     setSliceState((previous) => ({ ...previous, cursor: null }));
     refreshFirstDiffPage();
-    refreshWithheld();
     refreshFilesViewed();
   }, [backgroundRefreshToken, refreshFirstDiffPage, refreshFilesViewed]);
 

@@ -990,6 +990,7 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
     threadKey: null,
     sectionId: `pull-request:${route.params.repository}:${route.params.number}:${commit ?? "all"}`,
     diff: result.patch,
+    overlayKey: result.withheldOverlayKey,
     data,
     collapsedFileIds: collapsedIds,
     viewedFileIds: viewedIds,

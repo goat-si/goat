@@ -85,7 +85,10 @@ const {
           (headSha.startsWith("b") ? "afterPush()" : "beforePush()") +
           "\n"
         : "";
-    return Atom.make(() => AsyncResult.success({ patch, truncated: false, nextCursor: null }));
+    return Atom.make(() => {
+      mocks.withheldFileReads++;
+      return AsyncResult.success({ patch, truncated: false, nextCursor: null });
+    });
   });
   const withheldFilesAtom = Atom.family((key: string) => {
     const { target, paths } = JSON.parse(key) as {
@@ -106,11 +109,13 @@ const {
     );
   });
   return {
-    withheldPageAtom: Atom.make(() =>
-      AsyncResult.success({
-        ...withheldPage,
-        revision: { baseSha: "c".repeat(40), headSha: mocks.withheldHeadSha },
-      }),
+    withheldPageAtom: Atom.family((_fixture: number) =>
+      Atom.make(() =>
+        AsyncResult.success({
+          ...withheldPage,
+          revision: { baseSha: "c".repeat(40), headSha: mocks.withheldHeadSha },
+        }),
+      ),
     ),
     withheldFileAtom,
     withheldFilesAtom,
@@ -128,6 +133,8 @@ const mocks = vi.hoisted(() => ({
   image: false,
   withheld: false,
   freshWithheldAdvertisement: true,
+  withheldFileReads: 0,
+  withheldFixture: 0,
   withheldHeadSha: "a".repeat(40),
   assetResources: [] as unknown[],
   diffCommits: [] as Array<string | undefined>,
@@ -163,7 +170,7 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
       diff: (({ input }: { input: { commit?: string; cursor?: string } }) => {
         mocks.diffCommits.push(input.commit);
         if (mocks.image) return imageDiffAtom;
-        if (mocks.withheld) return withheldPageAtom;
+        if (mocks.withheld) return withheldPageAtom(mocks.withheldFixture);
         return mocks.paged ? pagedDiffAtom(input.cursor ?? "first") : diffAtom;
       }) as never,
     },
@@ -230,6 +237,8 @@ function setup(paged = false, image = false) {
   mocks.image = image;
   mocks.withheld = false;
   mocks.freshWithheldAdvertisement = true;
+  mocks.withheldFileReads = 0;
+  mocks.withheldFixture++;
   mocks.withheldHeadSha = "a".repeat(40);
   mocks.assetResources = [];
   mocks.diffCommits = [];
@@ -411,4 +420,21 @@ it("keeps a cached withheld page readable after a rollback without offering a fi
   await expect
     .element(screen.getByRole("button", { name: "Load file diff" }))
     .not.toBeInTheDocument();
+});
+
+it("retains a loaded immutable patch when the Code tab refreshes the same revision", async () => {
+  setup();
+  mocks.withheld = true;
+  mocks.withheldHeadSha = "d".repeat(40);
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(tab(0), { container });
+  await userEvent.click(screen.getByRole("button", { name: "Expand diff" }));
+  await userEvent.click(screen.getByRole("button", { name: "Load file diff" }));
+  await expect.element(screen.getByText("beforePush()", { exact: true })).toBeVisible();
+  const reads = mocks.withheldFileReads;
+
+  await screen.rerender(tab(1));
+  await expect.element(screen.getByText("beforePush()", { exact: true })).toBeVisible();
+  expect(mocks.withheldFileReads).toBe(reads);
 });

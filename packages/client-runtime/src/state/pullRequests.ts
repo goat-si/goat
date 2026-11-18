@@ -58,7 +58,10 @@ export {
   PullRequestDiffCredentialRejectedError,
 } from "./pullRequestDiffHttp.ts";
 export * as PullRequestDiffLoader from "./pullRequestDiffHttp.ts";
-export { EnvironmentHttpConnectionNotReadyError } from "./pullRequestDiffQueries.ts";
+export {
+  EnvironmentHttpConnectionNotReadyError,
+  retainWithheldDiffPaths,
+} from "./pullRequestDiffQueries.ts";
 
 const LINKED_PULL_REQUEST_IDLE_TTL_MS = 5_000;
 

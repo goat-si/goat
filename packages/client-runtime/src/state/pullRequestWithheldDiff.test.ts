@@ -1,3 +1,4 @@
+import { retainWithheldDiffPaths } from "./pullRequestDiffQueries.ts";
 import { ProjectId } from "@goat/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -55,3 +56,14 @@ it.effect(
       }),
     ),
 );
+
+it("evicts the oldest withheld overlays at either row or byte limits", () => {
+  const paths = ["oldest", "middle", "newest"];
+  const patch = (value: string) => ({ patch: value, truncated: false, nextCursor: null });
+  expect(retainWithheldDiffPaths(paths, () => patch("x\n".repeat(10_000)))).toEqual(paths.slice(1));
+  expect(retainWithheldDiffPaths(paths, () => patch("x".repeat(2_000_000)))).toEqual(
+    paths.slice(1),
+  );
+  const pending = Array.from({ length: 20 }, (_, index) => String(index));
+  expect(retainWithheldDiffPaths(pending, () => undefined)).toEqual(pending.slice(-8));
+});

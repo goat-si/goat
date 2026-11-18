@@ -14,6 +14,7 @@ export function useNativeReviewDiffBridge(input: {
   readonly threadKey: string | null;
   readonly sectionId: string | null;
   readonly diff: string | null | undefined;
+  readonly overlayKey?: string | undefined;
   readonly data: NativeReviewDiffData;
   readonly collapsedFileIds: ReadonlyArray<string>;
   readonly viewedFileIds: ReadonlyArray<string>;
@@ -25,6 +26,7 @@ export function useNativeReviewDiffBridge(input: {
     collapsedFileIds,
     data,
     diff,
+    overlayKey,
     sectionId,
     selectedRowIds,
     threadKey,
@@ -61,10 +63,20 @@ export function useNativeReviewDiffBridge(input: {
         sectionId,
         scheme,
         diff,
+        overlayKey,
         fileCount: data.files.length,
         rowCount: data.rows.length,
       })}:${surfaceGeneration}`,
-    [data.files.length, data.rows.length, diff, scheme, sectionId, surfaceGeneration, threadKey],
+    [
+      data.files.length,
+      data.rows.length,
+      diff,
+      overlayKey,
+      scheme,
+      sectionId,
+      surfaceGeneration,
+      threadKey,
+    ],
   );
   const { acknowledgeTokenPatch, rejectTokenPatch, tokensPatchJson, updateVisibleRange } =
     useNativeReviewDiffHighlighting({
