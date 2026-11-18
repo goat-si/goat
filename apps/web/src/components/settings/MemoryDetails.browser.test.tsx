@@ -14,6 +14,8 @@ const state = vi.hoisted(() => ({
   listeners: new Set<() => void>(),
   exposure: null as unknown as import("@goat/client-runtime/state/memory").MemoryExposure,
   write: true,
+  readPending: false,
+  revert: null as unknown,
   queries: new Map<string, unknown>(),
   upsert: null as ((input: unknown) => Promise<unknown>) | null,
   calls: vi.fn(),
@@ -31,6 +33,8 @@ function useFixtureVersion() {
   );
 }
 function fixtureValue(label: string) {
+  if (label === "readReply")
+    return state.readPending ? null : (state.queries.get("read") ?? Option.none());
   return label === "exposure" ? state.exposure : label === "upsert" ? state.write : true;
 }
 vi.mock("@effect/atom-react", async (original) => {
@@ -59,7 +63,9 @@ vi.mock("../../state/memory", async () => {
   return {
     memoryEnvironment: {
       exposureAtom: () => ({ label: "exposure" }),
-      read: () => ({ label: "read" }),
+      read: Object.assign(() => ({ label: "read" }), { reply: () => ({ label: "readReply" }) }),
+      revertResolution: command("revert"),
+      resetReportAttempts: command("resetReportAttempts"),
       history: () => ({ label: "history" }),
       upsert: command("upsert"),
       forget: command("forget"),
@@ -80,7 +86,7 @@ vi.mock("../../state/use-atom-command", () => ({
           state.calls(input);
           return state.upsert?.(input) ?? Promise.resolve({ _tag: "Failure" });
         }
-      : () => Promise.resolve({ _tag: "Failure" }),
+      : () => Promise.resolve(label === "revert" ? state.revert : { _tag: "Failure" }),
 }));
 vi.mock("../../state/environments", async (original) => ({
   ...(await original<typeof import("../../state/environments")>()),
@@ -157,6 +163,8 @@ function setup() {
   state.listeners.clear();
   state.exposure = readyMemoryExposure(id(1));
   state.write = true;
+  state.readPending = false;
+  state.revert = null;
   state.queries.clear();
   state.queries.set("read", Option.some(original));
   state.upsert = null;
@@ -621,4 +629,64 @@ it("a hold after a refused save discards the draft and closes the editor with th
   expect(screen.container.textContent).toContain(CHANGED_LINE);
   expect(state.onForgotten).not.toHaveBeenCalled();
   expect(state.navigate).not.toHaveBeenCalled();
+});
+
+it("keeps an untouched edit mounted while the refresh after a revert settles", async () => {
+  const registry = setup();
+  if (original.status !== "active" || saved.status !== "active")
+    throw new Error("Active fixtures required");
+  const resolution = {
+    resolutionId: id(8),
+    memoryId: id(2),
+    memorySpaceId: id(1),
+    resultRevisionId: original.revision.revisionId,
+    inputRevisionIds: [saved.revision.revisionId],
+    requestedModelSelection: { instanceId: "codex", model: "synthetic", options: [] },
+    effectiveProvider: "codex",
+    effectiveModel: "synthetic",
+    resolvingEnvironmentId: "remote-owner",
+    appliedAtUtc: "2026-09-01T00:00:00.000Z",
+    revertDeadlineUtc: "2099-10-01T00:00:00.000Z",
+  };
+  state.queries.set(
+    "history",
+    Option.some({
+      revisions: [{ revision: saved.revision, payload: saved.payload }],
+      resolutions: [{ resolution, payload: null }],
+      nextCursor: null,
+      reports: [],
+      revertResults: [],
+    }),
+  );
+  state.revert = {
+    _tag: "Success",
+    value: { operationId: id(9), memoryId: id(2), resolutionId: id(8), status: "pending" },
+  };
+  state.refresh.mockImplementation(() => {
+    state.readPending = true;
+    expire();
+    state.version += 1;
+    for (const listener of state.listeners) listener();
+  });
+  await using screen = await renderDetails(registry);
+  await click(screen, "Edit");
+  const editor = memoryText(screen);
+  await click(screen, "Open Resolution");
+  await act(() => screen.container.querySelector<HTMLInputElement>('input[type="radio"]')!.click());
+  await click(screen, "Revert resolution");
+
+  expect(memoryText(screen)).toBe(editor);
+  expect(memoryText(screen)?.value).toBe("");
+  expect(screen.container.textContent).not.toContain(HIDDEN_LINE);
+  expect(state.onForgotten).not.toHaveBeenCalled();
+
+  await update(() => {
+    state.readPending = false;
+    state.queries.set("read", Option.some(original));
+  });
+  expect(memoryText(screen)).toBe(editor);
+  expect(memoryText(screen)?.value).toBe("Synthetic original");
+  await update(() => state.queries.set("read", Option.some(saved)));
+  expect(memoryText(screen)).toBeNull();
+  expect(screen.container.textContent).toContain("Synthetic original, saved");
 });
