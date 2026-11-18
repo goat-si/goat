@@ -1,3 +1,4 @@
+import { makeSessionInventory } from "./sessionInventory.ts";
 import type {
   EventOf,
   NativeForm,
@@ -30,7 +31,7 @@ import {
   CLEAR_PROMPT_REJECTIONS,
 } from "./connectionConstants.ts";
 import { turnPromptId, steerPromptId } from "./promptIds.ts";
-import { modelRef, malformedModel, sameModel, type ModelRef } from "./modelRef.ts";
+import { malformedModel, sameModel, type ModelRef } from "./modelRef.ts";
 import { goatMcpServerName, cuaMcpServerName } from "./mcpNames.ts";
 export { goatMcpServerName, cuaMcpServerName } from "./mcpNames.ts";
 import { NativeGoal, decodeGoal, isMissingGoal } from "./nativeGoal.ts";
@@ -44,7 +45,6 @@ import {
   approves,
   permissionGone,
   formGone,
-  agentPaths,
   ref,
   sessionIdOf,
   textOf,
@@ -92,7 +92,6 @@ import {
   type ModelSelection,
   type ProviderInstanceId,
   type RuntimeRequestId,
-  ThreadId,
 } from "@goat/contracts";
 import type * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -117,13 +116,7 @@ import { readableProviderErrorMessage } from "../providerErrorMessage.ts";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
-import {
-  deniesSubagents,
-  sameRules,
-  sessionRules,
-  type Rule,
-  type RulesPolicy,
-} from "./sessionRules.ts";
+import { deniesSubagents, type Rule } from "./sessionRules.ts";
 import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
 import { goatOrchestrationSystemPrompt } from "@goat/provider-core/server/orchestrationInstructions";
 import * as KeyedLock from "@goat/shared/KeyedLock";
@@ -215,14 +208,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       (state.goalRefreshing || (state.goalFresh && state.providerThread.goal?.status === "active"));
     let client = connection.client;
     const sessionScope = yield* Effect.scope;
-    // Project config changes model limits; key by directory because this runtime serves all instance threads.
-    const contextWindows = new Map<string, Map<string, number>>();
-    const modelVariants = new Map<string, Map<string, ReadonlySet<string>>>();
-    const directoryOf = (cwd: string | null | undefined) => cwd ?? host.paths.cwd;
-    const windowOf = (cwd: string | null | undefined, model: string) =>
-      contextWindows.get(directoryOf(cwd))?.get(model);
-    const listedModelRef = (selection: ModelSelection, cwd: string | null | undefined) =>
-      modelRef(selection, modelVariants.get(directoryOf(cwd))?.get(selection.model));
     const now = yield* DateTime.now;
     let session: OrchestrationV2ProviderSession = {
       id: input.providerSessionId,
@@ -275,6 +260,23 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       while (current.subagent !== undefined) current = current.subagent.call.state;
       return current;
     };
+
+    const {
+      directoryOf,
+      windowOf,
+      listedModelRef,
+      readModels,
+      readModelsOnce,
+      rulesFor,
+      writeRules,
+    } = makeSessionInventory({
+      client: () => client,
+      defaultDirectory: host.paths.cwd,
+      appThreadIdOf: (state) => rootOf(state).providerThread.appThreadId,
+      mcpSessions,
+      mcpServerNameFor,
+      cuaServerNameFor,
+    });
 
     const sessionsOf = (thread: ThreadState): ReadonlyArray<ThreadState> => [
       thread,
@@ -2614,105 +2616,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       );
     }
 
-    const readModels = (directory: string) =>
-      Effect.suspend(() => {
-        const windows = contextWindows.get(directory) ?? new Map<string, number>();
-        contextWindows.set(directory, windows);
-        const variants = modelVariants.get(directory) ?? new Map<string, ReadonlySet<string>>();
-        modelVariants.set(directory, variants);
-        return client.model.list({ location: { directory } }).pipe(
-          Effect.timeout("5 seconds"),
-          Effect.tap((models) =>
-            Effect.sync(() => {
-              for (const model of models.data) {
-                const slug = `${model.providerID}/${model.id}`;
-                windows.set(slug, model.limit.input ?? model.limit.context);
-                variants.set(slug, new Set(model.variants.map((variant) => variant.id)));
-              }
-            }),
-          ),
-          Effect.ignore({ log: true }),
-        );
-      });
-    const readModelsOnce = (cwd: string | null | undefined) =>
-      contextWindows.has(directoryOf(cwd)) ? Effect.void : readModels(directoryOf(cwd));
     yield* readModels(session.cwd);
-
-    const agentRules = new Map<string, ReadonlyMap<string, ReadonlyArray<Rule>>>();
-    const pathsFor = Effect.fnUntraced(function* (
-      directory: string,
-      agents: ReadonlyArray<string>,
-    ) {
-      let known = agentRules.get(directory);
-      if (known === undefined) {
-        // A fresh server lists no agents for its first moments, like its models.
-        const listed = yield* client.agent.list({ location: { directory } }).pipe(
-          Effect.repeat({
-            until: (list) => list.data.length > 0,
-            schedule: Schedule.spaced("250 millis"),
-          }),
-          Effect.timeout("5 seconds"),
-          Effect.tapCause((cause) =>
-            Effect.logWarning(
-              "Could not list OpenCode agents; their path rules are skipped.",
-              cause,
-            ).pipe(Effect.annotateLogs({ errorTag: causeErrorTag(cause) })),
-          ),
-          Effect.option,
-        );
-        if (listed._tag === "None") return [];
-        known = new Map(
-          listed.value.data.map((agent) => [agent.id, agentPaths(agent.permissions)]),
-        );
-        agentRules.set(directory, known);
-      }
-      const paths = new Map<string, Rule>();
-      for (const agent of agents) {
-        for (const entry of known.get(agent) ?? []) {
-          paths.set(`${entry.action}\u0000${entry.resource}`, entry);
-        }
-      }
-      return [...paths.values()];
-    });
-
-    const rulesFor = Effect.fnUntraced(function* (
-      thread: Pick<ThreadState, "directory" | "agent" | "grants">,
-      policy: RulesPolicy,
-      appThreadId: string | null,
-    ) {
-      const plan = policy.interactionMode === "plan";
-      const paths =
-        policy.runtimeMode === "full-access" && !plan
-          ? []
-          : yield* pathsFor(thread.directory, plan ? [thread.agent, "plan"] : [thread.agent]);
-      const mcpSession =
-        appThreadId === null ? undefined : yield* mcpSessions.read(ThreadId.make(appThreadId));
-      return sessionRules(
-        policy,
-        paths,
-        policy.runtimeMode === "full-access" ? [] : thread.grants,
-        appThreadId === null
-          ? null
-          : {
-              goat: yield* mcpServerNameFor(appThreadId),
-              cua:
-                mcpSession?.cuaDriver === undefined ? null : yield* cuaServerNameFor(appThreadId),
-            },
-        mcpSession?.nativeSubagentLimit === 0,
-      );
-    });
-
-    const writeRules = Effect.fnUntraced(function* (state: ThreadState, policy: RulesPolicy) {
-      const rules = yield* rulesFor(state, policy, rootOf(state).providerThread.appThreadId);
-      if (!sameRules(state.rules, rules)) {
-        yield* client.session.update({
-          sessionID: Session.ID.make(state.sessionId),
-          permissions: rules,
-        });
-        state.rules = rules;
-      }
-      state.policy = policy;
-    });
 
     const writeTitle = Effect.fnUntraced(function* (state: ThreadState, title: string) {
       const next = title.trim();
