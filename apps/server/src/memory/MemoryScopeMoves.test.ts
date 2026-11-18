@@ -12,6 +12,7 @@ import { checkUsage } from "./MemoryUsageScan.testkit.ts";
 import { scanReplicaMemory } from "./testkit/ScanReplicaMemory.ts";
 import {
   core,
+  coreFor,
   hubEnv,
   id,
   live,
@@ -301,6 +302,146 @@ describe("negotiated memory scope moves", () => {
         });
       }).pipe(checkUsage, Effect.provide(live)),
   );
+
+  it.effect(
+    "refuses an offline edit staged before a move round trip and accepts a fresh edit",
+    () =>
+      Effect.gen(function* () {
+        yield* seed;
+        const hub = yield* Hub.MemoryHubService;
+        const authority = yield* Store.MemoryStore;
+        yield* hub.pull(advertise, principal());
+        yield* hub.pull({ ...advertise, environmentId: otherEnv }, principal(otherEnv));
+        const root = newMemory(599);
+        const push = (op: M.MemoryOperation, env = hubEnv) =>
+          hub.push({ ...pushInput(op), environmentId: env, features }, principal(env));
+        assert.include((yield* push(root)).receipts[0], { outcome: "accepted" });
+        const page = yield* hub.pull(advertise, principal());
+        const target = {
+          kind: "thread" as const,
+          thread: { environmentId: hubEnv, threadId: M.ThreadId.make("round-trip-target") },
+        };
+        yield* Effect.gen(function* () {
+          const service = yield* Service.MemoryService;
+          const replica = yield* Store.MemoryStore;
+          const receive = (next: M.MemoryHubPullResult, expectedSequence: number) =>
+            service.receiveHubPage({
+              memorySpaceId: space,
+              hubEnvironmentId: hubEnv,
+              localEnvironmentId: otherEnv,
+              expectedSequence,
+              page: next,
+              reauthorize: Effect.void,
+            });
+          yield* receive(page, 0);
+          const edit = (n: number, text: string) =>
+            Effect.gen(function* () {
+              const operationId = M.MemoryOperationId.make(id(n));
+              yield* service.upsert(
+                {
+                  memorySpaceId: space,
+                  memoryId: root.memoryId,
+                  operationId,
+                  expectedHeads: [root.revision.revisionId],
+                  scope: root.revision.scope,
+                  assertionKind: "inference",
+                  baseBoundary: null,
+                  payload: { ...root.payload, text },
+                },
+                Effect.void,
+              );
+              const queued = yield* replica.readWorkOperation(`sync:${space}:${operationId}`);
+              if (queued?.kind !== "upsert") throw new Error("Expected a queued edit");
+              return queued;
+            });
+          const offline = yield* edit(600, "offline pre-move text");
+          for (const [version, fromScope, toScope] of [
+            [0, root.revision.scope, target],
+            [1, target, root.revision.scope],
+          ] as const) {
+            const moved = (yield* push(
+              decodeOperation({
+                kind: "move",
+                protocolVersion: 1,
+                operationId: id(601 + version),
+                memoryId: root.memoryId,
+                memorySpaceId: space,
+                originEnvironmentId: hubEnv,
+                expectedHeads: [root.revision.revisionId],
+                expectedScopeVersion: version,
+                fromScope,
+                toScope,
+              }),
+            )).receipts[0];
+            assert.include(moved, { outcome: "accepted" }, JSON.stringify(moved));
+          }
+          const tail = yield* hub.pull(
+            { ...advertise, afterSequence: page.throughSequence },
+            principal(),
+          );
+          yield* receive(tail, page.throughSequence);
+          const refused = (yield* push(offline, otherEnv)).receipts[0];
+          assert.include(refused, { outcome: "rejected", failureCode: "revision_changed" });
+          assert.deepStrictEqual((yield* authority.loadAggregate(space, root.memoryId)).heads, [
+            root.revision.revisionId,
+          ]);
+          const history = yield* service.history(
+            { memorySpaceId: space, memoryId: root.memoryId, limit: 10 },
+            Effect.void,
+          );
+          assert.isNull(
+            history.revisions.find(
+              ({ revision }) => revision.revisionId === offline.revision.revisionId,
+            )?.payload,
+          );
+          const fresh = yield* edit(603, "fresh post-move text");
+          assert.include((yield* push(fresh, otherEnv)).receipts[0], { outcome: "accepted" });
+          assert.deepStrictEqual((yield* authority.loadAggregate(space, root.memoryId)).heads, [
+            fresh.revision.revisionId,
+          ]);
+        }).pipe(Effect.provide(Layer.fresh(coreFor(otherEnv))));
+      }).pipe(checkUsage, Effect.provide(live)),
+  );
+
+  it("round-trips accepted and refused move receipts and preserves historical kind bytes", () => {
+    const record = {
+      memorySpaceId: space,
+      originEnvironmentId: hubEnv,
+      operationKind: "move" as const,
+      receipt: {
+        operationId: M.MemoryOperationId.make(id(1)),
+        memoryId: newMemory(1).memoryId,
+        operationDigest: "a".repeat(64),
+        hubSequence: 1,
+        outcome: "accepted" as const,
+      },
+      revisionId: null,
+      resolutionId: null,
+      revertsResolutionId: null,
+      attemptId: null,
+      fencingToken: null,
+      reportGuard: null,
+    };
+    for (const receipt of [
+      record.receipt,
+      { ...record.receipt, outcome: "rejected" as const, failureCode: "revision_changed" as const },
+    ]) {
+      const value = { ...record, receipt };
+      const bytes = Store.encodeCompactReceipt(value, () => 1);
+      assert.strictEqual(bytes[1], 4);
+      assert.deepStrictEqual(
+        Store.decodeCompactReceipt(bytes, space, () => hubEnv),
+        value,
+      );
+    }
+    const expectedTail = `00010000000000004000800000000000000101${record.receipt.memoryId.replaceAll("-", "")}${"a".repeat(64)}010100000000000000000000`;
+    for (const [ordinal, operationKind] of (
+      ["upsert", "forget", "resolve", "revert"] as const
+    ).entries()) {
+      const legacy = Store.encodeCompactReceipt({ ...record, operationKind }, () => 1);
+      assert.strictEqual(Buffer.from(legacy).toString("hex"), `020${ordinal}${expectedTail}`);
+    }
+  });
 
   it.effect("refuses a move into a full scope without removing the source", () =>
     Effect.gen(function* () {
