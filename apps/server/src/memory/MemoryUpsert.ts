@@ -1,5 +1,5 @@
 import type { MemoryRefusedSaveHook } from "./MemoryRemember.ts";
-import { suggestionForgetGeneration } from "./store/SaveSuggestions.ts";
+import { bindPendingSuggestion, suggestionForgetGeneration } from "./store/SaveSuggestions.ts";
 import { floorWriteId } from "./store/FloorWrites.ts";
 import { hubReceiptCodec } from "./store/StoreCodecs.ts";
 import * as M from "@goat/contracts";
@@ -332,8 +332,10 @@ export const makeUpsert = (deps: {
           payload,
         };
         const result = yield* apply(op, Store.localIntent, permit);
-        if (result.receipt.outcome !== "rejected" && origin && !M.requiresMemoryFloor2(op))
-          yield* recordMemoryOrigin(space, value.memoryId, origin);
+        if (result.receipt.outcome !== "rejected" && origin) {
+          if (!M.requiresMemoryFloor2(op)) yield* recordMemoryOrigin(space, value.memoryId, origin);
+          else if (remember && !current?.identity) yield* bindPendingSuggestion(sql, op, origin);
+        }
         return result;
       }).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
     );

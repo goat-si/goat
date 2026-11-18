@@ -28,7 +28,6 @@ import * as Settings from "../serverSettings.ts";
 import * as Generation from "../textGeneration/TextGeneration.ts";
 import * as Client from "./MemoryHubClient.ts";
 import * as Hub from "./MemoryHubService.ts";
-import { readSettingsView } from "./MemoryHubSettings.ts";
 import * as Service from "./MemoryService.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Hold from "./MemoryGenerationHold.ts";
@@ -1667,6 +1666,7 @@ const make = Effect.gen(function* () {
             acquired,
             input,
             "summaryPrerequisite" in candidate.work.metadata,
+            "acceptanceGeneration" in candidate.work.metadata,
           );
           const ack = yield* (
             r.connection
@@ -2214,7 +2214,7 @@ const make = Effect.gen(function* () {
       permit.pipe(
         Effect.andThen(readSettings),
         Effect.flatMap((s) =>
-          readSettingsView(store, {
+          Hub.readSettingsView(store, {
             settings: s.memoryHub,
             version: s.memoryHubVersion,
           }),

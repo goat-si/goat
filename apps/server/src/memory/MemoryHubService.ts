@@ -36,6 +36,7 @@ export class MemoryHubConfiguration extends Context.Service<
   }
 >()("goat/memory/MemoryHubService/MemoryHubConfiguration") {}
 
+export { readSettingsView } from "./MemoryHubSettings.ts";
 export { MemoryHubActivity, activityLayer } from "./MemoryHubActivity.ts";
 
 export class MemoryHubService extends Context.Service<

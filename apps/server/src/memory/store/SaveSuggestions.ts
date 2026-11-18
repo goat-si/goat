@@ -1,5 +1,5 @@
 import { validateSummaryDependencies } from "../MemoryDependencies.ts";
-import { promotionPrerequisiteReady } from "./FloorWrites.ts";
+import { floorWriteId, promotionPrerequisiteReady } from "./FloorWrites.ts";
 import * as M from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -20,6 +20,28 @@ export const suggestionForgetGeneration = Effect.fn("MemorySuggestions.forgetGen
   },
 );
 
+export const bindPendingSuggestion = Effect.fn("MemorySuggestions.bindPending")(function* (
+  sql: SqlClient.SqlClient,
+  { memorySpaceId: space, memoryId, operationId }: M.MemoryOperation,
+  origin: M.ScopedThreadRef,
+) {
+  const now = yield* Clock.currentTimeMillis;
+  const [bound] = yield* stored(
+    "suggestion-bind-remember",
+    sql<{ forget_generation: number }>`UPDATE memory_save_suggestions
+      SET state='accepting',accept_operation_id=${operationId}
+      WHERE space=${space} AND id=${memoryId} AND state='pending' AND expires_at>${now}
+        AND origin_environment_id=${origin.environmentId} AND origin_thread_id=${origin.threadId}
+      RETURNING forget_generation`,
+  );
+  if (bound)
+    yield* stored(
+      "suggestion-bind-generation",
+      sql`UPDATE memory_outbox SET metadata_json=json_set(metadata_json,'$.acceptanceGeneration',${bound.forget_generation})
+        WHERE id=${floorWriteId(space, operationId)}`,
+    );
+});
+
 export const acceptanceGenerationMatches = (sql: SqlClient.SqlClient) =>
   sql`(json_extract(memory_outbox.metadata_json,'$.acceptanceGeneration') IS NULL OR
     json_extract(memory_outbox.metadata_json,'$.acceptanceGeneration') =
@@ -31,9 +53,13 @@ export const checkAcceptanceDispatch = Effect.fn("MemorySuggestions.checkDispatc
   owner: SyncWorkOwner,
   input: M.MemoryHubPushInput,
   promotion: boolean,
+  boundSuggestion: boolean,
 ) {
   const operation = input.operations[0];
-  if (operation?.kind !== "upsert" || (!promotion && operation.forgetFence === undefined))
+  if (
+    operation?.kind !== "upsert" ||
+    (!promotion && !boundSuggestion && operation.forgetFence === undefined)
+  )
     return input;
   const now = yield* Clock.currentTimeMillis;
   const rows = yield* stored(
