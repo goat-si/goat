@@ -1311,7 +1311,7 @@ function OpenCommandPaletteDialog(props: {
             (promptLinkProjectRef
               ? providersByEnvironment.get(promptLinkProjectRef.environmentId)
               : undefined) ?? [],
-          threadModelSelection: activeThread?.modelSelection ?? null,
+          thread: activeThread,
         };
   const plainPromptLink = promptLinkInput
     ? composerPromptLink({ ...promptLinkInput, withContext: false })

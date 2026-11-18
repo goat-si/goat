@@ -34,6 +34,14 @@ export interface SubagentRequestAwareness {
   readonly createdAt: DateTime.Utc;
 }
 
+/**
+ * Turn items that can start or end a user-only wait: a secret or handoff card is pending only
+ * by its own status. Filters that drop subagent transcript updates must keep these, or the
+ * parent's "Input needed" never appears or never clears; every other item stays filtered.
+ */
+export const turnItemCanChangeUserWait = (item: { readonly type: string }) =>
+  item.type === "secret_request" || item.type === "human_handoff";
+
 export function subagentRequestAwareness(
   thread: Pick<
     OrchestrationV2ThreadShell,

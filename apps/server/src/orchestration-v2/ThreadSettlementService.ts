@@ -1,6 +1,7 @@
 import { isPendingApprovalRequest } from "@goat/contracts";
 import {
   backgroundWorkHoldsCompletion,
+  isPullRequestWatchTask,
   turnItemUpdateCanEndBackgroundWork,
 } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
@@ -165,7 +166,10 @@ export function isAutoSettlementCandidate(
   // A guest is waiting on the owner; settling would hide the Request.
   if ((thread.pendingGuestMessageCount ?? 0) > 0) return false;
   if (thread.activityRunStatus != null) return false;
-  if (backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])) return false;
+  const pendingTasks = thread.pendingBackgroundTasks ?? [];
+  if (backgroundWorkHoldsCompletion(pendingTasks)) return false;
+  // Settling ends a watch, which would silently drop a reviewer's later comments.
+  if (pendingTasks.some(isPullRequestWatchTask)) return false;
   if (threadHasQueuedTurnStart(thread, nowMs)) return false;
   // Interrupted runs must keep the same snooze protection the sidebar shows.
   return !isSnoozed(thread, nowMs);

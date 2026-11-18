@@ -88,7 +88,10 @@ by a tool command stays in that command's process group and dies with it, usuall
 runner writes its first line, which looks like a dev server that exits at once with an empty log.
 
 Flags go directly after the task name, for example `vp run dev --home-dir /tmp/goat-dev`.
-Add `--browser` to open a browser automatically.
+Add `--browser` to open a browser automatically. Use `vp run dev --no-watch` if file watcher
+bursts interrupt a client test pass. The source server and web client keep running until you
+restart them. This also works with `dev:server` and `dev:web`; Electron's bundle watcher has its
+own lifecycle.
 
 ### State and ports
 

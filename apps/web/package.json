@@ -6,7 +6,9 @@
   "scripts": {
     "build:ghostty-wasm": "bash scripts/build-libghostty-wasm.sh",
     "dev": "vp dev",
+    "dev:once": "vp dev",
     "dev:built": "vp build --watch",
+    "dev:built:once": "vp build",
     "build": "vp build",
     "i18n:generate": "gt generate",
     "preview": "vp preview",

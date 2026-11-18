@@ -61,17 +61,17 @@ const isChildRunLive = (
 /** Provider-native
     subagents ask on their parent, so they are skipped. */
 export function subagentRequest(thread: OrchestrationV2ThreadShell): PendingSubagentRequest | null {
-  const kind = thread.pendingRuntimeRequest?.kind;
+  const request = thread.pendingRuntimeRequest;
   if (
-    kind === undefined ||
-    kind === "auth_refresh" ||
+    request === null ||
+    request.kind === "auth_refresh" ||
     thread.lineage.relationshipToParent !== "subagent" ||
     isProviderNativeSubagentThread(thread) ||
-    !isChildRunLive(thread)
+    (request.userOnly !== true && !isChildRunLive(thread))
   ) {
     return null;
   }
-  return isPendingApprovalRequest(thread.pendingRuntimeRequest) ? "approval" : "user_input";
+  return isPendingApprovalRequest(request) ? "approval" : "user_input";
 }
 
 export function pendingSubagentRequestsByThread(
@@ -81,7 +81,12 @@ export function pendingSubagentRequestsByThread(
   let byId: ReadonlyMap<ThreadId, OrchestrationV2ThreadShell> | undefined;
   for (const child of threads) {
     const request = subagentRequest(child);
-    if (request === null || request === "user_input") continue;
+    // The coordinator answers child questions; approvals and user-only cards need the user.
+    if (
+      request === null ||
+      (request === "user_input" && child.pendingRuntimeRequest?.userOnly !== true)
+    )
+      continue;
     byId ??= new Map(threads.map((thread) => [thread.id, thread] as const));
     const seen = new Set<ThreadId>([child.id]);
     let current: OrchestrationV2ThreadShell | undefined = child;
