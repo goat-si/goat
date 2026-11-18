@@ -5,7 +5,14 @@ import * as Schema from "effect/Schema";
 import * as SchemaParser from "effect/SchemaParser";
 import * as SchemaAST from "effect/SchemaAST";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import { EnvironmentId, EventId, MessageId, NonNegativeInt, PositiveInt } from "./baseSchemas.ts";
+import {
+  EnvironmentId,
+  EventId,
+  MessageId,
+  NonNegativeInt,
+  PositiveInt,
+  ThreadId,
+} from "./baseSchemas.ts";
 import { ScopedThreadRef, ScopedProjectRef } from "./environment.ts";
 import { ProviderDriverKind } from "./providerInstance.ts";
 
@@ -17,6 +24,10 @@ import {
   MEMORY_DERIVED_REVISIONS_MAX,
   MEMORY_PAGE_MAX_UTF8_BYTES,
   MEMORY_PAYLOAD_MAX_UTF8_BYTES,
+  MEMORY_REVERT_WINDOW_MS,
+  MEMORY_LEGACY_LINEAGE_GUIDANCE,
+  MEMORY_LINEAGE_GUIDANCE,
+  MEMORY_HUB_UPGRADE_GUIDANCE,
 } from "./memoryLimits.ts";
 export * from "./memoryLimits.ts";
 
@@ -104,17 +115,6 @@ export const MEMORY_LEASE_RENEW_MS = 30000;
 export const MEMORY_RESOLUTION_ATTEMPT_MAX_MS = 600000;
 export const MEMORY_SOURCE_READ_TIMEOUT_MS = 75000;
 export const MEMORY_SOURCE_READ_POLL_MS = 1000;
-export const MEMORY_REVERT_WINDOW_MS = 2592000000;
-export const MEMORY_REPLACED_PAYLOAD_RETENTION_MS = 2592000000;
-export const MEMORY_RESOLUTION_PAYLOAD_RETENTION_MS = 2592000000;
-export const MEMORY_HISTORY_MAX_PAYLOAD_BYTES = 134217728;
-export const MEMORY_CHECKPOINT_INTERVAL_MS = 86400000;
-export const MEMORY_CHECKPOINT_TRIGGER_TAIL_ROWS = 10000;
-export const MEMORY_CHECKPOINT_TRIGGER_TAIL_BYTES = 33554432;
-export const MEMORY_LOG_RETENTION_MS = 2592000000;
-export const MEMORY_LOG_MAX_TAIL_ROWS = 50000;
-export const MEMORY_LOG_MAX_TAIL_BYTES = 67108864;
-export const MEMORY_CANONICAL_STAGING_MAX_BYTES = 536870912;
 export const MEMORY_FTS_INDEXED_TEXT_MAX_BYTES = 134217728;
 export const MEMORY_FTS_ALLOCATED_WARNING_BYTES = 100663296;
 export const MEMORY_FTS_ALLOCATED_BRAKE_BYTES = 134217728;
@@ -597,7 +597,14 @@ export const MemoryOperation = bounded(
   256 * 1024,
 );
 export type MemoryOperation = typeof MemoryOperation.Type;
+export const MemoryRevisionMarks = struct({
+  provenance: Schema.optionalKey(Schema.Literal("unverified")),
+  originThreadId: Schema.optionalKey(ThreadId),
+});
+export type MemoryRevisionMarks = typeof MemoryRevisionMarks.Type;
+const includeMarks = { includeMarks: Schema.optionalKey(Schema.Literal(true)) };
 const itemFields = {
+  marks: Schema.optionalKey(MemoryRevisionMarks),
   memorySpaceId: MemorySpaceId,
   memoryId: MemoryId,
   pendingSync: Schema.Boolean,
@@ -832,9 +839,11 @@ const safeErrorFields = {
   operationId: Schema.optionalKey(MemoryOperationId),
   capacity: Schema.optionalKey(MemoryCapacityExceeded),
   guidance: Schema.optionalKey(
-    Schema.Literal(
-      "This conversation has incomplete memory provenance and cannot save new memories. Start a new conversation to save this memory.",
-    ),
+    Schema.Literals([
+      MEMORY_LEGACY_LINEAGE_GUIDANCE,
+      MEMORY_LINEAGE_GUIDANCE,
+      MEMORY_HUB_UPGRADE_GUIDANCE,
+    ]),
   ),
 };
 const safeDomainError = Schema.Struct(safeErrorFields).check(
@@ -859,9 +868,12 @@ export class MemoryRpcError extends Schema.TaggedError<MemoryRpcError>()(
     return strictSchema(Schema.make(super.ast)).ast;
   }
   override get message(): string {
-    return this.code === "thread_lineage_incomplete"
-      ? "This conversation has incomplete memory provenance and cannot save new memories. Start a new conversation to save this memory."
-      : `Memory request failed (${this.code}).`;
+    return (
+      this.guidance ??
+      (this.code === "thread_lineage_incomplete"
+        ? MEMORY_LEGACY_LINEAGE_GUIDANCE
+        : `Memory request failed (${this.code}).`)
+    );
   }
 }
 export class MemoryHubError extends Schema.TaggedError<MemoryHubError>()(
@@ -1410,6 +1422,11 @@ export const MemoryPage = bounded(
 );
 export type MemoryPage = typeof MemoryPage.Type;
 const revisionPair = struct({ revision: MemoryRevision, payload: Schema.NullOr(MemoryPayload) });
+const projectedRevisionPair = struct({
+  revision: MemoryRevision,
+  payload: Schema.NullOr(MemoryPayload),
+  marks: Schema.optionalKey(MemoryRevisionMarks),
+});
 const resolutionPair = struct({
   resolution: MemoryResolution,
   payload: Schema.NullOr(MemoryResolutionPayload),
@@ -1419,7 +1436,7 @@ const resolutionPair = struct({
 export const MemoryHistoryPage = bounded(
   struct({
     memoryId: MemoryId,
-    revisions: array(revisionPair),
+    revisions: array(projectedRevisionPair),
     /** Selected resolution inputs retained on the server, including bodies too large to preview. */
     restorableRevisionIds: Schema.optionalKey(distinct(MemoryRevisionId)),
     resolutions: array(resolutionPair),
@@ -1572,6 +1589,7 @@ export type MemorySearchPage = {
 };
 
 export const MemorySearchInput = struct({
+  ...includeMarks,
   ...space,
   ...paging,
   cursor: Schema.optionalKey(
@@ -1594,6 +1612,7 @@ export const MemorySearchInput = struct({
 export type MemorySearchInput = typeof MemorySearchInput.Type;
 
 export const MemoryListInput = struct({
+  ...includeMarks,
   ...space,
   ...paging,
   scope: Schema.optionalKey(MemoryScope),
@@ -1601,7 +1620,7 @@ export const MemoryListInput = struct({
 });
 export type MemoryListInput = typeof MemoryListInput.Type;
 
-export const MemoryReadInput = struct({ ...space, memoryId: MemoryId });
+export const MemoryReadInput = struct({ ...space, ...includeMarks, memoryId: MemoryId });
 export type MemoryReadInput = typeof MemoryReadInput.Type;
 
 export const MemoryResetReportAttemptsInput = struct({
@@ -1617,6 +1636,7 @@ export const MemoryResetReportAttemptsResult = struct({
 export type MemoryResetReportAttemptsResult = typeof MemoryResetReportAttemptsResult.Type;
 
 export const MemoryHistoryInput = struct({
+  ...includeMarks,
   ...space,
   ...paging,
   memoryId: MemoryId,

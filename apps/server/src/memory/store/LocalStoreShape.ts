@@ -37,6 +37,10 @@ export interface LocalStoreShape {
     effect: Effect.Effect<A, E, R>,
     options?: { requireOuter?: boolean; finalGuard?: Effect.Effect<void, E> },
   ) => Effect.Effect<A, E | MemoryStorageError, Exclude<R, Transaction>>;
+  readonly areAutomaticallyUsable: (
+    space: M.MemorySpaceId,
+    revisions: readonly M.MemoryRevisionId[],
+  ) => Effect.Effect<boolean, MemoryStorageError>;
   readonly readThreadLineage: (
     thread: M.ScopedThreadRef,
     space: M.MemorySpaceId,
@@ -57,7 +61,11 @@ export interface LocalStoreShape {
   readonly readResolutionInputsPage: (
     input: M.MemoryHistoryInput & { resolutionInputsFor: M.MemoryResolutionId },
   ) => Effect.Effect<
-    { scope: M.MemoryScope | null; page: M.MemoryHistoryPage },
+    {
+      scope: M.MemoryScope | null;
+      page: M.MemoryHistoryPage;
+      consumed: MemoryAggregate["revisions"];
+    },
     MemoryStorageError | MemoryStoreConflict
   >;
   readonly readResolutionSnapshot: (

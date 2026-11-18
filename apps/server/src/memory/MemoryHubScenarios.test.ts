@@ -772,7 +772,6 @@ describe("Memory hub assembled HTTP scenarios", () => {
         );
       }).pipe(Effect.provide(NodeServices.layer)),
   );
-
   it.effect("uses bearer identity for 401/403 and withdraws live advertisement when disabled", () =>
     Effect.gen(function* () {
       const s = yield* scenario;
@@ -848,6 +847,7 @@ describe("Memory hub assembled HTTP scenarios", () => {
         refusedReverts: true,
         resolutionInputs: true,
         retainedLocalSpace: true,
+        provenanceProjection: true,
         generationHold: true,
         hubDiagnostics: true,
         siteNotes: true,

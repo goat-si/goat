@@ -50,7 +50,6 @@ const decodeRun = Schema.decodeUnknownEffect(Schema.fromJsonString(M.Orchestrati
 const decodeSelection = Schema.decodeUnknownEffect(M.MemoryModelSelection);
 const encodeSelection = Schema.encodeSync(Schema.fromJsonString(M.MemoryModelSelection));
 const decodeInput = Schema.decodeUnknownEffect(M.GenerateMemorySummaryInput);
-const decodePayload = Schema.decodeEffect(M.MemoryPayload);
 const encodeGenerationMessage = Schema.encodeEffect(
   Schema.fromJsonString(
     Schema.Struct({
@@ -547,17 +546,28 @@ const make = Effect.gen(function* () {
       if (current?.tombstone || current?.pendingForget)
         return yield* new MemoryWorkerError({ code: "forgotten" });
       // Reserve input space for the bounded previous payload, including its evidence.
+      const previousHead = current?.revisions.find(
+        (pair) => current.heads.length === 1 && current.heads[0] === pair.revision.revisionId,
+      );
       let previousSummary = work.space.startsWith("_local:")
         ? yield* store.readLocalSummaryPayload(
             environmentId,
             `${environmentId}:${meta.sourceThread.threadId}:summary`,
           )
-        : (current?.revisions.find(
-            (pair) => current.heads.length === 1 && current.heads[0] === pair.revision.revisionId,
-          )?.payload ?? undefined);
+        : (previousHead?.payload ?? undefined);
       const dependencySpace = M.MemorySpaceId.make(
         work.space.startsWith("_local:") ? Service.memoryStableUuid(work.space) : work.space,
       );
+      const requireVerifiedPrevious = Effect.gen(function* () {
+        if (
+          previousHead &&
+          !(yield* store.areAutomaticallyUsable(dependencySpace, [
+            previousHead.revision.revisionId,
+          ]))
+        )
+          return yield* new MemoryWorkerError({ code: "source_invalidated" });
+      });
+      yield* requireVerifiedPrevious;
       if (previousSummary)
         yield* Service.validateSummaryDependencies(dependencySpace, previousSummary).pipe(
           Effect.provideService(SqlClient.SqlClient, sql),
@@ -580,24 +590,16 @@ const make = Effect.gen(function* () {
             ...(previousSummary?.derivedFromMemoryRevisions ?? []),
           ]),
         ];
-        // Use the existing payload contract: no truncation and no unbounded generation.
-        const payload = yield* query(
-          decodePayload(
-            {
-              text: "lineage admission",
-              evidence: [],
-              derivedFromMemoryRevisions: deps,
-            },
-            strict,
-          ),
-        );
-        yield* Service.validateSummaryDependencies(dependencySpace, payload).pipe(
-          Effect.provideService(SqlClient.SqlClient, sql),
-        );
+        yield* Service.validateSummaryDependencies(dependencySpace, {
+          text: "lineage admission",
+          evidence: [],
+          derivedFromMemoryRevisions: deps,
+        }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
         return deps;
       });
       const dependencies = yield* readDependencies;
       const recheckSource = Effect.gen(function* () {
+        yield* requireVerifiedPrevious;
         yield* readSource(work);
         const latest = yield* readDependencies;
         if (

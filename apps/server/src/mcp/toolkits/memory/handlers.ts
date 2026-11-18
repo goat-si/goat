@@ -56,13 +56,26 @@ export const memoryError = (error: unknown): M.MemoryRpcError => {
     return new M.MemoryRpcError({
       code: error.code,
       ...(error.code === "thread_lineage_incomplete"
-        ? {
-            guidance:
-              "This conversation has incomplete memory provenance and cannot save new memories. Start a new conversation to save this memory." as const,
-          }
-        : {}),
+        ? { guidance: M.MEMORY_LINEAGE_GUIDANCE }
+        : error.code === "hub_upgrade_required"
+          ? { guidance: M.MEMORY_HUB_UPGRADE_GUIDANCE }
+          : {}),
     });
   return new M.MemoryRpcError({ code: "storage_failed" });
+};
+
+export const memoryLegacyError = (error: unknown) => {
+  const mapped = memoryError(error);
+  if (mapped.code === "hub_upgrade_required" || mapped.code === "thread_lineage_incomplete")
+    return new M.MemoryRpcError({
+      code: "thread_lineage_incomplete",
+      guidance: M.MEMORY_LEGACY_LINEAGE_GUIDANCE,
+    });
+  if (mapped.capacity?.dimension === "dependencies")
+    return new M.MemoryRpcError({ code: "invalid_output" });
+  if (mapped.capacity?.dimension === "payload_bytes")
+    return new M.MemoryRpcError({ code: "payload_too_large" });
+  return mapped;
 };
 
 export const invocationPermit = (requirement: MemoryAccess.MemoryAccessRequirement | "settings") =>

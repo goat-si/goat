@@ -1,7 +1,9 @@
+import { areAutomaticallyUsable } from "./MemoryRevisionMarks.ts";
 import { makeThreadLineage } from "./store/ThreadLineage.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 import { metadataCodec, metadataOf, stored } from "./store/StoreCodecs.ts";
 import { MemoryStoreConflict, Transaction } from "./store/StoreModel.ts";
 import type { MemoryStoreShape } from "./store/StoreShape.ts";
@@ -502,6 +504,10 @@ const make = Effect.gen(function* () {
     readThreadHookWatermark,
     cancelThreadWork,
     ...lineage,
+    areAutomaticallyUsable: (space, revisions) =>
+      areAutomaticallyUsable(space, revisions).pipe(
+        Effect.provideService(SqlClient.SqlClient, kernel.sql),
+      ),
     commitThreadHook,
     readParked,
     enqueueWork,

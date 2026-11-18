@@ -2,6 +2,7 @@ import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import { installMemoryThreadLineageAccounting } from "./memoryThreadLineageAccounting.ts";
 import { MemoryStorageError } from "../../memory/store/StoreModel.ts";
 
 const decodeLegacyLineage = Schema.decodeUnknownEffect(
@@ -43,7 +44,7 @@ export default Effect.gen(function* () {
     PRIMARY KEY(environment_id,thread_id,ordinal),
     UNIQUE(environment_id,thread_id,revision_id),
     FOREIGN KEY(environment_id,thread_id)
-      REFERENCES memory_thread_lineages(environment_id,thread_id) ON DELETE CASCADE
+      REFERENCES memory_thread_lineages(environment_id,thread_id)
   )`;
   yield* sql`CREATE INDEX memory_thread_lineage_revision_idx
     ON memory_thread_lineage_revisions(revision_id)`;
@@ -67,6 +68,7 @@ export default Effect.gen(function* () {
     derived_cap INTEGER NOT NULL,
     activated_at INTEGER NOT NULL
   )`;
+  yield* installMemoryThreadLineageAccounting();
   let cursor: string | null = null;
   while (true) {
     const rows: ReadonlyArray<{ id: string; metadata_json: string }> = yield* sql<{

@@ -88,7 +88,8 @@ export const makeThreadLineage = ({ sql, transact }: Pick<StoreKernel, "sql" | "
     space: M.MemorySpaceId,
     own: Effect.Success<ReturnType<typeof readOwnLineage>>,
   ): Effect.fn.Return<ThreadLineage, MemoryStorageError> {
-    if (own.space !== undefined && own.space !== space) return { state: "unknown", revisions: [] };
+    if (own.space !== undefined && own.space !== space)
+      return { state: "unknown", revisions: own.revisions };
     const revisions = new Set(own.revisions);
     const result = (state: ThreadLineage["state"]): ThreadLineage => ({
       state,

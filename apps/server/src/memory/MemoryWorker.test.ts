@@ -1254,7 +1254,7 @@ it.effect.each(["fork", "import", "transfer", "overflow"] as const)(
         yield* store.appendThreadLineage(
           { environmentId, threadId },
           space,
-          Array.from({ length: 100 }, (_, n) => M.MemoryRevisionId.make(id(9800 + n))),
+          Array.from({ length: 1000 }, (_, n) => M.MemoryRevisionId.make(id(9800 + n))),
         );
         yield* store.appendThreadLineage({ environmentId, threadId }, space, [
           M.MemoryRevisionId.make(id(9900)),

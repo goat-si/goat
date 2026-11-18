@@ -230,6 +230,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
         refusedReverts: true,
         resolutionInputs: true,
         retainedLocalSpace: true,
+        provenanceProjection: true,
         generationHold: true,
         hubDiagnostics: true,
         siteNotes: true,

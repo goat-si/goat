@@ -216,7 +216,11 @@ export const layer = Layer.effect(
             const pair = aggregate.revisions.find(
               (entry) => entry.revision.revisionId === item.revision.revisionId,
             );
-            if (!pair?.payload) continue;
+            if (
+              !pair?.payload ||
+              !(yield* store.areAutomaticallyUsable(space, [pair.revision.revisionId]))
+            )
+              continue;
             const matchedTerms = matchingTerms(pair.payload.text, terms);
             const termCoverage = terms.length ? matchedTerms.length / terms.length : 0;
             const rel = min === max ? 1 : (-candidate.rank - min) / (max - min);

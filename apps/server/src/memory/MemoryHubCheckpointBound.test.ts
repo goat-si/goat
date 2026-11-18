@@ -20,6 +20,7 @@ import adminMigration from "../persistence/Migrations/109_MemoryHubAdministered.
 import lifecycleMigration from "../persistence/Migrations/110_MemoryCheckpointLifecycle.ts";
 import revisionSizeMigration from "../persistence/Migrations/115_MemoryRevisionCheckpointSize.ts";
 import { CHECKPOINT_PULL_MAX_BYTES, FORGET_RECORDS_MAX_BYTES } from "./MemoryCheckpointBound.ts";
+import { measureMemoryTailBytes, MEMORY_TAIL_ADMISSION_BYTES } from "./MemoryTailAdmission.ts";
 import { encodeCheckpointRecord } from "./MemoryCheckpointInventory.ts";
 import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts";
 import { scanMemoryValue } from "./MemorySecretScanner.ts";
@@ -570,4 +571,97 @@ it.effect(
       const result = yield* hub.push(HubKit.pushInput(op), HubKit.principal());
       assert.strictEqual(result.receipts[0]?.outcome, "deleted");
     }).pipe(Effect.provide(HubKit.live)),
+);
+
+const encodePayload = Schema.encodeSync(Schema.fromJsonString(M.MemoryPayload));
+const encodePush = Schema.encodeSync(Schema.fromJsonString(M.MemoryHubPushInput));
+const decodeCheckpointPage = Schema.decodeUnknownSync(
+  Schema.fromJsonString(M.MemoryHubCheckpointPage),
+);
+
+it.effect("packs a maximal-body 1000-source save in a push, tail, and real checkpoint", () =>
+  Effect.gen(function* () {
+    const store = yield* Store.MemoryStore;
+    const sql = yield* SqlClient.SqlClient;
+    yield* join;
+    yield* sql`INSERT INTO memory_space_features VALUES (${space},1000,0)`;
+    const base = upsert({ memory: 9000, operation: 9001, text: "synthetic", messages: [] });
+    if (base.kind !== "upsert") throw new Error("expected fixture upsert");
+    const sourceWatermark = {
+      fromEventId: M.EventId.make("from-" + "f".repeat(507)),
+      toEventId: M.EventId.make("to-" + "t".repeat(509)),
+      throughSequence: Number.MAX_SAFE_INTEGER,
+    };
+    const payload = {
+      text: "z".repeat(M.MEMORY_BODY_MAX_UTF8_BYTES),
+      evidence: [
+        {
+          origin: "thread" as const,
+          sourceThread: thread,
+          watermark: sourceWatermark,
+          messageIds: [],
+        },
+      ],
+      derivedFromMemoryRevisions: Array.from({ length: 1000 }, (_, n) =>
+        M.MemoryRevisionId.make(id(10000 + n)),
+      ),
+    };
+    const operation = { ...base, payload };
+    const payloadBytes = utf8(encodePayload(payload));
+    const pushBytes = utf8(
+      encodePush({
+        protocolVersion: 1,
+        memorySpaceId: space,
+        environmentId: env,
+        operations: [operation],
+      }),
+    );
+    const tailBytes = yield* measureMemoryTailBytes(operation);
+    assert.isAtMost(payloadBytes, M.MEMORY_PAYLOAD_MAX_UTF8_BYTES);
+    assert.isAtMost(pushBytes, 256 * 1024);
+    assert.isAtMost(tailBytes, MEMORY_TAIL_ADMISSION_BYTES);
+    yield* admit(operation);
+    const tail = yield* store.transact(
+      store.readHubTailTx({
+        memorySpaceId: space,
+        afterSequence: 0,
+        highWatermark: null,
+        limit: 100,
+        maxBytes: M.MEMORY_PAGE_MAX_UTF8_BYTES,
+      }),
+    );
+    assert.lengthOf(tail.entries, 1);
+    yield* snapshot("wide-save");
+    const persisted = (yield* sql<{ body_bytes: number; dependency_bytes: number }>`
+      SELECT length(CAST(body_json AS BLOB)) AS body_bytes, length(CAST(dependencies_json AS BLOB)) AS dependency_bytes
+      FROM memory_payloads WHERE space=${space} AND memory_id=${operation.memoryId}`)[0]!;
+    const counters = yield* store.counters(space);
+    assert.strictEqual(
+      counters.find((r) => r.dimension === "usage_payload_bytes")?.value,
+      persisted.body_bytes,
+    );
+    assert.strictEqual(
+      counters.find((r) => r.dimension === "usage_dependency_bytes")?.value,
+      persisted.dependency_bytes,
+    );
+    const pages = yield* sql<{
+      metadata_json: string;
+    }>`SELECT metadata_json FROM memory_inbox_pending
+      WHERE space=${space} AND reason='hub_snapshot' ORDER BY page_ordinal`;
+    assert.lengthOf(pages, 1);
+    const serialized = pages[0]!.metadata_json;
+    const checkpoint = decodeCheckpointPage(serialized);
+    assert.deepStrictEqual(
+      checkpoint.revisions[0]?.payload?.derivedFromMemoryRevisions,
+      payload.derivedFromMemoryRevisions,
+    );
+    assert.isAtMost(utf8(serialized), CHECKPOINT_PULL_MAX_BYTES);
+    yield* Effect.logInfo("wide memory bytes", {
+      payloadBytes,
+      pushBytes,
+      tailBytes,
+      checkpointBytes: utf8(serialized),
+      ...persisted,
+    });
+  }).pipe(Effect.provide(layer)),
 );

@@ -21,7 +21,7 @@ import * as CloudMachineService from "./cloudMachines/CloudMachineService.ts";
 import * as Handoffs from "./handoffs/Handoffs.ts";
 import { makeHubNodesHandlers } from "./hubNodes/HubNodes.rpc.ts";
 import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
-import { memoryError } from "./mcp/toolkits/memory/handlers.ts";
+import { memoryLegacyError as memoryError } from "./mcp/toolkits/memory/handlers.ts";
 import * as MemoryService from "./memory/MemoryService.ts";
 import { memorySessionPermit } from "./wsMemorySessionPermit.ts";
 import * as SiteNotes from "./preview/SiteNotes.ts";

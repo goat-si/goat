@@ -1,3 +1,4 @@
+import { makeMemoryViewProjection } from "../MemoryViewProjection.ts";
 import * as M from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -33,7 +34,11 @@ import type { MemoryStoreShape } from "./StoreShape.ts";
 const historyPageCodec = codec(M.MemoryHistoryPage);
 const decodeHistoryPage = Schema.decodeUnknownEffect(M.MemoryHistoryPage);
 const historyRevisionCodec = codec(
-  Schema.Struct({ revision: M.MemoryRevision, payload: Schema.NullOr(M.MemoryPayload) }),
+  Schema.Struct({
+    revision: M.MemoryRevision,
+    payload: Schema.NullOr(M.MemoryPayload),
+    marks: Schema.optionalKey(M.MemoryRevisionMarks),
+  }),
 );
 
 export const makeHistory = (
@@ -41,6 +46,7 @@ export const makeHistory = (
   coreReads: Pick<CoreReads, "readItem" | "readOperation">,
 ) => {
   const { sql } = kernel;
+  const viewProjection = makeMemoryViewProjection(sql);
   const { readItem, readOperation } = coreReads;
   const readResolutionInputsPage: MemoryStoreShape["readResolutionInputsPage"] = Effect.fn(
     "MemoryStore.readResolutionInputsPage",
@@ -76,6 +82,7 @@ export const makeHistory = (
         nextCursor: null,
       };
       const revisions: Array<M.MemoryHistoryPage["revisions"][number]> = [];
+      const consumed: MemoryAggregate["revisions"][number][] = [];
       const restorableRevisionIds: M.MemoryRevisionId[] = [];
       let bytes = new TextEncoder().encode(yield* historyPageCodec.encode(page)).length;
       let examined = offset;
@@ -117,9 +124,12 @@ export const makeHistory = (
           strict,
         );
         // Include the UUID in retention metadata and array separators in the byte budget.
+        const metadata = yield* viewProjection.revision(
+          { revision, payload: null },
+          input.includeMarks,
+        );
         const metadataBytes =
-          new TextEncoder().encode(yield* historyRevisionCodec.encode({ revision, payload: null }))
-            .length + 42;
+          new TextEncoder().encode(yield* historyRevisionCodec.encode(metadata)).length + 42;
         const visible =
           current.item.localAvailability.exposure === "visible" && current.item.status === "active";
         const bodyBytes = visible ? row.payload_bytes : 0;
@@ -142,12 +152,16 @@ export const makeHistory = (
           );
           if (bodies[0]) payload = yield* payloadCodec.decode(bodies[0].body_json, strict);
         }
-        revisions.push({ revision, payload });
+        const raw = { revision, payload };
+        const projected = yield* viewProjection.revision(raw, input.includeMarks);
+        revisions.push(projected);
+        if (payload) consumed.push(raw);
         if (visible && row.payload_bytes > 0) restorableRevisionIds.push(id);
         bytes += metadataBytes + (payload ? bodyBytes : 0);
         examined++;
       }
       return {
+        consumed,
         scope: identity?.scope ?? ("scope" in current.item ? current.item.scope : null),
         page: yield* decodeHistoryPage(
           {
@@ -266,7 +280,10 @@ export const makeHistory = (
             FROM memory_revisions r LEFT JOIN memory_payloads p ON p.space=r.space AND p.payload_ref=r.payload_ref
             WHERE r.rowid=${key} AND r.space=${space} AND r.memory_id=${id} LIMIT 1`,
             );
-            if (rows[0]) output = pair = yield* decodeHistoryRevision(rows[0], space, id, visible);
+            if (rows[0]) {
+              pair = yield* decodeHistoryRevision(rows[0], space, id, visible);
+              output = yield* viewProjection.revision(pair, input.includeMarks);
+            }
           } else if (category === 1 || category === 3) {
             const rows = yield* stored(
               "history-resolution",
@@ -431,7 +448,7 @@ export const makeHistory = (
             };
           }
           if (pair) {
-            revisions.push(pair);
+            revisions.push(yield* viewProjection.revision(pair, input.includeMarks));
             if (pair.payload) consumed.push(pair);
           }
           if (resolutionPair) {

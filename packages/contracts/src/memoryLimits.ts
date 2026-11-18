@@ -3,6 +3,7 @@ export const MEMORY_CONTEXT_MAX_UTF8_BYTES = 24 * 1024;
 export const MEMORY_CONTEXT_OUTER_FRAME = "<external_goat_memory></external_goat_memory>";
 export const MEMORY_PAGE_MAX_ITEMS = 100;
 export const MEMORY_PAGE_MAX_UTF8_BYTES = 64 * 1024;
+export const MEMORY_TAIL_ADMISSION_BYTES = MEMORY_PAGE_MAX_UTF8_BYTES - 2048;
 export const MEMORY_PAYLOAD_MAX_UTF8_BYTES = 64 * 1024;
 export const MEMORY_DEFERRED_SWEEP_MAX_ITEMS = 256;
 export const MEMORY_DEFERRED_SWEEP_MAX_BYTES = 8 * 1024 * 1024;
@@ -36,3 +37,21 @@ export const MEMORY_IMPORT_LINEAGE_MAX_RECORDS_PER_MEMORY = 1000;
 export const MEMORY_IMPORT_LINEAGE_MAX_BYTES = 33554432;
 export const MEMORY_IMPORT_KEY_MAX_UTF8_BYTES = 512;
 export const MEMORY_IMPORT_DIGEST_MAX_UTF8_BYTES = 64;
+export const MEMORY_REVERT_WINDOW_MS = 2592000000;
+export const MEMORY_REPLACED_PAYLOAD_RETENTION_MS = 2592000000;
+export const MEMORY_RESOLUTION_PAYLOAD_RETENTION_MS = 2592000000;
+export const MEMORY_HISTORY_MAX_PAYLOAD_BYTES = 134217728;
+export const MEMORY_CHECKPOINT_INTERVAL_MS = 86400000;
+export const MEMORY_CHECKPOINT_TRIGGER_TAIL_ROWS = 10000;
+export const MEMORY_CHECKPOINT_TRIGGER_TAIL_BYTES = 33554432;
+export const MEMORY_LOG_RETENTION_MS = 2592000000;
+export const MEMORY_LOG_MAX_TAIL_ROWS = 50000;
+export const MEMORY_LOG_MAX_TAIL_BYTES = 67108864;
+export const MEMORY_CANONICAL_STAGING_MAX_BYTES = 536870912;
+
+export const MEMORY_LEGACY_LINEAGE_GUIDANCE =
+  "This conversation has incomplete memory provenance and cannot save new memories. Start a new conversation to save this memory.";
+export const MEMORY_LINEAGE_GUIDANCE =
+  "This conversation's memory history is incomplete. Ask the person to say the exact words to remember, or they can accept your suggestion in Settings → Memory.";
+export const MEMORY_HUB_UPGRADE_GUIDANCE =
+  "Other machines in the memory hub need updating before this memory can be saved.";

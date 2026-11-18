@@ -26,7 +26,7 @@ export class MemoryRefusedSaveHook extends Context.Service<
         | "source_invalidated";
     }) => Effect.Effect<void, MemoryServiceError>;
   }
->()("goat/memory/MemoryRefusedSaveHook") {}
+>()("goat/memory/MemoryRemember/MemoryRefusedSaveHook") {}
 
 const encodeProjectKey = Schema.encodeSync(Schema.fromJsonString(M.MemoryProjectKey));
 const scopeKey = (scope: M.MemoryScope) =>

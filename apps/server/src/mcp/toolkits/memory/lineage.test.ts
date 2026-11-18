@@ -217,8 +217,7 @@ it.effect.each(["fork", "import", "transfer", "overflow"] as const)(
         expect(result.result.isError).toBe(true);
         expect(result.body).toMatchObject({
           code: "thread_lineage_incomplete",
-          guidance:
-            "This conversation has incomplete memory provenance and cannot save new memories. Start a new conversation to save this memory.",
+          guidance: M.MEMORY_LINEAGE_GUIDANCE,
         });
       }
       expect(yield* counts).toEqual(before);
@@ -575,6 +574,24 @@ it.effect("remember with 101 sources on the new floor persists every edge for fo
     expect(before.revisions[0]?.payload?.derivedFromMemoryRevisions).toEqual(
       sources.map((source) => source.revision),
     );
+    const legacy = yield* service.read({ memorySpaceId: Fixture.space, memoryId }, Effect.void);
+    expect(legacy.status).toBe("active");
+    if (legacy.status !== "active") throw new Error("expected wide active memory");
+    expect(legacy.payload.derivedFromMemoryRevisions).toEqual([]);
+    yield* service.upsert(
+      {
+        ...Fixture.upsert(32998),
+        memoryId,
+        expectedHeads: [legacy.revision.revisionId],
+        payload: { ...legacy.payload, text: "a legacy Settings edit" },
+      },
+      Effect.void,
+    );
+    const edited = yield* store.loadAggregate(Fixture.space, memoryId);
+    expect(
+      edited.revisions.find((r) => r.revision.revisionId === edited.heads[0])?.payload
+        ?.derivedFromMemoryRevisions,
+    ).toEqual(sources.map((source) => source.revision));
     const last = sources[100]!;
     yield* service.forget(
       {

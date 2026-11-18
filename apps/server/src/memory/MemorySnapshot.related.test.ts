@@ -236,7 +236,7 @@ it.effect.each([false, true])(
     }).pipe(Effect.provide(f.live));
   },
 );
-it.effect.each(["none", "plain", "dependencies", "related-dependencies"] as const)(
+it.effect.each(["none", "plain", "dependencies", "related-dependencies", "wide"] as const)(
   "limits related injection to the full lineage union with $0 base",
   (base) => {
     const f = fixture({ message: "카카오톡 입력창" });
@@ -246,6 +246,7 @@ it.effect.each(["none", "plain", "dependencies", "related-dependencies"] as cons
       const service = yield* Service.MemoryService;
       const snapshot = yield* Snapshot.MemorySnapshot;
       yield* project;
+      if (base === "wide") yield* sql`INSERT INTO memory_space_features VALUES (${space},1000,0)`;
       const projectKey = { kind: "explicit" as const, sharedProjectId: "shared" };
       yield* store.putProjectBinding(
         {
@@ -304,18 +305,22 @@ it.effect.each(["none", "plain", "dependencies", "related-dependencies"] as cons
       yield* store.appendThreadLineage(
         { environmentId, threadId },
         space,
-        Array.from({ length: base === "dependencies" ? 77 : 79 }, (_, n) =>
+        Array.from({ length: base === "wide" ? 749 : base === "dependencies" ? 77 : 79 }, (_, n) =>
           M.MemoryRevisionId.make(id(2000 + n)),
         ),
       );
       const selected = yield* snapshot.forThread(threadId, f.policy(), f.currentPolicy);
       assert.deepStrictEqual(
         selected?.items.map((item) => item.memoryId),
-        base === "none" ? [id(3)] : base === "related-dependencies" ? [id(4)] : [id(2)],
+        base === "none" || base === "wide"
+          ? [id(3)]
+          : base === "related-dependencies"
+            ? [id(4)]
+            : [id(2)],
       );
       assert.strictEqual(
         (yield* store.readThreadLineage({ environmentId, threadId }, space)).revisions.length,
-        80,
+        base === "wide" ? 750 : 80,
       );
     }).pipe(Effect.provide(f.live));
   },

@@ -22,6 +22,18 @@ export const closureCap = Effect.fn("MemoryService.closureCap")(function* (space
     : M.MEMORY_DERIVED_REVISIONS_MAX_V1;
 });
 
+export const validateCheckpointClosureCapacity = Effect.fn(
+  "MemorySyncService.validateCheckpointClosureCapacity",
+)(function* (page: M.MemoryHubCheckpointPage) {
+  const cap = yield* closureCap(page.memorySpaceId);
+  for (const entry of [...page.items, ...page.revisions])
+    if ("payload" in entry && entry.payload)
+      yield* requireClosureCapacity(entry.payload.derivedFromMemoryRevisions.length, cap);
+});
+
+export const relatedExposureCap = (space: M.MemorySpaceId) =>
+  closureCap(space).pipe(Effect.map((cap) => (cap === M.MEMORY_DERIVED_REVISIONS_MAX ? 750 : 80)));
+
 export const requireClosureCapacity = (count: number, limit: number) =>
   count > limit
     ? Effect.fail(
@@ -43,6 +55,7 @@ export const normalizeMemoryDependencies = Effect.fn("MemoryService.normalizeMem
     const limit = yield* closureCap(space);
     const revisions = new Set(payload.derivedFromMemoryRevisions);
     yield* requireClosureCapacity(revisions.size, limit);
+    const allowedHeads = encodeHeads(resolutionHeads);
     for (const revision of revisions) {
       // Only authoritative resolution inputs may use this memory's own history
       // while its current frontier is quarantined. Foreign owners still need visibility.
@@ -53,7 +66,7 @@ export const normalizeMemoryDependencies = Effect.fn("MemoryService.normalizeMem
         WHERE r.space=${space} AND r.revision_id=${revision}
         AND NOT EXISTS (SELECT 1 FROM memory_inbox_pending q WHERE q.space=r.space AND q.operation_id=r.operation_id AND q.record_kind='operation')
         AND (i.status='active' AND json_extract(i.availability_json,'$.exposure')='visible'
-          OR r.memory_id=${resolvingMemoryId ?? null} AND r.revision_id IN (SELECT value FROM json_each(${encodeHeads(resolutionHeads)})))
+          OR r.memory_id=${resolvingMemoryId ?? null} AND r.revision_id IN (SELECT value FROM json_each(${allowedHeads})))
         AND i.status NOT IN ('forgotten','blocked')
         AND NOT EXISTS (SELECT 1 FROM memory_pending_forget_intents f WHERE f.space=r.space AND f.memory_id=r.memory_id)
       `.pipe(

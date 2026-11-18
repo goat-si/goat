@@ -152,6 +152,7 @@ export const makeCommitSummary = (deps: {
           (owner?.environmentId !== thread.environmentId || owner.threadId !== thread.threadId)
         )
           return;
+        if (!(yield* store.areAutomaticallyUsable(space, [summaryRevision]))) return;
         if (head && !promotions.replace) return;
         const payload = yield* decode(
           decodeSummaryPayload(
@@ -270,6 +271,11 @@ export const makeCommitSummary = (deps: {
             return yield* new Store.MemoryStoreConflict({ code: "attempt_expired" });
           return undefined;
         }
+        if (
+          input.input.previousSummary &&
+          !(yield* store.areAutomaticallyUsable(space, current.heads))
+        )
+          return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
         // The final input also carries lineage across in-memory generation chunks. Rebuilds
         // without the old summary must not inherit dependencies from the discarded head.
         const payload = yield* decode(

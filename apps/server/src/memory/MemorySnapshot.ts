@@ -10,6 +10,7 @@ import * as Projection from "../orchestration-v2/ProjectionStore.ts";
 import { makeShellThreadRows } from "../orchestration-v2/ProjectionShellThreadRows.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Service from "./MemoryService.ts";
+import { relatedExposureCap } from "./MemoryDependencies.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Sync from "./MemorySyncService.ts";
 import * as Settings from "../serverSettings.ts";
@@ -141,6 +142,13 @@ const make = Effect.gen(function* () {
           const keys = hasRelated
             ? yield* Related.relatedKeysFor(store, sql, view.space, own, view.project)
             : new Map<string, string>();
+          if (
+            !(yield* store.areAutomaticallyUsable(
+              view.space,
+              snapshot.items.map((item) => item.revisionId),
+            ))
+          )
+            return false;
           const revisions: M.MemoryRevisionId[] = [];
           for (const item of snapshot.items) {
             const current = yield* store.loadAggregate(snapshot.memorySpaceId, item.memoryId);
@@ -161,20 +169,19 @@ const make = Effect.gen(function* () {
                   keys.get(scopeKey(item.scope)) !== relatedBindings.get(scopeKey(item.scope))))
             )
               return false;
-            yield* Service.validateSummaryDependencies(snapshot.memorySpaceId, {
-              ...pair.payload,
-              derivedFromMemoryRevisions: [
-                item.revisionId,
-                ...pair.payload.derivedFromMemoryRevisions,
-              ],
-            }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+            yield* Service.validateSummaryDependencies(snapshot.memorySpaceId, pair.payload).pipe(
+              Effect.provideService(SqlClient.SqlClient, sql),
+            );
             revisions.push(item.revisionId, ...pair.payload.derivedFromMemoryRevisions);
           }
           if (hasRelated) {
             const lineage = yield* store.readThreadLineage(own, view.space);
             if (
               lineage.state !== "tracked" ||
-              new Set([...lineage.revisions, ...revisions]).size > 80
+              new Set([...lineage.revisions, ...revisions]).size >
+                (yield* relatedExposureCap(view.space).pipe(
+                  Effect.provideService(SqlClient.SqlClient, sql),
+                ))
             )
               return false;
           }
@@ -240,7 +247,12 @@ const make = Effect.gen(function* () {
             revisions.add(item.revisionId);
             for (const revision of pair.payload.derivedFromMemoryRevisions) revisions.add(revision);
           }
-          return revisions.size <= 80;
+          return (
+            revisions.size <=
+            (yield* relatedExposureCap(view.space).pipe(
+              Effect.provideService(SqlClient.SqlClient, sql),
+            ))
+          );
         }),
       );
       if (fits) return snapshot;
