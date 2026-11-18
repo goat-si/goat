@@ -443,7 +443,8 @@ export const layer: Layer.Layer<
             worktree === null
               ? execute(input, aside)
               : withWorkspaceLease(worktree, execute(input, aside));
-          // A file restore keeps turn starts out of every overlapping folder; a rewind touches no file.
+          // A file restore keeps turn starts out of every overlapping folder. A rewind takes no
+          // reservation, even when it recreates a missing worktree (under the folder lease only).
           yield* (
             worktree === null || input.restoreFiles === false
               ? rollback
