@@ -415,3 +415,17 @@ Local head `0fffea579caac015d73d7beacdce788c1b546012` has four independent commi
 P2-2 implementation is in the working tree. The two failing-first cases proved both missing and wrong HTTP instance IDs were used to resume; the revised tests cover each ID on both response shapes, no persisted HTTP shell, and correct persistence from the subsequent socket snapshot. Existing client shell and thread-family assertions remain intact, with fixture configuration and replies supplying the serving identity. The server scopes and client-runtime typechecks passed. The latest client whole-file run passed 80 tests across five files. Guarded transfer budget, bounded snapshot transport, and Hub HTTP tests passed 48 tests across three files.
 
 Rule 3 request is pending for apps/server/src/orchestration-v2/http.test.ts. Its existing exact expected body is `{ resumable: true }`; the new response requires `{ resumable: true, instanceId: "serving-instance" }`. The coordinator has the precise before and after. P2-2 commit, final lane gate and plain push await that ruling.
+
+### Fix round 1 historical shell cross-decode
+
+The coordinator approved the exact server test change to `{ resumable: true, instanceId: "serving-instance" }`. The HTTP test also verifies the serving ID on both the ordinary full snapshot and the full snapshot for a cursor ahead of the server, and retains the scope-denial assertion. Changes in existing client fixtures add matching serving IDs while preserving their assertions.
+
+Captured the actual JSON bodies from the guarded replayable-shell route test, including the legacy no-query full reply. Ran `node --conditions development check.mts` against the historic contract and client-runtime source exported with `git archive`. It loaded each revision's real `EnvironmentHttpApi` in Effect's generated HTTP client and its real `fetchEnvironmentShellSnapshot` response-only loader. Each response was also run without the new field as a control.
+
+| Source revision | Full snapshot with serving ID | Resumable reply with serving ID |
+| --- | --- | --- |
+| Integration before K7b-1 `78bcbf193331327e4b88e65e522ceb318b67db14` | Both decoders succeeded. The HTTP value equaled the control and the loader retained the same cursor and thread IDs. The field was ignored. | Both decoders rejected it because required snapshot fields were missing, with identical outcome without the new field. There is no `resumeFrom` option in the historic query or caller. |
+| Pre-K7b-2 cut `f82d2df4b0960eb39bd36e4100b72b6f2758c7d2` | Both decoders succeeded with the same result as the control. The field was ignored. | Both decoders rejected this shape even without the field. The historic endpoint only knows the full shell and the caller never sends `resumeFrom`. |
+| Reviewed K7b-1 `ab42f18f6271d57bdbe1947d9791beff9f588d37` | Both succeeded and ignored the field. | Both succeeded with `resumable: true`; adding the field did not affect acceptance. |
+
+No earlier decoder reported an excess-property error. The snapshot-only clients always reach the full-reply branch and can decode its new field. Clients that already opt into resumability by sending `resumeFrom` decode both replies. The updated client rejects an HTTP response with missing or mismatched instance ID and requests a complete socket snapshot. No extra request flag was needed.
