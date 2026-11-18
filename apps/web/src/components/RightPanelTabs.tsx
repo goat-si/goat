@@ -72,7 +72,7 @@ import {
   previewFaviconOf,
   RightPanelTab,
   SortableTabList,
-  type TabAudioState,
+  tabAudioState,
 } from "./RightPanelTab";
 import { usePanelTabLayout } from "./usePanelTabLayout";
 import { surfaceShortcutKey } from "~/lib/surfaceShortcutKey";
@@ -173,11 +173,6 @@ function tabMuteMenuItem(input: {
     label: muted ? "Unmute tab" : "Mute tab",
     disabled: input.overlay === null || !input.canResolveRuntimeTabId,
   };
-}
-
-function tabAudioState(overlay: DesktopPreviewOverlay | null): TabAudioState {
-  if (!overlay?.audible) return "none";
-  return overlay.audioMuted ? "muted" : "audible";
 }
 
 type SurfaceShortcutEvent = Pick<
