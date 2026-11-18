@@ -384,6 +384,23 @@ effectIt.effect("recovers an abandoned failed turn before continuing its native 
   }),
 );
 
+effectIt.effect.each(["interrupted", "rolled_back"] as const)(
+  "recovers a running turn left on a superseded attempt of a %s run",
+  (runStatus) =>
+    Effect.gen(function* () {
+      const harness = makeLocalCommandHarness({
+        text: "Continue",
+        previousTurn: { runStatus, turnStatus: "running", supersededTurn: true },
+      });
+      yield* harness.start;
+      const abandoned = harness
+        .projection()
+        .providerTurns.find((turn) => turn.id === ProviderTurnId.make("previous-provider-turn"));
+      expect(abandoned?.status).toBe("interrupted");
+      expect(harness.projection().runs.at(-1)?.status).toBe("running");
+    }),
+);
+
 effectIt.effect("hands the run worker the reason its Stop recorded, read for that run only", () =>
   Effect.gen(function* () {
     const harness = makeLocalCommandHarness({

@@ -18,6 +18,7 @@ const ENDED_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
   "interrupted",
   "failed",
   "cancelled",
+  "rolled_back",
 ]);
 
 export const STOPPED_EARLIER_TURN_MESSAGE =
@@ -62,22 +63,34 @@ function stoppedEarlierTurnNotice(input: {
  * path that settled its run while the provider kept working. A restart continuation adopts the turn
  * its source run left running, so that source is not among them.
  */
-export const endedRunsByAttempt = (
-  runs: ReadonlyArray<OrchestrationV2Run>,
+export function endedRunsByAttempt(
+  { runs, attempts }: Pick<OrchestrationV2ThreadProjection, "runs" | "attempts">,
   run: Pick<OrchestrationV2Run, "ordinal" | "restartContinuationOfRunId">,
   providerThreadId: OrchestrationV2ProviderThread["id"],
-) =>
-  new Map(
+) {
+  const ended = new Map(
     runs
       .filter(
         (previous) =>
           previous.ordinal < run.ordinal &&
-          previous.providerThreadId === providerThreadId &&
           ENDED_RUN_STATUSES.has(previous.status) &&
           previous.id !== run.restartContinuationOfRunId,
       )
+      .map((previous) => [previous.id, previous] as const),
+  );
+  const byAttempt = new Map(
+    Array.from(ended.values())
+      .filter((previous) => previous.providerThreadId === providerThreadId)
       .map((previous) => [previous.activeAttemptId, previous] as const),
   );
+  for (const attempt of attempts) {
+    const previous = ended.get(attempt.runId);
+    if (previous !== undefined && attempt.providerThreadId === providerThreadId) {
+      byAttempt.set(attempt.id, previous);
+    }
+  }
+  return byAttempt;
+}
 
 /**
  * Marks the turns ended runs left running interrupted. When the stop went through a live session and

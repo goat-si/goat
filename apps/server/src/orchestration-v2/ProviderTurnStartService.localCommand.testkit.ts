@@ -86,7 +86,8 @@ export function makeLocalCommandHarness(input: {
     readonly currentRun?: () => RunId | undefined;
   };
   readonly previousTurn?: {
-    readonly runStatus: "failed" | "completed" | "interrupted";
+    readonly runStatus: "failed" | "completed" | "interrupted" | "rolled_back";
+    readonly supersededTurn?: boolean;
     readonly terminationCause?: "person_stop" | "agent_stop";
     readonly turnStatus: "running" | "completed" | "interrupted";
     readonly differentThread?: boolean;
@@ -288,11 +289,31 @@ export function makeLocalCommandHarness(input: {
   const previousRunId = RunId.make("previous-failed-run");
   if (input.previousTurn !== undefined) {
     const previousAttemptId = RunAttemptId.make("previous-failed-attempt");
+    const restartedAttemptId = RunAttemptId.make("previous-restarted-attempt");
+    const previousRootId = NodeId.make("previous-root");
     const previousProviderThreadId = input.previousTurn.differentThread
       ? oldProviderThreadId
       : providerThreadId;
     projection = {
       ...projection,
+      attempts: input.previousTurn.supersededTurn
+        ? [
+            {
+              id: previousAttemptId,
+              runId: previousRunId,
+              attemptOrdinal: 1,
+              rootNodeId: previousRootId,
+              providerInstanceId: run.providerInstanceId,
+              providerThreadId: previousProviderThreadId,
+              providerTurnId: previousTurnId,
+              reason: "initial",
+              status: "superseded",
+              startedAt: now,
+              completedAt: now,
+            },
+            ...projection.attempts,
+          ]
+        : projection.attempts,
       runs: [
         {
           ...run,
@@ -302,8 +323,12 @@ export function makeLocalCommandHarness(input: {
           ...(input.previousTurn.terminationCause === undefined
             ? {}
             : { terminationCause: { kind: input.previousTurn.terminationCause } }),
-          rootNodeId: NodeId.make("previous-root"),
-          activeAttemptId: previousAttemptId,
+          rootNodeId: input.previousTurn.supersededTurn
+            ? NodeId.make("previous-steered-root")
+            : previousRootId,
+          activeAttemptId: input.previousTurn.supersededTurn
+            ? restartedAttemptId
+            : previousAttemptId,
           providerThreadId: previousProviderThreadId,
           completedAt: now,
         },
@@ -622,12 +647,14 @@ export function makeLocalCommandHarness(input: {
               projection.runs.find((candidate) => candidate.id === id),
             ),
           getTurnStartHistory: () =>
-            Effect.fail(
-              new ProjectionStore.ProjectionStoreReadError({
-                threadId,
-                cause: input.historyReadFailureAfterFallback,
-              }),
-            ),
+            input.previousTurn?.supersededTurn
+              ? Effect.succeed([])
+              : Effect.fail(
+                  new ProjectionStore.ProjectionStoreReadError({
+                    threadId,
+                    cause: input.historyReadFailureAfterFallback,
+                  }),
+                ),
         }),
         ...(input.memory === undefined
           ? []
