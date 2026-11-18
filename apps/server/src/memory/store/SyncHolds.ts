@@ -1,7 +1,11 @@
 import * as M from "@goat/contracts";
 import { legacyClosedLineageDigest } from "../MemoryDecider.ts";
 import * as Effect from "effect/Effect";
-import { promotionPrerequisiteReady } from "./FloorWrites.ts";
+import {
+  discardRevokedProjectPromotions,
+  promotionBindingCurrent,
+  promotionPrerequisiteReady,
+} from "./FloorWrites.ts";
 import { acceptanceGenerationMatches } from "./SaveSuggestions.ts";
 import type { CoreReads } from "./CoreReads.ts";
 import {
@@ -41,6 +45,8 @@ export const makeSyncHolds = (
       hashText(M.encodeMemoryOperation(op)) !== input.operationDigest
     )
       return null;
+    if (op.kind === "upsert" && op.revision.scope.kind === "project")
+      yield* discardRevokedProjectPromotions(sql, op.memorySpaceId, sql`id=${input.workId}`);
     const legacyDigest = legacyClosedLineageDigest(op) ?? null;
     const rows = yield* stored(
       "sync-acquire",
@@ -52,6 +58,7 @@ export const makeSyncHolds = (
       WHERE id=${input.workId} AND kind IN ('sync','revert_intent') AND sync_version=${input.expectedVersion}
         AND (operation_digest IS NULL OR operation_digest IN (${input.operationDigest},${legacyDigest})) AND next_attempt_at<=${input.now}
         AND ${acceptanceGenerationMatches(sql)} AND ${promotionPrerequisiteReady(sql, "memory_outbox")}
+        AND ${promotionBindingCurrent(sql)}
         AND (status IN ('pending','retry') OR (status='running' AND claimed_until<=${input.now})) RETURNING id`,
     );
     return rows.length

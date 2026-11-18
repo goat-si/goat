@@ -690,6 +690,7 @@ export const makeCoreReads = (kernel: Pick<StoreKernel, "sql" | "transact">) => 
       authorityFirst: _authority,
       acceptanceGeneration: _acceptance,
       summaryPrerequisite: _summary,
+      promotionBinding: _project,
       ...metadata
     } = work.metadata;
     return yield* operationFromMetadata(metadata);

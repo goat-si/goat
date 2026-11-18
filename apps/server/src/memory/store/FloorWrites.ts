@@ -1,5 +1,6 @@
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import type * as Statement from "effect/sql/Statement";
 import type * as SqlClient from "effect/sql/SqlClient";
 import { memoryOperationDigest } from "../MemoryDecider.ts";
 import type { ItemWrites } from "./ItemWrites.ts";
@@ -15,10 +16,18 @@ import {
 export const floorWriteId = (space: M.MemorySpaceId, operationId: M.MemoryOperationId) =>
   `sync:${space}:${operationId}`;
 
+export type PromotionPrerequisite = {
+  readonly summaryPrerequisite: M.MemoryRevisionId;
+  readonly promotionBinding?: {
+    readonly project: M.ScopedProjectRef;
+    readonly version: number;
+  };
+};
+
 export interface FloorWriteStore {
   readonly stageFloorWrite: (
     operation: Extract<M.MemoryOperation, { kind: "upsert" }>,
-    summaryPrerequisite?: M.MemoryRevisionId,
+    promotion?: PromotionPrerequisite,
   ) => InTx<void, MemoryCapacityError | MemoryStorageError>;
 }
 
@@ -28,14 +37,14 @@ export const makeFloorWrites = (
 ) => {
   const stageFloorWrite: FloorWriteStore["stageFloorWrite"] = Effect.fn(
     "MemoryStore.stageFloorWrite",
-  )(function* (operation: Extract<M.MemoryOperation, { kind: "upsert" }>, summaryPrerequisite) {
+  )(function* (operation, promotion) {
     yield* Transaction;
     const { memorySpaceId: space, memoryId, revision, operationId } = operation;
     const body = yield* payloadCodec.encode(operation.payload);
     const metadata = {
       ...metadataOf(operation),
       authorityFirst: memoryOperationDigest(operation),
-      ...(summaryPrerequisite ? { summaryPrerequisite } : {}),
+      ...promotion,
     };
     const [usage] = yield* stored(
       "floor-stage-budget",
@@ -93,13 +102,24 @@ export const promotionPrerequisiteReady = (
   ))`;
 };
 
-export const discardFloorPromotions = Effect.fn("MemoryStore.discardFloorPromotions")(function* (
+export const promotionBindingCurrent = (sql: SqlClient.SqlClient) => sql`(
+  json_extract(memory_outbox.metadata_json,'$.summaryPrerequisite') IS NULL OR
+  json_extract(memory_outbox.metadata_json,'$.revision.scope.kind') != 'project' OR EXISTS (
+    SELECT 1 FROM memory_project_bindings b
+    WHERE b.memory_space_id=memory_outbox.space
+      AND b.environment_id=json_extract(memory_outbox.metadata_json,'$.promotionBinding.project.environmentId')
+      AND b.project_id=json_extract(memory_outbox.metadata_json,'$.promotionBinding.project.projectId')
+      AND b.version=json_extract(memory_outbox.metadata_json,'$.promotionBinding.version')
+      AND b.project_key_json IS NOT NULL
+  ))`;
+
+const discardQueuedPromotions = Effect.fn("MemoryStore.discardQueuedPromotions")(function* (
   sql: SqlClient.SqlClient,
   space: string,
-  revision: M.MemoryRevisionId,
+  predicate: Statement.Fragment,
 ) {
-  const latent = sql`space=${space} AND kind='sync' AND status IN ('pending','retry','running')
-    AND json_extract(metadata_json,'$.summaryPrerequisite')=${revision}`;
+  yield* Transaction;
+  const latent = sql`space=${space} AND kind='sync' AND status IN ('pending','retry','running') AND ${predicate}`;
   yield* stored(
     "promotion-discard-body",
     sql`DELETE FROM memory_payloads
@@ -114,3 +134,20 @@ export const discardFloorPromotions = Effect.fn("MemoryStore.discardFloorPromoti
     WHERE ${latent}`,
   );
 });
+
+export const discardFloorPromotions = (
+  sql: SqlClient.SqlClient,
+  space: string,
+  revision: M.MemoryRevisionId,
+) =>
+  discardQueuedPromotions(
+    sql,
+    space,
+    sql`json_extract(metadata_json,'$.summaryPrerequisite')=${revision}`,
+  );
+
+export const discardRevokedProjectPromotions = (
+  sql: SqlClient.SqlClient,
+  space: M.MemorySpaceId,
+  match: Statement.Fragment,
+) => discardQueuedPromotions(sql, space, sql`${match} AND NOT ${promotionBindingCurrent(sql)}`);

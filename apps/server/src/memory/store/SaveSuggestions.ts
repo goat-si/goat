@@ -1,5 +1,9 @@
 import { validateSummaryDependencies } from "../MemoryDependencies.ts";
-import { floorWriteId, promotionPrerequisiteReady } from "./FloorWrites.ts";
+import {
+  floorWriteId,
+  promotionBindingCurrent,
+  promotionPrerequisiteReady,
+} from "./FloorWrites.ts";
 import * as M from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -68,7 +72,7 @@ export const checkAcceptanceDispatch = Effect.fn("MemorySuggestions.checkDispatc
       AND claimed_by=${owner.owner} AND sync_version=${owner.version}
       AND operation_digest=${owner.operationDigest} AND claimed_until=${owner.ownedUntil}
       AND claimed_until>${now} AND ${acceptanceGenerationMatches(sql)}
-      AND ${promotionPrerequisiteReady(sql, "memory_outbox")}`,
+      AND ${promotionPrerequisiteReady(sql, "memory_outbox")} AND ${promotionBindingCurrent(sql)}`,
   ).pipe(Effect.mapError(() => new M.MemoryHubError({ code: "storage_failed" })));
   if (!rows.length) return yield* new M.MemoryHubError({ code: "source_invalidated" });
   if (promotion)

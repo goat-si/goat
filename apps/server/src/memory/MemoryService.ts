@@ -27,6 +27,7 @@ import {
   requireClosureCapacity,
   validateSummaryDependencies,
 } from "./MemoryDependencies.ts";
+import type { PromotionPrerequisite } from "./store/FloorWrites.ts";
 import { Transaction as StoreTransaction } from "./store/StoreModel.ts";
 import * as Settings from "../serverSettings.ts";
 import {
@@ -602,7 +603,7 @@ const make = Effect.fnUntraced(function* (
     admission: Store.MemoryAdmissionContext,
     permit: Permit,
     approval?: M.MemoryHubReceipt,
-    summaryPrerequisite?: M.MemoryRevisionId,
+    promotion?: PromotionPrerequisite,
   ) {
     const digest =
       approval?.operationDigest ??
@@ -678,7 +679,7 @@ const make = Effect.fnUntraced(function* (
             return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
           return yield* quota.withAdmission(
             { operation: op, admission, environmentId, receipt: decision.receipt },
-            Effect.andThen(permit, store.stageFloorWrite(op, summaryPrerequisite)).pipe(
+            Effect.andThen(permit, store.stageFloorWrite(op, promotion)).pipe(
               Effect.as({
                 operationDigest: digest,
                 receipt: { ...decision.receipt, revisionId: null, pendingSync: true },

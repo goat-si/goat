@@ -94,6 +94,12 @@ export const Metadata = Schema.Struct({
   authorityFirst: Schema.optionalKey(digest),
   acceptanceGeneration: Schema.optionalKey(Schema.Int),
   summaryPrerequisite: Schema.optionalKey(M.MemoryRevisionId),
+  promotionBinding: Schema.optionalKey(
+    Schema.Struct({
+      project: M.ScopedProjectRef,
+      version: M.NonNegativeInt,
+    }),
+  ),
   revision: Schema.optionalKey(M.MemoryRevision),
   tombstone: Schema.optionalKey(M.MemoryTombstone),
   resolution: Schema.optionalKey(M.MemoryResolution),

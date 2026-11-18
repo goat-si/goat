@@ -7,6 +7,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Store from "./MemoryStore.ts";
 import { redactMemoryText, scanMemoryValue } from "./MemorySecretScanner.ts";
+import type { PromotionPrerequisite } from "./store/FloorWrites.ts";
 import type { MemoryServiceError } from "./MemoryService.ts";
 
 export type SummaryPromotionCommit = {
@@ -78,7 +79,7 @@ export const makeCommitSummary = (deps: {
     op: M.MemoryOperation,
     admission: Store.MemoryAdmissionContext,
     permit: Effect.Effect<void>,
-    summaryPrerequisite?: M.MemoryRevisionId,
+    promotion?: PromotionPrerequisite,
   ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
   readonly validateDependencies: (
     space: M.MemorySpaceId,
@@ -120,6 +121,7 @@ export const makeCommitSummary = (deps: {
       if (scanMemoryValue(candidate).kind !== "allowed") continue;
       const safe = redactMemoryText(candidate);
       let scope: M.MemoryScope = { kind: "user" };
+      let promotionBinding: PromotionPrerequisite["promotionBinding"];
       let key = "user";
       if (destination === "project") {
         if (!promotions.project) continue;
@@ -131,6 +133,7 @@ export const makeCommitSummary = (deps: {
           encodeProjectKey(binding.projectKey) !== encodeProjectKey(projectKey)
         )
           continue;
+        promotionBinding = { project: promotions.project.project, version: binding.version };
         scope = { kind: "project", projectKey };
         key = `project:${encodeProjectKey(projectKey)}`;
       }
@@ -212,7 +215,12 @@ export const makeCommitSummary = (deps: {
           },
           Store.localIntent,
           Effect.void,
-          staged ? summaryRevision : undefined,
+          staged
+            ? {
+                summaryPrerequisite: summaryRevision,
+                ...(promotionBinding ? { promotionBinding } : {}),
+              }
+            : undefined,
         );
       });
       // Inside the summary's transaction this is a savepoint: a refused promotion rolls back alone.
