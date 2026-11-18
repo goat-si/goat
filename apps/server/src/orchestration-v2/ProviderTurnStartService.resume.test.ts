@@ -12,6 +12,7 @@ effectIt.effect.each([
   "registered-unsent",
   "ambiguous",
   "legacy",
+  "restart-stub",
 ] as const)("handles manual Resume with a %s source", (scenario) =>
   Effect.gen(function* () {
     const harness = makeLocalCommandHarness({
@@ -22,11 +23,12 @@ effectIt.effect.each([
         ...(scenario === "registered-unsent" ? { delivery: "unsent" } : {}),
         ...(scenario === "ambiguous" ? { delivery: "ambiguous" } : {}),
         ...(scenario === "legacy" ? { legacy: true } : {}),
+        ...(scenario === "restart-stub" ? { restart: true, delivery: "unsent" } : {}),
       },
       previousTurn: { runStatus: "interrupted", turnStatus: "interrupted" },
     });
     yield* harness.start;
-    if (scenario === "ambiguous" || scenario === "legacy") {
+    if (scenario === "ambiguous" || scenario === "legacy" || scenario === "restart-stub") {
       expect(harness.projection().turnItems).toMatchObject([
         {
           type: "error",

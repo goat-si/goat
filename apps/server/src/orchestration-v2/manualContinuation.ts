@@ -44,6 +44,7 @@ export function manualContinuationDelivery(
       inputAttempts.some((attempt) => attempt.inputDelivery !== "unsent")
     )
       break;
+    if (replacement === 0 && source.restartContinuationOfRunId !== undefined) break;
     if (replacement !== 0 || source.manualContinuationOfRunId === undefined)
       return { type: "replay", source };
     sourceId = source.manualContinuationOfRunId;

@@ -16,6 +16,7 @@ export interface AttemptDeliveryUpdate {
   readonly id: EventId;
   readonly occurredAt: DateTime.Utc;
   readonly delivery: Exclude<InputDelivery, "unsent">;
+  readonly inherited?: true;
 }
 
 const decodeAttempt = Schema.decodeUnknownEffect(
@@ -52,7 +53,9 @@ export const withAttemptDeliveryEvent = Effect.fn("EventSink.withAttemptDelivery
   if (
     attempt.inputDelivery === "accepted" ||
     attempt.inputDelivery === update.delivery ||
-    (update.delivery === "accepted" && attempt.inputDelivery !== "ambiguous")
+    (update.delivery === "accepted" &&
+      attempt.inputDelivery !== "ambiguous" &&
+      update.inherited !== true)
   )
     return input.events;
   return [

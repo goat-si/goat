@@ -535,6 +535,8 @@ export type ProviderAdapterV2CloudTaskMetadata = Pick<
 export interface ProviderInputDelivery {
   readonly begin: () => Effect.Effect<boolean, ProviderAdapterTurnStartError>;
   readonly accepted: () => Effect.Effect<void>;
+  /** A continuation attached to work the provider was already running. */
+  readonly inherited: () => Effect.Effect<void>;
 }
 
 export interface ProviderAdapterV2TurnInput {

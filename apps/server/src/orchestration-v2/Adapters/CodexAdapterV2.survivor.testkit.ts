@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -15,3 +16,18 @@ const layerTest = Layer.mergeAll(
 );
 
 export { layerTest };
+
+export function makeSurvivorInputEvidence() {
+  let inherited = 0;
+  return {
+    inputDelivery: {
+      begin: () => Effect.die("Survivor adoption must not submit input."),
+      accepted: () => Effect.void,
+      inherited: () =>
+        Effect.sync(() => {
+          inherited++;
+        }),
+    },
+    inheritedCount: () => inherited,
+  };
+}

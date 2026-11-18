@@ -14,7 +14,7 @@ export const makeRunInputDelivery = Effect.fn("RunExecutionService.makeInputDeli
 ) {
   if (reattach === true || attempt.inputDelivery === undefined) return undefined;
   const write = Effect.fn("RunExecutionService.writeInputDelivery")(
-    function* (delivery: AttemptDeliveryUpdate["delivery"]) {
+    function* (delivery: AttemptDeliveryUpdate["delivery"], inherited = false) {
       const { id: runId, threadId } = run;
       const result = yield* eventSink.writeIfRunCurrent({
         threadId,
@@ -33,6 +33,7 @@ export const makeRunInputDelivery = Effect.fn("RunExecutionService.makeInputDeli
           id: yield* ids.allocate.event({ threadId }),
           occurredAt: yield* DateTime.now,
           delivery,
+          ...(inherited ? { inherited: true } : {}),
         },
         events: [],
       });
@@ -49,14 +50,15 @@ export const makeRunInputDelivery = Effect.fn("RunExecutionService.makeInputDeli
         }),
     ),
   );
-  const accepted = yield* Effect.cached(
-    write("accepted").pipe(
-      Effect.asVoid,
-      Effect.catch(() =>
-        Effect.logWarning("Provider input acceptance could not be recorded.", { runId: run.id }),
-      ),
+  const acknowledge = Effect.fn("RunExecutionService.acknowledgeInputDelivery")(
+    function* (inherited = false) {
+      yield* write("accepted", inherited);
+    },
+    Effect.catch(() =>
+      Effect.logWarning("Provider input acceptance could not be recorded.", { runId: run.id }),
     ),
   );
+  const accepted = yield* Effect.cached(acknowledge());
   const submitted = yield* Ref.make(false);
   const begin = write("ambiguous").pipe(
     Effect.tap((admitted) => (admitted ? Ref.set(submitted, true) : Effect.void)),
@@ -64,6 +66,7 @@ export const makeRunInputDelivery = Effect.fn("RunExecutionService.makeInputDeli
   return {
     begin: () => begin,
     accepted: () => accepted,
+    inherited: () => acknowledge(true),
     submitted: Ref.get(submitted),
   } satisfies ProviderAdapter.ProviderInputDelivery & {
     readonly submitted: Effect.Effect<boolean>;
