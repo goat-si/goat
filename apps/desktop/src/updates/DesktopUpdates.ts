@@ -76,6 +76,7 @@ import {
   getDesktopUpdateInstallationMessage,
 } from "./updateInstallation.ts";
 import {
+  clearDesktopUpdateInstallError,
   createInitialDesktopUpdateState,
   reduceDesktopUpdateStateOnCheckFailure,
   reduceDesktopUpdateStateOnCheckStart,
@@ -701,6 +702,7 @@ export const make = Effect.gen(function* () {
         yield* Ref.set(installRunningBackendsRef, []);
 
         return yield* Effect.gen(function* () {
+          yield* updateState(clearDesktopUpdateInstallError);
           yield* writeUpdateRestartMarker;
           yield* writeInstallRecord(expectedVersion);
           // Stop pooled backends and SSH tunnels before quitAndInstall can outrun their scope finalizers.
