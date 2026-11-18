@@ -24,7 +24,6 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
-import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
@@ -71,6 +70,12 @@ import {
 
 export type { ServerConfigProjection } from "./serverConfigProjection.ts";
 
+import {
+  ServerUpdateProgressIncompleteError,
+  ServerUpdateResumeTimeoutError,
+  ServerUpdateTerminalError,
+} from "./serverUpdateErrors.ts";
+
 export type ServerUpdateStage = "downloading" | "installing" | "resuming";
 
 export type ServerUpdateState =
@@ -103,42 +108,6 @@ export const serverUpdateStateAtom = Atom.family((environmentId: EnvironmentId) 
     Atom.withLabel(`environment-data:server:update-state:${environmentId}`),
   ),
 );
-
-export class ServerUpdateResumeTimeoutError extends Schema.TaggedError<ServerUpdateResumeTimeoutError>()(
-  "ServerUpdateResumeTimeoutError",
-  {
-    environmentId: Schema.String,
-    targetVersion: Schema.String,
-  },
-) {
-  override get message(): string {
-    return `Could not confirm that the server resumed on GOAT ${this.targetVersion}. Reconnect to check the update outcome.`;
-  }
-}
-
-export class ServerUpdateProgressIncompleteError extends Schema.TaggedError<ServerUpdateProgressIncompleteError>()(
-  "ServerUpdateProgressIncompleteError",
-  {
-    targetVersion: Schema.String,
-  },
-) {
-  override get message(): string {
-    return `The GOAT ${this.targetVersion} update ended before the server accepted the restart.`;
-  }
-}
-
-export class ServerUpdateTerminalError extends Schema.TaggedError<ServerUpdateTerminalError>()(
-  "ServerUpdateTerminalError",
-  {
-    targetVersion: Schema.String,
-    status: Schema.Literals(["committed", "rolled-back", "failed"]),
-    reason: Schema.optional(Schema.String),
-  },
-) {
-  override get message(): string {
-    return this.reason ?? `The GOAT ${this.targetVersion} update ${this.status}.`;
-  }
-}
 
 // Covers the service launcher's 30-minute trial deadline (PREPARED_TIMEOUT_MS)
 // and a final restart of the previous version when the trial rolls back.
