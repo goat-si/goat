@@ -266,10 +266,9 @@ const steps = [
       "typecheck",
     ],
   },
-  // From the repo root, the root vite.config.ts hands each file to its package's config.
   vitestTests.length > 0 && {
     name: `test (${vitestTests.length} files)`,
-    args: ["test", "run", "--reporter=default", "--passWithNoTests", ...vitestTests],
+    args: ["exec", "node", "scripts/run-changed-vitest.ts", ...vitestTests],
     stream: true,
   },
   nodeTests.length > 0 && {
