@@ -301,6 +301,10 @@ it.effect.each([
             },
           }),
           FileSystem.layerNoop({
+            lstat: (file) =>
+              file === shim
+                ? Effect.succeed({ type: "File" } as FileSystem.File.Info)
+                : Effect.die("unexpected lstat"),
             readFileString: (file) =>
               file === shim ? Effect.succeed(files.get(shim) ?? "") : Effect.die("unexpected read"),
             makeDirectory: () => Effect.void,
