@@ -252,18 +252,22 @@ export function resolveServerConfigValue(
 
 type ServerProviderEntry = ServerConfig["providers"][number];
 
-/**
- * The provider-wide fields a workspace snapshot builds on. A live session, a sign-out, or a
- * /usage-limits change shows up here, so a snapshot fetched before it no longer applies.
- */
-const snapshotBasis = (provider: ServerProviderEntry | undefined) =>
-  provider && {
+function snapshotBasis(provider: ServerProviderEntry | undefined, reply?: ServerProviderEntry) {
+  if (!provider) return undefined;
+  // A cwd reply carries the observed installation but omits the machine models.
+  const installation = reply ?? provider;
+  const catalogDigest = reply?.catalogDigest ?? provider.catalogDigest;
+  return {
     enabled: provider.enabled,
+    installed: installation.installed,
+    version: installation.version,
+    installedVersion: installation.installedVersion,
     models: provider.models,
-    ...(provider.catalogDigest === undefined
+    ...(catalogDigest === undefined
       ? { slashCommands: provider.slashCommands, skills: provider.skills }
-      : { catalogDigest: provider.catalogDigest }),
+      : { catalogDigest }),
   };
+}
 
 interface FetchedWorkspaceSnapshot {
   readonly instanceId: ProviderInstanceId;
@@ -310,10 +314,9 @@ export function recordFetchedWorkspaceSnapshot(
   providers: ServerConfig["providers"],
   configProvider: ServerProviderEntry | undefined,
 ): ReadonlyArray<FetchedWorkspaceSnapshot> {
-  const basis = snapshotBasis(configProvider);
-  const snapshot = providers
-    .find((provider) => provider.instanceId === input.instanceId)
-    ?.workspaceSnapshots?.find((candidate) => candidate.cwd === input.cwd);
+  const reply = providers.find((provider) => provider.instanceId === input.instanceId);
+  const basis = snapshotBasis(configProvider, reply);
+  const snapshot = reply?.workspaceSnapshots?.find((candidate) => candidate.cwd === input.cwd);
   const stored = current.find(
     (entry) => entry.instanceId === input.instanceId && entry.snapshot.cwd === input.cwd,
   );
@@ -1170,9 +1173,7 @@ export function createServerEnvironmentAtoms<R, E>(
               current,
               { instanceId, cwd, fresh: input.fresh === true },
               result.providers,
-              configProvider && refreshed?.catalogDigest !== undefined
-                ? { ...configProvider, catalogDigest: refreshed.catalogDigest }
-                : configProvider,
+              configProvider,
             ),
           );
         }),

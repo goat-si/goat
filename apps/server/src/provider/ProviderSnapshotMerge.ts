@@ -29,12 +29,15 @@ const carrySavedAntigravityAccount = (
   return { auth: previousProvider.auth, status };
 };
 
-export function sameWorkspaceCatalog(
+export function sameWorkspaceCatalogBasis(
   previous: ServerProvider | undefined,
   next: ServerProvider,
 ): boolean {
   return (
     previous !== undefined &&
+    previous.installed === next.installed &&
+    previous.version === next.version &&
+    previous.installedVersion === next.installedVersion &&
     Equal.equals(previous.slashCommands, next.slashCommands) &&
     Equal.equals(previous.skills, next.skills)
   );
@@ -47,7 +50,7 @@ export function invalidateChangedWorkspaceCatalog(
   if (
     !previous ||
     !provider.workspaceSnapshots?.length ||
-    sameWorkspaceCatalog(previous, provider)
+    sameWorkspaceCatalogBasis(previous, provider)
   ) {
     return provider;
   }

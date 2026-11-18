@@ -125,3 +125,61 @@ it("a changed digest retires the cwd snapshot while loading a digest preserves i
       ?.workspaceSnapshots,
   ).toBeUndefined();
 });
+
+it.each([
+  ["installed state", { installed: false }],
+  ["reported version", { version: "2.0.0" }],
+  ["installed CLI version", { installedVersion: "2.0.0" }],
+] as const)(
+  "uses the cwd reply's %s even when the machine digest is unchanged",
+  (_label, change) => {
+    const cwd = "/workspace";
+    const old = { ...wire, catalogDigest: "A", installedVersion: "1.0.0" };
+    const updated = { ...old, ...change };
+    const configWith = (provider: ServerProvider) => {
+      const base = config(provider);
+      return {
+        ...base,
+        environment: {
+          ...base.environment,
+          capabilities: { providerWorkspaceSnapshotsOnDemand: true, repositoryIdentity: false },
+        },
+      };
+    };
+    const target = { instanceId, cwd, fresh: false };
+    const before = {
+      cwd,
+      checkedAt: wire.checkedAt,
+      slashCommands: [{ name: "before" }],
+      skills: [],
+    };
+    const after = { ...before, slashCommands: [{ name: "after" }] };
+    const fetched = recordFetchedWorkspaceSnapshot(
+      [],
+      target,
+      [{ ...old, workspaceSnapshots: [before] }],
+      old,
+    );
+    expect(
+      withFetchedWorkspaceSnapshots(configWith(old), fetched).providers[0]?.workspaceSnapshots,
+    ).toEqual([before]);
+    expect(
+      withFetchedWorkspaceSnapshots(configWith(updated), fetched).providers[0]?.workspaceSnapshots,
+    ).toBeUndefined();
+
+    // The RPC can report the installation change before the config stream does.
+    const refreshed = recordFetchedWorkspaceSnapshot(
+      fetched,
+      target,
+      [{ ...updated, workspaceSnapshots: [after] }],
+      old,
+    );
+    expect(
+      withFetchedWorkspaceSnapshots(configWith(old), refreshed).providers[0]?.workspaceSnapshots,
+    ).toBeUndefined();
+    expect(
+      withFetchedWorkspaceSnapshots(configWith(updated), refreshed).providers[0]
+        ?.workspaceSnapshots,
+    ).toEqual([after]);
+  },
+);

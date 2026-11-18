@@ -441,6 +441,54 @@ it.effect("the next cwd refresh rescans after a machine command or skill changes
   }),
 );
 
+it.effect("a new installed CLI version refreshes the cwd reply with the same machine digest", () =>
+  Effect.gen(function* () {
+    const { registry, machine, scan } = yield* makeWorkspaceCatalogRegistry();
+    const { instanceId, version } = catalogProvider;
+    const client = yield* makeProviderCatalogRpc({
+      providers: [catalogProvider],
+      cwdProviders: new Set([instanceId]),
+      refreshWorkspaceSnapshot: registry.refreshWorkspaceSnapshot,
+    });
+    const refresh = () =>
+      client[WS_METHODS.serverRefreshProviders]({
+        instanceId,
+        cwd: "/workspace",
+        workspaceSnapshotsOnDemand: true,
+        providerCatalogsOnDemand: true,
+        machineCatalog: true,
+      });
+    const installed = { ...catalogProvider, installedVersion: version };
+    yield* Ref.set(machine, installed);
+    yield* registry.refreshInstance(instanceId);
+    yield* Ref.set(
+      scan,
+      Effect.succeed({ ...installed, slashCommands: [{ name: "before-update" }] }),
+    );
+    const initial = (yield* refresh()).providers[0];
+    assert.isString(initial?.catalogDigest);
+    assert.deepStrictEqual(initial?.workspaceSnapshots?.[0]?.slashCommands, [
+      { name: "before-update" },
+    ]);
+
+    const upgraded = { ...installed, installedVersion: "2.1.0" };
+    yield* Ref.set(machine, upgraded);
+    yield* registry.refreshInstance(instanceId);
+    yield* Ref.set(
+      scan,
+      Effect.succeed({ ...upgraded, slashCommands: [{ name: "after-update" }] }),
+    );
+
+    const current = (yield* refresh()).providers[0];
+    assert.strictEqual(current?.version, initial?.version);
+    assert.strictEqual(current?.catalogDigest, initial?.catalogDigest);
+    assert.strictEqual(current?.installedVersion, "2.1.0");
+    assert.deepStrictEqual(current?.workspaceSnapshots?.[0]?.slashCommands, [
+      { name: "after-update" },
+    ]);
+  }),
+);
+
 it.effect("a first cwd scan cannot publish after its machine catalog changed", () =>
   Effect.gen(function* () {
     const { registry, machine, scan } = yield* makeWorkspaceCatalogRegistry();

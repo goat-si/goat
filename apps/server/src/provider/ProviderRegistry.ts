@@ -2,7 +2,7 @@ import { loadBootProviderSnapshots } from "./ProviderRegistryBoot.ts";
 import {
   invalidateChangedWorkspaceCatalog,
   mergeProviderSnapshot,
-  sameWorkspaceCatalog,
+  sameWorkspaceCatalogBasis,
 } from "./ProviderSnapshotMerge.ts";
 import * as GlobalSkillRegistry from "../skills/GlobalSkillsRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -864,7 +864,7 @@ export const layer = Layer.effect(
                 }
                 return currentProviders.map((candidate) =>
                   candidate.instanceId === input.instanceId &&
-                  sameWorkspaceCatalog(scanBase, candidate) &&
+                  sameWorkspaceCatalogBasis(scanBase, candidate) &&
                   Equal.equals(workspaceSnapshotOf(candidate), workspaceSnapshotOf(scanBase))
                     ? upsertProviderWorkspaceSnapshot(candidate, input.cwd, {
                         ...scopedSnapshot,
