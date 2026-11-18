@@ -1,5 +1,5 @@
 export function parseServerUrlFromOutput(output: string): string | null {
-  for (const line of output.split("\n")) {
+  for (const line of output.split("\n").slice(0, -1)) {
     const match = line.match(/server listening on\s+(https?:\/\/[^\s]+)/i);
     if (match?.[1]) return match[1];
   }
