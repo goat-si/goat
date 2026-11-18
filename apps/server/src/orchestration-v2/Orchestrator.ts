@@ -13034,7 +13034,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }),
       ),
     );
-    yield* projectionStore.getRecoveryThreadIds("delegated-completions").pipe(
+    yield* recoverDelegatedCompletions;
+  });
+  // A full wake mailbox leaves delivery ownership in the parent run's persisted cohort.
+  const recoverDelegatedCompletions = projectionStore
+    .getRecoveryThreadIds("delegated-completions")
+    .pipe(
       Effect.tap((threadIds) =>
         Effect.annotateCurrentSpan("recovery.delegatedCompletionThreads", threadIds.length),
       ),
@@ -13096,7 +13101,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }),
       ),
     );
-  });
+  if (continuationRequests.awaitDelegatedRetry !== undefined) {
+    yield* continuationRequests.awaitDelegatedRetry.pipe(
+      Effect.andThen(recoverDelegatedCompletions),
+      Effect.forever,
+      Effect.forkScoped,
+    );
+  }
 
   const delegatedTaskResultPending = Effect.fn("Orchestrator.delegatedTaskResultPending")(
     function* (childThreadId: ThreadId, taskId?: NodeId) {

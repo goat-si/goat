@@ -1,3 +1,4 @@
+import * as FiberMap from "effect/FiberMap";
 import { claudeQueryFlagEnvironment, parseClaudeInteger } from "./ClaudeQueryFlags.ts";
 import {
   classifyClaudeNativeTool,
@@ -2762,11 +2763,7 @@ export interface ClaudeAdapterV2Options {
   readonly queryRunner: ClaudeAgentSdkQueryRunnerShape;
   readonly scopedLimitNames?: Ref.Ref<ClaudeScopedLimitNames>;
   readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
-  readonly continuationRequests?: {
-    readonly offer: (
-      request: ProviderContinuationRequests.ProviderContinuationRequest,
-    ) => Effect.Effect<void>;
-  };
+  readonly continuationRequests?: ProviderContinuationRequests.ProviderContinuationOffer;
   readonly installationGate?: ProviderInstallationGate.ProviderInstallationGate["Service"];
 }
 
@@ -3318,6 +3315,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         // `end` is the offered wake's last frame once known: its result, or the last frame a user turn absorbed.
         // A retired latch belongs to a cancelled wake that has not ended; its root frames are dropped until it does.
         // Claude may never open an "unopened" one, so a later task's notification releases it instead.
+        const deferredWakeOffers = yield* FiberMap.make<string>();
         const requestedContinuations = yield* Ref.make(
           new Map<
             string,
@@ -6713,7 +6711,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           // A process reset can clear and re-latch this thread; a stale request must not retire the newer wake.
           const retire = (): Effect.Effect<void> =>
             sdkMessageLock.withPermits(1)(retireOfferedWake(nativeThreadId, token));
-          yield* continuationRequests.offer({
+          const request = {
             threadId: route.threadId,
             providerThreadId: route.providerThreadId,
             driver: CLAUDE_PROVIDER,
@@ -6721,7 +6719,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ...(notification === null ? {} : { notification }),
             clearIfCurrent: retire,
             onRunEndedWithoutStarting: retire,
-          });
+          } satisfies ProviderContinuationRequests.ProviderContinuationRequest;
+          if ((yield* continuationRequests.offer(request)) === "overflow") {
+            yield* ProviderContinuationRequests.offerWithBackpressure(continuationRequests, {
+              ...request,
+              dispatchIfCurrent: (dispatch) =>
+                Ref.get(requestedContinuations).pipe(
+                  Effect.flatMap((latches) =>
+                    latches.get(nativeThreadId)?.token === token
+                      ? Effect.asSome(dispatch)
+                      : Effect.succeedNone,
+                  ),
+                ),
+            }).pipe(FiberMap.run(deferredWakeOffers, nativeThreadId));
+          }
         });
 
         // Drops what the unstarted continuation would have shown. Starts of subagents still running stay

@@ -34,17 +34,39 @@ export interface ProviderContinuationRequest {
   readonly onRunEndedWithoutStarting?: () => Effect.Effect<void>;
 }
 
+export interface ProviderContinuationOffer {
+  readonly offer: (request: ProviderContinuationRequest) => Effect.Effect<void | "overflow">;
+  readonly awaitSpace?: (threadId: ThreadId) => Effect.Effect<void>;
+}
+
 /** The default drops requests; share the live layer with the worker that drains them. */
-export class ProviderContinuationRequests extends Context.Reference<{
-  readonly offer: (request: ProviderContinuationRequest) => Effect.Effect<void>;
-  readonly take: Effect.Effect<ProviderContinuationRequest>;
-  readonly takeEligible?: (
-    canTake: (threadId: ThreadId) => boolean,
-    awaitCapacityChange: () => Effect.Effect<void>,
-  ) => Effect.Effect<ProviderContinuationRequest>;
-}>("@goat/provider-core/server/ProviderContinuationRequests", {
+export class ProviderContinuationRequests extends Context.Reference<
+  ProviderContinuationOffer & {
+    readonly awaitDelegatedRetry?: Effect.Effect<void>;
+    readonly take: Effect.Effect<ProviderContinuationRequest>;
+    readonly takeEligible?: (
+      canTake: (threadId: ThreadId) => boolean,
+      awaitCapacityChange: () => Effect.Effect<void>,
+    ) => Effect.Effect<ProviderContinuationRequest>;
+  }
+>("@goat/provider-core/server/ProviderContinuationRequests", {
   defaultValue: () => ({ offer: () => Effect.void, take: Effect.never }),
 }) {}
+
+/** Providers keep ownership of a wake until it enters the bounded mailbox. */
+export const offerWithBackpressure = Effect.fn(
+  "ProviderContinuationRequests.offerWithBackpressure",
+)(function* (requests: ProviderContinuationOffer, request: ProviderContinuationRequest) {
+  while ((yield* requests.offer(request)) === "overflow") {
+    if (requests.awaitSpace === undefined)
+      return yield* Effect.die("Wake queue overflow requires a capacity signal");
+    yield* requests.awaitSpace(request.threadId);
+  }
+});
+
+const MAX_PENDING_PER_THREAD = 128;
+const MAX_PENDING = 1_024;
+const RESERVED_NEW_THREAD_SLOTS = 16;
 
 export const layer = Layer.effect(
   ProviderContinuationRequests,
@@ -52,6 +74,23 @@ export const layer = Layer.effect(
     type Entry = { readonly order: number; readonly request: ProviderContinuationRequest };
     const pending = new Map<ThreadId, Map<MessageId | ProviderContinuationRequest, Entry>>();
     let order = 0;
+    let size = 0;
+    let space = Deferred.makeUnsafe<void>();
+    let delegatedOverflow = false;
+    let delegatedRetry = Deferred.makeUnsafe<void>();
+    const isFull = (threadId: ThreadId) => {
+      const count = pending.get(threadId)?.size ?? 0;
+      return (
+        count >= MAX_PENDING_PER_THREAD ||
+        size >= (count === 0 ? MAX_PENDING : MAX_PENDING - RESERVED_NEW_THREAD_SLOTS)
+      );
+    };
+    const awaitSpace = (threadId: ThreadId): Effect.Effect<void> =>
+      Effect.suspend(() =>
+        isFull(threadId)
+          ? Deferred.await(space).pipe(Effect.andThen(awaitSpace(threadId)))
+          : Effect.void,
+      );
     let offered = Deferred.makeUnsafe<void>();
     // Keep saturated threads at their source while the consumer takes the oldest eligible wake.
     const takeEligible = (
@@ -84,7 +123,15 @@ export const layer = Layer.effect(
         }
         const { entry, key, queue } = oldest;
         queue.delete(key);
+        size--;
         if (queue.size === 0) pending.delete(entry.request.threadId);
+        const previous = space;
+        space = Deferred.makeUnsafe<void>();
+        Deferred.doneUnsafe(previous, Effect.void);
+        if (delegatedOverflow) {
+          delegatedOverflow = false;
+          Deferred.doneUnsafe(delegatedRetry, Effect.void);
+        }
         return Effect.succeed(entry.request);
       });
 
@@ -94,17 +141,20 @@ export const layer = Layer.effect(
       ) {
         return Effect.suspend(() => {
           const key = request.delegatedCompletion?.messageId ?? request.messageId ?? request;
-          let queue = pending.get(request.threadId);
-          if (queue === undefined) {
-            queue = new Map();
-            pending.set(request.threadId, queue);
-          }
-          const existing = queue.get(key);
-          if (existing !== undefined) {
-            queue.set(key, { order: existing.order, request });
+          const existingQueue = pending.get(request.threadId);
+          const existing = existingQueue?.get(key);
+          if (existingQueue !== undefined && existing !== undefined) {
+            existingQueue.set(key, { order: existing.order, request });
             return Effect.void;
           }
+          if (isFull(request.threadId)) {
+            if (request.delegatedCompletion !== undefined) delegatedOverflow = true;
+            return Effect.succeed("overflow" as const);
+          }
+          const queue = existingQueue ?? new Map();
           queue.set(key, { order: order++, request });
+          pending.set(request.threadId, queue);
+          size++;
           const previous = offered;
           offered = Deferred.makeUnsafe<void>();
           return Deferred.succeed(previous, undefined).pipe(Effect.asVoid);
@@ -115,6 +165,16 @@ export const layer = Layer.effect(
         () => Effect.never,
       ),
       takeEligible,
+      awaitSpace,
+      awaitDelegatedRetry: Effect.suspend(() =>
+        Deferred.await(delegatedRetry).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              delegatedRetry = Deferred.makeUnsafe<void>();
+            }),
+          ),
+        ),
+      ),
     };
   }),
 );

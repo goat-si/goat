@@ -1,3 +1,4 @@
+import { offerWithBackpressure } from "@goat/provider-core/server/ProviderContinuationRequests";
 import { ACP_PROMPT_ACTIVITY_UPDATES } from "./capabilities.ts";
 import {
   acpSubagentStatusBlocksTurnSettlement,
@@ -97,7 +98,6 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 import type * as EffectAcpSchema from "effect-acp/compat";
-
 import { formatReadToolLabel, formatSearchToolLabel } from "@goat/shared/toolActivity";
 import { resolveNice } from "@goat/shared/toolPriority";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -3650,7 +3650,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             threadId: route.threadId,
             providerThreadId: route.providerThreadId,
           });
-          yield* continuationRequests.offer({
+          yield* offerWithBackpressure(continuationRequests, {
             threadId: route.threadId,
             providerThreadId: route.providerThreadId,
             driver,

@@ -14,6 +14,7 @@ import {
 import * as Deferred from "effect/Deferred";
 
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -133,6 +134,64 @@ it.effect("does not dispatch continuations while held and dispatches after relea
 );
 
 describe("ProviderContinuationService", () => {
+  it.effect(
+    "signals source overflow per thread and across threads, while allowing duplicate offers",
+    () =>
+      Effect.gen(function* () {
+        const mailbox = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+        const busy = (index: number) => ({
+          ...request(),
+          messageId: MessageId.make(`busy:${index}`),
+        });
+        for (let index = 0; index < 128; index++) {
+          assert.notEqual(yield* mailbox.offer(busy(index)), "overflow");
+        }
+        assert.equal(yield* mailbox.offer(busy(128)), "overflow");
+        assert.notEqual(yield* mailbox.offer(busy(0)), "overflow");
+        for (let index = 0; index < 896; index++) {
+          assert.notEqual(
+            yield* mailbox.offer({
+              ...request(),
+              threadId: ThreadId.make(`other:${index}`),
+            }),
+            "overflow",
+          );
+        }
+        const fresh = { ...request(), threadId: ThreadId.make("thread:over-global") };
+        assert.equal(yield* mailbox.offer(fresh), "overflow");
+        assert.equal((yield* mailbox.take).messageId, busy(0).messageId);
+        assert.notEqual(yield* mailbox.offer(fresh), "overflow");
+      }).pipe(Effect.provide(ProviderContinuationRequests.layer)),
+  );
+
+  it.effect("retries staged provider and durable delegated wakes after capacity returns", () =>
+    Effect.gen(function* () {
+      const mailbox = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+      for (let index = 0; index < 128; index++)
+        yield* mailbox.offer(request(undefined, `queued:${index}`));
+      const delegated = {
+        ...request(),
+        delegatedCompletion: { parentRunId, generation: 1, messageId: delegatedMessageId },
+      };
+      assert.equal(yield* mailbox.offer(delegated), "overflow");
+      assert.isDefined(mailbox.awaitDelegatedRetry);
+      if (mailbox.awaitDelegatedRetry === undefined) return;
+      const provider = request(undefined, "retried wake");
+      const waiting = yield* ProviderContinuationRequests.offerWithBackpressure(
+        mailbox,
+        provider,
+      ).pipe(Effect.forkScoped({ startImmediately: true }));
+      assert.equal((yield* mailbox.take).detail, "queued:0");
+      yield* mailbox.awaitDelegatedRetry;
+      yield* Fiber.join(waiting);
+      for (let index = 1; index < 128; index++)
+        assert.equal((yield* mailbox.take).detail, `queued:${index}`);
+      assert.equal((yield* mailbox.take).detail, "retried wake");
+      assert.notEqual(yield* mailbox.offer(delegated), "overflow");
+      assert.deepEqual((yield* mailbox.take).delegatedCompletion, delegated.delegatedCompletion);
+    }).pipe(Effect.provide(ProviderContinuationRequests.layer)),
+  );
+
   it.effect(
     "dispatches a healthy wake behind a saturated thread and preserves its queued peers",
     () =>

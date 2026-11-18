@@ -86,7 +86,7 @@ import {
   backgroundWorkNotification,
   type BackgroundWorkReport,
 } from "@goat/provider-core/server/notification";
-import type * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
+import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import { makeProviderFailure, makeProviderRetryTurnItem } from "@goat/provider-core/server/failure";
 import {
   makeSubagentChildThread,
@@ -112,11 +112,7 @@ export interface MuseAdapterV2Options {
   readonly nativeEventLogger?: ProviderEventLoggers.EventNdjsonLogger;
   /** Receives every account-wide usage report, whichever session's host sent it. */
   readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
-  readonly continuationRequests?: {
-    readonly offer: (
-      request: ProviderContinuationRequests.ProviderContinuationRequest,
-    ) => Effect.Effect<void>;
-  };
+  readonly continuationRequests?: ProviderContinuationRequests.ProviderContinuationOffer;
 }
 
 interface ActiveTurn {
@@ -1318,19 +1314,22 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
             wake = held;
             const notification = backgroundWorkNotification(finishedBackground.splice(0));
             if (thread?.appThreadId && options.continuationRequests)
-              yield* options.continuationRequests.offer({
-                threadId: thread.appThreadId,
-                providerThreadId: thread.id,
-                driver: MUSE_PROVIDER,
-                detail: null,
-                ...(notification ? { notification } : {}),
-                dispatchIfCurrent: (dispatch) =>
-                  wake === held ? Effect.asSome(dispatch) : Effect.succeedNone,
-                clearIfCurrent: () =>
-                  Effect.sync(() => {
-                    if (wake === held) wake = undefined;
-                  }),
-              });
+              yield* ProviderContinuationRequests.offerWithBackpressure(
+                options.continuationRequests,
+                {
+                  threadId: thread.appThreadId,
+                  providerThreadId: thread.id,
+                  driver: MUSE_PROVIDER,
+                  detail: null,
+                  ...(notification ? { notification } : {}),
+                  dispatchIfCurrent: (dispatch) =>
+                    wake === held ? Effect.asSome(dispatch) : Effect.succeedNone,
+                  clearIfCurrent: () =>
+                    Effect.sync(() => {
+                      if (wake === held) wake = undefined;
+                    }),
+                },
+              );
           }
         }
         // Muse compacts the latest run, which can be the held wake; its compaction item ends this turn.

@@ -1206,7 +1206,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     const offerWake = Effect.fnUntraced(function* (state: ThreadState, wake: Wake) {
       const route = state.providerThread.appThreadId;
       if (route === null || wake.messageId === undefined) return;
-      yield* continuationRequests.offer({
+      yield* ProviderContinuationRequests.offerWithBackpressure(continuationRequests, {
         threadId: route,
         providerThreadId: state.providerThread.id,
         driver,
