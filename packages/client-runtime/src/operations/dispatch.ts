@@ -29,9 +29,9 @@ const MAX_LOST_TRANSPORT_RESENDS = 2;
 // requests, so a session still current and connected after this grace is a live one whose
 // reply was lost (a frame the client could not parse), and the same command goes again on it.
 const SAME_SESSION_RESEND_GRACE = Duration.seconds(5);
-const MESSAGE_ATTEMPT_WAIT_BOUND_MS = Duration.toMillis(Duration.seconds(60));
+const MESSAGE_ATTEMPT_WAIT_BOUND_NANOS = Duration.toNanosUnsafe(Duration.seconds(60));
 // Past this the person gets the draft back instead of a send that never ends.
-const LOST_MESSAGE_WAIT_BOUND = Duration.minutes(10);
+const LOST_MESSAGE_WAIT_BOUND_NANOS = Duration.toNanosUnsafe(Duration.minutes(10));
 
 export const dispatchMessage = Effect.fn("EnvironmentCommands.dispatchMessage")(function* (
   resendAfterSocketLoss: boolean,
@@ -56,7 +56,7 @@ export const dispatchMessage = Effect.fn("EnvironmentCommands.dispatchMessage")(
   );
   const attempt = send.pipe(
     Effect.timeoutOrElse({
-      duration: Duration.millis(MESSAGE_ATTEMPT_WAIT_BOUND_MS),
+      duration: Duration.nanos(MESSAGE_ATTEMPT_WAIT_BOUND_NANOS),
       orElse: () =>
         Effect.fail(
           new EnvironmentRpcUnavailableError({
@@ -67,17 +67,17 @@ export const dispatchMessage = Effect.fn("EnvironmentCommands.dispatchMessage")(
     }),
   );
   if (!resendAfterSocketLoss) return yield* attempt;
-  let deadline: number | undefined;
+  let deadline: bigint | undefined;
   for (let resends = 0; ; resends += 1) {
     attemptSession = Option.none();
     const remaining =
-      deadline === undefined ? Infinity : deadline - (yield* Clock.currentTimeMillis);
-    if (remaining <= 0) return yield* unconfirmed;
+      deadline === undefined ? undefined : deadline - (yield* Clock.monotonicTimeNanos);
+    if (remaining !== undefined && remaining <= 0n) return yield* unconfirmed;
     const exit = yield* Effect.exit(
-      remaining <= MESSAGE_ATTEMPT_WAIT_BOUND_MS
+      remaining !== undefined && remaining <= MESSAGE_ATTEMPT_WAIT_BOUND_NANOS
         ? send.pipe(
             Effect.timeoutOrElse({
-              duration: Duration.millis(remaining),
+              duration: Duration.nanos(remaining),
               orElse: () => Effect.fail(unconfirmed),
             }),
           )
@@ -89,8 +89,8 @@ export const dispatchMessage = Effect.fn("EnvironmentCommands.dispatchMessage")(
       Cause.hasInterruptsOnly(exit.cause) ||
       exit.cause.reasons.some((reason) => reason._tag === "Fail" && isRpcClientError(reason.error));
     if (!lostTransport || resends >= MAX_LOST_TRANSPORT_RESENDS) return yield* exit;
-    const now = yield* Clock.currentTimeMillis;
-    deadline ??= now + Duration.toMillis(LOST_MESSAGE_WAIT_BOUND);
+    const now = yield* Clock.monotonicTimeNanos;
+    deadline ??= now + LOST_MESSAGE_WAIT_BOUND_NANOS;
     const replacement = yield* Effect.raceAllFirst([
       SubscriptionRef.changes(supervisor.session).pipe(
         Stream.filter(
@@ -121,7 +121,7 @@ export const dispatchMessage = Effect.fn("EnvironmentCommands.dispatchMessage")(
             : Effect.never,
         ),
       ),
-    ]).pipe(Effect.timeoutOption(Duration.millis(Math.max(0, deadline - now))));
+    ]).pipe(Effect.timeoutOption(Duration.nanos(deadline > now ? deadline - now : 0n)));
     if (Option.isNone(replacement)) return yield* unconfirmed;
     if (Option.isNone(replacement.value)) return yield* exit;
   }

@@ -360,7 +360,7 @@ describe("message dispatch after socket loss", () => {
       }).pipe(Effect.provide(layerTestRandom)),
   );
 
-  it.effect("interrupts a resend still in flight when the ten-minute deadline expires", () =>
+  it.effect("interrupts an in-flight resend at ten minutes even if the wall clock rewinds", () =>
     Effect.gen(function* () {
       const commands: OrchestrationV2Command[] = [];
       const supervisor = yield* makeSupervisor(commands);
@@ -393,6 +393,7 @@ describe("message dispatch after socket loss", () => {
       );
       yield* Deferred.await(firstAttemptLost);
       yield* TestClock.adjust("590 seconds");
+      yield* TestClock.setTime(0);
       const slowClient = {
         ...healthySession.client,
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
