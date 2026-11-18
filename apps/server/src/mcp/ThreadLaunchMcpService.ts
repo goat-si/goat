@@ -362,11 +362,16 @@ const make = Effect.gen(function* () {
                   ),
                 )).projectId
               : yield* resolveProjectId(context, input.projectId);
-          const readProject = Project.ProjectService.pipe(
-            Effect.flatMap((projects) => projects.getById(projectId)),
-            Effect.mapError(unavailable),
-            Effect.map(Option.getOrUndefined),
-          );
+          const projects = yield* Project.ProjectService;
+          const foundProject = yield* projects
+            .getById(projectId)
+            .pipe(Effect.mapError(unavailable));
+          if (Option.isNone(foundProject))
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: "The project was not found.",
+            });
+          const project = foundProject.value;
           // GOAT Bot's launches record what they are for, so thread lists keep its chores under
           // the bot. A worktree requested in Scratch runs in its root, so it is a chore too.
           const worktreeRequested =
@@ -389,11 +394,8 @@ const make = Effect.gen(function* () {
               ? yield* ServerSettings.ServerSettingsService.pipe(
                   Effect.flatMap((settings) => settings.getSettings),
                   Effect.mapError(unavailable),
-                  Effect.flatMap((settings) =>
-                    Effect.map(
-                      readProject,
-                      (project) => resolveProjectSettings(settings, projectId, project).settings,
-                    ),
+                  Effect.map(
+                    (settings) => resolveProjectSettings(settings, projectId, project).settings,
                   ),
                 )
               : undefined;
@@ -401,7 +403,7 @@ const make = Effect.gen(function* () {
             input.modelSelection ??
             caller?.modelSelection ??
             (projectDefaults === undefined
-              ? (yield* readProject)?.defaultModelSelection
+              ? project.defaultModelSelection
               : projectDefaults.defaultModelSelection) ??
             undefined;
           if (modelSelection === undefined)
@@ -451,12 +453,6 @@ const make = Effect.gen(function* () {
               });
           }
           if (input.workspaceStrategy?.type === "existing_worktree") {
-            const project = yield* readProject;
-            if (project === undefined)
-              return yield* new OrchestratorMcpFailure({
-                code: "invalid_request",
-                message: "The project was not found.",
-              });
             yield* assertProjectWorktree(
               project.workspaceRoot,
               input.workspaceStrategy.worktreePath,
@@ -468,12 +464,6 @@ const make = Effect.gen(function* () {
           const strategy = input.workspaceStrategy;
           // A registered run carries its own source; nothing is submitted from this checkout.
           if (cloud && startsRun && cloudRun?.importedNativeThread?.cloudTask === undefined) {
-            const project = yield* readProject;
-            if (project === undefined)
-              return yield* new OrchestratorMcpFailure({
-                code: "invalid_request",
-                message: "The project was not found.",
-              });
             const branch = strategy?.type === "worktree" ? strategy.baseRef : strategy?.branch;
             yield* sources
               .resolve({

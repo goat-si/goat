@@ -1,5 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import { ThreadId } from "@goat/contracts";
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -7,6 +10,7 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -32,7 +36,12 @@ it.effect("a control ended by a failed read is never advertised again when reads
       Layer.mergeAll(
         ServerSettings.layerTest({ enableCua: true }),
         Layer.mock(McpSessionRegistry.McpSessionRegistry)({
-          inspect: () => Effect.succeed({ threadId, recheckAt: Number.MAX_SAFE_INTEGER }),
+          inspect: () =>
+            Effect.succeed({
+              threadId,
+              recheckAt: Number.MAX_SAFE_INTEGER,
+              recheckAtMonotonicMs: Number.MAX_SAFE_INTEGER,
+            }),
           subscribeChanges: PubSub.unbounded<void>().pipe(Effect.flatMap(PubSub.subscribe)),
         }),
         Layer.mock(ComputerUseLeases.ComputerUseLeases)({
@@ -82,5 +91,77 @@ it.effect("a control ended by a failed read is never advertised again when reads
     yield* Queue.take(recovered);
     yield* PubSub.publish(signals, undefined);
     assert.deepInclude(yield* next, { state: "active", controlId: "control:b" });
+  }).pipe(Effect.scoped),
+);
+
+it.effect("expires an open stream when the wall clock rolls back during a settings read", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(10_000);
+    const recheckAt = 10_101;
+    const recheckAtMonotonicMs = Number((yield* Clock.monotonicTimeNanos) / 1_000_000n) + 101;
+    const signals = yield* PubSub.unbounded<void>();
+    const heldRead = yield* Deferred.make<void>();
+    const resumeRead = yield* Deferred.make<void>();
+    const context = yield* Layer.build(
+      Layer.mergeAll(
+        ServerSettings.layerTest({ enableCua: true }),
+        Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+          inspect: () =>
+            Clock.monotonicTimeNanos.pipe(
+              Effect.map((time) =>
+                Number(time / 1_000_000n) < recheckAtMonotonicMs
+                  ? { threadId, recheckAt, recheckAtMonotonicMs }
+                  : undefined,
+              ),
+            ),
+          subscribeChanges: PubSub.subscribe(signals),
+        }),
+        Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+          proxy: undefined,
+          subscribe: PubSub.subscribe(signals),
+          streamOpened: () => Effect.void,
+          releaseApps: () => Effect.void,
+          currentControl: () =>
+            Effect.succeedSome({ threadId, controlId: "control:clock", expiresAt }),
+          controlState: () =>
+            Effect.succeed({
+              _tag: "active",
+              expiresAt,
+              apps: undefined,
+              interruptions: { count: 0, last: "human_input" },
+              wakeAt: DateTime.toEpochMillis(expiresAt),
+            }),
+        }),
+      ),
+    );
+    const settings = Context.get(context, ServerSettings.ServerSettingsService);
+    let reads = 0;
+    const heldSettings = ServerSettings.ServerSettingsService.of({
+      ...settings,
+      getSettings: Effect.suspend(() =>
+        ++reads === 3
+          ? Deferred.succeed(heldRead, undefined).pipe(
+              Effect.andThen(Deferred.await(resumeRead)),
+              Effect.andThen(settings.getSettings),
+            )
+          : settings.getSettings,
+      ),
+    });
+    const updates = yield* threadLeaseUpdates({ threadId, token: "fixture" }).pipe(
+      Stream.provideContext(
+        Context.add(context, ServerSettings.ServerSettingsService, heldSettings),
+      ),
+      Stream.toQueue({ capacity: "unbounded" }),
+    );
+
+    yield* Deferred.await(heldRead);
+    yield* TestClock.setTime(1_000);
+    yield* Deferred.succeed(resumeRead, undefined);
+    assert.deepInclude(yield* Queue.take(updates), { state: "active", controlId: "control:clock" });
+    yield* TestClock.adjust(101);
+    assert.deepEqual(
+      yield* Queue.poll(updates),
+      Option.some({ state: "ended", reason: "unauthorized" } as const),
+    );
   }).pipe(Effect.scoped),
 );

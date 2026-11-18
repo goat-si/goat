@@ -440,24 +440,22 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
     void Promise.allSettled([appCheck, providersChecked]).then(() => setIsActionPending(false));
   };
 
-  const runEverything = async ({ tab, rows }: UpdateDialogSelection) => {
+  const runEverything = async ({ rows }: UpdateDialogSelection) => {
     const bridge = window.desktopBridge;
     setIsConfirmingEverything(false);
     setIsActionPending(true);
     const result = await settlePromise(() =>
-      tab === "runtimes"
-        ? everything.runRuntimes(rows, everything.localEnvironmentId)
-        : everything.runApp(rows, {
-            ...(bridge && action === "download"
-              ? {
-                  downloadLocal: (reportError) =>
-                    downloadLocalUpdate(bridge, { notifyDownloaded: false, reportError }),
-                }
-              : {}),
-            ...(bridge && action !== "none"
-              ? { installLocal: (reportError) => installLocalUpdate(bridge, reportError) }
-              : {}),
-          }),
+      everything.runUpdates(rows, {
+        ...(bridge && action === "download"
+          ? {
+              downloadLocal: (reportError) =>
+                downloadLocalUpdate(bridge, { notifyDownloaded: false, reportError }),
+            }
+          : {}),
+        ...(bridge && action !== "none"
+          ? { installLocal: (reportError) => installLocalUpdate(bridge, reportError) }
+          : {}),
+      }),
     );
     if (result._tag === "Failure") {
       const error = squashAtomCommandFailure(result);
