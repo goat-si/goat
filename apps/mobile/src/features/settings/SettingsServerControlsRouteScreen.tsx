@@ -889,7 +889,7 @@ function ServerSettingsDetail(props: {
                   ) : null}
                   <SettingsSection title="Power">
                     <SettingsSwitchRow
-                      icon="bolt"
+                      icon="bolt.circle"
                       label="Keep awake while agents work"
                       subtitle={
                         supportsKeepAwake
