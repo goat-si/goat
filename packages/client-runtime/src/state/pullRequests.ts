@@ -1,3 +1,4 @@
+import { createPullRequestDiffQueries } from "./pullRequestDiffQueries.ts";
 import { isStalePullRequestReply } from "../pullRequestReply.ts";
 
 import {
@@ -17,7 +18,6 @@ import {
   PullRequestReviewGuideResult,
   PullRequestListResult,
   PullRequestChecks,
-  PullRequestDiffResult,
   PullRequestChangeBreakdown,
   PullRequestFilesViewedResult,
   PullRequestLinkedThreadsResult,
@@ -28,20 +28,17 @@ import {
   type PullRequestListStatsInput,
   type PullRequestListStatsResult,
   type PullRequestDetail,
-  type PullRequestDiffInput,
   type PullRequestRef,
   type PullRequestMergeMethod,
   PullRequestOperationError,
   PullRequestSummary,
   type VcsStatusResult,
 } from "@goat/contracts";
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { persistPullRequestStats } from "./pullRequestStatsPersistence.ts";
 import { persistQuery } from "./queryPersistence.ts";
 import * as Option from "effect/Option";
-import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import {
@@ -49,25 +46,19 @@ import {
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
-  createEnvironmentQueryAtomFamily,
   type QueryAnswerHandler,
 } from "./runtime.ts";
 import { createPullRequestRouter } from "./pullRequestRouting.ts";
 import { createEnvironmentSessionAtoms } from "./session.ts";
 import * as PullRequestDiffLoader from "./pullRequestDiffHttp.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
-import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 
 export {
   type PullRequestDiffLoadError,
   PullRequestDiffCredentialRejectedError,
 } from "./pullRequestDiffHttp.ts";
 export * as PullRequestDiffLoader from "./pullRequestDiffHttp.ts";
-
-/** @public Required to name the error in consumers' inferred pull request results. */
-export class EnvironmentHttpConnectionNotReadyError extends Data.TaggedError(
-  "EnvironmentHttpConnectionNotReadyError",
-)<{ readonly message: string }> {}
+export { EnvironmentHttpConnectionNotReadyError } from "./pullRequestDiffQueries.ts";
 
 const LINKED_PULL_REQUEST_IDLE_TTL_MS = 5_000;
 
@@ -434,33 +425,6 @@ export function createPullRequestEnvironmentAtoms<R, E>(
     execute: (input) => routedRequest(WS_METHODS.pullRequestsReviewerCandidates, input),
     staleTimeMs: 60_000,
   });
-  const loadDiff = Effect.fn("PullRequests.loadDiff")(function* (input: PullRequestDiffInput) {
-    const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
-    const loader = yield* PullRequestDiffLoader.PullRequestDiffLoader;
-    const prepared = yield* SubscriptionRef.get(supervisor.prepared);
-    if (Option.isNone(prepared)) {
-      return yield* new EnvironmentHttpConnectionNotReadyError({
-        message: "The environment HTTP connection is not ready.",
-      });
-    }
-    return yield* loader.load(prepared.value, input);
-  });
-
-  const withheldDiff = createEnvironmentQueryAtomFamily(runtime, {
-    label: "environment-data:pull-requests:withheld-diff",
-    staleTimeMs: 60_000,
-    execute: loadDiff,
-  });
-  const withheldDiffs = Atom.family((key: string) => {
-    const { target, paths } = JSON.parse(key) as {
-      readonly target: Parameters<typeof withheldDiff>[0];
-      readonly paths: readonly string[];
-    };
-    return Atom.make((get) =>
-      paths.map((path) => get(withheldDiff({ ...target, input: { ...target.input, path } }))),
-    );
-  });
-
   const runAction = Effect.fn("PullRequests.runAction")(function* (
     input: PullRequestActionInput & {
       readonly resolveMergeMethod?: (detail: PullRequestDetail) => PullRequestMergeMethod;
@@ -621,14 +585,7 @@ export function createPullRequestEnvironmentAtoms<R, E>(
           JSON.stringify([environmentId, input.threadId, input.cursor]),
       },
     }),
-    diff: createEnvironmentQueryAtomFamily(runtime, {
-      label: "environment-data:pull-requests:diff",
-      persistence: persistQuery(PullRequestDiffResult),
-      staleTimeMs: 60_000,
-      execute: loadDiff,
-    }),
-    withheldDiff,
-    withheldDiffs,
+    ...createPullRequestDiffQueries(runtime),
     diffFileContents: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:pull-requests:diff-file-contents",
       tag: WS_METHODS.pullRequestsDiffFileContents,

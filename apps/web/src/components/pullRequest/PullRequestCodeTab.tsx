@@ -132,6 +132,7 @@ interface ReviewAnnotationGroup {
   readonly withheld?: {
     readonly path: string;
     readonly status: "idle" | "loading" | "error" | "empty";
+    readonly readable: boolean;
   };
 }
 
@@ -522,7 +523,11 @@ function PullRequestCodeTab({
           threads: [],
           pending: [],
           draft: false,
-          withheld: { path, status: withheld.statuses.get(path) ?? "idle" },
+          withheld: {
+            path,
+            readable: withheld.readable,
+            status: withheld.statuses.get(path) ?? "idle",
+          },
         },
       });
     }
@@ -536,7 +541,7 @@ function PullRequestCodeTab({
         annotations
           .map(
             ({ side, lineNumber, metadata }) =>
-              `${side}:${lineNumber}:${metadata.image?.url ?? metadata.withheld?.status ?? ""}:${metadata.draft ? "d" : ""}:${metadata.pending
+              `${side}:${lineNumber}:${metadata.image?.url ?? metadata.withheld?.status ?? ""}:${metadata.withheld?.readable ?? ""}:${metadata.draft ? "d" : ""}:${metadata.pending
                 .map((comment) => `${comment.id}:${comment.body}`)
                 .join(",")}:${metadata.threads
                 .map(
@@ -903,7 +908,7 @@ function PullRequestCodeTab({
       {annotation.metadata.withheld ? (
         <PullRequestWithheldFileNotice
           status={annotation.metadata.withheld.status}
-          readable={withheldReadable}
+          readable={annotation.metadata.withheld.readable}
           load={() => withheld.load(annotation.metadata.withheld?.path)}
         />
       ) : null}

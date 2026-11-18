@@ -17,6 +17,7 @@ const {
   withheldPageAtom,
   withheldFileAtom,
   withheldFilesAtom,
+  withheldAdvertisementAtom,
 } = await vi.hoisted(async () => {
   const { AsyncResult, Atom } = await import("effect/reactivity");
   const filePatch = (path: string) =>
@@ -113,6 +114,7 @@ const {
     ),
     withheldFileAtom,
     withheldFilesAtom,
+    withheldAdvertisementAtom: Atom.family((fresh: boolean) => Atom.make(() => fresh)),
     diffAtom: Atom.make(() => AsyncResult.success(firstPage)),
     imageDiffAtom: Atom.make(() => AsyncResult.success(imagePage)),
     pagedDiffAtom: Atom.family((cursor: string) =>
@@ -125,6 +127,7 @@ const mocks = vi.hoisted(() => ({
   paged: false,
   image: false,
   withheld: false,
+  freshWithheldAdvertisement: true,
   withheldHeadSha: "a".repeat(40),
   assetResources: [] as unknown[],
   diffCommits: [] as Array<string | undefined>,
@@ -152,6 +155,7 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
     pullRequestEnvironment: {
       ...actual.pullRequestEnvironment,
       withheldDiffs: withheldFilesAtom as never,
+      withheldDiffAdvertised: () => withheldAdvertisementAtom(mocks.freshWithheldAdvertisement),
       withheldDiff: (({ input }: { input: { path: string; revision: { headSha: string } } }) =>
         withheldFileAtom(
           JSON.stringify({ path: input.path, headSha: input.revision.headSha }),
@@ -225,6 +229,7 @@ function setup(paged = false, image = false) {
   mocks.paged = paged;
   mocks.image = image;
   mocks.withheld = false;
+  mocks.freshWithheldAdvertisement = true;
   mocks.withheldHeadSha = "a".repeat(40);
   mocks.assetResources = [];
   mocks.diffCommits = [];
@@ -392,4 +397,18 @@ it("drops a loaded withheld patch across a force-push and loads the current file
   await userEvent.click(load);
   await expect.element(screen.getByText("afterPush()", { exact: true })).toBeVisible();
   await expect.element(screen.getByText("1 file", { exact: true })).toBeVisible();
+});
+
+it("keeps a cached withheld page readable after a rollback without offering a file request", async () => {
+  setup();
+  mocks.withheld = true;
+  mocks.freshWithheldAdvertisement = false;
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(tab(0), { container });
+  await userEvent.click(screen.getByRole("button", { name: "Expand diff" }));
+  await expect.element(screen.getByText("This file’s diff is too large to display.")).toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: "Load file diff" }))
+    .not.toBeInTheDocument();
 });

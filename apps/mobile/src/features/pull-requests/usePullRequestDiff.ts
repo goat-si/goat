@@ -44,6 +44,7 @@ export function pullRequestTarget(params: PullRequestParams) {
 }
 
 const NO_PATHS: readonly string[] = [];
+const UNADVERTISED = Atom.make(() => false);
 const NO_WITHHELD_ANSWERS = Atom.make(() => []);
 const NO_PAGES: readonly PullRequestDiffPage[] = [];
 
@@ -122,9 +123,12 @@ export function usePullRequestDiff(
   const fileTarget = params.commit ? target : { ...target, input: { ...target.input, revision } };
   const fileKey = JSON.stringify(fileTarget);
   const [loads, setLoads] = useState({ key: fileKey, paths: NO_PATHS });
-  const paths = loads.key === fileKey ? loads.paths : NO_PATHS;
-  const readable =
+  const pageReadable =
     firstPage?.withheldFilesReadable === true && (!!params.commit || revision !== undefined);
+  const readable = useAtomValue(
+    pageReadable ? composerPullRequests.withheldDiffAdvertised(fileTarget) : UNADVERTISED,
+  );
+  const paths = readable && loads.key === fileKey ? loads.paths : NO_PATHS;
   const registry = useContext(RegistryContext);
   const answers = useAtomValue(
     paths.length === 0

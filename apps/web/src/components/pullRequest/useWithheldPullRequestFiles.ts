@@ -16,6 +16,7 @@ import { pullRequestEnvironment } from "~/state/pullRequests";
 type DiffTarget = Parameters<typeof pullRequestEnvironment.withheldDiff>[0];
 type LoadStatus = "idle" | "loading" | "error" | "empty";
 const NO_PATHS: readonly string[] = [];
+const UNADVERTISED = Atom.make(() => false);
 const NO_WITHHELD_ANSWERS = Atom.make(() => []);
 const parsedFiles = new WeakMap<PullRequestDiffResult, FileDiffMetadata | null>();
 
@@ -35,12 +36,15 @@ function parseFile(result: PullRequestDiffResult, key: string) {
 
 export function useWithheldPullRequestFiles(
   target: DiffTarget,
-  canLoad: boolean,
+  pageReadable: boolean,
   pagedFiles: readonly FileDiffMetadata[],
 ) {
   const scope = JSON.stringify(target);
   const [selection, setSelection] = useState({ scope, paths: NO_PATHS });
-  const paths = selection.scope === scope ? selection.paths : NO_PATHS;
+  const readable = useAtomValue(
+    pageReadable ? pullRequestEnvironment.withheldDiffAdvertised(target) : UNADVERTISED,
+  );
+  const paths = readable && selection.scope === scope ? selection.paths : NO_PATHS;
   const registry = useContext(RegistryContext);
   const answers = useAtomValue(
     paths.length === 0
@@ -51,7 +55,7 @@ export function useWithheldPullRequestFiles(
     pullRequestEnvironment.withheldDiff({ ...target, input: { ...target.input, path } });
   const refresh = () => paths.forEach((path) => registry.refresh(query(path)));
   const load = (path: string | undefined) => {
-    if (!canLoad || path === undefined) return;
+    if (!readable || path === undefined) return;
     registry.refresh(query(path));
     if (!paths.includes(path)) setSelection({ scope, paths: [...paths, path] });
   };
@@ -95,6 +99,7 @@ export function useWithheldPullRequestFiles(
 
   return {
     ...overlay,
+    readable,
     fileKey: (file: FileDiffMetadata) =>
       overlay.identities.get(file) ?? buildFileDiffRenderKey(file),
     waiting: answers.some((answer) => answer.waiting),
