@@ -1591,7 +1591,7 @@ index 40e87cda8c9bc79a889e5542f29af429a24b24d4..d48d7d1bd76822f3ffdb0e8919f20625
        recycleItems,
        refreshControl: refreshControlElement ? stylePaddingTopState > 0 ? React2.cloneElement(refreshControlElement, {
 diff --git a/react-native.web.js b/react-native.web.js
-index 914d2dafaafa001c9ab6791a0a0581659295e333..da4ed73ad26854c1144018ee62f1e5141fff0cce 100644
+index 914d2dafaafa001c9ab6791a0a0581659295e333..bebbaca9d8bd4f601d85e608266256b142fc5fd0 100644
 --- a/react-native.web.js
 +++ b/react-native.web.js
 @@ -2869,7 +2869,9 @@ function abortBootstrapInitialScroll(ctx) {
@@ -1610,7 +1610,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..da4ed73ad26854c1144018ee62f1e514
      const element = viewRef == null ? void 0 : viewRef.current;
      if (itemKey !== void 0 && element) {
 -      const rect = element.getBoundingClientRect();
-+      const rect = { height: element.offsetHeight, width: element.offsetWidth };
++      const rect = measureContainerLayoutSize(element);
        setContainerLayoutBaseline(element, rect);
        measurements.push({
          containerId,
@@ -1679,7 +1679,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..da4ed73ad26854c1144018ee62f1e514
      }
    }
 diff --git a/react-native.web.mjs b/react-native.web.mjs
-index 95465f2ab89ce41a10553f58af83618f7310e83c..433778b2c34cae315a225e0330e6ddd56b547cff 100644
+index 95465f2ab89ce41a10553f58af83618f7310e83c..a1201ac88069f6deb9656b0c1f03061526326e5e 100644
 --- a/react-native.web.mjs
 +++ b/react-native.web.mjs
 @@ -2848,7 +2848,9 @@ function abortBootstrapInitialScroll(ctx) {
@@ -1698,7 +1698,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..433778b2c34cae315a225e0330e6ddd5
      const element = viewRef == null ? void 0 : viewRef.current;
      if (itemKey !== void 0 && element) {
 -      const rect = element.getBoundingClientRect();
-+      const rect = { height: element.offsetHeight, width: element.offsetWidth };
++      const rect = measureContainerLayoutSize(element);
        setContainerLayoutBaseline(element, rect);
        measurements.push({
          containerId,

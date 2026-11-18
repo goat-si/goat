@@ -46,30 +46,35 @@ describe("CommandPaletteContent", () => {
   });
 });
 
-it.each(["@legendapp/list/react", "@legendapp/list/react-native"])(
-  "reports only layout heights when %s mounts under scale",
-  async (entry) => {
+it.each([
+  { entry: "@legendapp/list/react", height: 80, scale: 0.8 },
+  { entry: "@legendapp/list/react-native", height: 80, scale: 0.8 },
+  { entry: "@legendapp/list/react-native", height: 40.625, scale: 1 },
+])(
+  "reports only the $height px layout height when $entry mounts at scale $scale",
+  async ({ entry, height, scale }) => {
     const { LegendList: List } =
       await vi.importActual<typeof import("@legendapp/list/react")>(entry);
     const onItemSizeChanged = vi.fn<(measurement: { size: number }) => void>();
     await using screen = await render(
-      <div style={{ scale: "0.8" }}>
+      <div style={{ scale: String(scale) }}>
         <List
           data={["Project A"]}
           estimatedItemSize={100}
           keyExtractor={(item) => item}
           onItemSizeChanged={onItemSizeChanged}
           recycleItems={false}
-          renderItem={({ item }) => <div style={{ height: 80 }}>{item}</div>}
+          renderItem={({ item }) => <div style={{ height }}>{item}</div>}
           style={{ height: 100, width: 300 }}
         />
       </div>,
     );
-    await expect.element(screen.getByText("Project A")).toBeVisible();
+    const row = screen.getByText("Project A");
+    await expect.element(row).toBeVisible();
+    expect(row.element().getBoundingClientRect().height).toBeCloseTo(height * scale);
     await vi.waitFor(() =>
-      expect(onItemSizeChanged).toHaveBeenCalledWith(expect.objectContaining({ size: 80 })),
+      expect(onItemSizeChanged.mock.calls.map(([{ size }]) => size)).toEqual([height]),
     );
-    expect(onItemSizeChanged.mock.calls.map(([{ size }]) => size)).toEqual([80]);
   },
 );
 
