@@ -263,7 +263,7 @@ it.effect("drops a descriptor arriving after leave or key rotation", () =>
 );
 
 it.effect(
-  "a stored route is read once per run, and replaced when the member's GOAT answers as another environment",
+  "a stored route is read once per run, and its environment and drafts stay when the member's GOAT answers as another environment",
   () =>
     Effect.gen(function* () {
       const stored = EnvironmentId.make("old");
@@ -391,8 +391,8 @@ it.effect(
           ),
         ),
       );
-      expect(removed).toEqual([`old ${id}`]);
-      expect(registered).toEqual(["new"]);
+      expect(removed).toEqual([]);
+      expect(registered).toEqual([]);
       expect(opens).toBe(1);
     }),
 );

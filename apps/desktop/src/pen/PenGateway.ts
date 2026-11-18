@@ -558,15 +558,17 @@ export function makePenGateway(deps: Dependencies) {
           "HTTP/1.1 400 Bad Request\r\nReferrer-Policy: no-referrer\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
         );
       });
-      // Node would answer an Expect it does not support itself, without the gateway's headers.
-      instance.on("checkExpectation", (_request, response) => {
-        response.writeHead(417, {
-          "referrer-policy": "no-referrer",
-          "cache-control": "no-store",
-          connection: "close",
+      // Node would answer any Expect itself (a bare 100 for 100-continue), without the gateway's
+      // checks or headers. No client of the gateway sends one.
+      for (const event of ["checkExpectation", "checkContinue"] as const)
+        instance.on(event, (_request, response) => {
+          response.writeHead(417, {
+            "referrer-policy": "no-referrer",
+            "cache-control": "no-store",
+            connection: "close",
+          });
+          response.end();
         });
-        response.end();
-      });
       instance.listen(0, "127.0.0.1", () => {
         const address = instance.address();
         if (!address || typeof address === "string") return reject(new Error("no port"));

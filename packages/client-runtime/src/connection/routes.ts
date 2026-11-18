@@ -138,10 +138,13 @@ export function insertRoute(
   routes: ReadonlyArray<ConnectionRoute>,
   route: ConnectionRoute,
   { aheadOfSameKind = false }: { readonly aheadOfSameKind?: boolean } = {},
+  policy: PenViewerPolicy = { enabled: PEN_VIEWER_ENABLED },
 ): ReadonlyArray<ConnectionRoute> {
   const kind = connectionRouteKind(route);
   const rank = ROUTE_KIND_RANK[kind];
+  // Placed among the shown routes: a Pen route the closed gate hides keeps its slot.
   const index = routes.findIndex((existing) => {
+    if (!routeIsShown(existing, policy)) return false;
     const existingKind = connectionRouteKind(existing);
     return ROUTE_KIND_RANK[existingKind] > rank || (aheadOfSameKind && existingKind === kind);
   });
@@ -502,9 +505,14 @@ export function shownRoutes(
   entry: ConnectionCatalogEntry,
   policy: PenViewerPolicy = { enabled: PEN_VIEWER_ENABLED },
 ): ReadonlyArray<ConnectionRoute> {
-  return connectionRoutes(entry).filter(
-    (route) => route.target._tag !== "PenConnectionTarget" || policy.enabled,
-  );
+  return connectionRoutes(entry).filter((route) => routeIsShown(route, policy));
+}
+
+export function routeIsShown(
+  route: Pick<ConnectionRoute, "target">,
+  policy: PenViewerPolicy = { enabled: PEN_VIEWER_ENABLED },
+): boolean {
+  return route.target._tag !== "PenConnectionTarget" || policy.enabled;
 }
 
 /** A new order of the shown routes as a whole saved order, each hidden route in its place. */

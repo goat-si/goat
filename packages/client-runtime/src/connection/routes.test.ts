@@ -174,6 +174,8 @@ describe("connection routes", () => {
     expect(ids(shownRoutes(entry, { enabled: true }))).toEqual(saved);
     // Dragging tailnet first must still list the hidden Pen route, where it was.
     expect(routeOrderKeepingHidden(saved, ids([TAILNET, LAN]))).toEqual(ids([TAILNET, pen, LAN]));
+    // A new route takes its place among the shown routes; the hidden one does not move it ahead.
+    expect(ids(insertRoute([pen, LAN], TAILNET))).toEqual(ids([pen, LAN, TAILNET]));
   });
 });
 

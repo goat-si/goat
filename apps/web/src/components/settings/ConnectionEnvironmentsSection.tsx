@@ -210,17 +210,13 @@ type SavedBackendListRowProps = {
 function savedSshEnvironmentKeys(environments: ReadonlyArray<EnvironmentPresentation>) {
   const keys = new Set<string>();
   for (const environment of environments) {
-    const profile = environment.entry.profile;
-    if (
-      environment.entry.target._tag !== "SshConnectionTarget" ||
-      Option.isNone(profile) ||
-      profile.value._tag !== "SshConnectionProfile"
-    ) {
-      continue;
+    for (const route of shownRoutes(environment.entry)) {
+      const profile = Option.getOrNull(route.profile);
+      if (route.target._tag !== "SshConnectionTarget" || profile?._tag !== "SshConnectionProfile")
+        continue;
+      keys.add(profile.target.alias);
+      keys.add(formatDesktopSshTarget(profile.target));
     }
-    const target = profile.value.target;
-    keys.add(target.alias);
-    keys.add(formatDesktopSshTarget(target));
   }
   return keys;
 }

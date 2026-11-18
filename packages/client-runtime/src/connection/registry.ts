@@ -16,7 +16,6 @@ import * as ClientCapabilities from "../platform/capabilities.ts";
 import {
   type ConnectionCatalogEntry,
   type ConnectionCredential,
-  type ConnectionProfile,
   type ConnectionRegistration,
   type ConnectionRoute,
   type PlatformConnectionRegistration,
@@ -41,7 +40,12 @@ import * as ConnectionDriver from "./driver.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 import { makeKnownAddressCheck, unsupportedState } from "./registryPairing.ts";
 import { makeLeaseLock } from "./registryLeaseLock.ts";
-import { withRoutes } from "./registryRoutes.ts";
+import {
+  loadCatalogRoute,
+  targetsOfShownEnvironments,
+  withoutKey,
+  withRoutes,
+} from "./registryRoutes.ts";
 import {
   PullRequestRoutingPermissions,
   pullRequestRoutingConnectionKey,
@@ -56,6 +60,7 @@ import {
   hasSavedBearerRoute,
   mergeLearnedRoutes,
   routesAfterRemoving,
+  routeIsShown,
   upsertRoute,
   type ReportedEndpoint,
 } from "./routes.ts";
@@ -208,20 +213,9 @@ export const make = Effect.gen(function* () {
   const driver = yield* ConnectionDriver.ConnectionDriver;
   const wakeups = yield* ConnectionWakeups.ConnectionWakeups;
   const ssh = yield* ClientCapabilities.SshEnvironmentGateway;
-  const persistedTargets = yield* storage.list;
+  const persistedTargets = targetsOfShownEnvironments(yield* storage.list);
   const disabledEnvironmentIds = new Set(yield* storage.listDisabled);
-  const loadRoute = Effect.fn("EnvironmentRegistry.loadRoute")(function* (
-    target: ConnectionTarget,
-  ) {
-    const profile: Option.Option<ConnectionProfile> =
-      target._tag === "BearerConnectionTarget" ||
-      target._tag === "SshConnectionTarget" ||
-      target._tag === "HubProxyConnectionTarget" ||
-      target._tag === "PenConnectionTarget"
-        ? yield* profiles.get(target.connectionId)
-        : Option.none();
-    return { target, profile } satisfies ConnectionRoute;
-  });
+  const loadRoute = loadCatalogRoute(profiles);
   const persistedRoutesByEnvironment = new Map<EnvironmentId, Array<ConnectionTarget>>();
   for (const target of persistedTargets) {
     const routes = persistedRoutesByEnvironment.get(target.environmentId) ?? [];
@@ -600,11 +594,9 @@ export const make = Effect.gen(function* () {
           if (persisted) {
             const removed = yield* registrations.remove(target.environmentId).pipe(
               Effect.tap(() =>
-                Ref.update(persistedEnvironmentIds, (current) => {
-                  const next = new Set(current);
-                  next.delete(target.environmentId);
-                  return next;
-                }),
+                Ref.update(persistedEnvironmentIds, (current) =>
+                  withoutKey(current, target.environmentId),
+                ),
               ),
               Effect.as(true),
               Effect.catch((error) =>
@@ -698,17 +690,11 @@ export const make = Effect.gen(function* () {
             Effect.exit,
           );
           if (Exit.isFailure(revoked)) return false;
-          yield* Ref.update(platformEnvironmentIds, (current) => {
-            const next = new Set(current);
-            next.delete(environmentId);
-            return next;
-          });
+          yield* Ref.update(platformEnvironmentIds, (current) =>
+            withoutKey(current, environmentId),
+          );
           yield* closeServiceScope(environmentId);
-          yield* SubscriptionRef.update(entries, (current) => {
-            const next = new Map(current);
-            next.delete(environmentId);
-            return next;
-          });
+          yield* SubscriptionRef.update(entries, (current) => withoutKey(current, environmentId));
           if (entry !== undefined && entry.target._tag === "BearerConnectionTarget") {
             yield* credentials.remove(entry.target.connectionId).pipe(
               Effect.catch((error) =>
@@ -789,17 +775,9 @@ export const make = Effect.gen(function* () {
 
     yield* pullRequestRoutingPermissions.forget(environmentId);
     yield* registrations.remove(environmentId);
-    yield* Ref.update(persistedEnvironmentIds, (current) => {
-      const next = new Set(current);
-      next.delete(environmentId);
-      return next;
-    });
+    yield* Ref.update(persistedEnvironmentIds, (current) => withoutKey(current, environmentId));
     yield* closeServiceScope(environmentId);
-    yield* SubscriptionRef.update(entries, (current) => {
-      const next = new Map(current);
-      next.delete(environmentId);
-      return next;
-    });
+    yield* SubscriptionRef.update(entries, (current) => withoutKey(current, environmentId));
     yield* Effect.all(
       [
         cache.clear(environmentId).pipe(
@@ -980,10 +958,26 @@ export const make = Effect.gen(function* () {
         if (route === undefined) return;
         const remaining = routesAfterRemoving(routes, routeId);
         if (remaining.length === 0) return yield* removeLocked(environmentId);
-        yield* replaceRoutesLocked(entry, remaining);
+        if (remaining.some((left) => routeIsShown(left)))
+          yield* replaceRoutesLocked(entry, remaining);
+        else yield* retireLocked(environmentId, remaining);
         yield* forkSshDisconnect(environmentId, route);
       }),
     );
+  });
+
+  /** Only Pen routes the closed gate hides are left: saved with the environment's data, off the list. */
+  const retireLocked = Effect.fn("EnvironmentRegistry.retireLocked")(function* (
+    environmentId: EnvironmentId,
+    routes: ReadonlyArray<ConnectionRoute>,
+  ) {
+    yield* forgetRoutingTrust(environmentId, "set-connection-routes");
+    yield* registrations.setRoutes(
+      environmentId,
+      routes.map((left) => left.target as PersistedConnectionTarget),
+    );
+    yield* closeServiceScope(environmentId);
+    yield* SubscriptionRef.update(entries, (current) => withoutKey(current, environmentId));
   });
 
   const reorderRoutes = Effect.fn("EnvironmentRegistry.reorderRoutes")(function* (

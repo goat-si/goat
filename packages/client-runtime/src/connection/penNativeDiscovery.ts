@@ -125,9 +125,15 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
               verified.add(pinKey(pin));
               return;
             }
-            // The same environment under a new key is updated in place by register below.
-            if (known.target.environmentId !== descriptor.environmentId)
-              yield* registry.removeRoute(known.target.environmentId, connectionId);
+            // Another environment behind the same member keeps the saved one, its drafts and
+            // route; the person removes it to take the new one. A new key updates it in place.
+            if (known.target.environmentId !== descriptor.environmentId) {
+              verified.add(pinKey(pin));
+              return yield* Effect.logInfo("A Pen member answers as another environment", {
+                saved: known.target.environmentId,
+                answered: descriptor.environmentId,
+              });
+            }
           }
           const target = new PenConnectionTarget({
             connectionId,
