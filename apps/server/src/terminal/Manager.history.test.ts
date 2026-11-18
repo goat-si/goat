@@ -4,6 +4,7 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
@@ -20,6 +21,67 @@ it.layer(
   ),
   { excludeTestServices: true },
 )("TerminalManager history file", (it) => {
+  it.effect(
+    "removes abandoned compaction directories on startup and leaves other entries alone",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { basename, join } = yield* Path.Path;
+        const { manager, logsDir } = yield* createManager().pipe(
+          Effect.provideService(FileSystem.FileSystem, {
+            ...fs,
+            makeDirectory: (path, options) =>
+              fs.makeDirectory(path, options).pipe(
+                Effect.andThen(
+                  Effect.gen(function* () {
+                    if (basename(path) !== "terminals") return;
+                    yield* fs.makeDirectory(join(path, ".history-aBcD01"));
+                    yield* fs.writeFileString(
+                      join(path, ".history-aBcD01", "fedcba123456"),
+                      "old data",
+                    );
+                    yield* fs.writeFileString(join(path, ".history-aBcD02"), "keep");
+                    yield* fs.makeDirectory(join(path, ".history-aBcD03"));
+                    yield* fs.writeFileString(join(path, ".history-aBcD03", "unrelated"), "keep");
+                    yield* fs.makeDirectory(join(path, ".history-user-backup"));
+                  }),
+                ),
+              ),
+          }),
+        );
+        expect((yield* fs.readDirectory(logsDir)).toSorted()).toEqual([
+          ".history-aBcD02",
+          ".history-aBcD03",
+          ".history-user-backup",
+        ]);
+        expect((yield* manager.open(openInput())).history).toBe("");
+      }),
+  );
+
+  it.effect("opens with the compaction notice when both the rename and temp cleanup fail", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const denied = (method: "rename" | "remove") =>
+        PlatformError.systemError({ _tag: "PermissionDenied", module: "FileSystem", method });
+      const { manager, logsDir } = yield* createManager(5, { historyByteLimit: 256 }).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          rename: () => Effect.fail(denied("rename")),
+          remove: () => Effect.fail(denied("remove")),
+          makeTempFileScoped: (options) =>
+            Effect.acquireRelease(fs.makeTempFile(options), () => Effect.die(denied("remove"))),
+        }),
+      );
+      const path = yield* historyLogPath(logsDir);
+      const persisted = "x".repeat(512);
+      yield* fs.writeFileString(path, persisted);
+      expect((yield* manager.open(openInput())).history).toContain(
+        TERMINAL_HISTORY_COMPACTION_NOTICE,
+      );
+      expect(yield* fs.readFileString(path)).toBe(persisted);
+    }),
+  );
+
   it.effect("restores a log tail that starts inside a control sequence without its remainder", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

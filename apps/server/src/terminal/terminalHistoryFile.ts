@@ -5,6 +5,71 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
+import type * as Path from "effect/Path";
+
+const COMPACTION_TEMP_PREFIX = ".history-";
+const COMPACTION_TEMP_NAME = "history";
+
+const removeAbandonedHistoryCompactions = Effect.fn("terminal.removeAbandonedHistoryCompactions")(
+  function* (fs: FileSystem.FileSystem, path: Path.Path, logsDir: string) {
+    // The server holds exclusive ownership of its userdata before starting the terminal manager.
+    for (const name of yield* fs.readDirectory(logsDir)) {
+      if (!/^\.history-[a-z0-9]{6}$/i.test(name)) continue;
+      const dir = path.join(logsDir, name);
+      yield* Effect.gen(function* () {
+        if ((yield* fs.lstat(dir)).type !== "Directory") return;
+        const entries = yield* fs.readDirectory(dir);
+        if (entries.length > 1) return;
+        const [entry] = entries;
+        // Older servers used makeTempFileScoped, whose file name was six random bytes in hex.
+        if (entry !== undefined) {
+          if (entry !== COMPACTION_TEMP_NAME && !/^[a-f0-9]{12}$/.test(entry)) return;
+          if ((yield* fs.lstat(path.join(dir, entry))).type !== "File") return;
+        }
+        yield* fs.remove(dir, { recursive: true, force: true });
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("failed to remove abandoned terminal history", { error }),
+        ),
+      );
+    }
+  },
+  Effect.catch((error) =>
+    Effect.logWarning("failed to list abandoned terminal history", { error }),
+  ),
+);
+
+export const initializeTerminalHistory = Effect.fn("terminal.initializeHistory")(function* (
+  fs: FileSystem.FileSystem,
+  path: Path.Path,
+  logsDir: string,
+) {
+  yield* fs.makeDirectory(logsDir, { recursive: true }).pipe(Effect.orDie);
+  yield* removeAbandonedHistoryCompactions(fs, path, logsDir);
+});
+
+export const writeCompactedTerminalHistory = Effect.fn("terminal.writeCompactedHistory")(function* (
+  fs: FileSystem.FileSystem,
+  path: Path.Path,
+  logsDir: string,
+  nextPath: string,
+  history: string,
+) {
+  const dir = yield* Effect.acquireRelease(
+    fs.makeTempDirectory({ directory: logsDir, prefix: COMPACTION_TEMP_PREFIX }),
+    (dir) =>
+      fs
+        .remove(dir, { recursive: true, force: true })
+        .pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("failed to remove temporary terminal history", { error }),
+          ),
+        ),
+  );
+  const temporaryPath = path.join(dir, COMPACTION_TEMP_NAME);
+  yield* fs.writeFileString(temporaryPath, history);
+  yield* fs.rename(temporaryPath, nextPath);
+}, Effect.scoped);
 
 export const readTerminalHistoryTail = Effect.fn("terminal.readHistoryTail")(function* (
   fileSystem: FileSystem.FileSystem,
