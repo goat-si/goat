@@ -76,7 +76,7 @@ export function makePenGateway(deps: Dependencies) {
     for (const controller of route.dialing) controller.abort();
     for (const socket of route.sockets.keys()) socket.destroy();
     for (const waiter of route.waiting.splice(0)) waiter.reject(new Error("closed"));
-    for (const waiter of [...route.minting]) waiter({ error: new Error("closed") });
+    for (const waiter of route.minting) waiter({ error: new Error("closed") });
     await Promise.all(route.settling);
     await Promise.all([...route.children].map((pipe) => release(route, pipe)));
     await Promise.all(route.releasing.values());
@@ -210,7 +210,7 @@ export function makePenGateway(deps: Dependencies) {
     route.flight = flight;
     const answer = (outcome: Parameters<MintWaiter>[0]) => {
       if (route.flight === flight) route.flight = undefined;
-      for (const waiter of [...route.minting]) waiter(outcome);
+      for (const waiter of route.minting) waiter(outcome);
     };
     flight.then(
       (session) => answer({ session }),
