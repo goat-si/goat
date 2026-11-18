@@ -118,8 +118,9 @@ it.effect("keeps a refused account's last reading within its hub and login", () 
   let refused = true;
   let workspace: string | undefined = "login-a";
   let percent = 78;
+  let onFailedRedemption: Effect.Effect<void> | undefined;
   const http = HttpClient.make((request) =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
       const path = new URL(request.url).pathname;
       if (path.endsWith("/auth-files")) {
         return HttpClientResponse.fromWeb(
@@ -145,13 +146,35 @@ it.effect("keeps a refused account's last reading within its hub and login", () 
       }
       if (body.includes("/consume")) {
         refused = true;
+        if (onFailedRedemption) {
+          yield* onFailedRedemption;
+          return HttpClientResponse.fromWeb(
+            request,
+            Response.json({ status_code: 502, body: "{}" }),
+          );
+        }
         return HttpClientResponse.fromWeb(
           request,
           Response.json({ status_code: 200, body: JSON.stringify({ code: "reset" }) }),
         );
       }
       if (body.includes("/rate-limit-reset-credits")) {
-        return HttpClientResponse.fromWeb(request, Response.json({ status_code: 404, body: "{}" }));
+        return HttpClientResponse.fromWeb(
+          request,
+          Response.json({
+            status_code: 200,
+            body: JSON.stringify({
+              credits: [
+                {
+                  id: "credit",
+                  expires_at: "2099-01-01T00:00:00Z",
+                  status: "available",
+                  reset_type: "codex_rate_limits",
+                },
+              ],
+            }),
+          }),
+        );
       }
       const usage = {
         plan_type: "pro",
@@ -229,6 +252,30 @@ it.effect("keeps a refused account's last reading within its hub and login", () 
     ).toEqual({ outcome: "reset" });
     expect((yield* sources.current)[0]?.accounts[0]?.usageLimits).toMatchObject(unreadable);
     expect((yield* read)?.accounts[0]?.usageLimits).toMatchObject(unreadable);
+
+    refused = false;
+    const beforeRedemption = (yield* read)?.accounts[0]?.usageLimits;
+    expect(beforeRedemption?.resetCredits).toBeDefined();
+    const currentReading = sources.current.pipe(
+      Effect.map((snapshots) => snapshots[0]?.accounts[0]?.usageLimits),
+    );
+    let duringRedemption: typeof beforeRedemption;
+    onFailedRedemption = currentReading.pipe(
+      Effect.map((reading) => {
+        duringRedemption = reading;
+      }),
+    );
+    const failed = yield* sources
+      .consumeResetCredit({ sourceId, accountId: "first.json", creditId: "credit" })
+      .pipe(Effect.result);
+    expect(failed._tag).toBe("Failure");
+    expect(duringRedemption).toMatchObject(unreadable);
+    expect(duringRedemption?.resetCredits).toBeUndefined();
+    expect(yield* currentReading).toMatchObject(unreadable);
+    expect((yield* read)?.accounts[0]?.usageLimits).toMatchObject(unreadable);
+    refused = false;
+    percent = 3;
+    expect((yield* read)?.accounts[0]?.usageLimits.windows[0]?.usedPercent).toBe(3);
   }).pipe(
     Effect.provide([
       ServerSettings.layerTest({ usageLimitSources: { [sourceId]: config } }),

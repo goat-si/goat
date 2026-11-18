@@ -12,6 +12,7 @@ import {
   type QuotaPool,
   type ServerProvider,
 } from "@goat/contracts";
+import { makeUnavailableUsageLimits } from "@goat/provider-core/server/usageLimits";
 import { resolveServerBackgroundActivitySettings } from "@goat/shared/backgroundActivitySettings";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -243,8 +244,30 @@ export const make = Effect.gen(function* () {
     const previous = yield* Ref.get(stateRef);
     const endpoints = new Map(previous.endpoints);
     endpoints.delete(input.sourceId);
+    const checkedAt = DateTime.formatIso(yield* DateTime.now);
     // Even an interrupted redemption can change quota before the next poll.
-    yield* Ref.set(stateRef, { ...previous, endpoints });
+    yield* publish({
+      endpoints,
+      snapshots: previous.snapshots.map((source) =>
+        source.kind === "cliproxy" && source.id === input.sourceId
+          ? {
+              ...source,
+              accounts: source.accounts.map((account) =>
+                account.id === input.accountId
+                  ? {
+                      ...account,
+                      usageLimits: makeUnavailableUsageLimits({
+                        checkedAt,
+                        reason: "probeFailed",
+                        message: "Waiting for fresh usage after a reset credit redemption attempt.",
+                      }),
+                    }
+                  : account,
+              ),
+            }
+          : source,
+      ),
+    }).pipe(Effect.uninterruptible);
     const result = yield* api.consume(
       { ...config, managementKey },
       input.accountId,
