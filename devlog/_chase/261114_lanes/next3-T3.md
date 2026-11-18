@@ -20,3 +20,12 @@
 - Focused `vp test run <files>` with JSON reporter exited 0, 94/94. `ChatView.terminalFocus.browser.test.tsx` 1/1, `runtime.test.ts` 31/31, `terminal.test.ts` 12/12, `commandPermissions.test.ts` 30/30, `rpc.test.ts` 15/15, `terminalMenu.test.ts` 5/5. Changed tests ran whole. `git diff --check` exited 0.
 - Pinned Node 26.12.1 via PATH because `vp env exec` inherited Node 22. Worktree setup completed. No lockfile reinstall needed at the merge.
 - NOT RUN: integrated P1 on real web/Electron/mobile, a mixed-version run with historical binaries (covered here at the codecs), lane CI or repo-wide suite. Independent review and #3700 CI are with the coordinator.
+
+## P3 review follow-ups and K7 merge
+
+- `f7c4bd607f95781a11bfa7daecc30eb0ac2f7dd9` adds a current-server attach case. The fake server returns the `TerminalRequestError` only for an opted-in request; the test round-trips it through the wire codec and reads the error message from the attachment atom as the client does. The legacy reconnect test continues to strip the field.
+- `3d733e51c9e1db79cb1112e159a184d5baa20982` restores the standalone tablet focus test and adds a separate open-notice browser test with a `TerminalRequestError` and a pending attach.
+- Merged integration `061fd0fee904c2abaada9efb5cfdb9ea58b18919` at lane head `9fa0f8ea344afd01b2b96aadc09ba486e5aefcaf`. Resolved `packages/client-runtime/src/state/terminal.ts` by sending both `terminalErrorMessage: true` and K7's `maxHistoryBytes` on every attach, and adding `resume: true` only after a reply. No lockfile change.
+- Focused `vp test run` exited 0, 44/44. `runtime.test.ts` 29/29, `terminal.test.ts` 13/13, `ChatView.terminalFocus.browser.test.tsx` 2/2. From `apps/server`, `GOAT_TEST_TMP_GUARD=fail vp test run src/terminal/Manager.leaseOrder.test.ts` exited 0, 34/34. All four changed files ran whole.
+- `vp run check:changed origin/chase/t3-261114-next3` exited 0. All 38 typechecks passed. Tests passed 3,558/3,558 across 21 files (server 35/35 in 2 files, workspace 3,523/3,523 in 19). `git diff --check` exited 0. Plain push advanced the lane branch to `9fa0f8ea344afd01b2b96aadc09ba486e5aefcaf`; the remote ref matched.
+- NOT RUN: P1 with the integrated clients, lane CI, repo-wide suite. P1 and #3700 CI stay with the coordinator.
