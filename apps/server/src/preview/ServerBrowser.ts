@@ -411,6 +411,7 @@ const make = Effect.gen(function* () {
       .send("Page.getNavigationHistory")
       .catch(() => null)
       .then((history) => {
+        if (tab.closing || tab.crash) return;
         const index = history?.currentIndex ?? 0;
         const count = history?.entries.length ?? 0;
         runFork(
@@ -468,28 +469,79 @@ const make = Effect.gen(function* () {
 
   const sessionOpen = (tab: ServerTab) => !closedSessions.has(tabKey(tab.threadId, tab.tabId));
 
-  const dropTab = (tab: ServerTab, closeSession: boolean) => {
+  const dropTab = (tab: ServerTab, closeSession: boolean, replacingRenderer = false) => {
     const key = tabKey(tab.threadId, tab.tabId);
     if (tabs.get(key) !== tab) return;
     tab.closing = true;
     viewerArrived(tab);
-    blockedTabs.drop(tab.threadId, tab.tabId);
+    if (!replacingRenderer) blockedTabs.drop(tab.threadId, tab.tabId);
     screen.notify({ kind: "stop", reason: "tabClosed", threadId: tab.threadId, tabId: tab.tabId });
     tabs.delete(key);
-    if (tab.openerTabId) closedPopups.record(tab.threadId, tab.tabId, tab.openerTabId);
+    if (tab.openerTabId && !replacingRenderer)
+      closedPopups.record(tab.threadId, tab.tabId, tab.openerTabId);
     tab.diagnostics.dispose();
     clearAbortedNavigation(tab);
     // A desktop page outlives the connection unless its session closed with it.
-    const end = tab.desktop && !closeSession && sessionOpen(tab) ? "reconnect" : "gone";
+    const end =
+      (tab.desktop || replacingRenderer) && !closeSession && sessionOpen(tab)
+        ? "reconnect"
+        : "gone";
     for (const viewer of tab.viewers) viewer.push({ _tag: end });
-    void tab.control.close().catch(constVoid);
+    void tab.control.close({ preserveHandoff: replacingRenderer }).catch(constVoid);
     if (tab.desktop) void tab.desktop.close().catch(constVoid);
-    else closeServerPage(tab.page, tab.isolatedContext, tab.dialog !== null);
+    else if (!replacingRenderer)
+      closeServerPage(tab.page, tab.isolatedContext, tab.dialog !== null);
     void tab.recording?.encoder.close().catch(constVoid);
     reportLiveTabs();
     if (closeSession) {
       runFork(manager.close({ threadId: tab.threadId, tabId: tab.tabId }).pipe(Effect.ignore));
     }
+  };
+
+  const recoverRenderer = (tab: ServerTab) => {
+    if (tab.desktop) return dropTab(tab, true);
+    const key = tabKey(tab.threadId, tab.tabId);
+    if (tabs.get(key) !== tab || tab.closing) return;
+    const url = tab.crash?.url ?? tab.page.url();
+    const crash = {
+      url: ServerBrowserPage.withoutDataPayload(url).slice(0, 2048),
+      code: -2,
+      description: "Page crashed",
+    };
+    tab.crash = { error: crash, url };
+    const replacement = (async () => {
+      dropTab(tab, false, true);
+      await runPromise(
+        manager.reportStatus({
+          threadId: tab.threadId,
+          tabId: tab.tabId,
+          serverControlled: true,
+          navStatus: { _tag: "LoadFailed", title: "", ...crash },
+          canGoBack: false,
+          canGoForward: false,
+        }),
+      );
+      await tab.page.close().catch(constVoid);
+      const { sessions } = await runPromise(manager.list({ threadId: tab.threadId }));
+      const snapshot = sessions.find(
+        (session) => session.tabId === tab.tabId && session.runtime === "server",
+      );
+      if (!snapshot)
+        throw new ServerBrowserTabNotFoundError({ threadId: tab.threadId, tabId: tab.tabId });
+      return createTab(snapshot, tab);
+    })()
+      .catch((cause: unknown) => {
+        tab.control.endHandoff("ended");
+        runFork(Effect.logWarning("server preview renderer could not recover", { cause }));
+        if (tab.isolatedContext) void tab.page.context().close().catch(constVoid);
+        throw cause;
+      })
+      .finally(() => {
+        pendingTabs.delete(key);
+        closedPendingTabs.delete(key);
+      });
+    pendingTabs.set(key, { agentId: tab.control.agentId, promise: replacement });
+    return replacement.then(constVoid, constVoid);
   };
 
   const desktopRenders = (snapshot: PreviewSessionSnapshot) =>
@@ -515,7 +567,7 @@ const make = Effect.gen(function* () {
       closeScope: (scope) => runPromise(Scope.close(scope, Exit.void)),
     });
 
-  const createTab = (snapshot: PreviewSessionSnapshot): Promise<ServerTab> =>
+  const createTab = (snapshot: PreviewSessionSnapshot, replaced?: ServerTab): Promise<ServerTab> =>
     withTabSetupCleanup(async (opened) => {
       const adopted = adoptedPages.get(tabKey(snapshot.threadId, snapshot.tabId));
       const openSignal = adopted
@@ -544,13 +596,15 @@ const make = Effect.gen(function* () {
         );
       }
       const isolatedContext =
-        adopted === undefined &&
-        desktop === null &&
-        ((snapshot.automationOwner !== undefined && snapshot.profileId === undefined) ||
-          snapshot.profileId === INCOGNITO_BROWSER_PROFILE_ID);
+        replaced?.isolatedContext ??
+        (adopted === undefined &&
+          desktop === null &&
+          ((snapshot.automationOwner !== undefined && snapshot.profileId === undefined) ||
+            snapshot.profileId === INCOGNITO_BROWSER_PROFILE_ID));
       const context =
         adopted?.page.context() ??
         desktop?.page.context() ??
+        replaced?.page.context() ??
         (await contexts.contextFor(
           snapshot.profileId ?? "default",
           isolatedContext ? tabKey(snapshot.threadId, snapshot.tabId) : undefined,
@@ -577,9 +631,10 @@ const make = Effect.gen(function* () {
       openSignal?.throwIfAborted();
       page.setDefaultTimeout(NAVIGATION_TIMEOUT_MS);
       page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
-      const control = new SessionControl(snapshot.automationOwner ?? null, () =>
-        ServerBrowserPage.invalidateRefs(page),
-      );
+      const invalidate = () => ServerBrowserPage.invalidateRefs(page);
+      const control =
+        replaced?.control.replacement(invalidate) ??
+        new SessionControl(snapshot.automationOwner ?? null, invalidate);
       opened.push(() => control.close());
       control.onDispatchCut(inputFence(cdp));
       const diagnostics = new ServerBrowserDiagnostics(
@@ -616,12 +671,13 @@ const make = Effect.gen(function* () {
         },
         isolatedContext,
         session:
+          replaced?.session ??
           (adopted && tabs.get(tabKey(snapshot.threadId, adopted.openerTabId))?.session) ??
           tabSession({ isolatedContext, profileId: snapshot.profileId, desktop }),
         desktop: desktop === null ? null : { close: desktop.close },
         profileId: snapshot.profileId,
-        openerTabId: adopted?.openerTabId,
-        downloads: [],
+        openerTabId: adopted?.openerTabId ?? replaced?.openerTabId,
+        downloads: replaced?.downloads ?? [],
         fileChooser: null,
         dialog: null,
         setting: snapshot.viewport ?? FILL_PREVIEW_VIEWPORT,
@@ -635,6 +691,7 @@ const make = Effect.gen(function* () {
         desktopResize: Promise.withResolvers<void>(),
         loading: false,
         loadError: undefined,
+        crash: replaced?.crash,
         closing: false,
         recording: null,
         recordingStart: null,
@@ -643,7 +700,7 @@ const make = Effect.gen(function* () {
         navigationGeneration: 0,
         stoppedGeneration: null,
         pendingInitialRequestUrl: null,
-        documentGeneration: 0,
+        documentGeneration: replaced ? replaced.documentGeneration + 1 : 0,
         abortedNavigation: null,
         captureLock: Promise.resolve(),
         capturing: 0,
@@ -691,6 +748,7 @@ const make = Effect.gen(function* () {
         clearAbortedNavigation(tab);
         tab.loading = true;
         tab.loadError = undefined;
+        tab.crash = undefined;
         if (stoppedFirst) {
           tab.stoppedGeneration = tab.navigationGeneration;
           return stopLoading.settle(tab, tab.navigationGeneration);
@@ -778,14 +836,14 @@ const make = Effect.gen(function* () {
         .catch(constVoid);
       openSignal?.throwIfAborted();
       setupSignal = undefined;
-      // Playwright cannot reload a crashed page, so it must leave the tab list.
       const key = tabKey(tab.threadId, tab.tabId);
       if (closedPendingTabs.delete(key)) {
         throw new ServerBrowserTabNotFoundError({ threadId: tab.threadId, tabId: tab.tabId });
       }
       page.on("close", () => dropTab(tab, true));
-      page.on("crash", () => dropTab(tab, true));
+      page.on("crash", () => recoverRenderer(tab));
       tabs.set(key, tab);
+      if (replaced) screen.watchHandoffs(tab);
       opened.length = 0;
       tab.control.onChange(ServerBrowserScreen.authorityReporter(tab, screen.notify));
       tab.control.onChange(() => (broadcastControl(tab), reportLiveTabs()));
@@ -1445,14 +1503,19 @@ const make = Effect.gen(function* () {
     if (!FENCED_ALLOWED_OPERATIONS.has(request.operation)) runSignal?.throwIfAborted();
     const input = request.input;
     switch (request.operation) {
-      case "status":
+      case "status": {
+        const key =
+          request.tabId === undefined ? undefined : tabKey(request.threadId, request.tabId);
+        const pending =
+          key === undefined ? undefined : await pendingTabs.get(key)?.promise?.catch(constVoid);
         return ServerBrowserScreen.checkedAround(
           request.tabId === undefined
             ? latestThreadTab(request.threadId, request.agentSessionId)
-            : tabs.get(tabKey(request.threadId, request.tabId)),
+            : (pending ?? tabs.get(tabKey(request.threadId, request.tabId))),
           request,
           (tab) => statusWithTitle(tab, request.agentSessionId),
         );
+      }
       case "open": {
         SessionControl.requireAgentSession(request);
         const open = input as PreviewAutomationOpenInput;
@@ -2164,6 +2227,10 @@ const make = Effect.gen(function* () {
         return;
       case "reload":
         tab.pendingInitialRequestUrl = null;
+        if (tab.crash) {
+          tab.control.trackUntilHandoff(tab.page.goto(tab.crash.url, VIEWER_NAVIGATION_OPTIONS));
+          return;
+        }
         if (message.ignoreCache === true) {
           await session.send("Page.reload", { ignoreCache: true });
           return;

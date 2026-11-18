@@ -213,6 +213,9 @@ export function makePageContext(
     mainFrame: () => page,
     frames: () => [page],
     url: () => url,
+    commit: (next: string) => {
+      url = next;
+    },
     title: vi.fn(async () => "test page"),
     viewportSize: vi.fn(() => viewport),
     setViewportSize: vi.fn(async (size: typeof viewport) => {
@@ -254,14 +257,16 @@ export function makePageContext(
     sessions,
     on: () => context,
     cssViewport,
-    newPage: async () => page as unknown as Page,
+    newPage: vi.fn(async () => page as unknown as Page),
     grantPermissions: vi.fn(async () => {}),
     cookies: async () => [],
     newCDPSession: async (target: unknown) => {
       const failure = hooks.setupFailure();
       if (failure) throw failure;
       const session = makeSession(
-        target === page ? undefined : (target as ReturnType<typeof makeFrame>),
+        typeof target === "object" && target !== null && "recording" in target
+          ? (target as ReturnType<typeof makeFrame>)
+          : undefined,
         () => hooks.desktopSize() ?? Promise.resolve({ result: { value: { ...cssViewport } } }),
       );
       sessions.push(session);

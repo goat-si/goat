@@ -2543,3 +2543,36 @@ it.effect("keeps a tab's zoom when its viewer resizes", () =>
     }),
   ).pipe(Effect.provide(layer)),
 );
+
+it.effect("a tab whose renderer crashes stays open instead of vanishing", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, broker, tabId } = yield* ready;
+      const url = `https://example.com/app?${"a".repeat(3000)}`;
+      const original = contexts[0]!;
+      const replacement = makeContext();
+      replacement.page.context = () => original;
+      original.newPage.mockImplementationOnce(replacement.newPage);
+      original.page.commit(url);
+      yield* Effect.promise(() => original.page.emitAsync("crash"));
+      expect(replacement.newPage).toHaveBeenCalled();
+      const status = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        tabId,
+        operation: "status",
+        input: {},
+      });
+      expect(status.tabId).toBe(tabId);
+      expect(status.loadError).toEqual({
+        url: url.slice(0, 2048),
+        code: -2,
+        description: "Page crashed",
+      });
+      // The crashed page cannot load anything again, so Reload goes to the page that replaced it.
+      const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
+      yield* viewer.input({ type: "takeControl" });
+      yield* viewer.input({ type: "reload" });
+      expect(replacement.page.goto).toHaveBeenCalledWith(url, expect.anything());
+    }),
+  ).pipe(Effect.provide(layer)),
+);

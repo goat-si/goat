@@ -67,6 +67,7 @@ export const guardedHistoryNavigation = async <
     readonly cdp: CDPSession;
     readonly control: SessionControl;
     pendingInitialRequestUrl?: string | null;
+    readonly crash?: { readonly url: string } | undefined;
   },
   Status,
 >(input: {
@@ -91,8 +92,20 @@ export const guardedHistoryNavigation = async <
       );
   };
   try {
-    await input.recordAction(tab, operation, () =>
-      navigateHistory(
+    await input.recordAction(tab, operation, async () => {
+      if (operation === "reload" && tab.crash) {
+        const url = tab.crash.url;
+        await input.assertDestination(url);
+        assertControl();
+        await input.channelFor(url).call(() =>
+          tab.page.goto(url, {
+            timeout: input.reload.timeoutMs ?? input.timeoutMs,
+            waitUntil: input.reload.readiness === "domContentLoaded" ? "domcontentloaded" : "load",
+          }),
+        );
+        return;
+      }
+      return navigateHistory(
         tab.page,
         tab.cdp,
         operation,
@@ -101,8 +114,8 @@ export const guardedHistoryNavigation = async <
         assertControl,
         input.assertDestination,
         input.channelFor,
-      ),
-    );
+      );
+    });
     assertControl();
     const status = await input.status(tab);
     assertControl();

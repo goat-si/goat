@@ -91,6 +91,9 @@ export interface ServerTab {
   desktopResize: PromiseWithResolvers<void>;
   loading: boolean;
   loadError: import("@goat/contracts").PreviewAutomationLoadError | undefined;
+  crash:
+    | { readonly error: import("@goat/contracts").PreviewAutomationLoadError; readonly url: string }
+    | undefined;
   closing: boolean;
   recording: Recording | null;
   initialNavigation: Promise<void> | null;
