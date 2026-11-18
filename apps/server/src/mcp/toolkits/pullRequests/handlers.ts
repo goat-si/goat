@@ -650,6 +650,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const { target, ref } = yield* locateOne(input);
         const activity = yield* pullRequests.activity(ref).pipe(Effect.mapError(readFailure));
+        const hasOverview = activity.overviewThreads !== undefined;
         const author =
           activity.author === undefined || activity.author === null
             ? {}
@@ -662,12 +663,13 @@ const make = Effect.gen(function* () {
             reviewers: [],
             comments: [],
             reviewThreads: [],
-            ...(activity.overviewThreads === undefined ? {} : { overviewThreads: [] }),
+            ...(hasOverview ? { overviewThreads: [] } : {}),
             commits: [],
             reactions: [],
           },
           commentsOmitted: WIDEST_COUNT,
           reviewThreadsOmitted: WIDEST_COUNT,
+          ...(hasOverview ? { overviewThreadsOmitted: WIDEST_COUNT } : {}),
           commitsOmitted: WIDEST_COUNT,
           reviewersOmitted: WIDEST_COUNT,
           reactionsOmitted: WIDEST_COUNT,
@@ -688,7 +690,6 @@ const make = Effect.gen(function* () {
         const overviewThreads = take(activity.overviewThreads ?? []);
         const commits = take(activity.commits);
         const reactions = take(activity.reactions ?? []);
-        const hasOverview = activity.overviewThreads !== undefined;
         return {
           ...identityOf(target),
           activity: {
