@@ -14,10 +14,15 @@ export interface DesktopPrimaryPasteBridge {
   getPrimaryPasteEnabled?: () => boolean;
 }
 
+export interface DesktopFileActionsBridge {
+  toLocalBackendPath?: (backendId: string, path: string) => Promise<string | null>;
+}
+
 /** Desktop bridge methods that live in their own modules, so ipc.ts stays within its budget. */
 export type DesktopBridgeParts = DesktopPrimaryPasteBridge &
   DesktopWindowMaterialBridge &
   DesktopPreviewSessionStackHost &
   DesktopHeadlessServerBridge &
   DesktopTrayBridge &
-  DesktopMicrophoneBridge;
+  DesktopMicrophoneBridge &
+  DesktopFileActionsBridge;

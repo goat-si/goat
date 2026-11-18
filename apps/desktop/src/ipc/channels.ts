@@ -1,4 +1,5 @@
 export const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
+export const TO_LOCAL_BACKEND_PATH_CHANNEL = "desktop:to-local-backend-path";
 export const SET_NOTIFICATION_BADGE_CHANNEL = "desktop:set-notification-badge";
 export const SET_TRAY_MENU_CHANNEL = "desktop:set-tray-menu";
 export const TRAY_ACTION_CHANNEL = "desktop:tray-action";

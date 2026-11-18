@@ -24,6 +24,8 @@ import * as DesktopBackendManager from "../../backend/DesktopBackendManager.ts";
 import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
 import * as DesktopHeadlessServer from "../../backend/DesktopHeadlessServer.ts";
 import * as DesktopAppSettings from "../../settings/DesktopAppSettings.ts";
+import * as DesktopWslEnvironment from "../../wsl/DesktopWslEnvironment.ts";
+import { toLocalBackendPath } from "./folderPaths.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import {
@@ -215,6 +217,36 @@ describe("getLocalEnvironmentBootstraps", () => {
       assert.deepEqual(result, []);
     }).pipe(Effect.provide(bootstrapsLayer([stoppedInstance])));
   });
+});
+
+describe("toLocalBackendPath", () => {
+  it.effect("uses the running WSL distro and rejects paths owned by another backend", () =>
+    Effect.gen(function* () {
+      const convert = vi.fn(() => Option.some("/drives/c/Work $draft"));
+      const primary = { ...defaultWslInstance, id: DesktopBackendManager.PRIMARY_INSTANCE_ID };
+      const convertDrop = (backendId: string, path: string) =>
+        toLocalBackendPath
+          .handler({ backendId, path })
+          .pipe(
+            Effect.provide(bootstrapsLayer([defaultWslInstance, primary])),
+            Effect.provide(DesktopAppSettings.layerTest()),
+            Effect.provide(DesktopWslEnvironment.layerTest({ windowsToWslPath: convert })),
+            Effect.provideService(HostProcess.Platform, "win32"),
+          );
+
+      assert.equal(yield* convertDrop("primary", "C:\\Work $draft"), "/drives/c/Work $draft");
+      assert.deepEqual(convert.mock.calls, [["Ubuntu", "C:\\Work $draft"]]);
+      assert.equal(
+        yield* convertDrop("wsl:default", "\\\\wsl.localhost\\ubuntu\\home\\dev"),
+        "/home/dev",
+      );
+      assert.isNull(yield* convertDrop("wsl:default", "\\\\wsl$\\Debian\\home\\dev"));
+      assert.isNull(yield* convertDrop("wsl:default", "\\\\remote\\share"));
+      assert.isNull(yield* convertDrop("missing-backend", "C:\\Work"));
+      assert.isNull(yield* convertDrop("wsl:default", "relative\\Work"));
+      assert.lengthOf(convert.mock.calls, 1);
+    }),
+  );
 });
 
 describe("getRelayTelemetryEnabled", () => {
