@@ -96,3 +96,29 @@ it("keeps the complete label of a context chip whose opening bracket is in the p
     })?.userText,
   ).toBe(`${prefix} Earlier response`);
 });
+
+it.each([
+  { text: "x".repeat(8_000), comment: "y".repeat(8_000), prefix: "" },
+  { text: "A short question.", comment: "y".repeat(8_000), prefix: "Please check " },
+])("caps the combined decoded quote and comment before flattening", ({ text, comment, prefix }) => {
+  const quote = serializeAssistantCitation({
+    version: 1,
+    environmentId: EnvironmentId.make("env"),
+    threadId: ThreadId.make("thread"),
+    messageId: MessageId.make("message"),
+    text,
+    start: 0,
+    end: text.length,
+    prefix: "",
+    suffix: "",
+    comment,
+  });
+  const preview = resolveTimelineMinimapPreview({
+    id: "turn",
+    rowIndex: 0,
+    userText: prefix + quote,
+    assistantText: null,
+  });
+  expect(preview?.userText).toHaveLength(1_500);
+  expect(preview?.userText).toBe(`${prefix}${text} Comment: ${comment}`.slice(0, 1_500));
+});

@@ -1,3 +1,4 @@
+import type { AssistantCitation } from "@goat/contracts";
 import { collectAssistantCitations } from "@goat/shared/assistantCitations";
 import {
   collectComposerContextReferences,
@@ -115,6 +116,15 @@ function markdownMinimapPreview(markdown: string | null) {
     : markdownPlainText(markdown.slice(0, MINIMAP_PREFIX_LENGTH)) || null;
 }
 
+function citationPreviewLabel(citation: AssistantCitation, limit: number): string {
+  const quote = citation.text.slice(0, limit);
+  const commentPrefix = " Comment: ";
+  const remaining = limit - quote.length - commentPrefix.length;
+  return citation.comment === undefined || remaining <= 0
+    ? quote
+    : quote + commentPrefix + citation.comment.slice(0, remaining);
+}
+
 function expandUserPreviewTokens(markdown: string) {
   const tokens = [
     ...collectComposerContextReferences(markdown, MINIMAP_PREFIX_LENGTH).map(
@@ -124,23 +134,20 @@ function expandUserPreviewTokens(markdown: string) {
         label,
       }),
     ),
-    ...collectAssistantCitations(markdown, MINIMAP_PREFIX_LENGTH).map(
-      ({ start, end, citation }) => ({
-        start,
-        end,
-        label:
-          citation.comment === undefined
-            ? citation.text
-            : `${citation.text} Comment: ${citation.comment}`,
-      }),
-    ),
+    ...collectAssistantCitations(markdown, MINIMAP_PREFIX_LENGTH),
   ].sort((a, b) => a.start - b.start);
   let expanded = "";
   let offset = 0;
-  for (const { start, end, label } of tokens) {
+  for (const token of tokens) {
+    const { start, end } = token;
     if (start < offset) continue;
+    expanded += markdown.slice(offset, start);
+    const label =
+      "citation" in token
+        ? citationPreviewLabel(token.citation, Math.max(0, MINIMAP_PREFIX_LENGTH - expanded.length))
+        : token.label;
     const literal = label.replace(/\s+/g, " ").replace(/[!-\/:-@[-`{-~]/g, "\\$&");
-    expanded += markdown.slice(offset, start) + literal;
+    expanded += literal;
     offset = end;
   }
   return expanded + markdown.slice(offset, MINIMAP_PREFIX_LENGTH);
