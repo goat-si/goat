@@ -63,7 +63,7 @@ it.effect("filters image searches before applying the result limit", () =>
         },
       }));
       const finder = {
-        destroy: vi.fn(),
+        destroyAsync: vi.fn(async () => {}),
         waitForIndexReady: vi.fn(async () => ({ ok: true as const, value: true })),
         fileSearchAsync: fileSearch,
       } as unknown as FileFinder;
@@ -112,7 +112,7 @@ it.effect("fetches past a first page of Git-ignored results", () =>
         },
       }));
       const finder = {
-        destroy: vi.fn(),
+        destroyAsync: vi.fn(async () => {}),
         waitForIndexReady: vi.fn(async () => ({ ok: true as const, value: true })),
         fileSearchAsync: fileSearch,
       } as unknown as FileFinder;
@@ -132,7 +132,7 @@ it.effect("keeps a backslash in a POSIX folder name as part of the search result
     Effect.gen(function* () {
       const items = [fileItem("dir\\one/report.txt")];
       const finder = {
-        destroy: vi.fn(),
+        destroyAsync: vi.fn(async () => {}),
         waitForIndexReady: vi.fn(async () => ({ ok: true as const, value: true })),
         fileSearchAsync: vi.fn(async () => ({
           ok: true as const,
@@ -196,7 +196,7 @@ it.effect("continues whole-word searches after a filtered grep page", () =>
             },
       );
       const finder = {
-        destroy: vi.fn(),
+        destroyAsync: vi.fn(async () => {}),
         waitForIndexReady: vi.fn(async () => ({ ok: true as const, value: true })),
         grepAsync: grep,
       } as unknown as FileFinder;
@@ -251,7 +251,7 @@ it.effect.each([
       Effect.gen(function* () {
         const items = [fileItem(hidden), fileItem(visible)];
         const finder = {
-          destroy: vi.fn(),
+          destroyAsync: vi.fn(async () => {}),
           waitForIndexReady: vi.fn(async () => ({ ok: true as const, value: true })),
           fileSearchAsync: vi.fn(async () => ({
             ok: true as const,
@@ -434,8 +434,12 @@ it.live("answers content searches with git grep while a slow content index build
         nextCursor: null,
       } satisfies GrepResult,
     }));
+    const destroy = vi.fn();
     const finder = {
-      destroy: vi.fn(),
+      destroy,
+      destroyAsync: async () => {
+        destroy();
+      },
       waitForIndexReady: vi.fn(async () => ({ ok: true as const, value: false })),
       getScanProgressAsync: async () => ({
         ok: true as const,
@@ -686,7 +690,7 @@ it.live.each(["grep.column", "grep.fullName"])(
       yield* fs.writeFileString(path.join(cwd, "note.txt"), "a needle\n");
 
       const finder = {
-        destroy: vi.fn(),
+        destroyAsync: vi.fn(async () => {}),
         getScanProgressAsync: async () => ({
           ok: true as const,
           value: { isScanning: true, isWarmupComplete: false },
@@ -746,7 +750,6 @@ it.live.each(["before grep", "during grep"])(
       });
 
       const finder = {
-        destroy: vi.fn(),
         destroyAsync: vi.fn(async () => {}),
         getScanProgressAsync: async () => ({
           ok: true as const,

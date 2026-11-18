@@ -19,12 +19,19 @@ const FINDER_IDLE_TTL = "15 minutes";
 const makeFinderCache = Effect.gen(function* () {
   const admission = yield* Semaphore.make(1);
   const liveSlots = yield* Semaphore.make(FINDER_CAPACITY);
+  let nativeCapacity = FINDER_CAPACITY;
+  const quarantineSlot = Effect.suspend(() => {
+    nativeCapacity -= 1;
+    return liveSlots.resize(nativeCapacity);
+  });
   const cache = yield* RcMap.make({
     lookup: (key: string) => {
       const separator = key.indexOf("\n");
       const variant = key.startsWith("content\n") ? "content" : "paths";
-      // A scope can still be closing after RcMap has dropped its key.
-      return liveSlots.takeScoped(1).pipe(Effect.andThen(make(key.slice(separator + 1), variant)));
+      // The finder finalizer awaits native teardown before the scope releases this permit.
+      return liveSlots
+        .takeScoped(1)
+        .pipe(Effect.andThen(make(key.slice(separator + 1), variant, quarantineSlot)));
     },
     capacity: FINDER_CAPACITY,
     idleTimeToLive: FINDER_IDLE_TTL,
@@ -53,8 +60,8 @@ const makeFinderCache = Effect.gen(function* () {
           yield* RcMap.invalidate(cache, key);
           existing = undefined;
         }
-        if (!existing && cachedOnly) return undefined;
-        if (!existing && MutableHashMap.size(entries) >= FINDER_CAPACITY) {
+        if (!existing && (cachedOnly || nativeCapacity === 0)) return undefined;
+        if (!existing && MutableHashMap.size(entries) >= nativeCapacity) {
           let oldest: string | undefined;
           let oldestExpiry = Number.POSITIVE_INFINITY;
           for (const [candidate, entry] of entries) {

@@ -56,6 +56,11 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/server/src/cli`, `apps/server/src/cloud`, `apps/desktop/src/wsl`, `scripts/install.sh`, `scripts/build-npm-launcher.ts`, `scripts/npm-launcher`
 - 정책: upstream 로직을 받고 실행 파일 `goat`, `runtime/goat/versions`, SSH 호스트 `~/.goat`를 유지한다. npm 배포는 upstream 단일 launcher(`scripts/build-npm-launcher.ts`, `scripts/npm-launcher/goat.mjs`) 위에 패키지 `goat`, bin `goat`·`t3`, 릴리스 저장소 `goat-si/goat-releases`를 얹는다 (사이클 261019).
 
+### `fff-node-teardown` 워크스페이스 검색 인덱스 종료
+
+- 경로: `patches/@ff-labs__fff-node@0.11.0.patch`, `apps/server/src/workspace/{WorkspaceSearchIndex,workspaceSearchFinderCache}.ts`
+- 정책: 기존 `destroy()` 호출 형태를 유지한다. GOAT 서버는 진행 중인 네이티브 호출과 `fff_destroy` 및 watcher 정리가 끝나는 `destroyAsync()`를 기다린 뒤 finder 슬롯을 돌려준다. FFF 업데이트 때 같은 종료 보장을 확인하고 패치를 유지하거나 upstream의 동등한 API로 옮긴다.
+
 ### `code-budgets` 파일 크기와 단언 ratchet
 
 - 커밋: #812

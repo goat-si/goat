@@ -394,13 +394,14 @@ const waitForIndexReady = Effect.fn("WorkspaceSearchIndex.waitForIndexReady")(fu
 export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
   cwd: string,
   variant: WorkspaceSearchIndexVariant = "paths",
+  onDestroyFailure: Effect.Effect<void> = Effect.void,
 ) {
   const hostIsWindows = yield* HostProcess.isWindows;
   const finder = yield* Effect.acquireRelease(createFinder(cwd, variant), (finder) =>
-    Effect.try({
-      try: () => finder.destroy(),
+    Effect.tryPromise({
+      try: () => finder.destroyAsync(),
       catch: (cause) => new WorkspaceSearchIndexDestroyFailed({ cwd, cause }),
-    }).pipe(Effect.orDie),
+    }).pipe(Effect.catch((cause) => Effect.andThen(onDestroyFailure, Effect.die(cause)))),
   );
   let initialScanTimedOut = false;
   const vcsProcess = yield* VcsProcess.VcsProcess;

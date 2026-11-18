@@ -53,7 +53,7 @@ function fakeSymlinkFinder(
     item: { relativePath: entry.path, fileName: entry.path.split("/").at(-1) },
   }));
   const finder = {
-    destroy: vi.fn(),
+    destroyAsync: vi.fn(async () => {}),
     waitForIndexReady: vi.fn(async () => ({ ok: true as const, value: true })),
     // fff's isScanning waits on the picker lock on the JS thread.
     isScanning: () => {
@@ -287,7 +287,7 @@ it.effect.each(["answers not-ok", "rejects"] as const)(
           value: { items: [], totalMatched: 0 },
         }));
         const finder = {
-          destroy: vi.fn(),
+          destroyAsync: vi.fn(async () => {}),
           waitForIndexReady: vi.fn(async () => ({ ok: true as const, value: true })),
           getScanProgressAsync: async () => ({ ok: true as const, value: { isScanning: false } }),
           watchAsync: async () => {
@@ -334,10 +334,14 @@ it.effect("an index closed while its watcher subscription is pending keeps no wa
     const handlers: Array<unknown> = [];
     let answer: (() => void) | undefined;
     const asked = yield* Deferred.make<void>();
+    const destroy = vi.fn(() => {
+      alive = false;
+    });
     const finder = {
-      destroy: vi.fn(() => {
-        alive = false;
-      }),
+      destroy,
+      destroyAsync: async () => {
+        destroy();
+      },
       waitForIndexReady: vi.fn(async () => ({ ok: true as const, value: true })),
       getScanProgressAsync: async () => ({ ok: true as const, value: { isScanning: false } }),
       watchAsync: (callback: unknown) => {
@@ -464,4 +468,37 @@ it.effect("omits stale native descendants of a directory skipped within the scan
       ]);
     }),
   ).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("holds the index scope open until native finder teardown completes", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const cwd = yield* fs.makeTempDirectoryScoped();
+    const cleanupStarted = yield* Deferred.make<void>();
+    const finish = Promise.withResolvers<void>();
+    const teardown = vi.fn(() => {
+      Deferred.doneUnsafe(cleanupStarted, Effect.void);
+      return finish.promise;
+    });
+    const finder = {
+      destroy: () => {
+        void teardown();
+      },
+      destroyAsync: teardown,
+      waitForIndexReady: async () => ({ ok: true, value: true }),
+    } as unknown as FileFinder;
+    vi.spyOn(FileFinder, "create").mockReturnValueOnce({ ok: true, value: finder });
+
+    const scope = yield* Scope.make();
+    yield* WorkspaceSearchIndex.make(cwd).pipe(Scope.provide(scope));
+    const closing = yield* Scope.close(scope, Exit.void).pipe(
+      Effect.forkChild({ startImmediately: true }),
+    );
+    yield* Deferred.await(cleanupStarted);
+    const beforeCleanup = closing.pollUnsafe();
+    finish.resolve();
+    yield* Fiber.join(closing);
+    expect(beforeCleanup).toBeUndefined();
+    expect(teardown).toHaveBeenCalledTimes(1);
+  }).pipe(Effect.scoped, Effect.provide(testLayer)),
 );

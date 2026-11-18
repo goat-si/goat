@@ -98,7 +98,7 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries symlinks", 
         return {
           ok: true,
           value: {
-            destroy: () => {
+            destroyAsync: async () => {
               destroyed.push(basePath);
             },
             waitForIndexReady: async () => ({ ok: true, value: true }),
