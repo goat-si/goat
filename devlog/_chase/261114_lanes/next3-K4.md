@@ -337,3 +337,18 @@ D4's four (authorised); one provide line in WorkspaceSearchIndex.test.ts (an exi
 - Limits for the PR body: D1, an older server misreads one turn's authored paths after a branch switch; D3, restore reservations are process-local (goat#3703); D5, a restore by another GOAT server does not notify this server's terminals.
 - P1 rows: 18aeb0fb91, a web capture of a new worktree with a submodule, and the mobile setup sheet if it shows the step; goat#3690, the notice in a web and a mobile terminal after a restore; D4, restoring a worktree whose project has a setup script, on a real client.
 - NOT RUN: Windows paths for 0c4b1d8f27, 76d0fff5fd and the goat#3690 folder match (no Windows host); Git older than 2.37 for the sparse checks (no older binary on pen-macmini); the client pass (P1); goat-ci (dispatched by the coordinator); the hang of "an index closed while its watcher subscription is pending" against the old code was observed but its output was not captured.
+
+### Rule 3: the two lines not ruled on separately (lane coordinator's request, 00:30 UTC)
+
+Neither line is a mirrored case under IV (i) or (v). There is no upstream hunk for either: upstream's CheckpointStore.test.ts already imported CheckpointRef before 7bd9134824 (line 7 of 7bd9134824^, unchanged by the commit), and the WorkspaceSearchIndex.test.ts case is GOAT's own. Both rely on the base rule in the lane brief: "no existing test's setup changes beyond an import or a provide line, without the coordinator's written word". An import line and a provide line are the two kinds that sentence allows. Neither changes a title, a body step or an expectation. They are listed here for the coordinator to confirm.
+
+1. apps/server/src/checkpointing/CheckpointStore.test.ts:7 (commit e4446d0581). The new upstream case from 7bd9134824 types its refs as CheckpointRef.
+   - Before: import { ThreadId, type VcsError } from "@goat/contracts";
+   - After: import { type CheckpointRef, ThreadId, type VcsError } from "@goat/contracts";
+2. apps/server/src/workspace/WorkspaceSearchIndex.test.ts, the case "matches ignored paths using host separators: $platform" (commit 7055191b69). WorkspaceSearchIndex.make now needs FileSystem and Path for the symlink scan, and this case provided neither.
+   - Before: ).pipe(Effect.provideService(HostProcess.Platform, platform)),
+   - After: ).pipe(
+       Effect.provideService(HostProcess.Platform, platform),
+       Effect.provide(NodeServices.layer),
+     ),
+   NodeServices was already imported in that file, so no import changed.
