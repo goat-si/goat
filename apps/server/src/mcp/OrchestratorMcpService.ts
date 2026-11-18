@@ -1,3 +1,4 @@
+import { taskPrompt, threadTitle } from "./goat/ThreadCreationText.ts";
 import * as FleetSync from "../goatclaw/FleetSync.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
@@ -625,30 +626,6 @@ function stableOperationMessageId(input: {
       stablePart(input.requestKey),
     ].join(":"),
   );
-}
-
-function threadTitle(input: {
-  readonly parentTitle: string;
-  readonly prompt: string | undefined;
-  readonly title: string | undefined;
-  readonly index: number;
-}): string {
-  const detail = input.title?.trim() || input.prompt?.trim();
-  if (!detail) return `${input.parentTitle} thread ${input.index + 1}`;
-  if (detail.length <= 80) return detail;
-  let end = 77;
-  const previous = detail.charCodeAt(end - 1);
-  const next = detail.charCodeAt(end);
-  if (previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
-    end -= 1;
-  }
-  return `${detail.slice(0, end)}...`;
-}
-
-function taskPrompt(input: OrchestratorMcpDelegateTaskInput): string {
-  return input.role === undefined || input.role === "general"
-    ? input.task
-    : `Act as the ${input.role} sub-agent for this task.\n\n${input.task}`;
 }
 
 const make = Effect.gen(function* () {

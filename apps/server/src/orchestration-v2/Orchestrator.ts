@@ -135,7 +135,7 @@ import {
   TurnItemId,
 } from "@goat/contracts";
 import { modelSelectionsEqual } from "@goat/shared/model";
-import { recordThreadOpen } from "@goat/shared/paletteSearch";
+import { makeDispatchThreadVisit } from "./ThreadVisit.ts";
 import { modelSwitchSince } from "./modelSwitch.ts";
 import {
   backgroundWorkHoldsCompletion,
@@ -2539,58 +2539,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
   });
 
-  const dispatchThreadVisit = Effect.fn("orchestrationV2.dispatch.threadVisit")(function* (
-    command: Extract<OrchestrationV2Command, { readonly type: "thread.visit" }>,
-    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-  ) {
-    const thread = yield* projectionStore
-      .getThread(command.threadId)
-      .pipe(
-        Effect.mapError(
-          (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
-        ),
-      );
-    if (thread.deletedAt !== null) {
-      return yield* new OrchestratorDispatchError({
-        commandId: command.commandId,
-        commandType: command.type,
-        cause: `Thread ${command.threadId} is deleted.`,
-      });
-    }
-    const visitedAt = DateTime.make(command.visitedAt);
-    if (Option.isNone(visitedAt)) {
-      return yield* new OrchestratorDispatchError({
-        commandId: command.commandId,
-        commandType: command.type,
-        cause: `Thread ${command.threadId} visit time ${command.visitedAt} is not a valid timestamp.`,
-      });
-    }
-    const movesForward =
-      thread.lastVisitedAt === null ||
-      DateTime.toEpochMillis(visitedAt.value) > DateTime.toEpochMillis(thread.lastVisitedAt);
-    const occurredAt = yield* DateTime.now;
-    // Opens are timed by the server clock so devices with skewed clocks agree.
-    if (!movesForward && !command.opened) return;
-    const opens = command.opened
-      ? recordThreadOpen(
-          thread.opens ?? null,
-          DateTime.toEpochMillis(occurredAt),
-          command.searchQuery,
-        )
-      : thread.opens;
-    yield* emit(
-      events,
-      command,
-    )({
-      type: "thread.visit-recorded",
-      threadId: command.threadId,
-      providerInstanceId: thread.providerInstanceId,
-      occurredAt,
-      payload: {
-        lastVisitedAt: movesForward ? visitedAt.value : thread.lastVisitedAt,
-        ...(opens === undefined ? {} : { opens }),
-      },
-    });
+  const dispatchThreadVisit = makeDispatchThreadVisit({
+    projectionStore,
+    OrchestratorDispatchError,
+    OrchestratorProjectionError,
+    emit,
   });
 
   // Recheck under the lock after reading the host. Record the watch first so wake events carry it.
