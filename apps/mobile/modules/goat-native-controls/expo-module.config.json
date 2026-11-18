@@ -13,7 +13,8 @@
       "expo.modules.goatnativecontrols.GoatNativeControlsModule",
       "expo.modules.goatnativecontrols.GoatWorkspaceNavigationModule",
       "expo.modules.goatnativecontrols.GoatKeyboardCommandsModule",
-      "expo.modules.goatnativecontrols.GoatFoldPostureModule"
+      "expo.modules.goatnativecontrols.GoatFoldPostureModule",
+      "expo.modules.goatnativecontrols.GoatSecretInputModule"
     ]
   }
 }
