@@ -15,6 +15,7 @@ import * as Effect from "effect/Effect";
 import { createMemoryImportWorkflow } from "../memoryImportWorkflow.ts";
 import * as HashMap from "effect/HashMap";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
@@ -37,6 +38,8 @@ import {
 } from "./runtime.ts";
 import { createEnvironmentSessionAtoms } from "./session.ts";
 
+const isMemoryRpcError = Schema.is(MemoryRpcError);
+
 export function memorySaveStatus(result: AsyncResult.AsyncResult<MemoryMutationReceipt, unknown>) {
   if (result._tag === "Success") {
     const receipt = result.value;
@@ -53,7 +56,7 @@ export function memorySaveStatus(result: AsyncResult.AsyncResult<MemoryMutationR
   }
   if (result._tag === "Failure") {
     const error = Option.getOrNull(Cause.findErrorOption(result.cause));
-    if (error instanceof MemoryRpcError) {
+    if (isMemoryRpcError(error)) {
       if (error.code === "revision_changed") return "stale";
       if (error.code !== "unavailable") return "refused";
     }
