@@ -2279,11 +2279,15 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             case "session.created":
             case "session.updated": {
               const info = event.properties.info;
-              if (info.parentID !== undefined && !threads.has(info.id)) {
+              if (info.parentID !== undefined) {
                 const owner = threads.get(info.parentID) ?? relatedSessionOwners.get(info.parentID);
                 if (owner !== undefined) {
-                  relatedSessionOwners.set(info.id, owner);
-                  if (event.type === "session.created" && unstartedSessionIds.size < 1024) {
+                  if (!threads.has(info.id)) relatedSessionOwners.set(info.id, owner);
+                  if (
+                    event.type === "session.created" &&
+                    !busySessionIds.has(info.id) &&
+                    unstartedSessionIds.size < 1024
+                  ) {
                     unstartedSessionIds.add(info.id);
                   }
                 }
