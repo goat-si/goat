@@ -1,8 +1,13 @@
 import { assert, it, describe } from "@effect/vitest";
+import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Scheduler from "effect/Scheduler";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import type { VcsStatusRemoteResult } from "@goat/contracts";
 import { GitManagerError } from "@goat/contracts";
@@ -110,6 +115,58 @@ describe("VcsStatusBroadcaster local-only refresh", () => {
 });
 
 describe("VcsStatusBroadcaster full refresh", () => {
+  it.effect("shutting down during refresh admission settles the caller", () =>
+    Effect.forEach(
+      Array.from({ length: 16 }, (_, index) => index + 1),
+      (pauseAt) =>
+        Effect.gen(function* () {
+          const layerScope = yield* Scope.fork(yield* Effect.scope);
+          const state = {
+            currentLocalStatus: baseLocalStatus,
+            currentRemoteStatus: baseRemoteStatus,
+            localStatusCalls: 0,
+            remoteStatusCalls: 0,
+            localInvalidationCalls: 0,
+            remoteInvalidationCalls: 0,
+            fileSystem: FileSystem.makeNoop({ realPath: (cwd) => Effect.succeed(cwd) }),
+          };
+          const context = yield* Layer.buildWithScope(layerTestFor(state), layerScope);
+          const broadcaster = Context.get(context, VcsStatusBroadcaster.VcsStatusBroadcaster);
+          let caller: number | undefined;
+          let callerOps = 0;
+          let park = false;
+          let resume: (() => void) | undefined;
+          const defaults = new Scheduler.MixedScheduler();
+          const scheduler = new Scheduler.MixedScheduler("async", (run) => {
+            if (!park) return defaults.setImmediate(run);
+            park = false;
+            resume = run;
+            return () => {};
+          });
+          scheduler.shouldYield = (fiber) => {
+            park = fiber.id === caller && ++callerOps === pauseAt;
+            return park;
+          };
+          const request = yield* Effect.withFiber((fiber) => {
+            caller = fiber.id;
+            return broadcaster.refreshStatus("/repo");
+          }).pipe(
+            Effect.provideService(Scheduler.Scheduler, scheduler),
+            Effect.forkScoped({ startImmediately: true }),
+          );
+          yield* Scope.close(layerScope, Exit.void);
+          if (resume === undefined) return;
+          resume();
+          const result = request.pollUnsafe();
+          assert.isDefined(result, `request stayed pending at admission yield ${pauseAt}`);
+          if (state.localStatusCalls === 0) {
+            assert.isTrue(result !== undefined && Exit.hasInterrupts(result));
+          }
+        }),
+      { discard: true },
+    ),
+  );
+
   it.effect.each(["succeeds", "fails"] as const)(
     "overlapping callers share a fresh follow-up when the running refresh %s",
     (outcome) => {

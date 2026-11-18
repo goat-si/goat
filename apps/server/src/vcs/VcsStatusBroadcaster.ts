@@ -520,26 +520,31 @@ export const make = Effect.gen(function* () {
   });
 
   type RefreshReply = Deferred.Deferred<VcsStatusResult, GitManagerServiceError>;
-  // Raw paths can select different auto-pull policies. Null means running with no follow-up.
-  const queuedRefreshes = new Map<string, RefreshReply | null>();
-  const drainStatusRefreshes = Effect.fn("VcsStatusBroadcaster.drainStatusRefreshes")(
-    (rawCwd: string, first: RefreshReply) =>
-      Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          let current: RefreshReply | null = first;
-          while (current !== null) {
-            const result = yield* restore(runStatusRefresh(rawCwd)).pipe(Effect.exit);
-            const followUp = queuedRefreshes.get(rawCwd) ?? null;
-            const interrupted = Exit.hasInterrupts(result);
-            if (interrupted || followUp === null) queuedRefreshes.delete(rawCwd);
-            else queuedRefreshes.set(rawCwd, null);
-            Deferred.doneUnsafe(current, result);
-            if (interrupted && followUp !== null) Deferred.doneUnsafe(followUp, result);
-            current = interrupted ? null : followUp;
-          }
-        }),
-      ),
-  );
+  interface QueuedRefresh {
+    current: RefreshReply;
+    followUp: RefreshReply | null;
+  }
+  // Raw paths can select different auto-pull policies.
+  const queuedRefreshes = new Map<string, QueuedRefresh>();
+  const drainStatusRefreshes = Effect.fn("VcsStatusBroadcaster.drainStatusRefreshes")(function* (
+    rawCwd: string,
+    queue: QueuedRefresh,
+  ) {
+    while (true) {
+      const result = yield* runStatusRefresh(rawCwd).pipe(Effect.exit);
+      if (Exit.isFailure(result) && Exit.hasInterrupts(result)) {
+        return yield* Effect.failCause(result.cause);
+      }
+      const { current, followUp } = queue;
+      if (followUp === null) queuedRefreshes.delete(rawCwd);
+      else {
+        queue.current = followUp;
+        queue.followUp = null;
+      }
+      Deferred.doneUnsafe(current, result);
+      if (followUp === null) return;
+    }
+  });
 
   const refreshStatus: VcsStatusBroadcaster["Service"]["refreshStatus"] = (rawCwd, options) => {
     if (options?.localOnly) return runStatusRefresh(rawCwd, options);
@@ -548,16 +553,26 @@ export const make = Effect.gen(function* () {
         if (broadcasterScope.state._tag === "Closed") return yield* restore(Effect.interrupt);
         const requested = yield* Deferred.make<VcsStatusResult, GitManagerServiceError>();
         const queued = queuedRefreshes.get(rawCwd);
-        if (queued !== undefined) {
-          const followUp = queued ?? requested;
-          queuedRefreshes.set(rawCwd, followUp);
-          return yield* restore(Deferred.await(followUp));
+        if (queued) {
+          queued.followUp ??= requested;
+          return yield* restore(Deferred.await(queued.followUp));
         }
-        queuedRefreshes.set(rawCwd, null);
+        const queue: QueuedRefresh = { current: requested, followUp: null };
+        queuedRefreshes.set(rawCwd, queue);
         // The worker belongs to the broadcaster so a caller can cancel its own wait.
-        yield* drainStatusRefreshes(rawCwd, requested).pipe(
+        const worker = yield* drainStatusRefreshes(rawCwd, queue).pipe(
           Effect.forkIn(broadcasterScope, { startImmediately: true, uninterruptible: false }),
         );
+        // A closed scope can interrupt the fork before its body or finalizers run.
+        worker.addObserver((exit) => {
+          if (queuedRefreshes.get(rawCwd) !== queue) return;
+          queuedRefreshes.delete(rawCwd);
+          const failure = Exit.isFailure(exit)
+            ? Exit.failCause(exit.cause)
+            : Exit.die(new Error("VCS refresh worker stopped with pending replies"));
+          Deferred.doneUnsafe(queue.current, failure);
+          if (queue.followUp) Deferred.doneUnsafe(queue.followUp, failure);
+        });
         return yield* restore(Deferred.await(requested));
       }),
     );
