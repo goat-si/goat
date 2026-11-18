@@ -584,17 +584,10 @@ describe("native Memory with shared factory", () => {
     await view.click("Open memory: Synthetic memory body");
     await view.click("Edit");
     await view.type("Memory text", "Synthetic discarded draft");
-    const read = h.memory.read({
-      environmentId: nativeEnv,
-      input: { memorySpaceId: nativeSpace, memoryId: nativeId },
-    });
-    const resumed = h.deferred<MemoryItem>();
-    h.responses.set(WS_METHODS.memoryRead, () => resumed.response);
-    await act(async () => h.registry.refresh(read));
+    await act(async () => h.revoke());
     expect(view.container.querySelector('input[aria-label="Memory text"]')).toBeNull();
-    await act(async () => {
-      await resumed.succeed(nativeItem);
-    });
+    await act(async () => h.grant(["memory:read", "memory:write", "orchestration:read"]));
+    await view.click("Open memory: Synthetic memory body");
     expect(view.container.querySelector('input[aria-label="Memory text"]')).toBeNull();
     await view.click("Edit");
     expect(

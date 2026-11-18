@@ -3,10 +3,11 @@ import { MemoryImportSettings } from "./MemoryImportSettings";
 import { MemoryAgentAccessSettings } from "./MemoryAgentAccessSettings";
 import { MemoryGenerationSettings } from "./MemoryGenerationSettings";
 import { MemoryReportRetrySettings } from "./MemoryReportRetrySettings";
+import { MemoryBodyGapNotice, MemoryEditor, useMemoryEditSession } from "./MemoryEditor";
 import { XIcon } from "../solar";
 import { MemoryAdministration } from "./MemorySharingSettings";
 import { randomUUID } from "../../lib/utils";
-import { RegistryContext, useAtom, useAtomSubscribe, useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomSubscribe, useAtomValue } from "@effect/atom-react";
 import { LegendList } from "@legendapp/list/react";
 import {
   AuthMemoryReadScope,
@@ -49,11 +50,13 @@ import {
 } from "@goat/client-runtime/memory-presentation";
 import { useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
-import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { useContext, useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironment, useEnvironments } from "../../state/environments";
 import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
 import { useProjects } from "../../state/entities";
+import { useEnvironmentShellStatus } from "../../state/shell";
+import { memorySaveMessage } from "@goat/client-runtime/state/memory";
 import {
   readEnvironmentScope,
   readPreparedConnection,
@@ -65,7 +68,6 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { memoryEnvironment } from "../../state/memory";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Textarea } from "../ui/textarea";
 import { Switch } from "../ui/switch";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Collapsible, CollapsibleTrigger, CollapsiblePanel } from "../ui/collapsible";
@@ -225,7 +227,6 @@ function MemoryDestinationContent({
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncReload, setSyncReload] = useState(0);
   const refreshSync = () => {
-    setSync(null);
     setSyncError(null);
     setSyncReload((value) => value + 1);
   };
@@ -258,7 +259,10 @@ function MemoryDestinationContent({
     void getSync({ environmentId: syncRequest.environmentId, input: {} }).then((result) => {
       if (!current) return;
       if (result._tag === "Success") setSync(result.value);
-      else setSyncError("Could not load memory sharing status.");
+      else {
+        setSync(null);
+        setSyncError("Could not load memory sharing status.");
+      }
     });
     return () => {
       current = false;
@@ -396,6 +400,7 @@ function MemoryRecords({
   memoryEnabled: boolean;
 }) {
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
+  const projectStatus = useEnvironmentShellStatus(environmentId);
   const navigate = useNavigate();
   const getBinding = useAtomCommand(memoryEnvironment.projectBindingGet, { reportFailure: false });
   const canGetBinding = useAtomValue(
@@ -404,7 +409,12 @@ function MemoryRecords({
   const [selection, setSelection] = useState<string | null>("user");
   const [scope, setScope] = useState<MemoryScope | null>({ kind: "user" });
   const selectedProject = projects.find((project) => `project:${project.id}` === selection);
-  const browseScope = selection?.startsWith("project:") && !selectedProject ? null : scope;
+  const [selectedTitle, setSelectedTitle] = useState<string | undefined>();
+  const projectMissing = selection?.startsWith("project:") && !selectedProject;
+  const projectSyncing = projectStatus === "synchronizing";
+  const projectRemoved = projectMissing && !projectSyncing;
+  const scopeTitle = selectedProject?.title ?? (projectSyncing ? selectedTitle : undefined);
+  const browseScope = projectRemoved ? null : scope;
   const [error, setError] = useState<string | null>(null);
   const generation = useRef(0);
   useEffect(
@@ -427,6 +437,7 @@ function MemoryRecords({
   async function choose(project: (typeof projects)[number] | null) {
     const attempt = ++generation.current;
     setSelection(project ? `project:${project.id}` : "user");
+    setSelectedTitle(project?.title);
     setError(null);
     setScope(project ? null : { kind: "user" });
     clearMemorySelection();
@@ -459,6 +470,8 @@ function MemoryRecords({
           description={
             error ? (
               <span role="alert">{error}</span>
+            ) : projectRemoved ? (
+              "The selected project is no longer available. Choose a memory scope."
             ) : !scope ? (
               "Loading project memory scope"
             ) : !canGetBinding && projects.length > 0 ? (
@@ -478,7 +491,7 @@ function MemoryRecords({
             >
               <SelectTrigger aria-label="Memory scope">
                 <SelectValue placeholder="Choose memory scope">
-                  {selection === "user" ? "User" : selectedProject?.title}
+                  {selection === "user" ? "User" : scopeTitle}
                 </SelectValue>
               </SelectTrigger>
               <SelectPopup>
@@ -504,11 +517,48 @@ function MemoryRecords({
           environmentId={environmentId}
           memorySpaceId={memorySpaceId}
           scope={browseScope}
-          scopeLabel={selectedProject?.title ?? memoryScopeLabel(browseScope)}
+          scopeLabel={scopeTitle ?? memoryScopeLabel(browseScope)}
         />
       ) : null}
     </>
   );
+}
+
+interface MemoryListPageIdentity {
+  readonly rowIds: ReadonlyArray<MemoryId>;
+}
+
+interface MemoryListLayout {
+  readonly page: MemoryListPageIdentity;
+  readonly height: number;
+  readonly sizes: ReadonlyMap<string, number>;
+}
+
+const EMPTY_MEMORY_LIST: ReadonlyArray<MemoryItem> = [];
+const memoryListPageIdentities = new WeakMap<ReadonlyArray<MemoryItem>, MemoryListPageIdentity>();
+
+export function memoryListPageIdentity(items: ReadonlyArray<MemoryItem>): MemoryListPageIdentity {
+  const current = memoryListPageIdentities.get(items);
+  if (current) return current;
+  const page = { rowIds: items.map((item) => item.memoryId) };
+  memoryListPageIdentities.set(items, page);
+  return page;
+}
+
+export function measureMemoryListRow(
+  previous: MemoryListLayout | null,
+  page: MemoryListPageIdentity,
+  itemKey: string,
+  size: number,
+): MemoryListLayout {
+  if (previous?.page === page && previous.sizes.get(itemKey) === size) return previous;
+  const sizes = new Map(previous?.page === page ? previous.sizes : []);
+  sizes.set(itemKey, size);
+  const height = Math.min(
+    320,
+    Math.ceil(page.rowIds.reduce((total, id) => total + (sizes.get(id) ?? 88), 0)),
+  );
+  return { page, height, sizes };
 }
 
 function ScopedMemoryRecords({
@@ -551,15 +601,12 @@ function ScopedMemoryRecords({
         }),
   );
   const value = page.data ? Option.getOrNull(page.data) : null;
-  const items = value?.items ?? [];
+  const items = value?.items ?? EMPTY_MEMORY_LIST;
   const coverage = value?.indexCoverage
     ? presentMemoryCoverage(value.indexCoverage, items.length)
     : null;
-  const [listLayout, setListLayout] = useState<{
-    items: readonly MemoryItem[];
-    height: number;
-    sizes: ReadonlyMap<string, number>;
-  } | null>(null);
+  const listPage = memoryListPageIdentity(items);
+  const [listLayout, setListLayout] = useState<MemoryListLayout | null>(null);
   function select(item: MemoryItem) {
     void navigate({
       to: "/settings/memory",
@@ -599,6 +646,9 @@ function ScopedMemoryRecords({
               scopeLabel={scopeLabel ?? memoryScopeLabel(scope)}
               environmentId={environmentId}
               memorySpaceId={memorySpaceId}
+              onSaveSettled={(status) =>
+                status === "pending" && setNotice(memorySaveMessage.pending)
+              }
               onClose={() => {
                 setAdding(false);
                 page.refresh();
@@ -695,22 +745,12 @@ function ScopedMemoryRecords({
             estimatedItemSize={72}
             style={{
               height:
-                listLayout?.items === items ? listLayout.height : Math.min(320, items.length * 88),
+                listLayout?.page === listPage
+                  ? listLayout.height
+                  : Math.min(320, items.length * 88),
             }}
             onItemSizeChanged={({ itemKey, size }) => {
-              setListLayout((previous) => {
-                if (previous?.items === items && previous.sizes.get(itemKey) === size)
-                  return previous;
-                const sizes = new Map(previous?.items === items ? previous.sizes : []);
-                sizes.set(itemKey, size);
-                const height = Math.min(
-                  320,
-                  Math.ceil(
-                    items.reduce((total, item) => total + (sizes.get(item.memoryId) ?? 88), 0),
-                  ),
-                );
-                return { items, height, sizes };
-              });
+              setListLayout((previous) => measureMemoryListRow(previous, listPage, itemKey, size));
             }}
             renderItem={({ item }) => (
               <SettingsRow
@@ -782,7 +822,7 @@ function ScopedMemoryRecords({
   );
 }
 
-function MemoryDetails({
+export function MemoryDetails({
   target,
   environmentId,
   memorySpaceId,
@@ -799,7 +839,6 @@ function MemoryDetails({
   const deviceName = (id: EnvironmentId) =>
     environments.find((e) => e.environmentId === id)?.label ?? "Unknown device";
   const memoryId = target.memoryId!;
-  const [editing, setEditing] = useState(false);
   const writePermission = useAtomValue(memoryEnvironment.upsert.permissionAtom(environmentId));
   const canWrite = writePermission && memoryEnabled;
   const read = useEnvironmentQuery(
@@ -813,25 +852,32 @@ function MemoryDetails({
     }),
   );
   const item = read.data ? Option.getOrNull(read.data) : null;
-  if ((item === null || !canWrite) && editing) setEditing(false);
+  const edit = useMemoryEditSession({
+    environmentId,
+    memorySpaceId,
+    memoryId,
+    item,
+    canWrite,
+    refresh: () => {
+      read.refresh();
+      history.refresh();
+    },
+  });
   const value = history.data ? Option.getOrNull(history.data) : null;
   const navigate = useNavigate();
-  const hadVisibleItem = useRef(false);
+  const leaveForgotten = useEffectEvent(() => {
+    onForgotten(
+      "Closed because this memory is no longer available. A related memory may have been forgotten.",
+    );
+    void navigate({
+      to: "/settings/memory",
+      search: validateMemorySettingsSearch({ environmentId, memorySpaceId }),
+      hash: "",
+    });
+  });
   useEffect(() => {
-    if (item) {
-      hadVisibleItem.current = true;
-    } else if (hadVisibleItem.current) {
-      hadVisibleItem.current = false;
-      onForgotten(
-        "Closed because this memory is no longer available. A related memory may have been forgotten.",
-      );
-      void navigate({
-        to: "/settings/memory",
-        search: validateMemorySettingsSearch({ environmentId, memorySpaceId }),
-        hash: "",
-      });
-    }
-  }, [item, onForgotten, navigate, environmentId, memorySpaceId]);
+    if (edit.gap === "forgotten") leaveForgotten();
+  }, [edit.gap]);
   const detailsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     detailsRef.current?.scrollIntoView?.({ block: "start" });
@@ -844,7 +890,12 @@ function MemoryDetails({
         control={
           <div className="flex items-center justify-end gap-2">
             {item?.status === "active" && canWrite ? (
-              <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={edit.start !== null || edit.needsReview || edit.ownRequest === "pending"}
+                onClick={() => edit.begin(item)}
+              >
                 Edit
               </Button>
             ) : null}
@@ -880,6 +931,13 @@ function MemoryDetails({
       >
         <div ref={detailsRef} tabIndex={-1} aria-label="Memory details" className="space-y-3">
           {read.error || history.error ? <p role="alert">{read.error ?? history.error}</p> : null}
+          {edit.notice ? <p role="status">{edit.notice}</p> : null}
+          {!edit.start && edit.saveMessage ? <p role="status">{edit.saveMessage}</p> : null}
+          {!edit.start && edit.needsReview && canWrite ? (
+            <Button size="sm" variant="outline" onClick={edit.reviewLatest}>
+              Review latest memory
+            </Button>
+          ) : null}
           {item ? (
             <>
               {item.status !== "active" ? (
@@ -893,29 +951,29 @@ function MemoryDetails({
                 {presentMemoryItem(item).syncLabel} {presentMemoryItem(item).cleanupLabel}
               </p>
               {item.status === "active" ? (
-                <p className="whitespace-pre-wrap break-words">{item.payload.text}</p>
-              ) : null}
-              {item.status === "active" && canWrite ? (
                 <>
-                  {editing ? (
-                    <MemoryEditor
-                      key={item.revision.revisionId}
-                      environmentId={environmentId}
-                      memorySpaceId={memorySpaceId}
-                      item={item}
-                      onClose={() => {
-                        setEditing(false);
-                        read.refresh();
-                        history.refresh();
-                      }}
-                    />
+                  <p className="whitespace-pre-wrap break-words">{item.payload.text}</p>
+                  {edit.reviewing && edit.ownRequest !== "pending" ? (
+                    <p>Current revision: {item.revision.revisionId}</p>
                   ) : null}
                 </>
               ) : null}
             </>
           ) : (
-            <p role="status">This memory is unavailable. Visible details have been cleared.</p>
+            <MemoryBodyGapNotice session={edit} />
           )}
+          {edit.start && canWrite ? (
+            <MemoryEditor
+              key={edit.start.revisionId}
+              environmentId={environmentId}
+              memorySpaceId={memorySpaceId}
+              start={edit.start}
+              seedText={item?.status === "active" ? item.payload.text : undefined}
+              {...edit.editorEvents}
+              onReviewLatest={edit.reviewLatest}
+              onClose={edit.close}
+            />
+          ) : null}
           {item && item.status !== "forgotten" && value ? (
             <>
               {value.resolutions.length > 0 ? (
@@ -948,10 +1006,7 @@ function MemoryDetails({
                         item={item}
                         entry={entry}
                         history={value}
-                        onSettled={() => {
-                          read.refresh();
-                          history.refresh();
-                        }}
+                        onSettled={edit.showAgain}
                       />
                     ) : null}
                   </MemoryHistoryDisclosure>
@@ -1453,123 +1508,6 @@ function MemoryReportControl({ report }: { report: MemoryReportDelivery }) {
         </Button>
       ) : null}
     </div>
-  );
-}
-
-const DEFAULT_MEMORY_SCOPE = { kind: "user" } as const;
-
-function MemoryEditor({
-  environmentId,
-  memorySpaceId,
-  item,
-  scope = DEFAULT_MEMORY_SCOPE,
-  scopeLabel,
-  onClose,
-}: {
-  environmentId: EnvironmentId;
-  memorySpaceId: MemorySpaceId;
-  item?: Extract<MemoryItem, { status: "active" }>;
-  scope?: MemoryScope;
-  scopeLabel?: string;
-  onClose: () => void;
-}) {
-  const [id] = useState(() => item?.memoryId ?? MemoryId.make(randomUUID()));
-  const [operationId, setOperationId] = useState<MemoryOperationId | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const draft = memoryEnvironment.draftAtom({
-    environmentId,
-    input: { memorySpaceId },
-    draftId: `editor:${id}`,
-  });
-  const [text, setText] = useAtom(draft);
-  const registry = useContext(RegistryContext);
-  const upsert = useAtomCommand(memoryEnvironment.upsert, { reportFailure: false });
-  const canWrite = useAtomValue(memoryEnvironment.upsert.permissionAtom(environmentId));
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    if (item)
-      registry.set(draft, {
-        text: item.payload.text,
-        memoryIds: [id],
-      });
-    return () => {
-      mounted.current = false;
-      registry.set(draft, null);
-    };
-  }, [draft, id, item, registry]);
-  if (!canWrite || (item && text === null))
-    return (
-      <div>
-        <p>Editing unavailable. Close this editor and reload the memory.</p>
-        <Button size="sm" variant="ghost" onClick={onClose}>
-          Close editor
-        </Button>
-      </div>
-    );
-  return (
-    <form
-      className="space-y-3"
-      onSubmit={async (event) => {
-        event.preventDefault();
-        if (
-          busy ||
-          !text?.trim() ||
-          !registry.get(memoryEnvironment.upsert.permissionAtom(environmentId))
-        )
-          return;
-        const intentId = operationId ?? MemoryOperationId.make(randomUUID());
-        setOperationId(intentId);
-        setBusy(true);
-        const result = await upsert({
-          environmentId,
-          input: {
-            memorySpaceId,
-            memoryId: id,
-            operationId: intentId,
-            expectedHeads: item ? [item.revision.revisionId] : [],
-            scope: item?.scope ?? scope,
-            assertionKind: item?.revision.assertionKind ?? "fact",
-            payload: {
-              text,
-              evidence: item?.payload.evidence ?? [{ origin: "user", messageIds: [] }],
-              derivedFromMemoryRevisions: item?.payload.derivedFromMemoryRevisions ?? [],
-            },
-            baseBoundary: null,
-          },
-        });
-        if (
-          !mounted.current ||
-          !registry.get(memoryEnvironment.upsert.permissionAtom(environmentId))
-        )
-          return;
-        setBusy(false);
-        if (result._tag === "Success" && result.value.outcome !== "rejected") onClose();
-        else
-          setError("Memory update failed. Retry the same request or close the editor and reload.");
-      }}
-    >
-      <p>Save to: {scopeLabel ?? memoryScopeLabel(item?.scope ?? scope)}</p>
-      <Textarea
-        aria-label="Memory text"
-        value={text ?? ""}
-        disabled={busy || operationId !== null}
-        onChange={(event) =>
-          setText({
-            text: event.currentTarget.value,
-            memoryIds: item ? [id] : [],
-          })
-        }
-      />
-      {error ? <p role="alert">{error}</p> : null}
-      <Button type="submit" size="sm" disabled={busy || !text?.trim()}>
-        {operationId ? "Retry memory request" : "Save memory"}
-      </Button>
-      <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={onClose}>
-        Cancel
-      </Button>
-    </form>
   );
 }
 

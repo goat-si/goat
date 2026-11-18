@@ -2,6 +2,7 @@ import { memoryImportTestLocks } from "../../test/memoryImportLocks";
 import { MemoryHubDiagnosticsSettings } from "./MemoryHubDiagnosticsSettings";
 import { MemoryRunAccessLabel } from "./MemoryRunAccessLabel";
 import { memorySyncFixture } from "../../test/memorySyncFixture";
+import { readyMemoryExposure, withMemorySignal } from "../../test/memoryExposureFixture";
 import { act, Children, isValidElement, useSyncExternalStore, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -23,7 +24,7 @@ const state = vi.hoisted(() => ({
   allowed: true,
   write: true,
   version: 0,
-  exposure: 0,
+  exposure: null as unknown as import("@goat/client-runtime/state/memory").MemoryExposure,
   listeners: new Set<() => void>(),
   queries: new Map<string, unknown>(),
   refresh: vi.fn(),
@@ -43,6 +44,7 @@ const state = vi.hoisted(() => ({
   navigate: vi.fn(),
   responses: new Map<string, unknown>(),
   executors: new Map<string, (input: unknown) => Promise<unknown>>(),
+  shellStatus: "live",
   projects: [] as { id: string; environmentId: string; title: string; repositoryIdentity?: null }[],
   threads: [] as { id: string; environmentId: string; title: string }[],
   threadReads: vi.fn(),
@@ -70,9 +72,11 @@ function notifyFixture() {
 function fixtureAtomValue(atom: { label: string }) {
   return atom.label === "syncChanges"
     ? state.exposure
-    : ["forget", "upsert", "projectBindingGet"].includes(atom.label)
-      ? state.write
-      : state.allowed;
+    : atom.label === "readReply"
+      ? (state.queries.get("read") ?? Option.none())
+      : ["forget", "upsert", "projectBindingGet"].includes(atom.label)
+        ? state.write
+        : state.allowed;
 }
 vi.mock("@effect/atom-react", async (original) => {
   const { useEffect } = await import("react");
@@ -155,7 +159,7 @@ vi.mock("../../state/memory", async () => {
         ].map((label) => [label, { label, permissionAtom: () => ({ label }) }]),
       ),
       ...Object.fromEntries(
-        ["list", "search", "read", "history", "readSource"].map((label) => [
+        ["list", "search", "history", "readSource"].map((label) => [
           label,
           (request: { input?: { resolutionInputsFor?: string } }) => {
             state.requests.push({ label, input: request.input });
@@ -168,10 +172,21 @@ vi.mock("../../state/memory", async () => {
           },
         ]),
       ),
+      read: Object.assign(
+        (request: { input: unknown }) => {
+          state.requests.push({ label: "read", input: request.input });
+          return { label: "read" };
+        },
+        { reply: () => ({ label: "readReply" }) },
+      ),
       draftAtom: ({ draftId }: { draftId: string }) => drafts(draftId),
     },
   };
 });
+vi.mock("../../state/shell", async (original) => ({
+  ...(await original<typeof import("../../state/shell")>()),
+  useEnvironmentShellStatus: () => (useFixtureVersion(), state.shellStatus),
+}));
 vi.mock("../../state/entities", () => ({
   useProjects: () => {
     useFixtureVersion();
@@ -407,20 +422,18 @@ beforeEach(() => {
   window.localStorage.clear();
   state.navigate.mockReset();
   state.threadReads.mockClear();
-  state.projects = [];
+  state.shellStatus = "live";
   state.threads = [];
   state.agentAccess = true;
   state.memoryEnabled = true;
   state.memoryModel = null;
   state.allowed = true;
   state.write = true;
-  state.exposure = 0;
+  state.exposure = readyMemoryExposure(id(1));
   state.projects = [];
   state.requests = [];
-  state.queries.clear();
-  state.executors.clear();
-  state.refresh.mockClear();
-  state.calls.mockClear();
+  for (const map of [state.queries, state.executors]) map.clear();
+  for (const mock of [state.refresh, state.calls]) mock.mockClear();
   state.environment = null;
   state.environments = [
     "remote-owner",
@@ -691,6 +704,12 @@ async function click(label: string) {
   );
   expect(button).toBeDefined();
   await act(async () => button!.click());
+}
+async function enterText(field: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  await act(() => {
+    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), "value")!.set!.call(field, value);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
 }
 // Settings renders the import and browse scope pickers under one name, so callers pass the section.
 function namedSelect(name: string, section = "") {
@@ -1050,12 +1069,15 @@ it("reads memory status again when memory is turned off or its model changes", a
 });
 
 it("automatically opens the ready space and keeps saved memories read-only after disabling", async () => {
-  state.responses.set("syncStatus", success({ state: "online", memorySpaceId: id(1) }));
   state.queries.set("list", Option.some({ items: [activeItem], nextCursor: null }));
-  await supportedScreen(false);
+  const { render } = await supportedScreen(false);
   expect(container.textContent).toContain("Synthetic original");
   expect(container.querySelector('[aria-label="Memory space ID"]')).toBeNull();
   expect(container.textContent).not.toContain("remote-owner ·");
+  state.queries.delete("list");
+  await render();
+  expect(container.textContent).not.toContain("Synthetic original");
+  state.queries.set("list", Option.some({ items: [{ ...activeItem }], nextCursor: null }));
   state.responses.set("syncStatus", success({ state: "disabled", memorySpaceId: null }));
   state.responses.set(
     "hubSettingsUpdate",
@@ -1117,9 +1139,10 @@ it("unmounts retained bodies and an open source when read is None, without reope
   expect(container.textContent).toContain("Retained body");
   expect(container.textContent).toContain("Synthetic judgment");
   expect(container.textContent).toContain("Source body");
+  state.exposure = withMemorySignal(state.exposure, id(1), "invalidate", id(2));
   state.queries.set("read", Option.none());
   await render();
-  expect(container.textContent).toContain("Visible details have been cleared");
+  expect(container.textContent).toContain("Show again");
   expect(container.textContent).not.toContain("Retained body");
   expect(container.textContent).not.toContain("Synthetic judgment");
   expect(container.textContent).not.toContain("Source body");
@@ -1336,7 +1359,7 @@ it("opens memories when bootstrap publishes a reset without a reload or timer", 
   expect(container.textContent).not.toContain("Synthetic original");
   state.responses.set("syncStatus", success({ state: "online", memorySpaceId: id(1) }));
   await act(async () => {
-    state.exposure += 1;
+    state.exposure = readyMemoryExposure(id(1));
     notifyFixture();
   });
   expect(container.textContent).toContain("Synthetic original");
@@ -1619,12 +1642,22 @@ it.each([false, true])(
   },
 );
 
-it("keeps saved memories readable while memory is off and blocks saving and editing", async () => {
-  const { render } = await supportedScreen();
+it("keeps editing during Sharing refresh and closes when memory is disabled", async () => {
+  await supportedScreen();
   await click("Edit");
-  state.responses.set("syncStatus", success({ state: "disabled", memorySpaceId: null }));
-  await act(async () => window.dispatchEvent(new Event("focus")));
-  await render();
+  const editor = container.querySelector("textarea")!;
+  await enterText(editor, "Typed during Sharing refresh");
+  const pending = await deferredResult();
+  state.responses.set("syncStatus", pending.promise);
+  state.responses.set(
+    "hubSettingsUpdate",
+    success({ view: { version: 3, settings: { mode: "disabled" } }, credential: null }),
+  );
+  await click("Turn sharing off");
+  await click("Stop sharing");
+  expect(container.querySelector("textarea")).toBe(editor);
+  expect(editor.value).toBe("Typed during Sharing refresh");
+  await act(() => pending.resolve(success({ state: "disabled", memorySpaceId: null })));
   expect(container.textContent).toContain(
     "Saved memories stay. Turn on memory to save new memories.",
   );
@@ -1717,26 +1750,6 @@ it("describes both seeing and saving memories on a fresh visit while sharing is 
   expect(container.textContent).not.toContain("Turn on memory to start saving memories.");
 });
 
-it("removes an open editor and history when shared admission removes the derived memory", async () => {
-  const { render, registry } = await supportedScreen();
-  const writes = vi.spyOn(registry, "set");
-  state.navigate.mockClear();
-  await click("Edit");
-  expect(container.querySelector('[aria-label="Memory text"]')).not.toBeNull();
-  state.queries.set("read", Option.none());
-  state.queries.set("history", Option.none());
-  await render();
-  expect(container.querySelector('[aria-label="Memory text"]')).toBeNull();
-  expect(container.textContent).not.toContain("Synthetic original");
-  expect(writes.mock.calls.at(-1)?.[1]).toBeNull();
-  expect(container.textContent).toContain(
-    "Closed because this memory is no longer available. A related memory may have been forgotten.",
-  );
-  expect(state.navigate).toHaveBeenCalledWith(
-    expect.objectContaining({ to: "/settings/memory", hash: "" }),
-  );
-});
-
 it("reopens saved memory after sharing is disabled and the settings screen remounts", async () => {
   state.queries.set("list", Option.some({ items: [activeItem], nextCursor: null }));
   await supportedScreen(false);
@@ -1800,13 +1813,7 @@ it("browses, searches and creates in an explicitly bound project, then returns t
   });
   expect(state.requests.at(-1)).toMatchObject({ label: "list", input: { scope } });
   const search = container.querySelector<HTMLInputElement>('[aria-label="Search memories"]')!;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-      search,
-      "missing",
-    );
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  await enterText(search, "missing");
   state.queries.set(
     "search",
     Option.some({ items: [], nextCursor: "more", projectionWatermark: 1 }),
@@ -1822,13 +1829,16 @@ it("browses, searches and creates in an explicitly bound project, then returns t
   expect(container.textContent?.match(/Save to:/g)).toHaveLength(1);
   expect(container.textContent).not.toContain("New memory · Project");
   const textarea = container.querySelector<HTMLTextAreaElement>('[aria-label="Memory text"]')!;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
-      textarea,
-      "Synthetic project memory",
-    );
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  await enterText(textarea, "Synthetic project memory");
+  const [project] = state.projects;
+  state.shellStatus = "synchronizing";
+  state.projects = [];
+  await render();
+  expect(container.querySelector("textarea")).toBe(textarea);
+  expect(textarea.value).toBe("Synthetic project memory");
+  state.projects = [project!];
+  state.shellStatus = "live";
+  await render();
   state.responses.set("upsert", success({ outcome: "accepted" }));
   await act(async () =>
     textarea
@@ -1840,8 +1850,10 @@ it("browses, searches and creates in an explicitly bound project, then returns t
     scope,
     payload: { text: "Synthetic project memory" },
   });
+  await click("Remember something");
   state.projects = [];
   await render();
+  expect(container.querySelector("textarea")).toBeNull();
   expect(container.querySelector('[aria-label="Search memories"]')).toBeNull();
   await selectMemoryScope("user");
   expect(state.requests.at(-1)).toMatchObject({
@@ -1951,13 +1963,7 @@ it.each([{ items: [] }, { items: [activeItem] }])(
   async ({ items }) => {
     await supportedScreen(false);
     const input = container.querySelector<HTMLInputElement>('[aria-label="Search memories"]')!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-        input,
-        "pending",
-      );
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    await enterText(input, "pending");
     state.queries.set(
       "search",
       Option.some({
@@ -2411,13 +2417,7 @@ it.each(["available", "partial"] as const)(
 );
 async function searchRecords() {
   const input = container.querySelector<HTMLInputElement>('[aria-label="Search memories"]')!;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-      input,
-      "synthetic",
-    );
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  await enterText(input, "synthetic");
   await click("Search");
 }
 it("preserves the recovery handle while disconnected and checks it on reconnect", async () => {
