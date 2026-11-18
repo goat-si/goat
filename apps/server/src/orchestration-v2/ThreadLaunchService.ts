@@ -262,6 +262,39 @@ const make = Effect.gen(function* () {
     startWorktreesFromOrigin,
   });
 
+  const savedWorktreeFallback = Effect.fn("ThreadLaunchService.savedWorktreeFallback")(function* (
+    cwd: string,
+    startFromOrigin: boolean,
+    preferredRemote: string | undefined,
+    note: (line: string) => Effect.Effect<void>,
+  ) {
+    if (startFromOrigin) {
+      const fetched = yield* git.resolveWorktreeFallbackRemote(cwd, preferredRemote).pipe(
+        Effect.flatMap((remote) =>
+          remote === null
+            ? Effect.succeed(null)
+            : git.fetchWorktreeBaseCommit({
+                cwd,
+                refName: remote.branchName,
+                remote,
+                onOutputLine: note,
+              }),
+        ),
+        Effect.catch((error) =>
+          note(`Could not fetch the default branch: ${error.detail}`).pipe(Effect.as(null)),
+        ),
+      );
+      if (fetched !== null)
+        return {
+          startRef: fetched.commitSha,
+          baseRefName: `refs/remotes/${fetched.remoteRefName}`,
+        };
+    }
+    return (yield* git.hasCommit({ cwd, refName: "HEAD" }))
+      ? { startRef: "HEAD", baseRefName: (yield* git.currentBranch(cwd)) ?? "HEAD" }
+      : null;
+  });
+
   const prepareInBackground = Effect.fn("ThreadLaunchService.prepareInBackground")(function* (
     input: PreparationInput,
     threadId: ThreadId,
@@ -420,6 +453,7 @@ const make = Effect.gen(function* () {
                 .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)))
             : null;
         const shouldFetch = remote !== null;
+        let fetched = false;
         yield* setupTracker.stageStatus(threadId, "fetch", shouldFetch ? "running" : "skipped");
         if (remote !== null) {
           yield* note(`Fetching ${input.workspaceStrategy.baseRef} from its remote.`);
@@ -432,11 +466,41 @@ const make = Effect.gen(function* () {
             })
             .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
           if (remoteBase !== null) {
+            fetched = true;
             startRef = remoteBase.commitSha;
             baseRefName = `refs/remotes/${remoteBase.remoteRefName}`;
             yield* note(
               `Fetched ${remoteBase.remoteRefName} at ${remoteBase.commitSha.slice(0, 12)}.`,
             );
+          }
+        }
+        if (
+          input.initialMessage?.scheduledTaskId !== undefined &&
+          !fetched &&
+          !requestedBaseRef.startsWith(":") &&
+          !(yield* git
+            .hasCommit({
+              cwd: project.workspaceRoot,
+              refName: requestedBaseRef === "-" ? "@{-1}" : requestedBaseRef,
+            })
+            .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)))) &&
+          !(yield* git
+            .hasRefNamed({ cwd: project.workspaceRoot, refName: requestedBaseRef })
+            .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId))))
+        ) {
+          const fallback = yield* savedWorktreeFallback(
+            project.workspaceRoot,
+            input.workspaceStrategy.startFromOrigin === true,
+            remote?.remoteName,
+            note,
+          ).pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
+          if (fallback !== null) {
+            ({ startRef, baseRefName } = fallback);
+            yield* note(`Saved base ${requestedBaseRef} is missing. Using ${baseRefName}.`);
+            yield* setupTracker.update(threadId, (snapshot) => ({
+              ...snapshot,
+              baseRef: baseRefName,
+            }));
           }
         }
         if (shouldFetch) yield* setupTracker.stageStatus(threadId, "fetch", "done");
@@ -1349,6 +1413,9 @@ const make = Effect.gen(function* () {
           : {
               initialMessage: {
                 text: message.text,
+                ...(message.scheduledTaskId === undefined
+                  ? {}
+                  : { scheduledTaskId: message.scheduledTaskId }),
                 attachments: message.attachments,
                 ...(message.context ? { context: message.context } : {}),
               },

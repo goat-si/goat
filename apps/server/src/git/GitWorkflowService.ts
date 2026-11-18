@@ -122,6 +122,10 @@ export class GitWorkflowService extends Context.Service<
       { readonly commitSha: string; readonly remoteRefName: string },
       GitCommandError
     >;
+    readonly resolveWorktreeFallbackRemote: (
+      cwd: string,
+      preferredRemote?: string,
+    ) => Effect.Effect<GitVcsDriver.GitWorktreeBaseRemote | null, GitCommandError>;
     readonly resolveWorktreeBaseRemote: GitVcsDriver.GitVcsDriver["Service"]["resolveWorktreeBaseRemote"];
     readonly fetchWorktreeBaseCommit: (input: {
       readonly cwd: string;
@@ -517,6 +521,14 @@ export const make = Effect.gen(function* () {
         return ensureGitCommand("GitWorkflowService.resolveRemoteTrackingCommit", input.cwd).pipe(
           Effect.andThen(git.resolveRemoteTrackingCommit(input)),
         );
+      },
+    ),
+    resolveWorktreeFallbackRemote: Effect.fn("GitWorkflowService.resolveWorktreeFallbackRemote")(
+      function* (cwd, preferredRemote) {
+        yield* ensureGitCommand("GitWorkflowService.resolveWorktreeFallbackRemote", cwd);
+        const remoteName = preferredRemote ?? (yield* git.resolvePrimaryRemoteName(cwd));
+        const branchName = yield* git.resolveDefaultBranchName(cwd, remoteName);
+        return branchName === null ? null : { remoteName, branchName };
       },
     ),
     resolveWorktreeBaseRemote: Effect.fn("GitWorkflowService.resolveWorktreeBaseRemote")(

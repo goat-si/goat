@@ -23,6 +23,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ScheduledTaskId,
   ThreadId,
   TextGenerationError,
 } from "@goat/contracts";
@@ -665,6 +666,28 @@ it.effect.each([
     }).pipe(Effect.provide(harness.layer));
   },
 );
+
+it.effect.each([true, false])("uses a fallback only for a saved launch (%s)", (scheduled) => {
+  const harness = makeHarness({ hasCommit: ({ refName }) => Effect.succeed(refName === "HEAD") });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const input = launchInput({
+      command: "command:launch:missing-recorded-base",
+      thread: "thread:launch:missing-recorded-base",
+      message: "Start work",
+      workspace: { type: "worktree", baseRef: "gone", startFromOrigin: false },
+    });
+    const launched = yield* launches.launch({
+      ...input,
+      initialMessage: {
+        ...input.initialMessage!,
+        ...(scheduled ? { scheduledTaskId: ScheduledTaskId.make("task:deleted-base") } : {}),
+      },
+    });
+    yield* preparationSettled(launched.threadId);
+    assert.equal(harness.createWorktree.mock.calls[0]?.[0].refName, scheduled ? "HEAD" : "gone");
+  }).pipe(Effect.provide(harness.layer));
+});
 
 it.effect("shows the fetch diagnosis when preparing a worktree from origin fails", () => {
   const detail =
