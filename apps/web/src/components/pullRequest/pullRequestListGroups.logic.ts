@@ -39,6 +39,7 @@ export function pullRequestGroups({
   authored,
   reviewing,
   partitionsWanted,
+  isPreferredEntry = () => true,
 }: {
   known: ReadonlyArray<EnvironmentPullRequestEntry>;
   /** The text-free rows already loaded, or undefined when the typed filters cannot vet them. */
@@ -55,6 +56,7 @@ export function pullRequestGroups({
   authored: ReadonlyArray<EnvironmentPullRequestEntry> | undefined;
   reviewing: ReadonlyArray<EnvironmentPullRequestEntry> | undefined;
   partitionsWanted: boolean;
+  isPreferredEntry?: (entry: EnvironmentPullRequestEntry) => boolean;
 }) {
   const searchingHosts = new Set(
     providers.flatMap((provider) => (provider.searchesOnHost ? [provider.host] : [])),
@@ -102,18 +104,19 @@ export function pullRequestGroups({
   const groups = (() => {
     if (involvement !== "all") return [{ key: "others" as const, label: "", entries }];
     if (baselineEmpty) {
-      return groupPullRequestsByInvolvement(entries, viewers);
+      return groupPullRequestsByInvolvement(entries, viewers, isPreferredEntry);
     }
     const narrow = (rows: ReadonlyArray<EnvironmentPullRequestEntry> | undefined) =>
-      rows === undefined || !hasLocalFilters
-        ? rows
-        : rows.filter((entry) =>
-            matchesPullRequestFilters(entry, localFilters, pullRequestEntryViewer(entry, viewers)),
-          );
+      rows?.filter(
+        (entry) =>
+          isPreferredEntry(entry) &&
+          (!hasLocalFilters ||
+            matchesPullRequestFilters(entry, localFilters, pullRequestEntryViewer(entry, viewers))),
+      );
     const narrowedAuthored = narrow(partitionsWanted ? (authored ?? held?.authored) : undefined);
     const narrowedReviewing = narrow(partitionsWanted ? (reviewing ?? held?.reviewing) : undefined);
     if (narrowedAuthored === undefined || narrowedReviewing === undefined) {
-      return groupPullRequestsByInvolvement(entries, viewers);
+      return groupPullRequestsByInvolvement(entries, viewers, isPreferredEntry);
     }
     return partitionPullRequestsWithPriority(entries, narrowedAuthored, narrowedReviewing);
   })();

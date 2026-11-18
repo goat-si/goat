@@ -113,7 +113,7 @@ import { cn } from "~/lib/utils";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { usePullRequestHostReads } from "./usePullRequestHostReads";
-import { pullRequestListTargets } from "./pullRequestListTargets";
+import { preferredPullRequestEntries, pullRequestListTargets } from "./pullRequestListTargets";
 
 /**
  * One whole page from the host and no more: every provider asks for one row beyond the page as
@@ -346,6 +346,14 @@ export function PullRequestsPage() {
     },
   }));
   const partitionsWanted = search.involvement === "all" && typedQuery.length === 0;
+  const partitionTargetsFor = (involvement: PullRequestInvolvement) =>
+    pullRequestListTargets(preferredEnvironmentQueries, {
+      state: search.state,
+      involvement,
+      limit: PAGE_SIZE,
+      ...listScope,
+      ...(menuFiltered ? { filters: menuFilters } : {}),
+    });
   const partitionTargets = (() => {
     // The main list identifies indexed repositories before the expensive per-repository fallback.
     if (
@@ -355,19 +363,10 @@ export function PullRequestsPage() {
     ) {
       return { authored: NO_LIST_TARGETS, reviewing: NO_LIST_TARGETS };
     }
-    const targetsFor = (involvement: PullRequestInvolvement) =>
-      environmentQueries.map(({ environmentId, projectIds }) => ({
-        environmentId,
-        input: {
-          state: search.state,
-          involvement,
-          limit: PAGE_SIZE,
-          ...listScope,
-          ...(projectIds ? { projectIds } : {}),
-          ...(menuFiltered ? { filters: menuFilters } : {}),
-        } satisfies PullRequestListInput,
-      }));
-    return { authored: targetsFor("authored"), reviewing: targetsFor("reviewing") };
+    return {
+      authored: partitionTargetsFor("authored"),
+      reviewing: partitionTargetsFor("reviewing"),
+    };
   })();
   const authoredQuery = usePullRequestList(partitionTargets.authored);
   const reviewingQuery = usePullRequestList(partitionTargets.reviewing);
@@ -433,9 +432,7 @@ export function PullRequestsPage() {
     if (loaded?.environmentKey !== environmentKey) {
       const restored = restoredPullRequestList(baselineTargets);
       const restoredPartition = (involvement: PullRequestInvolvement) =>
-        restoredPullRequestList(
-          baselineTargets.map((target) => ({ ...target, input: { ...target.input, involvement } })),
-        )?.entries;
+        restoredPullRequestList(partitionTargetsFor(involvement))?.entries;
       const authored = partitionsWanted ? restoredPartition("authored") : undefined;
       const reviewing = partitionsWanted ? restoredPartition("reviewing") : undefined;
       setLoaded(
@@ -677,6 +674,7 @@ export function PullRequestsPage() {
     authored: partitionsWanted ? authoredQuery.data?.entries : undefined,
     reviewing: partitionsWanted ? reviewingQuery.data?.entries : undefined,
     partitionsWanted,
+    isPreferredEntry: preferredPullRequestEntries(preferredEnvironmentQueries),
   });
 
   const visibleStatsKeys = useRef({ key: filterKey, values: new Set<string>() });

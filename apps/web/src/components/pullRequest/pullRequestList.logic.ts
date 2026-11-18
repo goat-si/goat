@@ -283,6 +283,7 @@ export function matchesPullRequestFilters(
 export function groupPullRequestsByInvolvement<Entry extends ScopedEntry>(
   entries: ReadonlyArray<Entry>,
   viewers: PullRequestViewers,
+  isPreferredEntry: (entry: Entry) => boolean = () => true,
 ): ReadonlyArray<PullRequestGroup<Entry>> {
   const buckets: Record<PullRequestGroupKey, Entry[]> = {
     reviewRequested: [],
@@ -290,7 +291,9 @@ export function groupPullRequestsByInvolvement<Entry extends ScopedEntry>(
     others: [],
   };
   for (const entry of entries) {
-    if (isAuthoredByViewer(entry, viewers)) {
+    if (!isPreferredEntry(entry)) {
+      buckets.others.push(entry);
+    } else if (isAuthoredByViewer(entry, viewers)) {
       buckets.authored.push(entry);
     } else if (entry.viewerReviewRequested) {
       buckets.reviewRequested.push(entry);
