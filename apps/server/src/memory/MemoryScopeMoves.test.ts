@@ -277,7 +277,7 @@ describe("negotiated memory scope moves", () => {
             );
             assert.include(optimistic.receipt, { outcome: "accepted", pendingSync: true });
             const updated = yield* local.loadAggregate(space, first.memoryId);
-            assert.include(updated.item, { status: "active", scope });
+            assert.deepInclude(updated.item, { status: "active", scope });
             assert.deepStrictEqual(updated.identity?.origin, origin);
             const queued = yield* local.readWorkOperation(
               `sync:${space}:${optimistic.receipt.operationId}`,
