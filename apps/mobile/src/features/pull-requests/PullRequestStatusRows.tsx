@@ -24,6 +24,7 @@ import {
 } from "./pullRequestActions";
 import {
   checkStatus,
+  isFailingCheck,
   pullRequestBranchSummary,
   pullRequestChecksSummary,
   pullRequestReviewSummary,
@@ -129,8 +130,7 @@ export function PullRequestChecksRow(props: RowProps) {
           exiting={PR_ROW_EXIT}
           className="pl-8"
         >
-          {props.pr.state === "open" &&
-          props.pr.checks.some((check) => check.status === "failure") ? (
+          {props.pr.state === "open" && props.pr.checks.some(isFailingCheck) ? (
             <PullRequestAgentRow {...props} task="feedback" title="Fix failing checks" />
           ) : null}
           {action.available("approve-workflows") ? (

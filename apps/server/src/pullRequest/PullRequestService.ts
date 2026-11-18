@@ -1,3 +1,4 @@
+import { canCacheDiff, decodeDiffCacheKey, diffCacheEvictions } from "./pullRequestDiffCache.ts";
 import { withRateLimitBackoff } from "./pullRequestRateLimit.ts";
 import { gatherReferencePages, rankFilterOptions } from "./pullRequestFilterRanking.ts";
 import { toPullRequestSummary, matchesFilterRepository } from "./pullRequestSummary.ts";
@@ -177,23 +178,6 @@ const LIST_CACHE_CAPACITY = 64;
 const LIST_STATS_CACHE_CAPACITY = 32;
 const DETAIL_CACHE_CAPACITY = 128;
 const DIFF_CACHE_CAPACITY = 128;
-// Each holder stays within this UTF-16 patch budget as well as its entry-count bound.
-const DIFF_CACHE_PATCH_BUDGET_BYTES = 32 * 1024 * 1024;
-const canCacheDiff = (value: PullRequestDiffResult) =>
-  value.patch.length * 2 <= DIFF_CACHE_PATCH_BUDGET_BYTES;
-const diffCacheEvictions = (entries: Iterable<readonly [string, PullRequestDiffResult]>) => {
-  let bytes = 0;
-  const evictions: string[] = [];
-  for (const [key, value] of Array.from(entries).toReversed()) {
-    const size = value.patch.length * 2;
-    if (bytes + size > DIFF_CACHE_PATCH_BUDGET_BYTES) {
-      evictions.push(key);
-    } else {
-      bytes += size;
-    }
-  }
-  return evictions;
-};
 const FILES_VIEWED_CACHE_CAPACITY = 128;
 const VIEWER_CACHE_CAPACITY = 32;
 
@@ -1594,21 +1578,29 @@ export const make = Effect.gen(function* () {
   const diffUncached: PullRequestService["Service"]["diff"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project) =>
-        project.api.capabilities.diff
+        project.api.capabilities.diff &&
+        (input.path === undefined || project.api.capabilities.withheldFileDiff === true)
           ? project.api
               .getDiff({
                 cwd: project.project.workspaceRoot,
                 repository: project.repository,
                 host: project.host,
                 number: input.number,
-                ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+                ...(input.cursor === undefined || input.path !== undefined
+                  ? {}
+                  : { cursor: input.cursor }),
+                ...(input.path === undefined ? {} : { path: input.path }),
+                ...(input.revision === undefined ? {} : { revision: input.revision }),
                 ...(input.commit === undefined ? {} : { commit: input.commit }),
               })
               .pipe(Effect.mapError(toPullRequestError("diff")))
           : Effect.fail(
               new PullRequestOperationError({
                 operation: "diff",
-                detail: "This host cannot provide a diff for a change request.",
+                detail:
+                  input.path === undefined
+                    ? "This host cannot provide a diff for a change request."
+                    : "This host cannot read one file of a change request's diff.",
               }),
             ),
       ),
@@ -2031,6 +2023,9 @@ export const make = Effect.gen(function* () {
         const review = project.api.capabilities.review;
         const refuse = (detail: string) =>
           Effect.fail(new PullRequestOperationError({ operation: "submitReview", detail }));
+        if (input.revision !== undefined && project.api.kind !== "github") {
+          return refuse("This host cannot submit a review at the selected revision.");
+        }
         if (!review.verdicts.includes(input.verdict)) {
           return refuse(`This host cannot ${VERDICT_LABELS[input.verdict]} a change request.`);
         }
@@ -2067,6 +2062,7 @@ export const make = Effect.gen(function* () {
                 verdict: input.verdict,
                 body: input.body,
                 comments: input.comments,
+                ...(input.revision === undefined ? {} : { revision: input.revision }),
               })
               .pipe(Effect.mapError(toPullRequestError("submitReview")));
           }),
@@ -3112,16 +3108,18 @@ export const make = Effect.gen(function* () {
 
   const diffCache = yield* Cache.makeWith(
     (key: string) => {
-      const [reference, cursor, commit] = JSON.parse(key) as [string, string | null, string | null];
+      const [reference, cursor, commit, , path] = decodeDiffCacheKey(key);
       return diffUncached({
         ...refOfCacheKey(reference),
+        ...(path === null ? {} : { path }),
         ...(cursor === null ? {} : { cursor }),
         ...(commit === null ? {} : { commit }),
       } as PullRequestDiffInput).pipe(
         observeRead,
         Effect.tap(({ value, observedAt }) => {
           // Keep the loader's epoch and read time if a refresh occurs during the provider read.
-          diffFiles.record(JSON.stringify([reference, cursor, commit]), value, observedAt);
+          if (path === null)
+            diffFiles.record(JSON.stringify([reference, cursor, commit]), value, observedAt);
           return Effect.void;
         }),
       );
@@ -3163,11 +3161,12 @@ export const make = Effect.gen(function* () {
   const readDiff = (input: PullRequestDiffInput) => {
     const key = JSON.stringify([
       refCacheKey(input),
-      input.cursor ?? null,
+      input.path === undefined ? (input.cursor ?? null) : null,
       input.commit ?? null,
       input.commit === undefined
         ? (lastGoodSummary.peek(refCacheKey(input))?.updatedAt ?? null)
         : null,
+      input.path ?? null,
     ]);
     const evictDiffs = Cache.entries(diffCache).pipe(
       Effect.flatMap((entries) =>
@@ -3185,8 +3184,11 @@ export const make = Effect.gen(function* () {
     return { key, read };
   };
   const diff: PullRequestService["Service"]["diff"] = (input) => {
+    // The host must revalidate both live PR refs before every aggregate file read.
+    if (input.path !== undefined && input.commit === undefined) return diffUncached(input);
     const { key, read } = readDiff(input);
-    return staleDiff.serve(key, read.pipe(Effect.map((read) => read.value)));
+    const result = read.pipe(Effect.map((observation) => observation.value));
+    return input.path === undefined ? staleDiff.serve(key, result) : result;
   };
 
   const filesViewedCache = yield* Cache.makeWith(

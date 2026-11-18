@@ -1,5 +1,5 @@
 import { EnvironmentId, type ServerSelfUpdateCapability } from "@goat/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   buildAppTab,
@@ -320,6 +320,52 @@ describe("runWhenIdle", () => {
     idle[1]!.resolve(true);
     await expect(result).resolves.toBe("updated");
     expect(calls).toEqual(["idle?", "attempt 1", "retry later", "idle?", "attempt 2"]);
+  });
+
+  it.each(["provider", "stage"] as const)(
+    "starts restart admission after both prerequisites finish (%s first)",
+    async (first) => {
+      const providerInstall = gate();
+      const stage = gate();
+      const idle = vi.fn(async () => true);
+      const restart = vi.fn(async () => "updated");
+      const result = runWhenIdle({
+        beforeIdle: Promise.all([providerInstall.promise, stage.promise]),
+        idle,
+        attempt: restart,
+        isBusy: () => false,
+        retryLater: async () => true,
+      });
+
+      await Promise.resolve();
+      expect(idle).not.toHaveBeenCalled();
+      const [firstToFinish, lastToFinish] =
+        first === "provider" ? [providerInstall, stage] : [stage, providerInstall];
+      firstToFinish.resolve(true);
+      await Promise.resolve();
+      expect(restart).not.toHaveBeenCalled();
+      lastToFinish.resolve(true);
+      await expect(result).resolves.toBe("updated");
+      expect(restart).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("reports a staging failure without starting idle checks or restarting the server", async () => {
+    const staged = { status: "failed", message: "Could not stage the update" };
+    const restart = vi.fn(async () => ({ status: "updated", message: "" }));
+    const idle = vi.fn(async () => true);
+
+    await expect(
+      runWhenIdle({
+        stagingFailure: Promise.resolve(staged),
+        idle,
+        attempt: restart,
+        isBusy: () => false,
+        retryLater: async () => true,
+      }),
+    ).resolves.toEqual(staged);
+    expect(idle).not.toHaveBeenCalled();
+    expect(restart).not.toHaveBeenCalled();
   });
 
   it("never attempts when a person stops waiting", async () => {

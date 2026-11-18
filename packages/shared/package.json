@@ -7,6 +7,10 @@
       "types": "./src/pullRequestAnchor.ts",
       "import": "./src/pullRequestAnchor.ts"
     },
+    "./memoryGenerationCapabilities": {
+      "types": "./src/memoryGenerationCapabilities.ts",
+      "import": "./src/memoryGenerationCapabilities.ts"
+    },
     "./forkInScope": {
       "types": "./src/forkInScope.ts",
       "import": "./src/forkInScope.ts"
@@ -639,6 +643,10 @@
       "types": "./src/hostClassification.ts",
       "import": "./src/hostClassification.ts"
     },
+    "./officeCjkFontAssets": {
+      "types": "./src/officeCjkFontAssets.ts",
+      "import": "./src/officeCjkFontAssets.ts"
+    },
     "./cliRelease": {
       "types": "./src/cliRelease.ts",
       "import": "./src/cliRelease.ts"
@@ -646,6 +654,10 @@
     "./runtimeManifest": {
       "types": "./src/runtimeManifest.ts",
       "import": "./src/runtimeManifest.ts"
+    },
+    "./diffCutLines": {
+      "types": "./src/diffCutLines.ts",
+      "import": "./src/diffCutLines.ts"
     },
     "./gitPatchPath": {
       "types": "./src/gitPatchPath.ts",

@@ -1,3 +1,4 @@
+import { fromRunner } from "@goat/provider-core/server/textGenerationOperations";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -59,7 +60,7 @@ const makeInstance = (
   enabled: true,
   snapshot: {} as ProviderInstance["snapshot"],
   orchestrationAdapter,
-  textGeneration: {} as ProviderInstance["textGeneration"],
+  textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
 });
 
 const personalAdapter = makeAdapter(personalId);

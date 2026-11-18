@@ -90,6 +90,7 @@ import {
   type PullRequestCompletionScope,
   pullRequestCompletionScope,
 } from "./PullRequestMarkdownTextarea";
+import { canReactPullRequestComment } from "@goat/client-runtime/pull-request-reactions";
 import { PullRequestReactionBar } from "./PullRequestReactions";
 import { PullRequestResolveThreadButton } from "./PullRequestResolveThreadButton";
 import { PullRequestConversationGhost } from "./PullRequestGhosts";
@@ -539,7 +540,7 @@ export function PullRequestSummaryTab({
     <PullRequestReactionBar
       className="ml-auto justify-end"
       reactions={comment.reactions ?? []}
-      canReact={detail.capabilities.reactions === true}
+      canReact={canReactPullRequestComment(detail, comment)}
       subjectId={comment.id}
       environmentId={environmentId}
       reference={reference}

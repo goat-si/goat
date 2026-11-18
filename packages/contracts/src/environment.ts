@@ -121,6 +121,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       asideImport: Schema.optionalKey(Schema.Boolean),
     }),
   ),
+  shellThreadFamilies: Schema.optionalKey(Schema.Boolean),
+  shellOlderSettled: Schema.optionalKey(Schema.Boolean),
   repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   connectionProbe: Schema.optionalKey(Schema.Boolean),
   attachmentUploads: Schema.optionalKey(Schema.Boolean),
@@ -134,6 +136,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   ),
   pullRequests: Schema.optionalKey(Schema.Boolean),
   pullRequestChecks: Schema.optionalKey(Schema.Boolean),
+  vcsBranchStatus: Schema.optionalKey(Schema.Boolean),
   /** Absent on older servers; serialize context as legacy text for them. */
   inlineMessageContext: Schema.optionalKey(Schema.Boolean),
   requiredWorktreeBootstrap: Schema.optionalKey(Schema.Boolean),
@@ -223,6 +226,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Manual commands must update this install, not the host's default global prefix. */
   serverInstallation: ForwardCompatibleOptional(ServerInstallation),
   serverSelfUpdateProgress: Schema.optionalKey(Schema.Boolean),
+  serverUpdateStaging: Schema.optionalKey(Schema.Boolean),
   serverUpdateThreadContinuation: Schema.optionalKey(Schema.Boolean),
   /** Only explicit false skips Live Activity seeding; older servers may still publish. */
   agentActivityPublishing: Schema.optionalKey(Schema.Boolean),
@@ -235,6 +239,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   ignoredFileSearch: Schema.optionalKey(Schema.Boolean),
   environmentIcon: Schema.optionalKey(Schema.Boolean),
   desktopAppUpdate: Schema.optionalKey(Schema.Boolean),
+  keepAwakeWhileAgentsWork: Schema.optionalKey(Schema.Boolean),
   /** Subscribe to command output only when advertised; older servers never send it. */
   commandOutputStreaming: Schema.optionalKey(Schema.Boolean),
   /** Hosts headless Chromium tabs streamed over /api/preview-stream for clients without a local runtime. */
@@ -244,6 +249,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   replyToResponse: Schema.optionalKey(Schema.Boolean),
   /** Server browser viewers' stopLoading input cancels a loading page; older servers ignore it. */
   serverBrowserStopLoading: Schema.optionalKey(Schema.Boolean),
+  nativeServerBrowserStopLoading: Schema.optionalKey(Schema.Boolean),
   /** Server exposes the bounded SSH runtime activity probe. */
   sshActivity: Schema.optionalKey(Schema.Boolean),
   /** Server proxies its nodes' APIs below `/hub/nodes` for clients holding `hub:proxy`. */
@@ -304,6 +310,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   slackChannelAccess: Schema.optionalKey(Schema.Boolean),
   /** Publishes a pull request refresh when linked-thread answers change; older servers need polling. */
   linkedThreadRefreshes: Schema.optionalKey(Schema.Boolean),
+  revisionBoundPullRequestReviews: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 
@@ -334,6 +341,7 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
   protocol: Schema.optionalKey(RuntimeProtocolRanges),
   /** New for every server start. A replacement request names it so it never hits a successor. */
   instanceId: Schema.optionalKey(TrimmedNonEmptyString),
+  databaseMigration: Schema.optionalKey(Schema.Int),
   /**
    * The same for every GOAT server on one machine, whatever its base directory, so clients
    * draw them as one machine. A hash of the OS machine identifier, absent when the OS hides it

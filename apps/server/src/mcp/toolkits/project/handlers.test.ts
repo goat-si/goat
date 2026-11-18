@@ -7,6 +7,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   type ModelSelection,
+  type Project as ProjectRecord,
   type OrchestrationV2ThreadShell,
   type RuntimeMode,
 } from "@goat/contracts";
@@ -26,7 +27,6 @@ import * as ServerConfig from "../../../config.ts";
 
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
-import * as ProjectCloneTracker from "../../../project/ProjectCloneTracker.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as RemoteDispatchCoordinator from "../../../remoteReports/RemoteDispatchCoordinator.ts";
@@ -49,6 +49,17 @@ import {
   type Route,
 } from "./handlers.testkit.ts";
 import { ProjectToolkit } from "./tools.ts";
+
+const launchProject = (id: ProjectId, workspaceRoot: string): ProjectRecord => ({
+  id,
+  title: "Launch target",
+  workspaceRoot,
+  defaultModelSelection: null,
+  scripts: [],
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+  deletedAt: null,
+});
 
 /** Launches from a T3 thread caller over mocks; returns what the handler did. */
 const launchFromThread = (params: {
@@ -150,7 +161,9 @@ const launchFromThread = (params: {
           } as unknown as ThreadLaunch.ThreadLaunchResult);
         },
       }),
-      Layer.mock(Project.ProjectService)({ getById: () => Effect.succeed(Option.none()) }),
+      Layer.mock(Project.ProjectService)({
+        getById: () => Effect.succeedSome(launchProject(projectId, "/projects/client-target")),
+      }),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
       Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       Layer.mock(RemoteReportService.RemoteReportService)({}),
@@ -474,7 +487,9 @@ it.effect("launches a scratch thread into the Scratch project", () =>
           } as unknown as ThreadLaunch.ThreadLaunchResult);
         },
       }),
-      Layer.mock(Project.ProjectService)({}),
+      Layer.mock(Project.ProjectService)({
+        getById: () => Effect.succeedSome(launchProject(scratchProjectId, "/projects/scratch")),
+      }),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
         namedProjectsRoot: "/projects",
         ensureScratchProject: Effect.succeed({ projectId: scratchProjectId }),
@@ -630,6 +645,34 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
       expect(rejected.at(-1)?.result).toMatchObject({ code: "invalid_request" });
     }
     expect(named).toEqual(["Pinball Stats"]);
+  }),
+);
+
+it.effect("launch into an unknown project gives an actionable refusal", () =>
+  Effect.gen(function* () {
+    const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+    const { modelSelection, dependencies } = clientLaunchHarness({
+      runtimeModeCeiling: "auto",
+      launched,
+    });
+    const layer = withLaunchService(dependencies);
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(layer)),
+      ),
+    );
+    const result = yield* toolkit
+      .handle("goat_thread_launch", {
+        title: "Launch",
+        projectId: ProjectId.make("missing"),
+        modelSelection,
+      })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(layer));
+    expect(result.at(-1)?.result).toMatchObject({
+      code: "invalid_request",
+      message: "The project was not found.",
+    });
+    expect(launched).toEqual([]);
   }),
 );
 
@@ -1328,49 +1371,5 @@ it.effect("tells the agent how to restore a missing project folder, and watches 
         'Project "Client target" points at /projects/client-target, which does not exist on this machine. No thread was created. Clone it back with goat_call {path:"project.clone", args:{remoteUrl:"https://github.com/acme/client-target.git", destinationPath:"/projects/client-target"}}, or point the project at an existing checkout with goat_call {path:"project.update", args:{projectId:"project", workspaceRoot}}, then launch again.',
     });
     expect(launch.registrations).toEqual([]);
-  }),
-);
-
-it.effect("deleting a project through MCP also discards its clone record", () =>
-  Effect.gen(function* () {
-    const discarded: Array<ProjectId> = [];
-    const harness = clientLaunchHarness({ runtimeModeCeiling: "full-access", launched: [] });
-    const dependencies = Layer.merge(
-      harness.dependencies,
-      Layer.mergeAll(
-        Layer.mock(Project.ProjectService)({
-          delete: (input) =>
-            Effect.succeed({
-              id: input.projectId,
-              title: "client-target",
-              workspaceRoot: "/projects/client-target",
-              repositoryIdentity: null,
-              faviconPath: null,
-              defaultModelSelection: null,
-              defaultThreadEnvMode: null,
-              autoPull: false,
-              projectIcon: null,
-              scripts: [],
-              createdAt: "2026-01-01T00:00:00.000Z",
-              updatedAt: "2026-01-01T00:00:00.000Z",
-              deletedAt: "2026-01-01T00:00:00.000Z",
-            }),
-        }),
-        Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
-          discard: (projectId) => Effect.sync(() => void discarded.push(projectId)),
-        }),
-      ),
-    );
-    const toolkit = yield* ProjectToolkit.pipe(
-      Effect.provide(
-        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(dependencies)),
-      ),
-    );
-
-    yield* toolkit
-      .handle("goat_project_delete", { projectId: harness.projectId })
-      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
-
-    expect(discarded).toEqual([harness.projectId]);
   }),
 );

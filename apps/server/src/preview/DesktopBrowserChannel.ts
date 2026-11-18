@@ -51,6 +51,7 @@ export class DesktopBrowserChannel extends Context.Service<
     readonly isAttached: (key: DesktopTabKey) => Effect.Effect<boolean>;
     /** Whether a desktop window draws the tab on screen, which no streamed viewer counts. */
     readonly isShown?: (key: DesktopTabKey) => boolean;
+    readonly awaitShown?: (key: DesktopTabKey, timeout: Duration.Input) => Effect.Effect<boolean>;
     /** A load failure the desktop saw, possibly before the server connected to the tab. */
     readonly loadFailure?: (key: DesktopTabKey) => PreviewAutomationLoadError | undefined;
     readonly endpoint: (key: DesktopTabKey) => Effect.Effect<string, never, Scope.Scope>;
@@ -77,6 +78,8 @@ const make = Effect.gen(function* () {
   const attachedTabs = new Set<string>();
   // Missing reports protect desktop tabs until the renderer explicitly marks them hidden.
   const shownTabs = new Map<string, boolean>();
+  const visibilityChanged = yield* PubSub.sliding<void>(1);
+  let channelStopped = false;
   const loadFailures = new Map<string, PreviewAutomationLoadError>();
   const inbound = new Map<string, Queue.Queue<string>>();
   const writeLock = yield* Semaphore.make(1);
@@ -173,20 +176,24 @@ const make = Effect.gen(function* () {
           inbound.delete(id);
           return (queue ? Queue.shutdown(queue) : Effect.void).pipe(
             Effect.andThen(PubSub.publish(changes, { key, attached: false })),
+            Effect.andThen(PubSub.publish(visibilityChanged, undefined)),
           );
         }
         case "shown":
-          if (attachedTabs.has(id) && (shownTabs.has(id) || shownTabs.size < 32))
+          if (attachedTabs.has(id) && (shownTabs.has(id) || shownTabs.size < 32)) {
             shownTabs.set(id, event.shown);
+            return PubSub.publish(visibilityChanged, undefined);
+          }
           return Effect.void;
       }
     }),
     Effect.catchCause((cause) => Effect.logWarning("desktop browser channel stopped", { cause })),
     Effect.ensuring(
       Effect.sync(() => {
+        channelStopped = true;
         shownTabs.clear();
         loadFailures.clear();
-      }),
+      }).pipe(Effect.andThen(PubSub.publish(visibilityChanged, undefined))),
     ),
     Effect.forkScoped,
   );
@@ -282,6 +289,29 @@ const make = Effect.gen(function* () {
       return Effect.sync(() => attachedTabs.has(keyOf(key)));
     }),
     isShown: (key) => shownTabs.get(keyOf(key)) ?? true,
+    awaitShown: Effect.fn("DesktopBrowserChannel.awaitShown")(function* (key, timeout) {
+      const id = keyOf(key);
+      return yield* Effect.scoped(
+        Effect.gen(function* () {
+          const subscription = yield* PubSub.subscribe(visibilityChanged);
+          const read = () =>
+            channelStopped || !attachedTabs.has(id)
+              ? false
+              : shownTabs.get(id) === true
+                ? true
+                : undefined;
+          const current = read();
+          if (current !== undefined) return current;
+          const result = yield* Stream.fromSubscription(subscription).pipe(
+            Stream.map(read),
+            Stream.filter((shown) => shown !== undefined),
+            Stream.runHead,
+            Effect.timeoutOption(timeout),
+          );
+          return Option.getOrElse(Option.flatten(result), () => false);
+        }),
+      );
+    }),
     loadFailure: (key) => loadFailures.get(keyOf(key)),
     endpoint,
     turn: Effect.fn("DesktopBrowserChannel.turn")(function (threadId, active) {

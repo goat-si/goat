@@ -36,6 +36,7 @@ export interface AcpAdapterV2RuntimeInput {
   readonly sessionEnvironment?: NodeJS.ProcessEnv | undefined;
   readonly sessionLaunch?: unknown;
   readonly resumeSessionId?: string;
+  readonly requireSessionLoadResponse?: true;
   readonly interruptPromptOnCancel?: boolean;
   readonly clientCapabilities: EffectAcpSchema.InitializeRequest["clientCapabilities"];
   readonly clientInfo: AcpSessionRuntime.AcpSessionRuntimeOptions["clientInfo"];
@@ -354,11 +355,7 @@ export interface AcpAdapterV2Options {
     readonly shellCommands?: boolean;
   };
   readonly nativeLogging?: (threadId: ThreadId) => AcpAdapterV2NativeLogging;
-  readonly continuationRequests?: {
-    readonly offer: (
-      request: ProviderContinuationRequests.ProviderContinuationRequest,
-    ) => Effect.Effect<void>;
-  };
+  readonly continuationRequests?: ProviderContinuationRequests.ProviderContinuationOffer;
   readonly testHooks?: {
     readonly onDeferredFinalizeScheduled?: (debounce: Duration.Input) => Effect.Effect<void>;
     /** Wire signal is set; the completion callback has not requested its permit yet. */

@@ -1,3 +1,4 @@
+import { derive } from "./IdAllocator.ts";
 import type {
   EventId,
   MessageId,
@@ -178,6 +179,17 @@ export function makeSubagentConversationArtifacts(input: {
   return { message, turnItem };
 }
 
+export const PROVIDER_STOP_REASON_SIGNAL = "provider-stop-reason";
+
+function providerStopReason(
+  projection: Pick<OrchestrationV2ThreadProjection, "turnItems">,
+  run: OrchestrationV2Run,
+): string {
+  const id = derive.runSignalTurnItem({ runId: run.id, signal: PROVIDER_STOP_REASON_SIGNAL });
+  const notice = projection.turnItems.find((item) => item.id === id);
+  return notice?.type === "system_notice" ? `\n\n${notice.message}` : "";
+}
+
 export function subagentResultForRun(
   projection: Pick<OrchestrationV2ThreadProjection, "messages" | "turnItems"> &
     Partial<Pick<OrchestrationV2ThreadProjection, "providerTurns">>,
@@ -232,7 +244,7 @@ export function subagentResultForRun(
     message?.text ??
     turnItem?.text ??
     (run.status === "completed"
-      ? "Child task completed without an assistant result."
+      ? `Child task completed without an assistant result.${providerStopReason(projection, run)}`
       : `Child task ended with status ${run.status}.`);
   const executed = latestProviderTurnForAttempt(
     projection.providerTurns ?? [],

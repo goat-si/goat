@@ -104,6 +104,7 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.pullRequestsSubscribeRefreshes
   | typeof WS_METHODS.pullRequestsSubscribeLinkedThreadRefreshes
   | typeof WS_METHODS.subscribeVcsStatus
+  | typeof WS_METHODS.subscribeVcsBranch
   | typeof WS_METHODS.subscribeWorktreeSetup
   | typeof WS_METHODS.subscribeProjectClones
   | typeof WS_METHODS.terminalAttach
@@ -142,6 +143,11 @@ export class EnvironmentRpcSubscriptionObserver extends Context.Reference<{
 
 export const isRpcClientError = Schema.is(RpcClientError.RpcClientError);
 const isEnvironmentAuthorizationError = Schema.is(EnvironmentAuthorizationError);
+
+export const isAuthorizationFailure = (cause: Cause.Cause<unknown>) =>
+  cause.reasons.some(
+    (reason) => reason._tag === "Fail" && isEnvironmentAuthorizationError(reason.error),
+  );
 
 const MAX_EXPECTED_FAILURE_RETRY_DELAY_MS = 30_000;
 const STREAM_FAILURE_RETRY_DELAY = Duration.seconds(1);
@@ -252,6 +258,27 @@ function memoryHistoryDispatchInput(input: MemoryHistoryInput, refusedReverts: b
   return legacyInput;
 }
 
+const requireServerUpdateStaging = Effect.fn("EnvironmentRpc.requireServerUpdateStaging")(
+  function* (tag: string, input: unknown, session: RpcSession) {
+    if (
+      (tag !== WS_METHODS.serverUpdateServer &&
+        tag !== WS_METHODS.serverUpdateServerWithProgress) ||
+      typeof input !== "object" ||
+      input === null ||
+      !("stageOnly" in input) ||
+      input.stageOnly !== true
+    )
+      return;
+    const { target } = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+    const unsupported = new EnvironmentRpcUnavailableError({
+      environmentId: target.environmentId,
+      message: "Server update staging is unavailable on this environment.",
+    });
+    const config = yield* session.initialConfig.pipe(Effect.mapError(() => unsupported));
+    if (config.environment.capabilities.serverUpdateStaging !== true) return yield* unsupported;
+  },
+);
+
 export const requestGuarded = <TTag extends EnvironmentUnaryRpcTag>(
   tag: TTag,
   input: EnvironmentRpcInput<TTag>,
@@ -267,6 +294,7 @@ export const requestInSession = Effect.fn("EnvironmentRpc.request")(function* <
     "rpc.method": tag,
   });
   yield* authorizeRequest(tag, input);
+  yield* requireServerUpdateStaging(tag, input, session);
   let dispatchInput = input;
   if (tag.startsWith("memory.") || tag.startsWith("siteNotes.")) {
     const config = yield* session.initialConfig.pipe(
@@ -387,13 +415,20 @@ export function runStreamInSession<TTag extends EnvironmentStreamCommandRpcTag>(
   input: EnvironmentRpcInput<TTag>,
 ): Stream.Stream<
   EnvironmentRpcStreamValue<TTag>,
-  EnvironmentRpcStreamFailure<TTag> | EnvironmentAuthorizationError,
+  | EnvironmentRpcStreamFailure<TTag>
+  | EnvironmentRpcUnavailableError
+  | EnvironmentAuthorizationError,
   EnvironmentSupervisor.EnvironmentSupervisor
 > {
   const method = (session.client as EnvironmentProtocolClient)[tag] as (
     input: EnvironmentRpcInput<TTag>,
   ) => Stream.Stream<EnvironmentRpcStreamValue<TTag>, EnvironmentRpcStreamFailure<TTag>>;
-  return Stream.unwrap(authorizeRequest(tag, input).pipe(Effect.map(() => method(input)))).pipe(
+  return Stream.unwrap(
+    authorizeRequest(tag, input).pipe(
+      Effect.andThen(requireServerUpdateStaging(tag, input, session)),
+      Effect.map(() => method(input)),
+    ),
+  ).pipe(
     Stream.withSpan("EnvironmentRpc.runStream", {
       attributes: { "rpc.method": tag },
     }),
@@ -498,7 +533,10 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         method: tag,
                         input,
                       });
-                      const stream = mapStream(session, method(input)).pipe(
+                      const stream = mapStream(
+                        session,
+                        Stream.suspend(() => method(input)),
+                      ).pipe(
                         Stream.onFirst(() =>
                           Effect.sync(() => {
                             expectedFailureRetries = 0;
@@ -613,13 +651,9 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         const handled = Stream.fromEffect(options.onExpectedFailure(cause)).pipe(
                           Stream.drain,
                         );
-                        const isAuthorizationFailure = cause.reasons.some(
-                          (reason) =>
-                            reason._tag === "Fail" && isEnvironmentAuthorizationError(reason.error),
-                        );
                         if (
                           options.retryExpectedFailureAfter === undefined ||
-                          isAuthorizationFailure
+                          isAuthorizationFailure(cause)
                         ) {
                           return handled;
                         }
@@ -759,6 +793,63 @@ export function subscribeOrUnavailable<TTag extends EnvironmentSubscriptionRpcTa
     () => ({ subscription, unavailable: true as const }),
   );
 }
+
+export const subscribeVcsBranch = (
+  input: EnvironmentRpcInput<typeof WS_METHODS.subscribeVcsBranch>,
+) =>
+  subscribeDynamicMapped(
+    WS_METHODS.subscribeVcsBranch,
+    () => Effect.succeed(input),
+    (session, stream) =>
+      Stream.unwrap(
+        session.initialConfig.pipe(
+          Effect.mapError(
+            (error) =>
+              new RpcClientError.RpcClientError({
+                reason: new RpcClientError.RpcClientDefect({
+                  message: error.message,
+                  cause: error,
+                }),
+              }),
+          ),
+          Effect.map((config) =>
+            config.environment.capabilities.vcsBranchStatus === true &&
+            session.vcsBranchTransportSupported !== false
+              ? stream
+              : session.client[WS_METHODS.subscribeVcsStatus]({
+                  ...input,
+                  includeRemote: false,
+                }).pipe(
+                  Stream.filter((event) => event._tag !== "remoteUpdated"),
+                  Stream.map(({ local }) => ({ refName: local.refName, isRepo: local.isRepo })),
+                ),
+          ),
+        ),
+      ),
+  );
+
+export const refreshVcsBranch = Effect.fn("EnvironmentRpc.refreshVcsBranch")(function* (
+  input: EnvironmentRpcInput<typeof WS_METHODS.vcsRefreshBranch>,
+) {
+  const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+  const session = yield* currentSession();
+  const config = yield* session.initialConfig.pipe(
+    Effect.mapError(
+      (error) =>
+        new EnvironmentRpcUnavailableError({
+          environmentId: supervisor.target.environmentId,
+          message: error.message,
+        }),
+    ),
+  );
+  if (
+    config.environment.capabilities.vcsBranchStatus === true &&
+    session.vcsBranchTransportSupported !== false
+  ) {
+    return yield* requestInSession(session, WS_METHODS.vcsRefreshBranch, input);
+  }
+  // Older hosts retain their existing status stream without adding per-row wake scans.
+});
 
 export const request = <TTag extends Exclude<EnvironmentUnaryRpcTag, ClientGuardedRpcTag>>(
   tag: TTag,

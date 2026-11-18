@@ -56,6 +56,11 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/server/src/cli`, `apps/server/src/cloud`, `apps/desktop/src/wsl`, `scripts/install.sh`, `scripts/build-npm-launcher.ts`, `scripts/npm-launcher`
 - 정책: upstream 로직을 받고 실행 파일 `goat`, `runtime/goat/versions`, SSH 호스트 `~/.goat`를 유지한다. npm 배포는 upstream 단일 launcher(`scripts/build-npm-launcher.ts`, `scripts/npm-launcher/goat.mjs`) 위에 패키지 `goat`, bin `goat`·`t3`, 릴리스 저장소 `goat-si/goat-releases`를 얹는다 (사이클 261019).
 
+### `fff-node-teardown` 워크스페이스 검색 인덱스 종료
+
+- 경로: `patches/@ff-labs__fff-node@0.11.0.patch`, `apps/server/src/workspace/{WorkspaceSearchIndex,workspaceSearchFinderCache}.ts`
+- 정책: 기존 `destroy()` 호출 형태를 유지한다. GOAT 서버는 진행 중인 네이티브 호출과 `fff_destroy` 및 watcher 정리가 끝나는 `destroyAsync()`를 기다린 뒤 finder 슬롯을 돌려준다. FFF 업데이트 때 같은 종료 보장을 확인하고 패치를 유지하거나 upstream의 동등한 API로 옮긴다.
+
 ### `code-budgets` 파일 크기와 단언 ratchet
 
 - 커밋: #812
@@ -85,6 +90,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 
 - 경로: `apps/server/src/cua/ComputerUseAttachment.ts`, `apps/server/src/cua/ComputerUseRequests.ts`, `apps/server/src/cua/ComputerUseLeases.ts`, `packages/client-runtime/src/computerUse/readinessSteps.ts`, `docs/user/computer-use.md`, `structure/decisions/ADR-0022-cua-driver-computer-use.md`
 - 정책: 사람이 키보드·마우스를 사용핮에 따라 승인된 에이전트를 자동으로 일시정지하지 않는다. 무인 작업은 기존 grant 또는 full-access 자동 승인과 private-mode 감지를 요구하고, 사람 입력과 무관하게 Stop·Stop all·Hand back·승인 만료로 끝낼 수 있다. 비밀번호·OTP·passkey 필드는 계속 자동 일시정지한다. upstream 동작을 받을 때 이 GOAT 정책 차이를 유지하고, 사람 입력 차단이나 승인 없는 실행으로 되돌리지 않는다.
+
+### `cursor-command-output` Cursor 명령 출력
+
+- 커밋: #3700 (사이클 261114 next3, SF3)
+- 경로: `packages/provider-cursor/src/server/adapter.ts`, `packages/provider-cursor/src/server/{commandOutputGate,shellOutputCoalescer}.ts`
+- 정책: SF3가 upstream `6be1bd6472` (#26934)를 미리 옮겼다. 다음 사이클에서는 반영 여부만 확인한다. Cursor 출력 경로를 바꿀 때는 대기 중인 출력의 상한과, 명령 완료 후 그 명령의 대기 출력이 전달되지 않는 순서를 지킨다.
 
 ### `decision-routing` 자식 결정의 부모 우선 라우팅
 
@@ -212,6 +223,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 커밋: 사이클 261114 다음 PR의 lane N13a (PR 번호는 draft PR이 열리면 적는다)
 - 경로: `apps/web/src/components/files/officeArchiveWorkbook.ts`, `apps/web/src/components/files/officeArchiveXml.ts`, `apps/web/src/components/files/AttachmentFilePreview.spreadsheet.browser.test.tsx`
 - 정책: upstream 코드를 그대로 옮긴 GOAT 파일이다. `officeArchive.ts`가 1211줄 예산에 닿아 `boundedWorksheet`·`boundWorkbook`(upstream c8e8b58ee6 이후 `engineStyles` 포함)은 `officeArchiveWorkbook.ts`로, 두 파일이 같이 쓰는 `xmlParser`·`officeXmlDecoder`·`officeXml`은 `officeArchiveXml.ts`로 옮겼다. 스프레드시트 미리보기 테스트 다섯 묶음은 `AttachmentFilePreview.spreadsheet.browser.test.tsx`에 있다. upstream이 `officeArchive.ts`의 스프레드시트 부분이나 XML 도우미를 바꾸면 그 hunk를 이 파일들에 옮겨 적용한다. Word 부분은 `officeArchive.ts`에 남아 그대로 머지된다. upstream `fcc25c8bb2`는 Office 테스트 전부를 `AttachmentFilePreview.office.browser.test.tsx`로 나눴지만 GOAT는 받지 않았다(#3176). 그 파일에 들어가는 스프레드시트 테스트 hunk는 GOAT의 spreadsheet 파일로, 나머지 Office 테스트 hunk는 `AttachmentFilePreview.browser.test.tsx`로 옮긴다.
+
+### `opencode-legacy-lifecycle` OpenCode 1.x 백그라운드 턴과 자식 권한
+
+- 커밋: #3700
+- 경로: `packages/provider-opencode/src/server/{adapter,backgroundTurns,permissionRules,permissionSync}.ts`, `apps/server/src/orchestration-v2/ProviderContinuationService.ts`
+- 정책: upstream #36887의 OpenCode 1.x SSE 재생은 GOAT의 `ProviderContinuationRequests`로 연결한다. 기존 실행을 이어받을 때 새 native prompt를 보내지 않으며 재생 시한이 지나도 이미 시작한 턴의 종료 이벤트는 발행한다. #35401의 전체 접근 규칙은 자식이 상속할 `external_directory` 허용을 명시한다. 자식 세션의 `goatPermissionBase`는 다음 prompt를 보내기 전에 현재 정책으로 교체하고 native deny는 보존한다. 재시작 후에도 자식 권한을 갱신한다. Stop에서 루트 abort가 실패한 경우와 자식 정리만 실패한 경우를 구분한다. 후자의 경우 U12가 추적하는 자식을 자체 종료 증거가 올 때까지 실행 중으로 둔다.
 
 ### `orchestrator-goat-modules` Orchestrator의 GOAT 명령 모듈
 

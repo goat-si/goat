@@ -1,4 +1,5 @@
 import { enrichProjectShells } from "./project/enrichProjectShells.ts";
+import { vcsStatusHandlers } from "./vcs/vcsStatusHandlers.ts";
 import { makeGlobalSkillsRpcLayer } from "./skills/GlobalSkillsRpcHandlers.ts";
 import * as AccessRpc from "./auth/AccessRpc.ts";
 import { makeOmittableShellReaders } from "./orchestration-v2/ThreadFamilyLookup.ts";
@@ -92,7 +93,6 @@ import {
   type AcpRegistrySetProviderInput,
   type AuthEnvironmentScope,
   type DiscoveredLocalServerList,
-  type ServerProvider,
   type GitActionProgressEvent,
   type GitManagerServiceError,
   type MessageId,
@@ -136,8 +136,6 @@ import { withWebSocketIdleTimeout } from "./wsIdleTimeout.ts";
 import * as AcpRegistryRuntimeCoordinator from "@goat/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
 import * as RelayClient from "@goat/shared/relayClient";
-import { isTelemetryIdHash } from "@goat/shared/telemetryId";
-import { withUsageLimitsCommands } from "@goat/shared/usageLimits";
 import * as SqlClient from "effect/sql/SqlClient";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import { issueNoteFileUrl } from "./assets/noteFileAsset.ts";
@@ -213,6 +211,8 @@ import {
   archivedShellStreamItemFromThreadShell,
   bufferShellLiveStream,
   buildActiveShellSnapshot,
+  canResumeShellFrom,
+  resumeIdentityRoots,
   coalesceShellApplicationEvents,
   coalesceStoredThreadEvents,
   composeShellStreamWithEnrichment,
@@ -309,7 +309,7 @@ import { storageRpcHandlers } from "./storage/storageRpc.ts";
 import { terminalWorkspaceRpcHandlers } from "./terminal/terminalWorkspaceRpc.ts";
 import { heldTurnRpcHandlers } from "./orchestration-v2/goat/HeldTurnRpc.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
-import type { TelemetryOwner } from "./telemetry/Identify.ts";
+import { readClientOwners } from "./wsClientOwners.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { terminalOutputStream, withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
 import { terminalMetadataStream } from "./terminalMetadataStream.ts";
@@ -338,11 +338,14 @@ import {
   withProviderStatusChanges,
 } from "./serverConfigUpdates.ts";
 import { requestUrl } from "./requestUrl.ts";
+import {
+  makeProviderConfigProjection,
+  makeProviderRefreshProjection,
+  makeProviderReplyProjection,
+  type ProviderConfigProjection,
+} from "./providerConfigCatalogs.ts";
 import { isNetworkPath } from "@goat/shared/path";
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
-function withoutWorkspaceSnapshots(providers: ReadonlyArray<ServerProvider>): ServerProvider[] {
-  return providers.map(({ workspaceSnapshots: _workspaceSnapshots, ...provider }) => provider);
-}
 const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(function* (input: {
   readonly threadId: ThreadId;
   readonly messageId: MessageId;
@@ -450,13 +453,6 @@ const ServerWsCoreRpcGroup = WsCoreRpcGroup.middleware(RpcInstrumentation);
 const ServerWsCoreServerRpcGroup = WsCoreServerRpcGroup.middleware(RpcInstrumentation);
 const ServerWsCoreWorkspaceRpcGroup = WsCoreWorkspaceRpcGroup.middleware(RpcInstrumentation);
 const ServerWsChannelRpcGroup = WsChannelRpcGroup.middleware(RpcInstrumentation);
-// A resuming client further behind than this gets a fresh shell snapshot instead of per-event
-// catch-up: each replayed event costs a shell refetch, while one O(active-threads) snapshot is
-// bounded. Matches the event store's default page size (DEFAULT_READ_FROM_SEQUENCE_LIMIT).
-const SHELL_RESUME_MAX_GAP = 1_000;
-// Row counts do not bound large tool payloads; sum stored JSON bytes in SQL and snapshot above budget.
-const ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES = 8 * 1024 * 1024;
-
 const isClientSurface = Schema.is(ClientSurface);
 const isSiteNoteError = Schema.is(SiteNotes.SiteNoteError);
 const siteNoteRpcError = (error: unknown) =>
@@ -554,56 +550,6 @@ function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) 
     ...(isClientConnectionMethod(connectionMethod) ? { connectionMethod } : {}),
   };
 }
-
-/**
- * Owners a connecting client reports: its hashed GOAT Connect account and its
- * hashed device id. Only hashes are accepted, so a raw id never reaches analytics.
- */
-function readClientOwners(
-  request: HttpServerRequest.HttpServerRequest,
-): ReadonlyArray<TelemetryOwner> {
-  const url = requestUrl(request);
-  if (Option.isNone(url)) {
-    return [];
-  }
-  const params = url.value.searchParams;
-  return (
-    [
-      ["connect", params.get("clientOwner")],
-      ["device", params.get("clientDevice")],
-    ] as const
-  ).flatMap(([source, ownerId]) =>
-    ownerId !== null && isTelemetryIdHash(ownerId) ? [{ source, ownerId }] : [],
-  );
-}
-
-const canReplayPersistedRange = Effect.fnUntraced(function* (
-  afterSequence: number,
-  headSequence: number,
-  maxGap: number,
-) {
-  const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
-  const replayGap = headSequence - afterSequence;
-  if (replayGap < 0 || replayGap > maxGap) {
-    return false;
-  }
-  const stats = yield* applicationEvents.getReplayStats({
-    afterSequence,
-    throughSequence: headSequence,
-  });
-  if (stats.rawPayloadBytes > ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES) {
-    yield* Effect.logDebug("orchestration replay replaced by snapshot", {
-      afterSequence,
-      headSequence,
-      replayGap,
-      eventCount: stats.eventCount,
-      payloadBytes: stats.rawPayloadBytes,
-      payloadBudgetBytes: ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES,
-    });
-    return false;
-  }
-  return true;
-});
 
 export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subscribeThread")(
   function* (input: {
@@ -820,6 +766,8 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
 export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subscribeShell")(
   function* (input: {
     readonly afterSequence?: number;
+    readonly knownProjectIdentities?: string;
+    readonly httpSnapshotFallback?: true;
     readonly requestCompletionMarker?: boolean;
     readonly omitIdleSubagents?: boolean;
     readonly omitOlderSettled?: boolean;
@@ -1006,7 +954,11 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       rpcInitialItems(
         shellStreamItemsFromResumeSnapshot({
           snapshot: loaded.snapshot,
-          resolvedRepositoryIdentityRoots: loaded.resolvedRepositoryIdentityRoots,
+          resolvedRepositoryIdentityRoots: resumeIdentityRoots({
+            projects: loaded.snapshot.projects,
+            resolvedRepositoryIdentityRoots: loaded.resolvedRepositoryIdentityRoots,
+            knownProjectIdentities: input.knownProjectIdentities,
+          }),
         }),
       );
     // Drain initial frames before merging enrichment with live events so marked refreshes cannot precede the initial frame.
@@ -1024,7 +976,8 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       }
 
       const highWater = yield* applicationEvents.latestApplicationSequence;
-      if (!(yield* canReplayPersistedRange(input.afterSequence, highWater, SHELL_RESUME_MAX_GAP))) {
+      if (!(yield* canResumeShellFrom(applicationEvents, input.afterSequence, highWater))) {
+        if (input.httpSnapshotFallback) return Stream.make({ kind: "snapshot-required" as const });
         const loaded = yield* loadSnapshot();
         return composeShellStreamWithEnrichment({
           initial: initialSnapshotItems(loaded),
@@ -1566,21 +1519,15 @@ export const layerWsRpc = (
         yield* providerRegistry.refreshInstance(input.instanceId);
         return { disabled: true } as const;
       });
+      const projectProviderReply = makeProviderReplyProjection(usageLimitSources.projectProviders);
       const loadServerConfig = Effect.fn("ws.loadServerConfig")(function* (options: {
-        readonly usageLimitsCommand: boolean;
-        readonly workspaceSnapshotsOnDemand: boolean;
+        readonly projectProviders?: ProviderConfigProjection;
         readonly deferDirectEndpoints?: boolean;
       }) {
         const keybindingsConfig = yield* keybindings.loadConfigState;
-        const currentProviders = yield* providerRegistry.getProviders.pipe(
-          Effect.flatMap(usageLimitSources.projectProviders),
+        const providers = yield* providerRegistry.getProviders.pipe(
+          Effect.flatMap(options.projectProviders ?? projectProviderReply()),
         );
-        const commandProviders = options.usageLimitsCommand
-          ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
-          : currentProviders;
-        const providers = options.workspaceSnapshotsOnDemand
-          ? withoutWorkspaceSnapshots(commandProviders)
-          : commandProviders;
         const settings = ServerSettings.redactServerSettingsForClient(
           yield* serverSettings.getSettings,
         );
@@ -2169,8 +2116,7 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
         ...(yield* PreviewSessions.makePreviewSessionRpcHandlers(currentSessionId)),
-        [WS_METHODS.serverGetConfig]: (_input) =>
-          loadServerConfig({ usageLimitsCommand: false, workspaceSnapshotsOnDemand: false }),
+        [WS_METHODS.serverGetConfig]: (_input) => loadServerConfig({}),
         [WS_METHODS.serverSearchAcpRegistry]: (input) =>
           acpRegistryCatalog
             .search(input)
@@ -2327,29 +2273,19 @@ export const layerWsRpc = (
                 providers = yield* providerRegistry.refreshInstance(instance.instanceId);
               }
             }
-            const projected = yield* usageLimitSources.projectProviders(providers);
-            if (input.workspaceSnapshotsOnDemand !== true) return { providers: projected };
-            const commandProviders =
-              input.usageLimitsCommand === true
-                ? withUsageLimitsCommands(projected, yield* usageLimitSources.current)
-                : projected;
-            const { instanceId, cwd } = input;
-            if (instanceId === undefined || cwd === undefined) {
-              return { providers: withoutWorkspaceSnapshots(commandProviders) };
+            if (
+              input.omitProviders === true &&
+              (input.instanceId === undefined || input.cwd === undefined)
+            ) {
+              return { providers: [] };
             }
             return {
-              providers: commandProviders
-                .filter((provider) => provider.instanceId === instanceId)
-                .map((provider) => ({
-                  ...provider,
-                  // Callers read only the cwd snapshot; the config stream carries the rest.
-                  models: [],
-                  slashCommands: [],
-                  skills: [],
-                  workspaceSnapshots: (provider.workspaceSnapshots ?? []).filter(
-                    (snapshot) => snapshot.cwd === cwd,
-                  ),
-                })),
+              providers: yield* projectProviderReply(
+                makeProviderRefreshProjection(input, providerInstances.getInstance),
+                input.workspaceSnapshotsOnDemand && input.usageLimitsCommand
+                  ? usageLimitSources.current
+                  : undefined,
+              )(providers),
             };
           }),
         [WS_METHODS.mcpAppsCallTool]: (input) => mcpAppRequests.callTool(input),
@@ -3027,14 +2963,12 @@ export const layerWsRpc = (
           }),
         [WS_METHODS.assetsPersistChatAttachments]: (input) =>
           persistChatAttachments(input).pipe(Effect.map((attachments) => ({ attachments }))),
-        [WS_METHODS.subscribeVcsStatus]: (input) => vcsStatusBroadcaster.streamStatus(input),
+        ...vcsStatusHandlers(vcsStatusBroadcaster),
         [WS_METHODS.subscribeWorktreeSetup]: (input) => worktreeSetupTracker.stream(input.threadId),
         [WS_METHODS.worktreeSetupCancel]: (input) =>
           worktreeSetupTracker
             .cancel(input.threadId)
             .pipe(Effect.map((cancelled) => ({ cancelled }))),
-        [WS_METHODS.vcsRefreshStatus]: (input) =>
-          vcsStatusBroadcaster.refreshStatus(input.cwd, { localOnly: input.localOnly ?? false }),
         [WS_METHODS.vcsPull]: (input) =>
           gitWorkflow.pullCurrentBranch(input.cwd).pipe(
             Effect.matchCauseEffect({
@@ -3144,7 +3078,7 @@ export const layerWsRpc = (
         [WS_METHODS.previewOpen]: (input) => previewManager.open(input),
         [WS_METHODS.previewNavigate]: (input) => previewManager.navigate(input),
         [WS_METHODS.previewResize]: (input) => previewManager.resize(input),
-        [WS_METHODS.previewAdjust]: (input) => previewManager.adjust(input),
+        [WS_METHODS.previewAdjust]: (input) => serverBrowser.adjustPreview(input),
         [WS_METHODS.previewRefresh]: (input) => previewManager.refresh(input),
         [WS_METHODS.previewClose]: (input) => previewManager.close(input),
         [WS_METHODS.previewList]: (input) => previewManager.list(input),
@@ -3205,7 +3139,10 @@ export const layerWsRpc = (
           Stream.unwrap(
             Effect.gen(function* () {
               const usageLimitsCommand = input.usageLimitsCommand === true;
-              const workspaceSnapshotsOnDemand = input.workspaceSnapshotsOnDemand === true;
+              const projectProviderConfig = makeProviderConfigProjection(
+                input,
+                providerInstances.listInstances,
+              );
               // Buffer changes through discovery and the initial snapshot's RPC ACK wait.
               const keybindingsChanges = yield* keybindings.subscribeChanges;
               const settingsChanges = yield* serverSettings.subscribeChanges;
@@ -3217,8 +3154,10 @@ export const layerWsRpc = (
                 { startImmediately: true },
               );
               const config = yield* loadServerConfig({
-                usageLimitsCommand,
-                workspaceSnapshotsOnDemand,
+                projectProviders: projectProviderReply(
+                  projectProviderConfig,
+                  usageLimitsCommand ? usageLimitSources.current : undefined,
+                ),
                 deferDirectEndpoints: true,
               });
               const keybindingsUpdates = keybindingsChanges.pipe(
@@ -3238,17 +3177,14 @@ export const layerWsRpc = (
                   providerRegistry.streamChanges,
                 ),
                 usageLimitSources.streamChanges,
-                (providers, sources) => {
-                  const commandProviders = usageLimitsCommand
-                    ? withUsageLimitsCommands(providers, sources)
-                    : providers;
-                  // Stripped before the de-dupe below, so snapshot-only changes send nothing.
-                  return workspaceSnapshotsOnDemand
-                    ? withoutWorkspaceSnapshots(commandProviders)
-                    : commandProviders;
-                },
+                (providers, sources) => [providers, sources] as const,
               ).pipe(
-                Stream.mapEffect(usageLimitSources.projectProviders),
+                Stream.mapEffect(([providers, sources]) =>
+                  projectProviderReply(
+                    projectProviderConfig,
+                    usageLimitsCommand ? Effect.succeed(sources) : undefined,
+                  )(providers),
+                ),
                 // Compare initial paired values with the snapshot; blindly dropping them loses changes between snapshot and subscription.
                 (updates) => Stream.concat(rpcInitialItems([config.providers]), updates),
                 Stream.changesWith(

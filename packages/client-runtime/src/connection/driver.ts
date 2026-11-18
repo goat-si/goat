@@ -1,3 +1,6 @@
+import * as RemoteAuthorization from "../authorization/service.ts";
+import { isLocalServerConnection } from "./loopbackHost.ts";
+import * as Option from "effect/Option";
 import type { DesktopSshPreparationProgress } from "@goat/contracts";
 import { GOAT_CONNECT_COMING_SOON } from "@goat/shared/goatConnect";
 import * as Context from "effect/Context";
@@ -25,6 +28,7 @@ import {
   isConnectionRouteEnabled,
   routeEntry,
   routeHttpBaseUrl,
+  routeKeepsItsHost,
   sendsTokenInClear,
   usableRoutes,
 } from "./routes.ts";
@@ -198,19 +202,27 @@ export const make = Effect.gen(function* () {
   const resolver = yield* ConnectionResolver.ConnectionResolver;
   const sessions = yield* RpcSession.RpcSessionFactory;
   const httpClient = yield* HttpClient.HttpClient;
+  const remote = yield* Effect.serviceOption(RemoteAuthorization.RemoteEnvironmentAuthorization);
   const primaryAuth = yield* ClientCapabilities.PrimaryEnvironmentAuth;
 
   // The descriptor is public, so this sends no credential to whatever
   // answers at a saved LAN address on a different network.
-  const checkDescriptor = (httpBaseUrl: string, environmentId: string) =>
+  const checkDescriptor = (httpBaseUrl: string, environmentId: string, keepsItsHost: boolean) =>
     fetchRemoteEnvironmentDescriptor({
       httpBaseUrl,
       timeoutMs: ROUTE_CHECK_TIMEOUT_MS,
     }).pipe(
-      Effect.map((descriptor): RouteCheck =>
-        descriptor.environmentId === environmentId ? "answered" : "silent",
+      Effect.option,
+      Effect.tap((descriptor) =>
+        Option.isSome(remote)
+          ? remote.value.rememberCheckedDescriptor(httpBaseUrl, descriptor, keepsItsHost)
+          : Effect.void,
       ),
-      Effect.orElseSucceed((): RouteCheck => "silent"),
+      Effect.map((descriptor): RouteCheck =>
+        Option.exists(descriptor, (value) => value.environmentId === environmentId)
+          ? "answered"
+          : "silent",
+      ),
       // A cached descriptor would answer for a host that cannot be reached.
       Effect.provideService(FetchHttpClient.RequestInit, {
         cache: "no-store",
@@ -223,7 +235,7 @@ export const make = Effect.gen(function* () {
     if (!isConnectionRouteEnabled(route)) return Effect.succeed<RouteCheck>("silent");
     const httpBaseUrl = routeHttpBaseUrl(route);
     if (httpBaseUrl === null) return Effect.succeed<RouteCheck>("unchecked");
-    return checkDescriptor(httpBaseUrl, entry.target.environmentId).pipe(
+    return checkDescriptor(httpBaseUrl, entry.target.environmentId, routeKeepsItsHost(route)).pipe(
       Effect.withSpan("ConnectionDriver.checkRoute", {
         attributes: { "connection.target.kind": route.target._tag },
       }),
@@ -231,7 +243,13 @@ export const make = Effect.gen(function* () {
   };
 
   const checkHost = (prepared: PreparedConnection) =>
-    checkDescriptor(prepared.httpBaseUrl, prepared.environmentId).pipe(
+    checkDescriptor(
+      prepared.httpBaseUrl,
+      prepared.environmentId,
+      prepared.target._tag !== "SshConnectionTarget" &&
+        (prepared.httpBaseUrl.startsWith("https:") ||
+          isLocalServerConnection(prepared.target, prepared.httpBaseUrl)),
+    ).pipe(
       Effect.withSpan("ConnectionDriver.checkHost", {
         attributes: { "connection.target.kind": prepared.target._tag },
       }),
@@ -300,7 +318,7 @@ export const make = Effect.gen(function* () {
                   detail: "Probe endpoint changed.",
                 });
             } else {
-              const check = yield* checkDescriptor(prepared.httpBaseUrl, prepared.environmentId);
+              const check = yield* checkHost(prepared);
               if (check !== "answered")
                 return yield* new ConnectionTransientError({
                   reason: "endpoint-unavailable",

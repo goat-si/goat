@@ -62,7 +62,8 @@ import {
 } from "./baseSchemas.ts";
 import { ServerActivityBlocker } from "./serverActivity.ts";
 import {
-  OrchestrationV2ShellSnapshot,
+  OrchestrationV2ShellHttpSnapshot,
+  OrchestrationV2ShellResumable,
   OrchestrationV2ThreadBoundedSnapshot,
   OrchestrationV2ThreadDetailSnapshot,
   OrchestrationV2ThreadHistoryPage,
@@ -773,6 +774,7 @@ const EnvironmentOrchestrationThreadSnapshotParams = Schema.Struct({
 export const EnvironmentOrchestrationShellSnapshotQuery = Schema.Struct({
   omitIdleSubagents: Schema.optionalKey(Schema.String),
   omitOlderSettled: Schema.optionalKey(Schema.String),
+  resumeFrom: Schema.optionalKey(Schema.String),
 });
 
 export const EnvironmentOrchestrationThreadBoundedSnapshotQuery = Schema.Struct({
@@ -802,7 +804,7 @@ class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
     HttpApiEndpoint.get("shellSnapshot", "/api/orchestration/shell", {
       headers: OrchestrationProtocolHeaders,
       query: EnvironmentOrchestrationShellSnapshotQuery,
-      success: OrchestrationV2ShellSnapshot,
+      success: [OrchestrationV2ShellHttpSnapshot, OrchestrationV2ShellResumable],
       error: EnvironmentOrchestrationSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )

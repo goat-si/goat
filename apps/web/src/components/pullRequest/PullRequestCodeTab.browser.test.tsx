@@ -14,7 +14,16 @@ import "~/index.css";
 import { __setClientSettingsForTests } from "../../hooks/useSettings";
 import { DEFAULT_CLIENT_SETTINGS } from "@goat/contracts/settings";
 
-const { diffAtom, pagedDiffAtom, imageDiffAtom } = await vi.hoisted(async () => {
+const {
+  diffAtom,
+  pagedDiffAtom,
+  imageDiffAtom,
+  withheldPageAtom,
+  withheldFileAtom,
+  withheldFilesAtom,
+  withheldAdvertisementAtom,
+  revisionReviewAtom,
+} = await vi.hoisted(async () => {
   const { AsyncResult, Atom } = await import("effect/reactivity");
   const filePatch = (path: string) =>
     [
@@ -59,7 +68,68 @@ const { diffAtom, pagedDiffAtom, imageDiffAtom } = await vi.hoisted(async () => 
     truncated: false,
     nextCursor: null,
   };
+  const omittedPatch = [
+    "diff --git a/large.js b/large.js",
+    "--- a/large.js",
+    "+++ b/large.js",
+    "",
+  ].join("\n");
+  const withheldPage: PullRequestDiffResult = {
+    patch: omittedPatch,
+    truncated: true,
+    nextCursor: null,
+    omittedFileStats: [{ path: "large.js", additions: 1, deletions: 1 }],
+    withheldFilesReadable: true,
+  };
+  const withheldFileAtom = Atom.family((key: string) => {
+    const { path, headSha } = JSON.parse(key) as { path: string; headSha: string };
+    const patch =
+      path === "large.js"
+        ? omittedPatch +
+          "@@ -1 +1 @@\n-original()\n+" +
+          (headSha.startsWith("b") ? "afterPush()" : "beforePush()") +
+          "\n"
+        : "";
+    return Atom.make(() => {
+      mocks.withheldFileReads++;
+      return AsyncResult.success({ patch, truncated: false, nextCursor: null });
+    });
+  });
+  const withheldFilesAtom = Atom.family((key: string) => {
+    const { target, paths } = JSON.parse(key) as {
+      target: { input: { revision: { headSha: string } } };
+      paths: string[];
+    };
+    return Atom.make((get) =>
+      paths.map((path) =>
+        get(
+          withheldFileAtom(
+            JSON.stringify({
+              path,
+              headSha: target.input.revision.headSha,
+            }),
+          ),
+        ),
+      ),
+    );
+  });
   return {
+    withheldPageAtom: Atom.family((_fixture: number) =>
+      Atom.make(() =>
+        AsyncResult.success(
+          mocks.inlineWithheldPage
+            ? firstPage
+            : {
+                ...withheldPage,
+                revision: { baseSha: "c".repeat(40), headSha: mocks.withheldHeadSha },
+              },
+        ),
+      ),
+    ),
+    withheldFileAtom,
+    withheldFilesAtom,
+    withheldAdvertisementAtom: Atom.family((fresh: boolean) => Atom.make(() => fresh)),
+    revisionReviewAtom: Atom.make(true),
     diffAtom: Atom.make(() => AsyncResult.success(firstPage)),
     imageDiffAtom: Atom.make(() => AsyncResult.success(imagePage)),
     pagedDiffAtom: Atom.family((cursor: string) =>
@@ -71,10 +141,17 @@ const { diffAtom, pagedDiffAtom, imageDiffAtom } = await vi.hoisted(async () => 
 const mocks = vi.hoisted(() => ({
   paged: false,
   image: false,
+  withheld: false,
+  inlineWithheldPage: false,
+  freshWithheldAdvertisement: true,
+  withheldFileReads: 0,
+  withheldFixture: 0,
+  withheldHeadSha: "a".repeat(40),
   assetResources: [] as unknown[],
   diffCommits: [] as Array<string | undefined>,
   viewedPaths: null as ReadonlySet<string> | null,
   viewedListeners: new Set<() => void>(),
+  command: vi.fn(),
 }));
 
 function deliverViewedPaths(paths: ReadonlySet<string> | null) {
@@ -95,7 +172,7 @@ vi.mock(import("~/assets/assetUrls"), async (original) => ({
 }));
 vi.mock(import("~/state/use-atom-command"), async (original) => ({
   ...(await original()),
-  useAtomCommand: (() => vi.fn()) as never,
+  useAtomCommand: (() => mocks.command) as never,
 }));
 vi.mock(import("./usePullRequestFilesViewed"), async () => {
   const { useSyncExternalStore } = await import("react");
@@ -124,9 +201,17 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
     ...actual,
     pullRequestEnvironment: {
       ...actual.pullRequestEnvironment,
+      withheldDiffs: withheldFilesAtom as never,
+      revisionReviewSupported: () => revisionReviewAtom,
+      withheldDiffAdvertised: () => withheldAdvertisementAtom(mocks.freshWithheldAdvertisement),
+      withheldDiff: (({ input }: { input: { path: string; revision: { headSha: string } } }) =>
+        withheldFileAtom(
+          JSON.stringify({ path: input.path, headSha: input.revision.headSha }),
+        )) as never,
       diff: (({ input }: { input: { commit?: string; cursor?: string } }) => {
         mocks.diffCommits.push(input.commit);
         if (mocks.image) return imageDiffAtom;
+        if (mocks.withheld) return withheldPageAtom(mocks.withheldFixture);
         return mocks.paged ? pagedDiffAtom(input.cursor ?? "first") : diffAtom;
       }) as never,
     },
@@ -134,7 +219,11 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
 });
 
 import { act, fakeTimers, render } from "../../../test/render";
+import { RegistryContext } from "@effect/atom-react";
+import { AtomRegistry } from "effect/reactivity";
 import PullRequestCodeTab from "./PullRequestCodeTab";
+import { PullRequestReviewForm } from "./PullRequestReviewForm";
+import { pullRequestReviewKey, usePullRequestReviewStore } from "./pullRequestReviewStore";
 
 const detail: PullRequestDetailView = {
   provider: SourceControlProviderKind.make("github"),
@@ -191,10 +280,18 @@ const detail: PullRequestDetailView = {
 function setup(paged = false, image = false) {
   mocks.paged = paged;
   mocks.image = image;
+  mocks.withheld = false;
+  mocks.inlineWithheldPage = false;
+  mocks.freshWithheldAdvertisement = true;
+  mocks.withheldFileReads = 0;
+  mocks.withheldFixture++;
+  mocks.withheldHeadSha = "a".repeat(40);
   mocks.assetResources = [];
   mocks.diffCommits = [];
   mocks.viewedPaths = null;
   mocks.viewedListeners.clear();
+  mocks.command.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
+  usePullRequestReviewStore.getState().clear(pullRequestReviewKey(detail));
 }
 
 const tab = (
@@ -336,6 +433,337 @@ it("previews an image the host sent no patch for at the pull request's head", as
     url: `https://github.com/owner/repo/raw/${headSha}/docs/shot.png`,
     repository: "owner/repo",
   });
+});
+
+it("drops a loaded withheld patch across a force-push and loads the current file on demand", async () => {
+  setup();
+  mocks.withheld = true;
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  const original = { ...detail, headSha: "a".repeat(40) };
+  const pushed = { ...detail, headSha: "b".repeat(40) };
+  await using screen = await render(tab(0, null, null, original), { container });
+  await userEvent.click(screen.getByRole("button", { name: "Expand diff" }));
+  const load = screen.getByRole("button", { name: "Load file diff" });
+  await expect.element(load).toBeVisible();
+  await userEvent.click(load);
+  await expect.element(screen.getByText("beforePush()", { exact: true })).toBeVisible();
+
+  mocks.withheldHeadSha = pushed.headSha;
+  await screen.rerender(tab(1, null, null, pushed));
+  await expect.element(screen.getByText("beforePush()", { exact: true })).not.toBeInTheDocument();
+  await expect.element(load).toBeVisible();
+  await userEvent.click(load);
+  await expect.element(screen.getByText("afterPush()", { exact: true })).toBeVisible();
+  await expect.element(screen.getByText("1 file", { exact: true })).toBeVisible();
+});
+
+it("keeps a cached withheld page readable after a rollback without offering a file request", async () => {
+  setup();
+  mocks.withheld = true;
+  mocks.freshWithheldAdvertisement = false;
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(
+    tab(0, null, null, { ...detail, headSha: mocks.withheldHeadSha }),
+    { container },
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Expand diff" }));
+  await expect.element(screen.getByText("This file’s diff is too large to display.")).toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: "Load file diff" }))
+    .not.toBeInTheDocument();
+});
+
+it("retains a loaded immutable patch when the Code tab refreshes the same revision", async () => {
+  setup();
+  mocks.withheld = true;
+  mocks.withheldHeadSha = "d".repeat(40);
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(
+    tab(0, null, null, { ...detail, headSha: mocks.withheldHeadSha }),
+    { container },
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Expand diff" }));
+  await userEvent.click(screen.getByRole("button", { name: "Load file diff" }));
+  await expect.element(screen.getByText("beforePush()", { exact: true })).toBeVisible();
+  const reads = mocks.withheldFileReads;
+
+  await screen.rerender(tab(1, null, null, { ...detail, headSha: mocks.withheldHeadSha }));
+  await expect.element(screen.getByText("beforePush()", { exact: true })).toBeVisible();
+  expect(mocks.withheldFileReads).toBe(reads);
+});
+
+it("stops review of withheld lines when detail advances before the diff page", async () => {
+  setup();
+  mocks.withheld = true;
+  const original = {
+    ...detail,
+    headSha: mocks.withheldHeadSha,
+    capabilities: {
+      ...detail.capabilities,
+      review: { ...detail.capabilities.review, inlineComment: true },
+    },
+    viewerPermissions: { ...detail.viewerPermissions, comment: true },
+  };
+  const pushed = { ...original, headSha: "b".repeat(40) };
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(tab(0, null, null, original), { container });
+  const load = screen.getByRole("button", { name: "Load file diff" });
+  const draft = screen.getByRole("textbox");
+  const oldLine = screen.getByText("beforePush()", { exact: true });
+  const renderedLineControl = (selector: string) =>
+    vi.waitFor(() => {
+      const control = container
+        .querySelector("diffs-container")
+        ?.shadowRoot?.querySelector<HTMLElement>(selector);
+      if (!control) throw new Error(`Missing diff control: ${selector}`);
+      return control;
+    });
+  const openDraft = async () => {
+    await userEvent.hover(
+      await renderedLineControl("[data-column-number][data-line-type='change-addition']"),
+    );
+    await userEvent.click(await renderedLineControl("[data-utility-button]"));
+    await expect.element(draft).toBeVisible();
+  };
+  await userEvent.click(screen.getByRole("button", { name: "Expand diff" }));
+  await userEvent.click(load);
+  await expect.element(oldLine).toBeVisible();
+  await openDraft();
+
+  await screen.rerender(tab(0, null, null, pushed));
+  await expect.element(oldLine).not.toBeInTheDocument();
+  await expect.element(draft).not.toBeInTheDocument();
+  await expect.element(load).not.toBeInTheDocument();
+
+  mocks.withheldHeadSha = pushed.headSha;
+  await screen.rerender(tab(1, null, null, pushed));
+  await userEvent.click(load);
+  await expect.element(screen.getByText("afterPush()", { exact: true })).toBeVisible();
+  await openDraft();
+});
+
+function reviewableWithheldDetail(headSha = mocks.withheldHeadSha) {
+  return {
+    ...detail,
+    headSha,
+    capabilities: {
+      ...detail.capabilities,
+      review: { ...detail.capabilities.review, inlineComment: true },
+    },
+    viewerPermissions: { ...detail.viewerPermissions, comment: true },
+  };
+}
+
+async function openWithheldDraft(container: HTMLElement) {
+  const control = (selector: string) =>
+    vi.waitFor(() => {
+      const found = container
+        .querySelector("diffs-container")
+        ?.shadowRoot?.querySelector<HTMLElement>(selector);
+      if (!found) throw new Error("Missing diff control: " + selector);
+      return found;
+    });
+  await userEvent.hover(await control("[data-column-number][data-line-type='change-addition']"));
+  await userEvent.click(await control("[data-utility-button]"));
+}
+
+function codeWithReview(pr: PullRequestDetailView, refreshToken = 0) {
+  return (
+    <div className="flex h-full w-full flex-col">
+      <div className="min-h-0 flex-1">{tab(refreshToken, null, null, pr)}</div>
+      <PullRequestReviewForm
+        environmentId={EnvironmentId.make("environment")}
+        reference={detail}
+        headSha={pr.headSha}
+        completionScope={null}
+        term="pull request"
+        verdicts={["comment"]}
+        requestChangesSummaryRequired={false}
+        textareaRef={{ current: null }}
+        pending={false}
+        onPendingChange={() => {}}
+        onSubmitted={() => {}}
+      />
+    </div>
+  );
+}
+
+it("blocks queued withheld-line review after a force-push", async () => {
+  setup();
+  mocks.withheld = true;
+  const original = reviewableWithheldDetail();
+  const pushed = reviewableWithheldDetail("b".repeat(40));
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(codeWithReview(original), { container });
+  await userEvent.click(screen.getByRole("button", { name: "Expand diff" }));
+  await userEvent.click(screen.getByRole("button", { name: "Load file diff" }));
+  await expect.element(screen.getByText("beforePush()", { exact: true })).toBeVisible();
+  await openWithheldDraft(container);
+  await userEvent.fill(
+    screen.getByRole("textbox", { name: /Comment on lines/ }),
+    "Keep this review note",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Add to review" }));
+  const submit = screen.getByRole("button", { name: "Submit review" });
+  await expect.element(submit).toBeEnabled();
+
+  await screen.rerender(codeWithReview(pushed));
+  await expect.element(submit).toBeDisabled();
+  expect(mocks.command).not.toHaveBeenCalled();
+  await expect.element(screen.getByRole("button", { name: "Move comment" })).toBeDisabled();
+
+  mocks.withheldHeadSha = pushed.headSha;
+  await screen.rerender(codeWithReview(pushed, 1));
+  await userEvent.click(screen.getByRole("button", { name: "Move comment" }));
+  await userEvent.click(screen.getByRole("button", { name: "Load file diff" }));
+  await expect.element(screen.getByText("afterPush()", { exact: true })).toBeVisible();
+  await openWithheldDraft(container);
+  await expect
+    .element(screen.getByRole("textbox", { name: /Comment on lines/ }))
+    .toHaveValue("Keep this review note");
+  await userEvent.click(screen.getByRole("button", { name: "Move comment here" }));
+  await expect.element(submit).toBeEnabled();
+  await userEvent.click(submit);
+  expect(mocks.command).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      input: expect.objectContaining({
+        revision: { headSha: pushed.headSha, baseSha: "c".repeat(40) },
+        comments: [
+          {
+            path: "large.js",
+            position: { kind: "added", newLine: 1 },
+            body: "Keep this review note",
+          },
+        ],
+      }),
+    }),
+  );
+});
+
+it("preserves an open inline draft across a force-push until the reader re-anchors it", async () => {
+  setup();
+  mocks.withheld = true;
+  const original = reviewableWithheldDetail();
+  const pushed = reviewableWithheldDetail("b".repeat(40));
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(tab(0, null, null, original), { container });
+  const load = screen.getByRole("button", { name: "Load file diff" });
+  const editor = screen.getByRole("textbox", { name: /Comment on lines/ });
+  await userEvent.click(screen.getByRole("button", { name: "Expand diff" }));
+  await userEvent.click(load);
+  await expect.element(screen.getByText("beforePush()", { exact: true })).toBeVisible();
+  await openWithheldDraft(container);
+  await userEvent.fill(editor, "An unsent note on this line");
+
+  await screen.rerender(tab(0, null, null, pushed));
+  const parked = screen.getByRole("region", { name: "Stale inline draft" });
+  const reanchor = parked.getByRole("button", { name: "Re-anchor draft" });
+  await expect.element(parked.getByText("An unsent note on this line")).toBeVisible();
+  await expect.element(reanchor).toBeDisabled();
+  await expect.element(editor).not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("button", { name: "Add to review" }))
+    .not.toBeInTheDocument();
+
+  mocks.withheldHeadSha = pushed.headSha;
+  await screen.rerender(tab(1, null, null, pushed));
+  await expect.element(reanchor).toBeEnabled();
+  await expect.element(editor).not.toBeInTheDocument();
+  await userEvent.click(reanchor);
+  await userEvent.click(load);
+  await expect.element(screen.getByText("afterPush()", { exact: true })).toBeVisible();
+  await openWithheldDraft(container);
+  await expect.element(editor).toHaveValue("An unsent note on this line");
+  await expect.element(parked).not.toBeInTheDocument();
+});
+
+it("requires moving a queued comment when the same head gets an inline diff without a verified base", async () => {
+  setup();
+  mocks.withheld = true;
+  const pr = reviewableWithheldDetail();
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(codeWithReview(pr), { container });
+  await userEvent.click(screen.getByRole("button", { name: "Expand diff" }));
+  await userEvent.click(screen.getByRole("button", { name: "Load file diff" }));
+  await expect.element(screen.getByText("beforePush()", { exact: true })).toBeVisible();
+  await openWithheldDraft(container);
+  await userEvent.fill(
+    screen.getByRole("textbox", { name: /Comment on lines/ }),
+    "Check this base",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Add to review" }));
+  const submit = screen.getByRole("button", { name: "Submit review" });
+  await expect.element(submit).toBeEnabled();
+
+  mocks.inlineWithheldPage = true;
+  await screen.rerender(codeWithReview(pr, 1));
+  await expect.element(screen.getByText("a.ts", { exact: true })).toBeVisible();
+  await expect.element(submit).toBeDisabled();
+  expect(mocks.command).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "Move comment" }));
+  const expand = screen.getByRole("button", { name: "Expand diff" });
+  if (expand.query()) await userEvent.click(expand);
+  await expect.element(screen.getByText("after()", { exact: true })).toBeVisible();
+  await openWithheldDraft(container);
+  await expect
+    .element(screen.getByRole("textbox", { name: /Comment on lines/ }))
+    .toHaveValue("Check this base");
+  await userEvent.click(screen.getByRole("button", { name: "Move comment here" }));
+  await userEvent.click(submit);
+  expect(mocks.command).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      input: expect.objectContaining({
+        revision: { headSha: pr.headSha },
+        comments: [
+          { path: "a.ts", position: { kind: "added", newLine: 1 }, body: "Check this base" },
+        ],
+      }),
+    }),
+  );
+});
+
+it("explains why a connection that only offers withheld reads cannot queue a line review", async () => {
+  setup();
+  mocks.withheld = true;
+  const registry = AtomRegistry.make();
+  using _registry = { [Symbol.dispose]: () => registry.dispose() };
+  using _capability = { [Symbol.dispose]: registry.mount(revisionReviewAtom) };
+  registry.set(revisionReviewAtom, false);
+  const pr = reviewableWithheldDetail();
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(
+    <RegistryContext value={registry}>{codeWithReview(pr)}</RegistryContext>,
+    { container },
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Expand diff" }));
+  await userEvent.click(screen.getByRole("button", { name: "Load file diff" }));
+  await expect.element(screen.getByText("beforePush()", { exact: true })).toBeVisible();
+  await openWithheldDraft(container);
+  const editor = screen.getByRole("textbox", { name: /Comment on lines/ });
+  await userEvent.fill(editor, "Keep this unsent");
+  const queue = screen.getByRole("button", { name: "Add to review" });
+  await expect.element(queue).toBeDisabled();
+  await expect
+    .element(
+      screen.getByText("This connection cannot submit review comments at a specific revision."),
+    )
+    .toBeVisible();
+  await userEvent.keyboard("{Control>}{Enter}{/Control}");
+  await expect.element(editor).toHaveValue("Keep this unsent");
+  await expect.element(screen.getByRole("button", { name: "Submit review" })).toBeDisabled();
+
+  await act(() => registry.set(revisionReviewAtom, true));
+  await expect.element(queue).toBeEnabled();
+  await userEvent.click(queue);
+  await expect.element(screen.getByRole("button", { name: "Submit review" })).toBeEnabled();
 });
 
 const linked = (

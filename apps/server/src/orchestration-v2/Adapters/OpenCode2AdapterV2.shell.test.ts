@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
-import type { ProviderReplayEntry } from "@goat/contracts";
+import { RunId, type ProviderReplayEntry } from "@goat/contracts";
+import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -47,6 +48,89 @@ it.layer(McpProviderSessions.layer)("OpenCode2 native shells", (it) => {
       );
       return { attached: Deferred.await(attached), terminal: Fiber.join(terminal) };
     });
+  it.effect.each(["owned", "mixed"] as const)("attributes the %s shell completion batch", (batch) =>
+    Effect.gen(function* () {
+      const gate = makeProviderReplayGate(["shell-report"]);
+      const offered =
+        yield* Deferred.make<ProviderContinuationRequests.ProviderContinuationRequest>();
+      const shellID = "sh_tracked";
+      const tool = { sessionID: SESSION, assistantMessageID: "msg_shell", id: "call-shell" };
+      const report = (id: string, label: string | undefined) =>
+        event(
+          "session.inbox.enqueued",
+          {
+            inboxID: `msg_${id}`,
+            sessionID: SESSION,
+            item: {
+              type: "synthetic",
+              delivery: "steer",
+              payload: {
+                text: `Shell ${id} finished`,
+                metadata: { source: "shell", shellID: id, state: "completed" },
+              },
+            },
+          },
+          label,
+        );
+      const output = [
+        out("shell.output", "<any>"),
+        reply("shell.output", {
+          location: { directory: WORK },
+          data: { output: "", cursor: 0, size: 0, truncated: false },
+        }),
+      ] as const;
+      const { runtime, thread } = yield* resumed(
+        [
+          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+          promptAccepted,
+          event("session.execution.started", { sessionID: SESSION }),
+          event("session.tool.input.started", { ...tool, name: "shell" }),
+          event("session.tool.called", {
+            ...tool,
+            name: "shell",
+            input: { command: "echo tracked", background: true },
+            executed: false,
+          }),
+          event(
+            "session.tool.success",
+            {
+              ...tool,
+              content: [{ type: "text", text: "Launched" }],
+              metadata: { shellID },
+              executed: false,
+            },
+            undefined,
+            2,
+          ),
+          ...output,
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          report(shellID, "shell-report"),
+          ...output,
+          ...(batch === "mixed" ? [report("sh_untracked", undefined)] : []),
+          event("session.execution.started", { sessionID: SESSION }),
+        ],
+        { replayGate: gate },
+      ).pipe(
+        Effect.provideService(ProviderContinuationRequests.ProviderContinuationRequests, {
+          offer: (request) => Deferred.succeed(offered, request).pipe(Effect.asVoid),
+          take: Effect.never,
+        }),
+      );
+      const runId = RunId.make("run:shell-launcher");
+      const terminal = yield* runtime.events.pipe(
+        Stream.filter((event) => event.type === "turn.terminal"),
+        Stream.runHead,
+        Effect.forkScoped,
+      );
+      yield* runtime.startTurn({ ...withLineage(thread), runId });
+      yield* Fiber.join(terminal);
+      gate.release("shell-report");
+      const wake = yield* Deferred.await(offered);
+      assert.equal(wake.notification?.source.kind, "command");
+      assert.equal(wake.notification?.aboutRunId, batch === "owned" ? runId : undefined);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect.each([false, true, "thread", "failed", "burst", "poll"] as const)(
     "tracks native background shells through launch, retained output, stop=%s",
     (stop) =>

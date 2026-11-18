@@ -1,8 +1,9 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@goat/contracts";
 import { createModelSelection } from "@goat/shared/model";
-import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
+import { resolveMemoryModelSelection, supportsMemoryGeneration } from "@goat/shared/serverSettings";
 import { useContext, useState } from "react";
+import { useNowMinute } from "../../hooks/useNowMinute";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { getCustomModelOptionsByInstance, selectsPlanAgent } from "../../modelSelection";
 import {
@@ -35,20 +36,25 @@ export function MemoryGenerationSettings({
   const entries = sortProviderInstanceEntries(
     applyProviderInstanceSettings(
       deriveProviderInstanceEntries(
-        providers.filter((provider) => provider.supportsTextGeneration !== false),
+        providers.filter(
+          (provider) =>
+            provider.supportsTextGeneration !== false &&
+            supportsMemoryGeneration(settings, provider, "summary"),
+        ),
       ),
       settings,
       null,
     ),
   );
-  const selection = resolveMemoryModelSelection(settings, providers);
-  const activeEntry = entries.find((entry) => entry.instanceId === selection.instanceId);
+  const nowMinute = useNowMinute();
+  const selection = resolveMemoryModelSelection(settings, providers, Date.parse(`${nowMinute}Z`));
+  const activeEntry = entries.find((entry) => entry.instanceId === selection?.instanceId);
   const separate = settings.memoryModelSelection !== null;
   const options = getCustomModelOptionsByInstance(
     settings,
     providers,
-    selection.instanceId,
-    selection.model,
+    selection?.instanceId,
+    selection?.model,
   );
   const allowed = canUpdate && !busy;
   function save(patch: Parameters<typeof update>[0]["input"]["patch"]) {
@@ -81,15 +87,18 @@ export function MemoryGenerationSettings({
           description="Automatic follows the text generation model. Choose a separate model for memory summaries."
           control={
             <div className="flex flex-wrap items-center justify-end gap-2">
-              {!separate ? (
+              {selection === null ? (
+                <span className="text-sm text-muted-foreground">No memory model available.</span>
+              ) : !separate ? (
                 <span className="text-sm text-muted-foreground">Automatic · {selection.model}</span>
               ) : null}
-              {activeEntry && separate ? (
+              {selection && activeEntry && separate ? (
                 <>
                   <ProviderModelPicker
                     environmentId={environmentId}
                     activeInstanceId={selection.instanceId}
                     model={selection.model}
+                    preserveSelectedModel
                     lockedProvider={null}
                     instanceEntries={entries}
                     modelOptionsByInstance={options}
@@ -127,17 +136,10 @@ export function MemoryGenerationSettings({
                 aria-label="Use a separate memory model"
                 checked={separate}
                 disabled={!allowed || (!separate && !activeEntry)}
-                onCheckedChange={(checked) =>
-                  save({
-                    memoryModelSelection: checked
-                      ? createModelSelection(
-                          selection.instanceId,
-                          selection.model,
-                          selection.options,
-                        )
-                      : null,
-                  })
-                }
+                onCheckedChange={(checked) => {
+                  if (checked && selection === null) return;
+                  save({ memoryModelSelection: checked ? selection : null });
+                }}
               />
             </div>
           }

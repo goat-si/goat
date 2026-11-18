@@ -1,3 +1,4 @@
+import { SHARED_HOME_UPDATE_WAIT } from "./sharedHomeUpdateWait.ts";
 import {
   LEGACY_SSH_ARCHIVE_VERSION_KEY,
   LEGACY_SSH_NODE_SCRIPT_PATH_KEY,
@@ -17,9 +18,10 @@ export function buildRemoteRuntimeProbeScript(
   recordReconnect = false,
   ownRuntimeVersion?: string,
   reportReplaceTarget = false,
+  waitForDesktopUpdate = false,
 ): string {
   return `set -eu
-V=${shellSingleQuote(version)}
+${waitForDesktopUpdate ? `${SHARED_HOME_UPDATE_WAIT}goat_wait_shared_home_update\n` : ""}V=${shellSingleQuote(version)}
 state_key=${shellSingleQuote(stateKey ?? "")}
 state="$HOME/.goat/ssh-launch/$state_key"
 runtime_file="$HOME/.goat/userdata/server-runtime.json"

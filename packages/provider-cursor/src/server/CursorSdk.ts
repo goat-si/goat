@@ -5,7 +5,10 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as PubSub from "effect/PubSub";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import { loadCursorSdk, loadCursorSqlite } from "./sdk.ts";
 
@@ -29,6 +32,13 @@ const classifyCursorRejection = (reason: unknown) => {
     Reflect.get(reason.cause, "code") === "ERR_STREAM_WRITE_AFTER_END"
   ) {
     return "Cursor SDK wrote to an ended request stream.";
+  }
+  if (
+    reason.name === "AbortError" &&
+    typeof reason.stack === "string" &&
+    /^[ \t]+at (?:\S+\.)?onStall \(.*[\\/]@cursor[\\/]sdk[\\/]dist[\\/]/m.test(reason.stack)
+  ) {
+    return "Cursor SDK aborted a stalled request.";
   }
   return undefined;
 };
@@ -88,6 +98,12 @@ export class CursorSdk extends Context.Service<
   {
     readonly load: typeof loadCursorSdk;
     readonly loadSqlite: typeof loadCursorSqlite;
+    readonly supportsLocalSandbox: Effect.Effect<boolean>;
+    readonly markLocalSandboxUnsupported: Effect.Effect<void>;
+    readonly localSandboxRefusal: {
+      readonly isRevoked: () => boolean;
+      readonly changes: Stream.Stream<void>;
+    };
     /** Why a session in this environment cannot use this process's transport, if it cannot. */
     readonly agentTransportRefusal?: (
       environment: NodeJS.ProcessEnv,
@@ -130,14 +146,66 @@ export const layer = Layer.effect(
         if (configured) loadCursorSdk().Cursor.configure({ local: { useHttp1ForAgent: null } });
       }),
     );
+    const load = () => {
+      const sdk = loadCursorSdk();
+      if (useHttp1ForAgent && !configured) {
+        sdk.Cursor.configure({ local: { useHttp1ForAgent: true } });
+        configured = true;
+      }
+      return sdk;
+    };
+
+    // The SDK's sandbox support is process-wide. Prewarm without an API key or an agent run.
+    const sandboxProbe = yield* Effect.cached(
+      Effect.gen(function* () {
+        const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-cursor-sandbox-" });
+        const cwd = path.join(root, "workspace");
+        yield* fileSystem.makeDirectory(cwd);
+        yield* Effect.tryPromise(async (signal) => {
+          const sdk = load();
+          const platform = await sdk.createAgentPlatform({
+            workspaceRef: cwd,
+            localStore: new sdk.JsonlLocalAgentStore(path.join(root, "state")),
+          });
+          if (signal.aborted) return;
+          const release = await platform.prewarmLocalWorkspace({
+            mcpServers: {},
+            local: { cwd, settingSources: [], sandboxOptions: { enabled: true } },
+          });
+          await release();
+        });
+      }).pipe(
+        Effect.scoped,
+        Effect.timeout("5 seconds"),
+        Effect.isSuccess,
+        Effect.withSpan("CursorSdk.probeLocalSandbox"),
+      ),
+    );
+
+    const sandboxUnsupported = yield* Ref.make(false);
+    const sandboxRefusals = yield* Effect.acquireRelease(
+      PubSub.sliding<void>({ capacity: 1, replay: 1 }),
+      PubSub.shutdown,
+    );
+    const supportsLocalSandbox = Effect.gen(function* () {
+      if (yield* Ref.get(sandboxUnsupported)) return false;
+      return (yield* sandboxProbe) && !(yield* Ref.get(sandboxUnsupported));
+    });
+
     return CursorSdk.of({
-      load: () => {
-        const sdk = loadCursorSdk();
-        if (useHttp1ForAgent && !configured) {
-          sdk.Cursor.configure({ local: { useHttp1ForAgent: true } });
-          configured = true;
-        }
-        return sdk;
+      load,
+      supportsLocalSandbox,
+      markLocalSandboxUnsupported: Ref.getAndSet(sandboxUnsupported, true).pipe(
+        Effect.flatMap((alreadyUnsupported) =>
+          alreadyUnsupported
+            ? Effect.void
+            : Effect.asVoid(PubSub.publish(sandboxRefusals, undefined)),
+        ),
+        Effect.uninterruptible,
+      ),
+      localSandboxRefusal: {
+        isRevoked: () => Ref.getUnsafe(sandboxUnsupported),
+        changes: Stream.fromPubSub(sandboxRefusals),
       },
       loadSqlite: loadCursorSqlite,
       agentTransportRefusal: Effect.fn("CursorSdk.agentTransportRefusal")(function* (

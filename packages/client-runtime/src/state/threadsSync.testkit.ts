@@ -71,6 +71,7 @@ export const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(funct
   /** Answers per load call; the last one repeats. Overrides `httpSnapshot`. */
   readonly httpSnapshots?: readonly ThreadSnapshotLoadResult[];
   readonly completionMarker?: boolean;
+  readonly threadSnapshotPagination?: boolean;
   readonly resumeCache?: NonNullable<Parameters<typeof makeEnvironmentThreadState>[1]>;
   readonly loadCached?: ReturnType<Persistence.EnvironmentCacheStore["Service"]["loadThread"]>;
   readonly saveThread?: Persistence.EnvironmentCacheStore["Service"]["saveThread"];

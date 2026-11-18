@@ -2,8 +2,6 @@ import { awaitHistoryPrefix } from "../cua/ComputerUseHistoryBackground.ts";
 import { browserHistoryPrefix } from "./BrowserHistoryRecordAction.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
-// @effect-diagnostics nodeBuiltinImport:off - one-time dummy passwords come from node:crypto.
-import * as NodeCrypto from "node:crypto";
 
 import * as PlatformNodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -13,7 +11,6 @@ import {
   PreviewTabId,
   ProviderInstanceId,
   SecretRef,
-  SecretRequestError,
   ThreadId,
   type PreviewAutomationFillSecretResult,
   type PreviewAutomationRead,
@@ -32,7 +29,6 @@ import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Broker from "../mcp/PreviewAutomationBroker.ts";
-import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as DesktopChannel from "./DesktopBrowserChannel.ts";
 import * as Manager from "./Manager.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
@@ -40,6 +36,7 @@ import * as PreviewBrowser from "./PreviewBrowser.ts";
 import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
+import { makeSecrets } from "./ServerBrowser.secretFill.testkit.ts";
 import { PAGES } from "./ServerBrowser.secretFill.pages.ts";
 import { playwrightDebugLogging } from "./ServerBrowserSecretFill.ts";
 
@@ -80,41 +77,6 @@ const scope = {
   requestNamespace: "secret-fill-test",
   capabilities: new Set(["preview"] as const),
   issuedAt: 1,
-};
-
-/** A one-use store with the real service's origin rule; refusals leave the value in place. */
-const makeSecrets = (beforeConsume: () => Promise<unknown> = async () => {}) => {
-  const saved = new Map<string, { readonly origin: string; readonly value: string }>();
-  const consumed: Array<string> = [];
-  const save = (origin: string, value = `pw_${NodeCrypto.randomUUID()}`) => {
-    const ref = SecretRef.make(`secret-ref:${NodeCrypto.randomBytes(16).toString("hex")}`);
-    saved.set(ref, { origin, value });
-    return { ref, value };
-  };
-  const unused = () => Effect.die("unused in these tests");
-  const service = SecretRequests.SecretRequests.of({
-    answer: unused,
-    savedRef: unused,
-    consume: unused,
-    saveToFile: unused,
-    useLogin: unused,
-    useCard: unused,
-    useOneTimeCode: unused,
-    consumeForOrigin: (input) =>
-      Effect.promise(beforeConsume).pipe(
-        Effect.andThen(() => {
-          const entry = saved.get(input.ref);
-          if (entry === undefined)
-            return Effect.fail(new SecretRequestError({ reason: "ref_unavailable" }));
-          if (entry.origin !== input.origin)
-            return Effect.fail(new SecretRequestError({ reason: "origin_mismatch" }));
-          saved.delete(input.ref);
-          consumed.push(input.ref);
-          return Effect.succeed(entry.value);
-        }),
-      ),
-  });
-  return { save, saved, consumed, layer: Layer.succeed(SecretRequests.SecretRequests, service) };
 };
 
 const layerFor = (secrets: ReturnType<typeof makeSecrets>, keepTypedText = false) =>
@@ -493,6 +455,31 @@ describe.skipIf(!chromiumInstalled)("what a sign-in on a server browser tab repo
       );
     },
   );
+
+  it.live("omits frame measurements when a text snapshot has a password pixel fence", () => {
+    const secrets = makeSecrets();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const { open, fill } = yield* harness;
+        const broker = yield* Broker.PreviewAutomationBroker;
+        const { tabId } = yield* open("https://login.test/form");
+        const snapshot = () =>
+          broker.invoke<PreviewAutomationSnapshot>({
+            scope,
+            tabId,
+            operation: "snapshot",
+            input: { captureImage: false },
+            measureSnapshotFrame: true,
+          });
+        expect((yield* snapshot()).screenshotSize?.width).toBeGreaterThan(0);
+        const { ref } = secrets.save("https://login.test");
+        yield* fill(tabId, { secretRef: ref, selector: "#pw" });
+        const text = yield* snapshot();
+        expect(text.screenshotSize).toBeUndefined();
+        expect(text.screenshot).toBeUndefined();
+      }).pipe(Effect.provide(layerFor(secrets))),
+    );
+  });
 
   it.live("keeps the pixels of a site it filled a password on off, after the field is gone", () => {
     const secrets = makeSecrets();

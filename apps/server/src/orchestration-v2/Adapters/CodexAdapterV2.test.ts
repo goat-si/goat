@@ -83,6 +83,7 @@ import {
 } from "./CodexAdapterV2.testkit.ts";
 import {
   codexReplayPreamble,
+  codexReplayThreadResult,
   makeCodexReplayHarness,
   RESUME_SCENARIO,
   RESUME_NATIVE_THREAD,
@@ -2806,7 +2807,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     { hook: "wrong-turn", status: "interrupted", expected: false },
     { hook: "wrong-thread", status: "interrupted", expected: false },
     { hook: "unscoped", status: "interrupted", expected: false },
-    { hook: "stopped", status: "completed", expected: false },
+    { hook: "stopped", status: "completed", expected: true },
     { hook: "stopped", status: "failed", expected: false },
   ] as const)(
     "correlates $hook hook output with a $status turn only",
@@ -7265,42 +7266,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ),
   );
 
-  const codexReplayThreadResult = (input: {
-    readonly nativeThreadId: string;
-    readonly forkedFromId: string | null;
-  }) => ({
-    thread: {
-      id: input.nativeThreadId,
-      sessionId: input.nativeThreadId,
-      forkedFromId: input.forkedFromId,
-      preview: "",
-      ephemeral: false,
-      modelProvider: "openai",
-      createdAt: 1782622440,
-      updatedAt: 1782622440,
-      status: { type: "idle" },
-      path: `/tmp/${input.nativeThreadId}.jsonl`,
-      cwd: "/workspace",
-      cliVersion: "0.144.0",
-      source: "vscode",
-      threadSource: null,
-      agentNickname: null,
-      agentRole: null,
-      gitInfo: null,
-      name: null,
-      turns: [],
-    },
-    model: "gpt-5.4",
-    modelProvider: "openai",
-    serviceTier: null,
-    cwd: "/workspace",
-    instructionSources: [],
-    approvalPolicy: "on-request",
-    approvalsReviewer: "user",
-    sandbox: { type: "workspaceWrite", writableRoots: [], networkAccess: false },
-    reasoningEffort: "medium",
-  });
-
   const errorCauseChainText = (error: unknown): string =>
     error instanceof Error ? `${error.message} ${errorCauseChainText(error.cause)}` : String(error);
 
@@ -7433,7 +7398,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               frame: {
                 id: 3,
                 method: "thread/fork",
-                params: { threadId: nativeThreadId, config: CodexAdapterV2.CODEX_THREAD_CONFIG },
+                params: {
+                  threadId: nativeThreadId,
+                  excludeTurns: true,
+                  config: CodexAdapterV2.CODEX_THREAD_CONFIG,
+                },
               },
             },
             {

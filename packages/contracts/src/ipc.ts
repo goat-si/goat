@@ -1,3 +1,14 @@
+import {
+  DesktopSnapShotMode,
+  DesktopCaptureExtensionState,
+  DesktopCaptureHelperState,
+  DesktopSnapShotSetupAction,
+  DesktopCaptureConfigRequest,
+  DesktopCaptureConfigPreview,
+} from "./desktopCaptureConfig.ts";
+export * from "./desktopCaptureConfig.ts";
+import type { DesktopPreviewFindBridge } from "./desktopPreviewFind.ts";
+export * from "./desktopPreviewFind.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type { PreviewCaptureFailureEncoded } from "./previewCapture.ts";
@@ -33,7 +44,10 @@ import type { PreviewForwardedShortcut } from "./keybindings.ts";
 import type { DesktopPreviewCaptureEvent, DesktopPreviewCursorEvent } from "./desktopBrowser.ts";
 import { DesktopPreviewTabIdSchema } from "./desktopBrowser.ts";
 import type { AnnotationVoiceBridge, AnnotationVoicePick } from "./previewAnnotationVoice.ts";
-export { DesktopPreviewTabIdSchema } from "./desktopBrowser.ts";
+export {
+  DesktopPreviewRegisterWebviewInputSchema,
+  DesktopPreviewTabIdSchema,
+} from "./desktopBrowser.ts";
 import type {
   DesktopAppActivationRequest,
   DesktopAppActivationResponse,
@@ -94,64 +108,6 @@ export const DesktopAppBrandingSchema = Schema.Struct({
   stageLabel: DesktopAppStageLabelSchema,
   displayName: Schema.String,
 });
-
-export const DesktopSnapShotMode = Schema.Literals(["direct", "portal", "unavailable"]);
-export type DesktopSnapShotMode = typeof DesktopSnapShotMode.Type;
-
-export const DesktopCaptureExtensionState = Schema.Struct({
-  status: Schema.Literals([
-    "not-installed",
-    "disabled",
-    "enabled",
-    "restart-required",
-    "update-required",
-    "extensions-disabled",
-    "unsupported",
-    "error",
-  ]),
-  message: Schema.String,
-});
-export type DesktopCaptureExtensionState = typeof DesktopCaptureExtensionState.Type;
-
-export const DesktopCaptureHelperState = Schema.Struct({
-  status: Schema.Literals(["not-installed", "update-required", "ready", "error"]),
-  message: Schema.String,
-  feedbackAvailable: Schema.optional(Schema.Boolean),
-});
-export type DesktopCaptureHelperState = typeof DesktopCaptureHelperState.Type;
-
-export const DesktopSnapShotSetupAction = Schema.Literals([
-  "install-extension",
-  "enable-extension",
-  "disable-extension",
-  "install-kde-helper",
-  "remove-kde-helper",
-  "install-hyprland-helper",
-  "remove-hyprland-helper",
-  "test-mac-capture",
-  "allow-screen-recording",
-  "allow-accessibility",
-  "retry-shortcut",
-]);
-export type DesktopSnapShotSetupAction = typeof DesktopSnapShotSetupAction.Type;
-
-export const DesktopCaptureConfigRequest = Schema.Struct({
-  operation: Schema.Literals(["install", "remove"]),
-  chooseFile: Schema.Boolean,
-  shortcut: Schema.optional(Schema.String.check(Schema.isMaxLength(80))),
-});
-export type DesktopCaptureConfigRequest = typeof DesktopCaptureConfigRequest.Type;
-
-export const DesktopCaptureConfigPreview = Schema.Struct({
-  id: Schema.String,
-  path: Schema.String,
-  resolvedPath: Schema.String,
-  before: Schema.String,
-  after: Schema.String,
-  shortcut: Schema.String,
-  operation: Schema.Literals(["install", "remove"]),
-});
-export type DesktopCaptureConfigPreview = typeof DesktopCaptureConfigPreview.Type;
 
 export const DesktopCaptureConfigApplied = Schema.Struct({
   backupPath: Schema.NullOr(Schema.String),
@@ -1074,11 +1030,6 @@ export interface DesktopPreviewTabDefaults {
   readonly serverTab?: { readonly threadId: string; readonly tabId: string } | undefined;
 }
 
-export const DesktopPreviewRegisterWebviewInputSchema = Schema.Struct({
-  tabId: DesktopPreviewTabIdSchema,
-  webContentsId: Schema.Int.check(Schema.isGreaterThan(0)),
-});
-
 export const DesktopPreviewNavigateInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   url: Schema.String,
@@ -1162,6 +1113,7 @@ export interface DesktopBridge extends DesktopBridgeParts, PenMembers.DesktopPen
    */
   getSystemLocale?: () => string | null;
   getLocalEnvironmentBootstraps: () => readonly DesktopEnvironmentBootstrap[];
+  getHostEnvironmentId?: () => Promise<string | null>;
   getLocalEnvironmentEnabled?: () => boolean;
   setLocalEnvironmentEnabled?: (enabled: boolean) => Promise<void>;
   getLocalEnvironmentBearerToken: () => Promise<string>;
@@ -1301,11 +1253,11 @@ export interface DesktopBridge extends DesktopBridgeParts, PenMembers.DesktopPen
 
 /** Renderer callback invoked by Electron with a fresh user gesture before display-media capture. */
 export const DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER = "__t3DesktopPreviewRecordingCapture";
-export interface DesktopPreviewBridge extends AnnotationVoiceBridge {
+export interface DesktopPreviewBridge extends AnnotationVoiceBridge, DesktopPreviewFindBridge {
   setForwardedShortcuts?: (shortcuts: ReadonlyArray<PreviewForwardedShortcut>) => Promise<void>;
   createTab: (tabId: string, defaults?: DesktopPreviewTabDefaults) => Promise<void>;
   closeTab: (tabId: string) => Promise<void>;
-  registerWebview: (tabId: string, webContentsId: number) => Promise<void>;
+  registerWebview: (tabId: string, guestId: number, reportDraw?: boolean) => Promise<void>;
   navigate: (tabId: string, url: string) => Promise<void>;
   goBack: (tabId: string) => Promise<void>;
   goForward: (tabId: string) => Promise<void>;
@@ -1321,6 +1273,7 @@ export interface DesktopPreviewBridge extends AnnotationVoiceBridge {
   setAudioMuted: (tabId: string, audioMuted: boolean) => Promise<void>;
   /** Tells the tab's server whether its webview is on screen. */
   setShown: (tabId: string, shown: boolean) => Promise<void>;
+  setCaptureDrawn?: (tabId: string, webContentsId: number, drawn: boolean) => Promise<void>;
   openDevTools: (tabId: string) => Promise<void>;
   clearCookies: (environmentId: EnvironmentId, profileId?: string) => Promise<void>;
   clearCache: (environmentId: EnvironmentId, profileId?: string) => Promise<void>;

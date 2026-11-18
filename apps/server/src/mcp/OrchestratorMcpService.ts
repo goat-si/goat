@@ -96,7 +96,7 @@ import {
 } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import {
-  delegatedTaskAwaitsSubagents,
+  delegatedTaskAwaitsWork,
   delegatedTaskResultRun,
   delegatedTaskRuns,
   runOutcome,
@@ -1259,7 +1259,7 @@ const make = Effect.gen(function* () {
         ? progress.state
         : !isTerminalTaskStatus(taskStatusForRun(taskResultRun))
           ? "working"
-          : delegatedTaskAwaitsSubagents(followupRuns, childControls.subagents)
+          : delegatedTaskAwaitsWork(followupRuns, childControls, taskResultRun)
             ? "waiting_for_children"
             : "result_available";
     const resultRunIds = [
@@ -1272,7 +1272,7 @@ const make = Effect.gen(function* () {
         messageRoles: ["assistant"],
         messageRunIds: resultRunIds,
         turnItemRunIds: resultRunIds,
-        turnItemTypes: ["assistant_message", "error"],
+        turnItemTypes: ["assistant_message", "error", "system_notice"],
       })
       .pipe(Effect.mapError(threadManagementFailure));
     const childProjection = {

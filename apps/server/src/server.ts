@@ -67,7 +67,7 @@ import { heartbeat, HeartbeatWebSocket } from "./wsHeartbeat.ts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentHttpApi, type RepositoryIdentity } from "@goat/contracts";
+import { EnvironmentHttpApi } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
@@ -91,7 +91,7 @@ import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as NativeChildWorkQuery from "./orchestration-v2/NativeChildWorkQuery.ts";
 import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
-import { BUILT_IN_SOURCE_CONTROL_DRIVER_LIST } from "./sourceControl/sourceControlDefinitions.ts";
+import { layerResolveRepositoryIdentity } from "./sourceControl/RepositoryIdentityLayer.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import * as AcpSessionService from "./provider/AcpSessionService.ts";
 import * as ProviderInstallationGate from "./provider/ProviderInstallationGate.ts";
@@ -131,7 +131,6 @@ import * as ProviderUsageLimitsIngestion from "./provider/ProviderUsageLimitsIng
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as GoatProjectFileLoader from "./project/GoatProjectFileLoader.ts";
-import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
@@ -156,6 +155,7 @@ import * as McpOAuthHttp from "./auth/mcpOAuthHttp.ts";
 import * as ReplayMarkers from "./auth/replayMarkers.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as KeepAwake from "./background/KeepAwake.ts";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
 import * as ServerAutoUpdate from "./cloud/autoUpdate.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
@@ -404,27 +404,10 @@ const layerSourceControlProviderRegistry = SourceControlProviderRegistry.layer.p
   Layer.provideMerge(layerVcsDriverRegistry),
 );
 
-export const layerRepositoryIdentityResolver = Layer.effect(
-  RepositoryIdentityResolver.RepositoryIdentityResolver,
-  Effect.gen(function* () {
-    const registry = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
-    return yield* RepositoryIdentityResolver.make({
-      refine: Effect.fn(function* (identity: RepositoryIdentity) {
-        for (const { kind } of BUILT_IN_SOURCE_CONTROL_DRIVER_LIST) {
-          const provider = yield* registry.get(kind);
-          if (provider.refineRepositoryIdentity === undefined) continue;
-          const refined = yield* provider.refineRepositoryIdentity({
-            identity,
-            resolveContext: (input) =>
-              registry.resolveHandle(input).pipe(Effect.map((handle) => handle.context)),
-          });
-          if (refined !== identity) return refined;
-        }
-        return identity;
-      }),
-    });
-  }),
-).pipe(Layer.provide(layerSourceControlProviderRegistry), Layer.provide(ProcessRunner.layer));
+export const layerRepositoryIdentityResolver = layerResolveRepositoryIdentity.pipe(
+  Layer.provide(layerSourceControlProviderRegistry),
+  Layer.provide(ProcessRunner.layer),
+);
 
 const layerPullRequestService = PullRequestService.layer.pipe(
   Layer.provide(PullRequestProviderRegistry.layer),
@@ -501,7 +484,7 @@ const layerVcs = Layer.empty.pipe(
 
 const layerCheckpointStore = CheckpointStore.layer.pipe(Layer.provide(layerVcsDriverRegistry));
 
-const layerPortScanner = PortScanner.layer.pipe(Layer.provide(ProcessRunner.layer));
+const layerPortScanner = PortScanner.layerForServer(layerBackground);
 
 const layerTerminal = TerminalManager.layer(
   ProviderInstanceRegistryHydration.deriveProviderInstanceConfigMap,
@@ -697,6 +680,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ),
   HostPressureMonitor.layer,
   layerThreadPullRequestWorker,
+  KeepAwake.layer,
   DelegatedTaskAnalytics.layer,
   Layer.effectDiscard(
     Effect.gen(function* () {
@@ -705,8 +689,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     }),
   ).pipe(
     Layer.provideMerge(PullRequestSyncReactor.layer),
-    Layer.provide(layerPullRequestService),
-    Layer.provide(ProjectionStoreV2.layer),
+    Layer.provide([layerPullRequestService, ProjectionStoreV2.layer, RuntimeLayer.layerEventSink]),
   ),
   Layer.effectDiscard(
     Effect.gen(function* () {

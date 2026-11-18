@@ -208,6 +208,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   },
   getLocalEnvironmentBearerToken: () =>
     ipcRenderer.invoke(IpcChannels.GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL),
+  getHostEnvironmentId: () => ipcRenderer.invoke(IpcChannels.GET_HOST_ENVIRONMENT_ID_CHANNEL),
   getLocalEnvironmentEnabled: () =>
     ipcRenderer.sendSync(IpcChannels.GET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL) !== false,
   setLocalEnvironmentEnabled: (enabled) =>
@@ -550,8 +551,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
         colorScheme: defaults?.colorScheme,
       }),
     closeTab: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_CLOSE_TAB_CHANNEL, { tabId }),
-    registerWebview: (tabId, webContentsId) =>
-      ipcRenderer.invoke(IpcChannels.PREVIEW_REGISTER_WEBVIEW_CHANNEL, { tabId, webContentsId }),
+    registerWebview: (tabId, webContentsId, reportCaptureDraw) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_REGISTER_WEBVIEW_CHANNEL, {
+        tabId,
+        webContentsId,
+        ...(reportCaptureDraw === true ? { reportCaptureDraw } : {}),
+      }),
     navigate: (tabId, url) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_NAVIGATE_CHANNEL, { tabId, url }),
     goBack: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_GO_BACK_CHANNEL, { tabId }),
@@ -563,6 +568,14 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     resetZoom: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_RESET_ZOOM_CHANNEL, { tabId }),
     setZoomFactor: (tabId, zoomFactor) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_ZOOM_FACTOR_CHANNEL, { tabId, zoomFactor }),
+    findInPage: (input) => ipcRenderer.invoke(IpcChannels.PREVIEW_FIND_CHANNEL, input),
+    stopFindInPage: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_STOP_FIND_CHANNEL, { tabId }),
+    onFindResult: (listener) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, result: Parameters<typeof listener>[0]) =>
+        listener(result);
+      ipcRenderer.on(IpcChannels.PREVIEW_FIND_RESULT_CHANNEL, wrapped);
+      return () => ipcRenderer.removeListener(IpcChannels.PREVIEW_FIND_RESULT_CHANNEL, wrapped);
+    },
     hardReload: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_HARD_RELOAD_CHANNEL, { tabId }),
     setColorScheme: (tabId, colorScheme) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_COLOR_SCHEME_CHANNEL, { tabId, colorScheme }),
@@ -570,6 +583,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_AUDIO_MUTED_CHANNEL, { tabId, audioMuted }),
     setShown: (tabId, shown) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_SHOWN_CHANNEL, { tabId, shown }),
+    setCaptureDrawn: (tabId, webContentsId, drawn) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_SET_CAPTURE_DRAWN_CHANNEL, {
+        tabId,
+        webContentsId,
+        drawn,
+      }),
     openDevTools: (tabId) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_OPEN_DEVTOOLS_CHANNEL, { tabId }),
     listBrowserProfileOrigins: (environmentId, profileId) =>

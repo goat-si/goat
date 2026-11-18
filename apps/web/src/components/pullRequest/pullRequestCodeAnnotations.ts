@@ -1,18 +1,18 @@
-import type { DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
-import type {
-  PullRequestDiffSide,
-  PullRequestReviewPosition,
-  PullRequestReviewThread,
-} from "@goat/contracts";
-
-import type { PullRequestImagePreview } from "./PullRequestImageAnnotation";
+import type { PullRequestDiffSide, PullRequestReviewThread } from "@goat/contracts";
+import type { DiffLineAnnotation } from "@pierre/diffs";
 import type { PendingReviewComment } from "./pullRequestReviewStore";
+import type { PullRequestImagePreview } from "./PullRequestImageAnnotation";
 
 export interface ReviewAnnotationGroup {
   readonly threads: ReadonlyArray<PullRequestReviewThread>;
   readonly pending: ReadonlyArray<PendingReviewComment>;
   readonly draft: boolean;
   readonly image?: PullRequestImagePreview;
+  readonly withheld?: {
+    readonly path: string;
+    readonly status: "idle" | "loading" | "error" | "empty";
+    readonly readable: boolean;
+  };
 }
 
 export type ReviewAnnotation = DiffLineAnnotation<ReviewAnnotationGroup>;
@@ -34,13 +34,4 @@ export interface MutableAnnotationGroup {
   readonly threads: PullRequestReviewThread[];
   readonly pending: PendingReviewComment[];
   draft: boolean;
-}
-
-export interface DraftAnchor {
-  readonly fileKey: string;
-  readonly path: string;
-  readonly oldPath: string | null;
-  readonly position: PullRequestReviewPosition;
-  readonly startPosition?: PullRequestReviewPosition;
-  readonly range: SelectedLineRange;
 }

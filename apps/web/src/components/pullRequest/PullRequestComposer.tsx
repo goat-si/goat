@@ -151,6 +151,7 @@ export function PullRequestComposer({
             <PullRequestReviewForm
               environmentId={environmentId}
               reference={reference}
+              headSha={detail.headSha}
               completionScope={pullRequestCompletionScope(detail, environmentId, reference)}
               term={term}
               verdicts={verdicts}

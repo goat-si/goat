@@ -1,3 +1,32 @@
+import {
+  PreviewTabNotFoundError,
+  PreviewWebContentsNotFoundError,
+  PreviewWebviewNotInitializedError,
+  PreviewMainWindowClosedError,
+  PreviewRecordingArmConflictError,
+  PreviewRecordingCaptureUnavailableError,
+  PreviewOperationError,
+  isPreviewOperationError,
+  PreviewArtifactPathOutsideDirectoryError,
+  PreviewArtifactImageLoadError,
+  PreviewAutomationDevToolsOpenError,
+  PreviewAutomationDebuggerAttachedError,
+  PreviewManagerError,
+} from "./ManagerErrors.ts";
+export {
+  PreviewTabNotFoundError,
+  PreviewWebContentsNotFoundError,
+  PreviewWebviewNotInitializedError,
+  PreviewMainWindowClosedError,
+  PreviewRecordingArmConflictError,
+  PreviewRecordingCaptureUnavailableError,
+  PreviewOperationError,
+  PreviewArtifactPathOutsideDirectoryError,
+  PreviewArtifactImageLoadError,
+  PreviewAutomationDevToolsOpenError,
+  PreviewAutomationDebuggerAttachedError,
+  PreviewManagerError,
+} from "./ManagerErrors.ts";
 import * as PreviewNavigation from "./previewNavigation.ts";
 import { confirmPreviewPaint } from "./confirmPreviewPaint.ts";
 import { isPreviewInputSignal } from "./previewInputSignal.ts";
@@ -13,16 +42,14 @@ import { isPreviewEditingShortcut } from "./previewEditingShortcut.ts";
 import { isPreviewRefreshShortcut } from "./previewRefresh.ts";
 import { admitAgentPointer, pointerEvent, type AgentPointer } from "./CursorStateOrdering.ts";
 import * as PreviewDownloadCopy from "./downloadCopy.ts";
-import {
-  DesktopPreviewRecordingInputSchema,
-  DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER,
-} from "@goat/contracts";
+import { DesktopPreviewRecordingInputSchema } from "@goat/contracts";
 import type {
   AnnotationVoiceConfig,
   AnnotationVoiceState,
   DesktopPreviewAnnotationTheme,
   DesktopPreviewColorScheme,
   DesktopPreviewFavicon,
+  DesktopPreviewFindInput,
   DesktopPreviewOpenLinkEvent,
   DesktopPreviewCursorEvent,
   PreviewAnnotationSubmissionResult,
@@ -73,12 +100,17 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
 import {
   PREVIEW_ANNOTATION_VOICE_EVENT_CHANNEL,
+  PREVIEW_FIND_RESULT_CHANNEL,
   PREVIEW_PICTURE_IN_PICTURE_FRAME_CHANNEL,
 } from "../ipc/channels.ts";
 import { makeAnnotationVoiceRelay } from "./AnnotationVoiceRelay.ts";
 import { cropAnnotationScreenshot, normalizeCaptureRect } from "./AnnotationCapture.ts";
 import { forwardPreviewCommand } from "./workspaceFocus.ts";
 import * as DesktopBrowserHost from "./DesktopBrowserHost.ts";
+import {
+  recordingFileExtension,
+  requestRecordingCaptureExpression,
+} from "./recordingCaptureDetails.ts";
 import { makeTabVisibility } from "./TabVisibility.ts";
 import { artifactSiteSlug } from "./artifactSiteSlug.ts";
 import * as PreviewPasskeys from "./Passkeys.ts";
@@ -90,6 +122,7 @@ import {
   CANCEL_PICK_CHANNEL,
   ELEMENT_PICKED_CHANNEL,
   HUMAN_INPUT_CHANNEL,
+  PAGE_UNHANDLED_SHORTCUT_CHANNEL,
   RECORDING_CURSOR_CHANNEL,
   RECORDING_INPUT_CHANNEL,
   RECORDING_CONTROLLER_CHANNEL,
@@ -111,6 +144,23 @@ import {
   nextZoomLevel,
   ZOOM_EPSILON,
 } from "./previewZoom.ts";
+
+const pageFirstShortcuts: ReadonlySet<PreviewForwardedShortcut["command"]> = new Set([
+  "preview.find",
+  "preview.zoomIn",
+  "preview.zoomOut",
+  "preview.resetZoom",
+]);
+const decodePageShortcut = Schema.decodeUnknownOption(
+  Schema.Struct({
+    key: Schema.String,
+    code: Schema.String,
+    ctrlKey: Schema.Boolean,
+    metaKey: Schema.Boolean,
+    altKey: Schema.Boolean,
+    shiftKey: Schema.Boolean,
+  }),
+);
 
 export type PreviewNavStatus =
   | { kind: "Idle" }
@@ -149,15 +199,6 @@ const PICTURE_IN_PICTURE_JPEG_QUALITY = 80;
 const CAPTURE_PAGE_RETRY_ATTEMPTS = 3;
 const CAPTURE_PAGE_RETRY_DELAY_MS = 120;
 const CAPTURE_PAGE_ATTEMPT_TIMEOUT_MS = 1_000;
-const requestRecordingCaptureExpression = (tabId: string): string =>
-  `globalThis[${JSON.stringify(DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER)}]?.(${JSON.stringify(tabId)}) === true`;
-
-const recordingFileExtension = (mimeType: string): string => {
-  const subtype = mimeType.split(";", 1)[0]?.trim().toLowerCase().split("/")[1] ?? "";
-  const extension = subtype.replace(/^x-/, "").replace(/[^a-z0-9]/g, "");
-  return extension || "video";
-};
-
 export const PreviewAutomationSelectorKind = Schema.Literals([
   "focused-element",
   "selector",
@@ -258,12 +299,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const runPromise = Effect.runPromiseWith(context);
   const resolvedArtifactDirectory = path.resolve(artifactDirectory);
 
+  const findRequests = new WeakMap<Electron.WebContents, number>();
   let forwardedShortcuts: ReadonlyArray<PreviewForwardedShortcut> = [];
   const annotationThemeRef = yield* Ref.make(DEFAULT_ANNOTATION_THEME);
   const annotationSendEnabled = new Map<string, boolean>();
   const mainWindowRef = yield* Ref.make<Option.Option<BrowserWindow>>(Option.none());
   const tabsRef = yield* SynchronizedRef.make<ReadonlyMap<string, PreviewTabState>>(new Map());
-  const { setShown, hideDestroyedGuest } = makeTabVisibility(tabsRef, browserHost);
+  const visibility = makeTabVisibility(tabsRef, browserHost, webContents.fromId);
   const attachedRef = yield* Ref.make<ReadonlyMap<number, ManagedListeners>>(new Map());
   const listenersRef = yield* Ref.make<ReadonlySet<Listener>>(new Set());
   const pointerEventListenersRef = yield* Ref.make<ReadonlySet<PointerEventListener>>(new Set());
@@ -1269,6 +1311,20 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         !isPreviewEditingShortcut(input, hostPlatform) || !holdsKeyboardFocus(contents),
       );
     };
+    const findForwardedShortcut = (keys: Parameters<typeof matchesKeybindingShortcut>[0]) =>
+      !(
+        hostPlatform !== "darwin" &&
+        keys.ctrlKey &&
+        keys.altKey &&
+        /^(?:[^a-zA-Z0-9]|Dead)$/u.test(keys.key)
+      ) &&
+      forwardedShortcuts.find(({ shortcut }) =>
+        matchesKeybindingShortcut(
+          keys,
+          shortcut,
+          hostPlatform === "darwin" ? "MacIntel" : hostPlatform,
+        ),
+      );
     const beforeInput = (event: Electron.Event, input: Electron.Input): void => {
       syncMenuShortcuts(wc, input);
       const host = wc.hostWebContents;
@@ -1278,27 +1334,16 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         host &&
         !host.isDestroyed() &&
         holdsKeyboardFocus(wc) &&
-        !(
-          hostPlatform !== "darwin" &&
-          input.control &&
-          input.alt &&
-          /^(?:[^a-zA-Z0-9]|Dead)$/u.test(input.key)
-        ) &&
-        forwardedShortcuts.find(({ shortcut }) =>
-          matchesKeybindingShortcut(
-            {
-              key: input.key,
-              code: input.code,
-              metaKey: input.meta,
-              ctrlKey: input.control,
-              shiftKey: input.shift,
-              altKey: input.alt,
-            },
-            shortcut,
-            hostPlatform === "darwin" ? "MacIntel" : hostPlatform,
-          ),
-        );
+        findForwardedShortcut({
+          key: input.key,
+          code: input.code,
+          metaKey: input.meta,
+          ctrlKey: input.control,
+          shiftKey: input.shift,
+          altKey: input.alt,
+        });
       if (forwarded && host) {
+        if (pageFirstShortcuts.has(forwarded.command)) return;
         event.preventDefault();
         if (!input.isAutoRepeat) forwardPreviewCommand(host, forwarded.command);
         return;
@@ -1312,6 +1357,30 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         );
         return;
       }
+    };
+    const unhandledShortcut = (event: Electron.IpcMainEvent, input: unknown) => {
+      const host = wc.hostWebContents;
+      if (
+        event.senderFrame !== wc.mainFrame ||
+        !host ||
+        host.isDestroyed() ||
+        !holdsKeyboardFocus(wc)
+      )
+        return;
+      const keys = decodePageShortcut(input);
+      if (Option.isNone(keys)) return;
+      const forwarded = findForwardedShortcut(keys.value);
+      if (forwarded && pageFirstShortcuts.has(forwarded.command))
+        forwardPreviewCommand(host, forwarded.command);
+    };
+    const foundInPage = (_event: Electron.Event, result: Electron.Result) => {
+      const host = wc.hostWebContents;
+      if (!host || host.isDestroyed() || findRequests.get(wc) !== result.requestId) return;
+      host.send(PREVIEW_FIND_RESULT_CHANNEL, {
+        tabId,
+        matches: result.matches,
+        activeMatchOrdinal: result.activeMatchOrdinal,
+      });
     };
     yield* Scope.addFinalizer(
       scope,
@@ -1328,6 +1397,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.off("dom-ready", restoreRecordingCursor);
         wc.off("did-fail-load", failed as never);
         wc.off("audio-state-changed", audioStateChanged);
+        wc.off("found-in-page", foundInPage);
+        wc.ipc.off(PAGE_UNHANDLED_SHORTCUT_CHANNEL, unhandledShortcut);
+        findRequests.delete(wc);
         wc.off("before-input-event", beforeInput);
         wc.off("before-mouse-event", beforeMouse);
         wc.ipc.off(HUMAN_INPUT_CHANNEL, humanInput);
@@ -1350,6 +1422,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.on("dom-ready", restoreRecordingCursor);
         wc.on("did-fail-load", failed as never);
         wc.on("audio-state-changed", audioStateChanged);
+        wc.on("found-in-page", foundInPage);
+        wc.ipc.on(PAGE_UNHANDLED_SHORTCUT_CHANNEL, unhandledShortcut);
         wc.ipc.on(HUMAN_INPUT_CHANNEL, humanInput);
         wc.ipc.on(RECORDING_INPUT_CHANNEL, recordingInput);
         detachPasskeys = passkeys.attachGuest(wc);
@@ -1551,6 +1625,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     tabId: string,
     webContentsId: number,
     expectedGeneration: number | undefined,
+    reportCaptureDraw: boolean,
   ) {
     const tab = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
     if (
@@ -1670,6 +1745,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       });
       return yield* new PreviewTabNotFoundError({ tabId });
     }
+    if (reportCaptureDraw && tab.serverTab && tab.webContentsId !== webContentsId)
+      browserHost.setCaptureDrawn(wc, false);
     const { state: registered, pendingUrl } = registration.value;
     // Concurrent actions targeted the previous guest; reconcile this one with committed zoom and mute.
     yield* assertTabZoom(tabId);
@@ -1700,11 +1777,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const registerWebview = Effect.fn("PreviewManager.registerWebview")(function* (
     tabId: string,
     webContentsId: number,
+    reportCaptureDraw = false,
   ) {
     const expectedGeneration = tabLifecycleGenerations.get(tabId);
     return yield* withTabLifecycleLock(
       tabId,
-      registerWebviewUnlocked(tabId, webContentsId, expectedGeneration),
+      registerWebviewUnlocked(tabId, webContentsId, expectedGeneration, reportCaptureDraw),
     );
   });
 
@@ -1727,7 +1805,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     });
     wc.once("destroyed", () => {
       guestLoadFailures.delete(webContentsId);
-      runFork(hideDestroyedGuest(webContentsId));
+      runFork(visibility.hideDestroyedGuest(webContentsId));
       runFork(detachControlSession(webContentsId));
     });
     yield* ensureControlSession(wc).pipe(
@@ -1855,6 +1933,16 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     if (PreviewNavigation.needsNavigationProbe(operation)) yield* leaveBusyPage(wc);
     yield* attempt({ operation, tabId, webContentsId: wc.id }, () => use(wc));
   });
+
+  const findInPage = ({ tabId, text, forward, newSession }: DesktopPreviewFindInput) =>
+    withWebContents("findInPage", tabId, (wc) => {
+      findRequests.set(wc, wc.findInPage(text, { forward, findNext: newSession }));
+    });
+  const stopFindInPage = (tabId: string) =>
+    withWebContents("stopFindInPage", tabId, (wc) => {
+      findRequests.delete(wc);
+      wc.stopFindInPage("clearSelection");
+    });
 
   const goBack = (tabId: string) =>
     withWebContents("goBack", tabId, (wc) => {
@@ -3237,6 +3325,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     refresh,
     stopLoading,
     registerWebview,
+    findInPage,
+    stopFindInPage,
     resetZoom: (tabId: string) => applyZoom(tabId, () => DEFAULT_ZOOM_FACTOR),
     setZoomFactor: (tabId: string, zoomFactor: number) =>
       applyZoom(tabId, () => normalizeZoomFactor(zoomFactor)),
@@ -3245,7 +3335,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     setAnnotationTheme,
     setAnnotationSendEnabled,
     setAudioMuted,
-    setShown,
+    setShown: visibility.setShown,
+    setCaptureDrawn: visibility.setCaptureDrawn,
     setColorScheme,
     setMainWindow,
     setForwardedShortcuts: (shortcuts: ReadonlyArray<PreviewForwardedShortcut>) =>
@@ -3268,147 +3359,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   };
 });
 
-export class PreviewTabNotFoundError extends Schema.TaggedError<PreviewTabNotFoundError>()(
-  "PreviewTabNotFoundError",
-  { tabId: Schema.String },
-) {
-  override get message(): string {
-    return `Preview tab not found: ${this.tabId}`;
-  }
-}
-
-export class PreviewWebContentsNotFoundError extends Schema.TaggedError<PreviewWebContentsNotFoundError>()(
-  "PreviewWebContentsNotFoundError",
-  { tabId: Schema.String, webContentsId: Schema.Number },
-) {
-  override get message(): string {
-    return `WebContents ${this.webContentsId} not found for preview tab ${this.tabId}`;
-  }
-}
-
-export class PreviewWebviewNotInitializedError extends Schema.TaggedError<PreviewWebviewNotInitializedError>()(
-  "PreviewWebviewNotInitializedError",
-  { tabId: Schema.String },
-) {
-  override get message(): string {
-    return `Preview tab "${this.tabId}" has no webview registered`;
-  }
-}
-
-export class PreviewMainWindowClosedError extends Schema.TaggedError<PreviewMainWindowClosedError>()(
-  "PreviewMainWindowClosedError",
-  { tabId: Schema.String },
-) {
-  override get message(): string {
-    return `Cannot start preview frame capture while the main window is closed: ${this.tabId}`;
-  }
-}
-
-export class PreviewRecordingArmConflictError extends Schema.TaggedError<PreviewRecordingArmConflictError>()(
-  "PreviewRecordingArmConflictError",
-  {
-    tabId: Schema.String,
-    webContentsId: Schema.Number,
-    armedTabId: Schema.String,
-  },
-) {
-  override get message(): string {
-    return `Preview tab ${this.armedTabId} is still claiming the capture stream, so recording could not start for tab ${this.tabId}`;
-  }
-}
-
-export class PreviewRecordingCaptureUnavailableError extends Schema.TaggedError<PreviewRecordingCaptureUnavailableError>()(
-  "PreviewRecordingCaptureUnavailableError",
-  {
-    tabId: Schema.String,
-    webContentsId: Schema.Number,
-  },
-) {
-  override get message(): string {
-    return `Preview recording capture is unavailable for tab ${this.tabId} in WebContents ${this.webContentsId}`;
-  }
-}
-
-export class PreviewOperationError extends Schema.TaggedError<PreviewOperationError>()(
-  "PreviewOperationError",
-  {
-    operation: Schema.String,
-    tabId: Schema.optional(Schema.String),
-    webContentsId: Schema.optional(Schema.Number),
-    artifactPath: Schema.optional(Schema.String),
-    cause: Schema.Defect(),
-  },
-) {
-  static toTimelineMessage(error: PreviewOperationError): string {
-    return error.cause instanceof Error ? error.cause.message : String(error.cause);
-  }
-
-  override get message(): string {
-    const context = [
-      this.tabId === undefined ? undefined : `tab ${this.tabId}`,
-      this.webContentsId === undefined ? undefined : `WebContents ${this.webContentsId}`,
-      this.artifactPath === undefined ? undefined : `artifact ${this.artifactPath}`,
-    ].filter((value): value is string => value !== undefined);
-    return `Desktop preview operation failed: ${this.operation}${context.length === 0 ? "" : ` (${context.join(", ")})`}`;
-  }
-}
-
-const isPreviewOperationError = Schema.is(PreviewOperationError);
-
-export class PreviewArtifactPathOutsideDirectoryError extends Schema.TaggedError<PreviewArtifactPathOutsideDirectoryError>()(
-  "PreviewArtifactPathOutsideDirectoryError",
-  {
-    artifactPath: Schema.String,
-    artifactDirectory: Schema.String,
-  },
-) {
-  override get message(): string {
-    return `Preview artifact path ${this.artifactPath} is outside ${this.artifactDirectory}`;
-  }
-}
-
-export class PreviewArtifactImageLoadError extends Schema.TaggedError<PreviewArtifactImageLoadError>()(
-  "PreviewArtifactImageLoadError",
-  { artifactPath: Schema.String },
-) {
-  override get message(): string {
-    return `Preview artifact could not be loaded as an image: ${this.artifactPath}`;
-  }
-}
-
-export class PreviewAutomationDevToolsOpenError extends Schema.TaggedError<PreviewAutomationDevToolsOpenError>()(
-  "PreviewAutomationDevToolsOpenError",
-  { webContentsId: Schema.Number },
-) {
-  override get message(): string {
-    return `Close preview DevTools before using agent browser control for WebContents ${this.webContentsId}`;
-  }
-}
-
-export class PreviewAutomationDebuggerAttachedError extends Schema.TaggedError<PreviewAutomationDebuggerAttachedError>()(
-  "PreviewAutomationDebuggerAttachedError",
-  { webContentsId: Schema.Number },
-) {
-  override get message(): string {
-    return `Preview control cannot attach to WebContents ${this.webContentsId} because another debugger owns it`;
-  }
-}
-
-export const PreviewManagerError = Schema.Union([
-  PreviewTabNotFoundError,
-  PreviewWebContentsNotFoundError,
-  PreviewWebviewNotInitializedError,
-  PreviewMainWindowClosedError,
-  PreviewRecordingArmConflictError,
-  PreviewRecordingCaptureUnavailableError,
-  PreviewOperationError,
-  PreviewArtifactPathOutsideDirectoryError,
-  PreviewArtifactImageLoadError,
-  PreviewAutomationDevToolsOpenError,
-  PreviewAutomationDebuggerAttachedError,
-]);
-export type PreviewManagerError = typeof PreviewManagerError.Type;
-
 export class PreviewManager extends Context.Service<
   PreviewManager,
   {
@@ -3430,6 +3380,7 @@ export class PreviewManager extends Context.Service<
     readonly registerWebview: (
       tabId: string,
       webContentsId: number,
+      reportCaptureDraw?: boolean,
     ) => Effect.Effect<void, PreviewManagerError>;
     readonly prepareWebview: (webContents: Electron.WebContents) => Effect.Effect<void>;
     readonly navigate: (tabId: string, url: string) => Effect.Effect<void, PreviewManagerError>;
@@ -3439,6 +3390,10 @@ export class PreviewManager extends Context.Service<
     readonly stopLoading: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly zoomIn: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly zoomOut: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
+    readonly findInPage: (
+      input: DesktopPreviewFindInput,
+    ) => Effect.Effect<void, PreviewManagerError>;
+    readonly stopFindInPage: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly resetZoom: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly reapplyZoom: () => Effect.Effect<void>;
     readonly hardReload: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
@@ -3454,6 +3409,7 @@ export class PreviewManager extends Context.Service<
       tabId: string,
       audioMuted: boolean,
     ) => Effect.Effect<void, PreviewManagerError>;
+    readonly setCaptureDrawn: ReturnType<typeof makeTabVisibility>["setCaptureDrawn"];
     readonly setShown: (tabId: string, shown: boolean) => Effect.Effect<void>;
     readonly openDevTools: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly clearCookies: (
@@ -3594,12 +3550,15 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     zoomIn: operations.zoomIn,
     zoomOut: operations.zoomOut,
     resetZoom: operations.resetZoom,
+    findInPage: operations.findInPage,
+    stopFindInPage: operations.stopFindInPage,
     reapplyZoom: operations.reapplyZoom,
     hardReload: operations.hardReload,
     setColorScheme: operations.setColorScheme,
     setZoomFactor: operations.setZoomFactor,
     setAudioMuted: operations.setAudioMuted,
     setShown: operations.setShown,
+    setCaptureDrawn: operations.setCaptureDrawn,
     openDevTools: operations.openDevTools,
     clearCookies: Effect.fn("PreviewManager.clearCookies")(function* (partitions) {
       yield* browserSession

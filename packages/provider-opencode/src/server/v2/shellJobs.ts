@@ -72,6 +72,8 @@ export const makeShellJobs = (deps: ShellJobDeps) => {
   const client = () => deps.connection().client;
   const shellInfo = new Map<string, Shell.Info>();
   const shells = new Map<string, TrackedShell>();
+  // The shell exit can arrive before the synthetic report. Retain only the ownership stamp.
+  const exitedShells = new Map<string, { readonly sessionId: string; readonly runId: RunId }>();
 
   const fetchShellOutput = Effect.fn("OpenCode2Adapter.fetchShellOutput")(function* (
     id: string,
@@ -347,11 +349,16 @@ export const makeShellJobs = (deps: ShellJobDeps) => {
     const id = stringField(payload.metadata, "shellID");
     const shell = id === undefined ? undefined : shells.get(id);
     if (shell !== undefined && shell.state !== state) return true;
+    const exited = id === undefined ? undefined : exitedShells.get(id);
+    if (exited !== undefined && exited.sessionId !== state.sessionId) return true;
+    if (id !== undefined) exitedShells.delete(id);
+    const runId = shell?.turn?.input.runId ?? shell?.recoveredRunId ?? exited?.runId;
     const outcome = reportOutcome(stringField(payload.metadata, "state"));
     state.reports.set(inboxId, {
       inboxId,
       childId: id ?? inboxId,
       text: payload.text,
+      ...(runId == null ? {} : { runId }),
       report: { kind: "command", label: shell?.command ?? payload.description, outcome },
     });
     if (id !== undefined && shell?.stopping !== true) {
@@ -401,6 +408,12 @@ export const makeShellJobs = (deps: ShellJobDeps) => {
           : "failed",
       exit,
     );
+    const runId = shell.turn?.input.runId ?? shell.recoveredRunId;
+    if (runId != null) {
+      exitedShells.set(event.data.id, { sessionId: shell.state.sessionId, runId });
+      const oldest = exitedShells.keys().next();
+      if (exitedShells.size > 128 && !oldest.done) exitedShells.delete(oldest.value);
+    }
     shells.delete(event.data.id);
     shellInfo.delete(event.data.id);
     yield* syncRosterAncestors(shell.state);

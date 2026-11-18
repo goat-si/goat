@@ -1,22 +1,15 @@
 import type { InteractionUpdate, RunResult, SDKUserMessage, ToolCall } from "@cursor/sdk";
-import { formatReadToolLabel, formatSearchToolLabel } from "@goat/shared/toolActivity";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { cursorToolOutput } from "./toolOutput.ts";
-import {
-  cursorToolFailed,
-  cursorToolOutputText,
-  cursorToolName,
-  cursorToolFileName,
-  cursorToolSearchPattern,
-  cursorToolSearchResults,
-} from "./toolPresentation.ts";
+import { cursorToolFailed } from "./toolPresentation.ts";
+import { makeTaskTextSnapshots } from "./taskTextSnapshots.ts";
+import { makeCursorTurnProjection, MAX_CURSOR_STREAMED_OUTPUT_CHARS } from "./turnProjection.ts";
+import { makeCursorTaskProjection, makeTaskProjectionState } from "./taskProjection.ts";
 import {
   isOrchestrationV2WorkActive,
   defaultInstanceIdForDriver,
   type ChatAttachment,
   type ModelSelection,
   type OrchestrationV2ConversationMessage,
-  type OrchestrationV2ExecutionNode,
   type OrchestrationV2PlanArtifact,
   type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ProviderFailure,
@@ -24,7 +17,6 @@ import {
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2Subagent,
-  type OrchestrationV2TurnItem,
   type ProviderInstanceId,
   type ThreadId,
 } from "@goat/contracts";
@@ -42,7 +34,6 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
-import { mcpToolPresentation } from "@goat/provider-core/server/mcpToolPresentation";
 import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
@@ -86,7 +77,8 @@ import {
   type ActiveCursorTextStream,
   type ActiveCursorTurn,
 } from "./activeTurn.ts";
-import { isCursorSdkError } from "./sdk.ts";
+import { classifyCursorModelRejection } from "./modelRejection.ts";
+import { makeCommandOutputGate } from "./commandOutputGate.ts";
 import { cursorRunPrompt, type CursorRunPrompt } from "./steerPrompt.ts";
 import {
   assistantTextsFromConversationSteps,
@@ -220,28 +212,6 @@ function providerSession(input: {
   };
 }
 
-class CursorModelUnavailableError extends Schema.TaggedError<CursorModelUnavailableError>()(
-  "CursorModelUnavailableError",
-  {
-    model: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Cursor cannot run the model "${this.model}". Cursor only runs models from your Cursor account. Choose one of those, or use OpenCode for OpenRouter and other API-key models.`;
-  }
-}
-
-// Uncoded SDK model rejections are identifiable only by message prefix.
-const classifyCursorModelRejection =
-  (modelSelection: ModelSelection) => (error: CursorAgentSdk.CursorAgentSdkRunnerError) =>
-    isCursorSdkError(error.cause, "ConfigurationError") &&
-    error.cause.message.startsWith("Cannot use this model:")
-      ? new CursorModelUnavailableError({ model: modelSelection.model, cause: error.cause })
-      : error;
-
-// Cursor results can omit output; retain more streamed fallback than the persisted tail.
-const MAX_CURSOR_STREAMED_OUTPUT_CHARS = 256 * 1024;
 // After a turn ends, a retryable error can resume an older checkpoint and report failure despite an answer.
 const CURSOR_RESUME_NO_PROGRESS_MESSAGE =
   "Agent turn stopped after repeated resume attempts made no progress";
@@ -306,6 +276,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           now: createdAt,
         });
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+        const outputGate = yield* makeCommandOutputGate();
         const liveAgent = yield* Ref.make<CursorLiveAgent | null>(null);
         // Cursor drops a cancelled run from the conversation, so the next message carries its prompt.
         const interruptedPrompt = yield* Ref.make<{
@@ -329,6 +300,16 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             context.itemOrdinals.set(nativeItemId, ordinal);
             return ordinal;
           });
+
+        const taskTextSnapshots = makeTaskTextSnapshots(emitProviderEvent);
+        const projection = makeCursorTurnProjection(
+          idAllocator.derive,
+          path,
+          emitProviderEvent,
+          taskTextSnapshots,
+        );
+        const { emitAssistant, emitReasoning, emitToolArtifacts } = projection;
+        const { handleTaskUpdate, completeTaskWork } = makeCursorTaskProjection(projection);
 
         const resolvePlanId = Effect.fnUntraced(function* (
           context: ActiveCursorTurn,
@@ -360,167 +341,6 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           providerTurnId: context.providerTurnId,
         });
 
-        const emitAssistant = Effect.fnUntraced(function* (
-          context: ActiveCursorTurn,
-          completed: boolean,
-        ) {
-          const segment = context.assistant.current;
-          if (segment === null || segment.text.length === 0) {
-            return;
-          }
-          const now = yield* DateTime.now;
-          const ordinal = yield* resolveItemOrdinal(context, segment.nativeItemId);
-          const nodeId = idAllocator.derive.nodeFromProviderItem({
-            driver: CursorAgentSdk.CURSOR_PROVIDER,
-            nativeItemId: segment.nativeItemId,
-          });
-          const messageId = idAllocator.derive.messageFromProviderItem({
-            driver: CursorAgentSdk.CURSOR_PROVIDER,
-            nativeItemId: segment.nativeItemId,
-          });
-          const turnItemId = idAllocator.derive.turnItemFromProviderItem({
-            driver: CursorAgentSdk.CURSOR_PROVIDER,
-            nativeItemId: segment.nativeItemId,
-          });
-          const nativeItemRef = {
-            driver: CursorAgentSdk.CURSOR_PROVIDER,
-            nativeId: segment.nativeItemId,
-            strength: "weak" as const,
-          };
-          yield* emitProviderEvent({
-            type: "node.updated",
-            driver: CursorAgentSdk.CURSOR_PROVIDER,
-            node: {
-              id: nodeId,
-              threadId: context.input.threadId,
-              runId: context.input.runId,
-              parentNodeId: context.input.rootNodeId,
-              rootNodeId: context.input.rootNodeId,
-              kind: "assistant_message",
-              status: completed ? "completed" : "running",
-              countsForRun: false,
-              providerThreadId: context.input.providerThread.id,
-              providerTurnId: context.providerTurnId,
-              nativeItemRef,
-              runtimeRequestId: null,
-              checkpointScopeId: null,
-              startedAt: segment.startedAt,
-              completedAt: completed ? now : null,
-            },
-          });
-          yield* emitProviderEvent({
-            type: "message.updated",
-            driver: CursorAgentSdk.CURSOR_PROVIDER,
-            message: {
-              createdBy: "agent",
-              creationSource: "provider",
-              id: messageId,
-              threadId: context.input.threadId,
-              runId: context.input.runId,
-              nodeId,
-              role: "assistant",
-              text: segment.text,
-              attachments: [],
-              streaming: !completed,
-              createdAt: segment.startedAt,
-              updatedAt: now,
-            },
-          });
-          yield* emitProviderEvent({
-            type: "turn_item.updated",
-            driver: CursorAgentSdk.CURSOR_PROVIDER,
-            turnItem: {
-              id: turnItemId,
-              threadId: context.input.threadId,
-              runId: context.input.runId,
-              nodeId,
-              providerThreadId: context.input.providerThread.id,
-              providerTurnId: context.providerTurnId,
-              nativeItemRef,
-              parentItemId: null,
-              ordinal,
-              status: completed ? "completed" : "running",
-              title: null,
-              startedAt: segment.startedAt,
-              completedAt: completed ? now : null,
-              updatedAt: now,
-              type: "assistant_message",
-              messageId,
-              text: segment.text,
-              streaming: !completed,
-            },
-          });
-        });
-
-        const emitReasoning = Effect.fnUntraced(function* (
-          context: ActiveCursorTurn,
-          completed: boolean,
-        ) {
-          const segment = context.reasoning.current;
-          if (segment === null || segment.text.length === 0) {
-            return;
-          }
-          const now = yield* DateTime.now;
-          const ordinal = yield* resolveItemOrdinal(context, segment.nativeItemId);
-          const nodeId = idAllocator.derive.nodeFromProviderItem({
-            driver: CursorAgentSdk.CURSOR_PROVIDER,
-            nativeItemId: segment.nativeItemId,
-          });
-          const turnItemId = idAllocator.derive.turnItemFromProviderItem({
-            driver: CursorAgentSdk.CURSOR_PROVIDER,
-            nativeItemId: segment.nativeItemId,
-          });
-          const nativeItemRef = {
-            driver: CursorAgentSdk.CURSOR_PROVIDER,
-            nativeId: segment.nativeItemId,
-            strength: "weak" as const,
-          };
-          yield* emitProviderEvent({
-            type: "node.updated",
-            driver: CursorAgentSdk.CURSOR_PROVIDER,
-            node: {
-              id: nodeId,
-              threadId: context.input.threadId,
-              runId: context.input.runId,
-              parentNodeId: context.input.rootNodeId,
-              rootNodeId: context.input.rootNodeId,
-              kind: "reasoning",
-              status: completed ? "completed" : "running",
-              countsForRun: false,
-              providerThreadId: context.input.providerThread.id,
-              providerTurnId: context.providerTurnId,
-              nativeItemRef,
-              runtimeRequestId: null,
-              checkpointScopeId: null,
-              startedAt: segment.startedAt,
-              completedAt: completed ? now : null,
-            },
-          });
-          yield* emitProviderEvent({
-            type: "turn_item.updated",
-            driver: CursorAgentSdk.CURSOR_PROVIDER,
-            turnItem: {
-              id: turnItemId,
-              threadId: context.input.threadId,
-              runId: context.input.runId,
-              nodeId,
-              providerThreadId: context.input.providerThread.id,
-              providerTurnId: context.providerTurnId,
-              nativeItemRef,
-              parentItemId: null,
-              ordinal,
-              status: completed ? "completed" : "running",
-              title: null,
-              startedAt: segment.startedAt,
-              completedAt: completed ? now : null,
-              updatedAt: now,
-              type: "reasoning",
-              text: segment.text,
-              streaming: !completed,
-            },
-          });
-        });
-
         const appendTextSegment = Effect.fnUntraced(function* (input: {
           readonly context: ActiveCursorTurn;
           readonly stream: ActiveCursorTextStream;
@@ -529,9 +349,11 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
         }) {
           if (input.stream.current === null) {
             input.stream.nextSegment += 1;
+            const nativeItemId = `${input.kind}:${input.context.run.runId}:${input.stream.nextSegment}`;
             input.stream.current = {
-              nativeItemId: `${input.kind}:${input.context.run.runId}:${input.stream.nextSegment}`,
+              nativeItemId,
               startedAt: yield* DateTime.now,
+              ordinal: yield* resolveItemOrdinal(input.context, nativeItemId),
               text: "",
             };
           }
@@ -542,7 +364,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           if (context.assistant.current === null) {
             return;
           }
-          yield* emitAssistant(context, true);
+          yield* emitAssistant(parentTarget(context), context.assistant.current, true);
           context.assistant.current = null;
         });
 
@@ -550,196 +372,8 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           if (context.reasoning.current === null) {
             return;
           }
-          yield* emitReasoning(context, true);
+          yield* emitReasoning(parentTarget(context), context.reasoning.current, true);
           context.reasoning.current = null;
-        });
-
-        const emitToolArtifacts = Effect.fnUntraced(function* (input: {
-          readonly active: ActiveCursorToolCall;
-          readonly completed: boolean;
-          readonly unfinishedStatus?: "interrupted" | "failed" | "cancelled";
-        }) {
-          const { active } = input;
-          const toolCall = active.toolCall;
-          const now = yield* DateTime.now;
-          const failed = input.completed && cursorToolFailed(toolCall);
-          const status = !input.completed
-            ? "running"
-            : (input.unfinishedStatus ?? (failed ? "failed" : "completed"));
-          const nodeId = idAllocator.derive.nodeFromProviderItem({
-            driver: CursorAgentSdk.CURSOR_PROVIDER,
-            nativeItemId: active.callId,
-          });
-          const turnItemId = idAllocator.derive.turnItemFromProviderItem({
-            driver: CursorAgentSdk.CURSOR_PROVIDER,
-            nativeItemId: active.callId,
-          });
-          const nativeItemRef = {
-            driver: CursorAgentSdk.CURSOR_PROVIDER,
-            nativeId: active.callId,
-            strength: "strong" as const,
-          };
-          const node: OrchestrationV2ExecutionNode = {
-            id: nodeId,
-            threadId: active.target.threadId,
-            runId: active.target.runId,
-            parentNodeId: active.target.parentNodeId,
-            rootNodeId: active.target.rootNodeId,
-            kind: "tool_call",
-            status,
-            countsForRun: false,
-            providerThreadId: active.target.providerThreadId,
-            providerTurnId: active.target.providerTurnId,
-            nativeItemRef,
-            runtimeRequestId: null,
-            checkpointScopeId: null,
-            startedAt: active.startedAt,
-            completedAt: input.completed ? now : null,
-          };
-          const base = {
-            id: turnItemId,
-            threadId: active.target.threadId,
-            runId: active.target.runId,
-            nodeId,
-            providerThreadId: active.target.providerThreadId,
-            providerTurnId: active.target.providerTurnId,
-            nativeItemRef,
-            parentItemId: null,
-            ordinal: active.ordinal,
-            status,
-            title: null,
-            startedAt: active.startedAt,
-            completedAt: input.completed ? now : null,
-            updatedAt: now,
-          } satisfies Pick<
-            OrchestrationV2TurnItem,
-            | "id"
-            | "threadId"
-            | "runId"
-            | "nodeId"
-            | "providerThreadId"
-            | "providerTurnId"
-            | "nativeItemRef"
-            | "parentItemId"
-            | "ordinal"
-            | "status"
-            | "title"
-            | "startedAt"
-            | "completedAt"
-            | "updatedAt"
-          >;
-          const outputText = cursorToolOutputText(toolCall) || active.streamedOutput;
-          let turnItem: OrchestrationV2TurnItem;
-          switch (toolCall.type) {
-            case "shell":
-              turnItem = {
-                ...base,
-                type: "command_execution",
-                input: toolCall.args.command,
-                ...(outputText.length === 0 ? {} : { output: outputText }),
-                ...(toolCall.result?.status === "success"
-                  ? { exitCode: toolCall.result.value.exitCode }
-                  : {}),
-              };
-              break;
-            case "write":
-            case "delete":
-            case "edit":
-            case "generateImage":
-              turnItem = {
-                ...base,
-                type: "file_change",
-                fileName: cursorToolFileName(toolCall),
-                ...(toolCall.type === "edit" &&
-                toolCall.result?.status === "success" &&
-                toolCall.result.value.linesAdded !== undefined
-                  ? { additions: toolCall.result.value.linesAdded }
-                  : {}),
-                ...(toolCall.type === "edit" &&
-                toolCall.result?.status === "success" &&
-                toolCall.result.value.linesRemoved !== undefined
-                  ? { deletions: toolCall.result.value.linesRemoved }
-                  : {}),
-                ...(toolCall.type === "edit" &&
-                toolCall.result?.status === "success" &&
-                toolCall.result.value.diffString !== undefined
-                  ? { diffStr: toolCall.result.value.diffString }
-                  : toolCall.result?.status === "error" && outputText.trim().length > 0
-                    ? { diffStr: outputText }
-                    : {}),
-                ...(toolCall.type === "write" ? { newStr: toolCall.args.fileText } : {}),
-              };
-              break;
-            case "read":
-              turnItem = {
-                ...base,
-                title: formatReadToolLabel(toolCall.args.path),
-                type: "dynamic_tool",
-                toolName: "Read",
-                input: toolCall.args,
-                ...(cursorToolOutput(toolCall) === undefined
-                  ? {}
-                  : { output: cursorToolOutput(toolCall) }),
-              };
-              break;
-            case "glob":
-            case "grep":
-            case "ls":
-            case "readLints":
-            case "semSearch": {
-              const pattern = cursorToolSearchPattern(toolCall);
-              const searchPath =
-                toolCall.type === "grep"
-                  ? toolCall.args.path
-                  : toolCall.type === "glob"
-                    ? toolCall.args.targetDirectory
-                    : toolCall.type === "semSearch"
-                      ? toolCall.args.targetDirectories?.join(", ")
-                      : pattern;
-              const results =
-                toolCall.result?.status === "error" && outputText.trim().length > 0
-                  ? [{ fileName: searchPath?.trim() || ".", preview: outputText }]
-                  : cursorToolSearchResults(toolCall, path);
-              turnItem = {
-                ...base,
-                title:
-                  formatSearchToolLabel({
-                    input: toolCall.args,
-                    ...(pattern === undefined ? {} : { pattern }),
-                  }) ?? null,
-                type: "file_search",
-                ...(pattern === undefined ? {} : { pattern }),
-                ...(results.length === 0 ? {} : { results: [...results] }),
-              };
-              break;
-            }
-            default:
-              turnItem = {
-                ...base,
-                type: "dynamic_tool",
-                ...(toolCall.type === "mcp"
-                  ? mcpToolPresentation({
-                      serverName: toolCall.args.providerIdentifier,
-                      toolName: toolCall.args.toolName,
-                    })
-                  : {}),
-                toolName: cursorToolName(toolCall),
-                input: toolCall.type === "mcp" ? (toolCall.args.args ?? {}) : toolCall.args,
-                ...(cursorToolOutput(toolCall) === undefined
-                  ? {}
-                  : { output: cursorToolOutput(toolCall) }),
-              };
-          }
-          yield* emitProviderEvent({
-            type: "node.updated",
-            driver: CursorAgentSdk.CURSOR_PROVIDER,
-            node,
-          });
-          yield* emitProviderEvent({
-            type: "turn_item.updated",
-            driver: CursorAgentSdk.CURSOR_PROVIDER,
-            turnItem,
-          });
         });
 
         const ensureToolStarted = Effect.fnUntraced(function* (
@@ -962,12 +596,11 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 ? "failed"
                 : "completed"
               : "running");
-          const resultText = [
+          const resultParts = [
             ...assistantTextsFromConversationSteps(result?.conversationSteps ?? []),
             ...(result?.resultSuffix === undefined ? [] : [result.resultSuffix]),
-          ]
-            .filter((part) => part.trim().length > 0)
-            .join("\n");
+          ].filter((part) => part.trim().length > 0);
+          const resultText = resultParts.join("\n");
           const nativeItemId = input.callId;
           const nodeId =
             existing?.task.id ??
@@ -1035,6 +668,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             turnItemOrdinal:
               existing?.turnItemOrdinal ?? (yield* resolveItemOrdinal(input.context, nativeItemId)),
             nextChildOrdinal: existing?.nextChildOrdinal ?? 100,
+            projection: existing?.projection ?? makeTaskProjectionState(),
             resultProjected: existing?.resultProjected ?? false,
           };
           input.context.subagents.set(input.callId, subagent);
@@ -1175,64 +809,12 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           });
 
           if (input.completed && !subagent.resultProjected) {
-            for (const [index, nestedTool] of toolCallsFromConversationSteps(
-              result?.conversationSteps ?? [],
-            ).entries()) {
-              const callId = `${nativeItemId}:child-tool:${nestedTool.callId || index + 1}`;
-              const startedAt = task.startedAt ?? now;
-              const active: ActiveCursorToolCall = {
-                callId,
-                toolCall: nestedTool.toolCall,
-                target: {
-                  threadId: childThreadId,
-                  runId: null,
-                  rootNodeId: childRootNodeId,
-                  parentNodeId: childRootNodeId,
-                  providerThreadId: null,
-                  providerTurnId: null,
-                },
-                ordinal: ++subagent.nextChildOrdinal,
-                startedAt,
-                streamedOutput: "",
-              };
-              yield* emitToolArtifacts({ active, completed: true });
-            }
-            if (task.result !== null && task.result.length > 0) {
-              const resultNativeId = `${nativeItemId}:result`;
-              const resultArtifacts = makeSubagentConversationArtifacts({
-                messageId: idAllocator.derive.messageFromProviderItem({
-                  driver: CursorAgentSdk.CURSOR_PROVIDER,
-                  nativeItemId: resultNativeId,
-                }),
-                turnItemId: idAllocator.derive.turnItemFromProviderItem({
-                  driver: CursorAgentSdk.CURSOR_PROVIDER,
-                  nativeItemId: resultNativeId,
-                }),
-                threadId: childThreadId,
-                rootNodeId: childRootNodeId,
-                providerThreadId: null,
-                providerTurnId: null,
-                nativeItemRef: {
-                  driver: CursorAgentSdk.CURSOR_PROVIDER,
-                  nativeId: resultNativeId,
-                  strength: "weak",
-                },
-                role: "assistant",
-                text: task.result,
-                ordinal: ++subagent.nextChildOrdinal,
-                now,
-              });
-              yield* emitProviderEvent({
-                type: "message.updated",
-                driver: CursorAgentSdk.CURSOR_PROVIDER,
-                message: resultArtifacts.message,
-              });
-              yield* emitProviderEvent({
-                type: "turn_item.updated",
-                driver: CursorAgentSdk.CURSOR_PROVIDER,
-                turnItem: resultArtifacts.turnItem,
-              });
-            }
+            yield* completeTaskWork(
+              subagent,
+              toolCallsFromConversationSteps(result?.conversationSteps ?? []),
+              task.status,
+              resultParts,
+            );
             subagent.resultProjected = true;
           }
         });
@@ -1334,7 +916,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 kind: "assistant",
                 text: update.text,
               });
-              yield* emitAssistant(context, false);
+              yield* emitAssistant(parentTarget(context), context.assistant.current, false);
               return;
             case "thinking-delta":
               yield* completeAssistant(context);
@@ -1344,7 +926,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 kind: "reasoning",
                 text: update.text,
               });
-              yield* emitReasoning(context, false);
+              yield* emitReasoning(parentTarget(context), context.reasoning.current, false);
               return;
             case "thinking-completed":
               yield* completeReasoning(context);
@@ -1355,6 +937,9 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               yield* completeAssistant(context);
               yield* completeReasoning(context);
               yield* handleToolUpdate(context, update);
+              return;
+            case "tool-call-delta":
+              yield* handleTaskUpdate(context, update);
               return;
             case "step-completed":
             case "turn-ended":
@@ -1375,19 +960,27 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               const chunk = shellOutputText(update.event);
               if (chunk.length === 0) return;
               // Persist output once; live hub deltas avoid quadratic event-store growth.
-              shell.streamedOutput = (shell.streamedOutput + chunk).slice(
-                -MAX_CURSOR_STREAMED_OUTPUT_CHARS,
-              );
-              yield* emitProviderEvent({
-                type: "command_output.delta",
-                driver: CursorAgentSdk.CURSOR_PROVIDER,
-                threadId: shell.target.threadId,
-                itemId: idAllocator.derive.turnItemFromProviderItem({
+              shell.streamedOutput += chunk;
+              // Trimming on every chunk would flatten and copy the whole tail each time.
+              if (shell.streamedOutput.length > 2 * MAX_CURSOR_STREAMED_OUTPUT_CHARS) {
+                shell.streamedOutput = shell.streamedOutput.slice(
+                  -MAX_CURSOR_STREAMED_OUTPUT_CHARS,
+                );
+              }
+              yield* outputGate.offer(
+                events,
+                {
+                  type: "command_output.delta",
                   driver: CursorAgentSdk.CURSOR_PROVIDER,
-                  nativeItemId: shell.callId,
-                }),
-                chunk,
-              });
+                  threadId: shell.target.threadId,
+                  itemId: idAllocator.derive.turnItemFromProviderItem({
+                    driver: CursorAgentSdk.CURSOR_PROVIDER,
+                    nativeItemId: shell.callId,
+                  }),
+                  chunk,
+                },
+                () => context.interrupted || context.finalized,
+              );
               return;
             }
             default:
@@ -1447,6 +1040,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             return;
           }
           input.context.finalized = true;
+          yield* outputGate.wakeAll;
           const completedAt = yield* DateTime.now;
           for (const tool of input.context.tools.values()) {
             yield* emitToolArtifacts({
@@ -1977,7 +1571,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                                       : "provider_error",
                                   })
                                 : makeProviderFailure({
-                                    cause: transportFailure,
+                                    message: transportFailure,
                                     class: "transport_error",
                                   }),
                           }
@@ -2034,6 +1628,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
         );
 
         const closeSession = Effect.fnUntraced(function* () {
+          yield* outputGate.close;
           const existing = yield* Ref.get(liveAgent);
           if (existing !== null) {
             yield* existing.session.close.pipe(Effect.ignore);
@@ -2059,7 +1654,9 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             selection.instanceId === adapterOptions.instanceId
               ? cursorContextWindowTokens(selection, adapterOptions.getModels?.(apiKey, env) ?? [])
               : undefined,
-          events: Stream.fromEffectRepeat(Queue.take(events)),
+          events: Stream.fromEffectRepeat(
+            outputGate.take(events).pipe(Effect.map(taskTextSnapshots.drain)),
+          ).pipe(Stream.flattenArray),
           ensureThread: Effect.fn("CursorAdapterV2.ensureThread")(
             function* (threadInput: ProviderAdapter.ProviderAdapterV2EnsureThreadInput) {
               const opened = yield* openAgent({
@@ -2209,6 +1806,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 });
               }
               context.interrupted = true;
+              yield* outputGate.wakeAll;
               yield* context.run.cancel;
               const stopped = yield* Deferred.await(context.completed).pipe(
                 Effect.timeoutOption("10 seconds"),
