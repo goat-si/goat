@@ -8,6 +8,7 @@ import { latestExecutedRun } from "@goat/shared/orchestrationV2ThreadError";
 import type * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type { OrchestratorDispatchError } from "../Orchestrator.ts";
+import type { ProjectionStoreV2Shape } from "../ProjectionStore.ts";
 import { cancelledBeforeStart } from "../RestartBackgroundNote.ts";
 
 /** Stop ended this task, so its result is not delivered to the parent agent. */
@@ -138,25 +139,38 @@ export function worktreeSetupPending(
   return projection.thread.worktreePath === null && projection.runs.some(failedWorktreePreparation);
 }
 
-export function guardScheduledWorktreeSend(
-  command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
-  projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs">,
+export function makeScheduledWorktreeGuard(
+  messages: Pick<ProjectionStoreV2Shape, "getMessagesById">,
   DispatchError: typeof OrchestratorDispatchError,
-): Effect.Effect<void, OrchestratorDispatchError> {
-  return command.scheduledTaskId !== undefined &&
-    command.dispatchMode.type !== "defer_start" &&
-    projection.thread.worktreePath === null &&
-    projection.runs.some(
-      (run) => run.workspacePreparation?.type === "worktree" && cancelledBeforeStart(run),
+) {
+  return Effect.fn("Orchestrator.guardScheduledWorktreeSend")(function* (
+    command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
+    projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs">,
+  ) {
+    if (
+      command.scheduledTaskId === undefined ||
+      command.dispatchMode.type === "defer_start" ||
+      projection.thread.worktreePath !== null
     )
-    ? Effect.fail(
-        new DispatchError({
-          commandId: command.commandId,
-          commandType: command.type,
+      return;
+    const cancelledMessageIds = projection.runs
+      .filter((run) => run.workspacePreparation?.type === "worktree" && cancelledBeforeStart(run))
+      .map((run) => run.userMessageId);
+    if (cancelledMessageIds.length === 0) return;
+
+    const commandFields = { commandId: command.commandId, commandType: command.type };
+    // The dispatch projection can omit older messages after compaction.
+    const origins = yield* messages
+      .getMessagesById(command.threadId, cancelledMessageIds)
+      .pipe(Effect.mapError((cause) => new DispatchError({ ...commandFields, cause })));
+    for (const origin of origins.values()) {
+      if (origin.scheduledTaskId === command.scheduledTaskId)
+        return yield* new DispatchError({
+          ...commandFields,
           cause:
             "The automation's worktree setup was cancelled. Attach a worktree to its thread or recreate the automation with a new worktree.",
           refusal: "scheduled_worktree_missing",
-        }),
-      )
-    : Effect.void;
+        });
+    }
+  });
 }

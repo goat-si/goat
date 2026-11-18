@@ -43,7 +43,7 @@ import {
   hasLiveRun,
   isTerminalDelegatedTaskStatus,
   delegatedTaskTerminalStatus,
-  guardScheduledWorktreeSend,
+  makeScheduledWorktreeGuard,
   latestFailedWorktreeRun,
   worktreeSetupPending,
 } from "./goat/OrchestratorRunState.ts";
@@ -5060,6 +5060,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     mapDispatchError,
     OrchestratorDispatchError,
   });
+  const checkWorktreeSend = makeScheduledWorktreeGuard(projectionStore, OrchestratorDispatchError);
 
   const dispatchMessage = Effect.fn("Orchestrator.dispatchMessage")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
@@ -5088,7 +5089,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           }
         : undefined,
     );
-    yield* guardScheduledWorktreeSend(command, projection, OrchestratorDispatchError);
+    yield* checkWorktreeSend(command, projection);
     let steerFollowUpAfterStop = false;
     if (command.steerFollowUpOfRunId !== undefined) {
       const source = projection.runs.find((run) => run.id === command.steerFollowUpOfRunId);

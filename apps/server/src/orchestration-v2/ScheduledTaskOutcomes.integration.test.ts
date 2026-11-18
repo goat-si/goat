@@ -359,6 +359,7 @@ it.effect(
         });
         const retried = yield* fire;
         assert.deepEqual(retried, firstDelivery);
+        if (retried._tag !== "accepted") return yield* Effect.die("Relay retry was not admitted.");
         const accepted = (yield* tasks.list()).tasks.find(({ id }) => id === task.id);
         assert.equal(accepted?.lastRun?.dispatchStatus, "accepted");
         assert.equal(accepted?.lastRun?.firingId, firingId);
@@ -376,6 +377,37 @@ it.effect(
     }).pipe(Effect.provide(layer));
   },
 );
+it.effect(
+  "a local automation can use a thread with another task's cancelled worktree setup",
+  () => {
+    const { layer, tasksLayer, prepareInterruptedAutomation, threadId } =
+      worktreeAutomationHarness();
+    return Effect.gen(function* () {
+      yield* prepareInterruptedAutomation();
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const result = yield* Effect.gen(function* () {
+        const tasks = yield* Tasks.ScheduledTaskService;
+        const task = yield* create({
+          id: ScheduledTaskId.make("local-automation"),
+          threadId,
+          threadMode: "continue",
+        });
+        return yield* tasks.runNow({ id: task.id });
+      }).pipe(Effect.provide(Layer.fresh(tasksLayer)));
+
+      assert.equal(result.task.lastRun?.dispatchStatus, "accepted");
+      assert.equal(result.threadId, threadId);
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNull(projection.thread.worktreePath);
+      assert.lengthOf(projection.runs, 2);
+      const message = projection.messages.find(
+        ({ scheduledTaskId }) => scheduledTaskId === result.task.id,
+      );
+      assert.equal(message?.runId, result.task.lastRun?.runId);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
 it.effect.each(["completed", "failed", "interrupted", "cancelled", "rolled_back"] as const)(
   "commits %s with the exact firing and publishes it through the shared task subscription",
   (status) =>
