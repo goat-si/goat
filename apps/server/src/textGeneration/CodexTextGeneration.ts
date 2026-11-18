@@ -275,7 +275,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       Effect.catch(() =>
         TextGenerationOperations.isMemoryOperation(operation)
           ? Effect.fail(memoryHomeFailure(operation))
-          : Effect.succeed(undefined),
+          : Effect.void,
       ),
     );
     if (userAuth === undefined) return receptionHome;
