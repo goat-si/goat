@@ -709,3 +709,10 @@ Rule IV: from apps/server, GOAT_TEST_TMP_GUARD=fail vp test run ClaudeDescendant
 Correction: the nits round took the token at 01:53:52 UTC (clock), not "~02:00" as written above. Token released with this push.
 NOT RUN: the Linux group case with its new cleanup (goat-ci lane=server); the P3-3 failure states.
 
+
+### Coordinator 01:59 UTC on the nits (section I for K5)
+
+Read whole by the coordinator; goat-ci quick 44219794331 and server 44219798204 dispatched on 170f10c7fc (the server run is the first run of the Linux group case with its new cleanup); merge on both green, a fast-forward if the integration head is still ac238fcce3. Head stays put.
+Note for the record (not a condition), verbatim: "for a failed removal of a record whose survivors were stopped, the sentence "will not be reaped" is not quite what happened (the record is kept and read again at the next start); the file and the cause are in the line, which is what the finding asked for."
+The process slip is noted by the coordinator; ps in its own step first stands.
+
