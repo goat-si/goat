@@ -227,6 +227,7 @@ export function parseElicitationForm(
         ? {}
         : { allowCustomAnswer: false }),
       ...(kind === "multiChoice" ? { multiSelect: true } : {}),
+      ...(kind === "text" && !required.has(id) ? { required: false } : {}),
     });
   }
   return {
