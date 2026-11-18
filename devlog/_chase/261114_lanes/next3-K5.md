@@ -691,3 +691,12 @@ Coordinator 2026-11-18 01:50 UTC, section I, verbatim:
 >  Then READY with the gate on the pushed head and every changed apps/server test file once under GOAT_TEST_TMP_GUARD=fail; quick and server by me (a Linux-only case changes). It holds no other lane.
 
 Done first, records only: the (g) and P3-6 Limits sentences above now say "on macOS, and on Linux without a systemd user manager". The fix-delta report file is not on pen-mac-studio and not on the records branch; the nits are worked from the ruling's wording.
+
+### K5 nits round (holds pen-mac-studio's heavy-job token from 2026-11-18 ~02:00 UTC, token rule item 4)
+
+Branch chase/t3-261114-next3-k5-nits from ac238fcce375e08d3c73c5cb5ce4de2c36c85055, local commits:
+- c2160a792d P3-1 test: "a failed read between samples keeps what the last whole table showed" (killed [200]); under "a failed read is an empty table" it fails: expected [] to deeply equal [ 200 ].
+- 6832638a8d P3-2 test: the Linux group case's cleanup uses signalProcessGroup(leader.pid ?? 0, "SIGKILL").
+- 170f10c7fc P3-3: the "will not be reaped" warning with its cause for an unlistable records folder and for each failed record removal.
+The gate waits for SF3's check:changed that was already running when the round reached its gate (ps at the gate); SF3 and N10 start nothing new until K5's gate ends.
+
