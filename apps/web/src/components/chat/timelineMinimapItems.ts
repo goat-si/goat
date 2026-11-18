@@ -1,7 +1,7 @@
-import { assistantCitationsToPlainText } from "@goat/shared/assistantCitations";
+import { collectAssistantCitations } from "@goat/shared/assistantCitations";
 import {
+  collectComposerContextReferences,
   isAttachmentOnlyBootstrapPrompt,
-  replaceComposerContextReferences,
 } from "@goat/shared/composerContextReferences";
 import type { Nodes } from "mdast";
 import remarkCjkFriendly from "remark-cjk-friendly/parseOnly";
@@ -63,6 +63,11 @@ const markdownPreviewParser = unified()
   .use(remarkGfm)
   .use(remarkCjkFriendly)
   .freeze();
+const userMarkdownPreviewParser = unified()
+  .use(remarkParse)
+  .use(remarkGfm, { singleTilde: false })
+  .use(remarkCjkFriendly)
+  .freeze();
 
 const INLINE_PARENT_TYPES = new Set<Nodes["type"]>([
   "paragraph",
@@ -75,8 +80,9 @@ const INLINE_PARENT_TYPES = new Set<Nodes["type"]>([
   "linkReference",
 ]);
 
-function markdownNodeText(node: Nodes): string {
+function markdownNodeText(node: Nodes, userMessage = false): string {
   if (node.type === "html") {
+    if (userMessage) return node.value;
     return node.value
       .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
       .replace(/<\/?([a-z][\w-]*)(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi, (_, tag: string) =>
@@ -92,7 +98,7 @@ function markdownNodeText(node: Nodes): string {
   if (node.type === "image" || node.type === "imageReference") return node.alt ?? "";
   if (!("children" in node)) return "";
   const separator = INLINE_PARENT_TYPES.has(node.type) ? "" : " ";
-  return node.children.map(markdownNodeText).join(separator);
+  return node.children.map((child) => markdownNodeText(child, userMessage)).join(separator);
 }
 
 /** Markdown as one line of the text it renders, without markup or link targets. */
@@ -105,6 +111,42 @@ function markdownMinimapPreview(markdown: string | null) {
   return markdown === null ? null : markdownPlainText(markdown.slice(0, 1_500)) || null;
 }
 
+function expandUserPreviewTokens(markdown: string) {
+  const tokens = [
+    ...collectComposerContextReferences(markdown).map(({ start, end, label }) => ({
+      start,
+      end,
+      label,
+    })),
+    ...collectAssistantCitations(markdown).map(({ start, end, citation }) => ({
+      start,
+      end,
+      label:
+        citation.comment === undefined
+          ? citation.text
+          : `${citation.text} Comment: ${citation.comment}`,
+    })),
+  ].sort((a, b) => a.start - b.start);
+  let expanded = "";
+  let offset = 0;
+  for (const { start, end, label } of tokens) {
+    if (start < offset) continue;
+    const literal = label.replace(/\s+/g, " ").replace(/[!-\/:-@[-`{-~]/g, "\\$&");
+    expanded += markdown.slice(offset, start) + literal;
+    offset = end;
+  }
+  return expanded + markdown.slice(offset);
+}
+
+function userMinimapPreview(markdown: string | null) {
+  if (markdown === null) return null;
+  const expanded = expandUserPreviewTokens(markdown).slice(0, 1_500);
+  return (
+    markdownNodeText(userMarkdownPreviewParser.parse(expanded), true).replace(/\s+/g, " ").trim() ||
+    null
+  );
+}
+
 export function resolveTimelineMinimapPreview(
   item: TimelineMinimapItem | null,
 ): TimelineMinimapItem | null {
@@ -112,13 +154,7 @@ export function resolveTimelineMinimapPreview(
     ? null
     : {
         ...item,
-        userText: markdownMinimapPreview(
-          item.userText === null
-            ? null
-            : assistantCitationsToPlainText(
-                replaceComposerContextReferences(item.userText, (reference) => reference.label),
-              ),
-        ),
+        userText: userMinimapPreview(item.userText),
         assistantText: markdownMinimapPreview(item.assistantText),
       };
 }

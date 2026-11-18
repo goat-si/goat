@@ -72,3 +72,33 @@ it("names the focused minimap turn from the text shown in its preview", async ()
   await userEvent.keyboard("{Enter}");
   expect(onSelect).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: first.id }));
 });
+
+it("keeps a literal Reply label and literal prose in the focused jump name", async () => {
+  await using screen = await render(
+    <TimelineMinimap
+      hasPersistentGutter
+      hitStripWidth={40}
+      currentIndex={0}
+      atEnd={false}
+      items={[
+        {
+          id: "one",
+          rowIndex: 0,
+          userText: "[---](goat-context://v1/response/earlier)\nKeep <literal> and ~local~.",
+          assistantText: null,
+        },
+        { id: "two", rowIndex: 1, userText: "Second", assistantText: null },
+      ]}
+      stripMap={new Map()}
+      onWheel={() => {}}
+      onSelect={() => {}}
+    />,
+  );
+  const rail = screen.getByRole("button", { name: "Jump to message: User message" }).element();
+  (rail as HTMLElement).focus();
+  await expect
+    .element(
+      screen.getByRole("button", { name: "Jump to message: --- Keep <literal> and ~local~." }),
+    )
+    .toHaveFocus();
+});
