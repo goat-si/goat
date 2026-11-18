@@ -4,7 +4,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
+import { SERVICE_LAUNCHER_PROTOCOL, SERVICE_RESTART_PENDING_FILE } from "./serviceProtocol.ts";
 
 const pendingState = JSON.stringify({
   protocol: SERVICE_LAUNCHER_PROTOCOL,
@@ -41,11 +41,37 @@ it.layer(NodeServices.layer)("boot service selection", (it) => {
   it.effect("an install leaves no selection lease behind", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
-      const { service, fs, statePath } = yield* makeHarness();
+      const { makeService, fs, statePath, service: original } = yield* makeHarness();
+      const { unitPath } = yield* original.status;
+      const pendingPath = path.join(path.dirname(statePath), SERVICE_RESTART_PENDING_FILE);
+      const observed: boolean[][] = [];
+      const service = yield* makeService().pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          writeFileString: (filePath, contents, options) =>
+            Effect.gen(function* () {
+              if (filePath === pendingPath) {
+                observed.push(
+                  yield* Effect.all([
+                    fs.exists(`${statePath}.selection-lock`),
+                    fs.exists(`${unitPath}.selection-lock`),
+                  ]),
+                );
+              }
+              yield* fs.writeFileString(filePath, contents, options);
+            }),
+        }),
+      );
       yield* service.install();
       yield* service.install({ start: false });
+      expect(observed).toEqual([
+        [true, true],
+        [true, true],
+      ]);
       const runtimeEntries = yield* fs.readDirectory(path.dirname(statePath));
+      const unitEntries = yield* fs.readDirectory(path.dirname(unitPath));
       expect(runtimeEntries.filter((entry) => entry.includes(".selection-lock"))).toEqual([]);
+      expect(unitEntries.filter((entry) => entry.includes(".selection-lock"))).toEqual([]);
     }),
   );
 
