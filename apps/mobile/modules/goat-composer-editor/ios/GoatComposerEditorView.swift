@@ -509,24 +509,15 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     }
     textView.onPasteContext = { [weak self] context in
       guard let self else { return }
-      let selection = self.sourceSelection()
-      self.nativeEventCount += 1
-      var payload: [String: Any] = context
-      payload["value"] = self.textView.serializedText()
-      payload["eventCount"] = self.nativeEventCount
-      payload["selection"] = ["start": selection.start, "end": selection.end]
-      self.onComposerPasteContext(payload)
+      let metadata: [String: Any] = context
+      let payload = self.nativeEditPayload(value: self.textView.serializedText())
+      self.onComposerPasteContext(metadata.merging(payload) { _, edit in edit })
     }
     textView.onPasteText = { [weak self] text, _ in
       guard let self else { return }
-      let selection = self.sourceSelection()
-      self.nativeEventCount += 1
-      self.onComposerPasteText([
-        "value": self.textView.serializedText(),
-        "eventCount": self.nativeEventCount,
-        "text": text,
-        "selection": ["start": selection.start, "end": selection.end],
-      ])
+      var payload = self.nativeEditPayload(value: self.textView.serializedText())
+      payload["text"] = text
+      self.onComposerPasteText(payload)
     }
     textView.onSubmit = { [weak self] alternate in
       self?.onComposerSubmit(["alternate": alternate])
@@ -1167,29 +1158,31 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     }
     value = textView.serializedText()
     revealSelectionAfterLayout()
-    let selection = sourceSelection()
-    nativeEventCount += 1
-    onComposerChange([
-      "value": value,
-      "selection": ["start": selection.start, "end": selection.end],
-      "eventCount": nativeEventCount,
-    ])
+    onComposerChange(nativeEditPayload(value: value))
     updatePlaceholderVisibility()
     emitContentSizeIfNeeded()
   }
 
   private func emitSelection() {
-    // Caret moves advance the revision counter like text edits do: a
-    // controlled payload computed before this move is stale and must fail the
-    // revision guard instead of yanking the caret back mid-typing.
-    let currentValue = textView.serializedText()
+    // Caret moves advance the revision too, so a stale payload cannot move the caret back.
+    onComposerSelectionChange(nativeEditPayload(value: textView.serializedText()))
+  }
+
+  private func nativeEditPayload(value: String) -> [String: Any] {
     let selection = sourceSelection()
     nativeEventCount += 1
-    onComposerSelectionChange([
-      "value": currentValue,
+    var payload: [String: Any] = [
+      "value": value,
       "selection": ["start": selection.start, "end": selection.end],
       "eventCount": nativeEventCount,
-    ])
+    ]
+    let storage = textView.textStorage
+    if storage.length > 0,
+       let attachment = storage.attribute(.attachment, at: storage.length - 1, effectiveRange: nil) as? ComposerTextAttachment,
+       attachment.token.type == "mention" || attachment.token.type == "skill" {
+      payload["trailingInlineSource"] = attachment.source
+    }
+    return payload
   }
 
   private func sourceSelection() -> ComposerSelectionPayload {

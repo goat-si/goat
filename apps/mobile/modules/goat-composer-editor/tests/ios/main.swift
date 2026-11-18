@@ -102,6 +102,23 @@ do {
 }
 
 do {
+  let source = "@README.md"
+  let view = makeEditor("hi " + source, tokensJson: mention("Readme", at: 3))
+  view.editor.selectedRange = NSRange(location: 3, length: 1)
+  view.editor.cut(nil)
+  check(view.onComposerChange.payloads.last?["trailingInlineSource"] == nil, "Cut still advertised the removed chip")
+  view.apply("hi ", tokensJson: "[]", echo: true)
+  view.editor.undoManager?.undo()
+  check(view.onComposerChange.payloads.last?["trailingInlineSource"] as? String == source, "Undo did not report the restored trailing attachment")
+  let restored = view.chip(at: 3)
+  view.apply("hi " + source, tokensJson: mention("Readme", at: 3), echo: true)
+  check(view.chip(at: 3) === restored, "Echo rebuilt the trailing attachment")
+  view.editor.undoManager?.redo()
+  check(view.text == "hi ", "Redo did not remove the trailing attachment again")
+  print("Trailing attachment Undo evidence and Redo passed")
+}
+
+do {
   let pasteboard = UIPasteboard.withUniqueName()
   defer { UIPasteboard.remove(withName: pasteboard.name) }
   let editor = ComposerTextView()

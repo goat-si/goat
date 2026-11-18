@@ -12,6 +12,7 @@ interface NativeEvent {
   readonly value: string;
   readonly selection: Selection;
   readonly eventCount: number;
+  readonly trailingInlineSource?: string;
 }
 interface Document {
   readonly value: string;
@@ -209,6 +210,49 @@ it("sends a model mention to the native editor as a chip with its exact source",
         label: "codex/gpt-5.5",
       }),
     );
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+it("echoes a native Undo with its confirmed trailing chip intact for Redo", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const prefix = "👋 ";
+  const source = "@README.md";
+  const text = prefix + source;
+  const initial = text + " ";
+  native.value = "";
+  native.selection = { start: 0, end: 0 };
+  native.eventCount = 0;
+  native.tokensJson = "[]";
+  draft.text = initial;
+  const root = createRoot(document.createElement("div"));
+  const edit = async (value: string, nativeTokens: string, trailingInlineSource?: string) => {
+    await act(async () => {
+      native.tokensJson = nativeTokens;
+      native.onChange?.({
+        nativeEvent: { ...nativeEdit(value, value.length), trailingInlineSource },
+      });
+    });
+  };
+
+  try {
+    await act(async () => root.render(<Host initial={initial} />));
+    const confirmed = native.tokensJson;
+    expect(JSON.parse(confirmed)).toEqual([
+      expect.objectContaining({ source, start: prefix.length, end: text.length }),
+    ]);
+    await edit(text, confirmed, source); // Backspace over the confirming space.
+    await edit(prefix, "[]"); // Cut the trailing chip.
+    native.writes = [];
+    await edit(text, confirmed, source); // UIKit restores the attachment before the callback.
+    expect(native.tokensJson).toBe(confirmed);
+    expect(native.writes).toEqual([]);
+    expect(native.selection).toEqual({ start: text.length, end: text.length });
+
+    await edit(prefix, "[]"); // Redo.
+    await edit(text, "[]"); // Typing the same unfinished source must leave it plain.
+    expect(native.tokensJson).toBe("[]");
   } finally {
     await act(async () => root.unmount());
   }

@@ -1,6 +1,9 @@
 import { PASTED_TEXT_ATTACHMENT_THRESHOLD_BYTES } from "@goat/client-runtime/text-paste";
 import { PROVIDER_SEND_TURN_MAX_INPUT_CHARS } from "@goat/contracts";
-import { collectComposerInlineTokens } from "@goat/shared/composerInlineTokens";
+import {
+  collectComposerInlineTokens,
+  type ComposerInlineToken,
+} from "@goat/shared/composerInlineTokens";
 import { composerContextEditorTokens, composerSkillLabels } from "../lib/composerContext";
 import { useComposerModelTokens } from "./useComposerModelTokens";
 import { requireNativeView } from "expo";
@@ -42,28 +45,16 @@ import type { ComposerEditorProps, ComposerEditorSelection } from "./GoatCompose
 const NATIVE_MODULE_NAME = "GoatComposerEditor";
 const EMPTY_SKILLS: NonNullable<ComposerEditorProps["skills"]> = [];
 
-type NativeEditorEvent = NativeSyntheticEvent<{
-  readonly value: string;
+type NativeEdit = Omit<ComposerNativeEventSnapshot, "selection"> & {
   readonly selection: ComposerEditorSelection;
-  readonly eventCount: number;
-}>;
-
-type NativeSelectionEvent = NativeSyntheticEvent<{
-  readonly value: string;
-  readonly selection: ComposerEditorSelection;
-  readonly eventCount: number;
-}>;
+};
+type NativeEditorEvent = NativeSyntheticEvent<NativeEdit>;
 
 type NativePasteImagesEvent = NativeSyntheticEvent<{
   readonly uris: ReadonlyArray<string>;
 }>;
 
-type NativePasteTextEvent = NativeSyntheticEvent<{
-  readonly value: string;
-  readonly eventCount: number;
-  readonly text: string;
-  readonly selection: ComposerEditorSelection;
-}>;
+type NativePasteTextEvent = NativeSyntheticEvent<NativeEdit & { readonly text: string }>;
 
 interface NativeComposerEditorRef {
   focus: () => Promise<void>;
@@ -91,7 +82,7 @@ interface NativeComposerEditorProps extends ViewProps {
   readonly autoCorrect: boolean;
   readonly spellCheck: boolean;
   readonly onComposerChange: (event: NativeEditorEvent) => void;
-  readonly onComposerSelectionChange?: (event: NativeSelectionEvent) => void;
+  readonly onComposerSelectionChange?: (event: NativeEditorEvent) => void;
   readonly onComposerPasteImages?: (event: NativePasteImagesEvent) => void;
   readonly onComposerContextPress?: (
     event: NativeSyntheticEvent<{ source: string; start: number; end: number }>,
@@ -124,6 +115,13 @@ function basename(path: string): string {
   return separator >= 0 ? path.slice(separator + 1) : path;
 }
 
+function confirmedTrailingToken(value: string, source: string | undefined) {
+  if (!source || !value.endsWith(source)) return undefined;
+  const [token] = collectComposerInlineTokens(source + " ");
+  if (token?.source !== source) return undefined;
+  return { ...token, start: value.length - source.length, end: value.length };
+}
+
 export function ComposerEditor({
   ref,
   skills = EMPTY_SKILLS,
@@ -147,18 +145,28 @@ export function ComposerEditor({
   const [, forceNativeEventRender] = useState(0);
   // Start history empty so restored drafts or recycled views receive a non-echo controlled payload.
   const nativeEventSnapshotsRef = useRef<ComposerNativeEventSnapshot[]>([]);
-  // Tokens advance from the previous committed value; render-phase state keeps
-  // an abandoned render from leaking a trailing token into the next one.
-  const [confirmedTokens, setConfirmedTokens] = useState(() => ({
-    value: props.value,
-    tokens: collectComposerInlineTokens(props.value),
-  }));
+  // oxlint-disable-next-line react/refs -- Only evidence paired with the current native revision and text can confirm a restored chip.
+  const latestNativeEdit = nativeEventSnapshotsRef.current.at(-1);
+  const trailingInlineSource =
+    latestNativeEdit?.eventCount === mostRecentEventCount && latestNativeEdit.value === props.value
+      ? latestNativeEdit.trailingInlineSource
+      : undefined;
+  // Render-phase state keeps an abandoned render from confirming a trailing token.
+  const [confirmedTokens, setConfirmedTokens] = useState<{
+    readonly value: string;
+    readonly tokens: ReadonlyArray<ComposerInlineToken>;
+    readonly trailingInlineSource?: string | undefined;
+  }>(() => ({ value: props.value, tokens: collectComposerInlineTokens(props.value) }));
   let tokens = confirmedTokens.tokens;
-  if (confirmedTokens.value !== props.value) {
+  if (
+    confirmedTokens.value !== props.value ||
+    confirmedTokens.trailingInlineSource !== trailingInlineSource
+  ) {
+    const restored = confirmedTrailingToken(props.value, trailingInlineSource);
     tokens = collectComposerInlineTokens(props.value, {
-      preserveTrailingFrom: confirmedTokens.tokens,
+      preserveTrailingFrom: restored ? [...tokens, restored] : tokens,
     });
-    setConfirmedTokens({ value: props.value, tokens });
+    setConfirmedTokens({ value: props.value, tokens, trailingInlineSource });
   }
   const bodyText = useComposerTextRole();
   const theme = useUniwindTheme();
@@ -277,7 +285,7 @@ export function ComposerEditor({
     nativeEventSnapshotsRef,
   ]);
   const acceptNativeEvent = useCallback(
-    (eventCount: number, value: string, nextSelection: ComposerEditorSelection) => {
+    ({ eventCount, value, selection, trailingInlineSource }: NativeEdit) => {
       const acknowledgedEventCount = acknowledgeComposerNativeEvent(
         mostRecentEventCountRef.current,
         eventCount,
@@ -289,7 +297,8 @@ export function ComposerEditor({
       nativeEventSnapshotsRef.current.push({
         eventCount: acknowledgedEventCount,
         value,
-        selection: nextSelection,
+        selection,
+        trailingInlineSource,
       });
       return acknowledgedEventCount;
     },
@@ -331,11 +340,7 @@ export function ComposerEditor({
       maxInputChars={PROVIDER_SEND_TURN_MAX_INPUT_CHARS}
       style={style as StyleProp<ViewStyle>}
       onComposerChange={(event) => {
-        const acknowledgedEventCount = acceptNativeEvent(
-          event.nativeEvent.eventCount,
-          event.nativeEvent.value,
-          event.nativeEvent.selection,
-        );
+        const acknowledgedEventCount = acceptNativeEvent(event.nativeEvent);
         if (acknowledgedEventCount === false) return;
         onChangeText(event.nativeEvent.value);
         onSelectionChange?.(event.nativeEvent.selection);
@@ -343,11 +348,7 @@ export function ComposerEditor({
         forceNativeEventRender((sequence) => sequence + 1);
       }}
       onComposerSelectionChange={(event) => {
-        const acknowledgedEventCount = acceptNativeEvent(
-          event.nativeEvent.eventCount,
-          event.nativeEvent.value,
-          event.nativeEvent.selection,
-        );
+        const acknowledgedEventCount = acceptNativeEvent(event.nativeEvent);
         if (acknowledgedEventCount === false) return;
         // Selection events may carry post-edit text; publish it with its revision or stale drafts can overwrite native text.
         if (event.nativeEvent.value !== props.value) {
@@ -361,11 +362,7 @@ export function ComposerEditor({
       onComposerContextPress={(event) => props.onContextPress?.(event.nativeEvent)}
       onComposerPasteContext={(event) => {
         const paste = event.nativeEvent;
-        const acknowledgedEventCount = acceptNativeEvent(
-          paste.eventCount,
-          paste.value,
-          paste.selection,
-        );
+        const acknowledgedEventCount = acceptNativeEvent(paste);
         if (acknowledgedEventCount === false) return;
         onChangeText(paste.value);
         onSelectionChange?.(paste.selection);
@@ -375,11 +372,7 @@ export function ComposerEditor({
       }}
       onComposerPasteText={(event) => {
         const paste = event.nativeEvent;
-        const acknowledgedEventCount = acceptNativeEvent(
-          paste.eventCount,
-          paste.value,
-          paste.selection,
-        );
+        const acknowledgedEventCount = acceptNativeEvent(paste);
         if (acknowledgedEventCount === false) return;
         // Sync before capturing async paste targets; props may lag the last native keystroke.
         onChangeText(paste.value);
