@@ -20,7 +20,7 @@ import {
   type OpenCodePermissionRequestKind,
 } from "./permissionRules.ts";
 import { installResumedOpenCodePermission, syncOpenCodeSubagentDeny } from "./permissionSync.ts";
-import { recordString, recordValue } from "./records.ts";
+import { recordString } from "./records.ts";
 import { openCodeLiveWork } from "./liveWork.ts";
 export {
   openCodeChildPermissionRules,
@@ -28,7 +28,6 @@ export {
   openCodePermissionRules,
 } from "./permissionRules.ts";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
-import { causeErrorTag } from "@goat/shared/observability";
 import {
   defaultInstanceIdForDriver,
   type ModelSelection,
@@ -36,7 +35,6 @@ import {
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2PlanStep,
-  type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ProviderFailure,
   type OrchestrationV2ProviderRef,
   type OrchestrationV2ProviderSession,
@@ -46,9 +44,7 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
   type PlanId,
-  ProviderDriverKind,
   type ProviderInstanceId,
-  type ProviderSessionId,
   type RuntimeRequestId,
   type ThreadId,
 } from "@goat/contracts";
@@ -74,16 +70,11 @@ import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
-import {
-  structuralProtocolMethod,
-  summarizeNativeProtocolPayload,
-} from "@goat/provider-core/server/nativeProtocolLogging";
 import { goatOrchestrationSystemPrompt } from "@goat/provider-core/server/orchestrationInstructions";
 import { buildSessionRuntimeInstructions } from "./screenInstructions.ts";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import { dateTimeFromEpoch, toolCompletedAt, toolInput, toolStartedAt } from "./toolPartTimes.ts";
 import { resolveOpenCodeVariant, type OpenCodeVariantCache } from "./openCodeVariant.ts";
-import { readableProviderErrorMessage } from "./providerErrorMessage.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import { turnScopedSelectionTransition } from "@goat/provider-core/server/selectionTransition";
@@ -115,9 +106,23 @@ import {
   type OpenCodeTurnTokenUsageAccumulator,
 } from "./turnUsage.ts";
 
-export const OPENCODE_PROVIDER = ProviderDriverKind.make("opencode");
+import {
+  isOpenCodeNotFound,
+  makeOpenCodeProtocolLogger,
+  openCodeErrorMessage,
+  OpenCodeProviderCapabilitiesV2,
+  OPENCODE_PROVIDER,
+  sdkResponseForRawLog,
+  unwrapData,
+} from "./adapterProtocol.ts";
+
+export {
+  makeOpenCodeProtocolLogger,
+  OPENCODE_PROVIDER,
+  OPENCODE_SDK_PROTOCOL,
+  type OpenCodeProtocolLogEvent,
+} from "./adapterProtocol.ts";
 export const OPENCODE_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(OPENCODE_PROVIDER);
-export const OPENCODE_SDK_PROTOCOL = "opencode-sdk.sse" as const;
 const DEFAULT_OPENCODE_SETTINGS = Schema.decodeSync(OpenCodeSettings)({});
 
 const makeOpenCodeMessageId = Effect.fnUntraced(function* (
@@ -139,102 +144,6 @@ const makeOpenCodeMessageId = Effect.fnUntraced(function* (
     .join("");
   return `msg_${encodedTime}${random}`;
 });
-
-// OpenCode has no turn object; correlate by initiating user message and settle on session idle.
-const OpenCodeProviderCapabilitiesV2 = {
-  sessions: {
-    // The directory-bound client/server is not safe for cross-thread pooling.
-    supportsMultipleProviderThreadsPerSession: false,
-    supportsModelSwitchInSession: true,
-    supportsProviderSwitchingViaHandoff: true,
-    supportsRuntimeModeSwitchInSession: false,
-    pendingRequestsSurviveRestart: false,
-  },
-  threads: {
-    canCreateEmptyThread: true,
-    canReadThreadSnapshot: true,
-    canRollbackThread: true,
-    canForkThread: true,
-    canForkFromTurn: true,
-    canForkFromSubagentThread: true,
-    exposesNativeThreadId: true,
-  },
-  turns: {
-    exposesNativeTurnId: false,
-    emitsTurnStarted: true,
-    emitsTurnCompleted: true,
-    supportsInterrupt: true,
-    supportsActiveSteering: true,
-    supportsSteeringByInterruptRestart: true,
-    supportsQueuedMessages: true,
-    terminalStatusQuality: "strong",
-  },
-  streaming: {
-    streamsAssistantText: true,
-    streamsReasoning: true,
-    streamsToolOutput: true,
-    streamsPlanText: false,
-    emitsMessageCompleted: true,
-  },
-  tools: {
-    exposesToolItemIds: true,
-    emitsToolStarted: true,
-    emitsToolCompleted: true,
-    emitsToolOutput: true,
-    supportsMcpTools: true,
-    supportsDynamicToolCallbacks: false,
-  },
-  approvals: {
-    supportsCommandApproval: true,
-    supportsFileReadApproval: true,
-    supportsFileChangeApproval: true,
-    supportsApplyPatchApproval: true,
-    approvalsHaveNativeRequestIds: true,
-    approvalCallbacksAreLiveOnly: true,
-    approvalsCanOriginateFromSubagents: true,
-  },
-  planning: {
-    emitsPlanUpdated: true,
-    emitsTodoList: true,
-    emitsProposedPlan: false,
-    supportsStructuredQuestions: true,
-    planDeltasHaveItemIds: false,
-  },
-  subagents: {
-    supportsSubagents: true,
-    exposesSubagentThreadIds: true,
-    emitsSubagentLifecycle: true,
-    canWaitForSubagents: true,
-    canCloseSubagents: false,
-    canForkSubagentThread: true,
-  },
-  context: {
-    acceptsSystemContext: false,
-    acceptsDeveloperContext: false,
-    acceptsSyntheticUserContext: true,
-    canGenerateSummaries: true,
-    canConsumeHandoffSummaries: true,
-    supportsDeltaHandoff: true,
-    supportsFullThreadHandoff: true,
-    maxRecommendedHandoffChars: null,
-  },
-  checkpointing: {
-    appCanCheckpointFilesystem: true,
-    supportsNestedCheckpointScopes: true,
-    providerCanRollbackConversation: true,
-    providerRollbackReturnsSnapshot: true,
-    providerCanReadConversationSnapshot: true,
-  },
-  identity: {
-    nativeThreadIds: "strong",
-    nativeTurnIds: "weak",
-    nativeItemIds: "strong",
-    nativeRequestIds: "strong",
-  },
-  runtimePolicy: {
-    enforcement: "native",
-  },
-} satisfies OrchestrationV2ProviderCapabilities;
 
 type TerminalTurnStatus = Extract<
   OrchestrationV2ProviderTurn["status"],
@@ -414,68 +323,6 @@ export interface OpenCodeAdapterV2Options {
   readonly nativeEventLogger?: ProviderEventLoggers.EventNdjsonLogger;
 }
 
-export interface OpenCodeProtocolLogEvent {
-  readonly direction: "incoming" | "outgoing";
-  readonly messageKind: "request" | "response" | "notification" | "error";
-  readonly method: string;
-  readonly payload: unknown;
-}
-
-function formatOpenCodeProtocolLogPayload(event: OpenCodeProtocolLogEvent) {
-  return {
-    direction: event.direction,
-    messageKind: event.messageKind,
-    method: structuralProtocolMethod(event.method),
-    payload: summarizeNativeProtocolPayload(event.payload),
-  };
-}
-
-export function makeOpenCodeProtocolLogger(input: {
-  readonly nativeEventLogger: ProviderEventLoggers.EventNdjsonLogger | undefined;
-  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
-  readonly providerInstanceId: ProviderInstanceId;
-  readonly providerSessionId: ProviderSessionId;
-  readonly threadId: ThreadId;
-}): (event: OpenCodeProtocolLogEvent) => Effect.Effect<void, never> {
-  return (event) =>
-    Effect.gen(function* () {
-      if (!input.nativeEventLogger || event.method === "message.part.delta") return;
-      const observedAt = DateTime.formatIso(yield* DateTime.now);
-      const method = structuralProtocolMethod(event.method);
-      yield* input.nativeEventLogger.write(
-        {
-          observedAt,
-          event: {
-            id: yield* input.idAllocator.allocate.rawEvent({
-              providerSessionId: input.providerSessionId,
-              method,
-            }),
-            kind: "protocol",
-            protocol: OPENCODE_SDK_PROTOCOL,
-            provider: OPENCODE_PROVIDER,
-            providerInstanceId: input.providerInstanceId,
-            providerSessionId: input.providerSessionId,
-            createdAt: observedAt,
-            threadId: input.threadId,
-            payload: formatOpenCodeProtocolLogPayload(event),
-          },
-        },
-        input.threadId,
-      );
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterrupts(cause)
-          ? Effect.interrupt
-          : Effect.logWarning("Failed to write native OpenCode event log.", {
-              errorTag: causeErrorTag(cause),
-              reasonCount: cause.reasons.length,
-              provider: OPENCODE_PROVIDER,
-              threadId: input.threadId,
-            }),
-      ),
-    );
-}
-
 function protocolError(
   detail: string,
   payload?: unknown,
@@ -493,13 +340,6 @@ function nativeThreadId(providerThread: OrchestrationV2ProviderThread): string {
     throw protocolError(`Provider thread ${providerThread.id} has no OpenCode session id`);
   }
   return nativeId;
-}
-
-function sdkResponseForRawLog(value: unknown): unknown {
-  if (typeof value !== "object" || value === null) return value;
-  if ("data" in value) return { data: (value as { readonly data?: unknown }).data ?? null };
-  if ("stream" in value) return { subscribed: true };
-  return value;
 }
 
 /** Boundaries are exclusive: use the next user message, or omit at head to retain the selected turn. */
@@ -561,19 +401,6 @@ function providerRef(nativeId: string, strength: "strong" | "weak" = "strong") {
   } satisfies OrchestrationV2ProviderRef;
 }
 
-function openCodeErrorMessage(event: Extract<OpenCodeEvent, { type: "session.error" }>): string {
-  const error = event.properties.error;
-  if (error === undefined) return "OpenCode session failed without an error payload.";
-  const statusCode = recordValue(error.data, "statusCode");
-  return (
-    readableProviderErrorMessage(
-      recordString(error.data, "message"),
-      typeof statusCode === "number" ? statusCode : undefined,
-      recordString(error.data, "responseBody"),
-    ) ?? error.name
-  );
-}
-
 function terminalStatusForError(
   event: Extract<OpenCodeEvent, { type: "session.error" }>,
   turn: ActiveOpenCodeTurn,
@@ -583,56 +410,6 @@ function terminalStatusForError(
 
 function isMessageAbortedError(event: Extract<OpenCodeEvent, { type: "session.error" }>): boolean {
   return event.properties.error?.name === "MessageAbortedError";
-}
-
-function isOpenCodeNotFound(cause: unknown): boolean {
-  const seen = new Set<unknown>();
-  const queue: Array<unknown> = [cause];
-  for (let steps = 0; queue.length > 0 && steps < 32; steps += 1) {
-    const node = queue.shift();
-    if (node === null || typeof node !== "object" || seen.has(node)) {
-      continue;
-    }
-    seen.add(node);
-    const record = node as Record<string, unknown>;
-
-    const response = record.response;
-    const statuses = [
-      record.status,
-      record.statusCode,
-      response !== null && typeof response === "object"
-        ? (response as { readonly status?: unknown }).status
-        : undefined,
-    ].filter((status): status is number => typeof status === "number");
-    if (statuses.includes(404)) {
-      return true;
-    }
-    if (statuses.length > 0) {
-      continue;
-    }
-
-    const name = record.name;
-    if (typeof name === "string" && name.toLowerCase() === "notfounderror") {
-      return true;
-    }
-
-    for (const key of ["cause", "body", "error", "data"] as const) {
-      if (record[key] !== undefined) {
-        queue.push(record[key]);
-      }
-    }
-  }
-  return false;
-}
-
-function unwrapData<A>(operation: string, result: { readonly data?: A }): NonNullable<A> {
-  if (result.data === undefined) {
-    throw new OpenCodeRuntime.OpenCodeRuntimeError({
-      operation,
-      detail: `OpenCode ${operation} returned no response payload.`,
-    });
-  }
-  return result.data as NonNullable<A>;
 }
 
 export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function* (
