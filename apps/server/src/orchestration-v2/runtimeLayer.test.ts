@@ -59,6 +59,7 @@ import { ROLLBACK_FAILED_MESSAGE } from "./CheckpointRollbackService.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
+import * as EventStore from "./EventStore.ts";
 import * as ProviderRuntimeRecoveryService from "./ProviderRuntimeRecoveryService.ts";
 import * as ProjectionMaintenance from "./ProjectionMaintenance.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -100,6 +101,7 @@ const prWatchDisabledProjectId = ProjectId.make("pr-watch-disabled-project");
 const layerTest = Layer.mergeAll(
   RuntimeLayer.layer,
   RuntimeLayer.layerEventSink,
+  EventStore.layer,
   ProjectStore.layer,
   ProjectionStore.layer,
   EffectOutbox.layer,
@@ -1349,7 +1351,15 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
         yield* recovery.reconcile("startup");
         const rerecovered = yield* orchestrator.getThreadProjection(threadId);
         assert.deepEqual(rerecovered.runtimeRequests, recovered.runtimeRequests);
-        const notices = rerecovered.turnItems.filter((item) => item.type === "system_notice");
+        const store = yield* EventStore.EventStoreV2;
+        const notices = yield* store.read({ threadId, eventType: "turn-item.updated" }).pipe(
+          Stream.flatMap(({ event }) =>
+            event.type === "turn-item.updated" && event.payload.type === "system_notice"
+              ? Stream.make(event.payload)
+              : Stream.empty,
+          ),
+          Stream.runCollect,
+        );
         assert.lengthOf(notices, scope === "run" ? 1 : 0);
         if (scope === "run") {
           assert.equal(
