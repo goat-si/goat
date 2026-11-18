@@ -137,11 +137,7 @@ describe("VCS HEAD watchers", () => {
 
   it.effect("a terminal checkout updates the branch before pending detailed status completes", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const gitDir = yield* fs.makeTempDirectoryScoped({ prefix: "vcs-head-watch-" });
-      const headPath = path.join(gitDir, "HEAD");
-      yield* fs.writeFileString(headPath, "ref: refs/heads/main\n");
+      const native = fakeNativeWatch();
       const state: Parameters<typeof layerTestFor>[0] = {
         currentLocalStatus: { ...baseLocalStatus, refName: "main" },
         currentRemoteStatus: null,
@@ -149,7 +145,11 @@ describe("VCS HEAD watchers", () => {
         remoteStatusCalls: 0,
         localInvalidationCalls: 0,
         remoteInvalidationCalls: 0,
-        headPath,
+        headPath: "/repo/.git/HEAD",
+        fileSystem: FileSystem.makeNoop({
+          realPath: (target) => Effect.succeed(target),
+          exists: () => Effect.succeed(true),
+        }),
       };
 
       yield* Effect.gen(function* () {
@@ -161,21 +161,26 @@ describe("VCS HEAD watchers", () => {
         );
         yield* details;
 
+        const detailedReadStarted = yield* Deferred.make<void>();
         const resume = yield* Deferred.make<void>();
-        state.beforeLocalStatus = Deferred.await(resume);
+        state.beforeLocalStatus = Deferred.succeed(detailedReadStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(resume)),
+        );
         state.currentLocalStatus = { ...baseLocalStatus, refName: "repro" };
-        const lockPath = path.join(gitDir, "HEAD.lock");
-        yield* fs.writeFileString(lockPath, "ref: refs/heads/repro\n");
-        yield* fs.rename(lockPath, headPath);
+        native.notify("rename", "HEAD");
 
         assert.deepEqual(yield* branches, [{ refName: "repro", isRepo: true }]);
+        yield* Deferred.await(detailedReadStarted);
         state.currentLocalStatus = { ...baseLocalStatus, refName: "second" };
-        yield* fs.writeFileString(lockPath, "ref: refs/heads/second\n");
-        yield* fs.rename(lockPath, headPath);
+        native.notify("rename", "HEAD");
         assert.deepEqual(yield* branches, [{ refName: "second", isRepo: true }]);
         yield* Deferred.succeed(resume, undefined);
-      }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);
-    }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(
+        Effect.provide(layerTestFor(state)),
+        Effect.provideService(NativeHeadWatch, native.startWatch),
+        Effect.scoped,
+      );
+    }),
   );
 
   it.effect("a checkout read that fails while index.lock is held retries until it succeeds", () =>
@@ -278,11 +283,7 @@ describe("VCS HEAD watchers", () => {
 
   it.effect("a HEAD watch that ended restarts for the next subscriber and keeps earlier ones", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const gitDir = yield* fs.makeTempDirectoryScoped({ prefix: "vcs-head-watch-" });
-      const headPath = path.join(gitDir, "HEAD");
-      yield* fs.writeFileString(headPath, "ref: refs/heads/main\n");
+      const native = fakeNativeWatch();
       const state: Parameters<typeof layerTestFor>[0] = {
         currentLocalStatus: { ...baseLocalStatus, isDefaultRef: true, refName: "main" },
         currentRemoteStatus: null,
@@ -291,6 +292,10 @@ describe("VCS HEAD watchers", () => {
         localInvalidationCalls: 0,
         remoteInvalidationCalls: 0,
         headPathCalls: 0,
+        fileSystem: FileSystem.makeNoop({
+          realPath: (target) => Effect.succeed(target),
+          exists: () => Effect.succeed(true),
+        }),
       };
 
       yield* Effect.gen(function* () {
@@ -318,30 +323,31 @@ describe("VCS HEAD watchers", () => {
           yield* Deferred.await(subscribed);
           return { fiber, sawRef };
         });
-        const checkout = (refName: string) =>
-          Effect.gen(function* () {
-            state.currentLocalStatus = { ...baseLocalStatus, isDefaultRef: false, refName };
-            const lockPath = path.join(gitDir, "HEAD.lock");
-            yield* fs.writeFileString(lockPath, `ref: refs/heads/${refName}\n`);
-            yield* fs.rename(lockPath, headPath);
-          });
+        const checkout = (refName: string) => {
+          state.currentLocalStatus = { ...baseLocalStatus, isDefaultRef: false, refName };
+          native.notify("rename", "HEAD");
+        };
 
         // The repository has no HEAD yet, so the first watch ends at once.
         const first = yield* subscribe;
-        state.headPath = headPath;
+        state.headPath = "/repo/.git/HEAD";
         const second = yield* subscribe;
         assert.strictEqual(state.headPathCalls, 2);
 
-        yield* checkout("one");
+        checkout("one");
         yield* Deferred.await(first.sawRef("one"));
         yield* Deferred.await(second.sawRef("one"));
 
         // The replacement belongs to both subscribers, so the second leaving keeps it.
         yield* Fiber.interrupt(second.fiber);
-        yield* checkout("two");
+        checkout("two");
         yield* Deferred.await(first.sawRef("two"));
-      }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(
+        Effect.provide(layerTestFor(state)),
+        Effect.provideService(NativeHeadWatch, native.startWatch),
+        Effect.scoped,
+      );
+    }),
   );
   it.effect("a HEAD watch ends when its git directory is removed", () =>
     Effect.gen(function* () {
