@@ -40,6 +40,7 @@ export interface PreviewMoreMenuActions {
   readonly resetZoom: () => void;
   readonly clearCookies: () => void;
   readonly clearCache: () => void;
+  readonly find?: () => void;
   readonly openDevTools?: () => void;
   readonly toggleNativePictureInPicture?: () => void;
 }
@@ -122,6 +123,7 @@ export function PreviewMoreMenu({
             </MenuRadioGroup>
           </MenuSubPopup>
         </MenuSub>
+        {actions.find ? <MenuItem onClick={actions.find}>Find in page</MenuItem> : null}
         <MenuSeparator />
         <MenuItem
           closeOnClick={false}

@@ -1,6 +1,7 @@
 import { DEFAULT_UNIFIED_SETTINGS } from "@goat/contracts/settings";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { CodexAppServerIsolationSetting } from "./CodexAppServerIsolationSetting";
+import { KeepAwakeSetting } from "./KeepAwakeSetting";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { SettingResetButton, SettingsRow } from "./settingsLayout";
@@ -28,6 +29,7 @@ export function RestartContinuationSettings() {
     );
   return (
     <>
+      <KeepAwakeSetting />
       <SettingsRow
         {...searchableSetting("continue-threads-after-server-update")}
         serverScoped

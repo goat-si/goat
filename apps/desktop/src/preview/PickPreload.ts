@@ -1,3 +1,11 @@
+import {
+  createButton,
+  styleControl,
+  createUnitControl,
+  createField,
+  createStyleSection,
+  createUnitInput,
+} from "./AnnotationStyleControls.ts";
 import "./HumanInputGuest.ts";
 // @effect-diagnostics globalDate:off globalTimers:off - This isolated Electron preload does not run inside an Effect runtime.
 import { ipcRenderer } from "electron";
@@ -44,6 +52,7 @@ import {
   CANCEL_PICK_CHANNEL,
   ELEMENT_PICKED_CHANNEL,
   HUMAN_INPUT_CHANNEL,
+  PAGE_UNHANDLED_SHORTCUT_CHANNEL,
   POINTER_DOWN_HOST_CHANNEL,
   RECORDING_CURSOR_CHANNEL,
   RECORDING_POINTER_CHANNEL,
@@ -179,6 +188,33 @@ const isolateOverlayKey = (event: KeyboardEvent): void => {
 
 for (const type of ["keydown", "keypress", "keyup"] as const)
   window.addEventListener(type, isolateOverlayKey, true);
+
+window.addEventListener(
+  "keydown",
+  (event) => {
+    if (
+      !event.isTrusted ||
+      event.repeat ||
+      event.isComposing ||
+      !(event.metaKey || event.ctrlKey || event.altKey || /^F\d{1,2}$/u.test(event.key))
+    )
+      return;
+    // Let the guest handle the chord before deciding whether to forward it.
+    setTimeout(() => {
+      if (event.defaultPrevented) return;
+      const { key, code, ctrlKey, metaKey, altKey, shiftKey } = event;
+      ipcRenderer.send(PAGE_UNHANDLED_SHORTCUT_CHANNEL, {
+        key,
+        code,
+        ctrlKey,
+        metaKey,
+        altKey,
+        shiftKey,
+      });
+    }, 0);
+  },
+  true,
+);
 
 let replayedThumbPress: { readonly x: number; readonly y: number } | null = null;
 ipcRenderer.on(
@@ -358,65 +394,6 @@ async function captureElement(element: Element): Promise<PickedElementPayload> {
     stack: [],
     styles: "",
   };
-}
-
-function createButton(label: string, title: string): HTMLButtonElement {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.textContent = label;
-  button.title = title;
-  button.className =
-    "inline-flex h-7 cursor-pointer items-center justify-center rounded-md border border-transparent px-2 font-sans text-xs font-medium text-foreground outline-none hover:bg-accent disabled:pointer-events-none disabled:opacity-60";
-  return button;
-}
-
-function styleControl(input: HTMLInputElement | HTMLSelectElement): void {
-  input.setAttribute("aria-label", input.getAttribute("aria-label") ?? "Style value");
-  input.className =
-    "h-7 min-w-0 w-full appearance-none rounded-md border border-input bg-background px-2 font-mono text-xs text-foreground shadow-xs outline-none";
-}
-
-function createUnitControl(input: HTMLInputElement): HTMLElement {
-  const wrapper = document.createElement("div");
-  wrapper.style.cssText = "position:relative;min-width:0";
-  const unit = document.createElement("span");
-  unit.textContent = input.dataset.unit ?? "";
-  unit.className =
-    "pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 font-mono text-xs text-muted-foreground";
-  wrapper.append(input, unit);
-  return wrapper;
-}
-
-function createField(
-  labelText: string,
-  input: HTMLInputElement | HTMLSelectElement,
-): HTMLLabelElement {
-  const label = document.createElement("label");
-  label.className =
-    "grid min-h-7 grid-cols-[82px_minmax(0,1fr)] items-center gap-2 font-sans text-xs font-medium text-muted-foreground";
-  const text = document.createElement("span");
-  text.textContent = labelText;
-  styleControl(input);
-  label.append(
-    text,
-    input instanceof HTMLInputElement && input.dataset.unit ? createUnitControl(input) : input,
-  );
-  return label;
-}
-
-function createStyleSection(): HTMLElement {
-  const section = document.createElement("section");
-  section.className = "grid gap-1 border-t border-border py-2";
-  return section;
-}
-
-function createUnitInput(unit: string, placeholder = "0"): HTMLInputElement {
-  const input = document.createElement("input");
-  input.type = "number";
-  input.placeholder = placeholder;
-  input.style.paddingRight = "30px";
-  input.dataset.unit = unit;
-  return input;
 }
 
 function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): void {

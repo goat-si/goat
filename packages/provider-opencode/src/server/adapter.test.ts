@@ -2461,6 +2461,7 @@ describe("OpenCodeAdapterV2", () => {
                 data: { id: "memory-root", time: { created: 1, updated: 1 } },
               }),
               get: async () => ({ data: { id: "memory-root", time: { created: 1, updated: 1 } } }),
+              children: async () => ({ data: [] }),
               promptAsync: async (input: { system?: string; messageID: string }) => {
                 payloads.push(input);
                 return { data: true };

@@ -13,10 +13,19 @@ import * as Result from "effect/Result";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
-import { ARCHIVE, remoteShell } from "./tunnel.fixture.ts";
+import {
+  ARCHIVE,
+  commandArgs,
+  remoteShell,
+  makeSuccessfulProcess,
+  NODE_SCRIPT,
+  uploadTarget,
+} from "./tunnel.fixture.ts";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 import { REMOTE_LAUNCH_LISTENER_SCRIPT } from "./launchListenerScripts.ts";
-import { buildRemoteNodeEnvScript } from "./tunnel.ts";
+import { buildRemoteNodeEnvScript, launchOrReuseRemoteServer } from "./tunnel.ts";
+import * as FileSystem from "effect/FileSystem";
+import { ChildProcessSpawner } from "effect/process";
 
 const listenerPrelude = () => {
   const env = buildRemoteNodeEnvScript();
@@ -72,6 +81,46 @@ const canIsolateListenerPath =
   }).status === 0;
 
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH launch identity", () => {
+  it.live("loads the account login profile before the POSIX launch script", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-ssh-login-" });
+      const shell = `${home}/bash`;
+      yield* fs.writeFileString(shell, '#!/bin/sh\nexec /bin/bash --noprofile "$@"\n');
+      yield* fs.chmod(shell, 0o755);
+      const profile = `${home}/profile`;
+      yield* fs.writeFileString(
+        profile,
+        "if shopt -q login_shell; then export GOAT_TEST_LOGIN=loaded; fi\n",
+      );
+      let launchCommand = "";
+      const spawner = ChildProcessSpawner.make((command) =>
+        Effect.sync(() => {
+          const args = commandArgs(command);
+          launchCommand = args.slice(args.indexOf("alex@devbox") + 1).join(" ");
+          return makeSuccessfulProcess(
+            '{"status":"ready","selectedVersion":"source","remotePort":3774}',
+          );
+        }),
+      );
+      yield* launchOrReuseRemoteServer(uploadTarget, undefined, NODE_SCRIPT).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      for (const [accountShell, expected] of [
+        [shell, "loaded"],
+        ["/missing/csh", "missing"],
+      ] as const) {
+        const result = NodeChildProcess.spawnSync("/bin/sh", ["-c", launchCommand], {
+          env: { PATH: "/usr/bin:/bin", HOME: home, SHELL: accountShell, BASH_ENV: profile },
+          input: 'printf "%s:%s" "${GOAT_TEST_LOGIN:-missing}" "$1"\n',
+          encoding: "utf8",
+        });
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stdout, `${expected}:runtime`);
+      }
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
+  );
+
   it.live("checks the socket PID with noglob enabled and preserves the caller's options", () =>
     Effect.gen(function* () {
       const server = yield* Effect.acquireRelease(

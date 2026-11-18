@@ -56,6 +56,7 @@ function makeDesktopPage() {
   const cssViewport = { width: 1920, height: 1080 };
   let closed = false;
   const page = {
+    emit: (name: string, ...args: unknown[]) => events.emit(name, ...args),
     on: (name: string, callback: (...args: unknown[]) => void) => events.on(name, callback),
     once: (name: string, callback: (...args: unknown[]) => void) => events.once(name, callback),
     off: (name: string, callback: (...args: unknown[]) => void) => events.off(name, callback),
@@ -227,6 +228,61 @@ it.effect("a desktop tab that was never measured says so instead of reporting a 
         "has not measured this desktop tab",
       );
       expect(yield* status).toBeUndefined();
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("native Stop settles loading through server control and defers to another viewer", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* ServerBrowser.ServerBrowser;
+      const manager = yield* Manager.PreviewManager;
+      const broker = yield* Broker.PreviewAutomationBroker;
+      const threadId = scope.thread.threadId;
+      const { tabId } = yield* manager.open({ threadId, runtime: "server" });
+      const attach = (canOperate: boolean) =>
+        browser.attachViewer({
+          threadId,
+          tabId,
+          canOperate,
+          maxWidth: 1280,
+          maxHeight: 800,
+          quality: 70,
+        });
+      yield* attach(false);
+      const desktop = desktopPages.at(-1);
+      if (!desktop) return yield* Effect.die("Missing native tab fixture");
+      desktop.page.emit("request", {
+        url: () => "https://example.com/pending",
+        method: () => "GET",
+        isNavigationRequest: () => true,
+        frame: () => desktop.page,
+        redirectedFrom: () => null,
+      });
+      const status = broker.invoke<PreviewAutomationStatus>({
+        scope,
+        tabId: PreviewTabId.make(tabId),
+        operation: "status",
+        input: {},
+      });
+      expect((yield* status).loading).toBe(true);
+      const viewer = yield* attach(true);
+      const stop = browser.adjustPreview({ threadId, tabId, stopLoading: true });
+      expect((yield* Effect.flip(stop))._tag).toBe("PreviewControlRequiredError");
+      expect((yield* status).loading).toBe(true);
+      yield* viewer.input({ type: "releaseControl" });
+      yield* stop;
+      expect((yield* status).loading).toBe(false);
+      expect(
+        desktop.sessions.flatMap((session) =>
+          session.send.mock.calls.filter(([method]) => method === "Page.stopLoading"),
+        ),
+      ).toHaveLength(1);
+      expect(
+        (yield* Effect.flip(
+          browser.adjustPreview({ threadId, tabId: "missing", stopLoading: true }),
+        ))._tag,
+      ).toBe("PreviewSessionLookupError");
     }),
   ).pipe(Effect.provide(layer)),
 );

@@ -193,6 +193,13 @@ Combine keys with `!` for not, `&&` for and, `||` for or, and parentheses:
 { "key": "mod+j", "command": "terminal.toggle", "when": "terminalOpen && !terminalFocus" }
 ```
 
+## Find in a browser page
+
+In the desktop app, press `mod+f` with the browser focused. You can also choose
+**Find in page** from the browser menu or **Find in browser page** from the
+command palette. Press Enter or Shift+Enter to move between matches and Escape
+to close search. Pages such as document editors can handle their own shortcut.
+
 ## Find in the current thread
 
 `chat.find` searches conversation messages and proposed plans in the active thread. Entering a

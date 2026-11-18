@@ -216,3 +216,21 @@ it.effect.each(["present", "missing", "changed"] as const)(
       assert.equal(result._tag, mode === "present" ? "Success" : "Failure");
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
 );
+
+it.effect("rejects a previously trimmed archive as a desktop staging input", () =>
+  Effect.gen(function* () {
+    const { fs, path, root, input, name, contents } = yield* desktopFontFixture();
+    yield* fs.writeFileString(path.join(input.clientAssetsDirectory, name), contents);
+    yield* stageSshRuntimeArchives(input);
+    const destinationDirectory = path.join(root, "repackaged");
+
+    const failure = yield* stageSshRuntimeArchives({
+      ...input,
+      sourceDirectory: input.destinationDirectory,
+      destinationDirectory,
+    }).pipe(Effect.flip);
+
+    assert.include(failure.message, "full CLI archive");
+    assert.isFalse(yield* fs.exists(destinationDirectory));
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
