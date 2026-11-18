@@ -869,3 +869,106 @@ describe("memory hub floor", () => {
     }).pipe(checkUsage, Effect.provide(live)),
   );
 });
+
+it.effect.each(["new", "backfilled"] as const)(
+  "keeps the ordinary tail moving past a %s oversized conversation origin",
+  (scenario) =>
+    Effect.gen(function* () {
+      yield* seed;
+      const hub = yield* Hub.MemoryHubService;
+      const sql = yield* SqlClient.SqlClient;
+      const member = principal(otherEnv);
+      const pullForMember = (afterSequence: number, afterOriginSequence: number) =>
+        hub.pull(
+          { ...advertise, environmentId: otherEnv, afterSequence, afterOriginSequence },
+          member,
+        );
+      yield* hub.pull(advertise, principal());
+      yield* pullForMember(0, 0);
+      const exact = newMemory(791);
+      const over = newMemory(792);
+      const victim = newMemory(793);
+      yield* hub.push({ ...pushInput(exact, over, victim), features }, principal());
+      const initial = yield* pullForMember(0, 0);
+      const origin = ({ memoryId, operationId }: typeof exact, extra: number) => {
+        const row = {
+          memoryId,
+          createOperationId: operationId,
+          threadId: "",
+          environmentId: hubEnv,
+          sequence: 1,
+        };
+        const overhead = new TextEncoder().encode(JSON.stringify(row)).length + 1;
+        const available = M.MEMORY_PAGE_MAX_UTF8_BYTES - 512 - overhead;
+        return {
+          memoryId,
+          createOperationId: operationId,
+          threadId: M.ThreadId.make(
+            '"'.repeat(Math.floor(available / 2)) + "x".repeat((available % 2) + extra),
+          ),
+        };
+      };
+      const fits = origin(exact, 0);
+      const oversized = origin(over, 1);
+      if (scenario === "backfilled") {
+        yield* sql`UPDATE memory_identity_ledger
+          SET identity_json=json_set(identity_json,'$.origin',json_object('environmentId',${hubEnv},'threadId',${oversized.threadId}))
+          WHERE space=${space} AND memory_id=${over.memoryId}`;
+        yield* sql`INSERT INTO memory_origins(space,memory_id,environment_id,thread_id,origin_sequence)
+          VALUES (${space},${over.memoryId},${hubEnv},${oversized.threadId},1)`;
+        yield* sql`INSERT INTO memory_space_counters(space,forget_generation,origin_update_sequence)
+          VALUES (${space},0,1) ON CONFLICT(space) DO UPDATE SET origin_update_sequence=1`;
+      }
+      yield* hub.push(
+        {
+          ...pushInput(),
+          features,
+          originUpdates: scenario === "new" ? [oversized, fits] : [fits],
+        },
+        principal(),
+      );
+      if (scenario === "new")
+        assert.deepStrictEqual(
+          yield* sql`SELECT memory_id,origin_sequence FROM memory_origins WHERE space=${space}`,
+          [{ memory_id: exact.memoryId, origin_sequence: 1 }],
+        );
+      const forgotten = yield* hub.push(
+        {
+          ...pushInput(forget(victim)),
+          environmentId: otherEnv,
+          features,
+        },
+        member,
+      );
+      assert.propertyVal(forgotten.receipts[0], "outcome", "deleted");
+      yield* Effect.gen(function* () {
+        const store = yield* Store.MemoryStore;
+        const service = yield* Service.MemoryService;
+        const receive = (expectedSequence: number, page: M.MemoryHubPullResult) =>
+          service.receiveHubPage({
+            memorySpaceId: space,
+            localEnvironmentId: otherEnv,
+            hubEnvironmentId: hubEnv,
+            expectedSequence,
+            afterOriginSequence: 0,
+            page,
+            reauthorize: Effect.void,
+          });
+        yield* receive(0, initial);
+        const after = yield* store.readCursor(space, hubEnv);
+        const tail = yield* pullForMember(after, 0);
+        assert.deepStrictEqual(
+          tail.originPage?.updates.map(({ memoryId }) => memoryId),
+          [exact.memoryId],
+        );
+        assert.isFalse(tail.originPage?.hasMore);
+        yield* receive(after, tail);
+        assert.propertyVal(
+          (yield* store.loadAggregate(space, victim.memoryId)).tombstone,
+          "memoryId",
+          victim.memoryId,
+        );
+        assert.equal(yield* store.readCursor(space, hubEnv), forgotten.receipts[0]?.hubSequence);
+      }).pipe(Effect.provide(Layer.fresh(core)));
+    }).pipe(Effect.provide(live), enabled),
+);
