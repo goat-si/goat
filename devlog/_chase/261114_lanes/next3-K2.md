@@ -429,3 +429,19 @@ C4 review commits: `61b1b242477` (b3fdf2b10f, older-client decode and reveal rou
 P1: web/desktop anchor reveal and hover preview, mobile comment and line reveal, Viewed folding and Changed after a push, first-send checkout linking and the changed-branch case, cross-environment All versus Reviewing, and mocked GitLab overview Resolve on web and mobile.
 
 NOT RUN: independent C4 review, P1 real clients and captures, live GitHub/GHES links and GitLab Resolve, lane CI, standalone repo-wide checks, and a gate on a merge with the newer integration tooling.
+
+## 2026-11-18 UTC — C4 review fix round 1, READY for re-review
+
+Plain-pushed and verified `a81bf0cbb06fbd3176d6d1a313ec03687d969ff1` on top of `00b419cbc1d189a402c86e6091ade5c1ae6d6cdd`. The existing merge base is `f82d2df4b0960eb39bd36e4100b72b6f2758c7d2`. `git merge-tree --write-tree HEAD origin/chase/t3-261114-next3` exited 0 against `258239d88f0c5df1ef43d787957007d1775f823d`. No additional merge.
+
+| Finding | Commit | Failing case and fix |
+| --- | --- | --- |
+| P2-1 | `51e282565f3` | The fallback account's row entered Authored while partitions loaded. Live and restored partition reads target preferred assignments. Fallback rows stay in Others during loading and after settlement. |
+| P2-2 | `b8e8407ad55` | A carried fallback row survived typing `author:me`. The request uses the effective parsed author and the immediate filter uses the typed author. The baseline read still checks its menu author. |
+| P2-3 | `a81bf0cbb06` | Two successful model threads produced zero link calls. Capture the branch-matched URL before the send and link only acknowledged thread IDs. The different-branch and failed-start cases stay unlinked. |
+| P3-1 | `5fff34868c8` | Code tab shuffled seed 1 failed with header position 304 versus the existing upper-half bound of 250. Restore the original settings and hydration status. Pin the paged layout fixture's diff expansion so it is independent of prior hydration. Assertions unchanged. |
+| P3-2 | `d984048f1a5` | A synthetic last overview thread fit only if the omission count was excluded from the shell. Reserve the worst-case count whenever the field is present. |
+
+- Whole focused `vp test run`: exit 0, 26 non-server files and 238 tests. From `apps/server`, `GOAT_TEST_TMP_GUARD=fail vp test run` on handlers.budget, PullRequestService.readableFallback and PullRequestService.viewedRevision: exit 0, three files and ten tests. Code tab `--sequence.shuffle --sequence.seed=1`: exit 0, eight tests. Web typecheck exit 0.
+- `VITEST_MAX_WORKERS=2 vp run check:changed origin/chase/t3-261114-next3`: exit 1, 37,854 passed, 67 failed, 21 skipped in 2,810 files. All non-test steps passed, including 42-package typecheck. The same 66 test names failed at `00b419cbc1d`: 44 SSH workspace, 16 Grok, 1 SSH tunnel, 1 Swift schema probe and 4 PostgreSQL relay. Eight representative cases across seven files reproduced the same failure modes on integration `6def29ca359` and `258239d88f0` (both probes exit 1): remote Git initialization, SSH shim Node lookup, Grok ACP exit 127, Swift SDK/compiler mismatch, missing PostgreSQL tools. The extra `GuestPage` timeout did not reproduce when the whole file ran in isolation: exit 0, three tests on lane and both integration heads.
+- NOT RUN: integrated P1 client captures, live forge cases, hosted lane CI, independent re-review, full baseline gate.
