@@ -88,6 +88,11 @@ describe("AcpMcpOverAcpBridge", () => {
         .message({ connectionId: connected.connectionId, method: "tools/list" })
         .pipe(Effect.flip);
       expect(closing.message).toContain("Unknown MCP-over-ACP connection");
+      const duplicate = yield* bridge
+        .disconnect({ connectionId: connected.connectionId })
+        .pipe(Effect.flip);
+      expect(duplicate.message).toContain("Unknown MCP-over-ACP connection");
+      expect(deletes).toBe(1);
       deleteResponse.resolve();
       expect((yield* Fiber.join(rejected)).message).toContain("HTTP 503");
       yield* bridge.disconnect({ connectionId: connected.connectionId });

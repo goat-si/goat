@@ -1,3 +1,4 @@
+import * as Exit from "effect/Exit";
 // @effect-diagnostics preferSchemaOverJson:off
 import * as Effect from "effect/Effect";
 import * as Semaphore from "effect/Semaphore";
@@ -85,12 +86,16 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
   const fetchImplementation = options.fetchImplementation ?? fetch;
   const connections = yield* Effect.sync(() => new Map<string, Connection>());
 
-  const connectionFor = (connectionId: string): Effect.Effect<Connection, AcpMcpOverAcpError> =>
+  const connectionFor = (connectionId: string, markClosing = false) =>
     Effect.suspend(() => {
       const connection = connections.get(connectionId);
-      return connection === undefined || connection.closing
-        ? Effect.fail(new AcpMcpOverAcpError(`Unknown MCP-over-ACP connection "${connectionId}".`))
-        : Effect.succeed(connection);
+      if (connection === undefined || connection.closing) {
+        return Effect.fail(
+          new AcpMcpOverAcpError(`Unknown MCP-over-ACP connection "${connectionId}".`),
+        );
+      }
+      if (markClosing) connection.closing = true;
+      return Effect.succeed(connection);
     });
 
   // Only initialization needs ordering; negotiated calls may wait independently.
@@ -150,15 +155,14 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
   const disconnect = Effect.fn("mcpOverAcpBridge.disconnect")(function* (
     request: AcpSchema.DisconnectMcpRequest,
   ): Effect.fn.Return<AcpSchema.DisconnectMcpResponse, AcpMcpOverAcpError> {
-    const connection = yield* connectionFor(request.connectionId);
-    connection.closing = true;
-    return yield* disconnectRemote(connection).pipe(
-      Effect.tap(() => Effect.sync(() => connections.delete(request.connectionId))),
-      Effect.ensuring(
+    return yield* Effect.acquireUseRelease(
+      connectionFor(request.connectionId, true),
+      disconnectRemote,
+      (connection, result) =>
         Effect.sync(() => {
+          if (Exit.isSuccess(result)) connections.delete(request.connectionId);
           connection.closing = false;
         }),
-      ),
     );
   });
 
