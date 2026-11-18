@@ -17,6 +17,17 @@ import {
   preparePullRequestThread,
 } from "./GitManagerTestHarness.ts";
 
+const findExistingPrWorktree = Effect.fn("findExistingPrWorktree")(function* (repoDir: string) {
+  const entries = (yield* runGit(repoDir, ["worktree", "list", "--porcelain"])).stdout;
+  const worktree = entries
+    .split("\n\n")
+    .find((entry) => entry.includes("branch refs/heads/feature/pr-existing"))
+    ?.split("\n")[0]
+    ?.slice("worktree ".length);
+  if (worktree === undefined) throw new Error("Expected the existing PR branch worktree");
+  return worktree;
+});
+
 it.layer(layerGitManagerTest)("GitManager existing PR branches", (it) => {
   it.effect.each([
     { localBranch: "ahead", expectedHead: "local", isOnPullRequestHead: false },
@@ -25,6 +36,7 @@ it.layer(layerGitManagerTest)("GitManager existing PR branches", (it) => {
     { localBranch: "rewritten-fetched", expectedHead: "local", isOnPullRequestHead: false },
     { localBranch: "wrong-ref", expectedHead: "pull request", isOnPullRequestHead: true },
     { localBranch: "stale-head", expectedHead: "local", isOnPullRequestHead: false },
+    { localBranch: "ignored-collision", expectedHead: "local", isOnPullRequestHead: false },
     { localBranch: "checkout-race", expectedHead: "pull request", isOnPullRequestHead: true },
   ] as const)(
     "moves an existing PR branch into a new worktree only when nothing is lost ($localBranch)",
@@ -37,6 +49,10 @@ it.layer(layerGitManagerTest)("GitManager existing PR branches", (it) => {
         yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
         yield* runGit(repoDir, ["checkout", "-b", "feature/pr-existing"]);
         NodeFS.writeFileSync(NodePath.join(repoDir, "existing.txt"), "pushed\n");
+        if (localBranch === "ignored-collision") {
+          NodeFS.writeFileSync(NodePath.join(repoDir, ".gitignore"), "local.cfg\n");
+          yield* runGit(repoDir, ["add", ".gitignore"]);
+        }
         yield* runGit(repoDir, ["add", "existing.txt"]);
         yield* runGit(repoDir, ["commit", "-m", "Pushed PR commit"]);
         yield* runGit(repoDir, ["push", "-u", "origin", "feature/pr-existing"]);
@@ -47,6 +63,10 @@ it.layer(layerGitManagerTest)("GitManager existing PR branches", (it) => {
         } else if (!localBranch.startsWith("rewritten")) {
           yield* runGit(repoDir, ["checkout", "-b", "author-push"]);
           NodeFS.writeFileSync(NodePath.join(repoDir, "authored.txt"), "authored\n");
+          if (localBranch === "ignored-collision") {
+            NodeFS.writeFileSync(NodePath.join(repoDir, "local.cfg"), "tracked PR content\n");
+            yield* runGit(repoDir, ["add", "-f", "local.cfg"]);
+          }
           yield* runGit(repoDir, ["add", "authored.txt"]);
           yield* runGit(repoDir, ["commit", "-m", "New PR head commit"]);
           yield* runGit(repoDir, ["push", "origin", "author-push:feature/pr-existing"]);
@@ -86,13 +106,20 @@ it.layer(layerGitManagerTest)("GitManager existing PR branches", (it) => {
         }
         const gate = {
           matches: (args: ReadonlyArray<string>) =>
-            args[0] === "fetch" &&
-            args.some((arg) => arg.startsWith("+refs/heads/feature/pr-existing:")),
+            localBranch === "ignored-collision"
+              ? args[0] === "merge-base" &&
+                args[1] === "--is-ancestor" &&
+                args[2] === localHead &&
+                args[3] === pullHead
+              : args[0] === "fetch" &&
+                args.some((arg) => arg.startsWith("+refs/heads/feature/pr-existing:")),
           reached: yield* Deferred.make<void>(),
           release: yield* Deferred.make<void>(),
         };
         const { manager } = yield* makeManager({
-          ...(localBranch === "checkout-race" ? { gitSpawnGate: gate } : {}),
+          ...(localBranch === "checkout-race" || localBranch === "ignored-collision"
+            ? { gitSpawnGate: gate }
+            : {}),
           providerScenario: {
             pullRequest: {
               number: 88,
@@ -126,15 +153,28 @@ it.layer(layerGitManagerTest)("GitManager existing PR branches", (it) => {
           expect(checkout.exitCode).not.toBe(0);
           expect((yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim()).toBe("main");
         }
+        if (localBranch === "ignored-collision") {
+          yield* Deferred.await(gate.reached);
+          const worktree = yield* findExistingPrWorktree(repoDir);
+          const ignoredFile = NodePath.join(worktree, "local.cfg");
+          NodeFS.writeFileSync(ignoredFile, "ignored user content\n");
+          expect((yield* runGit(worktree, ["status", "--porcelain"])).stdout).toBe("");
+          yield* Deferred.succeed(gate.release, undefined);
+        }
         const result = yield* Fiber.join(preparing);
+        const worktree = result.worktreePath;
+        if (worktree === null) throw new Error("Expected a PR worktree");
+        if (localBranch === "ignored-collision") {
+          expect(NodeFS.readFileSync(NodePath.join(worktree, "local.cfg"), "utf8")).toBe(
+            "ignored user content\n",
+          );
+        }
 
         const head = expectedHead === "local" ? localHead : pullHead;
         expect((yield* runGit(repoDir, ["rev-parse", "feature/pr-existing"])).stdout.trim()).toBe(
           head,
         );
-        expect(
-          (yield* runGit(result.worktreePath as string, ["rev-parse", "HEAD"])).stdout.trim(),
-        ).toBe(head);
+        expect((yield* runGit(worktree, ["rev-parse", "HEAD"])).stdout.trim()).toBe(head);
         expect(result).toMatchObject({ branch: "feature/pr-existing", isOnPullRequestHead });
       }),
   );
@@ -184,13 +224,7 @@ it.layer(layerGitManagerTest)("GitManager existing PR branches", (it) => {
         preparePullRequestThread(manager, { cwd: repoDir, reference: "88", mode: "worktree" }),
       );
       yield* Deferred.await(gate.reached);
-      const entries = (yield* runGit(repoDir, ["worktree", "list", "--porcelain"])).stdout;
-      const worktree = entries
-        .split("\n\n")
-        .find((entry) => entry.includes("branch refs/heads/feature/pr-existing"))
-        ?.split("\n")[0]
-        ?.slice("worktree ".length);
-      if (worktree === undefined) throw new Error("Expected the existing PR branch worktree");
+      const worktree = yield* findExistingPrWorktree(repoDir);
       const edited = NodePath.join(worktree, "README.md");
       NodeFS.writeFileSync(edited, "staged user edit\n");
       yield* runGit(worktree, ["add", "README.md"]);

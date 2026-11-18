@@ -4521,7 +4521,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         input.cwd,
         // reset --merge refuses tracked edits racing our cleanliness check, preserving work like --ff-only does.
         isAncestor
-          ? ["merge", "--ff-only", input.targetCommit]
+          ? ["merge", "--ff-only", "--no-overwrite-ignore", input.targetCommit]
           : ["reset", "--merge", input.targetCommit],
         {
           // Killing a slow checkout partway through strands a half-updated working tree.
