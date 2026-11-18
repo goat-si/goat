@@ -1,0 +1,113 @@
+import * as Effect from "effect/Effect";
+import type {
+  OpenCodeChildExecution,
+  OpenCodeSubagentContext,
+  OpenCodeThreadState,
+  TerminalTurnStatus,
+} from "./adapterState.ts";
+
+const MAX_UNCORRELATED_OUTCOMES = 1024;
+
+export function makeDetachedChildOutcomes(
+  parentOf: (sessionId: string) => OpenCodeThreadState | undefined,
+) {
+  const outcomes = new Map<string, TerminalTurnStatus>();
+  const unstarted = new Set<string>();
+  const stops = new Map<string, number>();
+  const isStopping = (sessionId: string) => {
+    for (let parent = parentOf(sessionId); parent; parent = parent.parentSubagent?.parentState) {
+      if (stops.has(parent.nativeSessionId)) return true;
+    }
+    return false;
+  };
+
+  return {
+    isStopping,
+    claim(
+      sessionId: string,
+      previous: OpenCodeChildExecution | undefined,
+      resumesSession: boolean,
+      busy: boolean,
+    ): OpenCodeChildExecution {
+      const resumed = previous !== undefined || resumesSession;
+      const pendingResume = previous?.pendingResume;
+      const outcome = resumed ? pendingResume?.outcome : outcomes.get(sessionId);
+      if (previous !== undefined) delete previous.pendingResume;
+      outcomes.delete(sessionId);
+      return {
+        resumed,
+        awaitingStart: resumed ? pendingResume === undefined : !busy,
+        outcome,
+      };
+    },
+    created(sessionId: string, busy: boolean) {
+      if (!busy && unstarted.size < MAX_UNCORRELATED_OUTCOMES) unstarted.add(sessionId);
+    },
+    isUnstarted: (sessionId: string) => unstarted.has(sessionId),
+    clearUnstarted: (sessionId: string) => unstarted.delete(sessionId),
+    start(execution: OpenCodeChildExecution | undefined) {
+      if (execution?.outcome !== undefined) execution.pendingResume ??= {};
+      else if (execution !== undefined) execution.awaitingStart = false;
+    },
+    observe(
+      sessionId: string,
+      status: TerminalTurnStatus,
+      execution?: OpenCodeChildExecution,
+      finalized = false,
+    ) {
+      if (execution?.pendingResume !== undefined) {
+        execution.pendingResume.outcome ??=
+          !finalized && isStopping(sessionId) ? "interrupted" : status;
+        return;
+      }
+      if (execution?.awaitingStart && !finalized && (status === "completed" || execution.resumed))
+        return;
+      const prior = execution === undefined ? outcomes.get(sessionId) : execution.outcome;
+      const outcome = finalized
+        ? status
+        : (prior ?? (isStopping(sessionId) ? "interrupted" : status));
+      if (execution !== undefined) {
+        execution.outcome = outcome;
+        return outcome;
+      }
+      if (!outcomes.has(sessionId) && outcomes.size >= MAX_UNCORRELATED_OUTCOMES) {
+        const oldest = outcomes.keys().next();
+        if (!oldest.done) outcomes.delete(oldest.value);
+      }
+      outcomes.set(sessionId, outcome);
+      return outcome;
+    },
+    stoppedBeforeLaunch(execution: OpenCodeChildExecution | undefined) {
+      if (execution !== undefined) execution.outcome = "interrupted";
+    },
+    withStop<A, E, R>(sessionId: string, stop: Effect.Effect<A, E, R>) {
+      return Effect.acquireUseRelease(
+        Effect.sync(() => stops.set(sessionId, (stops.get(sessionId) ?? 0) + 1)),
+        () => stop,
+        () =>
+          Effect.sync(() => {
+            const count = stops.get(sessionId) ?? 0;
+            if (count <= 1) stops.delete(sessionId);
+            else stops.set(sessionId, count - 1);
+          }),
+      );
+    },
+  };
+}
+
+function isChildCallUnder(context: OpenCodeSubagentContext, sessionId: string): boolean {
+  for (
+    let owner: OpenCodeThreadState | undefined = context.parentState;
+    owner;
+    owner = owner.parentSubagent?.parentState
+  ) {
+    if (owner.nativeSessionId === sessionId) return true;
+  }
+  return false;
+}
+
+export function* childCallsToStop(contexts: Iterable<OpenCodeSubagentContext>, sessionId: string) {
+  for (const context of contexts) {
+    if (context.launchOutcome === undefined && isChildCallUnder(context, sessionId)) yield context;
+  }
+}

@@ -182,3 +182,17 @@ export const createPreviewPopupLifecycle = (
     dispose,
   };
 };
+
+/** Native children retain the opener, POST body and profile for sign-in redirects. */
+export const previewWindowOpenAction = (details: {
+  readonly url: string;
+  readonly disposition: Electron.HandlerDetails["disposition"];
+  readonly postBody?: Electron.PostBody;
+}): "popup" | "new-tab" | "deny" => {
+  if (isBlankPopupUrl(details.url)) return "popup";
+  if (!popupWebOrigin(details.url)) return "deny";
+  if (details.disposition === "new-window" || details.postBody) return "popup";
+  return details.disposition === "foreground-tab" || details.disposition === "background-tab"
+    ? "new-tab"
+    : "popup";
+};

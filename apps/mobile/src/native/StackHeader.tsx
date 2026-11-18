@@ -190,7 +190,8 @@ export function NativeStackScreenOptions(props: {
 }) {
   const navigation = useNativeStackNavigation();
   const setOptions = useScreenOptionsWriter();
-  const tabActive = use(NativeWorkspaceTabActivityContext)?.active ?? true;
+  const tabActivity = use(NativeWorkspaceTabActivityContext);
+  const canWriteOptions = tabActivity === null || tabActivity.active || tabActivity.prewarming;
   const lastAppliedOptionsSignatureRef = useRef<string | undefined>(undefined);
   const latestOptionFunctionsRef = useRef(new Map<string, (...args: unknown[]) => unknown>());
   const optionFunctionWrappersRef = useRef(new Map<string, (...args: unknown[]) => unknown>());
@@ -209,7 +210,7 @@ export function NativeStackScreenOptions(props: {
           optionFunctionWrappersRef.current,
         )
       : undefined;
-    if (!tabActive) {
+    if (!canWriteOptions) {
       lastAppliedOptionsSignatureRef.current = undefined;
       return;
     }
@@ -233,7 +234,7 @@ export function NativeStackScreenOptions(props: {
         optionFunctionWrappersRef.current,
       ) as NativeStackNavigationOptions,
     );
-  }, [setOptions, props.options, props.optionsVersion, tabActive]);
+  }, [setOptions, props.options, props.optionsVersion, canWriteOptions]);
 
   useEffect(() => {
     if (!navigation || !props.listeners) {

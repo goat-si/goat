@@ -41,6 +41,7 @@ import type {
 import type { CompactBeforeSendState } from "./CompactBeforeSendNotice";
 import type { ThreadFeedHistoryControls } from "./ThreadFeed";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
+import type { RedirectBeforeDispatch } from "../../state/redirectSettings";
 
 export interface ThreadDetailScreenProps {
   readonly cloudState: CloudTaskState;
@@ -131,10 +132,7 @@ export interface ThreadDetailScreenProps {
   readonly onResumeQueue: (() => Promise<void>) | null;
   readonly onSendMessage: (
     followUp?: ActiveTurnComposerAction,
-    beforeDispatch?: (
-      text: string,
-      hasAttachmentsOrContext: boolean,
-    ) => Promise<boolean | "responded">,
+    beforeDispatch?: RedirectBeforeDispatch,
     onWillEnqueue?: () => void,
   ) => Promise<MessageId | null>;
   readonly onReconnectEnvironment: () => void;

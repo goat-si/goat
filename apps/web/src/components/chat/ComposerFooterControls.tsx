@@ -15,7 +15,7 @@ import { ComposerControl, ComposerControlIcon, ComposerSelectControl } from "./C
 import { useComposerMenuProps } from "./composerEventScope";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import type { ComposerVoiceButtonProps } from "./ComposerVoiceButton";
-import { resolveModelPickerSelectedModel } from "./ModelPickerContent";
+import { resolveModelPickerSelectedModel } from "./ProviderModelPicker.logic";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import { runtimeModeConfig } from "./runtimeModeConfig";
 import { useComposerMenuState } from "./useComposerMenuState";

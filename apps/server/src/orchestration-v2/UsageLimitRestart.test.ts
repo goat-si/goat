@@ -3,6 +3,7 @@ import { CommandId, EventId, MessageId, RunId, TurnItemId } from "@goat/contract
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
@@ -174,6 +175,17 @@ it.effect.each(["unsent", "started", "untagged", "disabled", "different", "prese
         scenario === "started" || scenario === "untagged" || scenario === "preserved",
       );
       yield* recovery.reconcile("startup");
+      if (scenario === "unsent") {
+        const store = yield* EventStore.EventStoreV2;
+        const notices = yield* store.read({ threadId, eventType: "turn-item.updated" }).pipe(
+          Stream.filter(
+            ({ event }) =>
+              event.type === "turn-item.updated" && event.payload.type === "system_notice",
+          ),
+          Stream.runCollect,
+        );
+        assert.isEmpty(notices);
+      }
       assert.equal(
         (yield* projections.getThread(threadId)).limitRecovery?.requestId,
         projection.thread.limitRecovery?.requestId,

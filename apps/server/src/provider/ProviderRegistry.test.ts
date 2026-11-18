@@ -4,6 +4,8 @@ import {
   layerMockSpawner,
   writeFakeCodexCli,
   makeMutableServerSettingsService,
+  layerBackgroundPolicyAlwaysRun,
+  withBundledCompatibility,
 } from "./ProviderRegistry.testkit.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as CodexErrors from "effect-codex-app-server/errors";
@@ -19,7 +21,6 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it, assert, expect } from "@effect/vitest";
 
-import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 
@@ -55,10 +56,8 @@ import { createModelCapabilities } from "@goat/shared/model";
 
 import { checkCodexProviderStatus } from "./CodexProvider.ts";
 import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
-import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as AntigravityInstallation from "./AntigravityInstallation.ts";
 import * as ModelManifest from "./ModelManifest.ts";
-import { applyProviderCompatibility } from "./providerCompatibility.ts";
 import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -113,49 +112,12 @@ const defaultCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({})
 
 process.env.GOAT_CURSOR_ENABLED = "1";
 
-const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
-const withBundledCompatibility = (snapshot: ServerProvider) =>
-  applyProviderCompatibility(
-    snapshot,
-    undefined,
-    ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
-  );
-
 const layerTestHttpClient = Layer.succeed(
   HttpClient.HttpClient,
   HttpClient.make((request) =>
     Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ version: "0.0.0" }))),
   ),
 ).pipe(Layer.provideMerge(ModelManifest.layerTest));
-
-const layerBackgroundPolicyAlwaysRun = Layer.mock(BackgroundPolicy.BackgroundPolicy)({
-  reportClientActivity: () => Effect.void,
-  removeRpcClient: () => Effect.void,
-  reportHostPowerState: () => Effect.void,
-  snapshot: Effect.succeed({
-    hostPower: {
-      source: "unknown",
-      idle: "unknown",
-      idleSeconds: null,
-      locked: "unknown",
-      suspended: false,
-      onBattery: "unknown",
-      lowPowerMode: "unknown",
-      thermalState: "unknown",
-      stale: true,
-      updatedAt: TEST_EPOCH,
-    },
-    leases: [],
-    activeForegroundLeaseCount: 0,
-    activeScopeKeys: [],
-    shouldRunOpportunisticWork: true,
-    updatedAt: TEST_EPOCH,
-  }),
-  streamChanges: Stream.empty,
-  hasDemand: () => Effect.succeed(true),
-  shouldRunScopeWork: () => Effect.succeed(true),
-  shouldRunOpportunisticWork: Effect.succeed(true),
-});
 
 const awaitPersistedProvider = (
   registry: ProviderRegistry.ProviderRegistry["Service"],
@@ -621,7 +583,7 @@ it.layer(
       );
     });
 
-    it("retains stale OpenCode models when a refresh fails", () => {
+    it("retains stale OpenCode models when a refresh fails or lists none", () => {
       const previousProvider = {
         instanceId: ProviderInstanceId.make("opencode"),
         driver: ProviderDriverKind.make("opencode"),
@@ -671,6 +633,18 @@ it.layer(
         ProviderRegistry.mergeProviderSnapshot(previousProvider, refreshedProvider).skills,
         previousProvider.skills,
       );
+
+      const coldProbe = {
+        ...refreshedProvider,
+        status: "warning",
+        message: "OpenCode 2 is running, but it did not list any models yet.",
+        slashCommands: [],
+        skills: [],
+      } satisfies ServerProvider;
+      const merged = ProviderRegistry.mergeProviderSnapshot(previousProvider, coldProbe);
+      assert.deepStrictEqual(merged.models, [...previousProvider.models]);
+      assert.deepStrictEqual(merged.slashCommands, previousProvider.slashCommands);
+      assert.deepStrictEqual(merged.skills, previousProvider.skills);
     });
 
     describe("Pi model inventories", () => {

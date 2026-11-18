@@ -78,6 +78,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "DisposableMachines",
   "DisposableMachineRequests",
   "DisposableMachineEnrollment",
+  "ScheduledTaskFirstBindIntent",
 ]);
 
 type MigrationEntry<E> = readonly [
@@ -190,44 +191,53 @@ export const assertMemoryMigrationsCompatible = Effect.fn("assertMemoryMigration
           SELECT migration_id, name FROM effect_sql_migrations
         `
       : [];
-    const currentIds = new Map(entries.map(([id, name]) => [name, id]));
-    const memoryRows = history.filter((row) => row.name.startsWith("Memory"));
-    const goatOffsets = new Set(
-      history.flatMap((row) => {
-        const currentId = currentIds.get(row.name);
-        const goatRow = GOAT_MIGRATION_NAMES.has(row.name) || row.name.startsWith("Memory");
-        return goatRow && currentId !== undefined ? [row.migration_id - currentId] : [];
-      }),
+    const problem = memoryMigrationProblem(
+      entries,
+      history,
+      tables.some((table) => table.name.startsWith("memory_")),
     );
-    const recordedNames = new Set(history.map((row) => row.name));
-    const skipsEarlierGoat = memoryRows.some((row) => {
-      const memoryId = currentIds.get(row.name);
-      return (
-        memoryId !== undefined &&
-        entries.some(
-          ([id, name]) =>
-            GOAT_MIGRATION_NAMES.has(name) && id < memoryId && !recordedNames.has(name),
-        )
-      );
-    });
-    const incompatibleLedger =
-      memoryRows.length > 0 &&
-      (memoryRows.some((row) => !currentIds.has(row.name)) ||
-        goatOffsets.size > 1 ||
-        skipsEarlierGoat);
-    const unrecordedMemory =
-      tables.some((table) => table.name.startsWith("memory_")) &&
-      !history.some((row) => row.name === "Memory");
-    // Preserve the evidence of unreleased memory before any startup reconciliation writes.
-    if (incompatibleLedger || unrecordedMemory) {
-      return yield* new Migrator.MigrationError({
-        kind: "BadState",
-        message:
-          "Unreleased memory DB is incompatible; reset this sandbox's memory development state and restart.",
-      });
-    }
+    if (problem !== undefined) return yield* problem;
   },
 );
+
+export function memoryMigrationProblem<E>(
+  entries: ReadonlyArray<MigrationEntry<E>>,
+  history: ReadonlyArray<{ readonly migration_id: number; readonly name: string }>,
+  hasMemoryTables: boolean,
+): Migrator.MigrationError | undefined {
+  const currentIds = new Map(entries.map(([id, name]) => [name, id]));
+  const memoryRows = history.filter((row) => row.name.startsWith("Memory"));
+  const goatOffsets = new Set(
+    history.flatMap((row) => {
+      const currentId = currentIds.get(row.name);
+      const goatRow = GOAT_MIGRATION_NAMES.has(row.name) || row.name.startsWith("Memory");
+      return goatRow && currentId !== undefined ? [row.migration_id - currentId] : [];
+    }),
+  );
+  const recordedNames = new Set(history.map((row) => row.name));
+  const skipsEarlierGoat = memoryRows.some((row) => {
+    const memoryId = currentIds.get(row.name);
+    return (
+      memoryId !== undefined &&
+      entries.some(
+        ([id, name]) => GOAT_MIGRATION_NAMES.has(name) && id < memoryId && !recordedNames.has(name),
+      )
+    );
+  });
+  const incompatibleLedger =
+    memoryRows.length > 0 &&
+    (memoryRows.some((row) => !currentIds.has(row.name)) ||
+      goatOffsets.size > 1 ||
+      skipsEarlierGoat);
+  const unrecordedMemory = hasMemoryTables && !history.some((row) => row.name === "Memory");
+  if (incompatibleLedger || unrecordedMemory) {
+    return new Migrator.MigrationError({
+      kind: "BadState",
+      message:
+        "Unreleased memory DB is incompatible; reset this sandbox's memory development state and restart.",
+    });
+  }
+}
 
 const readHistory = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -261,19 +271,20 @@ const runNextDisplaced = Effect.fn("reconcileGoatMigrationIds.runNextDisplaced")
   return [id, name] as const;
 });
 
+type LedgerRow = { readonly migration_id: number; readonly name: string };
+
 /**
- * Moves recorded GOAT migrations to their current ids, refusing before any write when one would
- * land on an id another migration recorded. The first displaced upstream migration commits with
- * the move: a build from before the shift, reading a moved ledger that holds only names it knows,
- * would move it back and start; with that name recorded it refuses as a newer database (exit 79).
+ * The ledger moveGoatLedger would leave, or the error it refuses with; undefined when nothing
+ * moves. Pure, so the update preflight reaches the same answer without writing.
  */
-const moveGoatLedger = Effect.fn("reconcileGoatMigrationIds.moveGoatLedger")(function* <E>(
+export const plannedGoatLedger = <E>(
   entries: ReadonlyArray<MigrationEntry<E>>,
-) {
-  const sql = yield* SqlClient.SqlClient;
-  yield* assertMemoryMigrationsCompatible(entries);
-  const history = yield* readHistory;
-  if (history === undefined || !goatMigrationIdsMove(entries, history)) return [];
+  history: ReadonlyArray<LedgerRow>,
+):
+  | { readonly moved: ReadonlyArray<LedgerRow>; readonly goatRows: ReadonlyArray<LedgerRow> }
+  | Migrator.MigrationError
+  | undefined => {
+  if (!goatMigrationIdsMove(entries, history)) return undefined;
   const currentIds = new Map(entries.map(([id, name]) => [name, id]));
   const goatRows = history.flatMap((row) => {
     const id = GOAT_MIGRATION_NAMES.has(row.name) ? currentIds.get(row.name) : undefined;
@@ -288,7 +299,7 @@ const moveGoatLedger = Effect.fn("reconcileGoatMigrationIds.moveGoatLedger")(fun
     (row) => GOAT_MIGRATION_NAMES.has(row.name) && !currentIds.has(row.name),
   );
   if (unknownGoat || goatRows.some((row) => upstreamRows.has(row.migration_id))) {
-    return yield* new Migrator.MigrationError({
+    return new Migrator.MigrationError({
       kind: "BadState",
       message: "Cannot move GOAT migrations onto ids another migration recorded.",
     });
@@ -300,7 +311,7 @@ const moveGoatLedger = Effect.fn("reconcileGoatMigrationIds.moveGoatLedger")(fun
     if (GOAT_MIGRATION_NAMES.has(name) || id > highestMoved || id < FIRST_V2_MIGRATION_ID) continue;
     if (recorded === undefined) continue;
     if (recorded !== name) {
-      return yield* new Migrator.MigrationError({
+      return new Migrator.MigrationError({
         kind: "BadState",
         message: `Migration ${id} is recorded as ${recorded}, expected ${name}.`,
       });
@@ -318,7 +329,26 @@ const moveGoatLedger = Effect.fn("reconcileGoatMigrationIds.moveGoatLedger")(fun
     undefined,
     Math.max(0, ...history.map((row) => row.migration_id)),
   );
-  if (skipped !== undefined) return yield* skipped;
+  return skipped ?? { moved, goatRows };
+};
+
+/**
+ * Moves recorded GOAT migrations to their current ids, refusing before any write when one would
+ * land on an id another migration recorded. The first displaced upstream migration commits with
+ * the move: a build from before the shift, reading a moved ledger that holds only names it knows,
+ * would move it back and start; with that name recorded it refuses as a newer database (exit 79).
+ */
+const moveGoatLedger = Effect.fn("reconcileGoatMigrationIds.moveGoatLedger")(function* <E>(
+  entries: ReadonlyArray<MigrationEntry<E>>,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  yield* assertMemoryMigrationsCompatible(entries);
+  const history = yield* readHistory;
+  if (history === undefined) return [];
+  const plan = plannedGoatLedger(entries, history);
+  if (plan === undefined) return [];
+  if (plan instanceof Migrator.MigrationError) return yield* plan;
+  const { moved, goatRows } = plan;
   yield* sql`DELETE FROM effect_sql_migrations WHERE name IN ${sql.in(goatRows.map((row) => row.name))}`;
   for (const row of goatRows) {
     yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${row.migration_id}, ${row.name})`;

@@ -490,17 +490,17 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       const { service, fs, statePath, makeService } = yield* makeHarness();
       const path = yield* Path.Path;
       yield* service.install();
-      const newer = yield* makeService(undefined, "1.2.4");
       const unitPath = (yield* service.status).unitPath;
-      yield* fs.remove(unitPath);
-      yield* fs.makeDirectory(unitPath);
-      yield* fs.writeFileString(path.join(unitPath, "occupied"), "");
-
+      const newer = yield* makeService(undefined, "1.2.4").pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          rename: (from, to) => fs.rename(from, to === unitPath ? path.dirname(to) : to),
+        }),
+      );
       const error = yield* newer.install({ start: false }).pipe(Effect.flip);
       expect(error._tag).toBe("BootServiceInstallError");
-      expect(
-        yield* fs.exists(path.join(path.dirname(statePath), SERVICE_RESTART_PENDING_FILE)),
-      ).toBe(true);
+      const restartPending = path.join(path.dirname(statePath), SERVICE_RESTART_PENDING_FILE);
+      expect(yield* fs.exists(restartPending)).toBe(true);
     }),
   );
 

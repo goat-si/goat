@@ -1,3 +1,4 @@
+import { stopUnresponsiveScript } from "./stopUnresponsiveScript.ts";
 /**
  * Stop on a loading tab. Chromium can answer Page.stopLoading without a Playwright load or
  * requestfailed event, so the tab settles its own status.
@@ -30,9 +31,13 @@ export const stoppedFirstRequest = (tab: StoppableTab, url: string) => {
 };
 
 /** A hard reload is a new navigation, never the first load Stop ended. */
-export const hardReload = (tab: StoppableTab, session: Pick<CDPSession, "send">) => {
+export const hardReload = async (
+  tab: StoppableTab & { readonly dialog?: unknown; readonly closing?: boolean },
+  session: Pick<CDPSession, "send">,
+) => {
   tab.pendingInitialRequestUrl = null;
-  return session.send("Page.reload", { ignoreCache: true });
+  await stopUnresponsiveScript(session, () => !tab.dialog && !tab.closing);
+  if (!tab.closing) return session.send("Page.reload", { ignoreCache: true });
 };
 
 export const makeStopLoading = <Tab extends StoppableTab>(settled: (tab: Tab) => void) => {
