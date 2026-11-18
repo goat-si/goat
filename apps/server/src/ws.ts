@@ -634,25 +634,6 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
           }),
       ),
     );
-    const eventStreamFrom = (afterSequence: number) =>
-      threadManagement
-        .streamStoredEventsFrom({
-          threadId: input.threadId,
-          afterSequence,
-        })
-        .pipe(
-          Stream.map(threadStreamEventItem),
-          withLegacyThreadVisits(input, threadManagement),
-          coalesceThreadLiveStream,
-          Stream.mapError(
-            (cause) =>
-              new OrchestrationV2GetThreadProjectionError({
-                threadId: input.threadId,
-                message: `Failed while streaming orchestration V2 thread ${input.threadId}`,
-                cause,
-              }),
-          ),
-        );
     const loadReplayThrough = (afterSequence: number, throughSequence: number) =>
       applicationEvents
         .readAgentEvents({
@@ -686,7 +667,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
         ? Stream.make({ kind: "synchronized" as const })
         : Stream.empty;
 
-    const snapshotThenLive = Effect.fn("ws.orchestrationV2.threadSnapshotThenLive")(function* () {
+    const loadSnapshot = Effect.fn("ws.orchestrationV2.loadThreadSnapshot")(function* () {
       const useBoundedSnapshot = shouldUseBoundedThreadSnapshot(input);
       const snapshot = yield* (
         useBoundedSnapshot
@@ -707,7 +688,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
         ),
       );
       const { snapshotSequence } = snapshot;
-      const snapshotItem = useBoundedSnapshot
+      return useBoundedSnapshot
         ? buildBoundedThreadStreamSnapshot({
             ...snapshot,
             compactTurnItems: input.acceptCompactTurnItems === true,
@@ -722,10 +703,33 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
               projection: dedupeBodies ? dedupeSnapshotBodies(projection) : projection,
             };
           })();
+    });
+
+    const eventStreamFrom = (afterSequence: number) =>
+      threadManagement
+        .streamStoredEventsFrom({
+          threadId: input.threadId,
+          afterSequence,
+        })
+        .pipe(
+          Stream.map(threadStreamEventItem),
+          coalesceThreadLiveStream,
+          Stream.mapError(
+            (cause) =>
+              new OrchestrationV2GetThreadProjectionError({
+                threadId: input.threadId,
+                message: `Failed while streaming orchestration V2 thread ${input.threadId}`,
+                cause,
+              }),
+          ),
+          withLegacyThreadVisits(input, loadSnapshot),
+        );
+    const snapshotThenLive = Effect.fn("ws.orchestrationV2.threadSnapshotThenLive")(function* () {
+      const snapshotItem = yield* loadSnapshot();
       return withLiveDedupe(
         Stream.concat(
           Stream.concat(rpcInitialItems([snapshotItem]), completionMarker),
-          eventStreamFrom(snapshotSequence),
+          eventStreamFrom(snapshotItem.snapshotSequence),
         ),
       );
     });

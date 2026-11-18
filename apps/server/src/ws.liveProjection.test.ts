@@ -150,8 +150,35 @@ it.effect("negotiates compact visits for both persisted replay and the live tail
         payload: { lastVisitedAt: nextVisit },
       },
     };
-    const subscribe = (acceptCompactVisits: boolean) =>
-      subscribeOrchestrationV2Thread({
+    const archived = {
+      ...projection,
+      thread: { ...projection.thread, lastVisitedAt: nextVisit, archivedAt: nextVisit },
+    };
+    const archive: OrchestrationV2StoredEvent = {
+      commandId: null,
+      sequence: next.sequence + 1,
+      event: {
+        type: "thread.archived",
+        id: EventId.make("event:wire-visit:archive"),
+        threadId,
+        occurredAt: nextVisit,
+        payload: archived.thread,
+      },
+    };
+    const afterArchive: OrchestrationV2StoredEvent = {
+      commandId: null,
+      sequence: archive.sequence + 1,
+      event: {
+        type: "thread.unarchived",
+        id: EventId.make("event:wire-visit:unarchive"),
+        threadId,
+        occurredAt: nextVisit,
+        payload: { ...archived.thread, archivedAt: null },
+      },
+    };
+    const subscribe = (acceptCompactVisits: boolean) => {
+      let servedInitialSnapshot = false;
+      return subscribeOrchestrationV2Thread({
         threadId,
         afterSequence: 0,
         ...(acceptCompactVisits ? { acceptCompactVisits } : {}),
@@ -161,30 +188,34 @@ it.effect("negotiates compact visits for both persisted replay and the live tail
         Effect.provide(
           Layer.mock(ThreadManagement.ThreadManagementService)({
             ensureLegacyTranscript: () => Effect.void,
-            streamStoredEventsFrom: () => Stream.make(next),
-            getThreadRecords: () => Effect.succeed(projection),
+            streamStoredEventsFrom: () => Stream.make(next, archive, afterArchive),
             getThreadSnapshot: () =>
-              Effect.succeed({ schemaVersion: 2, snapshotSequence: sequence, projection }),
+              Effect.sync(() => {
+                if (servedInitialSnapshot)
+                  return {
+                    schemaVersion: 2 as const,
+                    snapshotSequence: archive.sequence,
+                    projection: archived,
+                  };
+                servedInitialSnapshot = true;
+                return { schemaVersion: 2 as const, snapshotSequence: sequence, projection };
+              }),
           }),
         ),
       );
+    };
 
     const [oldClient, newClient] = yield* Effect.all([subscribe(false), subscribe(true)] as const);
     assert.deepEqual(oldClient, [
       { kind: "snapshot", snapshotSequence: sequence, projection },
-      {
-        kind: "event",
-        sequence: next.sequence,
-        event: {
-          ...next.event,
-          type: "thread.visited",
-          payload: { ...projection.thread, lastVisitedAt: nextVisit },
-        },
-      },
+      { kind: "snapshot", snapshotSequence: archive.sequence, projection: archived },
+      { kind: "event", sequence: afterArchive.sequence, event: afterArchive.event },
     ]);
     assert.deepEqual(newClient, [
       { kind: "event", sequence, event: recorded[0]!.event },
       { kind: "event", sequence: next.sequence, event: next.event },
+      { kind: "event", sequence: archive.sequence, event: archive.event },
+      { kind: "event", sequence: afterArchive.sequence, event: afterArchive.event },
     ]);
   }).pipe(Effect.provide(ReplayTestLayer)),
 );
