@@ -251,8 +251,9 @@ export function pendingBackgroundTurnItems<Item extends PendingBackgroundWorkTur
   );
 }
 
-// Explicit pull request watches count as monitors that keep the thread working
-// between wakes; automatic watches wake the agent without holding it working.
+// Explicit pull request watches are listed as monitors and keep the thread working while their
+// checks run; once every check finished they stay listed but hold nothing. Automatic watches wake
+// the agent without holding it working.
 export function derivePendingBackgroundWork(input: {
   readonly latestRun: PendingBackgroundWorkRun | null | undefined;
   readonly providerThreads: ReadonlyArray<PendingBackgroundWorkProviderThread>;
