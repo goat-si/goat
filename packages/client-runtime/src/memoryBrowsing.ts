@@ -114,7 +114,7 @@ export function memoryMoveCandidate(
   };
 }
 
-export function sameMemoryScope(left: MemoryScope, right: MemoryScope): boolean {
+function sameMemoryScope(left: MemoryScope, right: MemoryScope): boolean {
   if (left.kind === "user") return right.kind === "user";
   if (left.kind === "thread")
     return (
