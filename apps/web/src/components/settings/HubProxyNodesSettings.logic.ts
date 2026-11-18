@@ -12,11 +12,20 @@ export function hubProxyNodeActions(node: HubNode) {
   const preferred = node.routes[0]?.target.kind;
   const ssh = preferred === "ssh";
   const cloud = preferred === "cloud";
+  // The hub never installs GOAT on a machine it lists only because Pen does.
+  const pen = node.routes[0]?.pen !== undefined;
   return {
-    setup: node.environmentId === null && ssh,
+    setup: node.environmentId === null && ssh && !pen,
     linked: preferred === "linked",
     reachable: node.environmentId !== null && (ssh || cloud),
   };
+}
+
+/** What to say about a Pen member the hub lists but cannot open, or null. */
+export function hubProxyPenNotice(node: HubNode): string | null {
+  return node.routes[0]?.pen !== undefined && node.environmentId === null
+    ? "Pen member, GOAT not set up. Install GOAT on it, or add it here as an SSH host to set it up."
+    : null;
 }
 
 export function hubProxyFailureMessage(error: unknown, fallback: string): string {

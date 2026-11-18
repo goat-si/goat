@@ -31,6 +31,58 @@ const layer = Auth.layer.pipe(
   Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
+it.effect("closing the Pen membership view closes a socket without revoking its session", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Sessions.SessionStore;
+    const auth = yield* Auth.EnvironmentAuth;
+    const node = "a".repeat(26);
+    yield* sessions.followPenMembers(Effect.succeed(new Set([node])));
+    const issued = yield* sessions.issue({ penMemberNode: node });
+    const verified = yield* sessions.verify(issued.token, MAIN_LISTENER);
+    const ticket = yield* auth.issueWebSocketTicket(verified, { use: "rpc" });
+    const admitted = yield* Deferred.make<void>();
+    const routes = HttpRouter.add(
+      "GET",
+      "/ws",
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        const session = yield* auth.authenticateWebSocketUpgrade(request, "rpc");
+        return yield* Lifetime.run(
+          session,
+          Effect.gen(function* () {
+            const socket = yield* request.upgrade;
+            const reader = yield* socket.reader;
+            yield* Deferred.succeed(admitted, undefined);
+            yield* Stream.fromPull(Effect.succeed(reader.pull)).pipe(Stream.runDrain);
+            return HttpServerResponse.empty();
+          }),
+        );
+      }),
+    );
+    const origin = yield* serve(routes);
+    const closed = Promise.withResolvers<void>();
+    yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        const client = new NodeWS.WebSocket(
+          `${origin.replace(/^http/u, "ws")}ws?wsTicket=${encodeURIComponent(Redacted.value(ticket.ticket))}`,
+        );
+        client.on("close", () => closed.resolve());
+        client.on("error", () => {});
+        return client;
+      }),
+      (client) => Effect.sync(() => client.terminate()),
+    );
+    yield* Deferred.await(admitted);
+    yield* sessions.followPenMembers(Effect.succeed("closed"));
+    yield* Effect.promise(() => closed.promise);
+    expect(yield* sessions.listPenMemberSessions).toEqual([
+      { sessionId: issued.sessionId, penMemberNode: node },
+    ]);
+    yield* sessions.followPenMembers(Effect.succeed(new Set([node])));
+    expect((yield* sessions.readActiveScopes(issued.sessionId)).length).toBeGreaterThan(0);
+  }).pipe(Effect.scoped, Effect.provide(layer)),
+);
+
 it.effect.each([false, true])(
   "the hub socket lifetime helper closes on failed withdrawal (server-to-client traffic: %s)",
   (sendData) =>
