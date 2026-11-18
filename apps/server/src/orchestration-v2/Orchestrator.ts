@@ -1,4 +1,11 @@
 import {
+  holdUndeliveredSteers,
+  runDeferredSteeringReactor,
+  makeReleaseUnattendedHolds,
+  makeDeferSteerDuringSetup,
+  steeringMessageRefusal,
+} from "./goat/DeferredSteering.ts";
+import {
   cancelDelegatedTaskWork,
   delegatedTaskRunOutcome,
   readDelegatedTaskCancellation,
@@ -66,7 +73,7 @@ import {
   completionDeliveryMessage,
 } from "./goat/DelegatedCompletionMerge.ts";
 import { markThreadUnread } from "./ProjectionRunNotification.ts";
-import { runUpdateReactors } from "./runUpdateReactors.ts";
+import { relevantRunUpdate, runUpdateReactors } from "./runUpdateReactors.ts";
 import { makeRemoteDelegatedTasks } from "./goat/RemoteDelegatedTasks.ts";
 import { canSteerDelegatedCompletionIntoRun } from "./goat/DelegatedCompletionRouting.ts";
 import * as RuntimeAdmission from "../runtimeAdmission.ts";
@@ -1183,9 +1190,23 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         projection = yield* readCommandProjection(threadId);
       }
 
+      const automatic = options?.userStarted !== true;
+      if (automatic) {
+        const holds = yield* holdUndeliveredSteers(projection.runs);
+        if (holds.length > 0) yield* writeSystemEvents(holds);
+      }
       const storedQueuedRun =
         options?.queuedRunId === undefined
-          ? nextQueuedRun(projection)
+          ? nextQueuedRun(
+              automatic
+                ? {
+                    ...projection,
+                    runs: projection.runs.filter(
+                      (run) => run.steerWhenReadyAttemptId === undefined,
+                    ),
+                  }
+                : projection,
+            )
           : projection.runs.find(
               (run) => run.id === options.queuedRunId && run.status === "queued",
             );
@@ -1693,6 +1714,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           : "automatic-queue";
       const startingRun: OrchestrationV2Run = {
         ...queuedRun,
+        steerWhenReadyAttemptId: undefined,
         providerThreadId: queuedProviderThread.id,
         ordinal,
         status: "starting",
@@ -2042,51 +2064,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     );
   });
 
-  // A hold waits for a person to review what they queued. Nobody reviews messages from agents,
-  // the server or scheduled tasks, so a later completed run releases those unless it was stopped.
-  const releaseUnattendedHolds = Effect.fn("Orchestrator.releaseUnattendedHolds")(function* (
-    threadId: ThreadId,
-    completedRunId: RunId,
-  ) {
-    const held = yield* projectionStore.getHeldQueuedRuns(threadId);
-    if (held.length === 0) return;
-    const projection = yield* projectionStore.getThreadRecords(
-      threadId,
-      ["runs", "messages", "turnItems"],
-      {
-        messageIds: held.map((run) => run.userMessageId),
-        turnItemTypes: ["run_interrupt_request"],
-        turnItemRunIds: [completedRunId],
-      },
-    );
-    // Only the newest run completing shows the thread moved past the hold; a late or
-    // bookkeeping update to an older run, overtaken by a failure or Stop, does not.
-    if (
-      latestExecutedRun(projection.runs)?.id !== completedRunId ||
-      projection.turnItems.length > 0 ||
-      worktreeSetupPending(projection)
-    )
-      return;
-    const { messages } = projection;
-    const unattended = new Set(
-      messages
-        .filter((message) => message.createdBy !== "user" || message.scheduledTaskId !== undefined)
-        .map((message) => message.id),
-    );
-    const now = yield* DateTime.now;
-    const released = held.filter((run) => unattended.has(run.userMessageId));
-    if (released.length === 0) return;
-    yield* writeSystemEvents(
-      released.map((run) => ({
-        type: "run.updated" as const,
-        threadId,
-        runId: run.id,
-        providerInstanceId: run.providerInstanceId,
-        occurredAt: now,
-        payload: { ...run, queueHeld: false },
-      })),
-    );
-  });
+  const releaseUnattendedHolds = makeReleaseUnattendedHolds(projectionStore, writeSystemEvents);
 
   const resumeQueuedRuns = Effect.gen(function* () {
     const threadIds = yield* projectionStore.getRecoveryThreadIds("queued-runs");
@@ -4224,6 +4202,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
   });
 
+  const deferSteerDuringSetup = makeDeferSteerDuringSetup({
+    providerAdapters,
+    commandPolicy,
+    stopReachedRun: (command, threadId, runId) => stopReachedRun(command, threadId, runId),
+    OrchestratorDispatchError,
+  });
+
   const dispatchSteerIntoRun = Effect.fn("Orchestrator.dispatchSteerIntoRun")(function* (input: {
     readonly command: Extract<
       OrchestrationV2Command,
@@ -4267,24 +4252,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Target run ${input.targetRunId} was not found.`,
       });
     }
-    if (isNativeMaintenanceCommand(input)) {
+    const refusal = steeringMessageRefusal(input);
+    if (refusal !== undefined)
       return yield* new OrchestratorDispatchError({
         commandId: input.command.commandId,
         commandType: input.command.type,
-        cause:
-          input.text.trim().toLowerCase() === "/compact"
-            ? "Context compaction must run as a separate turn. Queue it or wait for the active turn to finish."
-            : "Signing out must run as a separate turn. Queue it or wait for the active turn to finish.",
+        cause: refusal,
       });
-    }
-    if (parseGoalCommand(input) !== null) {
-      return yield* new OrchestratorDispatchError({
-        commandId: input.command.commandId,
-        commandType: input.command.type,
-        cause:
-          "Goal commands must run as a separate turn. Queue it or wait for the active turn to finish.",
-      });
-    }
     const targetMessage = input.projection.messages.find(
       (message) => message.id === targetRun.userMessageId,
     );
@@ -5664,6 +5638,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             payload: { ...sourcePlan, status: "completed" },
           });
 
+    const steerTarget =
+      dispatchMode.type === "steer_active" &&
+      command.createdBy === "user" &&
+      command.deliveryIntent !== "auto"
+        ? projection.runs.find(
+            (run) => dispatchMode.type === "steer_active" && run.id === dispatchMode.targetRunId,
+          )
+        : undefined;
+    const steerWhenReadyAttemptId =
+      steerTarget === undefined
+        ? undefined
+        : yield* deferSteerDuringSetup(command, command, steerTarget, projection.providerTurns);
+    if (steerWhenReadyAttemptId !== undefined) dispatchMode = { type: "queue_after_active" };
     if (dispatchMode.type === "steer_active" || dispatchMode.type === "restart_active") {
       yield* ensureGoalCommandSupported(command, command, modelSelection.instanceId);
       yield* dispatchSteerIntoRun({
@@ -5736,6 +5723,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const incomingMessage = { ...command, delegatedCompletion };
     if (
       shouldQueue &&
+      steerWhenReadyAttemptId === undefined &&
       command.modelSelection === undefined &&
       queuedRunStop === undefined &&
       !followsCurrentConversation(incomingMessage) &&
@@ -5788,7 +5776,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         runId: held.id,
         providerInstanceId: held.providerInstanceId,
         occurredAt: releasedAt,
-        payload: { ...held, queueHeld: false },
+        payload: { ...held, queueHeld: false, steerWhenReadyAttemptId: undefined },
       });
     }
     if (shouldQueue) {
@@ -5918,7 +5906,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         rootNodeId,
         activeAttemptId: attemptId,
         status: "queued",
-        ...(worktreeMissingRun !== undefined ||
+        ...(steerWhenReadyAttemptId === undefined ? {} : { steerWhenReadyAttemptId }),
+        ...(steerTarget?.startHold !== undefined ||
+        worktreeMissingRun !== undefined ||
         steerFollowUpAfterStop ||
         (heldRunsToRelease.length === 0 &&
           queueIsHeld &&
@@ -8724,6 +8714,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         now,
       });
     }
+    const steerWhenReadyAttemptId = yield* deferSteerDuringSetup(
+      command,
+      queuedMessage,
+      target,
+      projection.providerTurns,
+    );
+    if (steerWhenReadyAttemptId !== undefined) {
+      yield* emitEvent({
+        type: "run.updated",
+        threadId: command.threadId,
+        runId: queuedRun.id,
+        nodeId: queuedRootNode.id,
+        providerInstanceId: queuedRun.providerInstanceId,
+        occurredAt: now,
+        payload: {
+          ...queuedRun,
+          steerWhenReadyAttemptId,
+          ...(target?.startHold === undefined ? {} : { queueHeld: true }),
+        },
+      });
+      return;
+    }
     yield* emitEvent({
       type: "run.updated",
       threadId: command.threadId,
@@ -8734,6 +8746,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       payload: {
         ...queuedRun,
         status: "cancelled",
+        steerWhenReadyAttemptId: undefined,
         terminationCause: { kind: "queued_replaced" },
         queuePosition: null,
         completedAt: now,
@@ -12517,7 +12530,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             runId: run.id,
             providerInstanceId: run.providerInstanceId,
             occurredAt: now,
-            payload: { ...run, queueHeld: false },
+            payload: { ...run, queueHeld: false, steerWhenReadyAttemptId: undefined },
           });
         }
         if (queued.length === 0) {
@@ -13044,28 +13057,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     return providerThreadsWithBackgroundWork.delete(event.payload.id);
   };
+  yield* runDeferredSteeringReactor(terminalEventsAfterSequence, eventSink, {
+    projections: projectionStore,
+    locks: threadDispatch,
+    dispatch: dispatchWithReceiptEffect,
+  }).pipe(Effect.forkScoped);
   yield* runUpdateReactors({
     afterSequence: terminalEventsAfterSequence,
-    // Filter run updates before buffering so blocked queue promotion does not retain unrelated tool bodies.
-    stream: (input) =>
-      eventSink
-        .stream(input)
-        .pipe(
-          Stream.filter(
-            (stored) =>
-              input.eventType !== "run.updated" ||
-              (stored.event.type === "run.updated" &&
-                !String(stored.commandId).startsWith("command:runtime-reconcile:") &&
-                ((stored.event.payload.delegatedTaskId !== undefined &&
-                  (stored.event.payload.status === "queued" ||
-                    stored.event.payload.status === "starting")) ||
-                  stored.event.payload.status === "completed" ||
-                  stored.event.payload.status === "interrupted" ||
-                  stored.event.payload.status === "failed" ||
-                  stored.event.payload.status === "cancelled" ||
-                  stored.event.payload.status === "rolled_back")),
-          ),
-        ),
+    stream: (input) => eventSink.stream(input).pipe(Stream.filter(relevantRunUpdate)),
     handleRun: handleRunUpdate,
     handleChild: (stored) => {
       if (!settlesChildWork(stored)) return Effect.void;

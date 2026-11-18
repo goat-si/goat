@@ -316,7 +316,7 @@ describe("thread workflows", () => {
   });
 
   it.each(["preparing", "starting", "waiting"] as const)(
-    "does not promote queued work into a %s run",
+    "offers Steer on preparing or starting work (%s)",
     (status) => {
       const state = deriveThreadQueueWorkflowState({
         thread: { id: "thread", activeProviderThreadId: "provider-thread" },
@@ -354,7 +354,7 @@ describe("thread workflows", () => {
         ],
       } as never);
 
-      expect(state.canPromoteToSteer).toBe(false);
+      expect(state.canPromoteToSteer).toBe(status !== "waiting");
     },
   );
 

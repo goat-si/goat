@@ -2787,7 +2787,7 @@ export default function ChatView(props: ChatViewProps) {
     modelPickerOpen: composerRef.current?.isModelPickerOpen() ?? false,
     composerFocus: document.activeElement?.getAttribute("data-testid") === "composer-editor",
     draftThreadRoute: routeKind === "draft",
-    turnRunning: phase === "running",
+    turnRunning: phase === "running" || sendQueuesBehindSetup,
     composerRequiresModifier: composerRequiresModifier(settings.sendShortcut, promptRef.current),
     isWeb: !isElectron,
     isDesktop: isElectron,

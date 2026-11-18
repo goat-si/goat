@@ -738,6 +738,7 @@ export const OrchestrationV2Run = Schema.Struct({
   terminationCause: Schema.optional(OrchestrationV2RunTerminationCause),
   queuePosition: Schema.optional(Schema.NullOr(PositiveInt)),
   queueHeld: Schema.optional(Schema.Boolean),
+  steerWhenReadyAttemptId: Schema.optional(RunAttemptId),
   /** Why a `starting` run has not started; meaningful only while the run is `starting`. */
   startHold: Schema.optional(OrchestrationV2RunStartHold),
   requestedAt: Schema.DateTimeUtc,

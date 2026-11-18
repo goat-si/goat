@@ -1360,9 +1360,7 @@ export function planComposerTurn(input: {
     isFirstMessage &&
     input.sendEnvMode === "worktree" &&
     !input.worktreePath;
-  // A stale Claude session compacts before this message so the turn does not re-read the
-  // old history. The message queues behind the /compact run, since steering into it is
-  // rejected.
+  // A stale Claude session compacts first, and /compact cannot accept steers.
   const compactBeforeSend =
     input.resumeCompactionTokens !== null &&
     !input.keepFullHistory &&
@@ -1374,7 +1372,9 @@ export function planComposerTurn(input: {
     baseBranchForWorktree: shouldCreateWorktree ? input.activeThreadBranch : null,
     compactBeforeSend,
     turnDispatchMode:
-      compactBeforeSend || input.sendQueuesBehindSetup ? ("queue" as const) : input.dispatchMode,
+      compactBeforeSend || (input.sendQueuesBehindSetup && input.dispatchMode !== "steer")
+        ? ("queue" as const)
+        : input.dispatchMode,
     shouldQueueBehindActiveRun:
       compactBeforeSend ||
       input.sendQueuesBehindSetup ||
