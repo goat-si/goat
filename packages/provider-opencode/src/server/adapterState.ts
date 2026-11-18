@@ -65,6 +65,8 @@ export interface ActiveOpenCodeTurn {
   admissionAccepted: boolean;
   admissionMessageObserved: boolean;
   idleDuringAdmission: boolean;
+  admissionUncertain: boolean;
+  admissionStatusSequence: number;
   admissionSettled: Deferred.Deferred<void>;
   admissionAbortController: AbortController | null;
 }

@@ -1,3 +1,5 @@
+import * as Option from "effect/Option";
+import { isOpenCodeRuntimeError } from "./OpenCodeRuntime.ts";
 import * as Effect from "effect/Effect";
 import type { ActiveOpenCodeTurn } from "./adapterState.ts";
 
@@ -53,10 +55,36 @@ export const reconcileOpenCodePromptAdmissionStatus = Effect.fn(
   if (admission.admissionGeneration !== generation || !admission.admissionPending) {
     return "stale" as const;
   }
-  const status = yield* readStatus;
+  const status = yield* readStatus.pipe(
+    Effect.timeoutOption("10 seconds"),
+    Effect.map(Option.getOrElse(() => "unknown" as const)),
+  );
   if (admission.admissionGeneration !== generation || !admission.admissionPending) {
     return "stale" as const;
   }
   if (status !== "unknown") admission.admissionPending = false;
   return status;
 });
+
+const unsentRequestCodes = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+
+// A reset after sending leaves prompt admission uncertain.
+export function isOpenCodePromptRejected(error: unknown): boolean {
+  const cause = isOpenCodeRuntimeError(error) ? error.cause : error;
+  if (!(cause instanceof Error) || typeof cause.cause !== "object" || cause.cause === null) {
+    return false;
+  }
+  return (
+    ("status" in cause.cause && typeof cause.cause.status === "number") ||
+    ("code" in cause.cause &&
+      typeof cause.cause.code === "string" &&
+      unsentRequestCodes.has(cause.cause.code))
+  );
+}

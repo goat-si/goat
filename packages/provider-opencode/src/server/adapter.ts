@@ -10,6 +10,7 @@ import {
 import {
   advanceOpenCodePromptAdmission,
   cancelOpenCodePromptAdmission,
+  isOpenCodePromptRejected,
   reconcileOpenCodePromptAdmissionStatus,
 } from "./promptAdmission.ts";
 export {
@@ -1769,16 +1770,20 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           generation: number,
         ) {
           while (promptAdmissionIsCurrent(state, turn, generation)) {
+            const sequence = turn.admissionStatusSequence;
             const status = yield* reconcileOpenCodePromptAdmissionStatus(
               turn,
               generation,
-              sdkCall("session.status", { sessionID: state.nativeSessionId, generation }, () =>
-                client.session.status(),
+              sdkCall(
+                "session.status",
+                { sessionID: state.nativeSessionId, generation },
+                (signal) => client.session.status(undefined, { signal }),
               ).pipe(
                 Effect.match({
                   onFailure: () => "unknown" as const,
                   onSuccess: (response) => {
-                    const statuses = unwrapData("session.status", response);
+                    const statuses = response.data;
+                    if (statuses === undefined) return "unknown" as const;
                     const sessionStatus = statuses[state.nativeSessionId];
                     return sessionStatus === undefined || sessionStatus.type === "idle"
                       ? ("idle" as const)
@@ -1795,6 +1800,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               turn.admissionGeneration !== generation
             ) {
               return;
+            }
+            if (sequence !== turn.admissionStatusSequence) {
+              turn.admissionPending = true;
+              continue;
             }
             if (status === "idle") {
               yield* finalizeTurn(state, turn, "completed");
@@ -1892,6 +1901,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             admissionAccepted: true,
             admissionMessageObserved: true,
             idleDuringAdmission: false,
+            admissionUncertain: false,
+            admissionStatusSequence: 0,
             admissionSettled: Deferred.makeUnsafe<void>(),
             admissionAbortController: null,
           };
@@ -2251,6 +2262,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               }
               const state = threads.get(sessionId);
               if (state === undefined) return;
+              if (state.activeTurn?.admissionPending) state.activeTurn.admissionStatusSequence++;
               if (event.properties.status.type === "busy") {
                 yield* updateProviderThread(state, { status: "active" });
                 return;
@@ -2273,6 +2285,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               const state = threads.get(event.properties.sessionID);
               if (state?.activeTurn !== null && state?.activeTurn !== undefined) {
                 if (state.activeTurn.admissionPending) {
+                  state.activeTurn.admissionStatusSequence++;
                   advanceOpenCodePromptAdmission(state.activeTurn, "idle");
                   return;
                 }
@@ -3002,6 +3015,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 admissionAccepted: isCompaction,
                 admissionMessageObserved: false,
                 idleDuringAdmission: false,
+                admissionUncertain: false,
+                admissionStatusSequence: 0,
                 admissionSettled: Deferred.makeUnsafe<void>(),
                 // @effect-diagnostics-next-line abortControllerInEffect:off - Turn interruption owns prompt admission cancellation.
                 admissionAbortController: new AbortController(),
@@ -3187,7 +3202,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                   `OpenCode turn ${steerInput.providerTurnId} is not active`,
                 );
               }
-              turn.admissionGeneration = state.nextAdmissionGeneration++;
+              if (!turn.admissionPending) turn.admissionUncertain = false;
+              const generation = (turn.admissionGeneration = state.nextAdmissionGeneration++);
               turn.admissionMessageId = admissionMessageId;
               turn.admissionPending = true;
               turn.admissionAccepted = false;
@@ -3200,6 +3216,12 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 turn.usage.promptMessageIds.add(turn.admissionMessageId);
               const admissionSettled = turn.admissionSettled;
               const admissionAbortController = turn.admissionAbortController;
+              const acceptAdmission = Effect.suspend(() =>
+                promptAdmissionIsCurrent(state, turn, generation) &&
+                advanceOpenCodePromptAdmission(turn, "accepted") === "reconcile-idle"
+                  ? reconcilePromptAdmission(state, turn)
+                  : Effect.void,
+              );
               yield* submitPrompt(
                 state,
                 turn,
@@ -3210,8 +3232,16 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                   ...turn.promptOptions,
                   parts,
                 },
-                admissionAbortController!,
+                admissionAbortController,
               ).pipe(
+                Effect.tapError((error) => {
+                  if (!promptAdmissionIsCurrent(state, turn, generation)) return Effect.void;
+                  if (isOpenCodePromptRejected(error) && !turn.admissionUncertain) {
+                    return reconcilePromptAdmission(state, turn);
+                  }
+                  turn.admissionUncertain = true;
+                  return acceptAdmission;
+                }),
                 Effect.ensuring(
                   Effect.all([
                     Deferred.succeed(admissionSettled, undefined).pipe(Effect.ignore),
@@ -3223,12 +3253,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                   ]).pipe(Effect.asVoid),
                 ),
               );
-              if (state.activeTurn === turn && !turn.finalized && !turn.interrupted) {
-                const admissionAction = advanceOpenCodePromptAdmission(turn, "accepted");
-                if (admissionAction === "reconcile-idle") {
-                  yield* reconcilePromptAdmission(state, turn);
-                }
-              }
+              yield* acceptAdmission;
             },
             (effect, steerInput) =>
               effect.pipe(

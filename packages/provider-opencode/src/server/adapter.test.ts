@@ -1,3 +1,4 @@
+import { TestClock } from "effect/testing";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { type OpencodeClient, type ToolPart } from "@opencode-ai/sdk/v2";
@@ -1736,6 +1737,146 @@ describe("OpenCodeAdapterV2", () => {
     ),
   );
 
+  it.effect.each([
+    "during",
+    "idle-during-status",
+    "busy-during-status",
+    "after-refused-connection",
+  ] as const)("completes the turn when the session goes idle %s a rejected steer", (idleTiming) =>
+    Effect.gen(function* () {
+      const nativeEvents = asyncEventStream();
+      const sessionId = `native-steer-rejected-${idleTiming}`;
+      const idle = {
+        type: "session.status",
+        properties: { sessionID: sessionId, status: { type: "idle" } },
+      };
+      const promptIds: Array<string> = [];
+      const terminal = yield* Deferred.make<void>();
+      const statusRead = promiseGate<void>();
+      const statusRechecked = promiseGate<void>();
+      let statusCalls = 0;
+      const harness = yield* makeOpenCodeRuntimeHarness(`steer-rejected-${idleTiming}`, sessionId, {
+        event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+        session: {
+          create: async () => ({ data: { id: sessionId, time: { created: 1, updated: 1 } } }),
+          get: async () => ({ data: { id: sessionId, time: { created: 1, updated: 1 } } }),
+          messages: async () => ({ data: [] }),
+          status: async () => {
+            statusCalls++;
+            statusRead.resolve();
+            if (idleTiming === "busy-during-status") {
+              if (statusCalls === 1) {
+                await nativeEvents.push({
+                  type: "session.status",
+                  properties: { sessionID: sessionId, status: { type: "busy" } },
+                });
+                return { data: { [sessionId]: { type: "idle" } } };
+              }
+              statusRechecked.resolve();
+              return { data: { [sessionId]: { type: statusCalls === 2 ? "busy" : "idle" } } };
+            }
+            if (idleTiming === "idle-during-status" && statusCalls === 1) {
+              await nativeEvents.push(idle);
+              return { data: { [sessionId]: { type: "busy" } } };
+            }
+            return {
+              data: {
+                [sessionId]: { type: idleTiming === "after-refused-connection" ? "busy" : "idle" },
+              },
+            };
+          },
+          promptAsync: async (input: { messageID: string }) => {
+            promptIds.push(input.messageID);
+            if (promptIds.length === 1) return { data: true };
+            if (idleTiming === "during") await nativeEvents.push(idle);
+            if (idleTiming === "after-refused-connection") {
+              throw new TypeError("fetch failed", {
+                cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+              });
+            }
+            // The SDK wraps an HTTP error reply in an Error with its status on `cause`.
+            throw new Error("steer rejected", { cause: { body: "steer rejected", status: 503 } });
+          },
+          abort: async () => ({ data: true }),
+          children: async () => ({ data: [] }),
+        },
+      });
+      yield* harness.startTurn();
+      yield* Effect.promise(() =>
+        nativeEvents.push({
+          type: "message.updated",
+          properties: {
+            sessionID: sessionId,
+            info: {
+              id: promptIds[0],
+              sessionID: sessionId,
+              role: "user",
+              time: { created: DateTime.toEpochMillis(harness.now) },
+            },
+          },
+        }),
+      );
+      const running = yield* harness.runtime.readThreadSnapshot({
+        providerThread: harness.providerThread,
+      });
+      yield* harness.runtime.events.pipe(
+        Stream.tap((event) =>
+          event.type === "turn.terminal" ? Deferred.succeed(terminal, undefined) : Effect.void,
+        ),
+        Stream.runDrain,
+        Effect.forkScoped,
+      );
+      const steer = yield* Effect.exit(
+        harness.runtime.steerTurn({
+          threadId: harness.threadId,
+          runId: harness.runId,
+          providerThread: harness.providerThread,
+          providerTurnId: running.providerTurns.at(-1)!.id,
+          message: {
+            messageId: MessageId.make(`message-steer-rejected-${idleTiming}`),
+            text: "also cover the README",
+            attachments: [],
+            createdBy: "user",
+            creationSource: "web",
+          },
+        }),
+      );
+      assert.isTrue(Exit.isFailure(steer));
+      yield* Effect.promise(() => statusRead.promise);
+      if (idleTiming === "busy-during-status") {
+        const outcome = yield* Effect.raceFirst(
+          Effect.promise(() => statusRechecked.promise).pipe(Effect.as("rechecked")),
+          Deferred.await(terminal).pipe(Effect.as("completed")),
+        );
+        assert.equal(outcome, "rechecked");
+        const active = yield* harness.runtime.readThreadSnapshot({
+          providerThread: harness.providerThread,
+        });
+        assert.equal(active.providerTurns.at(-1)?.status, "running");
+        yield* Effect.promise(() => nativeEvents.push(idle));
+      }
+      if (idleTiming === "after-refused-connection") {
+        const active = yield* harness.runtime.readThreadSnapshot({
+          providerThread: harness.providerThread,
+        });
+        assert.equal(active.providerTurns.at(-1)?.status, "running");
+        yield* Effect.promise(() => nativeEvents.push(idle));
+      }
+      yield* Deferred.await(terminal);
+      if (idleTiming !== "busy-during-status") {
+        assert.equal(statusCalls, idleTiming === "idle-during-status" ? 2 : 1);
+      }
+
+      const settled = yield* harness.runtime.readThreadSnapshot({
+        providerThread: harness.providerThread,
+      });
+      assert.equal(settled.providerTurns.at(-1)?.status, "completed");
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
   it.effect("interrupts an initial prompt while its SDK request is pending", () =>
     Effect.gen(function* () {
       const nativeEvents = asyncEventStream();
@@ -2127,6 +2268,15 @@ describe("OpenCodeAdapterV2", () => {
         yield* reconcileOpenCodePromptAdmissionStatus(admission, 4, Effect.succeed("unknown")),
         "unknown",
       );
+      assert.isTrue(admission.admissionPending);
+      const stalled = yield* reconcileOpenCodePromptAdmissionStatus(
+        admission,
+        4,
+        Effect.never,
+      ).pipe(Effect.forkChild({ startImmediately: true }));
+      yield* TestClock.adjust("10 seconds");
+      assert.isDefined(stalled.pollUnsafe());
+      assert.equal(yield* Fiber.join(stalled), "unknown");
       assert.isTrue(admission.admissionPending);
       assert.equal(
         yield* reconcileOpenCodePromptAdmissionStatus(admission, 4, Effect.succeed("idle")),
