@@ -1,3 +1,4 @@
+import { captureEmptySubmodules } from "./worktreeSubmoduleRecovery.ts";
 import { createTrace2Monitor } from "./gitTrace2Monitor.ts";
 export { splitNullSeparatedGitStdoutPaths } from "./gitStdoutPaths.ts";
 import {
@@ -4279,6 +4280,21 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         yield* progress.onSubmodulesStarted();
       }
       const onSubmoduleLine = progress?.onSubmoduleLine;
+      const submoduleUpdate = (args: readonly string[]) =>
+        runGit(
+          "GitVcsDriver.createWorktree.updateSubmodules",
+          worktreePath,
+          ["submodule", "update", "--init", ...args],
+          {
+            timeoutMs: null,
+            ...(onSubmoduleLine
+              ? {
+                  env: { LANGUAGE: "C" },
+                  progress: { onStdoutLine: onSubmoduleLine, onStderrLine: onSubmoduleLine },
+                }
+              : {}),
+          },
+        );
       yield* runGit(
         "GitVcsDriver.createWorktree.initSubmodules",
         worktreePath,
@@ -4286,23 +4302,34 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         { writesSharedConfig: true },
       ).pipe(
         Effect.andThen(
-          runGit(
-            "GitVcsDriver.createWorktree.updateSubmodules",
-            worktreePath,
-            submoduleMode.value === "recursive"
-              ? ["submodule", "update", "--init", "--recursive"]
-              : ["submodule", "update", "--init"],
-            {
-              // Cloning scales with remote size; let it finish or be cancelled, like worktree add.
-              timeoutMs: null,
-              ...(onSubmoduleLine
-                ? {
-                    env: { LANGUAGE: "C" },
-                    progress: { onStdoutLine: onSubmoduleLine, onStderrLine: onSubmoduleLine },
-                  }
-                : {}),
-            },
-          ),
+          Effect.gen(function* () {
+            const candidates =
+              existing === "reused" || pathExisted
+                ? Effect.succeed([])
+                : yield* captureEmptySubmodules({
+                    cwd: worktreePath,
+                    fs: fileSystem,
+                    path,
+                    git: (operation, cwd, args) => runGitStdout(operation, cwd, args),
+                  }).pipe(Effect.orElseSucceed(() => Effect.succeed([])));
+
+            yield* submoduleUpdate(submoduleMode.value === "recursive" ? ["--recursive"] : []).pipe(
+              Effect.tapError(() =>
+                Effect.gen(function* () {
+                  const cloned = yield* candidates;
+                  if (cloned.length > 0)
+                    yield* submoduleUpdate(["--force", "--checkout", "--", ...cloned]);
+                }).pipe(
+                  Effect.catch((cause) =>
+                    Effect.logWarning("could not check out cloned worktree submodules", {
+                      worktreePath,
+                      cause,
+                    }),
+                  ),
+                ),
+              ),
+            );
+          }),
         ),
         Effect.matchEffect({
           onFailure: (cause) =>
