@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@goat/contracts";
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
+import { noMemoryGeneration } from "@goat/provider-core/server/memoryGenerationRunner";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -34,6 +35,7 @@ it.effect("takes the installation gate only for a registered provider instance",
       instanceId: KNOWN,
       snapshot: { getSnapshot: Effect.succeed(snapshot) },
       textGeneration: {
+        ...noMemoryGeneration,
         generateBranchName: () => Effect.succeed({ branch: "feature/gate" }),
       },
     } as unknown as ProviderInstance;

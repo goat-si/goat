@@ -45,7 +45,7 @@ export class MemoryGenerationRunnerError extends Schema.TaggedError<MemoryGenera
     return "Memory runner cannot execute this request.";
   }
 }
-export const unsupportedMemoryOperation = (operation: MemoryOperationName) =>
+const unsupportedMemoryOperation = (operation: MemoryOperationName) =>
   Effect.fail(
     new M.TextGenerationError({
       operation,
