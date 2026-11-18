@@ -59,6 +59,7 @@ import {
   makeFrame,
   makePageContext,
   makeDesktopViewer,
+  holdTitleObservation,
   viewerInput,
   mockCopy,
   refClickTarget,
@@ -217,12 +218,16 @@ const ready = Effect.gen(function* () {
   const tabId = PreviewTabId.make(opened.tabId!);
   return { browser, broker, tabId };
 });
-const openDesktopViewer = makeDesktopViewer(
-  () => {
-    desktopRendersNext = true;
-  },
-  () => desktopConnections[0]!.context,
-);
+const openDesktopViewer = Effect.gen(function* () {
+  return yield* makeDesktopViewer(
+    yield* ServerBrowser.ServerBrowser,
+    yield* Manager.PreviewManager,
+    () => {
+      desktopRendersNext = true;
+    },
+    () => desktopConnections[0]!.context,
+  );
+});
 
 beforeEach(() => {
   contexts.length = 0;
@@ -2581,4 +2586,26 @@ it.effect("a popup opens in its opener's appearance", () =>
       expect(event.snapshot.colorScheme).toBe("dark");
     }),
   ).pipe(Effect.provide(layer)),
+);
+
+it.effect("publishes a same-document title change without a navigation", () =>
+  Effect.gen(function* () {
+    yield* ready;
+    const events = yield* (yield* Manager.PreviewManager).subscribeEvents;
+    const { page, observeTitle, change } = holdTitleObservation(contexts[0]!);
+    page.commit("https://example.com/");
+    yield* Effect.promise(() => page.emitAsync("load"));
+    expect(observeTitle).toHaveBeenCalledTimes(1);
+    page.title.mockResolvedValue("Updated title");
+    change.resolve({ result: { value: true } });
+    for (;;) {
+      const event = yield* PubSub.take(events);
+      if (
+        event.type === "navigated" &&
+        event.snapshot.navStatus._tag === "Success" &&
+        event.snapshot.navStatus.title === "Updated title"
+      )
+        break;
+    }
+  }).pipe(Effect.scoped, Effect.provide(layer)),
 );

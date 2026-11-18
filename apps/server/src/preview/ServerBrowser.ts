@@ -1,3 +1,4 @@
+import { BROWSER_TITLE_LIMIT, makeBrowserTitleWatcher } from "./browserTitleWatcher.ts";
 import { makeSaveDownload } from "./saveBrowserDownload.ts";
 import { stopUnresponsiveScript } from "./stopUnresponsiveScript.ts";
 import { SnapshotTiming } from "./snapshotTiming.ts";
@@ -65,6 +66,7 @@ import * as Stream from "effect/Stream";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as NodeCrypto from "node:crypto";
 import * as NodePath from "node:path";
+import * as NodeUtil from "node:util";
 import type { CDPSession, Page } from "playwright-core";
 
 import * as ServerConfig from "../config.ts";
@@ -409,41 +411,57 @@ const make = Effect.gen(function* () {
     broadcastControl(tab);
   };
   const report = (tab: ServerTab, navStatus: PreviewNavStatus) => {
+    const document = tab.documentGeneration;
+    const loadError = tab.loadError;
     void tab.cdp
       .send("Page.getNavigationHistory")
       .catch(() => null)
       .then((history) => {
-        if (tab.closing || tab.crash) return;
+        if (
+          tab.closing ||
+          tab.crash ||
+          (navStatus._tag === "Success" &&
+            (tab.documentGeneration !== document || tab.loadError !== loadError))
+        )
+          return;
         const index = history?.currentIndex ?? 0;
         const count = history?.entries.length ?? 0;
-        runFork(
-          manager
-            .reportStatus({
-              threadId: tab.threadId,
-              tabId: tab.tabId,
-              serverControlled: true,
-              navStatus,
-              canGoBack: index > 0,
-              canGoForward: index < count - 1,
-            })
-            .pipe(Effect.ignore),
-        );
+        const next = {
+          threadId: tab.threadId,
+          tabId: tab.tabId,
+          serverControlled: true,
+          navStatus,
+          canGoBack: index > 0,
+          canGoForward: index < count - 1,
+        };
+        if (NodeUtil.isDeepStrictEqual(tab.lastReport, next)) return;
+        tab.lastReport = next;
+        runFork(manager.reportStatus(next).pipe(Effect.ignore));
       });
   };
 
   const reportLoaded = async (tab: ServerTab) => {
     const url = tab.page.url();
     // Chromium's error page loads after `requestfailed` and must not clear LoadFailed.
-    if (url === "about:blank" || url.startsWith("chrome-error://")) return;
+    if (tab.closing || tab.loadError || url === "about:blank" || url.startsWith("chrome-error://"))
+      return;
     // A navigation that starts and fails during the title read leaves the URL unchanged.
-    const generation = tab.navigationGeneration;
-    const title = (await tab.page.title().catch(() => "")).slice(0, 512);
-    if (tab.navigationGeneration !== generation || tab.loading || tab.page.url() !== url) return;
+    const document = tab.documentGeneration;
+    const title = (await tab.page.title().catch(() => "")).slice(0, BROWSER_TITLE_LIMIT);
+    if (
+      tab.closing ||
+      tab.documentGeneration !== document ||
+      tab.loadError ||
+      tab.loading ||
+      tab.page.url() !== url
+    )
+      return;
     report(tab, {
       _tag: "Success",
       url: ServerBrowserPage.withoutDataPayload(url).slice(0, 2048),
       title,
     });
+    await tab.titleWatcher.watch(document, title, () => reportLoaded(tab));
   };
 
   const reportLiveTabs = () => {
@@ -481,6 +499,7 @@ const make = Effect.gen(function* () {
     tabs.delete(key);
     if (tab.openerTabId && !replacingRenderer)
       closedPopups.record(tab.threadId, tab.tabId, tab.openerTabId);
+    tab.titleWatcher.stop();
     tab.diagnostics.dispose();
     clearAbortedNavigation(tab);
     // A desktop page outlives the connection unless its session closed with it.
@@ -693,6 +712,8 @@ const make = Effect.gen(function* () {
         desktopResize: Promise.withResolvers<void>(),
         loading: false,
         loadError: undefined,
+        titleWatcher: makeBrowserTitleWatcher(cdp),
+        lastReport: undefined,
         crash: replaced?.crash,
         closing: false,
         recording: null,
@@ -747,6 +768,7 @@ const make = Effect.gen(function* () {
         const stoppedFirst = Stop.stoppedFirstRequest(tab, request.url());
         navigationGenerations.set(request, ++tab.navigationGeneration);
         tab.documentGeneration++;
+        tab.titleWatcher.stop();
         clearAbortedNavigation(tab);
         tab.loading = true;
         tab.loadError = undefined;
@@ -772,7 +794,7 @@ const make = Effect.gen(function* () {
       page.on("load", () => {
         tab.pendingInitialRequestUrl = null;
         tab.loading = false;
-        void reportLoaded(tab);
+        return reportLoaded(tab);
       });
       let setupSignal = adopted?.signal;
       page.on("framenavigated", (frame) => {

@@ -2,8 +2,8 @@ import type { BrowserContext, Page } from "playwright-core";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Queue from "effect/Queue";
 import * as Effect from "effect/Effect";
-import * as Manager from "./Manager.ts";
-import * as ServerBrowser from "./ServerBrowser.ts";
+import type * as Manager from "./Manager.ts";
+import type * as ServerBrowser from "./ServerBrowser.ts";
 // @effect-diagnostics nodeBuiltinImport:off - a mocked CDP session for ServerBrowser tests; no Effect runtime.
 import * as NodeEvents from "node:events";
 import { vi } from "vite-plus/test";
@@ -292,11 +292,11 @@ export const viewerInput = (tabId: string, canOperate: boolean) => ({
   quality: 70,
 });
 export const makeDesktopViewer = Effect.fn("TestBrowser.makeDesktopViewer")(function* (
+  browser: ServerBrowser.ServerBrowser["Service"],
+  manager: Manager.PreviewManager["Service"],
   selectNext: () => void,
   contextOf: () => ReturnType<typeof makePageContext>,
 ) {
-  const browser = yield* ServerBrowser.ServerBrowser;
-  const manager = yield* Manager.PreviewManager;
   selectNext();
   const { tabId } = yield* manager.open({ threadId: scope.thread.threadId, runtime: "server" });
   const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
@@ -309,3 +309,23 @@ export const makeDesktopViewer = Effect.fn("TestBrowser.makeDesktopViewer")(func
   };
   return { tabId, viewer, context, cdp, resize };
 });
+
+export const holdTitleObservation = ({ page, sessions }: ReturnType<typeof makePageContext>) => {
+  const cdp = sessions[0];
+  if (!cdp) throw new Error("The page has no CDP session.");
+  const change = Promise.withResolvers<Record<string, unknown>>();
+  const send = cdp.send.getMockImplementation();
+  if (!send) throw new Error("The CDP session has no send handler.");
+  const observeTitle = vi
+    .fn(() => Promise.resolve({ result: { value: false } } as Record<string, unknown>))
+    .mockImplementationOnce(() => change.promise);
+  cdp.send.mockImplementation((method, params) =>
+    method === "Runtime.evaluate" && (params as { contextId?: number })?.contextId === 17
+      ? observeTitle()
+      : method === "Page.createIsolatedWorld" &&
+          (params as { worldName?: string }).worldName === "goat-preview-title"
+        ? Promise.resolve({ executionContextId: 17 })
+        : send(method, params),
+  );
+  return { page, observeTitle, change };
+};
