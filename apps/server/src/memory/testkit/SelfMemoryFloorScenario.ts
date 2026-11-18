@@ -205,13 +205,13 @@ export const runSelfWideSave = Effect.fn("test.runSelfWideSave")(function* (
   const release = yield* Deferred.make<void>();
   const held = Hub.MemoryHubService.of({
     ...hub,
-    push: (...args) =>
-      args[0].operations.some((op) => op.memoryId === draft.memoryId)
-        ? Deferred.succeed(entered, undefined).pipe(
-            Effect.andThen(Deferred.await(release)),
-            Effect.andThen(hub.push(...args)),
-          )
-        : hub.push(...args),
+    push: Effect.fn("test.holdSelfPush")(function* (...args: Parameters<typeof hub.push>) {
+      if (args[0].operations.some((op) => op.memoryId === draft.memoryId)) {
+        yield* Deferred.succeed(entered, undefined);
+        yield* Deferred.await(release);
+      }
+      return yield* hub.push(...args);
+    }),
   });
   const restartedWithBarrier = yield* Layer.build(
     Layer.fresh(Sync.layer).pipe(Layer.provide(Layer.succeed(Hub.MemoryHubService, held))),
