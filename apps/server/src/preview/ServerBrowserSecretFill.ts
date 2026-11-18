@@ -872,19 +872,29 @@ export const make = Effect.gen(function* () {
     // cannot check, stops it.
     if (textSnapshot ? own.shown || own.unconfirmed : own.holding)
       throw refused(own.unconfirmed ? UNCONFIRMED : own.shown ? SHOWN : FENCED);
-    if (textSnapshot && (!measure || own.holding || pixelsOff(tab, request.threadId) !== null))
-      return;
     const sharing = contextTabs.get(context) ?? new Set<SecretFillTab>();
+    if (textSnapshot) {
+      if (!measure || own.holding) return;
+      // Optional dimensions must never wait for a different renderer to clear its fence.
+      const mayMeasure = () => {
+        if ((fillEpoch.get(context) ?? 0) !== epoch || pixelsOff(tab, request.threadId) !== null)
+          return false;
+        for (const other of sharing) {
+          if (other.page.isClosed()) sharing.delete(other);
+          else if (
+            other.page !== tab.page &&
+            fences.get(other.page)?.some((entry) => !closedSessions.has(entry.session))
+          )
+            return false;
+        }
+        return true;
+      };
+      return mayMeasure() ? mayMeasure : undefined;
+    }
     for (const other of sharing) {
       if (other.page.isClosed()) sharing.delete(other);
-      else if (other.page !== tab.page && (await fenceState(other.page)).holding) {
-        if (textSnapshot) return;
+      else if (other.page !== tab.page && (await fenceState(other.page)).holding)
         throw refused(SHARED_FENCED);
-      }
-    }
-    if (textSnapshot) {
-      return () =>
-        (fillEpoch.get(context) ?? 0) === epoch && pixelsOff(tab, request.threadId) === null;
     }
     // Pixels of a site it filled a password on stay off after the field lets go, too.
     if (visual) assertPixels(tab, request.threadId);
