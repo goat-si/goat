@@ -1111,6 +1111,7 @@ export interface DesktopBridge extends DesktopBridgeParts {
    */
   getSystemLocale?: () => string | null;
   getLocalEnvironmentBootstraps: () => readonly DesktopEnvironmentBootstrap[];
+  getHostEnvironmentId?: () => Promise<string | null>;
   getLocalEnvironmentEnabled?: () => boolean;
   setLocalEnvironmentEnabled?: (enabled: boolean) => Promise<void>;
   getLocalEnvironmentBearerToken: () => Promise<string>;
