@@ -68,6 +68,7 @@ import {
   type ServiceState,
 } from "./serviceProtocol.ts";
 import { acquireServiceSelectionLock } from "./serviceSelectionLock.ts";
+import { makeBootServiceUnitOwnership, type OwnedLegacyUnit } from "./bootServiceUnitOwnership.ts";
 
 const plistFileOf = (names: BootServiceNames) => `${names.launchdLabel}.plist`;
 
@@ -268,11 +269,6 @@ export interface BootServiceManager {
   readonly handoff?: ReadonlyArray<BootServiceStep>;
   readonly deactivate: ReadonlyArray<BootServiceStep>;
   readonly finalize: ReadonlyArray<BootServiceStep>;
-}
-
-interface OwnedLegacyUnit {
-  readonly manager: BootServiceManager;
-  readonly contents: string;
 }
 
 function launchdManager(input: {
@@ -691,36 +687,10 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     if (remaining[0]) return yield* new BootServicePrerequisiteError({ problem: remaining[0] });
   });
 
-  /**
-   * A unit installed under the legacy names that serves this GOAT home. One
-   * that serves another home is upstream T3 Code's or another install's, and
-   * is never touched.
-   */
-  const servesThisHome = (baseDir: string | undefined) =>
-    baseDir !== undefined && path.resolve(baseDir) === path.resolve(input.baseDir);
-
-  const readOwnedLegacyUnit = Effect.gen(function* () {
-    if (legacyManager === undefined) return Option.none<OwnedLegacyUnit>();
-    const contents = yield* fs.readFileString(legacyManager.unitPath).pipe(Effect.option);
-    if (Option.isNone(contents)) return Option.none<OwnedLegacyUnit>();
-    const servedBaseDir = bootServiceBaseDirOf(contents.value);
-    return servesThisHome(servedBaseDir)
-      ? Option.some<OwnedLegacyUnit>({ manager: legacyManager, contents: contents.value })
-      : Option.none<OwnedLegacyUnit>();
-  });
-
-  /**
-   * `goat.service` is one unit per user. A file that serves another home belongs
-   * to that home; this command must not stop, replace, or report it as ours.
-   */
-  const readCurrentUnit = Effect.gen(function* () {
-    const contents = yield* fs.readFileString(unitPath).pipe(Effect.option);
-    if (Option.isNone(contents)) return { _tag: "Absent" as const };
-    const servedBaseDir = bootServiceBaseDirOf(contents.value);
-    return servesThisHome(servedBaseDir)
-      ? { _tag: "Owned" as const, contents: contents.value }
-      : { _tag: "Foreign" as const, baseDir: servedBaseDir };
-  });
+  const { servesThisHome, readUnit, readLegacyUnit, checkInstallDestination, checkUnitOwner } =
+    makeBootServiceUnitOwnership(fs, path, input.baseDir);
+  const readCurrentUnit = Effect.suspend(() => readUnit(unitPath));
+  const readOwnedLegacyUnit = Effect.suspend(() => readLegacyUnit(legacyManager));
 
   const runtimeStatePath = path.join(input.baseDir, "userdata", "server-runtime.json");
 
@@ -822,13 +792,8 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     let manager = yield* requireManager;
     if (manager.kind === "systemd" && systemdUnsafeValue(plan))
       return yield* new BootServiceBaseDirUnsupportedError({ baseDir: input.baseDir });
-    let current = yield* readCurrentUnit;
-    if (current._tag === "Foreign") {
-      return yield* new BootServiceCommandError({
-        step: `the service for this user belongs to ${current.baseDir ?? "another GOAT home"}`,
-      });
-    }
-    let currentInstalled = current._tag === "Owned";
+    const readInstallStatus = readCurrentUnit.pipe(Effect.flatMap(checkUnitOwner));
+    let currentInstalled = yield* readInstallStatus;
     yield* fs
       .makeDirectory(input.logsDir, { recursive: true })
       .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
@@ -863,12 +828,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         manager = yield* requireManager;
         unitPath = manager.unitPath;
         plan = { ...plan, unitPath };
-        current = yield* readCurrentUnit;
-        if (current._tag === "Foreign")
-          return yield* new BootServiceCommandError({
-            step: `the service for this user belongs to ${current.baseDir ?? "another GOAT home"}`,
-          });
-        currentInstalled = current._tag === "Owned";
+        currentInstalled = yield* readInstallStatus;
       }
     }
 
@@ -964,6 +924,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       if (Option.isSome(legacy)) yield* runSteps(legacy.value.manager.stop);
     }
 
+    let destinationRejected = false;
     let wroteSelection = false;
     let selectionState: Option.Option<string> = Option.none();
     let selectionPending: Option.Option<string> = Option.none();
@@ -987,6 +948,13 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     // State lease, then the unit's; the launcher never holds both, and manager stop and start run
     // outside them, since stopping a launcher that waits on a lease would deadlock.
     const selectInstall = Effect.gen(function* () {
+      const destinationOwned = yield* checkInstallDestination(target.unitPath).pipe(
+        Effect.tapError(() =>
+          Effect.sync(() => {
+            destinationRejected = true;
+          }),
+        ),
+      );
       const previousStateText = yield* fs.readFileString(statePath).pipe(Effect.option);
       if (Option.isSome(previousStateText)) {
         // Read the final version after stopping the launcher; a remote update may finish after the status check.
@@ -1002,7 +970,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
               : {},
           );
         }
-        if (installed) {
+        if (installed || destinationOwned) {
           if (
             installedVersion !== undefined &&
             options?.allowDowngrade !== true &&
@@ -1070,6 +1038,16 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       ),
       Effect.tapError(() => {
         if (!start) return Effect.void;
+        if (destinationRejected) {
+          return readOwnedLegacyUnit.pipe(
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.void,
+                onSome: ({ manager }) => runSteps(manager.restart).pipe(Effect.ignore),
+              }),
+            ),
+          );
+        }
         if (currentInstalled) return runSteps(manager.restart).pipe(Effect.ignore);
         // The legacy launcher reads activeVersion at startup. Put the previous
         // selection back before it starts, or it clears the marker and runs
