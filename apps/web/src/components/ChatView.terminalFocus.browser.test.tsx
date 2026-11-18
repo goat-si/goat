@@ -2,7 +2,7 @@ import { createMemoryHistory } from "@tanstack/react-router";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import {
   AuthTerminalOperateScope,
-  TerminalCwdNotFoundError,
+  TerminalRequestError,
   ThreadId,
   WS_METHODS,
 } from "@goat/contracts";
@@ -44,17 +44,14 @@ vi.mock(import("~/rpc/requestLatencyState"), async (original) => ({
   trackRpcRequestSent: () => {},
 }));
 
-it("a tablet focuses the drawer terminal on thread entry and shows a failed new terminal open", async () => {
+it("entering a thread on a touch tablet focuses its open drawer terminal and never the composer", async () => {
   const realMatchMedia = window.matchMedia.bind(window);
   using _touch = vi
     .spyOn(window, "matchMedia")
     .mockImplementation((query) => realMatchMedia(query === "(pointer: coarse)" ? "all" : query));
   const first = threadWithHistory("thread-terminal-touch-a", 1);
   const second = threadWithHistory("thread-terminal-touch-b", 1);
-  const rejected = new TerminalCwdNotFoundError({ cwd: "/missing/worktree" });
-  using _environment = installFakeEnvironment([first, second], {
-    rpc: { [WS_METHODS.terminalOpen]: () => Effect.fail(rejected) },
-  });
+  using _environment = installFakeEnvironment([first, second]);
   // The drawer terminal takes focus only once Ghostty's WebAssembly has loaded.
   await loadGhosttyRuntime();
   // iPad Pro 11 in landscape: the desktop layout, above max-sm.
@@ -88,6 +85,34 @@ it("a tablet focuses the drawer terminal on thread entry and shows a failed new 
     expect(document.activeElement?.closest('[data-terminal-owner="drawer"]')).not.toBeNull(),
   );
   expect(document.activeElement).not.toBe(composer.element());
+});
+
+it("shows the server's open error while terminal attachment is still pending", async () => {
+  const first = threadWithHistory("thread-terminal-touch-a", 1);
+  const second = threadWithHistory("thread-terminal-touch-b", 1);
+  const rejected = new TerminalRequestError({
+    message: "This thread moved to another worktree. Open the terminal again.",
+  });
+  using _environment = installFakeEnvironment([first, second], {
+    rpc: { [WS_METHODS.terminalOpen]: () => Effect.fail(rejected) },
+  });
+  await page.viewport(1194, 834);
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  useTerminalUiStateStore
+    .getState()
+    .setTerminalOpen(scopeThreadRef(ENVIRONMENT_ID, ThreadId.make(first.id)), true);
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${first.id}`] }),
+  );
+  await router.load();
+  await using _app = await render(<AppRoot router={router} />, {
+    // AppRoot brings its own router.
+    router: false,
+  });
+  await expect.element(page.getByText(`Answer 0 for ${first.id}.`)).toBeVisible();
 
   await vi.waitFor(() =>
     expect(readEnvironmentScope(ENVIRONMENT_ID, AuthTerminalOperateScope)).toBe(true),
@@ -95,7 +120,7 @@ it("a tablet focuses the drawer terminal on thread entry and shows a failed new 
   await page.getByRole("button", { name: /^New Terminal/i }).click();
   await vi.waitFor(() =>
     expect(rpcRequests(WS_METHODS.terminalOpen)).toContainEqual(
-      expect.objectContaining({ threadId: second.id, terminalErrorMessage: true }),
+      expect.objectContaining({ threadId: first.id, terminalErrorMessage: true }),
     ),
   );
   await expect.element(page.getByText(rejected.message)).toBeVisible();
