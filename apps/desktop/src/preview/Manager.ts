@@ -1,3 +1,4 @@
+import { isPreviewEditingShortcut } from "./previewEditingShortcut.ts";
 import { isPreviewRefreshShortcut } from "./previewRefresh.ts";
 import { admitAgentPointer, pointerEvent, type AgentPointer } from "./CursorStateOrdering.ts";
 import * as PreviewDownloadCopy from "./downloadCopy.ts";
@@ -91,7 +92,7 @@ import { buildPreviewPictureInPictureDataUrl } from "./PictureInPicturePage.ts";
 import { fingerprintCapturedFrame } from "./FrameFingerprint.ts";
 import { captureFavicon, safeHttpOrigin, selectFaviconCandidates } from "./FaviconCapture.ts";
 import { DEFAULT_RECORDING_INPUT_OPTIONS, type RecordingInputOptions } from "./RecordingInput.ts";
-import { createPreviewPopupLifecycle, isBlankPopupUrl, popupWebOrigin } from "./PopupLifecycle.ts";
+import { createPreviewPopupLifecycle, previewWindowOpenAction } from "./PopupLifecycle.ts";
 import { loadUrlAllowingRedirects, stopLoad } from "./loadUrlAllowingRedirects.ts";
 import {
   DEFAULT_ZOOM_FACTOR,
@@ -255,43 +256,6 @@ type RecordingInputListener = (event: DesktopPreviewRecordingInputEvent) => Effe
 type PointerEventListener = (event: DesktopPreviewCursorEvent) => Effect.Effect<void>;
 
 type OpenLinkListener = (event: DesktopPreviewOpenLinkEvent) => Effect.Effect<void>;
-
-/** Native children retain the opener, POST body and profile for sign-in redirects. */
-export const previewWindowOpenAction = (details: {
-  readonly url: string;
-  readonly disposition: Electron.HandlerDetails["disposition"];
-  readonly postBody?: Electron.PostBody;
-}): "popup" | "new-tab" | "deny" => {
-  if (isBlankPopupUrl(details.url)) return "popup";
-  if (!popupWebOrigin(details.url)) return "deny";
-  if (details.disposition === "new-window" || details.postBody) return "popup";
-  return details.disposition === "foreground-tab" || details.disposition === "background-tab"
-    ? "new-tab"
-    : "popup";
-};
-
-export const isPreviewEditingShortcut = (
-  input: Electron.Input,
-  platform: NodeJS.Platform,
-): boolean => {
-  const isMac = platform === "darwin";
-  if (isMac ? !input.meta || input.control : !input.control || input.meta) return false;
-
-  const key = input.key.toLowerCase();
-  // Option changes the DOM key for macOS Paste and Match Style (for example, to ◊).
-  if (isMac && input.alt && input.shift && input.code === "KeyV") return true;
-  if (key === "v" && input.shift) return input.alt === isMac;
-  if (input.alt) return false;
-  if (key === "z") return !input.shift || platform !== "win32";
-  if (input.shift) return false;
-  return (
-    key === "a" ||
-    key === "c" ||
-    key === "v" ||
-    key === "x" ||
-    (key === "y" && platform === "win32")
-  );
-};
 
 const isPreviewInputSignal = (value: unknown): value is PreviewInputSignal => {
   if (typeof value !== "object" || value === null || !("kind" in value)) return false;
