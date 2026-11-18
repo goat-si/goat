@@ -13,6 +13,7 @@ import {
   awaitMessage,
   holdLauncher,
   answer,
+  promote,
 } from "./QuestionEscalationService.testkit.ts";
 import { assert, it, vi } from "@effect/vitest";
 import {
@@ -42,26 +43,6 @@ import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as QuestionEscalationService from "./QuestionEscalationService.ts";
-
-const promote = (suffix: string) =>
-  Effect.gen(function* () {
-    const sink = yield* EventSink.EventSinkV2;
-    const { runs } = yield* records(suffix);
-    const run = runs.find((r) => r.userMessageId === ids(suffix).messageId)!;
-    const now = yield* DateTime.now;
-    yield* sink.write({
-      events: [
-        {
-          id: EventId.make(`promote:${suffix}`),
-          type: "run.updated",
-          threadId: run.threadId,
-          runId: run.id,
-          occurredAt: now,
-          payload: { ...run, status: "running", startedAt: now },
-        },
-      ],
-    });
-  });
 
 it.layer(layerTest)("QuestionEscalationService", (it) => {
   it.effect("a blocked launcher does not delay another launcher or race its own resolution", () =>

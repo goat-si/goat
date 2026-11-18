@@ -301,3 +301,24 @@ export const answer = (
           },
     );
   });
+
+export const promote = (suffix: string) =>
+  Effect.gen(function* () {
+    const sink = yield* EventSink.EventSinkV2;
+    const { runs } = yield* records(suffix);
+    const run = runs.find((r) => r.userMessageId === ids(suffix).messageId);
+    if (run === undefined) return yield* Effect.die("Question escalation run missing");
+    const now = yield* DateTime.now;
+    yield* sink.write({
+      events: [
+        {
+          id: EventId.make(`promote:${suffix}`),
+          type: "run.updated",
+          threadId: run.threadId,
+          runId: run.id,
+          occurredAt: now,
+          payload: { ...run, status: "running", startedAt: now },
+        },
+      ],
+    });
+  });
