@@ -47,20 +47,16 @@ import {
   MACOS_WINDOW_BUTTON_RADIUS,
 } from "./DesktopWindowAppearance.ts";
 import * as DesktopWindowMaterial from "./material/DesktopWindowMaterial.ts";
-import * as DesktopWindowBounds from "./DesktopWindowBounds.ts";
+import type { DisplayBounds } from "./DesktopWindowBounds.ts";
 import {
-  clampWindowBoundsToDisplay,
-  getDisplayDistanceSquared,
-  getOverlapArea,
   MIN_MAIN_WINDOW_HEIGHT,
   MIN_MAIN_WINDOW_WIDTH,
   normalBoundsOnWindowDisplay,
+  resolveInitialMainWindowBounds,
   windowBoundsEqual,
 } from "./mainWindowPlacement.ts";
 import { makeQuitShortcutHandler } from "./QuitHold.ts";
 import { copyContextMenuImage } from "./ContextMenuImage.ts";
-
-type DisplayBounds = DesktopWindowBounds.DisplayBounds;
 
 function parseMailtoAddress(rawUrl: string): Option.Option<string> {
   let url: URL;
@@ -159,54 +155,12 @@ function getIconOption(
   });
 }
 
-function selectRecoveryDisplay(
-  windowBounds: DesktopAppSettings.DesktopWindowBounds,
-  displays: readonly DisplayBounds[],
-): DisplayBounds {
-  let selected = displays[0]!;
-  let bestOverlapArea = getOverlapArea(windowBounds, selected);
-  let bestDistanceSquared = getDisplayDistanceSquared(windowBounds, selected);
-
-  for (let index = 1; index < displays.length; index += 1) {
-    const candidate = displays[index]!;
-    const overlapArea = getOverlapArea(windowBounds, candidate);
-    const distanceSquared = getDisplayDistanceSquared(windowBounds, candidate);
-    if (
-      overlapArea > bestOverlapArea ||
-      (overlapArea === bestOverlapArea && distanceSquared < bestDistanceSquared)
-    ) {
-      selected = candidate;
-      bestOverlapArea = overlapArea;
-      bestDistanceSquared = distanceSquared;
-    }
-  }
-
-  return selected;
-}
-
 function readDisplayBoundsOrEmpty(): readonly DisplayBounds[] {
   try {
     return Electron.screen.getAllDisplays().map((display) => display.bounds);
   } catch {
     return [];
   }
-}
-
-export function resolveInitialMainWindowBounds(
-  persistedBounds: DesktopAppSettings.DesktopWindowBounds | null,
-  displays: readonly DisplayBounds[],
-): DesktopAppSettings.DesktopWindowBounds | typeof DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE {
-  const validDisplays = displays.filter((display) => display.width > 0 && display.height > 0);
-  if (persistedBounds === null || validDisplays.length === 0) {
-    return DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE;
-  }
-  if (DesktopWindowBounds.fitsWithinDisplays(persistedBounds, validDisplays)) {
-    return persistedBounds;
-  }
-  return clampWindowBoundsToDisplay(
-    persistedBounds,
-    selectRecoveryDisplay(persistedBounds, validDisplays),
-  );
 }
 
 function buildConnectingSplashDataUrl(shouldUseDarkColors: boolean): string {
