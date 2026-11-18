@@ -25,7 +25,7 @@ import {
   SYNTHETIC_CLAUDE_STANDARD_MODEL,
   SYNTHETIC_CLAUDE_THINKING_MODEL,
 } from "../provider/ClaudeModelCatalog.testFixtures.ts";
-import * as TextGeneration from "./TextGeneration.ts";
+import type { ProviderTextGeneration } from "@goat/provider-core/server/textGeneration";
 import { EMPTY_CHANNEL_RECEPTION_MODEL_OUTPUT } from "@goat/provider-core/server/channelReceptionPrompt";
 import { sanitizeThreadTitle } from "@goat/provider-core/server/textGenerationUtils";
 import { makeClaudeTextGeneration } from "./ClaudeTextGeneration.ts";
@@ -95,7 +95,7 @@ function withFakeClaudeEnv<A, E, R>(
     cwdMustNotBe?: string;
     claudeConfig?: Partial<ClaudeSettings>;
   },
-  effectFn: (textGeneration: TextGeneration.TextGeneration["Service"]) => Effect.Effect<A, E, R>,
+  effectFn: (textGeneration: ProviderTextGeneration) => Effect.Effect<A, E, R>,
 ) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -318,7 +318,6 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
           expect(result.failure.detail).toContain("Failed to collect process output");
       }),
   );
-
   it.effect.each(memoryOperations)(
     "records the resolved Claude alias and option suffix for %s",
     (operation) =>
@@ -343,6 +342,7 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
                 { id: "effort", value: "high" },
               ],
             });
+            expect(yield* generation.memoryCapabilities).toEqual({ summary: true, conflict: true });
             const generated =
               operation === "resolveMemoryConflict"
                 ? yield* generation.resolveMemoryConflict!({
@@ -404,10 +404,10 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
                 : generation.generateMemorySummary!(memorySummary),
             );
             expect(failure.cause).toMatchObject({ code: "unavailable" });
+            expect(Object.values(yield* generation.memoryCapabilities)).toEqual([false, false]);
           }),
       ),
   );
-
   it.effect.each(
     memoryOperations.flatMap((operation) =>
       [

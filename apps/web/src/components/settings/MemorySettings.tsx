@@ -52,7 +52,7 @@ import * as Option from "effect/Option";
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironment, useEnvironments } from "../../state/environments";
-import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
+import { configuredMemoryModelSelection } from "@goat/shared/serverSettings";
 import { useProjects } from "../../state/entities";
 import {
   readEnvironmentScope,
@@ -234,7 +234,7 @@ function MemoryDestinationContent({
   // Resolved as the server does when it reports the pause; the string keeps re-renders to
   // changes of these two values.
   const memoryModel = useEnvironmentSettings(environmentId, (settings) =>
-    JSON.stringify([settings.memoryEnabled, resolveMemoryModelSelection(settings, undefined)]),
+    JSON.stringify([settings.memoryEnabled, configuredMemoryModelSelection(settings)]),
   );
   const [syncRequest, setSyncRequest] = useState({
     canSync,

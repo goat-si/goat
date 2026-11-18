@@ -25,9 +25,9 @@ import {
   MemoryPromotingModelAnswer,
   type MemorySummaryModelOutput,
 } from "./memoryGenerationPrompts.ts";
-import { unsupportedMemoryRunner, type MemoryRunner } from "./memoryGenerationRunner.ts";
+import { noMemoryGeneration, type MemoryRunner } from "./memoryGenerationRunner.ts";
 export type { MemoryRunner } from "./memoryGenerationRunner.ts";
-import type { ProviderTextGeneration } from "./textGeneration.ts";
+import type { ProviderTextGeneration, TextGenerationOperations } from "./textGeneration.ts";
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
@@ -41,7 +41,7 @@ import {
   sanitizeThreadTitle,
 } from "./textGenerationUtils.ts";
 
-export type Operation = keyof ProviderTextGeneration;
+export type Operation = keyof TextGenerationOperations;
 export const isMemoryOperation = (
   operation: Operation,
 ): operation is "resolveMemoryConflict" | "generateMemorySummary" =>
@@ -131,7 +131,12 @@ export const generatedThreadTitle = (raw: string) => {
 };
 
 export interface FromRunnerOptions {
-  readonly memoryRunner?: MemoryRunner;
+  readonly memory:
+    | false
+    | {
+        readonly capabilities: ProviderTextGeneration["memoryCapabilities"];
+        readonly run: MemoryRunner;
+      };
   /**
    * Also offer channel reception. Only providers whose runner has been checked to run it with
    * tools off and in an empty directory turn this on.
@@ -139,12 +144,7 @@ export interface FromRunnerOptions {
   readonly channelReception?: boolean;
 }
 
-export function fromRunner(
-  name: string,
-  run: Runner,
-  options: FromRunnerOptions = {},
-): ProviderTextGeneration {
-  const runMemory = options.memoryRunner ?? unsupportedMemoryRunner;
+function memoryOperations(name: string, runMemory: MemoryRunner) {
   const resolveMemoryConflict: NonNullable<ProviderTextGeneration["resolveMemoryConflict"]> =
     Effect.fn(`${name}.resolveMemoryConflict`)(function* (input) {
       const request = yield* buildMemoryConflictPrompt(input);
@@ -242,6 +242,14 @@ export function fromRunner(
         });
       return result;
     });
+  return { resolveMemoryConflict, generateMemorySummary };
+}
+
+export function fromRunner(
+  name: string,
+  run: Runner,
+  options: FromRunnerOptions = { memory: false },
+): ProviderTextGeneration {
   const generateCommitMessage: ProviderTextGeneration["generateCommitMessage"] = Effect.fn(
     `${name}.generateCommitMessage`,
   )(function* (input) {
@@ -359,8 +367,12 @@ export function fromRunner(
   });
 
   return {
-    resolveMemoryConflict,
-    generateMemorySummary,
+    ...(options.memory === false
+      ? noMemoryGeneration
+      : {
+          memoryCapabilities: options.memory.capabilities,
+          ...memoryOperations(name, options.memory.run),
+        }),
     generateCommitMessage,
     generatePrContent,
     generateBranchName,

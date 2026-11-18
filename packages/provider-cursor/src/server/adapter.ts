@@ -86,7 +86,8 @@ import {
   type ActiveCursorTextStream,
   type ActiveCursorTurn,
 } from "./activeTurn.ts";
-import { isCursorSdkError } from "./sdk.ts";
+import { classifyCursorModelRejection } from "./modelRejection.ts";
+import { makeCommandOutputGate } from "./commandOutputGate.ts";
 import { cursorRunPrompt, type CursorRunPrompt } from "./steerPrompt.ts";
 import {
   assistantTextsFromConversationSteps,
@@ -220,26 +221,6 @@ function providerSession(input: {
   };
 }
 
-class CursorModelUnavailableError extends Schema.TaggedError<CursorModelUnavailableError>()(
-  "CursorModelUnavailableError",
-  {
-    model: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Cursor cannot run the model "${this.model}". Cursor only runs models from your Cursor account. Choose one of those, or use OpenCode for OpenRouter and other API-key models.`;
-  }
-}
-
-// Uncoded SDK model rejections are identifiable only by message prefix.
-const classifyCursorModelRejection =
-  (modelSelection: ModelSelection) => (error: CursorAgentSdk.CursorAgentSdkRunnerError) =>
-    isCursorSdkError(error.cause, "ConfigurationError") &&
-    error.cause.message.startsWith("Cannot use this model:")
-      ? new CursorModelUnavailableError({ model: modelSelection.model, cause: error.cause })
-      : error;
-
 // Cursor results can omit output; retain more streamed fallback than the persisted tail.
 const MAX_CURSOR_STREAMED_OUTPUT_CHARS = 256 * 1024;
 // After a turn ends, a retryable error can resume an older checkpoint and report failure despite an answer.
@@ -306,6 +287,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           now: createdAt,
         });
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+        const outputGate = yield* makeCommandOutputGate();
         const liveAgent = yield* Ref.make<CursorLiveAgent | null>(null);
         // Cursor drops a cancelled run from the conversation, so the next message carries its prompt.
         const interruptedPrompt = yield* Ref.make<{
@@ -628,7 +610,9 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             | "completedAt"
             | "updatedAt"
           >;
-          const outputText = cursorToolOutputText(toolCall) || active.streamedOutput;
+          const outputText =
+            cursorToolOutputText(toolCall) ||
+            active.streamedOutput.slice(-MAX_CURSOR_STREAMED_OUTPUT_CHARS);
           let turnItem: OrchestrationV2TurnItem;
           switch (toolCall.type) {
             case "shell":
@@ -1375,19 +1359,27 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               const chunk = shellOutputText(update.event);
               if (chunk.length === 0) return;
               // Persist output once; live hub deltas avoid quadratic event-store growth.
-              shell.streamedOutput = (shell.streamedOutput + chunk).slice(
-                -MAX_CURSOR_STREAMED_OUTPUT_CHARS,
-              );
-              yield* emitProviderEvent({
-                type: "command_output.delta",
-                driver: CursorAgentSdk.CURSOR_PROVIDER,
-                threadId: shell.target.threadId,
-                itemId: idAllocator.derive.turnItemFromProviderItem({
+              shell.streamedOutput += chunk;
+              // Trimming on every chunk would flatten and copy the whole tail each time.
+              if (shell.streamedOutput.length > 2 * MAX_CURSOR_STREAMED_OUTPUT_CHARS) {
+                shell.streamedOutput = shell.streamedOutput.slice(
+                  -MAX_CURSOR_STREAMED_OUTPUT_CHARS,
+                );
+              }
+              yield* outputGate.offer(
+                events,
+                {
+                  type: "command_output.delta",
                   driver: CursorAgentSdk.CURSOR_PROVIDER,
-                  nativeItemId: shell.callId,
-                }),
-                chunk,
-              });
+                  threadId: shell.target.threadId,
+                  itemId: idAllocator.derive.turnItemFromProviderItem({
+                    driver: CursorAgentSdk.CURSOR_PROVIDER,
+                    nativeItemId: shell.callId,
+                  }),
+                  chunk,
+                },
+                () => context.interrupted || context.finalized,
+              );
               return;
             }
             default:
@@ -1447,6 +1439,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             return;
           }
           input.context.finalized = true;
+          yield* outputGate.wakeAll;
           const completedAt = yield* DateTime.now;
           for (const tool of input.context.tools.values()) {
             yield* emitToolArtifacts({
@@ -2034,6 +2027,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
         );
 
         const closeSession = Effect.fnUntraced(function* () {
+          yield* outputGate.close;
           const existing = yield* Ref.get(liveAgent);
           if (existing !== null) {
             yield* existing.session.close.pipe(Effect.ignore);
@@ -2059,7 +2053,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             selection.instanceId === adapterOptions.instanceId
               ? cursorContextWindowTokens(selection, adapterOptions.getModels?.(apiKey, env) ?? [])
               : undefined,
-          events: Stream.fromEffectRepeat(Queue.take(events)),
+          events: Stream.fromEffectRepeat(outputGate.take(events)),
           ensureThread: Effect.fn("CursorAdapterV2.ensureThread")(
             function* (threadInput: ProviderAdapter.ProviderAdapterV2EnsureThreadInput) {
               const opened = yield* openAgent({
@@ -2209,6 +2203,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 });
               }
               context.interrupted = true;
+              yield* outputGate.wakeAll;
               yield* context.run.cancel;
               const stopped = yield* Deferred.await(context.completed).pipe(
                 Effect.timeoutOption("10 seconds"),

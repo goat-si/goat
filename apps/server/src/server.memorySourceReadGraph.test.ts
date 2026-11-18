@@ -1,3 +1,4 @@
+import { fromRunner } from "@goat/provider-core/server/textGenerationOperations";
 import { assert, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
@@ -141,13 +142,10 @@ const environment = (home: string) =>
         Layer.provide(RuntimeIdentity.layer),
         Layer.provideMerge(observed),
         Layer.provide(
-          Layer.succeed(Generation.TextGeneration, {
-            generateCommitMessage: () => Effect.die("unexpected fixture provider call"),
-            generatePrContent: () => Effect.die("unexpected fixture provider call"),
-            generateBranchName: () => Effect.die("unexpected fixture provider call"),
-            generateThreadTitle: () => Effect.die("unexpected fixture provider call"),
-            generateReviewGuide: () => Effect.die("unexpected fixture provider call"),
-          }),
+          Layer.succeed(
+            Generation.TextGeneration,
+            fromRunner("fixture", () => Effect.die("unexpected fixture provider call")),
+          ),
         ),
         Layer.provide(
           Layer.mock(Registry.ProviderInstanceRegistry)({
