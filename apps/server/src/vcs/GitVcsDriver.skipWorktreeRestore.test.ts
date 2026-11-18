@@ -215,7 +215,7 @@ it.effect.each([
   }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
 );
 
-it.effect("refuses an oversized sparse index path list before changing the worktree or index", () =>
+const assertOversizedSparseListingRefused = (listingFails: boolean) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -234,14 +234,28 @@ it.effect("refuses an oversized sparse index path list before changing the workt
       execute: driver.execute,
       vcsProcess: {
         run: (input) =>
-          process.run({
-            ...input,
-            onStdoutChunk: (chunk) => {
-              input.onStdoutChunk?.(chunk);
-              input.onStdoutChunk?.(Buffer.from("S in/first\0s in/"));
-              input.onStdoutChunk?.(Buffer.from("x".repeat(40) + "\0"));
-            },
-          }),
+          process
+            .run({
+              ...input,
+              onStdoutChunk: (chunk) => {
+                input.onStdoutChunk?.(chunk);
+                input.onStdoutChunk?.(Buffer.from("S in/first\0s in/"));
+                input.onStdoutChunk?.(Buffer.from("x".repeat(40) + "\0"));
+              },
+            })
+            .pipe(
+              Effect.filterOrFail(
+                () => !listingFails,
+                () =>
+                  new VcsProcessExitError({
+                    operation: input.operation,
+                    cwd: input.cwd,
+                    command: input.command,
+                    exitCode: 128,
+                    detail: "sparse listing failed after output",
+                  }),
+              ),
+            ),
       },
       operation: "checkpoint-test",
       cwd,
@@ -255,7 +269,14 @@ it.effect("refuses an oversized sparse index path list before changing the workt
     assert.strictEqual(result._tag, "Failure");
     if (result._tag === "Failure")
       assert.strictEqual(result.failure._tag, "VcsProcessOutputLimitError");
-  }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
+  }).pipe(Effect.scoped, Effect.provide(layerGitContract));
+
+it.effect("refuses an oversized sparse index path list before changing the worktree or index", () =>
+  assertOversizedSparseListingRefused(false),
+);
+
+it.effect("refuses an oversized sparse index path list when Git then exits 128", () =>
+  assertOversizedSparseListingRefused(true),
 );
 
 it.effect("logs the typed Git failure when sparse restore falls back", () =>

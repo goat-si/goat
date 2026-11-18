@@ -42,41 +42,43 @@ export const restoreCheckpointFiles = Effect.fn("GitVcsDriver.checkpoints.restor
           let recordStart = true;
           let keep = false;
           let record: Uint8Array[] = [];
-          yield* vcsProcess.run({
-            operation,
-            command: "git",
-            cwd,
-            args: ["ls-files", "--full-name", "--sparse", "-v", "-z", "--", "."],
-            maxOutputBytes: 4_096,
-            outputMode: "truncate",
-            // The index can be huge; keep only the "S "/"s " records of the NUL-delimited list.
-            onStdoutChunk: (chunk) => {
-              let start = 0;
-              while (start < chunk.length && skippedBytes <= maxPathBytes) {
-                const end = chunk.indexOf(0, start);
-                if (recordStart) {
-                  keep = chunk[start] === 83 || chunk[start] === 115;
-                  record = [];
-                }
-                if (keep) {
-                  const piece = chunk.subarray(start, end === -1 ? undefined : end);
-                  skippedBytes += piece.length + (end === -1 ? 0 : 1);
-                  if (skippedBytes > maxPathBytes) break;
-                  record.push(Buffer.from(piece));
-                  if (end !== -1) {
-                    const entry = Buffer.concat(record).subarray(2);
+          const listing = yield* vcsProcess
+            .run({
+              operation,
+              command: "git",
+              cwd,
+              args: ["ls-files", "--full-name", "--sparse", "-v", "-z", "--", "."],
+              maxOutputBytes: 4_096,
+              outputMode: "truncate",
+              // The index can be huge; keep only the "S "/"s " records of the NUL-delimited list.
+              onStdoutChunk: (chunk) => {
+                let start = 0;
+                while (start < chunk.length && skippedBytes <= maxPathBytes) {
+                  const end = chunk.indexOf(0, start);
+                  if (recordStart) {
+                    keep = chunk[start] === 83 || chunk[start] === 115;
                     record = [];
-                    // Sparse directory entries are exclusions; stdin cannot carry non-UTF-8.
-                    if (entry.at(-1) !== 47 && NodeBuffer.isUtf8(entry))
-                      skipped.push(entry.toString("utf8"));
                   }
+                  if (keep) {
+                    const piece = chunk.subarray(start, end === -1 ? undefined : end);
+                    skippedBytes += piece.length + (end === -1 ? 0 : 1);
+                    if (skippedBytes > maxPathBytes) break;
+                    record.push(Buffer.from(piece));
+                    if (end !== -1) {
+                      const entry = Buffer.concat(record).subarray(2);
+                      record = [];
+                      // Sparse directory entries are exclusions; stdin cannot carry non-UTF-8.
+                      if (entry.at(-1) !== 47 && NodeBuffer.isUtf8(entry))
+                        skipped.push(entry.toString("utf8"));
+                    }
+                  }
+                  recordStart = end !== -1;
+                  if (!recordStart) break;
+                  start = end + 1;
                 }
-                recordStart = end !== -1;
-                if (!recordStart) break;
-                start = end + 1;
-              }
-            },
-          });
+              },
+            })
+            .pipe(Effect.result);
           if (skippedBytes > maxPathBytes) {
             return yield* new VcsProcessOutputLimitError({
               operation,
@@ -87,6 +89,7 @@ export const restoreCheckpointFiles = Effect.fn("GitVcsDriver.checkpoints.restor
               observedBytes: skippedBytes,
             });
           }
+          if (listing._tag === "Failure") return yield* listing.failure;
           if (skipped.length === 0) return skipped;
           const stdin = skipped.join("\0") + "\0";
           step = "sparse-checkout check-rules";
