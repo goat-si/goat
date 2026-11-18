@@ -131,15 +131,57 @@ function removeRouteMetadata(
   removed: ReadonlyArray<ConnectionTarget>,
 ): ConnectionCatalogDocument {
   const connectionIds = new Set(removed.flatMap((target) => connectionIdOf(target) ?? []));
+  // A Pen route's id names its member, so a Pen profile also has to be this environment's.
+  const penRoutes = new Set(
+    removed.flatMap((target) =>
+      target._tag === "PenConnectionTarget" ? [penRouteKey(target)] : [],
+    ),
+  );
   const relayRemoved = removed.some((target) => target._tag === "RelayConnectionTarget");
   const environmentIds = new Set(removed.map((target) => target.environmentId));
   return {
     ...document,
-    profiles: document.profiles.filter((value) => !connectionIds.has(value.connectionId)),
+    profiles: document.profiles.filter((value) =>
+      value._tag === "PenConnectionProfile"
+        ? !penRoutes.has(penRouteKey(value))
+        : !connectionIds.has(value.connectionId),
+    ),
     credentials: document.credentials.filter((value) => !connectionIds.has(value.connectionId)),
     remoteDpopTokens: relayRemoved
       ? document.remoteDpopTokens.filter((value) => !environmentIds.has(value.environmentId))
       : document.remoteDpopTokens,
+  };
+}
+
+const penRouteKey = (value: { readonly environmentId: string; readonly connectionId: string }) =>
+  `${value.environmentId}\u0000${value.connectionId}`;
+
+// A Pen target and its profile are one record: a target without its own profile, or a second
+// target of the same member, is dropped with any profile left without its target.
+function pairPenRoutes(document: ConnectionCatalogDocument): ConnectionCatalogDocument {
+  const profiles = new Set(
+    document.profiles.flatMap((value) =>
+      value._tag === "PenConnectionProfile" ? [penRouteKey(value)] : [],
+    ),
+  );
+  const members = new Set<string>();
+  const targets = document.targets.filter((target) => {
+    if (target._tag !== "PenConnectionTarget") return true;
+    if (!profiles.has(penRouteKey(target)) || members.has(target.connectionId)) return false;
+    members.add(target.connectionId);
+    return true;
+  });
+  const paired = new Set(
+    targets.flatMap((target) =>
+      target._tag === "PenConnectionTarget" ? [penRouteKey(target)] : [],
+    ),
+  );
+  return {
+    ...document,
+    targets,
+    profiles: document.profiles.filter(
+      (value) => value._tag !== "PenConnectionProfile" || paired.has(penRouteKey(value)),
+    ),
   };
 }
 
@@ -388,11 +430,11 @@ export const decodeConnectionCatalogStorage = (raw: string) =>
         decodePenProfile(new Set(baseProfiles.map((profile) => profile.connectionId))),
         penProfiles,
       );
-      return {
+      return pairPenRoutes({
         ...document,
         targets: mergeExtensions(baseTargets, targets, penSlots(penTargets) - targets.length),
         profiles: mergeExtensions(baseProfiles, profiles, penSlots(penProfiles) - profiles.length),
-      } satisfies ConnectionCatalogDocument;
+      } satisfies ConnectionCatalogDocument);
     }),
   );
 

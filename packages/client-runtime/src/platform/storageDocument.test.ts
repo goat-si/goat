@@ -566,6 +566,7 @@ describe("Pen storage compatibility", () => {
       JSON.stringify({
         ...legacy,
         penTargets: [{ index: 0, value: penTarget }],
+        penProfiles: [{ index: 0, value: penProfile }],
         hubProxyTargets: [{ index: 0, value: hubTarget }],
       }),
     );
@@ -690,7 +691,6 @@ describe("Pen storage compatibility", () => {
       const bad = JSON.parse(raw());
       // A record a newer or broken writer left: the wrong shape for this build's Pen route.
       bad.penTargets.push({ index: 1, value: { ...penTarget, connectionId: 7 } });
-      bad.penProfiles[0].value = { ...penProfile, noisePub: null };
       const decoded = yield* decodeConnectionCatalogStorage(JSON.stringify(bad));
       expect(decoded.targets.map((value) => value._tag)).toEqual([
         "PenConnectionTarget",
@@ -700,6 +700,7 @@ describe("Pen storage compatibility", () => {
       expect(decoded.profiles.map((value) => value._tag)).toEqual([
         "HubProxyConnectionProfile",
         "BearerConnectionProfile",
+        "PenConnectionProfile",
       ]);
       expect(decoded.credentials).toEqual(legacy.credentials);
     }),
@@ -762,4 +763,40 @@ describe("Pen storage compatibility", () => {
       ]);
     }),
   );
+  it.effect(
+    "a Pen target without its own profile is dropped, so another environment keeps its",
+    () =>
+      Effect.gen(function* () {
+        const other = EnvironmentId.make("environment-2");
+        const decoded = yield* decodeConnectionCatalogStorage(
+          JSON.stringify({
+            ...legacy,
+            penTargets: [
+              { index: 0, value: penTarget },
+              { index: 2, value: { ...penTarget, environmentId: other } },
+            ],
+            penProfiles: [
+              { index: 0, value: { ...penProfile, noisePub: null } },
+              { index: 2, value: { ...penProfile, environmentId: other } },
+            ],
+          }),
+        );
+        const pens = (values: ReadonlyArray<{ _tag: string; environmentId: string }>) =>
+          values
+            .filter((value) => value._tag.startsWith("Pen"))
+            .map((value) => value.environmentId);
+        expect(pens(decoded.targets)).toEqual([other]);
+        expect(pens(decoded.profiles)).toEqual([other]);
+      }),
+  );
+  it("forgetting an environment removes only its own Pen profile", () => {
+    const other = EnvironmentId.make("environment-2");
+    const document = decodeCatalogDocument({
+      ...EMPTY_CONNECTION_CATALOG_DOCUMENT,
+      targets: [penTarget, { ...penTarget, environmentId: other }],
+      profiles: [penProfile, { ...penProfile, environmentId: other }],
+    });
+    const next = removeConnectionFromCatalog(document, ENVIRONMENT_ID);
+    expect(next.profiles.map((value) => value.environmentId)).toEqual([other]);
+  });
 });

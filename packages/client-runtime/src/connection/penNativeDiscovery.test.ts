@@ -600,9 +600,7 @@ it.effect("a member's new Noise key keeps its stored route and updates the pin i
       start: Effect.void,
       register: (value) =>
         Effect.sync(() => {
-          registered.push(
-            value.profile._tag === "PenConnectionProfile" ? value.profile.noisePub : "",
-          );
+          registered.push(value._tag === "PenConnectionRegistration" ? value.profile.noisePub : "");
           return true;
         }),
       registerPlatform: unused,
