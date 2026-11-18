@@ -244,9 +244,10 @@ export function isTextGenerationEligible(
     return (
       scope.purpose === undefined &&
       generator.enabled &&
-      settings.projectSettingsOverrides[scope.projectId ?? ""]?.providerInstances?.[
-        selection.instanceId
-      ]?.enabled !== false
+      (scope.projectId === null ||
+        settings.projectSettingsOverrides[scope.projectId]?.providerInstances?.[
+          selection.instanceId
+        ]?.enabled !== false)
     );
   }
   return (
