@@ -82,7 +82,7 @@ import { makePullRequestSetup } from "./pullRequestSetup.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { extractBranchNameFromRemoteRef } from "./remoteRefs.ts";
 import { detachStackFrame } from "./detachStackFrame.ts";
-import { makePrLookupGitState } from "./prLookupGitState.ts";
+import { makePrLookupGitState, prLookupFailureTtl } from "./prLookupGitState.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import type { GitManagerServiceError } from "@goat/contracts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -180,22 +180,11 @@ const STATUS_RESULT_CACHE_TTL = Duration.seconds(1);
 const STATUS_RESULT_CACHE_CAPACITY = 2_048;
 const PR_LOOKUP_CACHE_TTL = Duration.seconds(60);
 const PR_LOOKUP_NO_OPEN_PR_CACHE_TTL = Duration.minutes(5);
-const PR_LOOKUP_FAILURE_BASE_TTL = Duration.seconds(20);
-const PR_LOOKUP_FAILURE_MAX_TTL = Duration.minutes(15);
 const PR_LOOKUP_CACHE_CAPACITY = 2_048;
 const PR_THREAD_CONTEXT_BYTES = 16_000;
 const PR_THREAD_COMMAND_OUTPUT_CHARS = 2_000;
 const isSourceControlProviderError = Schema.is(SourceControlProviderError);
 
-/**
- * Throttled lookups fail fast, so a flat failure TTL would retry faster than a healthy
- * lookup refreshes. Backing off per branch keeps a 429 from becoming sustained pressure.
- */
-function prLookupFailureTtl(consecutiveFailures: number): Duration.Duration {
-  const exponent = Math.max(0, consecutiveFailures - 1);
-  const backoffMs = Duration.toMillis(PR_LOOKUP_FAILURE_BASE_TTL) * Math.pow(2, exponent);
-  return Duration.min(Duration.millis(backoffMs), PR_LOOKUP_FAILURE_MAX_TTL);
-}
 type StripProgressContext<T> = T extends any ? Omit<T, "actionId" | "cwd" | "action"> : never;
 type GitActionProgressPayload = StripProgressContext<GitActionProgressEvent>;
 type GitActionProgressEmitter = (event: GitActionProgressPayload) => Effect.Effect<void, never>;
