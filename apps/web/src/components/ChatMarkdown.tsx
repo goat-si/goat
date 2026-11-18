@@ -9,7 +9,7 @@ import {
   inlineCodeFilePathCandidate,
 } from "@goat/shared/markdownLinks";
 import { taskListMarkerOffset } from "@goat/shared/markdownTaskList";
-import { isHostPath, resolveWorkspaceFilePath, workspaceRelativeFilePath } from "@goat/shared/path";
+import { isHostPath, workspaceRelativeFilePath } from "@goat/shared/path";
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";
 import {
   AuthFilesystemReadScope,
@@ -144,12 +144,9 @@ import { projectEnvironment } from "../state/projects";
 import { filesystemEnvironment } from "../state/filesystem";
 import {
   claimWorkspaceBasenameLookup,
-  needsWorkspaceBasenameLookup,
-  pickStrippedWorkspaceMatch,
-  pickWorkspaceBasenameMatch,
-  stripRepeatedWorkspacePrefix,
-  WORKSPACE_BASENAME_LOOKUP_LIMIT,
+  workspaceLinkLookupQuery,
 } from "@goat/client-runtime/workspace-basename-lookup";
+import { findChatFileLinkMatch } from "./chatMarkdownFileLinks";
 import { resolvePullRequestPreviewTarget } from "@goat/client-runtime/change-request-links";
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
@@ -649,33 +646,15 @@ function useChatMarkdownState({
     ) {
       return null;
     }
-    const isBasename = needsWorkspaceBasenameLookup(workspaceRelativePath);
-    const strippedPath = isBasename
-      ? null
-      : stripRepeatedWorkspacePrefix(workspaceRelativePath, cwd);
-    if (!isBasename && strippedPath === null) return null;
-    const result = await searchProjectEntries({
+    return findChatFileLinkMatch({
+      workspaceRelativePath,
+      cwd,
       environmentId,
-      input: {
-        cwd,
-        query: strippedPath ?? workspaceRelativePath,
-        limit: WORKSPACE_BASENAME_LOOKUP_LIMIT,
-        kind: "file",
-      },
+      threadProjectId: threadRef ? readThreadShell(threadRef)?.projectId : undefined,
+      projects,
+      searchProjectEntries,
+      getFilesystemMetadata,
     });
-    if (result._tag !== "Success") return null;
-    if (strippedPath === null) {
-      return pickWorkspaceBasenameMatch(workspaceRelativePath, result.value.entries);
-    }
-    const match = pickStrippedWorkspaceMatch(strippedPath, cwd, result.value.entries);
-    if (match === null) return null;
-    // Search can be truncated or still scanning, so it cannot rule out the
-    // literal path. Check the host before redirecting to the stripped match.
-    const metadata = await getFilesystemMetadata({
-      environmentId,
-      input: { paths: [resolveWorkspaceFilePath(workspaceRelativePath, cwd)] },
-    });
-    return metadata._tag === "Success" && metadata.value.entries[0] === null ? match : null;
   };
   const openFileInPanel = (fileLinkMeta: MarkdownFileLinkMeta, panelPath: string) => {
     if (!threadRef) return;
@@ -686,8 +665,7 @@ function useChatMarkdownState({
     if (
       fileLinkMeta.workspaceLookupPath === null ||
       !cwd ||
-      (!needsWorkspaceBasenameLookup(panelPath) &&
-        stripRepeatedWorkspacePrefix(panelPath, cwd) === null)
+      workspaceLinkLookupQuery(panelPath, cwd) === null
     ) {
       openAt(panelPath);
       return;
@@ -989,7 +967,12 @@ const CHAT_MARKDOWN_COMPONENTS = {
     if (linkedThreadId) {
       const label = hastPlainTextDeep(node) || linkedThreadId;
       return environmentId ? (
-        <MarkdownThreadLink environmentId={environmentId} threadId={linkedThreadId} label={label} />
+        <MarkdownThreadLink
+          environmentId={environmentId}
+          threadId={linkedThreadId}
+          label={label}
+          markdown={text}
+        />
       ) : (
         <span>{label}</span>
       );

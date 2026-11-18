@@ -26,7 +26,7 @@ import type { ComposerSendInput } from "./useComposerSend.input";
 
 const sshWorkspaceLaunchCommand = vcsEnvironment.sshWorkspaceLaunch;
 
-/** The SSH ports a send uses and its "continue on SSH" action, rebuilt each render as before. */
+/** The SSH ports a send uses and its "continue on SSH" action, built anew on each call. */
 export function composerSshContinuation(
   deps: SshComposerPortDeps &
     Pick<

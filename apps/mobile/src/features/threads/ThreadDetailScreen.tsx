@@ -1,6 +1,5 @@
 import { USER_INPUT_TOGGLE_TIMING } from "./threadDetailMotion";
 import { ChildThreadApprovals } from "./ChildThreadApprovals";
-import type { CloudRunCard, CloudTaskState } from "@goat/client-runtime/state/cloud-task";
 import { CloudTaskStatus } from "./CloudTaskStatus";
 import { AppText as Text } from "../../components/ui/AppText";
 import { useOpenThreadInspector } from "./thread-inspector-navigation";
@@ -23,37 +22,14 @@ import {
   isThreadWokeUnseen,
   snoozeWakeLabel,
 } from "@goat/client-runtime/state/thread-settled";
-import type { WorktreeSetupCardProps } from "./worktree-setup-card";
-import type { ComposerTextPaste } from "../../native/GoatComposerEditor.types";
-import { type EnvironmentConnectionPhase } from "@goat/client-runtime/connection";
-import {
-  childThreadRequestsTitle,
-  type EnvironmentThreadShell,
-} from "@goat/client-runtime/state/shell";
-import type { HandoffEndpoints } from "@goat/client-runtime/handoff";
-import {
-  type CodexFeedbackSubmission,
-  type EnvironmentThreadStatus,
-} from "@goat/client-runtime/state/threads";
+import { childThreadRequestsTitle } from "@goat/client-runtime/state/shell";
 import { useKeyboardChatComposerInset, useKeyboardScrollToEnd } from "@legendapp/list/keyboard";
 import { resolveThreadProviderSkills } from "@goat/client-runtime/providerSkills";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { NativeLayoutObserver } from "../../native/NativeLayoutObserver";
 import { deriveBottomControlInsets, type NativeLayoutMetrics } from "../../lib/reserved-regions";
-import type {
-  OrchestrationV2ProviderSession,
-  EnvironmentId,
-  MessageId,
-  ModelSelection,
-  ProviderInteractionMode,
-  RuntimeMode,
-  RuntimeRequestId,
-  ScopedThreadRef,
-  ServerConfig as GoatServerConfig,
-  UsageLimitsReport,
-  RunId,
-} from "@goat/contracts";
+import type { MessageId, RuntimeRequestId, UsageLimitsReport, RunId } from "@goat/contracts";
 import {
   appendCodexArtifactTemplateUsePrompt,
   type CodexArtifactTemplate,
@@ -61,8 +37,6 @@ import {
 import {
   declinePendingApprovals,
   sendApprovalFeedback,
-  type ApprovalResponder,
-  type ThreadUserInputQuestion,
 } from "@goat/client-runtime/state/thread-requests";
 import { useDeadlinePassed } from "../../lib/clock";
 import {
@@ -73,14 +47,9 @@ import {
   presentPendingBackgroundWork,
 } from "@goat/client-runtime/state/thread-execution";
 import { resolveSubagentPillSegment } from "@goat/client-runtime/state/thread-subagents";
-import {
-  formatModelSelectionEffort,
-  type ProviderSubagentStatus,
-} from "@goat/client-runtime/state/thread-execution";
+import { formatModelSelectionEffort } from "@goat/client-runtime/state/thread-execution";
 import { formatModelSlugName, resolveSelectableModel } from "@goat/shared/model";
 import { isProviderNativeSubagentThread } from "@goat/contracts";
-import type { QueuedRunEdit } from "../../state/queued-run-edit";
-import type { FollowUpBehavior } from "../../lib/followUpBehavior";
 import type { ActiveTurnComposerAction } from "@goat/client-runtime/state/composer-dispatch";
 import * as Haptics from "expo-haptics";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
@@ -125,14 +94,9 @@ import {
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { collectProviderUsageLimits } from "@goat/shared/usageLimits";
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
-import type { StatusTone } from "../../components/StatusPill";
 import { getComposerDraftSnapshot } from "../../state/use-composer-drafts";
 import { RenderErrorBoundary, RenderFailureView } from "../../components/RenderErrorBoundary";
-import {
-  ANDROID_READING_MAX_WIDTH,
-  CHAT_CONTENT_MAX_WIDTH,
-  type LayoutVariant,
-} from "../../lib/layout";
+import { ANDROID_READING_MAX_WIDTH, CHAT_CONTENT_MAX_WIDTH } from "../../lib/layout";
 import { editPendingThreadMessage } from "../../state/edit-pending-thread-message";
 import { deviceEnvironment } from "../../state/device";
 import { useEnvironmentQuery } from "../../state/query";
@@ -153,13 +117,6 @@ import { threadStreamHaptics } from "./threadStreamHaptics";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { useDelayedStatus } from "../../lib/useDelayedStatus";
-import type {
-  PendingApproval,
-  PendingUserInput,
-  PendingUserInputDraftAnswer,
-  ThreadFeedEntry,
-  ThreadFeedLatestRun,
-} from "../../lib/threadActivity";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { ComposerErrorNotice } from "./ComposerErrorNotice";
 import { ThreadWorkspaceBanner } from "./ThreadWorkspaceBanner";
@@ -169,7 +126,7 @@ import { PendingUserInputCard } from "./PendingUserInputCard";
 import { ProviderSubagentBar } from "./ProviderSubagentBar";
 import { SideChatParentRow } from "./SideChatParentRow";
 import { ThreadCreationFailedSlot } from "./ThreadCreationFailedSlot";
-import { CompactBeforeSendNotice, type CompactBeforeSendState } from "./CompactBeforeSendNotice";
+import { CompactBeforeSendNotice } from "./CompactBeforeSendNotice";
 import {
   FLOATING_WORKING_CONTROL_COVERAGE,
   FloatingWorkingControl,
@@ -195,133 +152,20 @@ import {
 } from "./ThreadComposer";
 import { ComposerCards, ComposerSlot, useSettledComposerHeight } from "./ComposerSlot";
 import { ComposerPopoverHost } from "./ComposerPopoverHost";
-import { ThreadFeed, type ThreadFeedHandle, type ThreadFeedHistoryControls } from "./ThreadFeed";
+import { ThreadFeed, type ThreadFeedHandle } from "./ThreadFeed";
 import { WorkspaceMutationIdProvider } from "./WorkspaceMutationIdProvider";
 import { useThreadTurnSubagents } from "./ThreadAgentsSheet";
 import { ComposerQueuedEditBanner } from "./ComposerQueuedEdit";
 import { useThreadQueuedCount } from "./ThreadQueueControl";
 import { ComposerThreadBars } from "./ComposerThreadBars";
-import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 import { useOpenLinkedThread } from "./useOpenLinkedThread";
 import { useGlobalVoiceInput } from "../voice-input/VoiceInputProvider";
 import { useOfflineSnapshotAge } from "../connection/useOfflineSnapshotAge";
 import { threadVisitTracker } from "./threadVisitTracker";
-export interface ThreadDetailScreenProps {
-  readonly cloudState: CloudTaskState;
-  readonly cloudRun?: CloudRunCard | null;
-  readonly onRetryCloudRun?: (() => void) | null;
-  readonly header?: React.ReactNode;
-  readonly draftMode?: {
-    readonly content: (
-      headerInset: number,
-      bottomInset: number,
-      availableHeight: number,
-    ) => React.ReactNode;
-    readonly controls: (viewportHeight: number) => React.ReactNode;
-    readonly editorRef: React.RefObject<ComposerEditorHandle | null>;
-    readonly sendBlockedReason: string | null;
-    readonly interactionLocked: boolean;
-  };
-  readonly worktreeSetup?: WorktreeSetupCardProps | null;
-  readonly setupWorkingStartedAt?: string | null;
-  readonly canOperateThread: boolean;
-  readonly selectedThread: EnvironmentThreadShell;
-  /** Use this for detail reads; it stays null until queued creation reaches the server. */
-  readonly selectedThreadDetailRef: ScopedThreadRef | null;
-  readonly contentPresentation: ThreadContentPresentation;
-  readonly screenTone: StatusTone;
-  readonly connectionError: string | null;
-  readonly environmentLabel: string | null;
-  readonly feedbackSubmissions: ReadonlyArray<CodexFeedbackSubmission>;
-  readonly onDismissFeedback: (id: MessageId) => void;
-  readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
-  readonly pendingHandoff?: HandoffEndpoints | null;
-  readonly activityRun:
-    | (ThreadFeedLatestRun & { readonly survivingRestartNotice?: string | null })
-    | null;
-  readonly activeWorkStartedAt: string | null;
-  readonly runlessWorkActive?: boolean;
-  readonly providerSubagentStatus?: ProviderSubagentStatus | null;
-  readonly extensionStatuses?: NonNullable<OrchestrationV2ProviderSession["extensionStatuses"]>;
-  readonly isCompacting: boolean;
-  /** Set while the next send compacts the thread first. */
-  readonly compactBeforeSend?: CompactBeforeSendState | null;
-  readonly creationState:
-    | {
-        readonly kind: "preparing";
-        readonly preparingWorktree: boolean;
-        readonly serverOwned: boolean;
-      }
-    | { readonly kind: "failed"; readonly reason: string; readonly onEditTask: () => void }
-    | null;
-  readonly activePendingApproval: PendingApproval | null;
-  readonly activePendingApprovals: ReadonlyArray<PendingApproval>;
-  readonly respondingApprovalId: RuntimeRequestId | null;
-  readonly activePendingUserInput: PendingUserInput | null;
-  readonly activePendingUserInputDrafts: Record<string, PendingUserInputDraftAnswer>;
-  readonly activePendingUserInputAnswers: Record<string, string | ReadonlyArray<string>> | null;
-  readonly respondingUserInputId: RuntimeRequestId | null;
-  readonly connectionStateLabel: EnvironmentConnectionPhase;
-  readonly threadSyncStatus?: EnvironmentThreadStatus;
-  readonly historyControls?: ThreadFeedHistoryControls;
-  readonly activeThreadBusy: boolean;
-  readonly canStopThread: boolean;
-  readonly queuedRunEdit: QueuedRunEdit | null;
-  readonly composerDraftKey: string | null;
-  readonly followUpBehavior: FollowUpBehavior;
-  readonly canSteerActiveTurn: boolean;
-  readonly isSavingQueuedEdit: boolean;
-  readonly onCancelQueuedRunEdit: () => void;
-  readonly onRemoveQueuedEditAttachment: (attachmentId: string) => void;
-  readonly environmentId: EnvironmentId;
-  readonly projectWorkspaceRoot: string | null;
-  readonly threadCwd: string | null;
-  readonly selectedThreadQueueCount: number;
-  readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
-  readonly dispatchingMessageId: MessageId | null;
-  readonly serverConfig: GoatServerConfig | null;
-  readonly layoutVariant?: LayoutVariant;
-  readonly usesAutomaticContentInsets?: boolean;
-  readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
-  readonly onOpenConnectionEditor: () => void;
-  readonly onChangeDraftMessage: (value: string) => void;
-  readonly onPickDraftMedia: () => Promise<void>;
-  readonly onPickDraftFiles: () => Promise<void>;
-  readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
-  readonly onNativePasteText: (paste: ComposerTextPaste) => Promise<void>;
-  readonly onRemoveDraftImage: (imageId: string) => void;
-  readonly onStopThread: () => void;
-  /** Present while the thread's queue is held. */
-  readonly onResumeQueue: (() => Promise<void>) | null;
-  readonly onSendMessage: (
-    followUp?: ActiveTurnComposerAction,
-    beforeDispatch?: (
-      text: string,
-      hasAttachmentsOrContext: boolean,
-    ) => Promise<boolean | "responded">,
-    onWillEnqueue?: () => void,
-  ) => Promise<MessageId | null>;
-  readonly onReconnectEnvironment: () => void;
-  readonly canSwitchThreadProvider: boolean;
-  readonly onUpdateThreadModelSelection: (modelSelection: ModelSelection) => void;
-  readonly onUpdateThreadRuntimeMode: (runtimeMode: RuntimeMode) => void;
-  readonly onUpdateThreadInteractionMode?: (interactionMode: ProviderInteractionMode) => void;
-  readonly onRespondToApproval: ApprovalResponder;
-  readonly onSelectUserInputOption: (
-    requestId: RuntimeRequestId,
-    question: ThreadUserInputQuestion,
-    value: string,
-  ) => void;
-  readonly onChangeUserInputCustomAnswer: (
-    requestId: RuntimeRequestId,
-    questionId: string,
-    customAnswer: string,
-  ) => void;
-  readonly onSubmitUserInput: () => Promise<unknown>;
-  readonly onDismissUserInput: () => Promise<unknown>;
-  readonly showContent?: boolean;
-}
+export type { ThreadDetailScreenProps } from "./ThreadDetailScreenProps";
+import type { ThreadDetailScreenProps } from "./ThreadDetailScreenProps";
+import { useToolCallVisibility } from "../../state/toolCallVisibility";
 const USAGE_LIMITS_PANEL_GAP = 12;
 const USAGE_LIMITS_PANEL_MIN_HEIGHT = 44;
 // Connection failures survive retries and app suspension.
@@ -446,6 +290,7 @@ function ThreadDetailBody(
     threadId: props.selectedThread.id,
   });
   const composerError = useAtomValue(threadComposerErrorsAtom)[selectedThreadKey]?.message ?? null;
+  const toolCallVisibility = useToolCallVisibility();
   const queuedCount = useThreadQueuedCount(props.selectedThreadDetailRef);
   const turnSubagents = useThreadTurnSubagents(props.selectedThreadDetailRef);
   const agentsSegment = resolveSubagentPillSegment(turnSubagents);
@@ -1374,6 +1219,7 @@ function ThreadDetailBody(
           >
             <WorkspaceMutationIdProvider threadRef={props.selectedThreadDetailRef}>
               <ThreadFeed
+                toolCallVisibility={toolCallVisibility}
                 environmentId={props.environmentId}
                 offline={props.connectionStateLabel !== "connected"}
                 threadId={props.selectedThread.id}

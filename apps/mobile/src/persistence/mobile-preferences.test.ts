@@ -134,3 +134,20 @@ describe("preferences when the database opens on Android (#3549)", () => {
       }),
   );
 });
+
+describe("mobile tool-call visibility preference", () => {
+  it.effect("keeps the choice across an app restart and drops a value it does not know", () =>
+    Effect.gen(function* () {
+      yield* MobilePreferences.make().pipe(
+        Effect.flatMap((store) => store.savePatch({ toolCallVisibility: "zen" })),
+        Effect.provide(storeLayer),
+      );
+      expect((yield* loadFresh).toolCallVisibility).toBe("zen");
+
+      yield* seedStoredPreferences({ toolCallVisibility: "summaries", followUpBehavior: "queue" });
+      const loaded = yield* loadFresh;
+      expect(loaded.followUpBehavior).toBe("queue");
+      expect("toolCallVisibility" in loaded).toBe(false);
+    }),
+  );
+});
