@@ -21,8 +21,11 @@ import { Badge } from "../ui/badge";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
-import { ModelPickerContent, resolveModelPickerSelectedModel } from "./ModelPickerContent";
-import { retainedModelWhileProviderLocked } from "./ProviderModelPicker.logic";
+import { ModelPickerContent } from "./ModelPickerContent";
+import {
+  retainedModelWhileProviderLocked,
+  resolveModelPickerSelectedModel,
+} from "./ProviderModelPicker.logic";
 import { ChatGptSharingControl } from "./ChatGptSharingControl";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { ModelEsque, getDisplayModelName, getTriggerDisplayModelName } from "./providerIconUtils";
