@@ -639,6 +639,15 @@ const beforeWindowBoundary = savedAlignmentWindow.slice(0, 511);
 const secondWindowFill = Array.from({ length: 510 }, (_, index) => `Saved step ${index + 514}.`);
 const thirdWindowFill = Array.from({ length: 74 }, (_, index) => `Saved step ${index + 1026}.`);
 
+const beforeSecondWindowBoundary = [
+  ...savedAlignmentWindow,
+  ...Array.from({ length: 511 }, (_, index) => `Saved step ${index + 513}.`),
+];
+const savedStepsBeforeAlignmentCap = [
+  ...beforeSecondWindowBoundary,
+  ...Array.from({ length: 3072 }, (_, index) => `Saved step ${index + 1024}.`),
+];
+
 it.effect.each([
   {
     name: "exact steps",
@@ -791,6 +800,53 @@ it.effect.each([
           "Review tests.",
           ...thirdWindowFill,
         ].join("\n"),
+        null,
+      ],
+    ],
+  },
+  {
+    name: "exact and partial candidates at steps 512–514",
+    live: ["Build", "Check status."],
+    saved: [...beforeWindowBoundary, "Build the image.", "Build", "Check status."],
+    final: [
+      ...beforeWindowBoundary.map((text) => [text, null]),
+      ["Build the image.", null],
+      ["Build", 0],
+      ["Check status.", 1],
+    ],
+  },
+  {
+    name: "exact and partial candidates at steps 1024–1026",
+    live: ["Build", "Check status."],
+    saved: [...beforeSecondWindowBoundary, "Build the image.", "Build", "Check status."],
+    final: [
+      ...savedAlignmentWindow.map((text) => [text, null]),
+      ["Build", 0],
+      ["Check status.", 1],
+      [[...beforeSecondWindowBoundary.slice(512), "Build the image."].join("\n"), null],
+    ],
+  },
+  {
+    name: "only saves novel tail text past the 4,096-step cap",
+    live: ["Check status.", "Check status. with tools", "Finish", "Close"],
+    saved: [
+      "Check status.",
+      ...savedStepsBeforeAlignmentCap.slice(0, -1),
+      "Close the dashboard.",
+      "Check status.",
+      "Check status. with tools and a dashboard.",
+      "Check status?",
+      "Finish the review.",
+      "Novel tail.",
+    ],
+    final: [
+      ["Check status.", 0],
+      ["Check status. with tools", 1],
+      ["Finish", 2],
+      ...beforeWindowBoundary.map((text) => [text, null]),
+      ["Close the dashboard.", 3],
+      [
+        [...savedStepsBeforeAlignmentCap.slice(511, -1), "Check status?", "Novel tail."].join("\n"),
         null,
       ],
     ],

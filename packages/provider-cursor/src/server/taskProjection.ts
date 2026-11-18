@@ -15,9 +15,10 @@ import type { makeCursorTurnProjection } from "./turnProjection.ts";
 
 const MAX_LIVE_TASK_TOOLS = 512;
 const MAX_LIVE_TASK_TEXT_SEGMENTS = 512;
-const SAVED_TASK_ALIGNMENT_WINDOW_SIZE = 512;
-// Reserve room for all aligned backfill steps before any one live item.
-const TASK_LIVE_ORDINAL_STRIDE = SAVED_TASK_ALIGNMENT_WINDOW_SIZE + 1;
+const MAX_SAVED_TASK_ALIGNMENT_STEPS = 4_096;
+const MAX_SAVED_TASK_BACKFILL_ITEMS = 512;
+// Reserve room for all individual backfill items before any one live item.
+const TASK_LIVE_ORDINAL_STRIDE = MAX_SAVED_TASK_BACKFILL_ITEMS + 1;
 
 export function makeTaskProjectionState(): CursorTaskProjectionState {
   return {
@@ -49,12 +50,12 @@ interface TaskAssistantMatch {
   readonly savedIndex: number;
 }
 
-function alignTaskAssistantWindow(live: ReadonlyArray<string>, saved: ReadonlyArray<string>) {
+function alignTaskAssistantSteps(live: ReadonlyArray<string>, saved: ReadonlyArray<string>) {
   if (live.length === 0 || saved.length === 0) return [];
   const prefixes = live.map((text) => text.trimStart());
   const liveText = prefixes.map((text) => text.trimEnd());
   const savedText = saved.map((text) => text.trimStart());
-  // At most 512 × 512 cells. One byte per decision and one live-sized score row.
+  // 4,096 saved steps × 512 live items. At most 2 MiB of one-byte decisions and one rolling score row.
   const decisions = new Uint8Array(saved.length * live.length);
   const scores = new Array<bigint>(live.length + 1).fill(0n);
   const skipLiveItem = 1;
@@ -66,6 +67,8 @@ function alignTaskAssistantWindow(live: ReadonlyArray<string>, saved: ReadonlyAr
     const text = savedText[savedIndex] ?? "";
     const trimmed = text.trimEnd();
     const savedWeight = 1n << BigInt(saved.length - 1 - savedIndex);
+    const prefixMatchWeight = matchWeight + savedWeight;
+    const exactMatchWeight = prefixMatchWeight + exactWeight;
     let diagonal = 0n;
     for (let liveIndex = live.length - 1; liveIndex >= 0; liveIndex--) {
       const skipSaved = scores[liveIndex] ?? 0n;
@@ -79,7 +82,7 @@ function alignTaskAssistantWindow(live: ReadonlyArray<string>, saved: ReadonlyAr
       const prefix = prefixes[liveIndex];
       const exact = trimmed === liveText[liveIndex];
       if (exact || (prefix && text.startsWith(prefix))) {
-        const matched = diagonal + matchWeight + (exact ? exactWeight : 0n) + savedWeight;
+        const matched = diagonal + (exact ? exactMatchWeight : prefixMatchWeight);
         if (matched >= best) {
           best = matched;
           decisions[cell] = matchStep;
@@ -108,31 +111,31 @@ function alignTaskAssistantWindow(live: ReadonlyArray<string>, saved: ReadonlyAr
   return matches;
 }
 
-function alignTaskAssistantSteps(
-  live: ReadonlyArray<string>,
-  saved: ReadonlyArray<string>,
-): TaskAssistantMatch[] {
-  const matches: TaskAssistantMatch[] = [];
-  let liveStart = 0;
-  for (
-    let savedStart = 0;
-    savedStart < saved.length && liveStart < live.length;
-    savedStart += SAVED_TASK_ALIGNMENT_WINDOW_SIZE
-  ) {
-    const window = alignTaskAssistantWindow(
-      live.slice(liveStart),
-      saved.slice(savedStart, savedStart + SAVED_TASK_ALIGNMENT_WINDOW_SIZE),
-    );
-    for (const match of window) {
-      matches.push({
-        liveIndex: liveStart + match.liveIndex,
-        savedIndex: savedStart + match.savedIndex,
-      });
+function makeLiveTaskTextLookup(live: ReadonlyArray<string>) {
+  const exact = new Set(live.map((text) => text.trim()));
+  const prefixes: string[] = [];
+  for (const prefix of live.map((text) => text.trimStart()).sort()) {
+    const previous = prefixes.at(-1);
+    if (prefix && (previous === undefined || !prefix.startsWith(previous))) {
+      prefixes.push(prefix);
     }
-    const last = window.at(-1);
-    if (last !== undefined) liveStart += last.liveIndex + 1;
   }
-  return matches;
+
+  // Without nested prefixes, only the last prefix at or before the saved text can match.
+  return (part: string): boolean => {
+    const text = part.trimStart();
+    if (exact.has(text.trimEnd())) return true;
+    let low = 0;
+    let high = prefixes.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      const prefix = prefixes[middle];
+      if (prefix !== undefined && prefix <= text) low = middle + 1;
+      else high = middle;
+    }
+    const prefix = prefixes[low - 1];
+    return prefix !== undefined && text.startsWith(prefix);
+  };
 }
 
 export function makeCursorTaskProjection({
@@ -251,9 +254,10 @@ export function makeCursorTaskProjection({
   ) {
     const state = subagent.projection;
     const target = childTarget(subagent);
-    const firstWindowEnd = Math.min(resultParts.length, SAVED_TASK_ALIGNMENT_WINDOW_SIZE);
+    const individualBackfillEnd = Math.min(resultParts.length, MAX_SAVED_TASK_BACKFILL_ITEMS);
+    const alignmentEnd = Math.min(resultParts.length, MAX_SAVED_TASK_ALIGNMENT_STEPS);
     const live = state.assistantSegments.map((segment) => segment.text);
-    const matches = alignTaskAssistantSteps(live, resultParts);
+    const matches = alignTaskAssistantSteps(live, resultParts.slice(0, alignmentEnd));
     const now = yield* DateTime.now;
     const emitSaved = (savedIndex: number, text: string, ordinal: number) =>
       emitAssistant(
@@ -271,18 +275,25 @@ export function makeCursorTaskProjection({
       const segment = state.assistantSegments[match.liveIndex];
       const text = resultParts[match.savedIndex];
       if (segment === undefined || text === undefined) continue;
-      const gapEnd = Math.min(match.savedIndex, firstWindowEnd);
+      const gapEnd = Math.min(match.savedIndex, individualBackfillEnd);
       for (; savedIndex < gapEnd; savedIndex++) {
         const part = resultParts[savedIndex];
         if (part !== undefined) {
           yield* emitSaved(savedIndex, part, segment.ordinal - (gapEnd - savedIndex));
         }
       }
-      savedIndex = Math.min(match.savedIndex + 1, firstWindowEnd);
+      savedIndex = Math.min(match.savedIndex + 1, individualBackfillEnd);
       if (segment.text === text) continue;
       segment.text = text;
       if (segment !== state.assistant.current) yield* emitAssistant(target, segment, true);
     }
+    const isLiveText =
+      alignmentEnd < resultParts.length && live.length > 0
+        ? makeLiveTaskTextLookup([
+            ...live,
+            ...state.assistantSegments.map((segment) => segment.text),
+          ])
+        : undefined;
     yield* completeText(subagent);
     state.assistantSegments.length = 0;
 
@@ -314,19 +325,25 @@ export function makeCursorTaskProjection({
       );
       yield* emitToolArtifacts({ active, completed: true });
     }
-    for (; savedIndex < firstWindowEnd; savedIndex++) {
+    for (; savedIndex < individualBackfillEnd; savedIndex++) {
       const part = resultParts[savedIndex];
       if (part !== undefined) yield* emitSaved(savedIndex, part, ++subagent.nextChildOrdinal);
     }
-    if (firstWindowEnd < resultParts.length) {
+    if (individualBackfillEnd < resultParts.length) {
       const matchedSteps = new Set(matches.map((match) => match.savedIndex));
       const overflow: string[] = [];
-      for (let index = firstWindowEnd; index < resultParts.length; index++) {
+      for (let index = individualBackfillEnd; index < resultParts.length; index++) {
         const part = resultParts[index];
-        if (part !== undefined && !matchedSteps.has(index)) overflow.push(part);
+        if (
+          part !== undefined &&
+          !matchedSteps.has(index) &&
+          (index < alignmentEnd || !isLiveText?.(part))
+        ) {
+          overflow.push(part);
+        }
       }
       if (overflow.length > 0) {
-        yield* emitSaved(firstWindowEnd, overflow.join("\n"), ++subagent.nextChildOrdinal);
+        yield* emitSaved(individualBackfillEnd, overflow.join("\n"), ++subagent.nextChildOrdinal);
       }
     }
   });
