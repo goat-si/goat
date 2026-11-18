@@ -210,3 +210,35 @@ After an idle-worktree process check, `vp run check:changed origin/chase/t3-2611
 The gate started with the integration ref at `061fd0fee904c2abaada9efb5cfdb9ea58b18919`. The live tip was `258239d88f0c5df1ef43d787957007d1775f823d` at push. `git merge-tree --write-tree` exited 0 and the merge base remained `6def29ca359f546e50dcd731a6364e3f0d575545`. The lane stayed on the reviewed ancestry.
 
 NOT RUN: P1 real-client pass, lane CI, independent fix-round review, repository-wide checks.
+
+## Fix round 3
+
+The round-2 worktree guard's missing-worktree result already uses the receipt-free retry path. The same guard's candidate-message read is fallible, so its errors need the same retry policy while carrying the original read cause into the failed firing. [Worktree guard](https://github.com/goat-si/goat/blob/86c44dbf7ae/apps/server/src/orchestration-v2/goat/OrchestratorRunState.ts#L155-L174) and [receipt handling](https://github.com/goat-si/goat/blob/86c44dbf7ae/apps/server/src/orchestration-v2/Orchestrator.ts#L12734-L12764).
+
+Keep the normal missing-worktree test. Add a one-shot candidate-message read failure to the same-delivery test. It must leave a failed firing with the actual read error and no command receipt, accept the same relay delivery after attachment, then dedupe it. The retry classification is internal. Existing clients and servers in either version direction retain the same firing and error payload shape. No migration.
+
+## Fix round 3 · READY
+
+Pushed `a77e2d021a2f13da8119d9f4c29d3c5c2750b482` on `chase/t3-261114-next3-sf4`, one commit from reviewed `86c44dbf7aedec3f1bc4a735fc597e60f1cfdf47`. P2 makes the candidate-message lookup error use the same retryable worktree guard classification as a confirmed missing worktree. The original lookup cause remains attached and reaches the failed firing's error field. The command id remains available for relay redelivery.
+
+Fail-first from `apps/server`: `GOAT_TEST_TMP_GUARD=fail vp test run --reporter=default src/orchestration-v2/ScheduledTaskOutcomes.integration.test.ts` exited 1 with 21 passed and 1 failed. The new lookup case observed the original transient read error, then still had a failed firing after attachment on the reviewed production tree. On the fixed tree the lookup failure left no rejected receipt, the identical delivery and firing id were accepted after attachment, and further redelivery deduped.
+
+Final server `vp run typecheck` exited 0. `GOAT_TEST_TMP_GUARD=fail vp test run --reporter=default` on the nine whole files below exited 0 with 162 passed.
+
+| File under `apps/server/src/` | Passed |
+| --- | ---: |
+| `orchestration-v2/ScheduledTaskOutcomes.integration.test.ts` | 22 |
+| `orchestration-v2/Orchestrator.activeTurnRefusals.test.ts` | 28 |
+| `orchestration-v2/ThreadManagementService.worktreeSend.test.ts` | 5 |
+| `scheduledTasks/ScheduledTaskService.threadMode.test.ts` | 18 |
+| `scheduledTasks/ScheduledTaskRuns.test.ts` | 13 |
+| `scheduledTasks/ScheduledTaskService.test.ts` | 8 |
+| `scheduledTasks/ScheduledTaskService.webhook.test.ts` | 54 |
+| `scheduledTasks/ScheduledTaskService.botRoutine.test.ts` | 13 |
+| `scheduledTasks/scheduledTaskError.test.ts` | 1 |
+
+After an idle-worktree process check, `vp run check:changed origin/chase/t3-261114-next3` exited 0 for 15 lane files. Rename check, format, lint, GraphQL, agent context budget, agent surface audit, both Knip passes, and both package typechecks passed. Vitest selected 464 files. 462 passed and 2 were skipped. 5,499 tests passed, 4 were skipped, and zero failed.
+
+The gate started with the integration ref at `258239d88f0c5df1ef43d787957007d1775f823d`. The live tip was `9af811b8fc3d2fc0039efbafee606ca358d5a490` at push. `git merge-tree --write-tree` exited 0 with common base `6def29ca359f546e50dcd731a6364e3f0d575545`. The lane stayed on the reviewed ancestry.
+
+NOT RUN: P1 real-client pass, lane CI, independent fix-round review, repository-wide checks.
