@@ -20,7 +20,7 @@ import adminMigration from "../persistence/Migrations/109_MemoryHubAdministered.
 import lifecycleMigration from "../persistence/Migrations/110_MemoryCheckpointLifecycle.ts";
 import revisionSizeMigration from "../persistence/Migrations/115_MemoryRevisionCheckpointSize.ts";
 import { CHECKPOINT_PULL_MAX_BYTES, FORGET_RECORDS_MAX_BYTES } from "./MemoryCheckpointBound.ts";
-import { measureMemoryTailBytes, MEMORY_TAIL_ADMISSION_BYTES } from "./MemoryTailAdmission.ts";
+import { requireMemoryTailFit } from "./MemoryTailAdmission.ts";
 import { encodeCheckpointRecord } from "./MemoryCheckpointInventory.ts";
 import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts";
 import { scanMemoryValue } from "./MemorySecretScanner.ts";
@@ -616,10 +616,32 @@ it.effect("packs a maximal-body 1000-source save in a push, tail, and real check
         operations: [operation],
       }),
     );
-    const tailBytes = yield* measureMemoryTailBytes(operation);
+    const tailBytes = yield* requireMemoryTailFit(operation);
     assert.isAtMost(payloadBytes, M.MEMORY_PAYLOAD_MAX_UTF8_BYTES);
     assert.isAtMost(pushBytes, 256 * 1024);
-    assert.isAtMost(tailBytes, MEMORY_TAIL_ADMISSION_BYTES);
+    assert.isAtMost(tailBytes, M.MEMORY_TAIL_ADMISSION_BYTES);
+    const atSize = (extra: number) => ({
+      ...operation,
+      payload: {
+        ...payload,
+        evidence: [
+          {
+            ...payload.evidence[0]!,
+            watermark: {
+              ...sourceWatermark,
+              fromEventId: M.EventId.make(
+                sourceWatermark.fromEventId +
+                  "e".repeat(M.MEMORY_TAIL_ADMISSION_BYTES - tailBytes + extra),
+              ),
+            },
+          },
+        ],
+      },
+    });
+    assert.strictEqual(yield* requireMemoryTailFit(atSize(0)), M.MEMORY_TAIL_ADMISSION_BYTES);
+    const tooWide = yield* Effect.flip(requireMemoryTailFit(atSize(1)));
+    assert.strictEqual(tooWide.dimension, "payload_bytes");
+    assert.strictEqual(tooWide.current, M.MEMORY_TAIL_ADMISSION_BYTES + 1);
     yield* admit(operation);
     const tail = yield* store.transact(
       store.readHubTailTx({
@@ -656,12 +678,87 @@ it.effect("packs a maximal-body 1000-source save in a push, tail, and real check
       payload.derivedFromMemoryRevisions,
     );
     assert.isAtMost(utf8(serialized), CHECKPOINT_PULL_MAX_BYTES);
-    yield* Effect.logInfo("wide memory bytes", {
+    console.info("wide memory bytes", {
       payloadBytes,
       pushBytes,
       tailBytes,
       checkpointBytes: utf8(serialized),
       ...persisted,
     });
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect.each([1, 101])("bootstrap forget redacts a dependent with %s sources", (count) =>
+  Effect.gen(function* () {
+    yield* join;
+    const sql = yield* SqlClient.SqlClient;
+    const sources: M.MemoryRevisionId[] = [];
+    for (let n = 12000; n < 12000 + count; n++) {
+      const source = upsert({
+        memory: n,
+        operation: n,
+        text: `synthetic source ${n}`,
+        messages: [],
+      });
+      if (source.kind !== "upsert") throw new Error("expected source upsert");
+      yield* admit(source);
+      sources.push(source.revision.revisionId);
+    }
+    const target = upsert({
+      memory: 13000,
+      operation: 13000,
+      text: "synthetic dependent",
+      messages: [],
+    });
+    if (target.kind !== "upsert") throw new Error("expected dependent upsert");
+    yield* admit({
+      ...target,
+      payload: { ...target.payload, derivedFromMemoryRevisions: sources },
+    });
+    yield* snapshot("bootstrap-forget");
+    const rows = yield* sql<{
+      metadata_json: string;
+    }>`SELECT metadata_json FROM memory_inbox_pending
+      WHERE space=${space} AND reason='hub_snapshot' ORDER BY page_ordinal`;
+    const pages = rows.map((row) => decodeCheckpointPage(row.metadata_json));
+    const first = pages[0]!;
+    const stage = {
+      memorySpaceId: space,
+      hubEnvironmentId: env,
+      checkpointId: "fixture-bootstrap",
+      expectedSnapshotToken: "fixture-snapshot",
+      expectedCheckpointSequence: first.checkpointSequence,
+    };
+    yield* Effect.gen(function* () {
+      const member = yield* Store.MemoryStore;
+      const memberSql = yield* SqlClient.SqlClient;
+      yield* member.transact(
+        member.advanceBootstrapTx({
+          ...stage,
+          expectedState: "unbound",
+          nextState: "staging",
+          snapshotToken: stage.expectedSnapshotToken,
+          checkpointSequence: first.checkpointSequence,
+          nextCursor: null,
+        }),
+      );
+      for (const page of pages) yield* member.installCheckpointPage({ ...stage, page });
+      const bodies = memberSql`SELECT payload_ref FROM memory_payloads WHERE space=${space} AND memory_id=${target.memoryId}`;
+      assert.lengthOf(yield* bodies, 1);
+      const removal = forget(11999 + count, 13001, []);
+      const decision = decideMemoryOperation(
+        yield* member.loadAggregate(space, removal.memoryId),
+        removal,
+        Store.localIntent,
+        scanMemoryValue(removal),
+      );
+      yield* member.apply(decision);
+      yield* member.completeCheckpoint({ ...stage, pageCount: pages.length });
+      assert.lengthOf(yield* bodies, 0);
+      assert.strictEqual(
+        (yield* member.loadAggregate(space, target.memoryId)).item?.status,
+        "blocked",
+      );
+    }).pipe(Effect.provide(Layer.fresh(layer)));
   }).pipe(Effect.provide(layer)),
 );
