@@ -2006,6 +2006,7 @@ const make = Effect.fnUntraced(function* (
         return yield* new Store.MemoryStoreConflict({ code: "operation_id_reused" });
       return replay.entry.receipt;
     }
+    if (input.authority.beforeAdmission) yield* input.authority.beforeAdmission;
     if (M.requiresMemoryFloor2(op) && !active)
       return {
         operationId: op.operationId,

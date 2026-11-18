@@ -383,6 +383,7 @@ export type HubMember = {
   joinedAt: number | null;
 };
 export type HubAuthority = {
+  beforeAdmission?: InTx<unknown, M.MemoryHubError>;
   negotiateFloor?: InTx<boolean, M.MemoryHubError | MemoryStorageError>;
   principal: M.MemoryHubPrincipal;
   now: InTx<number, MemoryStorageError>;

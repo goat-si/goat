@@ -28,6 +28,7 @@ import * as Settings from "../serverSettings.ts";
 import * as Generation from "../textGeneration/TextGeneration.ts";
 import * as Client from "./MemoryHubClient.ts";
 import * as Hub from "./MemoryHubService.ts";
+import { readSettingsView } from "./MemoryHubSettings.ts";
 import * as Service from "./MemoryService.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Hold from "./MemoryGenerationHold.ts";
@@ -1670,7 +1671,7 @@ const make = Effect.gen(function* () {
           const ack = yield* (
             r.connection
               ? client.push(r.connection, input, prepare)
-              : Effect.andThen(prepare, hub.push({ ...input, ...selfFeatures }, r.principal!))
+              : hub.push({ ...input, ...selfFeatures }, r.principal!, prepare)
           ).pipe(
             Effect.catchTags({
               MemoryHubError: (error) =>
@@ -2213,7 +2214,7 @@ const make = Effect.gen(function* () {
       permit.pipe(
         Effect.andThen(readSettings),
         Effect.flatMap((s) =>
-          Hub.readSettingsView(store, {
+          readSettingsView(store, {
             settings: s.memoryHub,
             version: s.memoryHubVersion,
           }),
