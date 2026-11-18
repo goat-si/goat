@@ -278,6 +278,8 @@ export const penExactAliasRoute = (
   settings: ReadonlyMap<string, string>,
   platform?: NodeJS.Platform,
 ) => {
+  // ssh -G prints the command before ssh expands its % tokens; pen doubles each literal %.
+  if (!/^(?:[^%]|%%)*$/u.test(settings.get("proxycommand") ?? "")) return undefined;
   if (platform === "win32") {
     const match = windowsExactPipe(settings.get("proxycommand") ?? "");
     const file = settings.get("userknownhostsfile");

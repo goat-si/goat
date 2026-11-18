@@ -56,10 +56,18 @@ describe("exact Pen route", () => {
     f.settings.delete("controlpath");
     expect(penExactAliasRoute(f.settings)).toMatchObject({ nodeId: node });
   });
+  it("accepts a literal percent sign, which pen writes doubled", () => {
+    const f = facts();
+    f.settings.set("proxycommand", `'/home/100%%/pen' pipe --node ${node} --noise ${noise} 22`);
+    expect(penExactAliasRoute(f.settings)).toMatchObject({ nodeId: node });
+  });
   it.each([
     ["proxycommand", "'/bin/pen' pipe %n 22"],
     ["proxycommand", `"C:\\pen.exe" pipe --node ${node} --noise ${noise} 22`],
     ["proxycommand", `'/bin/pen' pipe --node ${node} --noise bad;id 22`],
+    // ssh expands a % token before it runs the command: only a doubled %% is a literal one.
+    ["proxycommand", `'/home/%u/pen' pipe --node ${node} --noise ${noise} 22`],
+    ["proxycommand", `env PEN_HOME='/p/%d' '/bin/pen' pipe --node ${node} --noise ${noise} 22`],
     ["controlmaster", "true"],
     ["controlpath", "/tmp/socket"],
     ["proxyjump", "jump"],
@@ -111,10 +119,20 @@ describe("Windows exact Pen route", () => {
       `"C:\\pen.exe" pipe --home "C:\\pen\\\\" --node ${node} --noise ${noise} 22`,
     );
     expect(penExactAliasDecision(f)).toMatchObject({ nodeId: node });
+    f.settings.set(
+      "proxycommand",
+      `"C:\\100%%\\pen.exe" pipe --home "C:\\100%%\\.pen" --node ${node} --noise ${noise} 22`,
+    );
+    expect(penExactAliasDecision(f)).toMatchObject({ nodeId: node });
     expect(penExactAliasDecision({ ...f, platform: "darwin" })).toBe("not-pen-route");
   });
   it.each([
     ["relative program", `"pen.exe" pipe --node ${node} --noise ${noise} 22`],
+    ["% token in program", `"C:\\Users\\%u\\pen.exe" pipe --node ${node} --noise ${noise} 22`],
+    [
+      "% token in home",
+      `"C:\\pen.exe" pipe --home "C:\\%d\\pen" --node ${node} --noise ${noise} 22`,
+    ],
     ["another program", `"C:\\tools\\other.exe" pipe --node ${node} --noise ${noise} 22`],
     ["quote in program", `"C:\\a\\"b\\pen.exe" pipe --node ${node} --noise ${noise} 22`],
     ["relative home", `"C:\\pen.exe" pipe --home "pen" --node ${node} --noise ${noise} 22`],
