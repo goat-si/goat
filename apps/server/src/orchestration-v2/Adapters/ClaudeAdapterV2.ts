@@ -1,8 +1,11 @@
 import * as Exit from "effect/Exit";
 import {
+  beforeClaudeStopProjection,
   holdClaudeStopDenial,
+  holdClaudeWorkflowMember,
   makeClaudeWorkflowStop,
   settleClaudeStopDenials,
+  workflowWithResolvedClaudeStop,
   type ClaudeWorkflowMemberState,
   type ClaudeWorkflowStop,
 } from "./ClaudeWorkflowStop.ts";
@@ -4250,7 +4253,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               stop.outcome !== "rejected" &&
               previous?.status !== "failed";
             let status =
-              (member.state === "queued" || member.state === "running") &&
+              member.outcome ??
+              ((member.state === "queued" || member.state === "running") &&
               input.coordinator.task.status !== "running"
                 ? input.coordinator.task.status
                 : member.state === "queued"
@@ -4262,7 +4266,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                       previous.attempt === (member.attempt ?? previous.attempt) &&
                       previous.agentId === member.agentId
                     ? "cancelled"
-                    : member.state;
+                    : member.state);
             const settled = status !== "pending" && status !== "running";
             const prompt = member.prompt ?? member.label;
             const model = member.model ?? parentThread.modelSelection.model;
@@ -4381,7 +4385,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
             const nodeBase = {
               runId: null,
-              status,
               countsForRun: false,
               providerThreadId: null,
               providerTurnId: null,
@@ -4519,15 +4522,23 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const matchingDenial = mightBeStopped && target.observedWorkflowStop === stop;
             const holdMember = matchingDenial && stop.outcome === "pending";
             if (holdMember) {
-              stop.heldMember = true;
               status = previous?.status ?? "running";
             } else if (matchingDenial) {
               status = "cancelled";
             }
             if (mightBeStopped && !holdMember && (changed || status !== previous?.status))
               yield* emitMember();
-            if (transcriptRead)
-              reportedMembers[memberIndex] = withWorkflowAgentMetadata(member, metadata ?? {});
+            let summary = transcriptRead
+              ? withWorkflowAgentMetadata(member, metadata ?? {})
+              : (reportedMembers[memberIndex] ?? member);
+            if (holdMember) summary = holdClaudeWorkflowMember(stop, summary, status);
+            if (
+              status === "cancelled" &&
+              member.state === "failed" &&
+              summary.outcome === undefined
+            )
+              summary = { ...summary, outcome: "cancelled" };
+            reportedMembers[memberIndex] = summary;
             if (settled && !holdMember) {
               // Open calls receive no results after their member settles.
               yield* endOpenToolCalls();
@@ -4576,7 +4587,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               }),
             );
           }
-          if (reportedMembers.some((member, index) => member !== input.workflow.agents[index])) {
+          if (
+            input.coordinator.workflowStop !== undefined ||
+            reportedMembers.some((member, index) => member !== input.workflow.agents[index])
+          ) {
             if ((yield* Ref.get(sessionSubagentsByTaskId)).get(taskId) !== input.coordinator)
               return;
             input.coordinator.task = {
@@ -4931,7 +4945,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           yield* emitProviderEvent({
             type: "subagent.updated",
             driver: CLAUDE_PROVIDER,
-            subagent: task,
+            subagent: beforeClaudeStopProjection(task, subagent.workflowStop, priorTask?.workflow),
           });
           if (lifecycleChanged) {
             yield* emitProviderEvent({
@@ -6436,7 +6450,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           yield* emitProviderEvent({
             type: "subagent.updated",
             driver: CLAUDE_PROVIDER,
-            subagent: task,
+            subagent: beforeClaudeStopProjection(
+              task,
+              coordinator.workflowStop,
+              registered.task.workflow,
+            ),
           });
           yield* projectClaudeWorkflowMembers({
             coordinator,
@@ -10470,10 +10488,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                       return;
                     const accepted = Exit.isSuccess(exit);
                     yield* settleClaudeStopDenials(stop, accepted);
-                    if (stop.heldMember && current.task.workflow !== undefined)
+                    if (stop.members.size > 0 && current.task.workflow !== undefined)
                       yield* projectClaudeWorkflowMembers({
                         coordinator: current,
-                        workflow: current.task.workflow,
+                        workflow: workflowWithResolvedClaudeStop(current.task.workflow, stop),
                       });
                     if (!accepted) {
                       if (previousStop === undefined) delete current.workflowStop;

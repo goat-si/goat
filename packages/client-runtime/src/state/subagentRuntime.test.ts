@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  OrchestrationV2WorkflowAgent,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
@@ -7,6 +8,7 @@ import {
   type OrchestrationV2SubagentWorkflow,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Schema from "effect/Schema";
 
 import {
   deriveWorkflowGroups,
@@ -17,6 +19,10 @@ import {
 } from "./subagentRuntime.ts";
 import { resolveSubagentMetadata } from "./subagentDisplay.ts";
 import { formatSubagentEffort } from "./threadExecution.ts";
+
+const { outcome: _outcome, ...legacyWorkflowAgentFields } = OrchestrationV2WorkflowAgent.fields;
+const decodeLegacyWorkflowAgent = Schema.decodeSync(Schema.Struct(legacyWorkflowAgentFields));
+const decodeWorkflowAgent = Schema.decodeSync(OrchestrationV2WorkflowAgent);
 
 const at = (iso: string) => DateTime.makeUnsafe(iso);
 
@@ -168,6 +174,29 @@ describe("projectedSubagentsToRuntime workflow expansion", () => {
 });
 
 describe("deriveWorkflowGroups over a dynamic workflow", () => {
+  it("shows a confirmed Stop as cancelled and retains a legacy workflow error", () => {
+    const stopped = {
+      ...member({ state: "failed", result: "Tool rejected" }),
+      outcome: "cancelled" as const,
+    };
+    const failed = member({ index: 2, state: "failed", result: "Exited with code 1" });
+    const legacy = decodeLegacyWorkflowAgent(stopped);
+    expect(legacy.state).toBe("failed");
+    expect(legacy).not.toHaveProperty("outcome");
+    expect(decodeWorkflowAgent(failed).outcome).toBeUndefined();
+    const groups = groupsOf([
+      subagent({
+        status: "cancelled",
+        completedAt: at("2026-08-01T10:00:09.000Z"),
+        workflow: { phases: [{ index: 1, title: "Alpha" }], agents: [stopped, failed] },
+      }),
+    ]);
+    expect(groups[0]?.phases[0]?.members.map(({ status, error }) => ({ status, error }))).toEqual([
+      { status: "cancelled", error: null },
+      { status: "failed", error: "Exited with code 1" },
+    ]);
+  });
+
   it("groups members under their phases and counts the run", () => {
     const groups = groupsOf([
       subagent({

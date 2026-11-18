@@ -9,6 +9,7 @@ import {
 } from "./baseSchemas.ts";
 
 export const OrchestrationV2WorkflowAgentTranscriptFields = {
+  outcome: Schema.optional(Schema.Literal("cancelled")),
   phaseIndex: Schema.optional(NonNegativeInt),
   phaseTitle: Schema.optional(TrimmedNonEmptyString),
   model: Schema.optional(TrimmedNonEmptyString),

@@ -45,6 +45,7 @@ function optional<T>(key: string, value: T | undefined): Record<string, T> {
 function withoutAgentMetadata({
   effort: _effort,
   speed: _speed,
+  outcome: _outcome,
   ...member
 }: OrchestrationV2WorkflowAgent): OrchestrationV2WorkflowAgent {
   return member;

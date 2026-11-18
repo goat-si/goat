@@ -14171,6 +14171,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           );
           if (!ackFirst) {
             assert.equal(
+              workflowCoordinatorEvents(harness.events).at(-1)?.subagent.workflow?.agents[0]?.state,
+              "running",
+            );
+            assert.equal(
               workflowMemberEvents(harness.events, 1).at(-1)?.subagent.status,
               "running",
             );
@@ -14197,6 +14201,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             workflowMemberEvents(harness.events, 1).at(-1)?.subagent.status,
             "cancelled",
           );
+          const summary = workflowCoordinatorEvents(harness.events).at(-1)?.subagent.workflow
+            ?.agents[0];
+          assert.equal(summary?.state, "failed");
+          assert.equal(summary?.outcome, "cancelled");
           assert.deepEqual(latestMemberThreadItems(harness.events, threadId).map(describeItem), [
             "user_message",
             "command failed: Exit code 1",
