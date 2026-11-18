@@ -177,6 +177,7 @@ export interface ThreadState {
         call: SubagentCall;
         readonly appThread: OrchestrationV2AppThread;
         turns: number;
+        readonly fresh: boolean;
         prompt: string | undefined;
         queued: string | undefined;
       }

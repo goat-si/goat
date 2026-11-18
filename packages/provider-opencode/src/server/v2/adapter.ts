@@ -501,7 +501,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       else turn.texts.set(nativeId, entry);
       if (entry.text.length === 0) return;
       if (completed && kind === "text") {
-        if (state.subagent !== undefined) turn.answer = subagentAnswer(entry.text);
+        if (state.subagent !== undefined)
+          turn.answer = subagentAnswer(data.assistantMessageID, entry.text);
         turn.closingText = entry;
       }
       const status = completed ? "completed" : "running";
@@ -1044,6 +1045,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         call,
         appThread,
         turns: previous?.subagent?.turns ?? 0,
+        fresh: previous?.subagent?.fresh ?? info !== undefined,
         prompt: call.prompt,
         queued: undefined,
       };
@@ -1301,7 +1303,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         if (terminal.status !== "failed") {
           for (const attached of callsAttachedTo(state)) {
             if (attached.run !== turns || !isOrchestrationV2WorkActive(attached.status)) continue;
-            const evicted = subagentReports.remember({
+            const evicted = subagentReports.remember(turn, {
               call: attached,
               answer: turn.answer,
               status: terminal.status,
@@ -1314,11 +1316,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           yield* settleCall(call, terminal.status);
         }
         if (terminal.status === "failed") {
-          // Background calls settle when the parent reads a report; failed children have no report.
-          // Fail every attached call so earlier background calls cannot leave phantom work,
-          // regardless of which call joined last or is still foreground.
           for (const attached of callsAttachedTo(state)) {
-            yield* settleCall(attached, terminal.status, terminal.failure.message);
+            if (attached.run === turns)
+              yield* settleCall(attached, terminal.status, terminal.failure.message);
           }
         }
         return;
@@ -1995,8 +1995,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const childId = stringField(payload.metadata, "childID");
       if (stringField(payload.metadata, "source") !== "subagent" || childId === undefined) return;
       strays.delete(childId);
-      const output = subagentOutput(payload.text);
-      const { call, calls, skipped } = subagentReports.match(state.calls.values(), childId, output);
+      const { call, settled } = subagentReports.reconcile(
+        state.calls.values(),
+        childId,
+        payload,
+        state.stoppedChildren.has(childId),
+      );
       const outcome = reportOutcome(stringField(payload.metadata, "state"));
       state.reports.set(inboxId, {
         inboxId,
@@ -2004,21 +2008,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         text: payload.text,
         report: {
           kind: "subagent",
-          label: call?.title ?? stringField(payload.metadata, "description"),
+          label: call?.title ?? payload.description ?? stringField(payload.metadata, "description"),
           childThreadId: call?.child?.subagent?.appThread.id,
           outcome,
         },
       });
-      const status = state.stoppedChildren.has(childId)
-        ? "interrupted"
-        : outcome === "failed"
-          ? "failed"
-          : outcome === "cancelled"
-            ? "cancelled"
-            : "completed";
-      for (const earlier of skipped)
-        yield* settleCall(earlier.call, earlier.status, earlier.answer?.preview);
-      for (const each of calls) yield* settleCall(each, status, output);
+      for (const entry of settled) yield* settleCall(entry.call, entry.status, entry.result);
     });
 
     const holderOf = (sessionId: string) => {

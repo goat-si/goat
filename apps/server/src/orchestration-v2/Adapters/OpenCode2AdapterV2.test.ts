@@ -1046,6 +1046,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         ...callAgain({ background: true }),
         childReport("msg_report_1", "FIRST_OK"),
         event("session.execution.started", { sessionID: CHILD }),
+        childAnswer("SECOND_OK", 2),
         event("session.execution.succeeded", { sessionID: CHILD }),
         event("session.execution.succeeded", { sessionID: SESSION }),
         childReport("msg_report_2", "SECOND_OK"),
@@ -1307,7 +1308,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
               event("session.execution.succeeded", { sessionID: CHILD }),
             ];
           }).flat(),
-          ...(lateReport ? [childReport("retired_report", "first answer")] : []),
+          ...(lateReport ? [childReport("msg_retired_report", "first answer")] : []),
           event("session.execution.succeeded", { sessionID: SESSION }),
         ]);
         const watch = yield* watchCalls(runtime, thread);
@@ -1317,6 +1318,112 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         assert.deepEqual(watch.calls.get("run-1"), { status: "running", result: null });
         assert.deepEqual(watch.calls.get("run-128"), { status: "running", result: null });
         assert.lengthOf(watch.state.roster ?? [], 128);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect.each(["identical", "unmatched", "identity"] as const)(
+    "reconciles reports at capacity using confirmed child executions, report=%s",
+    (order) =>
+      Effect.gen(function* () {
+        const unmatched = order === "unmatched";
+        const gate = makeProviderReplayGate(unmatched ? ["late_terminal"] : []);
+        const report = childReport(
+          "msg_capacity_report",
+          unmatched ? "old untracked report" : "OK",
+        );
+        const { runtime, thread } = yield* resumed(
+          [
+            ...launchedAndRunning,
+            ...(!unmatched ? [childAnswer("OK", 0)] : []),
+            event("session.execution.succeeded", { sessionID: CHILD }),
+            ...Array.from({ length: 128 }, (_, index) => {
+              const id = `run-${index + 1}`;
+              return [
+                ...callAgain(
+                  { background: true, description: id },
+                  { id, writesRules: index === 0 },
+                ),
+                event("session.execution.started", { sessionID: CHILD }),
+                childAnswer(
+                  !unmatched && (index === 127 || (order === "identity" && index === 126))
+                    ? "OK"
+                    : id,
+                  index + 1,
+                ),
+                event("session.execution.succeeded", { sessionID: CHILD }),
+              ];
+            }).flat(),
+            ...(unmatched
+              ? [
+                  ...callAgain(
+                    { background: true, description: "Live" },
+                    { id: "live", writesRules: false },
+                  ),
+                  event("session.execution.started", { sessionID: CHILD }),
+                ]
+              : []),
+            ...(order === "identity"
+              ? [
+                  event("session.inbox.enqueued", {
+                    inboxID: "msg_capacity_report",
+                    sessionID: SESSION,
+                    item: {
+                      type: "synthetic",
+                      payload: {
+                        text: "OK",
+                        metadata: {
+                          source: "subagent",
+                          childID: CHILD,
+                          state: "completed",
+                          assistantMessageID: "msg_child_127",
+                        },
+                      },
+                      delivery: "steer",
+                    },
+                  }),
+                ]
+              : [report]),
+            event("session.execution.succeeded", { sessionID: SESSION }),
+            ...(unmatched
+              ? [
+                  event(
+                    "session.text.ended",
+                    {
+                      sessionID: CHILD,
+                      assistantMessageID: "msg_live_answer",
+                      ordinal: 0,
+                      text: "Confirmed live answer",
+                    },
+                    "late_terminal",
+                  ),
+                  event("session.execution.succeeded", { sessionID: CHILD }),
+                ]
+              : []),
+          ],
+          { replayGate: gate },
+        );
+        const watch = yield* watchCalls(runtime, thread);
+        yield* runtime.startTurn(withLineage(thread));
+        yield* watch.until(() => watch.state.terminal === true);
+        if (order === "identical") {
+          assert.deepEqual(watch.calls.get("run-128"), { status: "completed", result: "OK" });
+        } else if (order === "identity") {
+          assert.deepEqual(watch.calls.get("run-127"), { status: "completed", result: "OK" });
+          assert.deepEqual(watch.calls.get("run-128"), { status: "running", result: null });
+        } else {
+          assert.deepEqual(watch.calls.get("run-1"), { status: "running", result: null });
+          assert.deepEqual(watch.calls.get("Live"), { status: "running", result: null });
+          assert.isFalse(
+            [...watch.calls.values()].some(({ result }) => result === "old untracked report"),
+          );
+          assert.lengthOf(watch.state.roster ?? [], 129);
+          gate.release("late_terminal");
+          yield* watch.until(() => watch.calls.get("Live")?.status === "completed");
+          assert.deepEqual(watch.calls.get("Live"), {
+            status: "completed",
+            result: "Confirmed live answer",
+          });
+        }
       }).pipe(Effect.scoped),
   );
 
