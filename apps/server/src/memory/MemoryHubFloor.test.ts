@@ -68,6 +68,22 @@ const forget = (source: ReturnType<typeof newMemory>): M.MemoryOperation => {
 };
 
 describe("memory hub floor", () => {
+  it.effect("rejects a replay that changes only the closed-lineage admission flag", () =>
+    Effect.gen(function* () {
+      yield* seed;
+      const hub = yield* Hub.MemoryHubService;
+      yield* hub.pull(advertise, principal());
+      yield* hub.pull({ ...advertise, environmentId: otherEnv }, principal(otherEnv));
+      const op = newMemory(239);
+      const push = (operation: M.MemoryOperation) =>
+        hub.push({ ...pushInput(operation), features }, principal());
+      assert.include((yield* push({ ...op, closedLineage: true })).receipts[0], {
+        outcome: "accepted",
+      });
+      assert.include(yield* push(op).pipe(Effect.flip), { code: "operation_id_reused" });
+    }).pipe(checkUsage, Effect.provide(live), enabled),
+  );
+
   it.effect("names members that block a wide write on the V1 floor", () =>
     Effect.gen(function* () {
       yield* seed;
