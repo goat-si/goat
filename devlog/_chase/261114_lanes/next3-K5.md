@@ -550,3 +550,86 @@ docs/user/providers-claude.md (no existing passage described closing a session; 
 Proposed for #3700's Limits (the coordinator owns that body):
 "On macOS, closing a Claude session now also stops background helpers the session started outside its process group (a dev server, a Gradle or adb daemon, an ssh ControlMaster), as Linux under the systemd agent scope already does; each starts again on next use."
 
+
+## Review of 18c6644ea8: BLOCK on one P2; fix round
+
+Review report: devlog/_chase/261114_lanes/K5-review/next3-K5-review-18c6644e.md (records 35a737b2dce), read whole.
+
+### Coordinator, 2026-11-17 23:50:37 UTC, section I (verbatim)
+
+> I. K5: REVIEW REPORTED, BLOCK on one P2. THE FIX ROUND STARTS NOW: PUSH WHEN DONE.
+> The fresh review of 18c6644ea8 is saved whole at /Users/jun/handoff-in/chase/next3-K5-review-18c6644e.md (19,663 bytes; scratch /tmp/k5-review-18c6644e). Its verdict: the kill guards, the reaper's trust rules, the launch gate, the startup order, the reactor's conditions, the boot deadline, both verbatim moves and rule 3 hold; both goat-ci runs are green on the head (quick 44198291794; server 44198312834 completed SUCCESS, and I read in its log "src/process/providerProcesses.test.ts (3 tests)" passing in shard 3 of 4, so the two Linux cases ran). All nine findings accepted by me:
+> - P2-1 (blocks): the tracked map never forgets (12.8 ms per sample and 17.9 MB at about 110,000 rows for one CLI). Your local e813c9f320 is the fix. ADD the reviewer's case: a job is seen, is absent from one whole table, then the same pid and start time return under ppid 1, and stop does not kill it.
+> - P3-2: your aa30e28658 (onError, one lock per query). P3-3: your 50269b590f.
+> - P3-4: the reaper's wait gets a total bound: signal every survivor first, then wait once, about 1 second in all. A case with two survivors that do not die.
+> - P3-6: fork the poll loop in the layer's scope; and let concurrent refresh and stop calls share one in-flight table read IF that is small (about 20 lines); otherwise a Limits sentence and an issue draft for the mass-close ps burst.
+> - P3-7: a case that the 257th thread's change is dropped and logged, and warnedFull resets once the table drains.
+> - P3-1: the fd 4 gate has no test that fails without it. Add one only if it needs no real-time wait (goat/no-real-time-wait-in-tests stands; no sleep, no slow register). If you find no such form, write it as a Limit with the reviewer's mutation named. Do not weaken the lint rule.
+> - P3-5 and P3-8: no code. Limits sentences for #3700: records of another hostname, state folder or version are never removed; a Claude start can show "working" for up to 13 minutes before the start-up message (two attempts of 5 minutes boot plus 90 seconds), upstream the same.
+> - 2(c), your 53de7f798f (the recorded leader's group): the reviewer calls it optional and upstream signals the pid only. KEEP it, as a recorded fork delta, with the guards you list (pgid <= 1 refused, the server's own group refused, the leader's identity read again inside the signal call); the fix-delta review reads it first.
+> - (g) FINAL: no exclusion list. The reviewer's reading adds one fact the sentence must carry: when a session closes, a build in ANOTHER session that was using a shared helper it started (a Gradle daemon, adb, a compiler cache) fails and has to be run again; the helper starts again on next use. Put that in 65ddf6b326's docs sentence and in the Limits sentence, in the product's voice.
+> - Your stated limit (a steer queued behind another steer's apply has no deadline of its own) goes to the fix-delta reviewer as an open question; say in the record how long the holder can hold the lock at most.
+> Process: one commit per finding on top of 18c6644ea8, the gate per push as before, then PUSH and report the new head with the list of commits. I then dispatch goat-ci lane=quick and lane=server on it and start a fresh review of the fix delta only. K5 has pen-mac-studio's heavy-job token first.
+
+### Fix commits on top of 18c6644ea8 (the earlier local ones were rebased locally, never pushed: new shas, same trees except where a finding added to them)
+
+| finding | commit | proof |
+| --- | --- | --- |
+| P2-1 | c059fbf2bf | the reviewer's case "forgets a job a whole table no longer lists" failed before the fix (killed [200]); 6/6 after |
+| P3-3 | 68d66c46ed | guards only; the failing states (EMFILE, unreadable directory) cannot be made under root CI |
+| 2(c), kept as fork delta | 5dbed6c30a | Linux case "takes the process group of a recorded CLI that still leads it" (runs in goat-ci server) |
+| P3-2 (+3(c)) | e8c5f125d7 | three cases; tapError back and lock removed each fail one |
+| (g) | f932dfe7a3 | docs sentence (below) |
+| P3-4 | a76eabc9ea | "unkillable survivors of two dead servers delay startup once, not once each": against the per-record wait it did not finish in its TestClock second (timeout 25, exit 124) |
+| P3-6 (first half) | b7fcac1b3e | "stops sampling when its layer closes": without the finalizer 10 more reads after close |
+| P3-7 | 50e90aaac3 | "drops a change past 256 draining threads, warning once each time the table fills": without the reset the second fill logged nothing; 5 consecutive passing runs |
+
+P3-6 second half NOT taken: a stop must read a table taken after its CLI exited, and an in-flight read shared with a refresh may predate that exit, so sharing reads would trade the burst for a stale-table kill decision. Limits sentence and issue draft below.
+
+P3-1: no gate test without a real-time wait. A test tells a gated launch from an ungated one only if the ungated CLI runs before register returns, which needs register slower than the CLI's exec (a real wait, refused by goat/no-real-time-wait-in-tests) or a race. Written as a Limit; the reviewer's mutation (delete "read -r _ <&4 || exit 1" at ClaudeProcessSpawn.ts:10; ClaudeAgentSdkQueryRunner.test.ts stays 19/19) is named there.
+
+Lock hold time, for the fix-delta reviewer (open question): a holder holds the per-query permit for one live change, setModel when needed plus applyFlagSettings, until both answer or fail. The reactor holder is interrupted at most 10 s after its apply began (LiveModelSelection.ts CALL_DEADLINE, which also covers its wait for the permit), and the permit is released then. A steer holder or a turn start holder has no deadline of its own: it holds until the CLI answers those control requests or the query fails or closes (the SDK has no control-request deadline, ClaudeAgentSdkQueryRunner.ts's own comment). So a steer queued behind another steer waits as long as the CLI takes to answer the first; before the lock both steers waited on the same CLI anyway, since control requests travel over one ordered channel (review 3(c)).
+
+### Limits sentences for #3700 (the coordinator owns that body)
+
+- (g) On macOS, closing a Claude session now also stops background helpers the session started outside its process group, such as a dev server, a Gradle or adb daemon, or a compiler cache, as Linux under the systemd agent scope already does; a build in another session that was using one of those helpers fails and has to be run again, and the helper starts again on next use.
+- P3-5: Provider process records written under another hostname or state folder, or by a newer version, are never removed; each unclean exit of such a server leaves a few hundred bytes that every start reads.
+- P3-8: A Claude start that never finishes booting can show "working" for up to 13 minutes before the start-up message (two attempts of 5 minutes boot plus 90 seconds MCP registration), as upstream.
+- P3-6: When many Claude sessions close at once on macOS, each starts its own ps for the refresh before close and another after the CLI exits (about 30 to 50 ms CPU each at 3,000 processes); they are not shared.
+- P3-1: The launch gate that keeps a Claude CLI from running before its record exists (ClaudeProcessSpawn.ts fd 4) has no test that fails without it; deleting the gate line leaves the tests green, because register runs synchronously right after spawn.
+- Fork delta: reaping a dead server's Claude CLI kills its process group when the CLI still leads the group it was recorded with (upstream kills the pid only).
+
+### Issue draft (P3-6 second half), not filed
+
+Title: Claude descendant sampler: a mass close starts two ps per session
+Body: On a host without a systemd agent scope (every Mac), closing a Claude session runs one ps -A table read for the refresh before close and one after the CLI exits (ClaudeDescendants.ts track: refresh and stop). Closing N sessions at once starts about 2N ps processes, each about 30 to 50 ms of CPU at 3,000 processes, with no cap. Sharing an in-flight read between concurrent calls is not enough: a stop must use a table taken after its own CLI exited. A fix would queue stops behind one read that starts after the latest exit, or batch stops arriving within a few milliseconds. Found in the K5 review of next3 (P3-6).
+
+
+### Gate runs of the fix round
+
+First check:changed on 005431f909 (local, never pushed): format, lint, knip, graphql, agent surface audit, agent context budget, typecheck (17 packages) pass; test (305 files) FAIL: 1 failed, 3904 passed, 5 skipped. The failure was this lane's own case "stops a job the CLI started in its own process group when the CLI exits" (it.live, timed out at 120 s). Cause: the P3-6 finalizer. The case provided the runner layer around the open only, so the layer closed when the open returned and the finalizer stopped the poll before the fake CLI's detached job existed. Fix, folded into the P3-6 commit: the layer is provided around the whole case (body and expectation unchanged; a deviation from upstream fdd54b942d's text of that case, which is this lane's port and not a dev test, so rule 3 does not apply). ClaudeAgentSdkQueryRunner.test.ts whole: 19/19. No leftover process (ps for sleep 600/3 empty after the timeout).
+Process slip: I started that first gate in the same command as the ps check that showed another worktree's five-file vitest (chase-t3-261114-next3-n-*) running, relying on K5's precedence. The lane coordinator's later rule puts the ps check in its own step and waits; every later heavy job here followed it.
+
+### Second gate and push
+
+check:changed origin/chase/t3-261114-next3 on 50e90aaac349a2fe5f23124b3429327060d3b9d7 (ps checked first in its own step: no other worktree's job): format, lint, graphql, agent context budget, agent surface audit, knip 1/2 and 2/2, typecheck (17 packages) pass; test (305 files) pass, 1144.1 s, Test Files 305 passed, Tests 3905 passed | 5 skipped. Pushed plain: 18c6644ea8..50e90aaac3 (git ls-remote shows 50e90aaac3). K5's heavy-job token is released with this push.
+
+The lane test change, before and after (ClaudeAgentSdkQueryRunner.test.ts, case "stops a job the CLI started in its own process group when the CLI exits"):
+before:
+      yield* openFakeCli(cli).pipe(Effect.provide(realQueryRunner));
+      yield* Effect.promise(() => leftoverStopped);
+    }),
+after:
+      // The runner layer owns the poll, so it stays open until the CLI has exited, as in the server.
+      yield* openFakeCli(cli);
+      yield* Effect.promise(() => leftoverStopped);
+    }).pipe(Effect.provide(realQueryRunner)),
+
+### Standing rule 3 extension (beside IV), coordinator 2026-11-18 00:35:17 UTC, verbatim
+
+> "Standing rule from now, so this needs no round trip again: a type-only import added to an existing test file, and a layer provided to an existing case because the code under test gained a dependency, need no word from me when the commit changes no title, body, setup value or expectation of that case; the lane quotes the before and after in its record and the fresh review lists them. A provide that replaces or fakes a service the case's assertions read still comes to me."
+
+Existing dev test files this fix round touched: none (ClaudeAgentSdkQueryRunner.test.ts's changed case, ClaudeDescendants.test.ts, providerProcesses.test.ts, ClaudeLiveSelection.test.ts and LiveModelSelection.test.ts are all this lane's additions, absent from dev).
+
+NOT RUN (fix round): providerProcesses.test.ts's three Linux cases, the new group case included (goat-ci lane=server on 50e90aaac3); the P3-3 failure states; a real Claude turn; the startup barrier against a real systemd user manager.
+
