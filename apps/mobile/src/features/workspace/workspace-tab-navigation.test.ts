@@ -108,6 +108,24 @@ describe("opening a workspace tab", () => {
     expect(back.routes.at(-1)).toMatchObject({ key: "thread", params: thread.params });
   });
 
+  it("reuses an unkeyed remembered page between prewarm and selection", () => {
+    const state = { routes: [home] };
+    const selections = { threads: thread.params };
+    const options = { columns: true, check: available };
+    const prewarmed = workspaceTabNavigationState(state, "threads", selections, options);
+    const selected = workspaceTabNavigationState(state, "threads", selections, options);
+    expect(selected.routes.at(-1)?.key).toBe(prewarmed.routes.at(-1)?.key);
+    const different = workspaceTabNavigationState(
+      state,
+      "threads",
+      {
+        threads: { ...thread.params, threadId: "different" },
+      },
+      options,
+    );
+    expect(different.routes.at(-1)?.key).not.toBe(prewarmed.routes.at(-1)?.key);
+  });
+
   it("reopens a draft the tab showed after its last chat, until another chat opens", () => {
     const columns = { columns: true, check: available };
     const draft = { key: "draft", name: "Thread", params: { draft: { requestId: "r" } } };

@@ -37,6 +37,12 @@ import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { WorkspaceTabsProvider, useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import { WorkspaceNativeTabs } from "../workspace/WorkspaceNativeTabs.ios";
+import { workspaceTabPage } from "../workspace/workspace-tab-navigation";
+import {
+  currentWorkspaceSelections,
+  workspaceSelectionCheck,
+} from "../workspace/workspace-selection-store";
+import { withKnownPullRequestSummary } from "../../state/use-thread-pr";
 import { workspaceUsesColumns } from "../workspace/workspace-tabs-state";
 import { isSettingsRoute, settingsOpenIn } from "../settings/settings-navigation";
 import { isNewTaskRoute, workspaceRoutesOf } from "./workspace-overlay-routes";
@@ -72,6 +78,7 @@ import {
   NativePrimaryColumnContext,
   NativeWorkspaceInspectorContext,
   NativeWorkspaceModeContext,
+  NativeWorkspaceTabActivityContext,
   WorkspaceSlotOptionsContext,
   slotScreenOptions,
 } from "../../native/v5-workspace-context";
@@ -239,6 +246,8 @@ function WorkspaceColumns(
   }
 
   const workspaceTabs = useWorkspaceTabs();
+  const tabActivity = use(NativeWorkspaceTabActivityContext);
+  const isTabActive = tabActivity?.isActive;
   const selectedTab = workspaceTabs?.state.selectedTab;
   const settingsOpen = workspaceTabs?.settingsOpen ?? false;
   const openNewTask = startNewTask;
@@ -285,19 +294,19 @@ function WorkspaceColumns(
         routes: current.routes.filter((route) => route.key !== key),
         completed: new Set([...current.completed, key]),
       }));
-      if (native) {
+      if (native && (isTabActive?.() ?? true)) {
         const state = props.navigation.getState();
         const action = nativeWorkspacePopAction(state, key);
         if (action) props.navigation.dispatch(action);
       }
     },
-    [props.navigation],
+    [isTabActive, props.navigation],
   );
   const followCollapsedSplit = (
     type: "willAppear" | "didAppear" | "willDisappear" | "didDisappear",
     key: string,
   ) => {
-    if (!collapsed.current || layout.usesSplitView) return;
+    if (!collapsed.current || layout.usesSplitView || isTabActive?.() === false) return;
     const transition = collapsedSplitTransition(
       collapsedColumn.current,
       { type, key },
@@ -334,10 +343,11 @@ function WorkspaceColumns(
       onCollapse={() => {
         collapsed.current = true;
         collapsedColumn.current = { visible: compactColumn, leaving: null };
-        setNativelyPoppingWorkspaceRoute(null);
+        if (isTabActive?.() !== false) setNativelyPoppingWorkspaceRoute(null);
       }}
       onExpand={() => {
         collapsed.current = false;
+        if (isTabActive?.() === false) return;
         setNativelyPoppingWorkspaceRoute(null);
         // Native callbacks can outlive the render that created them, so decide from the live
         // router state. An expanded split has columns, so its tab gets a page beside the list.
@@ -365,7 +375,7 @@ function WorkspaceColumns(
             )
       }
       onDisplayModeWillChange={({ nativeEvent }) => {
-        if (!layout.primarySidebarOverlaysContent) return;
+        if (!layout.primarySidebarOverlaysContent || isTabActive?.() === false) return;
         if (nativeEvent.nextDisplayMode === "oneOverSecondary") setPrimarySidebarVisible(true);
         else if (nativeEvent.nextDisplayMode === "secondaryOnly") setPrimarySidebarVisible(false);
       }}
@@ -503,7 +513,6 @@ function WorkspaceColumns(
 
 function WorkspaceStackView(props: ViewProps & { readonly nativeColumns: boolean }) {
   const { layout } = useAdaptiveWorkspaceLayout();
-  const workspace = useWorkspaceTabs()!;
   // Native dismiss commits the route pop after the transition. Restore the dock
   // when the primary screen starts appearing, including interactive back gestures.
   const [primaryVisible, setPrimaryVisible] = useState(false);
@@ -528,7 +537,6 @@ function WorkspaceStackView(props: ViewProps & { readonly nativeColumns: boolean
   const descriptors = props.descriptors;
   const baseRoute = { key: `${props.state.key}:workspace`, name: "Workspace" };
   const visibleRoute = projection.detail.at(-1) ?? primaryRoute;
-  const workspacePage = !workspaceUsesColumns(workspace.state.selectedTab, workspace.settingsOpen);
   const baseDescriptor: Descriptor = {
     ...primaryDescriptor,
     navigation: props.descriptors[visibleRoute.key]!.navigation,
@@ -544,28 +552,54 @@ function WorkspaceStackView(props: ViewProps & { readonly nativeColumns: boolean
           (metrics?.verticalBarEdge ?? "none") === "none"
         }
       >
-        {props.nativeColumns && !workspacePage ? (
-          <WorkspaceColumns
-            {...props}
-            descriptors={descriptors}
-            primary={primaryRoute}
-            detail={projection.detail}
-            presentationVisible={presentationVisible}
-          />
-        ) : (
-          <V5CardStackView
-            {...props}
-            onRootVisibilityChange={setPrimaryVisible}
-            onNativePopChange={setNativelyPoppingWorkspaceRoute}
-            descriptors={descriptors}
-            state={{
-              ...props.state,
-              routes: [primaryRoute, ...projection.detail],
-              index: projection.detail.length,
-              preloadedRoutes: [],
-            }}
-          />
-        )}
+        {(slotWorkspace, prewarming) => {
+          const usesColumns = workspaceUsesColumns(
+            slotWorkspace.state.selectedTab,
+            slotWorkspace.settingsOpen,
+          );
+          const destination = slotWorkspace.settingsOpen
+            ? "settings"
+            : slotWorkspace.state.selectedTab;
+          const page = prewarming
+            ? workspaceTabPage(
+                { routes: [primaryRoute] },
+                destination,
+                currentWorkspaceSelections(),
+                {
+                  columns: layout.usesSplitView,
+                  check: workspaceSelectionCheck,
+                  seedPullRequest: withKnownPullRequestSummary,
+                },
+              )
+            : undefined;
+          const detail = prewarming ? (page ? [page] : []) : projection.detail;
+          const slotDescriptors =
+            page && !descriptors[page.key]
+              ? { ...descriptors, [page.key]: props.describe(page, true) }
+              : descriptors;
+          return props.nativeColumns && usesColumns ? (
+            <WorkspaceColumns
+              {...props}
+              descriptors={slotDescriptors}
+              primary={primaryRoute}
+              detail={detail}
+              presentationVisible={presentationVisible && !prewarming}
+            />
+          ) : (
+            <V5CardStackView
+              {...props}
+              onRootVisibilityChange={setPrimaryVisible}
+              onNativePopChange={setNativelyPoppingWorkspaceRoute}
+              descriptors={slotDescriptors}
+              state={{
+                ...props.state,
+                routes: [primaryRoute, ...detail],
+                index: detail.length,
+                preloadedRoutes: [],
+              }}
+            />
+          );
+        }}
       </WorkspaceNativeTabs>
     ),
   };
