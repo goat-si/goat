@@ -650,6 +650,10 @@ function useChatMarkdownState({
       environmentId !== null &&
       remoteOpen.state.mode === "local-exec" &&
       availableEditors.includes("file-manager");
+    const appPath =
+      appBundle && cwd
+        ? resolveWorkspaceFilePath(fileLinkMeta.filePath, cwd)
+        : fileLinkMeta.filePath;
     const mediaPath = mediaSource ?? fileLinkMeta.filePath;
     const canPreviewMedia =
       mediaMimeTypeFromExtension(
@@ -665,13 +669,7 @@ function useChatMarkdownState({
         href={fileLinkMeta.targetPath}
         targetPath={fileLinkMeta.targetPath}
         iconPath={fileLinkMeta.filePath}
-        appIconPath={
-          appBundle && cwd
-            ? resolveWorkspaceFilePath(fileLinkMeta.filePath, cwd)
-            : appBundle
-              ? fileLinkMeta.filePath
-              : undefined
-        }
+        appIconPath={appBundle ? appPath : undefined}
         workspaceRelativePath={fileLinkMeta.workspaceRelativePath}
         panelPath={appBundle ? null : panelPath}
         line={fileLinkMeta.line}
@@ -684,10 +682,10 @@ function useChatMarkdownState({
         threadRef={threadRef}
         onOpen={
           canOpenApp
-            ? async () =>
+            ? () =>
                 openInEditor({
                   environmentId,
-                  input: { cwd: (await resolveHostPath()).absolutePath, editor: "file-manager" },
+                  input: { cwd: appPath, editor: "file-manager" },
                 })
             : canUseShellActions && !appBundle
               ? async () =>

@@ -809,3 +809,46 @@ it.effect("starts a Windows command shim for unicode paths with cmd metacharacte
     );
   }),
 );
+
+it.effect.skipIf(windowsHost)("opens only the canonical named macOS app directory", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const temp = yield* fs.makeTempDirectoryScoped({ prefix: "goat-external-app-" });
+    const root = yield* fs.realPath(temp);
+    const open = path.join(root, "open");
+    yield* fs.writeFileString(open, "#!/bin/sh\n");
+    yield* fs.chmod(open, 0o755);
+    const bundle = path.join(root, "release", "Demo.app");
+    const duplicate = path.join(root, "debug", "Demo.app");
+    const missing = path.join(root, "Missing.app");
+    const regular = path.join(root, "Regular.app");
+    const linked = path.join(root, "Linked.app");
+    yield* fs.makeDirectory(bundle, { recursive: true });
+    yield* fs.makeDirectory(duplicate, { recursive: true });
+    yield* fs.writeFileString(regular, "regular file");
+    yield* fs.symlink(bundle, linked);
+    const launches: ReadonlyArray<string>[] = [];
+    yield* Effect.gen(function* () {
+      const launcher = yield* ExternalLauncher.ExternalLauncher;
+      for (const invalid of [missing, regular, "Relative.app"]) {
+        const result = yield* launcher
+          .launchEditor({ cwd: invalid, editor: "file-manager" })
+          .pipe(Effect.result);
+        assert.equal(result._tag, "Failure", invalid);
+      }
+      yield* launcher.launchEditor({ cwd: linked, editor: "file-manager" });
+      yield* launcher.launchEditor({ cwd: duplicate, editor: "file-manager" });
+    }).pipe(
+      Effect.provide(
+        layerTest({
+          platform: "darwin",
+          env: { PATH: root },
+          resolveExecutable: () => open,
+          onSpawn: (command) => launches.push(command.args.map(String)),
+        }),
+      ),
+    );
+    assert.deepEqual(launches, [[bundle], [duplicate]]);
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);

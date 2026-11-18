@@ -523,9 +523,23 @@ const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
     return yield* new ExternalLauncherUnsupportedEditorError({ editor: input.editor });
   }
 
-  const target = expandHomePath(input.cwd, yield* HostProcess.HomeDirectory);
+  let target = expandHomePath(input.cwd, yield* HostProcess.HomeDirectory);
   if (input.reveal === true) {
     return yield* resolveFileManagerRevealLaunch(target, platform, env, command);
+  }
+  if (platform === "darwin" && target.endsWith(".app")) {
+    const path = yield* Path.Path;
+    const fs = yield* FileSystem.FileSystem;
+    const invalid = new ExternalLauncherUnsupportedTargetError({
+      editor: editorDef.id,
+      reason: "invalid-app-bundle",
+    });
+    if (!path.isAbsolute(target)) return yield* invalid;
+    const canonical = yield* fs.realPath(target).pipe(Effect.mapError(() => invalid));
+    if (!path.isAbsolute(canonical) || !canonical.endsWith(".app")) return yield* invalid;
+    const stat = yield* fs.stat(canonical).pipe(Effect.mapError(() => invalid));
+    if (stat.type !== "Directory") return yield* invalid;
+    target = canonical;
   }
 
   return {
