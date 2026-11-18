@@ -1,9 +1,11 @@
+import { verifyManagedCheckout } from "../orchestration-v2/goat/restoreSnapshot.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it, vi } from "@effect/vitest";
 import {
   CommandId,
   EnvironmentId,
+  GitCommandError,
   type OrchestrationV2ThreadProjection,
   type Project,
   ProjectId,
@@ -305,6 +307,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
           listRefs,
           listLocalBranchNames,
           localStatus,
+          verifyManagedCheckout: () => Effect.void,
           fetchWorktreeBaseCommit,
           createWorktree,
           removeWorktree,
@@ -459,6 +462,19 @@ describe("goat_worktree_handoff", () => {
       yield* command(cwd, ["commit", "--allow-empty", "-m", "local only"]);
       const harness = makeHarness({
         git: {
+          verifyManagedCheckout: (input) =>
+            verifyManagedCheckout(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new GitCommandError({
+                    operation: "verifyManagedCheckout",
+                    command: "git worktree",
+                    cwd: input.projectCwd,
+                    detail: cause.detail,
+                    cause,
+                  }),
+              ),
+            ),
           fetchWorktreeBaseCommit: (input) => git.fetchWorktreeBaseCommit({ ...input, cwd }),
           createWorktree: (input) => git.createWorktree({ ...input, cwd, path: worktreePath }),
         },
@@ -567,6 +583,36 @@ describe("goat_worktree_handoff", () => {
       const result = yield* runHandoff(harness, { branch: "feature/project-origin" });
       expect(harness.fetchWorktreeBaseCommit).toHaveBeenCalled();
       expect(result.startedFromOrigin).toBe(true);
+    });
+  });
+
+  it.effect("refuses a checkout at the wrong commit before binding or running setup", () => {
+    const harness = makeHarness({
+      git: {
+        verifyManagedCheckout: ({ expectedHead }) =>
+          expectedHead === "abc123"
+            ? Effect.fail(
+                new GitCommandError({
+                  operation: "verifyManagedCheckout",
+                  command: "git",
+                  cwd: workspaceRoot,
+                  detail: "wrong commit",
+                }),
+              )
+            : Effect.void,
+      },
+    });
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        runHandoff(harness, {
+          branch: "feature/replaced",
+          startFromOrigin: true,
+          continuationPrompt: "Continue",
+        }),
+      );
+      expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "operation_failed" });
+      expect(harness.dispatch).not.toHaveBeenCalled();
+      expect(harness.runForThread).not.toHaveBeenCalled();
     });
   });
 

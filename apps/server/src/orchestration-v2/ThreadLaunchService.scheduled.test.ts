@@ -1,3 +1,4 @@
+import { GitCommandError } from "@goat/contracts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import { preparationSettled } from "./testkit/preparationSettled.ts";
 import {
@@ -279,5 +280,70 @@ it.effect("publishes the missing base and its replacement in the scheduled fetch
         detail: "Saved base gone is missing. Using HEAD.",
       },
     );
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("a scheduled preparation retry refuses a replaced checkout before starting setup", () => {
+  let setupCalls = 0;
+  let replaced = false;
+  const harness = makeHarness({
+    git: {
+      verifyManagedCheckout: ({ projectCwd }) =>
+        replaced
+          ? Effect.fail(
+              new GitCommandError({
+                operation: "verifyManagedCheckout",
+                command: "git worktree",
+                cwd: projectCwd,
+                detail: "wrong repository",
+              }),
+            )
+          : Effect.void,
+    },
+    runSetup: () =>
+      Effect.sync(() =>
+        ++setupCalls === 1
+          ? {
+              status: "started" as const,
+              terminalId: "test",
+              scriptName: "Setup",
+              scriptCommand: "false",
+              cwd: "/repo-worktrees/feature",
+              scriptId: "setup",
+              async: false,
+              completion: Effect.succeed({ exitCode: 1, durationMs: 0 }),
+            }
+          : { status: "no-script" as const },
+      ),
+  });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const initial = launchInput({
+      command: "launch:scheduled-replaced",
+      thread: "thread:scheduled-replaced",
+      message: "Start",
+      workspace: { type: "worktree", baseRef: "main", branch: "feature/fixture" },
+    });
+    const launch = yield* launches.launch({
+      ...initial,
+      initialMessage: {
+        text: "Start",
+        attachments: [],
+        scheduledTaskId: ScheduledTaskId.make("task:retry"),
+      },
+    });
+    const first = yield* preparationSettled(launch.threadId);
+    const run = first.runs[0];
+    assert.equal(run?.status, "failed");
+    if (run === undefined) return assert.fail("Expected prepared run");
+    replaced = true;
+    yield* launches.retryPreparation({
+      commandId: CommandId.make("launch:scheduled-replaced:retry"),
+      threadId: launch.threadId,
+      runId: run.id,
+    });
+    const retried = yield* preparationSettled(launch.threadId);
+    assert.equal(retried.runs[0]?.status, "failed");
+    assert.equal(harness.runSetup.mock.calls.length, 1);
   }).pipe(Effect.provide(harness.layer));
 });

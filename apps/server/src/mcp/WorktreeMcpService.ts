@@ -281,6 +281,14 @@ const make = Effect.gen(function* () {
               `Thread '${scope.thread.threadId}' was archived while the worktree was being created.`,
             );
           }
+          yield* gitWorkflow
+            .verifyManagedCheckout({
+              projectCwd,
+              worktreePath,
+              branch: input.branch,
+              expectedHead: startedFromOrigin ? worktreeBaseRef : undefined,
+            })
+            .pipe(asOperationFailed("Unable to verify the new worktree"));
           return yield* threadManagement
             .dispatch({
               type: "thread.metadata.update",

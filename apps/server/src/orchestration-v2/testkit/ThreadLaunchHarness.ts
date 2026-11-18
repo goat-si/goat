@@ -198,6 +198,7 @@ export function makeHarness(options: HarnessOptions = {}) {
     }),
     Layer.mock(GitWorkflow.GitWorkflowService)({
       currentBranch: () => Effect.succeed(null),
+      verifyManagedCheckout: () => Effect.void,
       repositoryRoot: () => Effect.succeed(project.workspaceRoot),
       createWorktree,
       renameBranch,

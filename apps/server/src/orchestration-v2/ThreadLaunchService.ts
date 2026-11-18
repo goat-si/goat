@@ -422,6 +422,7 @@ const make = Effect.gen(function* () {
             Effect.mapError(mapError(input, "provision-worktree", threadId)),
           ));
         let startRef = requestedBaseRef;
+        let pinnedHead: string | undefined;
         let baseRefName = requestedBaseRef;
         const remote = startFromOrigin
           ? yield* git
@@ -448,6 +449,7 @@ const make = Effect.gen(function* () {
           if (remoteBase !== null) {
             fetched = true;
             startRef = remoteBase.commitSha;
+            pinnedHead = remoteBase.commitSha;
             baseRefName = `refs/remotes/${remoteBase.remoteRefName}`;
             yield* note(
               `Fetched ${remoteBase.remoteRefName} at ${remoteBase.commitSha.slice(0, 12)}.`,
@@ -465,6 +467,7 @@ const make = Effect.gen(function* () {
           ).pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
           if (fallback !== null) {
             ({ startRef, baseRefName } = fallback);
+            if (baseRefName.startsWith("refs/remotes/")) pinnedHead = startRef;
             fallbackDetail = `Saved base ${requestedBaseRef} is missing. Using ${baseRefName}.`;
             yield* note(fallbackDetail);
             yield* setupTracker.update(threadId, (snapshot) => ({
@@ -577,6 +580,14 @@ const make = Effect.gen(function* () {
               ),
             ),
           );
+        yield* git
+          .verifyManagedCheckout({
+            projectCwd: project.workspaceRoot,
+            worktreePath: worktree.worktree.path,
+            branch: branch!,
+            expectedHead: pinnedHead,
+          })
+          .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
         worktreePath = worktree.worktree.path;
         branch = worktree.worktree.refName;
         yield* note(`Worktree ready at ${worktreePath} on branch ${branch}.`);
@@ -715,6 +726,11 @@ const make = Effect.gen(function* () {
             phase: "setup",
           })
           .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+      }
+      if (reused !== undefined && worktreePath !== null && branch !== null) {
+        yield* git
+          .verifyManagedCheckout({ projectCwd: project.workspaceRoot, worktreePath, branch })
+          .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
       }
       yield* setupTracker.stageStatus(threadId, "setup-script", "running");
       const setup =
