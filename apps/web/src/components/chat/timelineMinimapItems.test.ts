@@ -60,3 +60,39 @@ it("caps the streamed assistant preview and leaves empty user previews empty", (
   expect(preview?.userText).toBeNull();
   expect(preview?.assistantText).toBe(assistantText);
 });
+
+it("completes a quote begun in the raw prefix without expanding a later Reply chip", () => {
+  const quote = serializeAssistantCitation({
+    version: 1,
+    environmentId: EnvironmentId.make("env"),
+    threadId: ThreadId.make("t".repeat(1_600)),
+    messageId: MessageId.make("message"),
+    text: "A short question.",
+    start: 0,
+    end: 17,
+    prefix: "",
+    suffix: "",
+  });
+  const later = formatComposerContextReference({
+    kind: "response",
+    contextId: toComposerContextId("later"),
+    label: "Outside the preview",
+  });
+  const item = { id: "turn-1", rowIndex: 0, assistantText: null };
+  expect(resolveTimelineMinimapPreview({ ...item, userText: `${quote}\n${later}` })?.userText).toBe(
+    "A short question.",
+  );
+});
+
+it("keeps the complete label of a context chip whose opening bracket is in the prefix", () => {
+  const prefix = "x".repeat(1_498);
+  const reply = "[Earlier response](goat-context://v1/response/earlier)";
+  expect(
+    resolveTimelineMinimapPreview({
+      id: "turn-1",
+      rowIndex: 0,
+      userText: `${prefix} ${reply} outside`,
+      assistantText: null,
+    })?.userText,
+  ).toBe(`${prefix} Earlier response`);
+});

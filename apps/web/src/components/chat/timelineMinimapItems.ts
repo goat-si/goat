@@ -106,26 +106,34 @@ export function markdownPlainText(markdown: string): string {
   return markdownNodeText(markdownPreviewParser.parse(markdown)).replace(/\s+/g, " ").trim();
 }
 
+const MINIMAP_PREFIX_LENGTH = 1_500;
+
 function markdownMinimapPreview(markdown: string | null) {
   // The tooltip only shows a few lines, including while assistant text is streaming.
-  return markdown === null ? null : markdownPlainText(markdown.slice(0, 1_500)) || null;
+  return markdown === null
+    ? null
+    : markdownPlainText(markdown.slice(0, MINIMAP_PREFIX_LENGTH)) || null;
 }
 
 function expandUserPreviewTokens(markdown: string) {
   const tokens = [
-    ...collectComposerContextReferences(markdown).map(({ start, end, label }) => ({
-      start,
-      end,
-      label,
-    })),
-    ...collectAssistantCitations(markdown).map(({ start, end, citation }) => ({
-      start,
-      end,
-      label:
-        citation.comment === undefined
-          ? citation.text
-          : `${citation.text} Comment: ${citation.comment}`,
-    })),
+    ...collectComposerContextReferences(markdown, MINIMAP_PREFIX_LENGTH).map(
+      ({ start, end, label }) => ({
+        start,
+        end,
+        label,
+      }),
+    ),
+    ...collectAssistantCitations(markdown, MINIMAP_PREFIX_LENGTH).map(
+      ({ start, end, citation }) => ({
+        start,
+        end,
+        label:
+          citation.comment === undefined
+            ? citation.text
+            : `${citation.text} Comment: ${citation.comment}`,
+      }),
+    ),
   ].sort((a, b) => a.start - b.start);
   let expanded = "";
   let offset = 0;
@@ -135,12 +143,12 @@ function expandUserPreviewTokens(markdown: string) {
     expanded += markdown.slice(offset, start) + literal;
     offset = end;
   }
-  return expanded + markdown.slice(offset);
+  return expanded + markdown.slice(offset, MINIMAP_PREFIX_LENGTH);
 }
 
 function userMinimapPreview(markdown: string | null) {
   if (markdown === null) return null;
-  const expanded = expandUserPreviewTokens(markdown).slice(0, 1_500);
+  const expanded = expandUserPreviewTokens(markdown);
   return (
     markdownNodeText(userMarkdownPreviewParser.parse(expanded), true).replace(/\s+/g, " ").trim() ||
     null
