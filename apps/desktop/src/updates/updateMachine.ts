@@ -224,6 +224,12 @@ export function reduceDesktopUpdateStateOnDownloadComplete(
   };
 }
 
+export function clearDesktopUpdateInstallError(state: DesktopUpdateState): DesktopUpdateState {
+  return state.errorContext === "install"
+    ? { ...state, status: "downloaded", message: null, errorContext: null }
+    : state;
+}
+
 export function reduceDesktopUpdateStateOnInstallFailure(
   state: DesktopUpdateState,
   message: string,
