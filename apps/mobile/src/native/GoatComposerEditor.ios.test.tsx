@@ -115,7 +115,7 @@ vi.mock("../lib/nativeComposerTheme", () => ({
 }));
 vi.mock("../lib/contextChipIconSource", () => ({ contextChipIconUri: () => null }));
 vi.mock("../features/settings/appearance/useScaledTextRole", () => ({
-  useScaledTextRole: () => ({ fontSize: 16, lineHeight: 22 }),
+  useComposerTextRole: () => ({ fontSize: 16, lineHeight: 22 }),
 }));
 
 import { ComposerEditor } from "./GoatComposerEditor.ios";
