@@ -1591,7 +1591,7 @@ index 40e87cda8c9bc79a889e5542f29af429a24b24d4..d48d7d1bd76822f3ffdb0e8919f20625
        recycleItems,
        refreshControl: refreshControlElement ? stylePaddingTopState > 0 ? React2.cloneElement(refreshControlElement, {
 diff --git a/react-native.web.js b/react-native.web.js
-index 914d2dafaafa001c9ab6791a0a0581659295e333..28095ec26cfbf6efe9e1ca3825a0ed2b21954a77 100644
+index 914d2dafaafa001c9ab6791a0a0581659295e333..cdb97fa58c01e725be6a2cc81ca45c6747e689b8 100644
 --- a/react-native.web.js
 +++ b/react-native.web.js
 @@ -2869,7 +2869,9 @@ function abortBootstrapInitialScroll(ctx) {
@@ -1605,6 +1605,15 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..28095ec26cfbf6efe9e1ca3825a0ed2b
        target: initialScroll,
        waitForCompletionFrame: Platform.OS === "web"
      });
+@@ -4956,7 +4958,7 @@ function measureContainersInLayoutEffect(ctx, targetContainerIds = null) {
+     const itemKey = peek$(ctx, `containerItemKey${containerId}`);
+     const element = viewRef == null ? void 0 : viewRef.current;
+     if (itemKey !== void 0 && element) {
+-      const rect = element.getBoundingClientRect();
++      const rect = { height: element.offsetHeight, width: element.offsetWidth };
+       setContainerLayoutBaseline(element, rect);
+       measurements.push({
+         containerId,
 @@ -5413,12 +5415,11 @@ function processContainerLayout({ containerId, ctx, rectangle, ref, state }) {
    const shouldDeferWebShrinkLayoutUpdate = !isInMVCPActiveMode(listState) && previousSize !== void 0 && size + 1 < previousSize;
    if (shouldDeferWebShrinkLayoutUpdate) {
@@ -1653,7 +1662,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..28095ec26cfbf6efe9e1ca3825a0ed2b
      }
    }
 diff --git a/react-native.web.mjs b/react-native.web.mjs
-index 95465f2ab89ce41a10553f58af83618f7310e83c..7d1065d1b80c6a5f26b1d0e68757be20f644ecef 100644
+index 95465f2ab89ce41a10553f58af83618f7310e83c..e0f193cda3de7ee2fe42e19de406f8b69d0af353 100644
 --- a/react-native.web.mjs
 +++ b/react-native.web.mjs
 @@ -2848,7 +2848,9 @@ function abortBootstrapInitialScroll(ctx) {
@@ -1667,6 +1676,15 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..7d1065d1b80c6a5f26b1d0e68757be20
        target: initialScroll,
        waitForCompletionFrame: Platform.OS === "web"
      });
+@@ -4935,7 +4937,7 @@ function measureContainersInLayoutEffect(ctx, targetContainerIds = null) {
+     const itemKey = peek$(ctx, `containerItemKey${containerId}`);
+     const element = viewRef == null ? void 0 : viewRef.current;
+     if (itemKey !== void 0 && element) {
+-      const rect = element.getBoundingClientRect();
++      const rect = { height: element.offsetHeight, width: element.offsetWidth };
+       setContainerLayoutBaseline(element, rect);
+       measurements.push({
+         containerId,
 @@ -5392,12 +5394,11 @@ function processContainerLayout({ containerId, ctx, rectangle, ref, state }) {
    const shouldDeferWebShrinkLayoutUpdate = !isInMVCPActiveMode(listState) && previousSize !== void 0 && size + 1 < previousSize;
    if (shouldDeferWebShrinkLayoutUpdate) {

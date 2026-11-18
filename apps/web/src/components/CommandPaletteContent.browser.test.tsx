@@ -47,6 +47,33 @@ describe("CommandPaletteContent", () => {
 });
 
 it.each(["@legendapp/list/react", "@legendapp/list/react-native"])(
+  "reports only layout heights when %s mounts under scale",
+  async (entry) => {
+    const { LegendList: List } =
+      await vi.importActual<typeof import("@legendapp/list/react")>(entry);
+    const onItemSizeChanged = vi.fn<(measurement: { size: number }) => void>();
+    await using screen = await render(
+      <div style={{ scale: "0.8" }}>
+        <List
+          data={["Project A"]}
+          estimatedItemSize={100}
+          keyExtractor={(item) => item}
+          onItemSizeChanged={onItemSizeChanged}
+          recycleItems={false}
+          renderItem={({ item }) => <div style={{ height: 80 }}>{item}</div>}
+          style={{ height: 100, width: 300 }}
+        />
+      </div>,
+    );
+    await expect.element(screen.getByText("Project A")).toBeVisible();
+    await vi.waitFor(() =>
+      expect(onItemSizeChanged).toHaveBeenCalledWith(expect.objectContaining({ size: 80 })),
+    );
+    expect(onItemSizeChanged.mock.calls.map(([{ size }]) => size)).toEqual([80]);
+  },
+);
+
+it.each(["@legendapp/list/react", "@legendapp/list/react-native"])(
   "keeps the %s row's layout height after a deferred shrink under scale",
   async (entry) => {
     // Both browser bundles expose the web implementation; native types add global declarations.
