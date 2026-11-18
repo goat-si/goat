@@ -346,24 +346,24 @@ const make = Effect.gen(function* () {
             cause: launched.failure,
           });
         }
-        if (canLoadHistory)
-          yield* importHistory.pipe(
-            Effect.catch((cause) =>
-              historyLimitExceeded(cause)
-                ? Effect.fail(
-                    new AcpRegistryOperationError({
-                      reason: "session_import_failed",
-                      message: historyLimitMessage,
-                      cause,
-                    }),
-                  )
-                : Effect.logWarning("Could not import ACP session history", {
-                    instanceId: input.instanceId,
-                    sessionId: input.sessionId,
-                    cause,
-                  }),
-            ),
-          );
+        if (canLoadHistory) {
+          const history = yield* Effect.result(importHistory);
+          if (Result.isFailure(history)) {
+            yield* Effect.logWarning("Could not import ACP session history", {
+              instanceId: input.instanceId,
+              sessionId: input.sessionId,
+              cause: history.failure,
+            });
+            return {
+              threadId,
+              imported: true,
+              nativeHistoryPending: true,
+              ...(historyLimitExceeded(history.failure)
+                ? { nativeHistoryError: historyLimitMessage }
+                : {}),
+            } as const;
+          }
+        }
         return { threadId, imported: true } as const;
       }),
     );

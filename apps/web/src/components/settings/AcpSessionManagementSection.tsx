@@ -256,17 +256,32 @@ function InstanceSessionManagement(
     if (generation !== projectGeneration.current) return;
     setImportingSessionId(null);
     if (result._tag === "Success") {
+      const { threadId, imported, nativeHistoryPending, nativeHistoryError } = result.value;
       setSessions((current) =>
         current.map((candidate) =>
           candidate.sessionId === session.sessionId
-            ? { ...candidate, importedThreadId: result.value.threadId, nativeHistoryPending: false }
+            ? {
+                ...candidate,
+                importedThreadId: threadId,
+                nativeHistoryPending: nativeHistoryPending === true,
+              }
             : candidate,
         ),
       );
-      toastManager.add({
-        type: "success",
-        title: result.value.imported ? "ACP session imported" : "ACP session already imported",
-      });
+      if (nativeHistoryPending === true) {
+        toastManager.add({
+          type: "warning",
+          title: "ACP session linked",
+          description:
+            nativeHistoryError ??
+            "Earlier history could not be copied. Select Import history to retry.",
+        });
+      } else {
+        toastManager.add({
+          type: "success",
+          title: imported ? "ACP session imported" : "ACP session already imported",
+        });
+      }
       return;
     }
     reportFailure("Could not import ACP session", result);

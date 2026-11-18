@@ -1,7 +1,14 @@
 import { expect, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { ProjectId, ProviderDriverKind, ProviderInstanceId, ThreadId } from "@goat/contracts";
+import {
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ProviderThreadId,
+  ThreadId,
+} from "@goat/contracts";
 import * as AcpRegistryRuntimeCoordinator from "@goat/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
+import { ProviderAdapterReadThreadSnapshotError } from "@goat/provider-core/server/ProviderAdapter";
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -28,6 +35,9 @@ it.effect("preserves incomplete listings, imports once, and protects imported se
     );
     const imported = yield* Ref.make<ThreadId | null>(null);
     const copiedHistory = yield* Ref.make(false);
+    const nextReadError = yield* Ref.make<ProviderAdapterReadThreadSnapshotError | undefined>(
+      undefined,
+    );
     const deleted = yield* Ref.make<ReadonlyArray<string>>([]);
     const launches = yield* Ref.make<ReadonlyArray<ThreadLaunchService.ThreadLaunchInput>>([]);
     const mutationActive = yield* Ref.make(false);
@@ -105,7 +115,14 @@ it.effect("preserves incomplete listings, imports once, and protects imported se
       }),
       Layer.mock(AgentSessionImporter.AgentSessionImporter)({
         importNativeHistory: () =>
-          requireMutation.pipe(Effect.andThen(Ref.set(copiedHistory, true)), Effect.as(true)),
+          requireMutation.pipe(
+            Effect.andThen(Ref.getAndSet(nextReadError, undefined)),
+            Effect.flatMap((error) =>
+              error === undefined
+                ? Ref.set(copiedHistory, true).pipe(Effect.as(true))
+                : Effect.fail(error),
+            ),
+          ),
       }),
       Layer.mock(ThreadLaunchService.ThreadLaunchService)({
         launch: (input) =>
@@ -174,6 +191,33 @@ it.effect("preserves incomplete listings, imports once, and protects imported se
       });
       expect(yield* Ref.get(copiedHistory)).toBe(true);
       expect(yield* Ref.get(launches)).toHaveLength(1);
+
+      for (const limitExceeded of [false, true]) {
+        yield* Ref.set(imported, null);
+        yield* Ref.set(copiedHistory, false);
+        yield* Ref.set(
+          nextReadError,
+          new ProviderAdapterReadThreadSnapshotError({
+            driver: ProviderDriverKind.make("acpRegistry"),
+            providerThreadId: ProviderThreadId.make("provider-thread:history"),
+            ...(limitExceeded ? { historyLimitExceeded: true } : {}),
+          }),
+        );
+        const first = yield* service.import({ instanceId, projectId, sessionId: "native-1" });
+        expect(first).toMatchObject({
+          threadId: expectedThreadId,
+          imported: true,
+          nativeHistoryPending: true,
+        });
+        if (limitExceeded)
+          expect(first).toHaveProperty("nativeHistoryError", expect.stringContaining("Shorten"));
+        expect(yield* Ref.get(copiedHistory)).toBe(false);
+        expect(yield* service.import({ instanceId, projectId, sessionId: "native-1" })).toEqual({
+          threadId: expectedThreadId,
+          imported: true,
+        });
+        expect(yield* Ref.get(copiedHistory)).toBe(true);
+      }
     }).pipe(Effect.provide(AcpSessionService.layer.pipe(Layer.provide(dependencies))));
   }),
 );
