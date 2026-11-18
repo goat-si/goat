@@ -89,6 +89,7 @@ import {
   makeInterruptResultTurnItem,
   providerProcessExitCause,
   terminalTerminationCause,
+  terminalRunNoticeEvents,
 } from "./runTerminationCause.ts";
 export { makeInterruptResultTurnItem } from "./runTerminationCause.ts";
 import { makeCloudResultEvents } from "./CloudResultEvents.ts";
@@ -635,27 +636,7 @@ export const layer: Layer.Layer<
                     payload: finalizedAttempt,
                   },
                 ]),
-            ...(input.terminal.status === "interrupted"
-              ? [
-                  {
-                    id: yield* allocateEventId(),
-                    type: "turn-item.updated" as const,
-                    threadId: input.run.threadId,
-                    runId: input.run.id,
-                    nodeId: input.rootNode.id,
-                    providerInstanceId: input.run.providerInstanceId,
-                    occurredAt: completedAt,
-                    payload: makeInterruptResultTurnItem({
-                      idAllocator,
-                      run: input.run,
-                      rootNode: input.rootNode,
-                      providerThread: input.providerThread,
-                      reason,
-                      completedAt,
-                    }),
-                  },
-                ]
-              : []),
+            ...(yield* terminalRunNoticeEvents({ ...input, idAllocator, completedAt, reason })),
             ...(input.liveProviderTurn !== undefined &&
             !isTerminalProviderTurnStatus(input.liveProviderTurn.status)
               ? [

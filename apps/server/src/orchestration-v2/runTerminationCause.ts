@@ -7,6 +7,7 @@ import type {
 } from "@goat/contracts";
 import type * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Schema from "effect/Schema";
 import { CommandPolicyCapabilityUnsupportedError } from "./CommandPolicy.ts";
@@ -154,3 +155,21 @@ export function makeInterruptResultTurnItem(input: {
     message: input.reason ?? "Stopped by the provider",
   };
 }
+
+export const terminalRunNoticeEvents = Effect.fn("RunExecution.terminalRunNoticeEvents")(function* (
+  input: Parameters<typeof makeInterruptResultTurnItem>[0] & { readonly terminal: Terminal },
+) {
+  if (input.terminal.status !== "interrupted") return [];
+  return [
+    {
+      id: yield* input.idAllocator.allocate.event({ threadId: input.run.threadId }),
+      type: "turn-item.updated" as const,
+      threadId: input.run.threadId,
+      runId: input.run.id,
+      nodeId: input.rootNode.id,
+      providerInstanceId: input.run.providerInstanceId,
+      occurredAt: input.completedAt,
+      payload: makeInterruptResultTurnItem(input),
+    },
+  ];
+});
