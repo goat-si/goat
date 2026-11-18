@@ -4,6 +4,7 @@ import {
   MemoryId,
   MemoryItem,
   MemoryRpcError,
+  type MemoryMutationReceipt,
   MemoryHistoryPage,
   MemoryRevisionId,
   MemorySourcePage,
@@ -37,7 +38,7 @@ import type { RpcSession } from "../rpc/session.ts";
 import { createMemoryEnvironmentAtoms, memoryBodyGap, memorySaveStatus } from "./memory.ts";
 
 it("treats a required hub upgrade as a definitive save refusal", () => {
-  const result = AsyncResult.failure(
+  const result = AsyncResult.failure<MemoryMutationReceipt, MemoryRpcError>(
     Cause.fail(new MemoryRpcError({ code: "hub_upgrade_required" })),
   );
   expect(memorySaveStatus(result)).toBe("refused");
