@@ -55,3 +55,69 @@ The restarted gate on 94ba58b183f2d62839907ee1c946e8b6b6ade71e passed format, li
 Remaining on the destination Mac: run `vp run check:changed origin/chase/t3-261114-next3` on the lane head with working Git under a synthetic HOME. If the ThreadStop case fails again, compare the same case with the integration head. The guarded six-file run is complete (89 passed, zero failed or skipped). P1 real-Claude before/after captures remain recorded above.
 
 NOT RUN: a complete passing gate, integration-head reproduction of the ThreadStop case, real Claude turns and live model eval, real-client and mixed-version P1 captures, standalone CI and independent review. This is a handoff and the lane is not READY.
+
+## Gate continuation and C4 review round 1
+
+Merged the published row `94ba58b183f2d62839907ee1c946e8b6b6ade71e` from the original lane, then merged fetched integration `3d683c091e517f93c2fa6fefb487b9af60f28fce`. The checkout's initial integration parent was `f82d2df4b0960eb39bd36e4100b72b6f2758c7d2`. The lockfile changed across the merges, and `vp i` exited 0. Node was `26.12.1`. The test runner found system Git with a synthetic HOME.
+
+### Coordinator Rule 3 approval for review round 1
+
+> Coordinator Rule 3: APPROVED. apps/server/src/mcp/agentSurface.test.ts:789 — exclude entries with listing === "prompt" from the expected resource set for the non-Claude discovery case only (D3: message.show is Claude-only); title, exact equality and every other entry/assertion unchanged. Quote it in next3-K12.md with the other approvals and continue.
+
+The only expectation update in this round filters prompt-tier entries before mapping the expected inventory resources.
+
+### Commits and verification
+
+- P2-1, `122bfb078a58fc6c488bfe097968475630f89d22`. The new whole discovery suite failed before the fix: outside MCP and Codex saw `message.show` in inventory, search, resource and exact lookup. The authenticated scope now carries the adapter driver, and `goat_describe` uses the caller's catalog for every depth and its search cursor version. After the fix, outside MCP and Codex cannot discover the path, and a Claude thread with a custom instance ID can. Explicit dispatch retains its existing admission checks.
+- P2-2, `1eb8efeb6b2db3b4eebf03997f8de911bd18e743`. Resolved the integration merge's `threadActivity.ts` conflict by keeping integration's type imports and re-exports and adding the sent-message variant and its `Extract` member to `threadActivityTypes.ts`. The 11 whole mobile feed suites plus the dependency graph passed 81 tests. `vp run --filter @goat/mobile typecheck` exited 0.
+- P3, `fdfdc5bba226f1f7b3a8457f1defbdc3257b41de`. Before the fix, adding a foreign lookalike tool, conflicting dispatcher aliases and an error with `sentMessage` only in its input removed the expected deferred-work row. After the fix, only a result accepted by the shared renderer validator receives the stored projection marker. The same predicate covers snapshot and history paging. The positive result remains inline and the three rejected rows defer. Seven affected line-budget entries match `wc -l`.
+- Whole changed server files on the final head, run from `apps/server` with `GOAT_TEST_TMP_GUARD=fail vp test run --maxWorkers=1 --reporter=default`: `agentSurface.test.ts` 23, `toolListing.test.ts` 16, `message.test.ts` 3, `discovery.test.ts` 7, `goatMcpToolNames.test.ts` 10, `ProjectionStore.midTurnMessage.test.ts` 1, and `WireProjection.test.ts` 36. All 96 passed. Including `ThreadStop.test.ts`, that command exited 0 with 8 files and 139 passed.
+- Whole workspace files on the final head: `threadFeedMidTurnMessage.test.ts` 1, `sessionMidTurnMessage.test.ts` 1, and `scripts/agent-surface/eval/replay.test.ts` 18. The combined workspace run with the mobile feed and dependency graph suites exited 0 with 14 files and 100 passed.
+- Guarded review run also passed `ProjectionStore.test.ts` 50, `McpSessionRegistry.test.ts` 32, `hostDescribe.test.ts` 18 and `search.test.ts` 20, for 259 passes across 12 files. Server typecheck exited 0.
+- The original `ThreadStop.test.ts` failure did not recur. The guarded whole file passed 43/43 on both the final lane head and detached integration `3d683c091e517f93c2fa6fefb487b9af60f28fce`, including “missing via thread.stop”. The test file blob is identical on both heads. The original machine was under memory pressure, and the comparison did not establish a cause.
+- The gate on `d86ed140becbfd61a0586fe22f70e1d2f69f5d16` was interrupted with exit 130 when review changes arrived. All static checks had passed by then.
+- Mobile feed counts: `threadActivity.test.ts` 56, `threadActivity.commandLabels.test.ts` 4, `threadActivity.goatCall.test.ts` 1, `threadActivity.mcpApp.test.ts` 1, `threadActivity.optionalQuestions.test.ts` 1, `threadActivity.pending-input.test.ts` 4, `threadActivity.retry.test.ts` 5, `threadActivity.runFolds.test.ts` 2, `threadActivity.toolCallVisibility.test.ts` 2, `threadActivity.viewedImages.test.ts` 2, `threadFeedMidTurnMessage.test.ts` 1, and `dependency-graph.test.ts` 2. A separate whole-file run exited 0 with 40 more passes in `thread-feed-live-follow.test.ts` 28, `pending-thread-feed.test.ts` 8 and `threadActivityIcons.test.ts` 4.
+
+### Gate inventory findings
+
+The gate on `fdfdc5bba226f1f7b3a8457f1defbdc3257b41de` selected 576 files (480 server and 96 workspace). All static checks passed, including typecheck across 39 packages. `ThreadStop.test.ts` passed 43 and `SshWorkspaceSync.test.ts` passed 84 inside the gate. The gate was stopped with exit 130 after `McpToolAccess.capabilities.test.ts` reported five failed count assertions.
+
+A guarded whole-file run on the same lane head exited 1 with 28 passed and 11 failed. The capabilities suite had 5 failures from pinned counts that each increased by one when the `message.show` write probe was added. The harness listing suite had 6 failures because its full-list expected set included the prompt-only tool. `toolAvailability.test.ts` passed all 12. On detached integration `b95bc9ddbdbc330494a708a6cf08db919d55ea06`, the guarded whole-file run passed capabilities 20/20, harness listing 7/7 and ThreadStop 43/43, with exit 0. The worktree returned to the lane.
+
+### Coordinator Rule 3 rulings for the gate inventory
+
+> harnessListing.test.ts — APPROVED: exclude listing === "prompt" entries from the expected full listing (D3: Claude-only); everything else unchanged.
+
+The capability-total approval was conditional on GOAT classifying the tool as a write. The registry guide (docs/internals/agent-surface.md:69–82) treats create, update and triggers as writes and distinguishes a wait that records waiting state from a wait that only observes. The write gate describes its target as “This tool changes the environment” (apps/server/src/mcp/McpToolAccess.ts:106–107). The registry's capability declaration requires a capability only for write and destructive entries (packages/contracts/src/agentSurface/types.ts:68–83). The message handler returns the supplied Markdown in its reply. It creates no thread message, resource or external effect.
+
+The registry entry and matching handler declaration now use `read` and `readsAsCaller`. The five pinned write totals stay 78, 133, 147, 149 and 187. Relative to the prior lane, registry reads moved from 115 to 116, writes from 112 to 111 and destructive stayed at 82. The generated audit's mutating total moved from 194 to 193. No pinned read total required an edit. Relative to the gate's integration base, the added entry contributes one read.
+
+The harness fixture now excludes prompt-tier entries from its expected full list. Its exact equality and all core expectations remain as before. Claude's existing target-level exception is exercised for direct calls and `goat_call`, including Plan mode and a read-only sandbox.
+
+The classification is in `7c26cbf3360cde894f6dec8b3cf45bf9c90b3d97`. The approved listing expectation is in `8c32846e532098958910b1ed8f120a5c5baabc32`. On that exact head, the guarded Node 26.12.1 server run passed 178 tests across 11 whole files. The eight changed server files contributed 103 tests. The additional whole files were `McpToolAccess.capabilities.test.ts` 20, `toolAvailability.test.ts` 12 and `ThreadStop.test.ts` 43. The new changed `harnessListing.test.ts` contributed 7. The three changed workspace files passed 20 tests on the same head.
+
+### Coordinator's three Rule 3 rulings
+
+> 1. apps/server/src/mcp/McpToolAccess.capabilities.test.ts — raise each of the five pinned write totals by exactly one for message.show. Titles and all other assertions unchanged.
+> 2. apps/server/src/mcp/harnessListing.test.ts — exclude entries with listing === "prompt" from the expected full listing only. Titles, exact equality and all other entries unchanged.
+> 3. apps/server/src/mcp/agentSurface.test.ts:789 — exclude listing === "prompt" entries from that one expected resource mapping only; keep title and exact equality.
+
+Merged integration `b95bc9ddbdbc330494a708a6cf08db919d55ea06` in `68b621dc4bf573da52489e553fb3ed85afeb0307`. The merge was clean and left the lockfile unchanged. The gate previously started on `8c32846e532098958910b1ed8f120a5c5baabc32` was stopped with exit 130 to switch to the integrated tree.
+
+### Coordinator's final classification ruling
+
+> K12 ruling (coordinator): KEEP the read classification (readsAsCaller) for message.show. It returns only caller-supplied Markdown and changes no environment state, which is outside GOAT's write definition at McpToolAccess.ts:106. Rule 3 ruling 1 (raise the five McpToolAccess.capabilities write totals) is therefore WITHDRAWN: leave those totals unchanged. Rulings 2 and 3 (prompt-only exclusions in harnessListing.test.ts and agentSurface.test.ts:789) stand. Also re-check the earlier approved goatMcpToolNames Plan-mode exception: if the read classification makes it unnecessary, revert that test edit so the existing case is byte-identical to integration; keep it only if the whole file still fails without it, and say which in the record. Record this ruling verbatim in K12.md. Then: merge the current integration tip origin/chase/t3-261114-next3 (now 12553a304d7, includes SF3, K8, U64, U21, F3579) once, run the complete gate (vp run check:changed origin/chase/t3-261114-next3) plus guarded whole server files, plain-push chase/t3-261114-next3-k12, append to K12.md on the records branch, and report READY with head SHA, gate counts and NOT RUN.
+
+Merged `12553a304d7ebdc84f79a7e61fb2e2b30ff68763` in `712a7c8848958f54a5fded97d55eb5c147cd53fa`. The lockfile changed, and `vp i` passed. Resolved the generated agent-surface audit by regenerating it and resolved the line-budget conflict from the integration table with the seven K12 entries set to their measured `wc -l` values.
+
+With the registry and handler set to read, I temporarily restored the integration version of the existing Plan-mode case and ran all of `goatMcpToolNames.test.ts` from `apps/server` with `GOAT_TEST_TMP_GUARD=fail`. It exited 1 with 9 passed and 1 failed. The existing case expected ask for direct `goat_message_show` and received allow. Claude's local tool decision does not use the registry effect to infer that exception. I restored the approved exception. The guarded whole file then passed all 10 cases, including direct and dispatcher calls in Plan mode and read-only sandboxes.
+
+On `712a7c8848958f54a5fded97d55eb5c147cd53fa`, Node 26.12.1 ran the guarded whole server set with exit 0, 11 files and 178 passed. Changed files: `agentSurface.test.ts` 23, `harnessListing.test.ts` 7, `toolListing.test.ts` 16, `discovery.test.ts` 7, `message.test.ts` 3, `goatMcpToolNames.test.ts` 10, `ProjectionStore.midTurnMessage.test.ts` 1 and `WireProjection.test.ts` 36. Companion files: `McpToolAccess.capabilities.test.ts` 20, `toolAvailability.test.ts` 12 and `ThreadStop.test.ts` 43. The workspace focused run exited 0, with mobile dependency graph 2, mobile mid-turn feed 1, web mid-turn session 1 and replay 18.
+
+### Final gate and lane push
+
+Status **READY**. The clean lane head `712a7c8848958f54a5fded97d55eb5c147cd53fa` ran `vp run check:changed origin/chase/t3-261114-next3` with Node 26.12.1 against merge base `12553a304d7ebdc84f79a7e61fb2e2b30ff68763`. Exit 0. Format, lint, both Knip checks, GraphQL, agent-surface audit, agent context budget and typecheck across 39 packages passed. The server batch passed all 482 files with 6,621 tests passed and four skipped. The workspace batch passed all 96 files with 5,033 tests passed. Total 578 files, 11,654 tests passed, zero failed and four skipped (three optional HTML browser cases and one Windows update case). The gate did not cache its result because its input fingerprint changed during the run. The commit and tracked files stayed clean.
+
+The lane branch was plain-pushed from `94ba58b183f2d62839907ee1c946e8b6b6ade71e`, and `git ls-remote` confirmed the tested head. `ThreadStop.test.ts` passed all 43 cases on the tested lane, inside the final gate, and on detached integration in the attribution runs. Final gate also passed `SshWorkspaceSync.test.ts` 84, `McpToolAccess.capabilities.test.ts` 20, and `harnessListing.test.ts` 7.
+
+NOT RUN: lane CI, the three optional HTML browser tests, the Windows-only update test, live Claude and model evaluation, and integrated real-client and mixed-version P1 captures.
