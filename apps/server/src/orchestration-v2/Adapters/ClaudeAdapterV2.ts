@@ -2,8 +2,7 @@ import {
   beforeClaudeStopProjection,
   holdClaudeStopDenial,
   holdClaudeWorkflowMember,
-  makeClaudeWorkflowStopCommand,
-  reconcileClaudeWorkflowStop,
+  makeClaudeWorkflowStops,
   type ClaudeWorkflowMemberState,
   type ClaudeWorkflowStop,
 } from "./ClaudeWorkflowStop.ts";
@@ -4208,11 +4207,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const memberKey = `${input.coordinator.childThreadId}:agent:${member.index}`;
             const previous = seen.get(memberKey);
             const stop = input.coordinator.workflowStop;
+            const observed = previous?.observedWorkflowStop;
+            const observedStop =
+              previous !== undefined &&
+              observed !== undefined &&
+              observed.lineage === stop?.lineage &&
+              previous.agentId === member.agentId &&
+              previous.attempt === (member.attempt ?? previous.attempt)
+                ? observed
+                : undefined;
             const mightBeStopped =
               member.state === "failed" &&
-              stop !== undefined &&
-              stop.outcome !== "rejected" &&
-              previous?.status !== "failed";
+              previous?.status !== "failed" &&
+              ((observedStop?.outcome !== undefined && observedStop.outcome !== "rejected") ||
+                (stop?.outcome !== undefined && stop.outcome !== "rejected"));
             let status =
               member.outcome ??
               ((member.state === "queued" || member.state === "running") &&
@@ -4220,12 +4228,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 ? input.coordinator.task.status
                 : member.state === "queued"
                   ? "pending"
-                  : mightBeStopped &&
-                      stop.outcome === "accepted" &&
-                      previous !== undefined &&
-                      previous.observedWorkflowStop === stop &&
-                      previous.attempt === (member.attempt ?? previous.attempt) &&
-                      previous.agentId === member.agentId
+                  : mightBeStopped && observedStop?.outcome === "accepted"
                     ? "cancelled"
                     : member.state);
             const settled = status !== "pending" && status !== "running";
@@ -4394,9 +4397,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               nextOrdinal: () => ++nextItemOrdinal,
               toolCalls,
               ...(stop === undefined ? {} : { workflowStop: stop }),
-              ...(newIdentity || previous.observedWorkflowStop === undefined
-                ? {}
-                : { observedWorkflowStop: previous.observedWorkflowStop }),
+              ...(observedStop === undefined ? {} : { observedWorkflowStop: observedStop }),
             };
             const endOpenToolCalls = Effect.fnUntraced(function* () {
               if (toolCalls.size === 0) return;
@@ -4480,11 +4481,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 if (!(yield* drain())) return;
               }
             }
-            const matchingDenial = mightBeStopped && target.observedWorkflowStop === stop;
-            const holdMember = matchingDenial && stop.outcome === "pending";
+            const memberStop = observedStop?.members.has(member.index)
+              ? observedStop
+              : target.observedWorkflowStop;
+            const holdMember = mightBeStopped && memberStop?.outcome === "pending";
             if (holdMember) {
               status = previous?.status ?? "running";
-            } else if (matchingDenial) {
+            } else if (mightBeStopped && memberStop?.outcome === "accepted") {
               status = "cancelled";
             }
             if (mightBeStopped && !holdMember && (changed || status !== previous?.status))
@@ -4492,7 +4495,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             let summary = transcriptRead
               ? withWorkflowAgentMetadata(member, metadata ?? {})
               : (reportedMembers[memberIndex] ?? member);
-            if (holdMember) summary = holdClaudeWorkflowMember(stop, summary, status);
+            if (holdMember) summary = holdClaudeWorkflowMember(memberStop, summary, status);
             if (
               status === "cancelled" &&
               member.state === "failed" &&
@@ -4536,7 +4539,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   (readTranscript ? 1 : 0),
                 transcriptCursor,
                 transcriptMetadata: metadata,
-                observedWorkflowStop: target.observedWorkflowStop,
+                observedWorkflowStop: memberStop,
                 nextItemOrdinal,
                 toolCalls,
                 textShown,
@@ -4564,6 +4567,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               subagent: input.coordinator.task,
             });
           }
+        });
+
+        const workflowStops = makeClaudeWorkflowStops({
+          driver: CLAUDE_PROVIDER,
+          getQuery: Ref.get(queryContext),
+          getCoordinator: (taskId) =>
+            Ref.get(sessionSubagentsByTaskId).pipe(Effect.map((tasks) => tasks.get(taskId))),
+          lock: sdkMessageLock,
+          scope: sessionScope,
+          project: projectClaudeWorkflowMembers,
         });
 
         const confirmedSubagentOutcome = (task: OrchestrationV2Subagent | undefined) => {
@@ -4958,13 +4971,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               coordinator: subagent,
               workflow: workflowWithThreads,
             });
-            const stop = subagent.workflowStop;
-            if (
-              input.nativeOutcome !== undefined &&
-              stop?.retryAt !== undefined &&
-              (yield* Ref.get(queryContext))?.query === stop.owner
-            )
-              yield* reconcileClaudeWorkflowStop(subagent, stop, projectClaudeWorkflowMembers);
+            if (input.nativeOutcome !== undefined)
+              yield* workflowStops.observeOutcome(subagent, (yield* Ref.get(queryContext))?.query);
             if ((yield* Ref.get(sessionSubagentsByTaskId)).get(input.taskId) !== subagent) return;
           }
           yield* emitProviderEvent({
@@ -6223,28 +6231,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           return startedAt;
         });
 
-        const settleClosedWorkflowStops = Effect.fn("ClaudeAdapterV2.settleClosedWorkflowStops")(
-          function* (closedQuery: ClaudeLiveQueryContext) {
-            const pending = ([, coordinator]: readonly [string, ActiveClaudeSubagent]) =>
-              coordinator.workflowStop?.owner === closedQuery.query &&
-              coordinator.workflowStop.outcome === "pending";
-            if (!Array.from(yield* Ref.get(sessionSubagentsByTaskId)).some(pending)) return;
-            yield* sdkMessageLock.withPermits(1)(
-              Effect.gen(function* () {
-                for (const coordinator of (yield* Ref.get(sessionSubagentsByTaskId)).values()) {
-                  const stop = coordinator.workflowStop;
-                  if (stop?.owner !== closedQuery.query) continue;
-                  yield* reconcileClaudeWorkflowStop(
-                    coordinator,
-                    stop,
-                    projectClaudeWorkflowMembers,
-                  );
-                }
-              }),
-            );
-          },
-        );
-
         const endSubagentsOfClosedQuery = Effect.fnUntraced(function* (input: {
           readonly closedQuery: ClaudeLiveQueryContext;
           readonly context: ActiveClaudeTurnContext;
@@ -6293,7 +6279,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const endSubagentsOfReplacedQuery = Effect.fnUntraced(function* (
           closedQuery: ClaudeLiveQueryContext,
         ) {
-          yield* settleClosedWorkflowStops(closedQuery);
+          yield* workflowStops.settleClosed(closedQuery.query);
           const context = closedQuery.lastTurn;
           if (context === null) return;
           yield* endSubagentsOfClosedQuery({
@@ -6313,7 +6299,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           closedQuery: ClaudeLiveQueryContext,
           cause?: Cause.Cause<ClaudeAgentSdkQueryRunnerError>,
         ) {
-          yield* settleClosedWorkflowStops(closedQuery);
+          yield* workflowStops.settleClosed(closedQuery.query);
           const current = yield* Ref.get(activeTurn);
           // A replacement query can reuse the native thread id; only this query's turn is ours.
           const context = closedQuery.lastTurn;
@@ -7145,12 +7131,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                       entry.subtype === "task_started" &&
                       entry.task_id === message.task_id,
                   ) ?? false;
-              const stop = registered?.workflowStop;
               const canApplyOutcome =
                 subagentStopOutcomes.has(message.task_id) ||
                 (!hasBufferedStart &&
                   (registered?.task.workflow === undefined ||
-                    (stop?.owner === liveQuery.query && stop.retryAt !== undefined)));
+                    workflowStops.hasTimedOut(registered, liveQuery.query)));
               if (registered !== undefined && settled !== undefined && canApplyOutcome) {
                 yield* discardBufferedSubagentStarts(
                   liveQuery.nativeThreadId,
@@ -10449,15 +10434,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 providerThread.nativeThreadRef?.nativeId,
               ),
             ),
-          stopTask: makeClaudeWorkflowStopCommand({
-            driver: CLAUDE_PROVIDER,
-            getQuery: Ref.get(queryContext),
-            getCoordinator: (taskId) =>
-              Ref.get(sessionSubagentsByTaskId).pipe(Effect.map((tasks) => tasks.get(taskId))),
-            lock: sdkMessageLock,
-            scope: sessionScope,
-            project: projectClaudeWorkflowMembers,
-          }),
+          stopTask: workflowStops.stopTask,
           awaitBackgroundTasks: Effect.fn("ClaudeAdapterV2.awaitBackgroundTasks")(
             function* ({ providerThread, taskIds, awaited }) {
               const nativeThreadId = providerThread.nativeThreadRef?.nativeId;

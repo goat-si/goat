@@ -339,6 +339,69 @@ it.effect.each(["unanswered", "late previous reply"] as const)(
     }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
 );
 
+it.effect.each(["acknowledged", "rejected", "EOF"] as const)(
+  "keeps the first Stop denial after retry until %s",
+  (firstResult) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const harness = yield* makeUnansweredWorkflow();
+      yield* writeHeldDenial(fs, harness.transcript);
+      yield* harness.offerAndWait(
+        frames.workflowSnapshot({ uuid: "first-attempt-denial", state: "error" }),
+      );
+      yield* TestClock.adjust("30 seconds");
+      const retry = yield* harness.start();
+      const second = yield* Effect.raceFirst(
+        Queue.take(harness.sent).pipe(Effect.asSome),
+        Fiber.join(retry).pipe(Effect.andThen(Effect.succeedNone)),
+      );
+      assert.equal(second._tag, "Some");
+      yield* harness.awaitEventsRecorded;
+      assert.deepEqual(heldToolOutcomes(harness), ["running"]);
+      const outcome = firstResult === "acknowledged" ? "interrupted" : "failed";
+      if (firstResult !== "EOF") {
+        yield* harness.offerAndWait(
+          frames.workflowNotification({ uuid: "workflow-stopped-during-retry", status: "stopped" }),
+        );
+        assert.equal(
+          workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status,
+          "cancelled",
+        );
+        assert.deepEqual(heldToolOutcomes(harness), ["running"]);
+        if (firstResult === "acknowledged") {
+          yield* Deferred.succeed(harness.firstReply, undefined);
+        } else {
+          yield* Deferred.fail(
+            harness.firstReply,
+            new ClaudeAgentSdkQueryRunnerError({
+              method: "stopTask",
+              cause: "Rejected first Stop",
+            }),
+          );
+        }
+        yield* harness.awaitUntil(
+          () => heldToolOutcomes(harness).length > 1,
+          "first attempt's tool settled",
+        );
+        assert.deepEqual(heldToolOutcomes(harness), ["running", outcome]);
+        yield* harness.awaitUntil(
+          () =>
+            workflowCoordinatorEvents(harness.events).at(-1)?.subagent.workflow?.agents[0]
+              ?.state === "failed",
+          "first attempt's member outcome projected",
+        );
+        assert.equal(
+          workflowCoordinatorEvents(harness.events).at(-1)?.subagent.workflow?.agents[0]?.outcome,
+          firstResult === "acknowledged" ? "cancelled" : undefined,
+        );
+      }
+      assert.isUndefined(retry.pollUnsafe());
+      yield* Queue.shutdown(harness.sdkMessages);
+      yield* harness.awaitQueryExit(harness.sdkMessages);
+      assert.deepEqual(heldToolOutcomes(harness), ["running", outcome]);
+    }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
+);
+
 it.effect(
   "bounds unresolved native Stop requests for a query and reuses a slot after a reply",
   () =>
