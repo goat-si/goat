@@ -351,6 +351,13 @@ export function useUpdateEverything(
         includesLocal && local.downloadLocal
           ? local.downloadLocal(reportLocalError)
           : Promise.resolve(true);
+      const stagingFailed = (error: unknown): ServerUpdateOutcome => ({
+        status: "failed",
+        message:
+          error instanceof Error
+            ? `Could not stage the server update: ${error.message}`
+            : "Could not stage the server update.",
+      });
       const staged = new Map(
         chosenServers.map((server) => {
           const key = server.environmentId;
@@ -364,7 +371,13 @@ export function useUpdateEverything(
                     environmentId: key,
                     input: { targetVersion: server.targetVersion, stageOnly: true },
                   })
-                  .catch(() => undefined)
+                  .then(
+                    (result) =>
+                      result._tag === "Failure"
+                        ? stagingFailed(squashAtomCommandFailure(result))
+                        : undefined,
+                    stagingFailed,
+                  )
               : undefined;
           return [key, stage] as const;
         }),
@@ -376,8 +389,10 @@ export function useUpdateEverything(
       const remote = Promise.all([
         ...chosenServers.map(async (server) => {
           const key = server.environmentId;
+          const stagingFailure = staged.get(key);
           const outcome = runWhenIdle({
-            beforeIdle: Promise.all([providerWork, staged.get(key)]),
+            beforeIdle: providerWork,
+            ...(stagingFailure === undefined ? {} : { stagingFailure }),
             idle: () => waitForIdleMachine(key, server.environmentId),
             attempt: () => updateServer(server, { quiet: true, whenIdle: true }),
             isBusy: isBusyRefusal,

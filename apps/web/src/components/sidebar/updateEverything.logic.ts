@@ -349,12 +349,18 @@ export function updateButtonLabel(count: number): string {
  */
 export async function runWhenIdle<A>(steps: {
   readonly beforeIdle?: Promise<unknown>;
+  readonly stagingFailure?: Promise<A | undefined>;
   readonly idle: () => Promise<boolean>;
   readonly attempt: () => Promise<A>;
   readonly isBusy: (result: A) => boolean;
   readonly retryLater: () => Promise<boolean>;
 }): Promise<A | null> {
-  if (steps.beforeIdle !== undefined) await steps.beforeIdle;
+  if (steps.stagingFailure !== undefined) {
+    const [, failure] = await Promise.all([steps.beforeIdle, steps.stagingFailure]);
+    if (failure !== undefined) return failure;
+  } else if (steps.beforeIdle !== undefined) {
+    await steps.beforeIdle;
+  }
   for (;;) {
     if (!(await steps.idle())) return null;
     const result = await steps.attempt();

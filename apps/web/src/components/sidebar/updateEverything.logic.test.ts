@@ -350,6 +350,24 @@ describe("runWhenIdle", () => {
     },
   );
 
+  it("reports a staging failure without starting idle checks or restarting the server", async () => {
+    const staged = { status: "failed", message: "Could not stage the update" };
+    const restart = vi.fn(async () => ({ status: "updated", message: "" }));
+    const idle = vi.fn(async () => true);
+
+    await expect(
+      runWhenIdle({
+        stagingFailure: Promise.resolve(staged),
+        idle,
+        attempt: restart,
+        isBusy: () => false,
+        retryLater: async () => true,
+      }),
+    ).resolves.toEqual(staged);
+    expect(idle).not.toHaveBeenCalled();
+    expect(restart).not.toHaveBeenCalled();
+  });
+
   it("never attempts when a person stops waiting", async () => {
     let attempted = false;
     const result = await runWhenIdle({
