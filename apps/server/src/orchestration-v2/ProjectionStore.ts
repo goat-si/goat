@@ -1,4 +1,7 @@
-import { upsertProviderThreadProjection } from "./projectionProviderThread.ts";
+import {
+  attributePendingBackgroundTasks,
+  upsertProviderThreadProjection,
+} from "./projectionProviderThread.ts";
 import { parentClosed } from "./goat/LimitRecoveryParent.ts";
 import * as ThreadNewestRun from "./goat/ThreadNewestRun.ts";
 import { replayActivityBlockers, selectThreadRecords } from "./goat/ProjectionStoreMemoryReads.ts";
@@ -1611,7 +1614,22 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               break;
             }
             case "provider-thread.updated": {
-              const payloadJson = yield* encodeProviderThreadPayload(event.payload);
+              const existing = event.payload.pendingBackgroundTasks?.some(
+                (task) => task.runId === undefined,
+              )
+                ? (yield* sql<PayloadRow>`
+                    SELECT payload_json FROM orchestration_v2_projection_provider_threads
+                    WHERE provider_thread_id = ${event.payload.id}
+                  `)[0]
+                : undefined;
+              const providerThread = attributePendingBackgroundTasks(
+                event.payload,
+                existing === undefined
+                  ? undefined
+                  : yield* decodeProviderThreadPayload(existing.payload_json),
+                event.runId,
+              );
+              const payloadJson = yield* encodeProviderThreadPayload(providerThread);
               const payload = parseEncodedPayload(payloadJson);
               yield* upsertProviderThreadProjection(
                 sql,

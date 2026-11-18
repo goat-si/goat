@@ -1,4 +1,4 @@
-import type { OrchestrationV2ProviderThread } from "@goat/contracts";
+import type { OrchestrationV2ProviderThread, RunId } from "@goat/contracts";
 import type * as SqlClient from "effect/sql/SqlClient";
 
 export function upsertProviderThreadProjection(
@@ -50,4 +50,23 @@ export function upsertProviderThreadProjection(
       updated_at = excluded.updated_at,
       payload_json = excluded.payload_json
   `;
+}
+
+// Adapters resend whole rosters. Keep an unstamped entry unattributed once observed.
+export function attributePendingBackgroundTasks(
+  next: OrchestrationV2ProviderThread,
+  previous: Pick<OrchestrationV2ProviderThread, "pendingBackgroundTasks"> | undefined,
+  runId: RunId | null | undefined,
+): OrchestrationV2ProviderThread {
+  const tasks = next.pendingBackgroundTasks ?? [];
+  if (tasks.every((task) => task.runId !== undefined)) return next;
+  const known = new Map(previous?.pendingBackgroundTasks?.map((task) => [task.taskId, task.runId]));
+  return {
+    ...next,
+    pendingBackgroundTasks: tasks.map((task) => {
+      if (task.runId !== undefined) return task;
+      const owner = known.has(task.taskId) ? known.get(task.taskId) : runId;
+      return owner == null ? task : { ...task, runId: owner };
+    }),
+  };
 }

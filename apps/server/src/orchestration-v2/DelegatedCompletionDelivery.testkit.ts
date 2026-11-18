@@ -10,6 +10,7 @@ import {
   MessageId,
   type ModelSelection,
   type OrchestrationV2Run,
+  type OrchestrationV2ProviderThread,
   NodeId,
   ProjectId,
   ProviderDriverKind,
@@ -658,3 +659,66 @@ export const recoverChildWithIndependentParentWake = Effect.fn(
   yield* orchestrator.recoverDelegatedTask(child.childThreadId, { sourceRunId: sourceRun.id });
   return yield* requests.take;
 });
+
+export const finishFollowupWithAwaitedTask = Effect.fn("finishFollowupWithAwaitedTask")(
+  function* () {
+    const seeded = yield* seedUnheldFollowup();
+    const { orchestrator, sink, childThreadId, taskId } = seeded;
+    const now = yield* DateTime.now;
+    const child = yield* orchestrator.getThreadProjection(childThreadId);
+    const followup = child.runs.find((run) => run.delegatedTaskId === taskId);
+    if (followup === undefined) return yield* Effect.die("Follow-up run missing");
+    const providerThread: OrchestrationV2ProviderThread = {
+      id: ProviderThreadId.make("provider-thread:held-followup-child"),
+      driver,
+      providerInstanceId: modelSelection.instanceId,
+      providerSessionId: null,
+      appThreadId: childThreadId,
+      ownerNodeId: null,
+      nativeThreadRef: null,
+      nativeConversationHeadRef: null,
+      status: "idle",
+      firstRunOrdinal: 2,
+      lastRunOrdinal: 2,
+      handoffIds: [],
+      forkedFrom: null,
+      createdAt: now,
+      updatedAt: now,
+      pendingBackgroundTasks: [{ kind: "command", taskId: "followup-command", awaited: true }],
+    };
+    yield* sink.write({
+      commandId: reconcileCommandId("finish-followup-with-await"),
+      events: [
+        {
+          id: EventId.make("event:followup-roster"),
+          type: "provider-thread.updated",
+          threadId: childThreadId,
+          runId: followup.id,
+          occurredAt: now,
+          payload: providerThread,
+        },
+        {
+          id: EventId.make("event:completed-followup"),
+          type: "run.updated",
+          threadId: childThreadId,
+          runId: followup.id,
+          occurredAt: now,
+          payload: {
+            ...followup,
+            status: "completed",
+            startedAt: now,
+            completedAt: now,
+            providerThreadId: providerThread.id,
+          },
+        },
+      ],
+    });
+    return {
+      ...seeded,
+      now,
+      followup,
+      providerThread,
+      pending: orchestrator.delegatedTaskResultPending(childThreadId, taskId),
+    };
+  },
+);

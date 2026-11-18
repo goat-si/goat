@@ -3,6 +3,7 @@ import {
   runEvent,
   seedRestartCancelledChild,
   seedUnheldFollowup,
+  finishFollowupWithAwaitedTask,
   recoverChildWithIndependentParentWake,
 } from "./DelegatedCompletionDelivery.testkit.ts";
 import { derive } from "@goat/provider-core/server/IdAllocator";
@@ -1240,6 +1241,13 @@ it.layer(layerTest)("delegated completion delivery repairs", (it) => {
 it.layer(Layer.merge(layerTest, ProviderContinuationRequests.layer))(
   "subagent follow-ups",
   (it) => {
+    it.effect("holds a finished follow-up for its awaited provider task", () =>
+      Effect.gen(function* () {
+        const { pending } = yield* finishFollowupWithAwaitedTask();
+        assert.isTrue(yield* pending);
+      }),
+    );
+
     it.effect("idles the parent task when runtime recovery holds its queued follow-up", () =>
       Effect.gen(function* () {
         const { sink, orchestrator, threadId, taskId, childThreadId } = yield* seedUnheldFollowup();

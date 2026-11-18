@@ -7,6 +7,7 @@ import type {
   OrchestrationV2TurnItem,
   ProviderDriverKind,
   ProviderTurnId,
+  RunId,
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
@@ -109,4 +110,16 @@ export function subagentFollowupArtifacts(input: {
     result: null,
   };
   return { task, node, turnItem };
+}
+
+export function followupTaskForWake(
+  runs: ReadonlyArray<OrchestrationV2Run>,
+  wakeRunId: RunId,
+  aboutRunId: RunId | undefined,
+): NodeId | undefined {
+  return aboutRunId !== undefined
+    ? runs.find((run) => run.id === aboutRunId)?.delegatedTaskId
+    : runs
+        .filter((run) => run.id !== wakeRunId && run.delegatedTaskId !== undefined)
+        .toSorted((a, b) => b.ordinal - a.ordinal)[0]?.delegatedTaskId;
 }
