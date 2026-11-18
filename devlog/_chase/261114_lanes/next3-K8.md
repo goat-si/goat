@@ -161,3 +161,87 @@ Reviewed head `6c3f046c0046dfbfe1b02f4befbf2ac30272dde3`.
 - P3. Upstream `e93f6ea361` exposes Electron Find for tabs with the native find bridge. Share the rendering and bridge checks between the view, palette and keyboard path.
 - `79daf43c1c` C4. Write an expiring marker only when a desktop uses the managed SSH home. Older launchers ignore the marker and have their existing race during the handoff. A newer launcher with an older desktop proceeds when the marker is absent. Ignore malformed, stale and foreign-home markers. Bound the wait, preserve live-runtime adoption, and clear failed/cancelled installs' markers. One file, no RPC or database changes.
 - [GOAT #3683](https://github.com/goat-si/goat/issues/3683) C4. A server advertises native-tab Stop and applies its viewer-control policy before issuing CDP Stop and settling loading. Older clients keep their desktop IPC path. New clients use that path with older servers. Deny unauthorized or competing controllers and handle missing tabs without changing state. The capability and request are additive. There are no persisted rows.
+
+## Fix round 1 delivery
+
+| Item | Commit | Failing-first observation |
+|---|---|---|
+| P2-1 | `b6a947a76e` | Connections, Cloud Machines and catalog each passed a resolved port where the caller left it unset. Three failures. The browser tests exercise registration and the real SSH manager fixture checks forwarded argv ports 2222 and 2223 across reconnect from its savable target. |
+| P2-2 | `dd7d4bc056` | Disable and failed activity reads retained the inhibitor, and the spawn options had no termination bound. Three failures. The production layer reaps a real helper that ignores TERM in the passing test. |
+| P2-3 | `1bc4675bf1` | EXPLAIN QUERY PLAN showed a scan without the partial-index predicate. One failure. The final test checks the covering index seek and that disable drops the activity subscription. |
+| P2-4 | `1a58d3c3b2` | Markdown launched a different same-name result than the literal icon path. The server accepted a missing bundle with a usable mock OS command. Both reproduced before the change. The existing error tag carries an optional bundle-validation reason. |
+| P3 | `2d6a1d6ca0` | A bridge with only findInPage exposed Find in the palette. One failure. The palette, route shortcut and view share the capability and native-tab checks. |
+| `79daf43c1c` | `66e02bbe48` | A shared-home desktop stopped without publishing a marker, and the remote probe did not wait on an active marker. Two failures. The POSIX fixtures check valid, expired, malformed and implausibly future timestamps. Existing native Windows ownership refusal still applies when the shared home contains a desktop-owned runtime. |
+| #3683 | `481820d0db` | An advertised native Stop still called Electron instead of sending a request to the server. One failure. The server-side test covers CDP Stop, settling loading, refusal while another viewer has control and the missing tab. The older-capability browser case exercises Electron IPC. |
+
+The keep-awake typecheck and subscription proof were completed in follow-up `902d8c6251`. No published commits were rewritten.
+
+`git merge-tree --write-tree HEAD origin/chase/t3-261114-next3` exited 0 against `061fd0fee904c2abaada9efb5cfdb9ea58b18919`. The lane retains the previously merged integration parent `2c0e0002a996ec5d46c708919be5a43f579176fa`.
+
+### Pre-merge focused checks
+
+`vp test run …` from the repository root exited 0 with 182 passed across 11 files. `GOAT_TEST_TMP_GUARD=fail vp test run …` from `apps/server` exited 0 with 55 passed across five files, including every changed server test. Whole files ran with no test-name filtering.
+
+NOT RUN: lane CI or PR, integrated real-client P1, native device capture, live shared-home desktop update and SSH adoption on a real peer, live Windows PowerShell runtime, OS sleep/wake, and live mixed-version desktop/server pairs.
+
+### Gate recovery
+
+The completed `check:changed` run on `902d8c6251541c62850ea7dd1e24b9fa1d5ca0b4` exited 1. All static checks passed. Its 750 selected files gave 13,292 passing tests, 18 skips and one failure. The launch-script byte invariant rejected the shared-home guard in the reusable generator's default output. The recovery keeps the default bytes and opts in only at owning SSH launch call sites. The original byte comparison is unchanged. The actual manager transport fixture also checks that its forwarded launch carries the guard.
+
+Recovery commit `1acd6ed4bf` preserved the reusable script bytes and added a transport assertion for the guard. Its whole-file SSH command exited 0 with 169 passed. Counts were `tunnel.core.test.ts` 131, `tunnel.ensure-flight.test.ts` 10, and `runtimeProbe.invocations.test.ts` 28. A fresh integration conflict check exited 0 on the recovery head.
+
+The first completed gate on `1acd6ed4bf9bf7ccb4f0036f97207d21c030e317` exited 1. All static checks and the unchanged byte invariant passed. The test stage reported 13,291 passed, 18 skipped and two failures across 750 files. `runnerProcess.test.ts` exceeded the graceful stop deadline and `FileBrowserPanel.browser.test.tsx` focused the wrong menu item. Both had passed in the preceding broad gate. Their whole-file rerun on this exact head exited 0 with 20 passed. The two failure paths have no direct changes in the recovery commit.
+
+
+### Conflicting integration advance
+
+The unchanged gate on `1acd6ed4bf9bf7ccb4f0036f97207d21c030e317` subsequently exited 0. All static steps and the test step passed with 13,293 passed, 18 skipped and 750 selected files.
+
+The delivery conflict check against `9af811b8fc3d2fc0039efbafee606ca358d5a490` found conflicts in `externalLauncher.ts` and `MarkdownFileLink.tsx`. Merge `a4c6d466a96b45ca44747a012cf06c3b529128b1` keeps the incoming Windows ShellExecute path with the expanded target and keeps both the context-menu source and app-icon state. The merge did not change the lockfile.
+
+Whole-file focused runs on the merge exited 0 with 318 passed across 12 files. From `apps/server`, two `GOAT_TEST_TMP_GUARD=fail vp test run …` batches exited 0 with 62 and 48 passed. Together they cover every changed server test and the existing server Stop suite.
+
+The gate on `a4c6d466a96b45ca44747a012cf06c3b529128b1` exited 0. Its two batches gave 13,386 passed and 26 skipped across 756 files. The branch was pushed at that SHA. Post-push conflict detection found a further integration advance at `593f1a546485e78216218641731d15918bc1e34c` affecting desktop Manager imports and server browser controls. The authorized merge `1d5751624594866e8ad3daaf30ced0b559bbaad4` keeps U08's logical control registry and its renderer recovery, with K8's viewer-authorized loading Stop in `ServerBrowserNativeStop.ts`. Both sides' desktop Manager imports remain. The merge did not change the lockfile.
+
+On the U08 merge, the whole-file focus command exited 0 with 451 passed and two platform skips in 20 files. From `apps/server`, `GOAT_TEST_TMP_GUARD=fail vp test run …` exited 0 with 110 passed in seven files, including all changed server tests.
+
+| File | Passed | Skipped |
+|---|---:|---:|
+| `packages/ssh/src/command.diagnostics.test.ts` | 8 | 0 |
+| `packages/ssh/src/runtimeFactsScripts.test.ts` | 20 | 0 |
+| `packages/ssh/src/runtimeProbe.invocations.test.ts` | 28 | 0 |
+| `packages/ssh/src/runtimeWindows.test.ts` | 17 | 0 |
+| `packages/ssh/src/tunnel.core.test.ts` | 131 | 0 |
+| `packages/ssh/src/tunnel.ensure-flight.test.ts` | 10 | 0 |
+| `packages/ssh/src/tunnel.launch-identity.test.ts` | 6 | 2 |
+| `packages/ssh/src/tunnel.managed-reuse.test.ts` | 2 | 0 |
+| `packages/client-runtime/src/connection/catalogHost.test.ts` | 16 | 0 |
+| `apps/web/src/remoteOpen.test.ts` | 21 | 0 |
+| `apps/web/src/components/commandPaletteFindItems.test.tsx` | 1 | 0 |
+| `apps/web/src/state/primaryEnvironment.test.ts` | 3 | 0 |
+| `apps/web/src/components/ChatMarkdown.browser.test.tsx` | 34 | 0 |
+| `apps/web/src/components/preview/PreviewView.browser.test.tsx` | 19 | 0 |
+| `apps/web/src/components/settings/CloudMachinesSettings.browser.test.tsx` | 3 | 0 |
+| `apps/web/src/components/settings/ConnectionEnvironmentsSection.browser.test.tsx` | 25 | 0 |
+| `apps/desktop/src/preview/Manager.helpers.test.ts` | 6 | 0 |
+| `apps/desktop/src/preview/Manager.test.ts` | 65 | 0 |
+| `apps/desktop/src/updates/DesktopUpdates.sharedHome.test.ts` | 1 | 0 |
+| `apps/desktop/src/updates/DesktopUpdates.test.ts` | 35 | 0 |
+| `apps/server/src/assets/NativeAppIconResolver.test.ts` | 1 | 0 |
+| `apps/server/src/background/KeepAwake.test.ts` | 7 | 0 |
+| `apps/server/src/auth/RpcAuthorization.test.ts` | 47 | 0 |
+| `apps/server/src/process/externalLauncher.test.ts` | 33 | 0 |
+| `apps/server/src/preview/ServerBrowser.desktopSize.test.ts` | 4 | 0 |
+| `apps/server/src/preview/ServerBrowser.stopLoading.test.ts` | 7 | 0 |
+| `apps/server/src/preview/ServerBrowserStream.test.ts` | 11 | 0 |
+
+The first gate on `1d5751624594866e8ad3daaf30ced0b559bbaad4` exited 1. Static checks and the 5,035-test server batch passed. The workspace batch had one failure in file-browser keyboard dismissal and 8,372 passes. The browser fallback's existing keyboard suite starts on the first enabled action, while the file-browser fixture expected the prior pointer action to have focus when the menu reopened. The fixture now parks the pointer and navigates to Copy mention before Escape. Its pointer-copy, focus and shadow-row restoration assertions are intact.
+
+Fixture recovery `dd6456ad38` passed 23 tests in two whole browser files on the final candidate. `FileBrowserPanel.browser.test.tsx` passed 17 and `contextMenuFallback.keyboard.browser.test.ts` passed six. The current integration tip at the final gate launch was `a3255d1fd41b38f1d767a982e1c11b9361e1d842`. The conflict check against it exited 0, so the merge base remains `593f1a546485e78216218641731d15918bc1e34c`.
+
+
+### READY receipt
+
+`chase/t3-261114-next3-k8` was fast-forwarded and read back at `dd6456ad3878645fb385713c0acfde5b8e2906a8`. The gate used merge base `593f1a546485e78216218641731d15918bc1e34c` and a clean tracked worktree. `vp run check:changed origin/chase/t3-261114-next3` exited 0. Format, lint, both Knip stages, GraphQL, both agent checks and 38-package typecheck passed. The server batch passed 5,035 tests with 12 skipped. The workspace batch passed 8,373 tests with 14 skipped. Total 13,408 passed, 26 skipped and zero failures across 756 selected files.
+
+NOT RUN: lane hosted CI, lane PR creation, P1 real-client and native capture, a real shared-home desktop update with SSH adoption, live native Windows PowerShell or OS sleep/wake, and live mixed-version pairs.
