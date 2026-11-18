@@ -172,6 +172,7 @@ export interface AcpSessionRuntimeOptions {
     result: EffectAcpSchema.InitializeResponse,
   ) => Effect.Effect<void, never>;
   readonly acpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
+  readonly httpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
   readonly protocolLogging?: {
     readonly logIncoming?: boolean;
@@ -739,6 +740,7 @@ export interface AcpSessionRuntimeStartResult {
 export interface AcpSessionActivationOptions {
   readonly mcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly acpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
+  readonly httpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
 }
 
 export class AcpSessionRuntime extends Context.Service<
@@ -1727,6 +1729,14 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
     initializeResult: EffectAcpSchema.InitializeResponse,
     activationOptions?: AcpSessionActivationOptions,
   ): ReadonlyArray<EffectAcpSchema.McpServer> => {
+    const httpServers =
+      activationOptions === undefined ? options.httpMcpServers : activationOptions.httpMcpServers;
+    if (
+      initializeResult.agentCapabilities?.mcpCapabilities?.http === true &&
+      httpServers !== undefined
+    ) {
+      return httpServers;
+    }
     const acpServers = activationOptions?.acpMcpServers ?? options.acpMcpServers ?? [];
     if (
       initializeResult.agentCapabilities?.mcpCapabilities?.acp === true &&

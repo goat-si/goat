@@ -32,6 +32,7 @@ export interface AcpAdapterV2RuntimeInput {
   readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
   readonly mcpServers: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly acpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
+  readonly httpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly processEnvironment?: NodeJS.ProcessEnv;
   readonly sessionEnvironment?: NodeJS.ProcessEnv | undefined;
   readonly sessionLaunch?: unknown;
@@ -109,6 +110,7 @@ export interface AcpAdapterV2ExtensionContext {
  * the agent's reply stays on `cause`.
  */
 export interface AcpAdapterV2Flavor {
+  readonly preferHttpMcp?: boolean;
   readonly buildPrompt?: (input: {
     readonly text: string;
     readonly attachments: ReadonlyArray<ChatAttachment>;

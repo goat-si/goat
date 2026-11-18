@@ -1,3 +1,4 @@
+import { prefersHttpMcpTransport } from "./mcpTransport.ts";
 import {
   extractClaudeSubagentUpdate,
   extractClaudeSubagentSessionEvent,
@@ -226,6 +227,7 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
   const copilotRouting = isCopilot ? makeCopilotSubagentRouting() : undefined;
   const flavor: AcpAdapterV2Flavor = {
     driver: ACP_REGISTRY_PROVIDER,
+    preferHttpMcp: prefersHttpMcpTransport(options.settings),
     // Cancelling a Copilot prompt also kills the background agents it started.
     capabilities: isCopilot
       ? {

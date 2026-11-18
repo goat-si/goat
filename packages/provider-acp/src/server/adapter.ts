@@ -582,7 +582,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
   const readMcpContext = (threadId: ThreadId | null) =>
     threadId === null
       ? Effect.succeed(acpMcpContext(undefined, self))
-      : mcpSessions.read(threadId).pipe(Effect.map((session) => acpMcpContext(session, self)));
+      : mcpSessions
+          .read(threadId)
+          .pipe(Effect.map((session) => acpMcpContext(session, self, flavor.preferHttpMcp)));
   // Claims belong to native conversations, not runtime attachments. Unknown resumed
   // IDs stay silent until this adapter advertises tools; replacement IDs start empty.
   const memoryToolClaims = new Set<string>();
@@ -1282,8 +1284,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           return {
             cwd: input.runtimePolicy.cwd ?? process.cwd(),
             runtimePolicy: input.runtimePolicy,
-            mcpServers: mcpContext.servers,
-            acpMcpServers: mcpContext.acpServers,
+            ...acpMcpActivation(mcpContext),
             sessionEnvironment,
             sessionLaunch,
             ...(mcpContext.processEnvironment === undefined
