@@ -820,6 +820,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           EffectAcpSchema.SessionUpdate,
           { sessionUpdate: "state_update" }
         > | null = null;
+        // The root's last reportForegroundWork state; undefined until the agent reports one.
+        let rootForegroundWork: "running" | "idle" | undefined;
+        let rootForegroundAwakened = false;
         const agentRequests = new Set<object>();
         const nativeChildren = new Map<string, AcpNativeChildSession>();
         const extractSubagentUpdate = (tool: AcpToolCallState) =>
@@ -864,6 +867,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             continuationRequests !== undefined &&
             setup.initializeResult.protocolVersion === 2;
           agentWork = null;
+          rootForegroundWork = undefined;
+          rootForegroundAwakened = false;
           agentRequests.clear();
           nativeChildren.clear();
           yield* Ref.set(activeSessionSetup, setup);
@@ -3505,6 +3510,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const pending = yield* continuationPermit.withPermit(
             Effect.gen(function* () {
               if (yield* Ref.get(continuationClosed)) return Option.none();
+              if (flavor.requireForegroundWakeTransition === true && !rootForegroundAwakened)
+                return Option.none();
               if (yield* Ref.get(stoppedRunQuarantine)) return Option.none();
               if (yield* Ref.get(continuationRequested)) return Option.none();
               const route = yield* Ref.get(lastTurnRoute);
@@ -5754,7 +5761,16 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   handlerGeneration,
                   Effect.gen(function* () {
                     if (yield* Ref.get(stoppedRunQuarantine)) return;
+                    if ((yield* Ref.get(activeSessionId)) !== notice.sessionId) return;
                     const context = yield* Ref.get(activeTurn);
+                    if (
+                      notice.state === "running" &&
+                      rootForegroundWork === "idle" &&
+                      (context === null || context.finalized)
+                    ) {
+                      rootForegroundAwakened = true;
+                    }
+                    rootForegroundWork = notice.state;
                     if (
                       context === null ||
                       context.finalized ||
@@ -7297,6 +7313,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             yield* projectDeferredCarryoverTerminals(rehydratedCarryoverSubagents);
             // Retain projected terminals during wake drain so monotonic guards reject replayed spawns.
             if (isContinuationTurn) {
+              rootForegroundAwakened = false;
               yield* Ref.set(continuationRequested, false);
               yield* Ref.update(wakeReports, ({ reports, offered }) => ({
                 reports: new Map([...reports].filter(([key]) => !offered.has(key))),
@@ -7332,6 +7349,17 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 ),
                 Effect.map((drained) => drained.length),
               );
+              // A root woken after foreground idle ends on its next idle report.
+              if (drainedWakeCount > 0 && rootForegroundWork !== undefined) {
+                yield* runtimeCallbackPermit.withPermit(
+                  Effect.suspend(() => {
+                    if (rootForegroundWork === "idle") return finalizeTurn(context, "completed");
+                    context.workAccepted = true;
+                    return Effect.void;
+                  }),
+                );
+                return;
+              }
               context.promptSettled = true;
               context.promptSettledStatus = "completed";
               if (drainedWakeCount === 0) {
