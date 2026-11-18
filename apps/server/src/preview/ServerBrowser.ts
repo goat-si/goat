@@ -63,7 +63,7 @@ import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
-import type { CDPSession, Download, FileChooser, Page } from "playwright-core";
+import type { CDPSession, Download, Page } from "playwright-core";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -118,7 +118,7 @@ import { makeRendering, UNATTACHED_FILL_VIEWPORT } from "./ServerBrowserRenderin
 import { inputFence } from "./PreviewInputFence.ts";
 import { PopupNavigationRequests } from "./PopupNavigationRequests.ts";
 import { recordCopies, recordFrameCopies, dispatchViewerKey } from "./ServerBrowserClipboard.ts";
-import * as PreviewUpload from "./PreviewUpload.ts";
+import { makeFileChoosers } from "./ServerBrowserFileChooser.ts";
 import { makeContextPreparer, startBrowserWatchers } from "./popupWatchers.ts";
 import { closePopupOnAbort, inspectPopup, type AdoptedPage } from "./popupAdmission.ts";
 import { closeUnadoptedPopup } from "./popupAdmission.ts";
@@ -287,6 +287,14 @@ const make = Effect.gen(function* () {
   const readReadiness = yield* ServerBrowserReadiness.makeReadinessReader;
 
   const tabs = new Map<string, ServerTab>();
+  const {
+    answerFileChooser,
+    closeFileChooser,
+    isFileChooserCurrent,
+    offerFileChooser,
+    pushFileChooser,
+    uploadFiles,
+  } = makeFileChoosers(tabs);
   const screen = ServerBrowserScreen.makeSurface<ServerTab>(
     (threadId, tabId) => tabs.get(tabKey(threadId, tabId)),
     (key, cursor) => runFork(desktopChannel.cursorState?.(key, cursor) ?? Effect.void),
@@ -908,121 +916,6 @@ const make = Effect.gen(function* () {
       await download.delete().catch(constVoid);
     }
   };
-
-  const fileChooserMessage = (tab: ServerTab): ServerBrowserViewerOutput | null =>
-    tab.fileChooser
-      ? {
-          _tag: "fileChooser",
-          id: tab.fileChooser.id,
-          multiple: tab.fileChooser.chooser.isMultiple(),
-          accept: tab.fileChooser.accept,
-        }
-      : null;
-
-  // Not isConnected: upload helpers often click an input never added to the page. The handle's
-  // context is destroyed with its document, so a replaced document rejects.
-  const isFileChooserCurrent = (chooser: FileChooser) =>
-    chooser
-      .element()
-      .evaluate(
-        (element) =>
-          element.ownerDocument === (globalThis as unknown as { document: unknown }).document,
-      )
-      .catch(() => false);
-
-  const offerFileChooser = async (tab: ServerTab, chooser: FileChooser) => {
-    const previous = tab.fileChooser;
-    const accept =
-      (await chooser
-        .element()
-        .getAttribute("accept")
-        .catch(() => null)) ?? "";
-    if (!(await isFileChooserCurrent(chooser))) return;
-    if (previous) closeFileChooser(tab);
-    tab.fileChooser = {
-      id: NodeCrypto.randomUUID(),
-      chooser,
-      accept: accept.slice(0, 1024),
-      offeredTo: null,
-    };
-    pushFileChooser(tab);
-  };
-
-  const pushFileChooser = (tab: ServerTab) => {
-    const open = tab.fileChooser;
-    const controller = [...tab.viewers].find((viewer) => viewer.id === tab.control.controller);
-    if (!open || !controller) return;
-    if (open.offeredTo !== controller.id) {
-      tab.fileChooser = { ...open, id: NodeCrypto.randomUUID(), offeredTo: controller.id };
-      if (open.offeredTo !== null)
-        for (const viewer of tab.viewers) viewer.push({ _tag: "fileChooserClosed", id: open.id });
-    }
-    const message = fileChooserMessage(tab);
-    if (message) controller.push(message);
-  };
-
-  const closeFileChooser = (tab: ServerTab) => {
-    const open = tab.fileChooser;
-    if (!open) return;
-    tab.fileChooser = null;
-    for (const viewer of tab.viewers) viewer.push({ _tag: "fileChooserClosed", id: open.id });
-  };
-
-  const setChooserFiles = async (
-    input: Parameters<ServerBrowser["Service"]["answerFileChooser"]>[0],
-  ) => {
-    const tab = tabs.get(tabKey(input.threadId, input.tabId));
-    const open = tab?.fileChooser;
-    if (
-      !tab ||
-      !open ||
-      open.id !== input.chooserId ||
-      open.offeredTo === null ||
-      open.offeredTo !== tab.control.controller
-    )
-      return false;
-    if (input.files.length > 0) {
-      await open.chooser.setFiles(
-        open.chooser.isMultiple() ? [...input.files] : input.files.slice(0, 1),
-      );
-    }
-    if (tab.fileChooser === open) closeFileChooser(tab);
-    return true;
-  };
-  const uploadFiles = async (
-    tab: ServerTab,
-    input: PreviewAutomationUploadInput,
-    gate: ServerBrowserPage.DispatchGate,
-  ) => {
-    await PreviewUpload.validatePaths(input.paths);
-    if (await PreviewUpload.setInputFiles(tab.page, tab.cdp, input, gate)) return undefined;
-    const open = tab.fileChooser;
-    if (!open)
-      throw new ServerBrowserPage.ServerBrowserOperationError(
-        "PreviewAutomationExecutionError",
-        "No file picker is open. Click the page's upload control first, or pass the file input's locator.",
-      );
-    if (input.paths.length > 1 && !open.chooser.isMultiple())
-      throw new ServerBrowserPage.ServerBrowserOperationError(
-        "PreviewAutomationExecutionError",
-        "This file picker accepts one file.",
-      );
-    if (input.paths.length > 0) {
-      const channel = gate.channel;
-      if (!channel) throw new Error("An action channel is required for upload.");
-      const element = await channel.call(() => open.chooser.element());
-      try {
-        await PreviewUpload.uploadInto(tab.cdp, element, input.paths, gate);
-      } finally {
-        if (!gate.signal?.aborted) void channel.dispose(element).catch(constVoid);
-      }
-    } else await gate();
-    if (tab.fileChooser === open) closeFileChooser(tab);
-    return undefined;
-  };
-
-  const answerFileChooser: ServerBrowser["Service"]["answerFileChooser"] = (input) =>
-    Effect.promise(() => setChooserFiles(input).catch(() => false));
 
   const openDownload: ServerBrowser["Service"]["openDownload"] = (input) =>
     Effect.sync(() => {

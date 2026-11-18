@@ -1,3 +1,7 @@
+import {
+  PreviewAutomationRemoteDiagnosticFields,
+  PreviewAutomationOptionalRemoteDiagnosticFields,
+} from "./previewAutomationDiagnostics.ts";
 import { ActionOutcomeSafety } from "./actionOutcomeSafety.ts";
 import { PreviewAutomationOperation } from "./previewAutomationOperations.ts";
 export * from "./previewAutomationOperations.ts";
@@ -720,24 +724,6 @@ const PreviewAutomationRequestErrorFields = {
   tabId: Schema.optional(PreviewTabId),
   timeoutMs: Schema.Int.check(Schema.isGreaterThan(0)),
   dispatched: Schema.optional(Schema.Boolean),
-};
-
-const PreviewAutomationRemoteDiagnosticFields = {
-  remoteTag: TrimmedNonEmptyString,
-  remoteMessageLength: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-  remoteDetailKind: Schema.optional(
-    Schema.Literals(["null", "array", "object", "string", "number", "boolean"]),
-  ),
-  cause: Schema.Defect(),
-};
-
-const PreviewAutomationOptionalRemoteDiagnosticFields = {
-  remoteTag: Schema.optional(TrimmedNonEmptyString),
-  remoteMessageLength: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
-  remoteDetailKind: Schema.optional(
-    Schema.Literals(["null", "array", "object", "string", "number", "boolean"]),
-  ),
-  cause: Schema.optional(Schema.Defect()),
 };
 
 export class PreviewAutomationNoAvailableHostError extends Schema.TaggedError<PreviewAutomationNoAvailableHostError>()(

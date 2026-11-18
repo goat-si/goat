@@ -57,7 +57,7 @@ import {
   scope,
   fileChooserElement,
   makeFrame,
-  makeSession,
+  makePageContext,
   mockCopy,
   refClickTarget,
   stallViewer,
@@ -101,111 +101,21 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
   },
 }));
 
-export function makeContext(
-  onClose?: (context: BrowserContext) => void,
-  initialUrl = "about:blank",
-) {
-  const events = new NodeEvents.EventEmitter();
-  const nativeFileChooser = vi.fn();
-  const setChooserFiles = vi.fn(async (_files: unknown) => {});
-  const sessions: ReturnType<typeof makeSession>[] = [];
-  let url = initialUrl;
-  let viewport: ReturnType<Page["viewportSize"]> = { width: 1280, height: 800 };
-  const cssViewport = { width: 1920, height: 1080 };
-  let closed = false;
-  let contextClosed = false;
-  const page = {
-    on: (name: string, callback: (...args: unknown[]) => void) => events.on(name, callback),
-    once: (name: string, callback: (...args: unknown[]) => void) => events.once(name, callback),
-    off: (name: string, callback: (...args: unknown[]) => void) => events.off(name, callback),
-    emit: (name: string, ...args: unknown[]) => events.emit(name, ...args),
-    emitConsole: (text: string, level = "log", args: unknown[] = [text]) =>
-      events.emit("console", { type: () => level, text: () => text, args: () => args }),
-    nativeFileChooser,
-    setChooserFiles,
-    openFileChooser: () => {
-      if (
-        !events.emit("filechooser", {
-          isMultiple: () => false,
-          element: () => fileChooserElement(".csv"),
-          setFiles: setChooserFiles,
-        })
-      ) {
-        nativeFileChooser();
-      }
+export const makeContext = (onClose?: (context: BrowserContext) => void, initialUrl?: string) =>
+  makePageContext(
+    {
+      setupFailure: () => pageSetupFailure,
+      initialNavigation: () => {
+        const pending = initialNavigation;
+        initialNavigation = null;
+        return pending?.();
+      },
+      desktopSize: () => desktopSizeAnswer?.(),
     },
-    emitAsync: (name: string, ...args: unknown[]) =>
-      Promise.all(events.listeners(name).map((listener) => listener(...args))),
-    setDefaultTimeout: vi.fn(),
-    setDefaultNavigationTimeout: vi.fn(),
-    context: () => context,
-    mainFrame: () => page,
-    frames: () => [page],
-    url: () => url,
-    title: vi.fn(async () => "test page"),
-    viewportSize: vi.fn(() => viewport),
-    setViewportSize: vi.fn(async (size: typeof viewport) => {
-      viewport = size;
-    }),
-    goto: vi.fn(async (next: string) => {
-      url = next;
-      events.emit("load");
-      const pending = initialNavigation;
-      initialNavigation = null;
-      await pending?.();
-    }),
-    goBack: vi.fn(async () => {}),
-    goForward: vi.fn(async () => {}),
-    reload: vi.fn(async () => {}),
-    emulateMedia: vi.fn(async () => {}),
-    waitForLoadState: vi.fn(async () => {}),
-    waitForNavigation: vi.fn(async () => null),
-    evaluate: vi.fn(async () => ({
-      url,
-      title: "test page",
-      loading: false,
-      visibleText: "delete",
-      interactiveElements: [],
-    })),
-    ariaSnapshot: vi.fn(async () => '- button "delete" [ref=e1]'),
-    locator: vi.fn(() => {
-      throw new Error("Unexpected locator action");
-    }),
-    mouse: { click: async () => {} },
-    isClosed: () => closed,
-    close: vi.fn(async () => {
-      if (!closed) {
-        closed = true;
-        events.emit("close");
-      }
-    }),
-  };
-  const context = {
-    page,
-    sessions,
-    on: () => context,
-    cssViewport,
-    newPage: async () => page as unknown as Page,
-    grantPermissions: vi.fn(async () => {}),
-    cookies: async () => [],
-    newCDPSession: async (target: unknown) => {
-      if (pageSetupFailure) throw pageSetupFailure;
-      const session = makeSession(
-        target === page ? undefined : (target as ReturnType<typeof makeFrame>),
-        () => desktopSizeAnswer?.() ?? Promise.resolve({ result: { value: { ...cssViewport } } }),
-      );
-      sessions.push(session);
-      return session;
-    },
-    close: vi.fn(async () => {
-      if (contextClosed) return;
-      contextClosed = true;
-      await page.close();
-      onClose?.(context as unknown as BrowserContext);
-    }),
-  };
-  return context;
-}
+    onClose,
+    initialUrl,
+  );
+
 const contexts: ReturnType<typeof makeContext>[] = [];
 const encoderStreams: Array<{ frameRate: number | undefined; bitsPerSecond: number }> = [];
 const contextRequests: Array<{ profileId: string; isolated: boolean }> = [];

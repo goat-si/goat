@@ -1,3 +1,9 @@
+import {
+  makeHost,
+  requestsFrom,
+  scope,
+  SERVER_BROWSER,
+} from "./PreviewAutomationBroker.testkit.ts";
 import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { expect, it } from "@effect/vitest";
 import {
@@ -7,62 +13,18 @@ import {
   PreviewAutomationMalformedResponseError,
   PreviewAutomationNoAvailableHostError,
   PreviewTabId,
-  ProviderInstanceId,
   ThreadId,
-  type PreviewAutomationHost,
-  type PreviewAutomationRequest,
   type PreviewAutomationStreamEvent,
 } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 
 import { PreviewBrowserRootError } from "../preview/PreviewBrowserHost.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 
 const makeBroker = PreviewAutomationBroker.make.pipe(Effect.provide(NodeServices.layer));
-
-const scope = {
-  environmentId: EnvironmentId.make("environment-1"),
-  requestNamespace: "provider-session-1",
-  thread: {
-    threadId: ThreadId.make("thread-1"),
-    providerSessionId: "provider-session-1",
-    providerInstanceId: ProviderInstanceId.make("codex"),
-  },
-  client: undefined,
-  capabilities: new Set(["preview"] as const),
-  issuedAt: 1,
-};
-
-/** Opens route only to the in-process server browser, so hosts that open tabs connect as it. */
-const SERVER_BROWSER = { inProcess: true } as const;
-
-const makeHost = (overrides: Partial<PreviewAutomationHost> = {}): PreviewAutomationHost => ({
-  clientId: "client-1",
-  environmentId: scope.environmentId,
-  ...overrides,
-});
-
-type RoutedRequest = PreviewAutomationRequest & {
-  readonly connectionId: PreviewAutomationStreamEvent["connectionId"];
-};
-
-const requestsFrom = (
-  events: Stream.Stream<PreviewAutomationStreamEvent>,
-  onConnected: (connectionId: PreviewAutomationStreamEvent["connectionId"]) => void = () => {},
-): Stream.Stream<RoutedRequest> =>
-  events.pipe(
-    Stream.filterMap((event) => {
-      if (event.type === "connected") {
-        onConnected(event.connectionId);
-        return Result.failVoid;
-      }
-      return Result.succeed({ ...event.request, connectionId: event.connectionId });
-    }),
-  );
 
 it.effect("atomically registers a connected host and correlates its response", () =>
   Effect.scoped(
