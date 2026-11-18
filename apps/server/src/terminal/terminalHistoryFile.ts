@@ -7,23 +7,26 @@ import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
 
-const COMPACTION_TEMP_PREFIX = ".history-";
+const COMPACTION_TEMP_PREFIX = ".goat-terminal-history-";
 const COMPACTION_TEMP_NAME = "history";
 
 const removeAbandonedHistoryCompactions = Effect.fn("terminal.removeAbandonedHistoryCompactions")(
   function* (fs: FileSystem.FileSystem, path: Path.Path, logsDir: string) {
     // The server holds exclusive ownership of its userdata before starting the terminal manager.
     for (const name of yield* fs.readDirectory(logsDir)) {
-      if (!/^\.history-[a-z0-9]{6}$/i.test(name)) continue;
+      if (
+        !name.startsWith(COMPACTION_TEMP_PREFIX) ||
+        !/^[a-z0-9]{6}$/i.test(name.slice(COMPACTION_TEMP_PREFIX.length))
+      )
+        continue;
       const dir = path.join(logsDir, name);
       yield* Effect.gen(function* () {
         if ((yield* fs.lstat(dir)).type !== "Directory") return;
         const entries = yield* fs.readDirectory(dir);
         if (entries.length > 1) return;
         const [entry] = entries;
-        // Older servers used makeTempFileScoped, whose file name was six random bytes in hex.
         if (entry !== undefined) {
-          if (entry !== COMPACTION_TEMP_NAME && !/^[a-f0-9]{12}$/.test(entry)) return;
+          if (entry !== COMPACTION_TEMP_NAME) return;
           if ((yield* fs.lstat(path.join(dir, entry))).type !== "File") return;
         }
         yield* fs.remove(dir, { recursive: true, force: true });

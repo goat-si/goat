@@ -22,7 +22,7 @@ it.layer(
   { excludeTestServices: true },
 )("TerminalManager history file", (it) => {
   it.effect(
-    "removes abandoned compaction directories on startup and leaves other entries alone",
+    "removes only GOAT compaction directories on startup and preserves ambiguous legacy names",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -42,7 +42,16 @@ it.layer(
                     );
                     yield* fs.writeFileString(join(path, ".history-aBcD02"), "keep");
                     yield* fs.makeDirectory(join(path, ".history-aBcD03"));
-                    yield* fs.writeFileString(join(path, ".history-aBcD03", "unrelated"), "keep");
+                    yield* fs.makeDirectory(join(path, ".goat-terminal-history-Abcd04"));
+                    yield* fs.writeFileString(
+                      join(path, ".goat-terminal-history-Abcd04", "history"),
+                      "partial",
+                    );
+                    yield* fs.makeDirectory(join(path, ".goat-terminal-history-Abcd05"));
+                    yield* fs.writeFileString(
+                      join(path, ".goat-terminal-history-Abcd05", "unrelated"),
+                      "keep",
+                    );
                     yield* fs.makeDirectory(join(path, ".history-user-backup"));
                   }),
                 ),
@@ -50,6 +59,8 @@ it.layer(
           }),
         );
         expect((yield* fs.readDirectory(logsDir)).toSorted()).toEqual([
+          ".goat-terminal-history-Abcd05",
+          ".history-aBcD01",
           ".history-aBcD02",
           ".history-aBcD03",
           ".history-user-backup",
