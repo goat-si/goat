@@ -161,7 +161,7 @@
   "apps/server/src/cloud/CloudLink.ts": { "lines": 1304 },
   "apps/server/src/cloud/ManagedEndpointRuntime.test.ts": { "lines": 1302 },
   "apps/server/src/cloud/bootService.test.ts": { "lines": 1272 },
-  "apps/server/src/cloud/bootService.ts": { "lines": 1358 },
+  "apps/server/src/cloud/bootService.ts": { "lines": 1269 },
   "apps/server/src/cloud/sshRuntimeSpawn.fixture.ts": { "nonNull": 2 },
   "apps/server/src/cloudMachines/CloudMachineService.testkit.ts": { "nonNull": 2 },
   "apps/server/src/cloudMachines/sshConfig.ts": { "nonNull": 3 },
