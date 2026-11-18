@@ -1,4 +1,12 @@
-import { EnvironmentId, WS_METHODS } from "@goat/contracts";
+import {
+  EnvironmentId,
+  MemoryId,
+  MemoryOperationId,
+  MemoryRpcError,
+  MemorySpaceId,
+  type ServerConfig,
+  WS_METHODS,
+} from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -25,10 +33,13 @@ const target = new PrimaryConnectionTarget({
   wsBaseUrl: "wss://hub.example.test",
 });
 
-const supervisorFor = Effect.fn("TestOlderHub.supervisor")(function* (client: WsRpcProtocolClient) {
+const supervisorFor = Effect.fn("TestOlderHub.supervisor")(function* (
+  client: WsRpcProtocolClient,
+  config?: ServerConfig,
+) {
   const session: RpcSession.RpcSession = {
     client,
-    initialConfig: Effect.never,
+    initialConfig: config ? Effect.succeed(config) : Effect.never,
     subscribeServerConfig: (input) => client.subscribeServerConfig(input ?? {}),
     ready: Effect.void,
     probe: Effect.void,
@@ -67,6 +78,74 @@ describe("environment RPC against an older hub", () => {
         expect(failure).toBeInstanceOf(EnvironmentRpcUnavailableError);
         expect(isHubMachinesUnsupportedError(failure)).toBe(true);
         expect(isHubNodesUnsupportedError(failure)).toBe(false);
+      }),
+  );
+  it.effect.each([false, true])(
+    "negotiates mutation failures on the destination: %s",
+    (supported) =>
+      Effect.gen(function* () {
+        const memorySpaceId = MemorySpaceId.make("00000000-0000-4000-8000-000000000001");
+        const memoryId = MemoryId.make("00000000-0000-4000-8000-000000000002");
+        const wire: unknown[] = [];
+        const fail = (input: { readonly includeFailureDetails?: true }) => {
+          wire.push(input);
+          return Effect.fail(
+            new MemoryRpcError({
+              code: input.includeFailureDetails ? "thread_lineage_incomplete" : "invalid_output",
+            }),
+          );
+        };
+        const client = {
+          [WS_METHODS.memoryUpsert]: fail,
+          [WS_METHODS.memoryForget]: fail,
+        } as unknown as WsRpcProtocolClient;
+        const supervisor = yield* supervisorFor(client, {
+          environment: {
+            capabilities: {
+              memory: {
+                protocolVersion: 1,
+                ...(supported ? { mutationFailureDetails: true } : {}),
+              },
+            },
+          },
+        } as ServerConfig);
+        const base = {
+          memorySpaceId,
+          memoryId,
+          expectedHeads: [],
+          operationId: MemoryOperationId.make("00000000-0000-4000-8000-000000000003"),
+        };
+        const upsert = {
+          ...base,
+          baseBoundary: null,
+          scope: { kind: "user" as const },
+          assertionKind: "inference" as const,
+          payload: { text: "synthetic", evidence: [], derivedFromMemoryRevisions: [] },
+        };
+        const provide = Effect.provideService(
+          EnvironmentSupervisor.EnvironmentSupervisor,
+          supervisor,
+        );
+        const permit = Effect.provideService(RpcPermissionGuard, { authorize: () => Effect.void });
+        const upsertError = yield* requestGuarded(WS_METHODS.memoryUpsert, upsert).pipe(
+          provide,
+          permit,
+          Effect.flip,
+        );
+        const forgetError = yield* requestGuarded(WS_METHODS.memoryForget, {
+          ...base,
+          includeFailureDetails: true,
+        }).pipe(provide, permit, Effect.flip);
+        const hint = supported ? { includeFailureDetails: true } : {};
+        expect(wire).toEqual([
+          { ...upsert, ...hint },
+          { ...base, ...hint },
+        ]);
+        for (const error of [upsertError, forgetError])
+          expect(error).toMatchObject({
+            _tag: "MemoryRpcError",
+            code: supported ? "thread_lineage_incomplete" : "invalid_output",
+          });
       }),
   );
 });
