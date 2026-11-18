@@ -86,7 +86,10 @@ export const snapshotPageMetadata = async (page: Page, scope?: Locator) => {
     : metadata;
 };
 
-export const snapshotCaptureOptions = (request: PreviewAutomationRequest) => {
+export const snapshotCaptureOptions = (
+  request: PreviewAutomationRequest,
+  mayMeasure: (() => boolean) | undefined,
+) => {
   const input = request.input as
     | (PreviewAutomationSnapshotInput & {
         readonly captureImage?: boolean;
@@ -96,6 +99,6 @@ export const snapshotCaptureOptions = (request: PreviewAutomationRequest) => {
   return {
     ...input,
     captureImage: input?.captureImage !== false,
-    measureSnapshotFrame: request.measureSnapshotFrame === true,
+    measureSnapshotFrame: mayMeasure,
   };
 };

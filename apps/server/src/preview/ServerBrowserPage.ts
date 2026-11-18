@@ -458,7 +458,7 @@ type SnapshotInput = PreviewAutomationSnapshotInput & {
   readonly fullScreenshot?: boolean | undefined;
   /** False skips the capture when nothing would show or save the image (L4). */
   readonly captureImage?: boolean;
-  readonly measureSnapshotFrame?: boolean;
+  readonly measureSnapshotFrame?: true | (() => boolean) | undefined;
   readonly consoleEntries: ReadonlyArray<PreviewAutomationConsoleEntry>;
   readonly networkEntries: ReadonlyArray<PreviewAutomationNetworkEntry>;
   readonly actionTimeline: PreviewAutomationSnapshot["actionTimeline"];
@@ -523,6 +523,10 @@ const capture = async (
               ...(scale < 1 && input.fullScreenshot === true ? { full: png } : {}),
             };
           });
+  const canMeasureFrame = () =>
+    input.captureImage === false &&
+    input.renderScale !== "display" &&
+    (input.measureSnapshotFrame === true || input.measureSnapshotFrame?.() === true);
   // Taken between the reads, so a value that changes during either fails the comparison.
   // Awaited after the tree: a capture that fails has finished its tree before a retry starts.
   const pageAndScreenshot = Promise.all([
@@ -531,7 +535,7 @@ const capture = async (
     input.annotate || input.captureImage === false ? undefined : track("screenshot", captureImage),
     track("frames", () => tabCookies(input.page)),
     track("page state", () => capturePaint(input.cdp)),
-    input.captureImage === false && input.measureSnapshotFrame
+    canMeasureFrame()
       ? track("screenshot", async () =>
           viewportPlacement(
             viewport,
@@ -642,7 +646,7 @@ const capture = async (
       treeComplete,
       ...maskSnapshotRecords(mask, input),
       ...(screenshot === undefined ? {} : { screenshot }),
-      ...(screenshotSize === undefined ? {} : { screenshotSize }),
+      ...(screenshotSize === undefined || !canMeasureFrame() ? {} : { screenshotSize }),
       ...(full === undefined ? {} : { fullScreenshot: { data: full, ...pngSize(full) } }),
     },
     input,

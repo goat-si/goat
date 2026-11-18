@@ -841,13 +841,25 @@ export const make = Effect.gen(function* () {
    * Refuses the agent's own script, pixels and recordings while a filled field holds a value, in
    * this tab or one sharing its sign-ins, and text snapshots too once that value shows as plain text.
    */
-  const guard = async (tab: SecretFillTab, request: PreviewAutomationRequest) => {
+  function guard(tab: SecretFillTab, request: PreviewAutomationRequest): Promise<void>;
+  function guard(
+    tab: SecretFillTab,
+    request: PreviewAutomationRequest,
+    serverRendered: boolean,
+  ): Promise<(() => boolean) | undefined>;
+  async function guard(
+    tab: SecretFillTab,
+    request: PreviewAutomationRequest,
+    serverRendered = false,
+  ): Promise<void | (() => boolean)> {
     join(tab, request.threadId);
     const textSnapshot =
       request.operation === "snapshot" &&
       (request.input as { readonly captureImage?: boolean } | undefined)?.captureImage === false;
-    if (request.operation === "snapshot" && !textSnapshot)
-      imageChecks.set(request, { tab, epoch: fillEpoch.get(tab.page.context()) ?? 0 });
+    const context = tab.page.context();
+    const epoch = fillEpoch.get(context) ?? 0;
+    if (request.operation === "snapshot" && !textSnapshot) imageChecks.set(request, { tab, epoch });
+    const measure = textSnapshot && serverRendered && request.measureSnapshotFrame === true;
     const guarded =
       request.operation === "evaluate" ||
       request.operation === "recordingStart" ||
@@ -860,16 +872,23 @@ export const make = Effect.gen(function* () {
     // cannot check, stops it.
     if (textSnapshot ? own.shown || own.unconfirmed : own.holding)
       throw refused(own.unconfirmed ? UNCONFIRMED : own.shown ? SHOWN : FENCED);
-    if (textSnapshot) return;
-    const sharing = contextTabs.get(tab.page.context()) ?? new Set<SecretFillTab>();
+    if (textSnapshot && (!measure || own.holding || pixelsOff(tab, request.threadId) !== null))
+      return;
+    const sharing = contextTabs.get(context) ?? new Set<SecretFillTab>();
     for (const other of sharing) {
       if (other.page.isClosed()) sharing.delete(other);
-      else if (other.page !== tab.page && (await fenceState(other.page)).holding)
+      else if (other.page !== tab.page && (await fenceState(other.page)).holding) {
+        if (textSnapshot) return;
         throw refused(SHARED_FENCED);
+      }
+    }
+    if (textSnapshot) {
+      return () =>
+        (fillEpoch.get(context) ?? 0) === epoch && pixelsOff(tab, request.threadId) === null;
     }
     // Pixels of a site it filled a password on stay off after the field lets go, too.
     if (visual) assertPixels(tab, request.threadId);
-  };
+  }
 
   /** Masks the thread's filled values in everything the tab answers. */
   const mask =

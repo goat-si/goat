@@ -1849,7 +1849,7 @@ const make = Effect.gen(function* () {
   ) => {
     signal?.throwIfAborted();
     const input = request.input;
-    await secretFill.guard(tab, request);
+    const mayMeasure = await secretFill.guard(tab, request, tab.desktop === null);
     signal?.throwIfAborted();
     ServerBrowserScreen.assertScreenExpectation(tab, request);
     const actionGate = (destination?: string) =>
@@ -1945,7 +1945,7 @@ const make = Effect.gen(function* () {
               {
                 ...tab,
                 renderScale: tab.desktop ? "display" : RENDER_SCALE,
-                ...snapshotCaptureOptions(request),
+                ...snapshotCaptureOptions(request, mayMeasure),
                 agentSessionId: request.agentSessionId,
                 actionChannel: actionGate().channel,
                 timeoutMs: deadlineMs - performance.now(),

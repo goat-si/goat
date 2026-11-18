@@ -1,5 +1,14 @@
 import { chromium, type Browser, type BrowserContext } from "playwright-core";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vite-plus/test";
 import { chromiumInstalled } from "./chromiumInstalled.testkit.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
@@ -111,6 +120,26 @@ describe.skipIf(!chromiumInstalled)("server browser snapshot screenshot", () => 
     expect(result.screenshotSize).toEqual(expect.objectContaining({ width: 1280, height: 800 }));
     expect(result.screenshot).toBeUndefined();
     expect(result.fullScreenshot).toBeUndefined();
+  });
+
+  it("keeps text-only desktop snapshots free of screenshot capture", async () => {
+    const page = await context.newPage();
+    await page.setContent("<h1>Desktop preview</h1>");
+    const cdp = await context.newCDPSession(page);
+    using send = vi.spyOn(cdp, "send");
+    const result = await ServerBrowserPage.snapshot({
+      page,
+      cdp,
+      renderScale: "display",
+      captureImage: false,
+      measureSnapshotFrame: true,
+      consoleEntries: [],
+      networkEntries: [],
+      actionTimeline: [],
+      timeoutMs: 30_000,
+    });
+    expect(result.screenshotSize).toBeUndefined();
+    expect(send.mock.calls.map(([command]) => command)).not.toContain("Page.captureScreenshot");
   });
 
   it("shrinks the screenshot of an XML document, whose createElement makes no canvas", async () => {
