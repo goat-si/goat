@@ -46,6 +46,8 @@ Every member can save and edit memories when it has memory write permission. If 
 
 To stop sharing on a device, turn sharing off in its Memory settings (**Leave sharing** for a member on web or desktop). Saved memories stay on the device. To share them again, make the same device the hub or add the member from the hub’s Memory settings.
 
+A hub that has enabled support for longer memory histories can add an older device in Settings, but the device must update before it can sync. Older GOAT builds cannot reopen an upgraded memory database, and restoring a backup loses memory writes made after that backup.
+
 If device setup does not finish, use **Retry** to continue the same request. After a reload, use **Replace key** to recover the device or **Remove** to clean up incomplete setup. If settings changed on another device, review the latest settings before trying again.
 
 ## Read original conversations

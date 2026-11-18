@@ -127,6 +127,27 @@ it.effect("missing hub advertisement stops before reading the credential or post
   }).pipe(Effect.provide(live)),
 );
 
+it.effect("keeps caller-supplied floor fields off a legacy hub request", () =>
+  Effect.gen(function* () {
+    yield* seed;
+    const client = yield* Client.MemoryHubClient;
+    const bodies: string[] = [];
+    const fetch: typeof globalThis.fetch = async (_url, init) => {
+      if (init?.method === "GET") return json(descriptor);
+      bodies.push(String(init?.body));
+      return json({ requests: [] });
+    };
+    assert.deepStrictEqual(
+      yield* client
+        .collectSourceReads(connection, { ...input, features: M.MEMORY_FLOOR_2 })
+        .pipe(Effect.provideService(FetchHttpClient.Fetch, fetch)),
+      { requests: [] },
+    );
+    assert.lengthOf(bodies, 1);
+    assert.notInclude(bodies[0]!, '"features"');
+  }).pipe(Effect.provide(live)),
+);
+
 it.effect("401 and 403 remain distinct and are never retried", () =>
   Effect.gen(function* () {
     yield* seed;

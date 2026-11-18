@@ -10,8 +10,9 @@ import * as McpToolAccess from "../../McpToolAccess.ts";
 import { schemaIssueSummary } from "../../../memory/memoryDiagnostics.ts";
 import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import { MemoryToolkit } from "./tools.ts";
-import { MemoryCapacityError } from "../../../memory/store/StoreModel.ts";
+import { MemoryCapacityError, MemoryStoreConflict } from "../../../memory/store/StoreModel.ts";
 
+const isStoreConflict = Schema.is(MemoryStoreConflict);
 const isMemoryError = Schema.is(M.MemoryRpcError);
 const isCapacityDimension = Schema.is(M.MemoryCapacityDimension);
 const isCapacity = Schema.is(M.MemoryCapacityExceeded);
@@ -55,6 +56,9 @@ export const memoryError = (error: unknown): M.MemoryRpcError => {
   if ("code" in error && isFailureCode(error.code) && error.code !== "capacity_exceeded")
     return new M.MemoryRpcError({
       code: error.code,
+      ...(isStoreConflict(error) && error.upgradeRequiredMembers
+        ? { upgradeRequiredMembers: error.upgradeRequiredMembers }
+        : {}),
       ...(error.code === "thread_lineage_incomplete"
         ? { guidance: M.MEMORY_LINEAGE_GUIDANCE }
         : error.code === "hub_upgrade_required"
@@ -71,6 +75,7 @@ export const memoryLegacyError = (error: unknown) => {
       code: "thread_lineage_incomplete",
       guidance: M.MEMORY_LEGACY_LINEAGE_GUIDANCE,
     });
+  if (mapped.code === "hub_unavailable") return new M.MemoryRpcError({ code: "unavailable" });
   if (mapped.capacity?.dimension === "dependencies")
     return new M.MemoryRpcError({ code: "invalid_output" });
   if (mapped.capacity?.dimension === "payload_bytes")

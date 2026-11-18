@@ -26,9 +26,17 @@ export const validateCheckpointClosureCapacity = Effect.fn(
   "MemorySyncService.validateCheckpointClosureCapacity",
 )(function* (page: M.MemoryHubCheckpointPage) {
   const cap = yield* closureCap(page.memorySpaceId);
-  for (const entry of [...page.items, ...page.revisions])
+  for (const entry of [...page.items, ...page.revisions]) {
+    if (
+      "revision" in entry &&
+      entry.revision &&
+      (entry.revision.provenance.unverified || entry.revision.provenance.originThreadId) &&
+      cap === M.MEMORY_DERIVED_REVISIONS_MAX_V1
+    )
+      return yield* new Store.MemoryStoreConflict({ code: "unsupported_protocol" });
     if ("payload" in entry && entry.payload)
       yield* requireClosureCapacity(entry.payload.derivedFromMemoryRevisions.length, cap);
+  }
 });
 
 export const relatedExposureCap = (space: M.MemorySpaceId) =>

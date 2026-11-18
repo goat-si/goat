@@ -191,6 +191,7 @@ it.effect("keeps an accepting suggestion when the pending queue reaches capacity
       forgetGeneration: 0,
       reason: "capacity_exceeded" as const,
     });
+    yield* sql`INSERT INTO memory_space_features VALUES (${space},1000,0)`;
     const first = candidate(500);
     yield* suggestions.onRefusedSave(first, Effect.void);
     const target = { memorySpaceId: space, suggestionId: first.input.memoryId };

@@ -1,4 +1,5 @@
 import * as M from "@goat/contracts";
+import { MemoryFloor2Enabled, memoryFloorAdvertisement } from "./MemoryFloor.ts";
 import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -105,6 +106,8 @@ export class MemoryHubClient extends Context.Service<
 
 const make = Effect.gen(function* () {
   const http = yield* HttpClient.HttpClient;
+  const floorEnabled = yield* MemoryFloor2Enabled;
+  const floor = memoryFloorAdvertisement(floorEnabled);
   const secrets = yield* Secrets.ServerSecretStore;
   const settings = yield* Settings.ServerSettingsService;
 
@@ -223,18 +226,22 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const call = <I, IE, O, OE>(
+  const call = <I extends { features?: readonly M.MemoryFloor2Feature[] }, IE, O, OE>(
     path: string,
     inputSchema: Schema.Codec<I, IE>,
     outputSchema: Schema.Codec<O, OE>,
     validate: (connection: HubConnection, input: I, output: O) => boolean = () => true,
+    needsFloor: (input: I) => boolean = () => false,
   ) => {
     const encode = Schema.encodeEffect(Schema.fromJsonString(inputSchema));
     const decode = Schema.decodeUnknownEffect(outputSchema);
     return (connection: HubConnection, input: I, prepare?: Effect.Effect<I, HubClientFailure>) =>
       bounded(
         Effect.gen(function* () {
-          yield* preflightOnce(connection);
+          const descriptor = yield* preflightOnce(connection);
+          const advertised = descriptor.capabilities.memory?.derivedCap === 1000;
+          if ((!advertised || !floorEnabled) && needsFloor(input))
+            return yield* new M.MemoryHubError({ code: "hub_upgrade_required" });
           const credential = yield* secrets
             .get(connection.secretName)
             .pipe(Effect.mapError(() => new M.MemoryHubError({ code: "storage_failed" })));
@@ -245,7 +252,9 @@ const make = Effect.gen(function* () {
           yield* ensureEpoch(connection);
           // Descriptor/credential waits are complete. Revalidate source for each attempt.
           const prepared = prepare ? yield* prepare : input;
-          const body = yield* encode(prepared).pipe(
+          const wire = { ...prepared };
+          delete wire.features;
+          const body = yield* encode(advertised ? { ...wire, ...floor } : wire).pipe(
             Effect.mapError(() => new M.MemoryHubError({ code: "invalid_output" })),
           );
           if (new TextEncoder().encode(body).length > RESPONSE_MAX_BYTES)
@@ -291,12 +300,14 @@ const make = Effect.gen(function* () {
             r.operationDigest === memoryOperationDigest(operation)
           );
         }),
+      (input) => input.operations.some(M.requiresMemoryFloor2),
     ),
     pull: call(
       M.MEMORY_HUB_PATHS.pull,
       M.MemoryHubPullInput,
       M.MemoryHubPullResult,
       (_c, i, o) =>
+        (o.derivedCap === undefined || floorEnabled) &&
         (i.highWatermark === undefined || i.highWatermark === o.highWatermark) &&
         (o.checkpoint === undefined || o.checkpoint.memorySpaceId === i.memorySpaceId),
     ),
@@ -309,6 +320,7 @@ const make = Effect.gen(function* () {
       (_c, i, o) =>
         o.operationId === i.operation.operationId &&
         o.operationDigest === memoryOperationDigest(i.operation),
+      (input) => M.requiresMemoryFloor2(input.operation),
     ),
     release: call(M.MEMORY_HUB_PATHS.release, M.MemoryHubReleaseInput, M.MemoryHubReleaseResult),
     requestSourceRead: call(

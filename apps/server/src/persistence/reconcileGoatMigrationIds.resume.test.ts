@@ -24,6 +24,8 @@ import {
   currentRow,
   fresh,
   shiftMigrations,
+  hubFloorRow,
+  saveSuggestionsRow,
   threadLineageRow,
   history,
   isDatabaseNewerThanBuildError,
@@ -258,6 +260,8 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), [
         ...UPSTREAM_80S.slice(1),
         threadLineageRow,
+        saveSuggestionsRow,
+        hubFloorRow,
       ]);
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
       assert.deepStrictEqual(yield* onRestart(reopen, userData), data);
@@ -278,6 +282,8 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), [
         ...UPSTREAM_80S.slice(3),
         threadLineageRow,
+        saveSuggestionsRow,
+        hubFloorRow,
       ]);
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
     }).pipe(provide);
@@ -302,6 +308,8 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), [
         ...UPSTREAM_80S.slice(5),
         threadLineageRow,
+        saveSuggestionsRow,
+        hubFloorRow,
       ]);
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
     }).pipe(provide);
@@ -376,6 +384,8 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), [
         ...UPSTREAM_80S.slice(1),
         threadLineageRow,
+        saveSuggestionsRow,
+        hubFloorRow,
       ]);
       const expected = yield* fresh;
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), {
@@ -391,7 +401,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       Effect.asVoid(runMigrations()),
       [61, 61],
       "61_PullRequestReviewGuides",
-      threadLineageRow[0],
+      hubFloorRow[0],
     ],
     [
       "a ledger from before the shift that lost row 72",

@@ -20,7 +20,7 @@ export const areAutomaticallyUsable = Effect.fn("MemoryService.areAutomaticallyU
   return rows.length === 0;
 });
 
-export const markUnverified = Effect.fn("MemoryService.markUnverified")(function* (
+const markUnverified = Effect.fn("MemoryService.markUnverified")(function* (
   space: M.MemorySpaceId,
   revisionId: M.MemoryRevisionId,
 ) {
@@ -44,4 +44,16 @@ export const recordMemoryOrigin = Effect.fn("MemoryService.recordMemoryOrigin")(
       VALUES (${space},${memoryId},${origin.environmentId},${origin.threadId})
       ON CONFLICT(space,memory_id) DO NOTHING`,
   );
+});
+
+export const persistRevisionMarks = Effect.fn("MemoryStore.persistRevisionMarks")(function* (
+  revision: M.MemoryRevision,
+) {
+  const { memorySpaceId, memoryId, revisionId, provenance } = revision;
+  if (provenance.unverified) yield* markUnverified(memorySpaceId, revisionId);
+  if (provenance.originThreadId)
+    yield* recordMemoryOrigin(memorySpaceId, memoryId, {
+      environmentId: provenance.environmentId,
+      threadId: provenance.originThreadId,
+    });
 });

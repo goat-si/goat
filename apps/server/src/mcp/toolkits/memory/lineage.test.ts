@@ -1,6 +1,9 @@
+import { scanReplicaMemory } from "../../../memory/testkit/ScanReplicaMemory.ts";
+import { memoryOperationDigest } from "../../../memory/MemoryDecider.ts";
 import { expect, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -549,6 +552,47 @@ it.effect("remember with 101 sources on the old floor asks for a hub upgrade", (
   }).pipe(Effect.provide(Fixture.layer)),
 );
 
+const decodeSavedReceipt = Schema.decodeUnknownSync(M.MemoryMutationReceipt);
+const applyAuthoritativeSave = Effect.fn("test.applyAuthoritativeSave")(function* (
+  operationId: M.MemoryOperationId,
+) {
+  const store = yield* Store.MemoryStore;
+  const service = yield* Service.MemoryService;
+  const op = yield* store.readWorkOperation(`sync:${Fixture.space}:${operationId}`);
+  if (!op) throw new Error("expected a staged save");
+  const hubEnvironmentId = ref().environmentId;
+  const expectedSequence = yield* store.readCursor(Fixture.space, hubEnvironmentId);
+  const hubSequence = expectedSequence + 1;
+  yield* service.receiveHubPage({
+    memorySpaceId: Fixture.space,
+    hubEnvironmentId,
+    localEnvironmentId: hubEnvironmentId,
+    expectedSequence,
+    reauthorize: Effect.void,
+    page: {
+      highWatermark: hubSequence,
+      throughSequence: hubSequence,
+      hasMore: false,
+      derivedCap: 1000,
+      entries: [
+        {
+          kind: "operation",
+          hubSequence,
+          operation: op,
+          receipt: {
+            outcome: "accepted",
+            memoryId: op.memoryId,
+            operationId,
+            hubSequence,
+            operationDigest: memoryOperationDigest(op),
+          },
+        },
+      ],
+    },
+  });
+  yield* scanReplicaMemory(op.memoryId);
+});
+
 it.effect.each([101, 1000])(
   "remember on the new floor preserves %s sources through edits and forget",
   (size) =>
@@ -574,6 +618,8 @@ it.effect.each([101, 1000])(
       }
       const saved = yield* remember("a wide synthetic memory");
       expect(saved.result.isError).not.toBe(true);
+      expect(saved.body).toMatchObject({ pendingSync: true, revisionId: null });
+      yield* applyAuthoritativeSave(decodeSavedReceipt(saved.body).operationId);
       const row = (yield* sql<{ memory_id: string }>`
       SELECT p.memory_id FROM memory_payloads p WHERE json_extract(p.body_json,'$.text')='a wide synthetic memory'`)[0]!;
       const memoryId = M.MemoryId.make(row.memory_id);
@@ -624,6 +670,7 @@ it.effect.each([101, 1000])(
         },
         Effect.void,
       );
+      yield* applyAuthoritativeSave(Fixture.upsert(36098).operationId);
       const edited = yield* store.loadAggregate(Fixture.space, memoryId);
       expect(
         edited.revisions.find((r) => r.revision.revisionId === edited.heads[0])?.payload
@@ -692,6 +739,8 @@ it.effect("an overflowed thread can save only the person's own words as unverifi
     expect(refused.body).toMatchObject({ code: "thread_lineage_incomplete" });
     const saved = yield* remember("café on Saturday");
     expect(saved.result.isError).not.toBe(true);
+    expect(saved.body).toMatchObject({ pendingSync: true, revisionId: null });
+    yield* applyAuthoritativeSave(decodeSavedReceipt(saved.body).operationId);
     const sql = yield* SqlClient.SqlClient;
     expect(yield* sql`SELECT provenance FROM memory_revision_marks`).toEqual([
       { provenance: "unverified" },
@@ -893,6 +942,14 @@ it.effect.each([true, false])(
       const result = yield* service.acceptSuggestion(accept, Effect.void);
       expect(result).toEqual({ status: "pending" });
       expect(yield* service.acceptSuggestion(accept, Effect.void)).toEqual(result);
+      const store = yield* Store.MemoryStore;
+      expect(
+        (yield* store.loadAggregate(Fixture.space, suggestion.suggestionId)).item,
+      ).toBeUndefined();
+      const [attempt] = yield* sql<{ accept_operation_id: string }>`
+        SELECT accept_operation_id FROM memory_save_suggestions WHERE id=${suggestion.suggestionId}`;
+      if (!attempt) throw new Error("Expected a staged suggestion");
+      yield* applyAuthoritativeSave(M.MemoryOperationId.make(attempt.accept_operation_id));
       const saved = yield* service.read(
         { ...request, memoryId: suggestion.suggestionId, includeMarks: true },
         Effect.void,

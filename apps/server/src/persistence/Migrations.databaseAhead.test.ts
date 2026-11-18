@@ -70,6 +70,37 @@ describe("runMigrations database ahead of this build", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
+  it.effect("the 159 build refuses a migrated 160 hub floor database", () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual((yield* runMigrations({ toMigrationInclusive: 160 })).at(-1), [
+        160,
+        "MemoryHubFloor",
+      ]);
+      const manifest159 = migrationEntries.filter(([id]) => id <= 159);
+      const failure = yield* Effect.flip(assertMemoryMigrationsCompatible(manifest159));
+      assert.strictEqual(failure._tag, "MigrationError");
+      assert.include(failure.message, "Unreleased memory DB is incompatible");
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect(
+    "migration 160 preserves suggestion forget generations and backfills the hub watermark",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 159 });
+        yield* sql`INSERT INTO memory_space_counters(space,forget_generation) VALUES ('synthetic',7)`;
+        yield* sql`INSERT INTO memory_hub_retention(space,checkpoint_sequence) VALUES ('synthetic',11)`;
+        assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 160 }), [
+          [160, "MemoryHubFloor"],
+        ]);
+        assert.deepStrictEqual(
+          yield* sql`SELECT forget_generation,last_forget_sequence FROM memory_space_counters WHERE space='synthetic'`,
+          [{ forget_generation: 7, last_forget_sequence: 11 }],
+        );
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect("keeps MigrationError when a failing ledger only contains known names", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

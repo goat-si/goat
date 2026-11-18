@@ -2,7 +2,6 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
-import * as SchemaParser from "effect/SchemaParser";
 import * as SchemaAST from "effect/SchemaAST";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import {
@@ -29,67 +28,23 @@ import {
   MEMORY_LINEAGE_GUIDANCE,
   MEMORY_HUB_UPGRADE_GUIDANCE,
 } from "./memoryLimits.ts";
+import {
+  array,
+  bounded,
+  distinct,
+  jsonBytes,
+  same,
+  sameSet,
+  strictMakeOptions,
+  strictSchema,
+  struct,
+  unique,
+  utf8,
+} from "./memoryCodec.ts";
+import { MemoryFloor2Feature } from "./memoryFloor.ts";
 export * from "./memoryLimits.ts";
+export * from "./memoryFloor.ts";
 
-const utf8 = (s: string) => new TextEncoder().encode(s).length;
-const jsonBytes = (value: unknown) => utf8(JSON.stringify(value));
-const unique = (values: readonly unknown[]) =>
-  new Set(values.map((v) => JSON.stringify(v))).size === values.length;
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-const sameSet = (a: readonly string[], b: readonly string[]) =>
-  a.length === b.length && a.every((v) => b.includes(v));
-const bounded = <S extends Schema.Top>(schema: S, max: number) =>
-  schema.check(
-    Schema.makeFilter((value) => jsonBytes(value) <= max, {
-      expected: `at most ${max} encoded UTF-8 bytes`,
-    }),
-  );
-const array = <S extends Schema.Top>(schema: S, max = 100, min = 0) =>
-  Schema.Array(schema).check(
-    Schema.makeFilter((values) => values.length >= min && values.length <= max),
-  );
-const distinct = <S extends Schema.Top>(schema: S, max = 100, min = 0) =>
-  array(schema, max, min).check(Schema.makeFilter(unique));
-// Effect 4 annotations cannot set parse options. A declaration keeps strict parsing
-// at the schema boundary, including flipped (encode) and type-only (.make) codecs.
-const strictSchema = <S extends Schema.Constraint>(schema: S) =>
-  Schema.declareConstructor<S["Type"], S["Encoded"]>()(
-    [schema],
-    ([codec]) => {
-      const decode = SchemaParser.decodeUnknownEffect(codec);
-      return (input, _ast, options) => decode(input, { ...options, onExcessProperty: "error" });
-    },
-    {
-      toCodec: ([codec]) => new SchemaAST.Link(codec.ast, SchemaTransformation.passthrough()),
-      // All memory Encoded values already use JSON. Do not insert a permissive
-      // struct parser ahead of this declaration when RPC derives its JSON codec.
-      toCodecJson: () => undefined,
-    },
-  );
-const struct = <F extends Schema.Struct.Fields>(fields: F) => {
-  const schema = Schema.Struct(fields);
-  // Effect's empty struct parser only rejects nullish values and preserves all others.
-  return strictSchema(
-    Object.keys(fields).length === 0
-      ? schema.check(
-          Schema.makeFilter(
-            (value) =>
-              typeof value === "object" &&
-              value !== null &&
-              !Array.isArray(value) &&
-              Reflect.ownKeys(value).length === 0,
-            { expected: "an object with no own keys" },
-          ),
-        )
-      : schema,
-  );
-};
-// TaggedError construction uses its internal struct rather than the overridden ast.
-const strictMakeOptions = (options?: Schema.MakeOptions): Schema.MakeOptions => ({
-  ...options,
-  disableChecks: false,
-  parseOptions: { ...options?.parseOptions, onExcessProperty: "error", disableChecks: false },
-});
 const canonical = Schema.String.check(
   Schema.makeFilter((s) => s.length > 0 && s === s.trim() && Array.from(s).length <= 1024),
 );
@@ -299,6 +254,7 @@ export const MemoryFailureCode = Schema.Literals([
   "scanner_pending",
   "forget_pending",
   "hub_upgrade_required",
+  "hub_unavailable",
 ]);
 export type MemoryFailureCode = typeof MemoryFailureCode.Type;
 
@@ -405,6 +361,8 @@ export type MemoryEvidence = typeof MemoryEvidence.Type;
 
 export const MemoryProvenance = struct({
   environmentId: EnvironmentId,
+  unverified: Schema.optionalKey(Schema.Literal(true)),
+  originThreadId: Schema.optionalKey(ThreadId),
   // Body-free identity of the original explicit upsert request and its caller.
   upsertRequestDigest: Schema.optionalKey(
     Schema.String.check(Schema.makeFilter((s) => /^[a-f0-9]{64}$/.test(s))),
@@ -534,10 +492,13 @@ const envelope = {
   expectedHeads: heads,
 };
 
+const floorOperation = { forgetFence: Schema.optionalKey(NonNegativeInt) };
+
 export const MemoryOperation = bounded(
   Schema.Union([
     struct({
       ...envelope,
+      ...floorOperation,
       kind: Schema.Literal("upsert"),
       revision: MemoryRevision,
       payload: MemoryPayload,
@@ -545,6 +506,7 @@ export const MemoryOperation = bounded(
     struct({ ...envelope, kind: Schema.Literal("forget"), tombstone: MemoryTombstone }),
     struct({
       ...envelope,
+      ...floorOperation,
       kind: Schema.Literal("resolve"),
       revision: MemoryRevision,
       payload: MemoryPayload,
@@ -555,6 +517,7 @@ export const MemoryOperation = bounded(
     }),
     struct({
       ...envelope,
+      ...floorOperation,
       kind: Schema.Literal("revert"),
       revision: MemoryRevision,
       payload: MemoryPayload,
@@ -691,6 +654,7 @@ export function encodeMemoryOperation(operation: MemoryOperation): string {
         kind,
         revision: value.revision,
         payload: value.payload,
+        ...(value.forgetFence === undefined ? {} : { forgetFence: value.forgetFence }),
       });
     case "forget":
       return encodeOperationJson({ ...common, kind, tombstone: value.tombstone });
@@ -700,6 +664,7 @@ export function encodeMemoryOperation(operation: MemoryOperation): string {
         kind,
         revision: value.revision,
         payload: value.payload,
+        ...(value.forgetFence === undefined ? {} : { forgetFence: value.forgetFence }),
         resolution: value.resolution,
         resolutionPayload: value.resolutionPayload,
         conflictId: value.conflictId,
@@ -711,6 +676,7 @@ export function encodeMemoryOperation(operation: MemoryOperation): string {
         kind,
         revision: value.revision,
         payload: value.payload,
+        ...(value.forgetFence === undefined ? {} : { forgetFence: value.forgetFence }),
         revertsResolutionId: value.revertsResolutionId,
         restoredRevisionId: value.restoredRevisionId,
       });
@@ -720,10 +686,16 @@ export function decodeMemoryOperation(json: string): MemoryOperation {
   return decodeOperationJson(json);
 }
 const eventSchema = Schema.Union([
-  struct({ ...envelope, kind: Schema.Literal("upsert"), revision: MemoryRevision }),
+  struct({
+    ...envelope,
+    ...floorOperation,
+    kind: Schema.Literal("upsert"),
+    revision: MemoryRevision,
+  }),
   struct({ ...envelope, kind: Schema.Literal("forget"), tombstone: MemoryTombstone }),
   struct({
     ...envelope,
+    ...floorOperation,
     kind: Schema.Literal("resolve"),
     revision: MemoryRevision,
     resolution: MemoryResolution,
@@ -732,6 +704,7 @@ const eventSchema = Schema.Union([
   }),
   struct({
     ...envelope,
+    ...floorOperation,
     kind: Schema.Literal("revert"),
     revision: MemoryRevision,
     revertsResolutionId: MemoryResolutionId,
@@ -761,6 +734,9 @@ export function encodeMemoryEventMetadata(operation: MemoryOperation): string {
     memoryId,
     expectedHeads,
     kind,
+    ...(operation.kind !== "forget" && operation.forgetFence !== undefined
+      ? { forgetFence: operation.forgetFence }
+      : {}),
   };
   const value =
     operation.kind === "forget"
@@ -833,7 +809,10 @@ export const MemoryCapacityExceeded = struct({
   reclaimable: NonNegativeInt,
 });
 export type MemoryCapacityExceeded = typeof MemoryCapacityExceeded.Type;
+export const MemoryHubUpgradeBlockers = distinct(EnvironmentId, MEMORY_HUB_MAX_MEMBERS);
+const upgradeBlockers = { upgradeRequiredMembers: Schema.optionalKey(MemoryHubUpgradeBlockers) };
 const safeErrorFields = {
+  ...upgradeBlockers,
   code: MemoryFailureCode,
   memoryId: Schema.optionalKey(MemoryId),
   operationId: Schema.optionalKey(MemoryOperationId),
@@ -2342,6 +2321,7 @@ export function validateMemoryResolutionApproval(
 }
 
 export const MemoryHubReceipt = struct({
+  ...upgradeBlockers,
   resolutionApproval: Schema.optionalKey(MemoryResolutionApproval),
   forgetExpansion: Schema.optionalKey(MemoryForgetExpansion),
   forgetRetryOf: Schema.optionalKey(MemoryForgetRetry),
@@ -2622,8 +2602,10 @@ export const MemoryHubCheckpointPage = bounded(
 );
 export type MemoryHubCheckpointPage = typeof MemoryHubCheckpointPage.Type;
 const hub = { protocolVersion: Schema.Literal(1), memorySpaceId: MemorySpaceId };
+const hubFeatures = { features: Schema.optionalKey(distinct(MemoryFloor2Feature, 3)) };
 
 export const MemoryHubJoinInput = struct({
+  ...hubFeatures,
   protocolVersion: Schema.Literal(1),
   environmentId: EnvironmentId,
   memorySpaceId: Schema.NullOr(MemorySpaceId),
@@ -2647,7 +2629,12 @@ export const MemoryHubJoinResult = struct({
 export type MemoryHubJoinResult = typeof MemoryHubJoinResult.Type;
 
 export const MemoryHubPushInput = bounded(
-  struct({ ...hub, environmentId: EnvironmentId, operations: array(MemoryOperation) }).check(
+  struct({
+    ...hub,
+    ...hubFeatures,
+    environmentId: EnvironmentId,
+    operations: array(MemoryOperation),
+  }).check(
     Schema.makeFilter((v) =>
       v.operations.every(
         (o) => o.memorySpaceId === v.memorySpaceId && o.originEnvironmentId === v.environmentId,
@@ -2663,6 +2650,7 @@ export type MemoryHubPushResult = typeof MemoryHubPushResult.Type;
 
 export const MemoryHubPullInput = struct({
   ...hub,
+  ...hubFeatures,
   environmentId: EnvironmentId,
   afterSequence: NonNegativeInt,
   limit,
@@ -2678,11 +2666,13 @@ export type MemoryHubPullInput = typeof MemoryHubPullInput.Type;
 
 export const MemoryHubPullResult = bounded(
   struct({
+    ...upgradeBlockers,
     highWatermark: NonNegativeInt,
     throughSequence: NonNegativeInt,
     hasMore: Schema.Boolean,
     entries: array(MemoryHubEntry),
     checkpoint: Schema.optionalKey(MemoryHubCheckpointPage),
+    derivedCap: Schema.optionalKey(Schema.Literal(1000)),
   }).check(
     Schema.makeFilter(
       (v) =>
@@ -2698,6 +2688,7 @@ export const MemoryHubPullResult = bounded(
 export type MemoryHubPullResult = typeof MemoryHubPullResult.Type;
 const leaseKey = {
   ...hub,
+  ...hubFeatures,
   memoryId: MemoryId,
   conflictId: MemoryConflictId,
   holderEnvironmentId: EnvironmentId,
@@ -2722,6 +2713,7 @@ export type MemoryHubReleaseResult = typeof MemoryHubReleaseResult.Type;
 
 export const MemoryHubApplyResolutionInput = struct({
   ...hub,
+  ...hubFeatures,
   holderEnvironmentId: EnvironmentId,
   attemptId: MemoryOperationId,
   operation: MemoryOperation.check(Schema.makeFilter((v) => v.kind === "resolve")),
@@ -2761,7 +2753,11 @@ export const MemorySourceReadRequest = struct({
 });
 export type MemorySourceReadRequest = typeof MemorySourceReadRequest.Type;
 
-export const MemoryHubSourceReadRequestInput = struct({ ...hub, ...sourceRequestFields });
+export const MemoryHubSourceReadRequestInput = struct({
+  ...hub,
+  ...hubFeatures,
+  ...sourceRequestFields,
+});
 export type MemoryHubSourceReadRequestInput = typeof MemoryHubSourceReadRequestInput.Type;
 
 export const MemoryHubSourceReadRequestResult = struct({ request: MemorySourceReadRequest });
@@ -2769,6 +2765,7 @@ export type MemoryHubSourceReadRequestResult = typeof MemoryHubSourceReadRequest
 
 export const MemoryHubSourceReadCollectInput = struct({
   ...hub,
+  ...hubFeatures,
   limit: PositiveInt.check(Schema.isLessThanOrEqualTo(32)),
 });
 export type MemoryHubSourceReadCollectInput = typeof MemoryHubSourceReadCollectInput.Type;
@@ -2802,6 +2799,7 @@ export type MemorySourceReadOutcome = typeof MemorySourceReadOutcome.Type;
 
 export const MemoryHubSourceReadNormalRespondInput = struct({
   ...hub,
+  ...hubFeatures,
   kind: Schema.Literal("normal").pipe(Schema.withDecodingDefault(Effect.succeed("normal"))),
   requestId: MemorySourceReadRequestId,
   ownerPolicyEpoch: MemoryOwnerPolicyEpoch.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
@@ -2811,6 +2809,7 @@ export type MemoryHubSourceReadNormalRespondInput =
   typeof MemoryHubSourceReadNormalRespondInput.Type;
 export const MemoryHubSourceReadRevokeInput = struct({
   ...hub,
+  ...hubFeatures,
   kind: Schema.Literal("revoke"),
   requesterEnvironmentId: EnvironmentId,
   ownerPolicyEpoch: MemoryOwnerPolicyEpoch,
@@ -2838,6 +2837,7 @@ export type MemoryHubSourceReadRespondResult = typeof MemoryHubSourceReadRespond
 
 export const MemoryHubSourceReadResultInput = struct({
   ...hub,
+  ...hubFeatures,
   requestId: MemorySourceReadRequestId,
 });
 export type MemoryHubSourceReadResultInput = typeof MemoryHubSourceReadResultInput.Type;

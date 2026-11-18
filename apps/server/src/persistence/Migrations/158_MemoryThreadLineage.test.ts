@@ -32,7 +32,9 @@ it.effect("backfills lineage states and ordered revisions from the outbox", () =
     yield* seed("a", "tracked");
     yield* seed("b", "unknown", []);
     yield* seed("c", "overflow");
-    assert.deepStrictEqual(yield* runMigrations(), [[158, "MemoryThreadLineage"]]);
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 158 }), [
+      [158, "MemoryThreadLineage"],
+    ]);
     assert.deepStrictEqual(
       yield* sql`SELECT thread_id,space,state,count FROM memory_thread_lineages ORDER BY thread_id`,
       [
@@ -56,7 +58,7 @@ it.effect("rejects malformed lineage without echoing its contents or removing ol
     yield* runMigrations({ toMigrationInclusive: 157 });
     yield* seed("a", "tracked");
     yield* seed("b", "private-marker");
-    const error = yield* Effect.flip(runMigrations());
+    const error = yield* Effect.flip(runMigrations({ toMigrationInclusive: 158 }));
     assert.notInclude(error.message, "private-marker");
     assert.lengthOf(yield* sql`SELECT id FROM memory_outbox`, 2);
     assert.lengthOf(

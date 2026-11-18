@@ -1,3 +1,5 @@
+import { persistRevisionMarks } from "../MemoryRevisionMarks.ts";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import type { Accounting } from "./Accounting.ts";
@@ -218,6 +220,7 @@ export const makeCheckpoints = (
               "checkpoint-revision",
               sql`INSERT INTO memory_revisions (space,revision_id,memory_id,operation_id,parents_json,scope_json,assertion_kind,provenance_json,payload_ref,created_at) VALUES (${input.memorySpaceId},${r.revisionId},${r.memoryId},${r.operationId},${yield* headsCodec.encode(r.parents)},${yield* scopeCodec.encode(r.scope)},${r.assertionKind},${yield* provenanceCodec.encode(r.provenance)},${r.payloadRef},${Date.parse(r.createdAtUtc)}) ON CONFLICT(space,revision_id) DO NOTHING`,
             );
+            yield* persistRevisionMarks(r).pipe(Effect.provideService(SqlClient.SqlClient, sql));
           }
           for (const tombstone of page.tombstones) {
             yield* stored(

@@ -153,7 +153,7 @@ export const makeMemorySaveSuggestions = ({
   const accept = Effect.fn("MemorySuggestions.accept")(function* (
     input: M.MemorySuggestionActionInput,
     permit: Permit,
-    writeAcceptedSuggestion: ReturnType<typeof makeUpsert>,
+    writeAcceptedSuggestion: ReturnType<typeof makeUpsert>["stageAcceptedSuggestion"],
   ): Effect.fn.Return<
     M.MemorySuggestionAcceptResult,
     | Store.MemoryStorageError
@@ -216,12 +216,8 @@ export const makeMemorySaveSuggestions = ({
               baseBoundary: null,
               payload: { text: row.text, evidence: [], derivedFromMemoryRevisions: revisions },
             },
+            { origin: suggestion.origin, unverified: !suggestion.lineageComplete },
             permit,
-            suggestion.origin,
-            {
-              allowUnverified: false,
-              acceptedSuggestion: { lineageComplete: suggestion.lineageComplete },
-            },
           );
           if (result.receipt.outcome === "rejected")
             return yield* new Store.MemoryStoreConflict({
@@ -278,7 +274,9 @@ export const settleMemorySuggestion = Effect.fn("MemorySuggestions.settle")(func
   sql: SqlClient.SqlClient,
   space: M.MemorySpaceId,
   receipt: M.MemoryHubReceipt,
+  source: "acknowledgement" | "ordered",
 ) {
+  if (receipt.failureCode === "source_invalidated" && source === "acknowledgement") return;
   if (receipt.outcome !== "rejected" || receipt.failureCode === "source_invalidated") {
     yield* stored(
       "suggestion-settle",

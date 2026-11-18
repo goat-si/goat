@@ -40,6 +40,8 @@ export const memoryEntries = {
       limit: "Items per page, 1 to 100. Default 20.",
       cursor: "nextCursor from the previous page, unchanged, with the same query and scope.",
       query: "The words to find.",
+      origin:
+        "Use this when looking for memories saved from a particular conversation. Filters by that conversation’s environmentId and threadId.",
       scope:
         "Where to search: {kind:'user'} (default), {kind:'project', projectKey} or {kind:'thread', thread, projectKey?}.",
       mode: "fts (default) for phrase search, or substring for partial text.",
