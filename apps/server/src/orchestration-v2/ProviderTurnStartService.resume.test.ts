@@ -1,8 +1,9 @@
 import { it as effectIt } from "@effect/vitest";
-import { ProviderDriverKind } from "@goat/contracts";
+import { RunId, ProviderDriverKind } from "@goat/contracts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Effect from "effect/Effect";
 import { expect } from "vite-plus/test";
+import { missedTurnInputRuns } from "./goat/MissedTurnInput.ts";
 import { makeLocalCommandHarness } from "./ProviderTurnStartService.localCommand.testkit.ts";
 
 effectIt.effect.each([
@@ -106,4 +107,37 @@ effectIt.effect("a refused native Resume fails without starting a fresh session 
     expect(harness.fallbackEnsureThread).not.toHaveBeenCalled();
     expect(harness.startRootRun).not.toHaveBeenCalled();
   }),
+);
+
+effectIt.effect.each(["accepted", "ambiguous", "unsent"] as const)(
+  "uses the manual replay's %s delivery when recovering its original input",
+  (inputDelivery) =>
+    Effect.gen(function* () {
+      const harness = makeLocalCommandHarness({
+        text: "Continue where you left off.",
+        manualResume: { accepted: false, supported: false },
+        previousTurn: { runStatus: "interrupted", turnStatus: "interrupted" },
+      });
+      yield* harness.start;
+      const replayed = harness.startRootRun.mock.calls.at(-1)![0];
+      expect(replayed.message.text).toBe("Original prompt");
+      const projection = harness.projection();
+      const followUp = {
+        ...replayed.run,
+        id: RunId.make("follow-up"),
+        ordinal: replayed.run.ordinal + 1,
+      };
+      const missed = missedTurnInputRuns(
+        {
+          ...projection,
+          attempts: projection.attempts.map((attempt) =>
+            attempt.id === replayed.attempt.id ? { ...replayed.attempt, inputDelivery } : attempt,
+          ),
+        },
+        followUp,
+      );
+      expect(missed.map((run) => run.userMessageId)).toEqual(
+        inputDelivery === "unsent" ? ["resume-source-message"] : [],
+      );
+    }),
 );

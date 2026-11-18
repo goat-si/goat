@@ -74,7 +74,7 @@ export const withAttemptDeliveryEvent = Effect.fn("EventSink.withAttemptDelivery
 });
 
 export const preserveAttemptDeliveryJson = (sql: SqlClient.SqlClient) => sql`
-  CASE
+  json_patch(CASE
     WHEN json_extract(excluded.payload_json, '$.inputDelivery') = 'accepted'
       THEN excluded.payload_json
     WHEN json_extract(payload_json, '$.inputDelivery') = 'unsent'
@@ -88,14 +88,22 @@ export const preserveAttemptDeliveryJson = (sql: SqlClient.SqlClient) => sql`
         AND json_extract(excluded.payload_json, '$.inputDelivery') IS NULL)
       THEN json_set(excluded.payload_json, '$.inputDelivery', json_extract(payload_json, '$.inputDelivery'))
     ELSE excluded.payload_json
-  END
+  END, CASE
+    WHEN json_extract(payload_json, '$.replayedInputMessageId') IS NOT NULL
+      AND json_extract(excluded.payload_json, '$.replayedInputMessageId') IS NULL
+      THEN json_object('replayedInputMessageId', json_extract(payload_json, '$.replayedInputMessageId'))
+    ELSE '{}'
+  END)
 `;
 
 export function preserveAttemptDelivery(
   attempts: ReadonlyArray<OrchestrationV2RunAttempt>,
   next: OrchestrationV2RunAttempt,
 ) {
-  const current = attempts.find(({ id }) => id === next.id)?.inputDelivery;
+  const previous = attempts.find(({ id }) => id === next.id);
+  const current = previous?.inputDelivery;
+  if (next.replayedInputMessageId === undefined && previous?.replayedInputMessageId !== undefined)
+    next = { ...next, replayedInputMessageId: previous.replayedInputMessageId };
   // An older server can execute a new attempt without recording a submit fence.
   if (
     current === "unsent" &&

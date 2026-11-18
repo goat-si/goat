@@ -17,7 +17,7 @@ export function missedTurnInputRuns(
   const compactionMessageIds = new Set(
     projection.messages.filter(isCompactionCommandMessage).map((message) => message.id),
   );
-  const evidence = indexRunInputDelivery(projection.attempts);
+  const evidence = indexRunInputDelivery(projection);
   return projection.runs.filter((source) => {
     const input = evidence.get(source.id);
     return (

@@ -1134,6 +1134,9 @@ export const layer: Layer.Layer<
       };
       const runningAttempt: OrchestrationV2RunAttempt = {
         ...attempt,
+        ...(replaySource === undefined
+          ? {}
+          : { replayedInputMessageId: replaySource.userMessageId }),
         ...(runningProviderThread.nativeThreadRef?.nativeId == null
           ? {}
           : { nativeThreadId: runningProviderThread.nativeThreadRef.nativeId }),

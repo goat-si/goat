@@ -16,7 +16,7 @@ export function manualContinuationDelivery(
   let sourceId = run?.manualContinuationOfRunId;
   if (sourceId === undefined) return { type: "native" };
   const runs = new Map(projection.runs.map((source) => [source.id, source]));
-  const evidence = indexRunInputDelivery(projection.attempts);
+  const evidence = indexRunInputDelivery(projection);
   const visited = new Set<OrchestrationV2Run["id"]>();
   while (
     sourceId !== undefined &&
