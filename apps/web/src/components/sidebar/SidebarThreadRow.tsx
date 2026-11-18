@@ -1,4 +1,4 @@
-import { useSidebarBranch } from "./useSidebarBranch";
+import { useSidebarBranch, withoutRemovedCheckout } from "./useSidebarBranch";
 import { JumpHintBadge } from "./SidebarJumpHintBadge";
 import { sidebarWorkingLabel } from "./sidebarWorkingLabel";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "../ThreadHoverCard";
@@ -581,6 +581,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     thread.branchPullRequest,
   );
   const visibleGitStatus = useSidebarBranch(thread, gitCwd, leaseLiveStatus);
+  const checkoutThread = withoutRemovedCheckout(thread, visibleGitStatus);
   const pr = linkedPullRequestStatus?.pr ?? null;
   const supportsMultiplePullRequests = useSupportsMultiplePullRequests(thread.environmentId);
   const currentLinkedPr = supportsMultiplePullRequests
@@ -684,7 +685,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
 
   const detailsTooltip = (
     <SidebarThreadTooltip
-      thread={thread}
+      thread={checkoutThread}
       project={props.project}
       projectDisplayName={props.projectDisplayName}
       environmentLabel={props.environmentLabel}
@@ -1258,7 +1259,9 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                   )}
                 >
                   {/* Stays put through hover so its path tooltip remains reachable. */}
-                  {thread.worktreePath ? <ThreadWorktreeIndicator thread={thread} /> : null}
+                  {checkoutThread.worktreePath ? (
+                    <ThreadWorktreeIndicator thread={checkoutThread} />
+                  ) : null}
                   <span
                     className={cn(
                       isWokeStatus
@@ -1517,6 +1520,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
   );
   const gitCwd = thread.worktreePath ?? props.project?.workspaceRoot ?? null;
   const visibleGitStatus = useSidebarBranch(thread, gitCwd, leaseLiveStatus);
+  const checkoutThread = withoutRemovedCheckout(thread, visibleGitStatus);
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
     effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",
     activeWorktreePath: thread.worktreePath,
@@ -1632,7 +1636,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
           </span>
         </TooltipTrigger>
         <SidebarThreadTooltip
-          thread={thread}
+          thread={checkoutThread}
           project={props.project}
           projectDisplayName={props.projectDisplayName}
           environmentLabel={props.environmentLabel}

@@ -88,6 +88,7 @@ export function layerTestFor(state: {
     ),
     Layer.provide(
       Layer.mock(GitWorkflowService.GitWorkflowService)({
+        repositoryRoot: (cwd) => Effect.succeed(state.currentLocalStatus.isRepo ? cwd : null),
         headPath: () =>
           Effect.sync(() => {
             state.headPathCalls = (state.headPathCalls ?? 0) + 1;

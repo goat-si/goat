@@ -91,14 +91,14 @@ describe("VCS HEAD watchers", () => {
       yield* Effect.gen(function* () {
         const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
         const branches = yield* Stream.toPull(broadcaster.streamBranchStatus({ cwd: "/repo" }));
-        assert.deepEqual(yield* branches, [{ refName: "main" }]);
+        assert.deepEqual(yield* branches, [{ refName: "main", isRepo: true }]);
 
         state.currentLocalStatus = { ...baseLocalStatus, refName: "repro" };
         const lockPath = path.join(gitDir, "HEAD.lock");
         yield* fs.writeFileString(lockPath, "ref: refs/heads/repro\n");
         yield* fs.rename(lockPath, headPath);
 
-        assert.deepEqual(yield* branches, [{ refName: "repro" }]);
+        assert.deepEqual(yield* branches, [{ refName: "repro", isRepo: true }]);
         assert.equal(state.localStatusCalls, 0);
       }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),

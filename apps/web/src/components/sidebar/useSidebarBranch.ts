@@ -24,3 +24,9 @@ export function useSidebarBranch(
   useAtomMount(vcsBranchRevalidation(target));
   return useRetainedValue(JSON.stringify([environmentId, cwd]), status.data);
 }
+
+export function withoutRemovedCheckout<
+  T extends { readonly branch: string | null; readonly worktreePath: string | null },
+>(thread: T, gitStatus: { readonly isRepo?: boolean | undefined } | null): T {
+  return gitStatus?.isRepo === false ? { ...thread, branch: null, worktreePath: null } : thread;
+}

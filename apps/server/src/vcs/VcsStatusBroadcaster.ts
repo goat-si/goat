@@ -175,6 +175,7 @@ export const make = Effect.gen(function* () {
     PubSub.unbounded<{
       readonly cwd: string;
       readonly refName: string | null;
+      readonly isRepo: boolean;
       readonly revision: number;
     }>(),
     (pubsub) => PubSub.shutdown(pubsub),
@@ -185,17 +186,18 @@ export const make = Effect.gen(function* () {
   const detailedSubscribers = new Map<string, number>();
   const branches = new Map<
     string,
-    { readonly refName: string | null; readonly revision: number }
+    { readonly refName: string | null; readonly isRepo: boolean; readonly revision: number }
   >();
   let branchRevision = 0;
   const publishBranch = Effect.fn("VcsStatusBroadcaster.publishBranch")(function* (
     cwd: string,
-    refName: string | null,
+    { refName, isRepo }: { readonly refName: string | null; readonly isRepo: boolean },
   ) {
-    if (branches.get(cwd)?.refName === refName) return;
+    const previous = branches.get(cwd);
+    if (previous?.refName === refName && previous.isRepo === isRepo) return;
     const revision = ++branchRevision;
-    branches.set(cwd, { refName, revision });
-    yield* PubSub.publish(branchChangesPubSub, { cwd, refName, revision });
+    branches.set(cwd, { refName, isRepo, revision });
+    yield* PubSub.publish(branchChangesPubSub, { cwd, refName, isRepo, revision });
   });
   const localRefreshLocks = yield* KeyedLock.make<string>();
   const cacheRef = yield* Ref.make(new Map<string, CachedVcsStatus>());
@@ -224,7 +226,7 @@ export const make = Effect.gen(function* () {
           new Map(cache).set(cwd, { local: nextLocal, remote }),
         ] as const;
       });
-      yield* publishBranch(cwd, local.refName);
+      yield* publishBranch(cwd, local);
       if (options?.publish && remoteCleared) {
         yield* PubSub.publish(changesPubSub, {
           cwd,
@@ -694,10 +696,15 @@ export const make = Effect.gen(function* () {
         cwd,
         Effect.gen(function* () {
           const refName = yield* workflow.currentBranch(cwd);
+          const isRepo = refName !== null || (yield* workflow.repositoryRoot(cwd)) !== null;
           const cached = yield* getCachedStatus(cwd);
-          if (detailedSubscribers.has(cwd) && cached?.local?.value.refName === refName) {
-            yield* publishBranch(cwd, refName);
-            return { refName, revision: branches.get(cwd)?.revision ?? 0 };
+          if (
+            detailedSubscribers.has(cwd) &&
+            cached?.local?.value.refName === refName &&
+            cached.local.value.isRepo === isRepo
+          ) {
+            yield* publishBranch(cwd, { refName, isRepo });
+            return { refName, isRepo, revision: branches.get(cwd)?.revision ?? 0 };
           }
           // HEAD cannot certify working-tree totals, even when it has not moved.
           localRefreshResults.delete(cwd);
@@ -709,10 +716,14 @@ export const make = Effect.gen(function* () {
           if (detailedSubscribers.has(cwd)) {
             const local = yield* workflow.localStatus({ cwd });
             yield* updateCachedLocalStatus(cwd, local, { publish: true });
-            return { refName: local.refName, revision: branches.get(cwd)?.revision ?? 0 };
+            return {
+              refName: local.refName,
+              isRepo: local.isRepo,
+              revision: branches.get(cwd)?.revision ?? 0,
+            };
           }
-          yield* publishBranch(cwd, refName);
-          return { refName, revision: branches.get(cwd)?.revision ?? 0 };
+          yield* publishBranch(cwd, { refName, isRepo });
+          return { refName, isRepo, revision: branches.get(cwd)?.revision ?? 0 };
         }),
       ),
   );
@@ -787,10 +798,10 @@ export const make = Effect.gen(function* () {
   const refreshBranchStatus: VcsStatusBroadcaster["Service"]["refreshBranchStatus"] = Effect.fn(
     "VcsStatusBroadcaster.refreshBranchStatus",
   )(function* (input) {
-    const { refName } = yield* refreshBranchStatusCore(
+    const { refName, isRepo } = yield* refreshBranchStatusCore(
       yield* withFileSystem(normalizeCwd(input.cwd)),
     );
-    return { refName };
+    return { refName, isRepo };
   });
 
   const streamBranchStatus: VcsStatusBroadcaster["Service"]["streamBranchStatus"] = (input) =>
@@ -801,12 +812,16 @@ export const make = Effect.gen(function* () {
         yield* watchCheckout(cwd);
         const branch = yield* refreshBranchStatusCore(cwd);
         return Stream.concat(
-          Stream.make({ refName: branch.refName }),
+          Stream.make({ refName: branch.refName, isRepo: branch.isRepo }),
           Stream.fromSubscription(subscription).pipe(
             Stream.filter((event) => event.cwd === cwd && event.revision > branch.revision),
-            Stream.map(({ refName }) => ({ refName })),
+            Stream.map(({ refName, isRepo }) => ({ refName, isRepo })),
           ),
-        ).pipe(Stream.changesWith((left, right) => left.refName === right.refName));
+        ).pipe(
+          Stream.changesWith(
+            (left, right) => left.refName === right.refName && left.isRepo === right.isRepo,
+          ),
+        );
       }),
     );
 
