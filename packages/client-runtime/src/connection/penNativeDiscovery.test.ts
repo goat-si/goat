@@ -450,7 +450,13 @@ it.effect("a closed viewer gate keeps a member's stored route and the environmen
     };
     const latest = yield* SubscriptionRef.make<Option.Option<PenMembersInput>>(Option.some(ready));
     // Pen machines turned off, or a client without Pen membership, says nothing about who left.
-    const states: ReadonlyArray<PenMembersInput> = [ready, { kind: "disabled" }];
+    // A closed gate keeps the route even when Pen says the member or this machine left.
+    const states: ReadonlyArray<PenMembersInput> = [
+      ready,
+      { kind: "disabled" },
+      { ...ready, seq: 2, members: [] },
+      { kind: "not-member", seq: 3 },
+    ];
     for (const gateway of [Option.none(), Option.some({ open: unused, close: () => Effect.void })])
       yield* Effect.gen(function* () {
         const discovery = yield* makePenNativeDiscovery();

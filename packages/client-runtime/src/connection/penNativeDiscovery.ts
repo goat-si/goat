@@ -44,11 +44,13 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
     for (const route of existing) {
       const { meshId, nodeId, noisePub } = route.profile;
       const pin: DesktopPenPin = { meshId, nodeId, noisePub };
-      // Only a member Pen says left loses its route: removing an environment's last route deletes
-      // the environment with its drafts. A closed gate, Pen machines turned off or a client
-      // without Pen membership leave the route stored and unusable.
+      // Only a member Pen says left loses its route, and only where the viewer runs: removing an
+      // environment's last route deletes it with its drafts. A closed gate, Pen machines turned
+      // off or a client without the gateway leave the route stored and unusable.
       const left =
-        state.kind === "not-member" || (state.kind === "ready" && !penPinIsCurrent(state, pin));
+        policy.enabled &&
+        Option.isSome(gateway) &&
+        (state.kind === "not-member" || (state.kind === "ready" && !penPinIsCurrent(state, pin)));
       if (!left) continue;
       yield* registry.removeRoute(route.target.environmentId, route.target.connectionId).pipe(
         Effect.catch((error) =>
