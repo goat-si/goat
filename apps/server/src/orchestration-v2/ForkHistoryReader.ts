@@ -87,3 +87,17 @@ export function makeReadSwitchItems<E>(
     ];
   });
 }
+
+export const makeReadHandoffItems =
+  <E>(store: ProjectionStoreV2["Service"], mapError: (threadId: ThreadId, cause: unknown) => E) =>
+  (threadId: ThreadId, runIds?: ReadonlyArray<RunId | null>) =>
+    store
+      .getThreadRecords(
+        threadId,
+        ["turnItems"],
+        runIds === undefined ? undefined : { turnItemRunIds: runIds },
+      )
+      .pipe(
+        Effect.map((records) => records.turnItems),
+        Effect.mapError((cause) => mapError(threadId, cause)),
+      );

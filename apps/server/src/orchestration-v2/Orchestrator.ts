@@ -1,11 +1,12 @@
-import { makeReadSwitchItems } from "./ForkHistoryReader.ts";
+import type { AtomicLaunchReceipt } from "./AtomicLaunchReceipt.ts";
+import { makeReadHandoffItems, makeReadSwitchItems } from "./ForkHistoryReader.ts";
 import { makeNextTurnItemOrdinal } from "./TurnItemOrdinal.ts";
 import {
   manualResumeCommand,
   manualResumeNotification,
   manualResumeRunFields,
 } from "./manualResumeCommand.ts";
-import { threadCreateMessage } from "./threadCreateMessage.ts";
+import { legacyInitialMessageCommandId, threadCreateMessage } from "./threadCreateMessage.ts";
 import { contextHandoffTurnItem } from "./ContextHandoffTurnItem.ts";
 import { retainedUserItemFailures } from "./goat/RetainedQueuedInput.ts";
 import { commandThreadId } from "./commandThreadId.ts";
@@ -817,22 +818,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })),
           );
 
-  const readHandoffItems = (threadId: ThreadId, runIds?: ReadonlyArray<RunId | null>) =>
-    projectionStore
-      .getThreadRecords(
-        threadId,
-        ["turnItems"],
-        runIds === undefined ? undefined : { turnItemRunIds: runIds },
-      )
-      .pipe(
-        Effect.map((records) => records.turnItems),
-        Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })),
-      );
-
+  const mapHandoffReadError = (threadId: ThreadId, cause: unknown) =>
+    new OrchestratorProjectionError({ threadId, cause });
+  const readHandoffItems = makeReadHandoffItems(projectionStore, mapHandoffReadError);
   const readSwitchItems = makeReadSwitchItems(
     projectionStore,
     readHandoffItems,
-    (threadId, cause) => new OrchestratorProjectionError({ threadId, cause }),
+    mapHandoffReadError,
   );
 
   const getProjectionWithPendingEvents =
@@ -12229,6 +12221,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         readonly reason: string;
       };
       readonly updateDelegatedCompletionOnlyRunId?: RunId;
+      readonly initialMessageReceipt?: AtomicLaunchReceipt;
     },
     OrchestratorV2Error
   > {
@@ -12247,15 +12240,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }
       | undefined;
     let updateDelegatedCompletionOnlyRunId: RunId | undefined;
+    let initialMessageReceipt: AtomicLaunchReceipt | undefined;
     switch (command.type) {
       case "thread.create":
         yield* dispatchThreadCreate(command, events);
-        if (command.initialMessage !== undefined)
+        if (command.initialMessage !== undefined) {
+          initialMessageReceipt = {
+            commandId: legacyInitialMessageCommandId(command.commandId, command.initialMessage),
+            createEventCount: (yield* Ref.get(events)).length,
+          };
           cancelUnsettledEffects = yield* dispatchMessage(
             threadCreateMessage(command, command.initialMessage),
             events,
             effects,
           );
+        }
         break;
       case "thread.promote":
         yield* dispatchThreadPromote(command, events);
@@ -12618,6 +12617,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     return {
       events: yield* Ref.get(events),
       effects: yield* Ref.get(effects),
+      ...(initialMessageReceipt === undefined ? {} : { initialMessageReceipt }),
       ...(cancelUnsettledEffects === undefined ? {} : { cancelUnsettledEffects }),
       ...(updateDelegatedCompletionOnlyRunId === undefined
         ? {}
@@ -12831,6 +12831,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandType: command.type,
         acceptedAt,
         events: plan.events,
+        ...(plan.initialMessageReceipt === undefined
+          ? {}
+          : { initialMessageReceipt: plan.initialMessageReceipt }),
         effects: plan.effects,
         allowEffectOnly: command.type === "thread.stop",
         ...(guard === undefined ? {} : { guard }),

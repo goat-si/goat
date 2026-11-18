@@ -2,7 +2,13 @@ import { ChatAttachment } from "./chatAttachment.ts";
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import { MemoryTaskGrantCeilingField } from "./memory.ts";
 import * as Schema from "effect/Schema";
-import { MessageId, ScheduledTaskId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  CommandId,
+  MessageId,
+  ScheduledTaskId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 
 export const OrchestrationV2ThreadLaunchWorkspaceStrategy = Schema.Union([
   Schema.Struct({
@@ -26,6 +32,7 @@ export type OrchestrationV2ThreadLaunchWorkspaceStrategy =
 // Server-owned input attached to a fresh launch's create command.
 export const OrchestrationV2ThreadCreateInitialMessage = Schema.Struct({
   messageId: MessageId,
+  legacyCommandId: Schema.optional(CommandId),
   text: Schema.String,
   attachments: Schema.Array(ChatAttachment),
   context: Schema.optional(OrchestrationMessageContext),

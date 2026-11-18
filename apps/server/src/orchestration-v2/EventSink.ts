@@ -1,3 +1,4 @@
+import { makeCommandEventAppender } from "./AtomicLaunchReceipt.ts";
 import { makeDelegatedCompletionUpdater } from "./goat/DelegatedCompletionMerge.ts";
 import { makeScheduledTaskAppender as makeTaskAppender } from "./ScheduledTaskCompletionBatch.ts";
 import * as ScheduledTaskRuns from "../scheduledTasks/ScheduledTaskRuns.ts";
@@ -203,6 +204,7 @@ const layerBase: Layer.Layer<
     };
 
     const appendStagedEvents = makeTaskAppender(sql, eventStore, projectionStore, scheduledRuns);
+    const appendCommandEvents = makeCommandEventAppender(appendStagedEvents, commandReceipts);
 
     const applyStoredEvents =
       /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
@@ -630,10 +632,7 @@ const layerBase: Layer.Layer<
               ? input.events
               : yield* updateDelegatedCompletionOnly(input.events, (id) => id === runId),
           );
-          const storedEvents = yield* appendStagedEvents({
-            commandId: input.commandId,
-            events: normalized,
-          });
+          const storedEvents = yield* appendCommandEvents(input, normalized);
           let sequence = storedEvents.at(-1)?.sequence;
           if (
             sequence === undefined &&

@@ -3127,6 +3127,12 @@ const make = Effect.gen(function* () {
                   : {
                       senderThreadId: scope.thread.threadId,
                       messageId: stableMessageId({ scope, requestKey: key, index }),
+                      legacyCommandId: stableCommandId({
+                        scope,
+                        requestKey: key,
+                        operation: "dispatch-thread",
+                        index,
+                      }),
                       text: request.prompt,
                       attachments: [],
                     };
@@ -3186,19 +3192,15 @@ const make = Effect.gen(function* () {
                 initialMessage !== undefined &&
                 !receipt.storedEvents.some(({ event }) => event.type === "run.created")
               ) {
+                const { legacyCommandId, ...message } = initialMessage;
                 yield* threadManagement
                   .dispatch({
                     type: "message.dispatch",
                     createdBy: "agent",
                     creationSource: "mcp",
-                    commandId: stableCommandId({
-                      scope,
-                      requestKey: key,
-                      operation: "dispatch-thread",
-                      index,
-                    }),
+                    commandId: legacyCommandId,
                     threadId,
-                    ...initialMessage,
+                    ...message,
                     modelSelection: resolvedModelSelection,
                     dispatchMode: { type: "start_immediately" },
                   })

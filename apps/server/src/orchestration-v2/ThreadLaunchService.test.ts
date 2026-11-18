@@ -1048,7 +1048,7 @@ it.effect("replays a server-allocated launch", () =>
       );
       assert.deepEqual(
         Array.from(created, (event) => event.commandId),
-        [rest.commandId, rest.commandId],
+        [rest.commandId, CommandId.make(`${rest.commandId}:initial-message`)],
       );
       yield* Deferred.await(setupEntered);
       const retry = yield* launches.launch(rest);
@@ -1063,6 +1063,25 @@ it.effect("replays a server-allocated launch", () =>
       assert.equal(retry.projection.runs.length, 1);
       assert.equal(retry.projection.messages[0]?.id, first.projection.messages[0]?.id);
       assert.equal(retry.projection.runs[0]?.id, first.projection.runs[0]?.id);
+      const legacyRetry = yield* threads.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`${rest.commandId}:initial-message`),
+        threadId: first.threadId,
+        messageId: MessageId.make("allocated-after-downgrade"),
+        text: "Only once",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "defer_start", workspaceStrategy: rest.workspaceStrategy },
+        createdBy: rest.createdBy,
+        creationSource: rest.creationSource,
+      });
+      assert.isTrue(legacyRetry.replayed);
+      assert.equal(legacyRetry.sequence, first.sequence);
+      assert.equal(
+        legacyRetry.storedEvents.find(({ event }) => event.type === "run.created")?.event.runId,
+        first.projection.runs[0]?.id,
+      );
+      assert.lengthOf((yield* threads.getThreadProjection(first.threadId)).runs, 1);
       yield* Deferred.succeed(allowSetup, undefined);
       yield* threads.streamStoredEventsFrom({ threadId: first.threadId }).pipe(
         Stream.filter(
