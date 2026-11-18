@@ -1,9 +1,10 @@
+import { closureCap, requireClosureCapacity } from "./MemoryDependencies.ts";
 import * as M from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import type * as SqlClient from "effect/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Store from "./MemoryStore.ts";
 import { redactMemoryText, scanMemoryValue } from "./MemorySecretScanner.ts";
 import type { MemoryServiceError } from "./MemoryService.ts";
@@ -154,12 +155,17 @@ export const makeCommitSummary = (deps: {
           return;
         if (!(yield* store.areAutomaticallyUsable(space, [summaryRevision]))) return;
         if (head && !promotions.replace) return;
+        const dependencies = [...new Set([summaryRevision, ...summaryDependencies])];
+        yield* requireClosureCapacity(
+          dependencies.length,
+          yield* closureCap(space).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+        );
         const payload = yield* decode(
           decodeSummaryPayload(
             {
               text: safe.text,
               evidence: safe.evidence,
-              derivedFromMemoryRevisions: [...new Set([summaryRevision, ...summaryDependencies])],
+              derivedFromMemoryRevisions: dependencies,
             },
             strict,
           ),
@@ -278,17 +284,22 @@ export const makeCommitSummary = (deps: {
           return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
         // The final input also carries lineage across in-memory generation chunks. Rebuilds
         // without the old summary must not inherit dependencies from the discarded head.
+        const dependencies = [
+          ...new Set([
+            ...lineage.revisions,
+            ...(input.input.previousSummary?.derivedFromMemoryRevisions ?? []),
+          ]),
+        ];
+        yield* requireClosureCapacity(
+          dependencies.length,
+          yield* closureCap(space).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+        );
         const payload = yield* decode(
           decodeSummaryPayload(
             {
               text: generated.result.text,
               evidence: generated.result.evidence,
-              derivedFromMemoryRevisions: [
-                ...new Set([
-                  ...lineage.revisions,
-                  ...(input.input.previousSummary?.derivedFromMemoryRevisions ?? []),
-                ]),
-              ],
+              derivedFromMemoryRevisions: dependencies,
             },
             strict,
           ),

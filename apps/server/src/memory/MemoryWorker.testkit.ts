@@ -403,3 +403,17 @@ export const lineageSetup = Effect.gen(function* () {
   yield* sql`CREATE TABLE projection_projects(project_id TEXT,workspace_root TEXT,deleted_at TEXT)`;
   yield* sql`INSERT INTO projection_projects VALUES ('project','/synthetic',NULL)`;
 });
+
+export const lineageUpsert = (
+  n: number,
+  deps: readonly M.MemoryRevisionId[] = [],
+): M.MemoryUpsertInput => ({
+  memorySpaceId: space,
+  memoryId: M.MemoryId.make(id(n)),
+  operationId: M.MemoryOperationId.make(id(n + 1000)),
+  expectedHeads: [],
+  scope: { kind: "user" },
+  assertionKind: "inference",
+  payload: { text: `synthetic lineage ${n}`, evidence: [], derivedFromMemoryRevisions: deps },
+  baseBoundary: null,
+});

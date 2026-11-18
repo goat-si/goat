@@ -549,64 +549,80 @@ it.effect("remember with 101 sources on the old floor asks for a hub upgrade", (
   }).pipe(Effect.provide(Fixture.layer)),
 );
 
-it.effect("remember with 101 sources on the new floor persists every edge for forget", () =>
-  Effect.gen(function* () {
-    yield* rememberSetup;
-    const sql = yield* SqlClient.SqlClient;
-    const service = yield* Service.MemoryService;
-    const store = yield* Store.MemoryStore;
-    yield* sql`INSERT INTO memory_space_features VALUES (${Fixture.space},1000,0)`;
-    const sources = yield* Effect.forEach(
-      Array.from({ length: 101 }, (_, n) => 32000 + n),
-      (n) => seed(n),
-    );
-    yield* appendLineage(
-      ref(),
-      Fixture.space,
-      sources.map((source) => source.revision),
-    );
-    const saved = yield* remember("a wide synthetic memory");
-    expect(saved.result.isError).not.toBe(true);
-    const row = (yield* sql<{ memory_id: string }>`
+it.effect.each([101, 1000])(
+  "remember on the new floor preserves %s sources through edits and forget",
+  (size) =>
+    Effect.gen(function* () {
+      yield* rememberSetup;
+      const sql = yield* SqlClient.SqlClient;
+      const service = yield* Service.MemoryService;
+      const store = yield* Store.MemoryStore;
+      yield* sql`INSERT INTO memory_space_features VALUES (${Fixture.space},1000,0)`;
+      const sources = yield* Effect.forEach(
+        Array.from({ length: size }, (_, n) => 32000 + n),
+        (n) => seed(n),
+      );
+      yield* appendLineage(
+        ref(),
+        Fixture.space,
+        sources.map((source) => source.revision),
+      );
+      if (size === 1000) {
+        yield* rememberFromActiveRun("Write a wide synthetic memory down.", person);
+        yield* appendLineage(ref(), Fixture.space, revisions(35600, 1));
+        expect((yield* store.readThreadLineage(ref(), Fixture.space)).state).toBe("overflow");
+      }
+      const saved = yield* remember("a wide synthetic memory");
+      expect(saved.result.isError).not.toBe(true);
+      const row = (yield* sql<{ memory_id: string }>`
       SELECT p.memory_id FROM memory_payloads p WHERE json_extract(p.body_json,'$.text')='a wide synthetic memory'`)[0]!;
-    const memoryId = M.MemoryId.make(row.memory_id);
-    const before = yield* store.loadAggregate(Fixture.space, memoryId);
-    expect(before.revisions[0]?.payload?.derivedFromMemoryRevisions).toEqual(
-      sources.map((source) => source.revision),
-    );
-    const legacy = yield* service.read({ memorySpaceId: Fixture.space, memoryId }, Effect.void);
-    expect(legacy.status).toBe("active");
-    if (legacy.status !== "active") throw new Error("expected wide active memory");
-    expect(legacy.payload.derivedFromMemoryRevisions).toEqual([]);
-    yield* service.upsert(
-      {
-        ...Fixture.upsert(32998),
-        memoryId,
-        expectedHeads: [legacy.revision.revisionId],
-        payload: { ...legacy.payload, text: "a legacy Settings edit" },
-      },
-      Effect.void,
-    );
-    const edited = yield* store.loadAggregate(Fixture.space, memoryId);
-    expect(
-      edited.revisions.find((r) => r.revision.revisionId === edited.heads[0])?.payload
-        ?.derivedFromMemoryRevisions,
-    ).toEqual(sources.map((source) => source.revision));
-    const last = sources[100]!;
-    yield* service.forget(
-      {
-        memorySpaceId: Fixture.space,
-        memoryId: last.input.memoryId,
-        operationId: M.MemoryOperationId.make(Fixture.id(32999)),
-        expectedHeads: [last.revision],
-      },
-      Effect.void,
-    );
-    const after = yield* store.loadAggregate(Fixture.space, memoryId);
-    expect(after.item?.status).toBe("blocked");
-    expect(after.item).toMatchObject({ failureCode: "source_invalidated" });
-    expect(after.revisions.every((entry) => entry.payload === null)).toBe(true);
-  }).pipe(Effect.provide(Fixture.layer)),
+      const memoryId = M.MemoryId.make(row.memory_id);
+      const before = yield* store.loadAggregate(Fixture.space, memoryId);
+      expect(before.revisions[0]?.payload?.derivedFromMemoryRevisions).toEqual(
+        sources.map((source) => source.revision),
+      );
+      const projected = yield* service.read(
+        { memorySpaceId: Fixture.space, memoryId, includeMarks: true },
+        Effect.void,
+      );
+      expect(projected.marks).toEqual(
+        size === 1000
+          ? { originThreadId: ref().threadId, provenance: "unverified" }
+          : { originThreadId: ref().threadId },
+      );
+      const legacy = yield* service.read({ memorySpaceId: Fixture.space, memoryId }, Effect.void);
+      expect(legacy.status).toBe("active");
+      if (legacy.status !== "active") throw new Error("expected wide active memory");
+      expect(legacy.payload.derivedFromMemoryRevisions).toEqual([]);
+      yield* service.upsert(
+        {
+          ...Fixture.upsert(36098),
+          memoryId,
+          expectedHeads: [legacy.revision.revisionId],
+          payload: { ...legacy.payload, text: "a legacy Settings edit" },
+        },
+        Effect.void,
+      );
+      const edited = yield* store.loadAggregate(Fixture.space, memoryId);
+      expect(
+        edited.revisions.find((r) => r.revision.revisionId === edited.heads[0])?.payload
+          ?.derivedFromMemoryRevisions,
+      ).toEqual(sources.map((source) => source.revision));
+      const last = sources.at(-1)!;
+      yield* service.forget(
+        {
+          memorySpaceId: Fixture.space,
+          memoryId: last.input.memoryId,
+          operationId: M.MemoryOperationId.make(Fixture.id(36099)),
+          expectedHeads: [last.revision],
+        },
+        Effect.void,
+      );
+      const after = yield* store.loadAggregate(Fixture.space, memoryId);
+      expect(after.item?.status).toBe("blocked");
+      expect(after.item).toMatchObject({ failureCode: "source_invalidated" });
+      expect(after.revisions.every((entry) => entry.payload === null)).toBe(true);
+    }).pipe(Effect.provide(Fixture.layer)),
 );
 
 const rememberFromActiveRun = Effect.fn("test.rememberFromActiveRun")(function* (

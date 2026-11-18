@@ -1,3 +1,4 @@
+import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGenerationRunner";
 import * as M from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
@@ -446,3 +447,26 @@ export const sourceFixture = Effect.gen(function* () {
     Effect.void,
   );
 });
+
+export const refusals = [
+  {
+    shape: "a typed runner refusal",
+    error: new M.TextGenerationError({
+      operation: "resolveMemoryConflict",
+      detail: "Grok did not disclose or support the selected memory model.",
+      cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
+    }),
+  },
+  {
+    shape: "a provider setup error under a generic detail",
+    error: new M.TextGenerationError({
+      operation: "resolveMemoryConflict",
+      detail: "Antigravity text generation failed.",
+      cause: new M.ProviderSetupError({
+        instanceId: M.ProviderInstanceId.make("antigravity"),
+        operation: "start",
+        detail: "Antigravity needs a Gemini API key or Google Cloud project.",
+      }),
+    }),
+  },
+];

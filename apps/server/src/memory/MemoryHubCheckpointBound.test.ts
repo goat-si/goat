@@ -678,6 +678,51 @@ it.effect("packs a maximal-body 1000-source save in a push, tail, and real check
       payload.derivedFromMemoryRevisions,
     );
     assert.isAtMost(utf8(serialized), CHECKPOINT_PULL_MAX_BYTES);
+    const time = M.MEMORY_LOG_RETENTION_MS;
+    const authority: Store.HubAuthority = {
+      principal: {
+        memorySpaceId: space,
+        environmentId: env,
+        credentialVersion: 1,
+        scopes: ["memory:sync"],
+      },
+      now: Effect.succeed(time),
+      reauthorize: Effect.void,
+    };
+    const handle = yield* store.transact(
+      store.prepareHubCheckpointTx({
+        authority,
+        checkpointId: "wide-save",
+        snapshotToken: "wide-save-token",
+        hubEnvironmentId: env,
+      }),
+    );
+    yield* store.transact(
+      store.publishCheckpointAndFloorTx({
+        memorySpaceId: space,
+        checkpointId: handle.checkpointId,
+        expectedFloor: 0,
+        nextFloor: handle.checkpointSequence,
+        now: time,
+      }),
+    );
+    const compacted = yield* store.transact(
+      store.compactEligibleHistoryTx({
+        memorySpaceId: space,
+        expectedFloor: handle.checkpointSequence,
+        now: time,
+        limit: 10,
+      }),
+    );
+    assert.isAbove(compacted.removedRows, 0);
+    const pinned = yield* store.transact(
+      store.readHubCheckpointPageTx({
+        authority,
+        snapshotToken: handle.snapshotToken,
+        cursor: null,
+      }),
+    );
+    assert.deepStrictEqual(pinned.revisions[0]?.payload, payload);
     console.info("wide memory bytes", {
       payloadBytes,
       pushBytes,

@@ -293,12 +293,12 @@ export const MemoryFailureCode = Schema.Literals([
   "storage_failed",
   "source_invalidated",
   "thread_lineage_incomplete",
-  "hub_upgrade_required",
   "capacity_exceeded",
   "base_compacted",
   "revert_expired",
   "scanner_pending",
   "forget_pending",
+  "hub_upgrade_required",
 ]);
 export type MemoryFailureCode = typeof MemoryFailureCode.Type;
 

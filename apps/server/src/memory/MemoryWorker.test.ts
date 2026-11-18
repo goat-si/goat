@@ -42,6 +42,7 @@ import {
   lineageLive,
   lineagePolicy,
   lineageSetup,
+  lineageUpsert,
 } from "./MemoryWorker.testkit.ts";
 import { countingTracer } from "../observability/countingTracer.testkit.ts";
 describe("MemoryWorker", () => {
@@ -1015,19 +1016,6 @@ describe("MemoryWorker", () => {
   });
 });
 
-const lineageUpsert = (
-  n: number,
-  deps: readonly M.MemoryRevisionId[] = [],
-): M.MemoryUpsertInput => ({
-  memorySpaceId: space,
-  memoryId: M.MemoryId.make(id(n)),
-  operationId: M.MemoryOperationId.make(id(n + 1000)),
-  expectedHeads: [],
-  scope: { kind: "user" },
-  assertionKind: "inference",
-  payload: { text: `synthetic lineage ${n}`, evidence: [], derivedFromMemoryRevisions: deps },
-  baseBoundary: null,
-});
 const head = (store: Store.MemoryStore["Service"], target: M.MemoryId) =>
   store.loadAggregate(space, target).pipe(Effect.map((a) => a.heads[0]!));
 const summaryMemoryId = M.MemoryId.make(
@@ -1257,7 +1245,7 @@ it.effect.each(["fork", "import", "transfer", "overflow"] as const)(
           Array.from({ length: 1000 }, (_, n) => M.MemoryRevisionId.make(id(9800 + n))),
         );
         yield* store.appendThreadLineage({ environmentId, threadId }, space, [
-          M.MemoryRevisionId.make(id(9900)),
+          M.MemoryRevisionId.make(id(10800)),
         ]);
       }
       assert.strictEqual(
@@ -1286,50 +1274,61 @@ it.effect.each(["fork", "import", "transfer", "overflow"] as const)(
     );
   },
 );
-it.effect("r3 previous summary plus thread lineage exceeding 100 never reaches generation", () => {
-  let generated = 0;
-  return Effect.gen(function* () {
-    yield* lineageSetup;
-    const worker = yield* Worker.MemoryWorker;
-    const service = yield* Service.MemoryService;
-    const store = yield* Store.MemoryStore;
-    yield* worker.sweepDue();
-    assert.strictEqual(generated, 1);
-    const deps: M.MemoryRevisionId[] = [];
-    for (let n = 10000; n <= 10100; n++) {
-      const value = lineageUpsert(n);
-      yield* service.upsert(value, Effect.void);
-      deps.push(yield* head(store, value.memoryId));
-    }
-    const current = yield* store.loadAggregate(space, summaryMemoryId);
-    const previous = current.revisions.find(
-      (p) => p.revision.revisionId === current.heads[0],
-    )!.payload!;
-    yield* service.upsert(
-      {
-        memorySpaceId: space,
-        memoryId: summaryMemoryId,
-        expectedHeads: current.heads,
-        operationId: M.MemoryOperationId.make(id(12000)),
-        scope: { kind: "thread", thread: { environmentId, threadId } },
-        assertionKind: "inference",
-        payload: { ...previous, derivedFromMemoryRevisions: deps.slice(0, 100) },
-        baseBoundary: null,
-      },
-      Effect.void,
+it.effect.each([false, true])(
+  "refuses ineligible generation inputs (unverified=%s)",
+  (unverified) => {
+    let generated = 0;
+    return Effect.gen(function* () {
+      yield* lineageSetup;
+      const worker = yield* Worker.MemoryWorker;
+      const service = yield* Service.MemoryService;
+      const store = yield* Store.MemoryStore;
+      yield* worker.sweepDue();
+      assert.strictEqual(generated, 1);
+      if (unverified) {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`INSERT INTO memory_revision_marks VALUES (${space},${yield* head(store, summaryMemoryId)},'unverified')`;
+        yield* laterLineageTurn;
+        yield* worker.sweepDue();
+        assert.strictEqual(generated, 1);
+        return;
+      }
+      const deps: M.MemoryRevisionId[] = [];
+      for (let n = 10000; n <= 10100; n++) {
+        const value = lineageUpsert(n);
+        yield* service.upsert(value, Effect.void);
+        deps.push(yield* head(store, value.memoryId));
+      }
+      const current = yield* store.loadAggregate(space, summaryMemoryId);
+      const previous = current.revisions.find(
+        (p) => p.revision.revisionId === current.heads[0],
+      )!.payload!;
+      yield* service.upsert(
+        {
+          memorySpaceId: space,
+          memoryId: summaryMemoryId,
+          expectedHeads: current.heads,
+          operationId: M.MemoryOperationId.make(id(12000)),
+          scope: { kind: "thread", thread: { environmentId, threadId } },
+          assertionKind: "inference",
+          payload: { ...previous, derivedFromMemoryRevisions: deps.slice(0, 100) },
+          baseBoundary: null,
+        },
+        Effect.void,
+      );
+      yield* store.appendThreadLineage({ environmentId, threadId }, space, [deps[100]!]);
+      yield* laterLineageTurn;
+      yield* worker.sweepDue();
+      assert.strictEqual(generated, 1);
+    }).pipe(
+      Effect.provide(
+        lineageLive(() => {
+          generated++;
+        }),
+      ),
     );
-    yield* store.appendThreadLineage({ environmentId, threadId }, space, [deps[100]!]);
-    yield* laterLineageTurn;
-    yield* worker.sweepDue();
-    assert.strictEqual(generated, 1);
-  }).pipe(
-    Effect.provide(
-      lineageLive(() => {
-        generated++;
-      }),
-    ),
-  );
-});
+  },
+);
 
 it.effect.each(threadProvenanceCases(threadId))(
   "production origin $name: $state lineage and delegation gate summary generation",

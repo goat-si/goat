@@ -9,6 +9,7 @@ import {
   boundaryCodec,
   checkpointCodec,
   decodeCheckpoint,
+  decodeMemoryId,
   executionCodec,
   fenceCodec,
   headsCodec,
@@ -260,6 +261,21 @@ export const makeCheckpoints = (
             yield* putItem(item, heads, checkpointWatermark);
           }
         }
+        // A forget can arrive before the checkpoint installs the source's revision metadata.
+        const forgottenSources = yield* stored(
+          "checkpoint-forgotten-sources",
+          sql<{ memory_id: string }>`SELECT DISTINCT r.memory_id
+            FROM memory_payloads p CROSS JOIN json_each(p.dependencies_json) d
+            JOIN memory_revisions r ON r.space=p.space AND r.revision_id=d.value
+            JOIN memory_tombstones t ON t.space=r.space AND t.memory_id=r.memory_id
+            WHERE p.space=${input.memorySpaceId} AND p.checkpoint_stage_id=${input.checkpointId}`,
+        );
+        for (const source of forgottenSources)
+          yield* purge(
+            input.memorySpaceId,
+            yield* stored("checkpoint-source-id", decodeMemoryId(source.memory_id)),
+            checkpointWatermark,
+          );
         // Every resolution must exist before receipt settlement, independent of page boundaries.
         for (const page of pages) {
           for (const compact of page.compactReceipts) {

@@ -124,6 +124,19 @@ export const scanUsage = Effect.fn("scanUsage")(function* (
     sql<{ bytes: number }>`
       SELECT coalesce(sum(length(CAST(record_json AS BLOB))),0) AS bytes FROM memory_import_lineage WHERE space=${space}`,
   );
+  const [localProvenance] = yield* sql<{ space_bytes: number; environment_bytes: number }>`
+    WITH charges(space, bytes) AS (
+      SELECT space,32+length(CAST(environment_id AS BLOB))+length(CAST(thread_id AS BLOB))+length(CAST(space AS BLOB)) FROM memory_thread_lineages
+      UNION ALL SELECT h.space,96+length(CAST(r.environment_id AS BLOB))+length(CAST(r.thread_id AS BLOB))+length(CAST(r.revision_id AS BLOB))
+        FROM memory_thread_lineage_revisions r JOIN memory_thread_lineages h USING(environment_id,thread_id)
+      UNION ALL SELECT space,32+length(CAST(space AS BLOB))+length(CAST(revision_id AS BLOB)) FROM memory_revision_marks
+      UNION ALL SELECT space,64+length(CAST(space AS BLOB))+length(CAST(memory_id AS BLOB))+length(CAST(environment_id AS BLOB))+length(CAST(thread_id AS BLOB)) FROM memory_origins
+    )
+    SELECT coalesce(sum(bytes) FILTER (WHERE space=${space}),0) AS space_bytes,
+      coalesce(sum(bytes),0) AS environment_bytes FROM charges`;
+  const [dependency] = yield* sql<{ bytes: number }>`SELECT
+    coalesce(sum(length(CAST(dependencies_json AS BLOB))),0) AS bytes
+    FROM memory_payloads WHERE space=${space}`;
   const importUsage = yield* stored(
     "usage-import",
     sql<{
@@ -143,12 +156,14 @@ export const scanUsage = Effect.fn("scanUsage")(function* (
     environmentPermanentBytes:
       environment[0]!.permanent +
       environment[0]!.receipt_bytes +
+      (localProvenance?.environment_bytes ?? 0) +
       ((yield* globalHubCounters()).find((row) => row.dimension === "hub_private_metadata")
         ?.value ?? 0),
     spaceItems: live[0]!.count,
     lifetimeIds: identities[0]!.count,
     permanentBytes:
       importMetadata +
+      (localProvenance?.space_bytes ?? 0) +
       identities[0]!.bytes +
       lineage[0]!.bytes +
       keys[0]!.bytes +
@@ -158,7 +173,13 @@ export const scanUsage = Effect.fn("scanUsage")(function* (
     liveBytes: payloads[0]!.live,
     historyBytes: payloads[0]!.history,
     logicalBytes:
-      importMetadata + payloads[0]!.all_bytes + log[0]!.bytes + keys[0]!.bytes + lineage[0]!.bytes,
+      importMetadata +
+      payloads[0]!.all_bytes +
+      (dependency?.bytes ?? 0) +
+      (localProvenance?.space_bytes ?? 0) +
+      log[0]!.bytes +
+      keys[0]!.bytes +
+      lineage[0]!.bytes,
     keys: keys[0]!.count + identities[0]!.reserved_keys,
     workItems: work[0]!.count,
     workBytes: work[0]!.bytes,
