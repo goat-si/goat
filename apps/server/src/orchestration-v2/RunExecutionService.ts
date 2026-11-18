@@ -1251,6 +1251,16 @@ export const layer: Layer.Layer<
               runId: input.run.id,
               nodeId: input.rootNode.id,
               event: deliveredEvent,
+              ...("planUpdateRunId" in deliveredEvent &&
+              deliveredEvent.planUpdateRunId !== undefined
+                ? {
+                    writeIfRunCurrent: {
+                      runId: input.run.id,
+                      activeAttemptId: input.attempt.id,
+                      expectedStatus: "running" as const,
+                    },
+                  }
+                : {}),
               ...(isRootProviderThreadUpdate
                 ? rootTerminalAlreadySeen
                   ? {

@@ -687,3 +687,76 @@ it("does not carry interrupted or still-running child ownership into later attem
 
   assert.isFalse(RunExecutionService.routeProviderEvent(lateChildNode, identity, state)[0]);
 });
+
+it("routes an earlier run's plan rows to this thread's active root turn only", () => {
+  const threadId = ThreadId.make("thread:earlier-plan-routing");
+  const priorRunId = RunId.make("run:earlier-plan-routing:prior");
+  const rootTurnId = ProviderTurnId.make("provider-turn:earlier-plan-routing:current");
+  const identity: RunExecutionService.ProviderEventRouteIdentity = {
+    threadId,
+    runId: RunId.make("run:earlier-plan-routing:current"),
+    attemptId: RunAttemptId.make("attempt:earlier-plan-routing:current"),
+    providerThreadId: ProviderThreadId.make("provider-thread:earlier-plan-routing"),
+  };
+  const active = RunExecutionService.makeProviderEventRoutingState({
+    identity,
+    providerTurnId: rootTurnId,
+  });
+  const planRow = {
+    type: "turn_item.updated",
+    driver,
+    planUpdateRunId: identity.runId,
+    turnItem: {
+      id: TurnItemId.make("turn-item:earlier-plan-routing"),
+      threadId,
+      runId: priorRunId,
+      type: "todo_list",
+    },
+  } as ProviderAdapter.ProviderAdapterV2Event;
+  const plan = {
+    type: "plan.updated",
+    driver,
+    planUpdateRunId: identity.runId,
+    plan: { threadId, runId: priorRunId },
+  } as ProviderAdapter.ProviderAdapterV2Event;
+  const otherThreadPlan = {
+    type: "plan.updated",
+    driver,
+    planUpdateRunId: identity.runId,
+    plan: { threadId: ThreadId.make("thread:earlier-plan-routing:other"), runId: priorRunId },
+  } as ProviderAdapter.ProviderAdapterV2Event;
+  const ordinaryRow = {
+    type: "turn_item.updated",
+    driver,
+    turnItem: {
+      id: TurnItemId.make("turn-item:earlier-plan-routing:tool"),
+      threadId,
+      runId: priorRunId,
+      type: "reasoning",
+    },
+  } as ProviderAdapter.ProviderAdapterV2Event;
+  const [, ended] = RunExecutionService.routeProviderEvent(
+    {
+      type: "turn.terminal",
+      driver,
+      providerThreadId: identity.providerThreadId,
+      providerTurnId: rootTurnId,
+      runOrdinal: 2,
+      status: "completed",
+      failure: null,
+      threadDisposition: "reusable",
+    },
+    identity,
+    active,
+  );
+
+  assert.isTrue(RunExecutionService.routeProviderEvent(planRow, identity, active)[0]);
+  assert.isTrue(RunExecutionService.routeProviderEvent(plan, identity, active)[0]);
+  assert.isFalse(RunExecutionService.routeProviderEvent(otherThreadPlan, identity, active)[0]);
+  assert.isFalse(RunExecutionService.routeProviderEvent(ordinaryRow, identity, active)[0]);
+  const previous = { ...identity, runId: priorRunId };
+  assert.isFalse(RunExecutionService.routeProviderEvent(planRow, previous, active)[0]);
+  assert.isFalse(RunExecutionService.routeProviderEvent(plan, previous, active)[0]);
+  assert.isFalse(RunExecutionService.routeProviderEvent(planRow, identity, ended)[0]);
+  assert.isFalse(RunExecutionService.routeProviderEvent(plan, identity, ended)[0]);
+});
