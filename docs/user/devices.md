@@ -131,7 +131,10 @@ SSH device hosts currently need macOS or Linux. To use devices on a Windows
 machine, run GOAT on that machine and connect to its environment.
 Node 22.12 or newer and npm must be available to non-interactive SSH commands.
 GOAT checks common Homebrew and Android SDK locations; custom installations need
-the appropriate PATH and ANDROID_HOME on the host. Android emulator video needs
+the appropriate PATH and `ANDROID_HOME` or `ANDROID_SDK_ROOT` on the host.
+Emulators need Android SDK Platform-Tools, Android Emulator, and Android SDK
+Command-line Tools (latest). For physical devices, a working `adb` on the SSH
+PATH is enough for GOAT to detect Android support. Android emulator video needs
 `ffmpeg` with libx264 on that host; physical Android devices use scrcpy and do
 not need ffmpeg.
 

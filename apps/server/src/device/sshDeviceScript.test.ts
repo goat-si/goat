@@ -63,6 +63,62 @@ it.effect("rejects Node below the agent-device 22.12 floor", () =>
   }),
 );
 
+it.effect("honors ANDROID_SDK_ROOT and reports missing emulator tools while adb works", () =>
+  Effect.gen(function* () {
+    if ((yield* HostProcess.Platform) === "win32") return;
+    yield* Effect.promise(async () => {
+      const home = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-ssh-android-"));
+      try {
+        const sdk = NodePath.join(home, "custom SDK");
+        const bin = NodePath.join(home, ".local/bin");
+        const tool = async (path: string) => {
+          await NodeFSP.mkdir(NodePath.dirname(path), { recursive: true });
+          await NodeFSP.writeFile(path, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+        };
+        await tool(NodePath.join(bin, "npm"));
+        await tool(NodePath.join(sdk, "platform-tools/adb"));
+        const probe = async (scriptEnv: Record<string, string>) => {
+          const result = await exec(
+            "/bin/sh",
+            [
+              "-c",
+              `
+${remoteDeviceEnvironment}
+exec ${quoteRemoteArg(process.execPath)} -e ${quoteRemoteArg(remoteDeviceScript("owner", "probe"))}
+`,
+            ],
+            { env: { HOME: home, PATH: "/nonexistent", ...scriptEnv } },
+          );
+          const value = JSON.parse(result.stdout) as {
+            platforms: Array<{ platform: string; available: boolean; reason?: string }>;
+          };
+          return value.platforms.find(({ platform }) => platform === "android");
+        };
+
+        const env = { ANDROID_SDK_ROOT: sdk };
+        expect(await probe(env)).toMatchObject({
+          available: true,
+          reason: expect.stringContaining("Android Emulator"),
+        });
+        await tool(NodePath.join(sdk, "emulator/emulator"));
+        expect(await probe(env)).toMatchObject({
+          available: true,
+          reason: expect.stringContaining("Command-line Tools"),
+        });
+        await tool(NodePath.join(sdk, "cmdline-tools/latest/bin/avdmanager"));
+        expect(await probe(env)).toEqual({ platform: "android", available: true });
+        await tool(NodePath.join(bin, "adb"));
+        expect(await probe({})).toMatchObject({
+          available: true,
+          reason: expect.stringContaining("ANDROID_HOME"),
+        });
+      } finally {
+        await NodeFSP.rm(home, { recursive: true, force: true });
+      }
+    });
+  }),
+);
+
 // Runs the stop-agent script against a fake agent-device whose behaviour is given as module source.
 const stopAgentWith = async (fakeAgentDevice: string) => {
   const home = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-ssh-agent-stop-"));
