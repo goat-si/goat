@@ -418,7 +418,6 @@ export const MemoryRevision = struct({
   ),
 );
 export type MemoryRevision = typeof MemoryRevision.Type;
-
 export const MemoryTombstone = struct({
   memorySpaceId: MemorySpaceId,
   memoryId: MemoryId,
@@ -2407,7 +2406,6 @@ export const MemoryCompactReceipt = struct({
 export type MemoryCompactReceipt = typeof MemoryCompactReceipt.Type;
 
 const encodeHubReceiptIntegrity = Schema.encodeSync(Schema.fromJsonString(MemoryHubReceipt));
-
 export const MemoryHubEntry = Schema.Union([
   struct({
     kind: Schema.Literal("operation"),
@@ -2464,9 +2462,13 @@ export const MemoryIdentityRecord = struct({
   creatingEnvironmentId: EnvironmentId,
   createOperationId: MemoryOperationId,
   createdAtUtc: MemoryUtcTimestamp,
-});
+  origin: Schema.optionalKey(ScopedThreadRef),
+}).check(
+  Schema.makeFilter(
+    (v) => v.origin === undefined || v.origin.environmentId === v.creatingEnvironmentId,
+  ),
+);
 export type MemoryIdentityRecord = typeof MemoryIdentityRecord.Type;
-
 export const MemoryFenceRecord = struct({
   memorySpaceId: MemorySpaceId,
   memoryId: MemoryId,
@@ -2482,7 +2484,6 @@ export const MemoryFenceRecord = struct({
   ),
 );
 export type MemoryFenceRecord = typeof MemoryFenceRecord.Type;
-
 export const MemorySuppressionRecord = Schema.Union([
   struct({
     memorySpaceId: MemorySpaceId,
@@ -2549,7 +2550,6 @@ export const memoryImportLineageRecordKey = (v: MemoryImportLineageRecord): stri
       ? [v.sourceKey.environmentId, v.sourceKey.sourceId, v.sourceKey.sourceItemKey]
       : [importScopeKey(v.content.scope), v.content.assertionKind, v.content.contentFingerprint],
   ]);
-
 export const MemoryHubCheckpointPage = bounded(
   struct({
     memorySpaceId: MemorySpaceId,

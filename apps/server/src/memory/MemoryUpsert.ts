@@ -16,7 +16,11 @@ import {
   requireClosureCapacity,
   validateSummaryDependencies,
 } from "./MemoryDependencies.ts";
-import { areAutomaticallyUsable, recordMemoryOrigin } from "./MemoryRevisionMarks.ts";
+import {
+  areAutomaticallyUsable,
+  readMemoryOrigin,
+  recordMemoryOrigin,
+} from "./MemoryRevisionMarks.ts";
 import { matchesActivePersonWords } from "./MemoryPersonWords.ts";
 import { redactMemoryText } from "./MemorySecretScanner.ts";
 import type { MemoryAccessError, MemoryServiceError } from "./MemoryService.ts";
@@ -282,7 +286,11 @@ export const makeUpsert = (deps: {
         if ((marked || acceptance) && limit === M.MEMORY_DERIVED_REVISIONS_MAX_V1)
           return yield* requireUpgrade(space);
         const origin = current?.identity
-          ? undefined
+          ? limit === M.MEMORY_DERIVED_REVISIONS_MAX &&
+            current.identity.creatingEnvironmentId === environmentId &&
+            !current.identity.origin
+            ? yield* readMemoryOrigin(space, value.memoryId)
+            : undefined
           : (acceptance?.origin ?? (remember ? sourceThread : undefined));
         const wide = payload.derivedFromMemoryRevisions.length > M.MEMORY_DERIVED_REVISIONS_MAX_V1;
         const forgetFence =
@@ -313,7 +321,7 @@ export const makeUpsert = (deps: {
               environmentId,
               upsertRequestDigest: requestDigest,
               ...(marked ? { unverified: true as const } : {}),
-              ...(origin && (marked || wide || acceptance)
+              ...(origin && limit === M.MEMORY_DERIVED_REVISIONS_MAX
                 ? { originThreadId: origin.threadId }
                 : {}),
             },

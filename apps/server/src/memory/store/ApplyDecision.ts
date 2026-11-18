@@ -229,7 +229,6 @@ export const makeApplyDecision = (
             "revision",
             sql`INSERT INTO memory_revisions (space,revision_id,memory_id,operation_id,parents_json,scope_json,assertion_kind,provenance_json,payload_ref,created_at) VALUES (${op.memorySpaceId},${r.revisionId},${op.memoryId},${r.operationId},${yield* headsCodec.encode(r.parents)},${yield* scopeCodec.encode(r.scope)},${r.assertionKind},${yield* provenanceCodec.encode(r.provenance)},${r.payloadRef},${Date.parse(r.createdAtUtc)}) ON CONFLICT(space,revision_id) DO NOTHING`,
           );
-          yield* persistRevisionMarks(r).pipe(Effect.provideService(SqlClient.SqlClient, sql));
           if (op.kind === "resolve") {
             const resolution =
               "hubSequence" in outcome && outcome.resolutionApproval
@@ -296,6 +295,10 @@ export const makeApplyDecision = (
             sql`INSERT INTO memory_identity_ledger (space,memory_id,identity_json,fence_json,reserve_bytes,reserve_keys) VALUES (${op.memorySpaceId},${op.memoryId},${yield* identityCodec.encode(decision.identity)},${yield* fenceCodec.encode(decision.fence ?? { memorySpaceId: op.memorySpaceId, memoryId: op.memoryId, highestFencingToken: 0, activeLease: null })},${M.MEMORY_IDENTITY_CORE_MAX_BYTES + reservation.bytes},${reservation.keys}) ON CONFLICT(space,memory_id) DO UPDATE SET reserve_bytes=max(memory_identity_ledger.reserve_bytes,excluded.reserve_bytes),reserve_keys=max(memory_identity_ledger.reserve_keys,excluded.reserve_keys) WHERE NOT EXISTS (SELECT 1 FROM memory_tombstones t WHERE t.space=excluded.space AND t.memory_id=excluded.memory_id)`,
           );
         }
+        if (!reconnect && accepted && !tombstones.length && op.kind !== "forget")
+          yield* persistRevisionMarks(op.revision).pipe(
+            Effect.provideService(SqlClient.SqlClient, sql),
+          );
         if (
           accepted &&
           decision.admission.kind !== "localIntent" &&
@@ -329,7 +332,7 @@ export const makeApplyDecision = (
           yield* purge(op.memorySpaceId, op.memoryId, watermark);
           yield* stored(
             "forget-reserve-consumed",
-            sql`UPDATE memory_identity_ledger SET reserve_bytes=${M.MEMORY_IDENTITY_CORE_MAX_BYTES},reserve_keys=0 WHERE space=${op.memorySpaceId} AND memory_id=${op.memoryId}`,
+            sql`UPDATE memory_identity_ledger SET reserve_bytes=${M.MEMORY_IDENTITY_CORE_MAX_BYTES},reserve_keys=0,identity_json=json_remove(identity_json,'$.origin') WHERE space=${op.memorySpaceId} AND memory_id=${op.memoryId}`,
           );
           yield* stored(
             "settle-forget",

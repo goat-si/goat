@@ -2035,7 +2035,10 @@ const make = Effect.fnUntraced(function* (
       if (
         op.kind !== "forget" &&
         op.revision.provenance.originThreadId &&
-        op.revision.provenance.environmentId !== op.originEnvironmentId
+        (op.revision.provenance.environmentId !== op.originEnvironmentId ||
+          (current.identity && current.identity.creatingEnvironmentId !== op.originEnvironmentId) ||
+          (current.identity?.origin &&
+            current.identity.origin.threadId !== op.revision.provenance.originThreadId))
       )
         return yield* new M.MemoryHubError({ code: "identity_mismatch" });
       if (
