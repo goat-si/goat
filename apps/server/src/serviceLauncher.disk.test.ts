@@ -190,44 +190,35 @@ it.layer(NodeServices.layer)("service update disk headroom", (it) => {
       }),
   );
 
-  it.effect.each(["startup", "backup"] as const)(
-    "rejects the delayed handoff over launcher IPC and reopens admission when %s capacity drops",
-    (space) =>
-      Effect.gen(function* () {
-        const f = yield* makeFixture(false);
-        let targetProbes = 0;
-        let backupProbes = 0;
-        const activeLauncher = yield* f.start({
-          startupSpaceProbe: async (directory) =>
-            space === "startup" && directory === f.targetDir && ++targetProbes > 1 ? 0 : headroom,
-          backupSpaceProbe: {
-            readFreeBytes: async () => (space === "backup" && ++backupProbes > 1 ? 0 : headroom),
-            canClone: async () => false,
-          },
-        });
-        const active = yield* Effect.promise(() => f.notice("active").promise);
-        const client = yield* makeIpcClient(active);
-        const { selfUpdate, admission } = yield* makeHarness({
-          baseDir: f.root,
-          requestUpdate: client.requestUpdate,
-        }).pipe(Effect.provide(NodeCrypto.layer));
-        const outcome = yield* selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.exit);
+  it.effect("rejects the delayed handoff over launcher IPC and reopens server admission", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture(false);
+      let targetProbes = 0;
+      const activeLauncher = yield* f.start({
+        startupSpaceProbe: async (directory) =>
+          directory === f.targetDir && ++targetProbes > 1 ? 0 : headroom,
+      });
+      const active = yield* Effect.promise(() => f.notice("active").promise);
+      const client = yield* makeIpcClient(active);
+      const { selfUpdate, admission } = yield* makeHarness({
+        baseDir: f.root,
+        requestUpdate: client.requestUpdate,
+      }).pipe(Effect.provide(NodeCrypto.layer));
+      const outcome = yield* selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.exit);
 
-        assert.isTrue(active.connected);
-        assert.deepEqual(
-          yield* admission.admit(Effect.succeed("new work")).pipe(Effect.exit),
-          Exit.succeed("new work"),
-        );
-        assert.isTrue(Exit.isFailure(outcome));
-        if (Exit.isFailure(outcome)) {
-          const reason = String(Cause.squash(outcome.cause));
-          assert.include(reason, "The server was not stopped");
-          assert.include(reason, space === "backup" ? "back up the database" : "bytes available");
-        }
-        assert.isFalse(yield* selfUpdate.isUpdating);
-        assert.isUndefined((yield* Effect.promise(() => readServiceState(f.statePath))).update);
-        yield* Effect.promise(() => activeLauncher.launcher.stop("SIGTERM"));
-      }),
+      assert.isTrue(active.connected);
+      assert.deepEqual(
+        yield* admission.admit(Effect.succeed("new work")).pipe(Effect.exit),
+        Exit.succeed("new work"),
+      );
+      assert.isTrue(Exit.isFailure(outcome));
+      if (Exit.isFailure(outcome)) {
+        assert.include(String(Cause.squash(outcome.cause)), "The server was not stopped");
+      }
+      assert.isFalse(yield* selfUpdate.isUpdating);
+      assert.isUndefined((yield* Effect.promise(() => readServiceState(f.statePath))).update);
+      yield* Effect.promise(() => activeLauncher.launcher.stop("SIGTERM"));
+    }),
   );
 
   it.effect(

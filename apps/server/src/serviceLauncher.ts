@@ -566,10 +566,25 @@ export class Launcher {
       await reject("The requested target runtime is missing or incomplete.");
       return;
     }
-    const blocker = await this.#updateDiskBlocker(message.targetVersion, message.dbPath);
+    // Failed checks must refuse updates rather than stop the server with unknown backup capacity.
+    const backupBlocker = await databaseBackupBlocker(
+      this.#baseDir,
+      message.dbPath,
+      this.#backupSpaceProbe,
+    ).catch(
+      (error: unknown) =>
+        `Could not check that the database backup fits before updating: ${error instanceof Error ? error.message : String(error)}. The server was not stopped.`,
+    );
+    if (!child.process.connected) return;
+    if (backupBlocker !== undefined) {
+      await reject(backupBlocker);
+      return;
+    }
+
+    const startupBlocker = await this.#startupDiskBlocker(message.targetVersion, message.dbPath);
     if (!child.process.connected || this.#stopRequested) return;
-    if (blocker !== undefined) {
-      await reject(blocker);
+    if (startupBlocker !== undefined) {
+      await reject(`${startupBlocker} The server was not stopped.`);
       return;
     }
 
@@ -588,32 +603,16 @@ export class Launcher {
     );
   }
 
-  async #updateDiskBlocker(version: string, dbPath: string): Promise<string | undefined> {
-    const backupBlocker = await databaseBackupBlocker(
-      this.#baseDir,
-      dbPath,
-      this.#backupSpaceProbe,
-    ).catch(
-      (error: unknown) =>
-        `Could not check that the database backup fits before updating: ${error instanceof Error ? error.message : String(error)}. The server was not stopped.`,
-    );
-    if (backupBlocker !== undefined) return backupBlocker;
-    const startupBlocker = await this.#startupDiskBlocker(version, dbPath);
-    return startupBlocker === undefined
-      ? undefined
-      : `${startupBlocker} The server was not stopped.`;
-  }
-
   async #acceptUpdate(child: ManagedChild, pending: PendingServiceUpdate): Promise<void> {
     if (!this.#updateAwaitingHandoff || this.#child !== child || this.#stopRequested) return;
     this.#updateAwaitingHandoff = false;
     this.#timer = undefined;
-    const blocker = await this.#updateDiskBlocker(pending.targetVersion, pending.dbPath);
+    const blocker = await this.#startupDiskBlocker(pending.targetVersion, pending.dbPath);
     if (!child.process.connected || this.#stopRequested) return;
     if (blocker !== undefined) {
       await sendMessage(child.process, {
         type: "update-rejected",
-        reason: blocker,
+        reason: `${blocker} The server was not stopped.`,
       });
       return;
     }
