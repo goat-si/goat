@@ -340,7 +340,7 @@ const handlers = {
   goat_memory_suggestions: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const service = yield* MemoryService.MemoryService;
-      return yield* service.suggestions.listMetadata(
+      return yield* service.listSuggestionMetadata(
         yield* decodeSuggestions(yield* withCurrentSpace(input)),
         yield* invocationPermit("read"),
       );

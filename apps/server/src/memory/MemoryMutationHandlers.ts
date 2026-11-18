@@ -30,7 +30,6 @@ export const makeMemoryMutationHandlers = (
 ) => {
   const readPermit = personMemorySuggestionPermit(session, read);
   const writePermit = personMemorySuggestionPermit(session, write);
-  const { suggestions } = memory;
   return {
     [WS_METHODS.memoryUpsert]: (input: MemoryUpsertInput) =>
       memory.upsert(input, write).pipe(
@@ -43,10 +42,10 @@ export const makeMemoryMutationHandlers = (
         Effect.mapError(memoryError),
       ),
     [WS_METHODS.memorySuggestionsList]: (input: MemorySuggestionsInput) =>
-      suggestions.list(input, readPermit).pipe(Effect.mapError(memoryError)),
+      memory.listSuggestions(input, readPermit).pipe(Effect.mapError(memoryError)),
     [WS_METHODS.memorySuggestionsAccept]: (input: MemorySuggestionActionInput) =>
-      suggestions.accept(input, writePermit).pipe(Effect.mapError(memoryError)),
+      memory.acceptSuggestion(input, writePermit).pipe(Effect.mapError(memoryError)),
     [WS_METHODS.memorySuggestionsDismiss]: (input: MemorySuggestionActionInput) =>
-      suggestions.dismiss(input, writePermit).pipe(Effect.mapError(memoryError)),
+      memory.dismissSuggestion(input, writePermit).pipe(Effect.mapError(memoryError)),
   };
 };

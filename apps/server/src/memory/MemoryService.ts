@@ -105,7 +105,10 @@ export class MemoryService extends Context.Service<
       pairs: ReadonlyArray<{ revision: M.MemoryRevision; payload: M.MemoryPayload | null }>,
     ) => Store.InTx<void, MemoryServiceError>;
     readonly importProvider: ImportProviderFacade;
-    readonly suggestions: MemorySuggestionService;
+    readonly listSuggestions: MemorySuggestionService["list"];
+    readonly listSuggestionMetadata: MemorySuggestionService["listMetadata"];
+    readonly acceptSuggestion: MemorySuggestionService["accept"];
+    readonly dismissSuggestion: MemorySuggestionService["dismiss"];
     /** L5 adds readiness/requireBootstrap/syncStatus from its existing Sync instance. */
     readonly importPorts: Omit<ImportPorts, "readiness" | "requireBootstrap" | "syncStatus">;
     readonly commitLocalIntent: (
@@ -2454,12 +2457,10 @@ const make = Effect.fnUntraced(function* (
     upsert,
     remember,
     forget,
-    suggestions: {
-      list: suggestionStore.list,
-      listMetadata: suggestionStore.listMetadata,
-      accept: (input, permit) => suggestionStore.accept(input, permit, upsert),
-      dismiss: suggestionStore.dismiss,
-    },
+    listSuggestions: suggestionStore.list,
+    listSuggestionMetadata: suggestionStore.listMetadata,
+    acceptSuggestion: (input, permit) => suggestionStore.accept(input, permit, upsert),
+    dismissSuggestion: suggestionStore.dismiss,
     retryForgetExpansion,
     revertResolution,
     read,

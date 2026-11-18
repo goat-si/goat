@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Service from "../../../memory/MemoryService.ts";
 import * as Store from "../../../memory/MemoryStore.ts";
+import { makeMemoryMutationHandlers } from "../../../memory/MemoryMutationHandlers.ts";
 import { makeMemorySaveSuggestions } from "../../../memory/MemorySaveSuggestions.ts";
 import { memoryOperationDigest } from "../../../memory/MemoryDecider.ts";
 import * as Fixture from "./handlers.testkit.ts";
@@ -193,7 +194,7 @@ it.effect("keeps an accepting suggestion when the pending queue reaches capacity
     const first = candidate(500);
     yield* suggestions.onRefusedSave(first, Effect.void);
     const target = { memorySpaceId: space, suggestionId: first.input.memoryId };
-    expect(yield* service.suggestions.accept(target, Effect.void)).toEqual({ status: "pending" });
+    expect(yield* service.acceptSuggestion(target, Effect.void)).toEqual({ status: "pending" });
     for (let offset = 1; offset <= M.MEMORY_SAVE_SUGGESTION_MAX_ITEMS; offset++) {
       yield* suggestions.onRefusedSave(candidate(500 + offset), Effect.void);
     }
@@ -205,5 +206,30 @@ it.effect("keeps an accepting suggestion when the pending queue reaches capacity
     expect(rows).not.toContainEqual(
       expect.objectContaining({ suggestionId: candidate(501).input.memoryId }),
     );
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect("body-bearing suggestion requests require a person session even with memory grants", () =>
+  Effect.gen(function* () {
+    const memory = yield* Service.MemoryService;
+    const input = { memorySpaceId: space, suggestionId: Fixture.memoryId };
+    for (const principalKind of ["proxied_person", "outside_client"] as const) {
+      const handlers = makeMemoryMutationHandlers(
+        memory,
+        { principalKind },
+        Effect.void,
+        Effect.void,
+      );
+      const errors = yield* Effect.all([
+        handlers[M.WS_METHODS.memorySuggestionsList]({ memorySpaceId: space }).pipe(Effect.flip),
+        handlers[M.WS_METHODS.memorySuggestionsAccept](input).pipe(Effect.flip),
+        handlers[M.WS_METHODS.memorySuggestionsDismiss](input).pipe(Effect.flip),
+      ]);
+      expect(errors.map((error) => error.code)).toEqual([
+        "unavailable",
+        "unavailable",
+        "unavailable",
+      ]);
+    }
   }).pipe(Effect.provide(Fixture.layer)),
 );

@@ -96,7 +96,8 @@ export const makeMemorySaveSuggestions = ({
           "suggestion-evict",
           sql`DELETE FROM memory_save_suggestions WHERE id IN (
           SELECT id FROM memory_save_suggestions WHERE space=${space}
-          ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ${M.MEMORY_SAVE_SUGGESTION_MAX_ITEMS}
+          AND state='pending' ORDER BY created_at, rowid
+          LIMIT max(0, (SELECT count(*) FROM memory_save_suggestions WHERE space=${space}) - ${M.MEMORY_SAVE_SUGGESTION_MAX_ITEMS})
         )`,
         );
       }),

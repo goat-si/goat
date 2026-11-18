@@ -889,10 +889,10 @@ it.effect("forgets by ID from a callerless session and keeps the original receip
   Effect.gen(function* () {
     const service = yield* MemoryService.MemoryService;
     const store = yield* Store.MemoryStore;
-    const created = yield* service.upsert(Fixture.upsert(), Effect.void);
-    const firstRevision = created.receipt.revisionId;
+    yield* service.upsert(Fixture.upsert(), Effect.void);
+    const [firstRevision] = (yield* store.loadAggregate(Fixture.space, Fixture.memoryId)).heads;
     if (!firstRevision) throw new Error("Expected the original revision");
-    const edited = yield* service.upsert(
+    yield* service.upsert(
       {
         ...Fixture.upsert(4),
         expectedHeads: [firstRevision],
@@ -900,14 +900,15 @@ it.effect("forgets by ID from a callerless session and keeps the original receip
       },
       Effect.void,
     );
-    expect(edited.receipt.revisionId).not.toBe(firstRevision);
+    const { heads: editedHeads } = yield* store.loadAggregate(Fixture.space, Fixture.memoryId);
+    expect(editedHeads).not.toEqual([firstRevision]);
     const input = { memoryId: Fixture.memoryId };
     const first = yield* Fixture.call("memory_forget", input);
     expect(first.body).toMatchObject({ outcome: "deleted", memoryId: Fixture.memoryId });
     const original = yield* decodeReceipt(first.body);
     expect(yield* store.readOperation(Fixture.space, original.operationId)).toMatchObject({
       kind: "forget",
-      expectedHeads: [edited.receipt.revisionId],
+      expectedHeads: editedHeads,
     });
     expect((yield* Fixture.call("memory_forget", input)).body).toMatchObject({
       outcome: "noop",
