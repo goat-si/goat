@@ -1,4 +1,8 @@
-import { isAttachmentOnlyBootstrapPrompt } from "@goat/shared/composerContextReferences";
+import { assistantCitationsToPlainText } from "@goat/shared/assistantCitations";
+import {
+  isAttachmentOnlyBootstrapPrompt,
+  replaceComposerContextReferences,
+} from "@goat/shared/composerContextReferences";
 import type { Nodes } from "mdast";
 import remarkCjkFriendly from "remark-cjk-friendly/parseOnly";
 import remarkGfm from "remark-gfm";
@@ -96,9 +100,9 @@ export function markdownPlainText(markdown: string): string {
   return markdownNodeText(markdownPreviewParser.parse(markdown)).replace(/\s+/g, " ").trim();
 }
 
-function compactMinimapPreview(text: string | null | undefined) {
-  const compact = text?.replace(/\s+/g, " ").trim() ?? "";
-  return compact.length > 0 ? compact : null;
+function markdownMinimapPreview(markdown: string | null) {
+  // The tooltip only shows a few lines, including while assistant text is streaming.
+  return markdown === null ? null : markdownPlainText(markdown.slice(0, 1_500)) || null;
 }
 
 export function resolveTimelineMinimapPreview(
@@ -108,12 +112,13 @@ export function resolveTimelineMinimapPreview(
     ? null
     : {
         ...item,
-        userText: compactMinimapPreview(item.userText),
-        // The tooltip shows three lines; bound parsing work while long responses stream.
-        assistantText: compactMinimapPreview(
-          item.assistantText === null
+        userText: markdownMinimapPreview(
+          item.userText === null
             ? null
-            : markdownNodeText(markdownPreviewParser.parse(item.assistantText.slice(0, 1_500))),
+            : assistantCitationsToPlainText(
+                replaceComposerContextReferences(item.userText, (reference) => reference.label),
+              ),
         ),
+        assistantText: markdownMinimapPreview(item.assistantText),
       };
 }
