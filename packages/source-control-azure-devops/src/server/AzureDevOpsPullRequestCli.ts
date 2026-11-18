@@ -637,7 +637,7 @@ export const make = Effect.gen(function* () {
       return yield* Effect.scoped(
         Effect.gen(function* () {
           const directory = yield* fileSystem
-            .makeTempDirectoryScoped({ prefix: "t3-azure-blobs-" })
+            .makeTempDirectoryScoped({ prefix: "goat-azure-blobs-" })
             .pipe(Effect.mapError(readFailure));
           const request = `${directory}/ids.json`;
           // invoke refuses to overwrite its output, so the archive gets a name nothing holds yet.
