@@ -639,6 +639,7 @@ export const PreviewAutomationRequest = Schema.Struct({
   tabId: Schema.optional(PreviewTabId),
   tabIdExplicit: Schema.optional(Schema.Boolean),
   screenExpectation: Schema.optional(Screen.PreviewAutomationScreenExpectation),
+  measureSnapshotFrame: Schema.optional(Schema.Boolean),
   /** Supplied by the broker from authenticated scope, never from tool input. */
   agentSessionId: Schema.optional(Schema.String),
   /** The caller's active run, supplied by the server. */

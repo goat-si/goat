@@ -10,11 +10,17 @@ import { restartRequiredIn } from "./ProviderSessionRetirement.ts";
 import { startsNoModelTurn } from "./goat/TurnModelGate.ts";
 import { WorkspaceLeaseBusyError } from "./goat/WorkspaceLeaseBusyError.ts";
 export { WorkspaceLeaseBusyError } from "./goat/WorkspaceLeaseBusyError.ts";
-import { isRegisteredAttach, nativeForkTurns, hasNativeGoals } from "./providerTurnStartHelpers.ts";
+import {
+  hasNativeGoals,
+  isRegisteredAttach,
+  nativeForkTurns,
+  readyHandoffsForRun,
+} from "./providerTurnStartHelpers.ts";
 import { withAgentOom } from "./agentOomFailure.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import { makeDeliverySession } from "./goat/ProviderTurnDeliverySession.ts";
 import { makePrepareTurnWorkspace, workspaceRestoredItem } from "./goat/prepareTurnWorkspace.ts";
+import { reserveTurnStart } from "../workspace/checkpointRestoreReservation.ts";
 import { makeProviderTurnHandoffRecovery } from "./goat/ProviderTurnHandoffRecovery.ts";
 import { refuseCodexAdmission } from "./goat/CodexTurnAdmission.ts";
 import { projectComposerContextForProvider } from "@goat/shared/composerContextReferences";
@@ -118,6 +124,8 @@ export const layer: Layer.Layer<
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const globalSkillsDir = (yield* ServerConfig.ServerConfig).globalSkillsDir;
     const prepareWorkspace = yield* makePrepareTurnWorkspace;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
     const projects = yield* ProjectService.ProjectService;
     const providerAuth = yield* ProviderAuthService.ProviderAuthService;
     const codexSurvivors = yield* Effect.serviceOption(CodexSurvivors.CodexSurvivors);
@@ -186,35 +194,7 @@ export const layer: Layer.Layer<
             launchSource?: ProviderAdapter.ProviderAdapterV2CloudLaunchSource;
           }
         | undefined;
-      // Older versions also stored subagent replies as history handoffs. Their
-      // queued completion messages carry the results without a history budget.
-      const subagentResultTransfers = new Set(
-        projection.contextTransfers
-          .filter((transfer) => transfer.type === "subagent_result")
-          .map((transfer) => transfer.id),
-      );
-      const handoffs = projection.contextHandoffs.filter(
-        (handoff) =>
-          (handoff.transferId == null || !subagentResultTransfers.has(handoff.transferId)) &&
-          handoff.status === "ready" &&
-          (handoff.targetRunId === run.id ||
-            (handoff.toProviderThreadId === run.providerThreadId &&
-              projection.runs.some(
-                (source) =>
-                  source.id === handoff.targetRunId &&
-                  (source.status === "failed" ||
-                    source.status === "interrupted" ||
-                    (source.status === "completed" &&
-                      handoff.delivery === undefined &&
-                      // Compaction and /goal turns defer history to the next turn.
-                      projection.messages.some(
-                        (message) =>
-                          message.id === source.userMessageId &&
-                          (isCompactionCommandMessage(message) ||
-                            parseGoalCommand(message) !== null),
-                      ))),
-              ))),
-      );
+      const handoffs = readyHandoffsForRun(projection, run);
       const nativeForkTransfer = projection.contextTransfers.find(
         (transfer) =>
           transfer.type === "fork" &&
@@ -236,6 +216,10 @@ export const layer: Layer.Layer<
           cause: `Run ${runId} is missing its execution projection state.`,
         });
       }
+      // A file restore overlapping the folder the turn works in sends this start back to retry.
+      const turnFolder = projection.thread.worktreePath ?? checkpointScope?.cwd;
+      if (turnFolder != null && !(yield* reserveTurnStart(fileSystem, path, turnFolder)))
+        return yield* new ProviderTurnStartError({ runId, cause: new WorkspaceLeaseBusyError({}) });
       const settleRunBeforeStart = Effect.fn("orchestrationV2.providerTurnStart.settleBeforeStart")(
         function* (input: {
           readonly signal: string;
@@ -1448,12 +1432,9 @@ export const layer: Layer.Layer<
                 )?.activeAttemptId
               : undefined;
           let attaching = false;
-          return yield* start({
-            ...input,
-            onAttach: () => {
-              attaching = true;
-            },
-          }).pipe(
+          // The scope holds the turn-start reservation until startup ends.
+          const startup = start({ ...input, onAttach: () => void (attaching = true) });
+          return yield* Effect.scoped(startup).pipe(
             // A start that ends before its turn registers must not keep holding the process.
             Effect.ensuring(providerSessions.settleTurnStart(input)),
             Effect.catch((cause) =>

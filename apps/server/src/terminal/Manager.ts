@@ -131,6 +131,8 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 import { withThreadMcpEnvironment } from "@goat/provider-core/server/mcpSession";
 import { ThreadId } from "@goat/contracts";
 import { terminalOutputStream } from "./OutputProtocol.ts";
+import { makeFolderReplacedNotifier } from "./folderReplacedTerminals.ts";
+import { enqueueProcessEvent } from "./processEventQueue.ts";
 import { normalizeChildCommandName } from "./childCommandName.ts";
 import { retainedAttachListener as retained } from "./retainedAttachHistory.ts";
 
@@ -278,6 +280,11 @@ export class TerminalManager extends Context.Service<
       readonly threadId: string;
       readonly terminalId?: string;
     }) => Effect.Effect<void>;
+    /** Tells each live terminal inside a folder GOAT just restored or set aside (goat#3690). */
+    readonly noticeFolderReplaced: (
+      folder: string,
+      setAsidePath?: string | null,
+    ) => Effect.Effect<void>;
 
     readonly subscribe: (
       listener: (event: TerminalEvent) => Effect.Effect<void>,
@@ -331,7 +338,7 @@ export interface TerminalStartInput extends TerminalOpenInput {
   rows: number;
 }
 
-interface TerminalSessionState extends AgentTerminalSession {
+export interface TerminalSessionState extends AgentTerminalSession {
   threadId: string;
   terminalId: string;
   cwd: string;
@@ -376,7 +383,7 @@ interface PersistHistoryRequest {
   immediate: boolean;
 }
 
-type PendingProcessEvent =
+export type PendingProcessEvent =
   | { type: "output"; data: string }
   | { type: "exit"; event: PtyAdapter.PtyExitEvent };
 
@@ -480,24 +487,6 @@ function cleanupProcessHandles(session: TerminalSessionState): void {
   session.unsubscribeData = null;
   session.unsubscribeExit?.();
   session.unsubscribeExit = null;
-}
-
-function enqueueProcessEvent(
-  session: TerminalSessionState,
-  expectedPid: number,
-  event: PendingProcessEvent,
-): boolean {
-  if (!session.process || session.status !== "running" || session.pid !== expectedPid) {
-    return false;
-  }
-
-  session.pendingProcessEvents.push(event);
-  if (session.processEventDrainRunning) {
-    return false;
-  }
-
-  session.processEventDrainRunning = true;
-  return true;
 }
 
 interface TerminalProcessTableSnapshot {
@@ -3088,6 +3077,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     closeOnSettle,
     subscribe,
     subscribeMetadata,
+    noticeFolderReplaced: yield* makeFolderReplacedNotifier(readManagerState, (session, pid) =>
+      runFork(drainProcessEvents(session, pid)),
+    ),
   });
   registerTerminalProbe(
     service,

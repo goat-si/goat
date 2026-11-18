@@ -29,6 +29,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { isNonRepositoryGitStderr } from "../vcs/gitNonRepository.ts";
+import { makeSymlinkScan, mergeSymlinkMatches } from "./workspaceSymlinkScan.ts";
 
 // fff-node's native library stays external; single-executables require disk packages instead of importing them.
 const requireForFff = NodeModule.createRequire(import.meta.url);
@@ -501,6 +502,14 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
     return result.value;
   });
 
+  const { listSymlinkEntries, invalidateSymlinkScan } = yield* makeSymlinkScan({
+    finder,
+    cwd,
+    isScanning,
+    toPosix: (relativePath) => toPosixPath(relativePath, hostIsWindows),
+    isIgnored: (relativePath) => isIgnoredPath(ignoredPaths, relativePath, hostIsWindows),
+  });
+
   // Grows the first page until hidden entries can no longer crowd visible ones out of it.
   const searchVisible = Effect.fn("WorkspaceSearchIndex.searchVisible")(function* <I>(
     query: string,
@@ -563,6 +572,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
         }),
     ).pipe(Effect.catchTags({ WorkspaceSearchIndexScanTimedOut: () => Effect.void }));
     ignoredPaths = yield* listGitIgnoredPaths(vcsProcess, cwd, hostIsWindows);
+    invalidateSymlinkScan();
   });
 
   const list: WorkspaceSearchIndex["Service"]["list"] = Effect.fn("WorkspaceSearchIndex.list")(
@@ -576,8 +586,11 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
         mixedItemPath,
       );
       const mapped = mapMixedSearchResult(result, WORKSPACE_INDEX_MAX_ENTRIES, hostIsWindows);
-      const sortedEntries = withDirectoryAncestors(mapped.entries).toSorted((left, right) =>
-        left.path.localeCompare(right.path),
+      const symlinks = yield* listSymlinkEntries();
+      // fff's watcher can index a link the scan rejected; only accepted links are listed.
+      const indexed = mapped.entries.filter((entry) => !symlinks.linkPaths.has(entry.path));
+      const sortedEntries = withDirectoryAncestors([...indexed, ...symlinks.entries]).toSorted(
+        (left, right) => left.path.localeCompare(right.path),
       );
       const entries = sortedEntries.slice(0, WORKSPACE_INDEX_MAX_ENTRIES);
       return {
@@ -594,7 +607,17 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
     kind: ProjectEntryKind | undefined,
     imageOnly: boolean | undefined,
   ) {
-    const pageSize = imageOnly ? WORKSPACE_INDEX_PAGE_SIZE : Math.max(1, limit + 1);
+    const { entries: allSymlinks, linkPaths } = yield* listSymlinkEntries();
+    const symlinks = allSymlinks.filter((entry) =>
+      imageOnly
+        ? entry.kind === "file" && isProjectFaviconPath(entry.path)
+        : kind === undefined || entry.kind === kind,
+    );
+    // Index results that are filtered-out links get dropped in the merge, so fetch past them.
+    const indexLimit = limit + linkPaths.size - symlinks.length;
+    const pageSize = imageOnly ? WORKSPACE_INDEX_PAGE_SIZE : Math.max(1, indexLimit + 1);
+    const merge = (indexed: ProjectSearchEntriesResult) =>
+      mergeSymlinkMatches(indexed, linkPaths, symlinks, query, limit);
     if (kind === "file" || imageOnly) {
       const result = yield* searchVisible(
         query,
@@ -603,7 +626,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
         (size) => finder.fileSearchAsync(query, { pageSize: size }),
         (item) => item.relativePath,
       );
-      return mapFileSearchResult(result, limit, hostIsWindows, imageOnly);
+      return merge(mapFileSearchResult(result, indexLimit, hostIsWindows, imageOnly));
     }
     if (kind === "directory") {
       const result = yield* searchVisible(
@@ -613,7 +636,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
         (size) => finder.directorySearchAsync(query, { pageSize: size }),
         (item) => item.relativePath,
       );
-      return mapDirectorySearchResult(result, limit, hostIsWindows);
+      return merge(mapDirectorySearchResult(result, indexLimit, hostIsWindows));
     }
     const result = yield* searchVisible(
       query,
@@ -622,7 +645,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
       (size) => finder.mixedSearchAsync(query, { pageSize: size }),
       mixedItemPath,
     );
-    return mapMixedSearchResult(result, limit, hostIsWindows);
+    return merge(mapMixedSearchResult(result, indexLimit, hostIsWindows));
   });
 
   const search: WorkspaceSearchIndex["Service"]["search"] = Effect.fn(

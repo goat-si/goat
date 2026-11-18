@@ -290,6 +290,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `packages/client-runtime/src/state/{server.updateResume.test.ts,serverUpdate.ts,server.test.ts}`
 - 정책: upstream `state/server.test.ts`의 서버 업데이트 묶음("accepted server update recovery", "launcher update resume")은 GOAT에서 `serverUpdate.ts` 옆 `server.updateResume.test.ts`에 있다. `server.ts`가 예산에 닿아 업데이트 도우미를 `serverUpdate.ts`로 옮겼고, 테스트가 모듈을 따라갔다. upstream이 이 두 묶음을 고치면 그 hunk를 이 파일에 적용한다. 나머지 `server.test.ts` 변경은 그대로 받는다.
 
+### `service-launcher-protocol` launcher protocol 4의 보장은 선택 필드로
+
+- 커밋: next3 N10 (upstream d0d0608b6b, e805ce3712)
+- 경로: `apps/server/src/cloud/serviceProtocol.ts`, `apps/server/src/serviceLauncher.ts`, `apps/server/src/serviceUnitRepoint.ts`
+- 정책: upstream은 protocol 4에서 durable state와 child context의 `protocol`을 4로 바꾼다. GOAT는 둘 다 3으로 두고, launcher의 보장(selection lease, unit repoint)은 context의 선택 필드 `launcherProtocol: 4`(`SERVICE_LAUNCHER_GUARANTEES`)로 알린다. 이유: 출시된 protocol-3 runtime(v0.1.10 `decodeServiceLauncherContext`)은 `protocol`이 3이 아니면 context를 거절하고 서버가 뜨지 않는다. 재시작된 새 launcher 아래에서 probation rollback이 protocol-3 runtime으로 돌아가면 그 기계는 시작하지 못한다(coordinator 판정 D1 B, `devlog/_chase/261114_lanes/next3-N10.md`). upstream의 protocol 상수, `isSupportedLauncherProtocol`, state의 protocol 4 정규화를 받을 때 이 형식을 유지하고, launcher 보장이 필요한 코드는 `launcherProtocol`을 읽는다.
+
 ### `session-ended-check` 쿠키 탭의 끝난 세션 판별
 
 - 커밋: #3592

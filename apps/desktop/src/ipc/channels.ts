@@ -73,6 +73,9 @@ export const GET_CONNECTION_CATALOG_UNREADABLE_CHANNEL =
   "desktop:get-connection-catalog-unreadable";
 export const CLEAR_CONNECTION_CATALOG_CHANNEL = "desktop:clear-connection-catalog";
 export const DISCOVER_SSH_HOSTS_CHANNEL = "desktop:discover-ssh-hosts";
+export const GET_PEN_MEMBERS_CHANNEL = "desktop:get-pen-members";
+export const PEN_MEMBERS_CHANGED_CHANNEL = "desktop:pen-members-changed";
+export const ISSUE_PEN_MEMBER_SESSION_CHANNEL = "desktop:issue-pen-member-session";
 export const RESOLVE_SSH_HOST_CHANNEL = "desktop:resolve-ssh-host";
 export const SSH_ENVIRONMENT_ANSWERED_CHANNEL = "desktop:ssh-environment-answered";
 export const SSH_ENVIRONMENT_PROGRESS_CHANNEL = "desktop:ssh-environment-progress";
@@ -113,6 +116,7 @@ export const PREVIEW_HARD_RELOAD_CHANNEL = "desktop:preview-hard-reload";
 export const PREVIEW_SET_COLOR_SCHEME_CHANNEL = "desktop:preview-set-color-scheme";
 export const PREVIEW_SET_AUDIO_MUTED_CHANNEL = "desktop:preview-set-audio-muted";
 export const PREVIEW_SET_SHOWN_CHANNEL = "desktop:preview-set-shown";
+export const PREVIEW_SET_CAPTURE_DRAWN_CHANNEL = "desktop:preview-set-capture-drawn";
 export const PREVIEW_OPEN_DEVTOOLS_CHANNEL = "desktop:preview-open-devtools";
 export const PREVIEW_CLEAR_COOKIES_CHANNEL = "desktop:preview-clear-cookies";
 export const PREVIEW_CLEAR_CACHE_CHANNEL = "desktop:preview-clear-cache";

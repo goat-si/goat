@@ -10,6 +10,8 @@ import {
   watchConnectedHubProxyDiscovery,
   watchRemovedHubProxyRoutes,
 } from "./hubProxyDiscovery.ts";
+import * as PenMembership from "./penMembership.ts";
+import * as PenDiscovery from "./penDiscovery.ts";
 import * as HubProxyAuthSource from "./hubProxyAuthSource.ts";
 import * as ConnectionResolver from "./resolver.ts";
 import * as ConnectionDriver from "./driver.ts";
@@ -77,7 +79,9 @@ export const watchDiscoveredCompatibility = Effect.fn("connection.watchDiscovere
 );
 
 export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
-  const layerResolver = ConnectionResolver.layer.pipe(Layer.provideMerge(HubProxyAuthSource.layer));
+  const layerResolver = ConnectionResolver.layer.pipe(
+    Layer.provideMerge(Layer.mergeAll(HubProxyAuthSource.layer, PenMembership.layer)),
+  );
   const layerDriver = ConnectionDriver.layer.pipe(
     Layer.provide(Layer.mergeAll(layerResolver, RpcSession.layer(options))),
   );
@@ -88,6 +92,9 @@ export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
     RelayEnvironmentDiscovery.layer,
     layerOnboarding,
     layerResolver,
+    PenDiscovery.layer.pipe(
+      Layer.provide(Layer.mergeAll(layerRegistry, layerOnboarding, layerResolver)),
+    ),
   );
   const layerConnectionStartup = Layer.effectDiscard(
     Effect.gen(function* () {
@@ -97,6 +104,7 @@ export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
       yield* registry.start;
       yield* watchRemovedHubProxyRoutes().pipe(Effect.forkScoped);
       yield* watchConnectedHubProxyDiscovery.pipe(Effect.forkScoped);
+      yield* PenDiscovery.watchPenDiscovery.pipe(Effect.forkScoped);
       yield* platformSource.registrations.pipe(
         Stream.runForEach(registry.reconcilePlatform),
         Effect.forkScoped,

@@ -661,8 +661,10 @@ export function isOwnedPastedImageUri(uri: string): boolean {
       return false;
     }
     const segments = url.pathname.split("/").filter(Boolean);
+    const name = segments.at(-1);
     return (
-      segments.at(-2) === OWNED_PASTED_IMAGE_DIRECTORY && segments.at(-1)?.endsWith(".png") === true
+      segments.at(-2) === OWNED_PASTED_IMAGE_DIRECTORY &&
+      (name?.endsWith(".png") === true || name?.endsWith(".gif") === true)
     );
   } catch {
     return false;

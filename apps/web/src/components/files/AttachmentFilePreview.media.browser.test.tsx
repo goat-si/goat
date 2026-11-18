@@ -33,6 +33,7 @@ vi.mock("~/hooks/useSettings", async () => {
 });
 vi.mock("~/components/ui/toast", () => ({
   toastManager: { add: vi.fn() },
+  anchoredToastManager: { add: vi.fn() },
   stackedThreadToast: (v: unknown) => v,
 }));
 vi.mock("~/components/ChatMarkdown", () => ({ default: () => null }));

@@ -144,4 +144,12 @@ export const WIRE_KEEP_RULES: readonly KeepRule[] = [
     reason:
       "Codex thread config sets each ACP MCP credential under its legacy T3_ name beside the GOAT_ one (withLegacyEnvNames); these tests pin both keys (#1039, #1059).",
   },
+  {
+    id: "wire-checkpoint-head-mark-trailer",
+    pattern: /(?<=HEAD_MARK_TRAILER = ")T3-Head-Moved-At(?=")/g,
+    scope: (path) => path === "apps/server/src/vcs/checkpointTurnStart.ts",
+    holdsOnApply: true,
+    reason:
+      "Checkpoint commits carry upstream's trailer name so later checkpoint ports apply without a rename (next3 K4 ruling D1).",
+  },
 ];

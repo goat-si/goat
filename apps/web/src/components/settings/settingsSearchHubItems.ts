@@ -20,6 +20,12 @@ export const HUB_SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "hub-pen-machines",
+    title: "List Pen machines as hub devices",
+    to: "/settings/hub",
+    searchTerms: ["pen mesh members machines hub devices automatic phone"],
+  },
+  {
     id: "hub-cloud-holder",
     title: "Cloud runs",
     to: "/settings/hub",

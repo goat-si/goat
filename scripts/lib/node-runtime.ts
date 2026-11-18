@@ -16,6 +16,21 @@ export function readPinnedNodeVersion(): string {
   return pinned;
 }
 
+/** Strips any "+..." integrity suffix from a package.json packageManager field. */
+export function normalizePackageManager(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const stripped = value.split("+", 1)[0]?.trim();
+  return stripped ? stripped : undefined;
+}
+
+/** The packageManager release root package.json pins (without any "+..." suffix), if any. */
+export function readPinnedPackageManager(): string | undefined {
+  const manifest: { readonly packageManager?: unknown } = JSON.parse(
+    NodeFS.readFileSync(ROOT_PACKAGE_JSON, "utf8"),
+  );
+  return normalizePackageManager(manifest.packageManager);
+}
+
 const versionParts = (version: string) =>
   version.split(".").map((part) => Number.parseInt(part, 10));
 
@@ -30,6 +45,7 @@ export function unsupportedNodeMessage(input: {
   readonly pinned: string;
   readonly execPath: string;
   readonly command: string;
+  readonly packageManager?: string | undefined;
 }): string | undefined {
   const [major = 0, minor = 0, patch = 0] = versionParts(input.version);
   const [pinnedMajor = 0, pinnedMinor = 0, pinnedPatch = 0] = versionParts(input.pinned);
@@ -39,9 +55,12 @@ export function unsupportedNodeMessage(input: {
   ) {
     return undefined;
   }
+  const packageManager = normalizePackageManager(input.packageManager);
+  const packageManagerArgs = packageManager ? ` --package-manager ${packageManager}` : "";
+  const packageManagerNote = packageManager ? " (vite-plus 0.3.1+)" : "";
   return [
     `GOAT development uses Node.js ${input.pinned} (engines.node in the root package.json), but ${input.execPath} is Node.js ${input.version}.`,
-    `Run it with the pinned Node.js: vp env exec --node ${input.pinned} -- ${input.command}`,
+    `Run it with the pinned Node.js${packageManagerNote}: vp env exec --node ${input.pinned}${packageManagerArgs} -- ${input.command}`,
     "Or let vp manage Node.js again: vp env on node",
   ].join("\n");
 }
@@ -52,6 +71,7 @@ export function currentUnsupportedNodeMessage(command: string): string | undefin
     pinned: readPinnedNodeVersion(),
     execPath: process.execPath,
     command,
+    packageManager: readPinnedPackageManager(),
   });
 }
 

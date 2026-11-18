@@ -63,6 +63,8 @@ const LANES = ["all", "server", "memory-growth", "windows", "quick"];
 const WINDOWS_SUITES = [
   "apps/desktop/src/cua/",
   "apps/server/src/cua/",
+  "apps/server/src/git/GitWorkflowService.test.ts",
+  "apps/server/src/vcs/VcsStatusBroadcaster.watch.test.ts",
   "apps/server/src/memory/imports/MemoryImportReaderWindows",
   "apps/server/src/runtimeRelaunch",
   "apps/server/src/cli/updateServerRestart",

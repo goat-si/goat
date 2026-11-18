@@ -48,6 +48,7 @@ import {
   resolveSshPasswordPrompt,
   updateSshRuntime,
 } from "./methods/sshEnvironment.ts";
+import { getPenMembers, issuePenMemberSession } from "./methods/penMembers.ts";
 import {
   checkForUpdate,
   downloadUpdate,
@@ -153,6 +154,8 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(clearConnectionCatalog);
 
   yield* ipc.handle(discoverSshHosts);
+  yield* ipc.handle(getPenMembers);
+  yield* ipc.handle(issuePenMemberSession);
   yield* ipc.handle(resolveSshHost);
   yield* ipc.handle(ensureSshEnvironment);
   yield* ipc.handle(getSshHostStatus);
