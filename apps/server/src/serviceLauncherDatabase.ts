@@ -204,16 +204,13 @@ export async function databaseRestorePending(
 }
 
 async function writeMarker(backupDir: string, marker: string): Promise<void> {
-  const markerPath = NodePath.join(backupDir, marker);
-  if (!(await pathExists(markerPath))) {
-    const handle = await NodeFSP.open(markerPath, "wx", 0o600);
-    try {
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await syncDirectory(backupDir);
+  const handle = await NodeFSP.open(NodePath.join(backupDir, marker), "a", 0o600);
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
   }
+  await syncDirectory(backupDir);
 }
 
 export async function markUntrackedDatabaseOwner(baseDir: string, updateId: string): Promise<void> {

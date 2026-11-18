@@ -226,4 +226,74 @@ it.layer(NodeServices.layer)("a pending update while another server owns the hom
       );
     }),
   );
+
+  it.effect("keeps the snapshot and committed writes after an unattributed trial refusal", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-trial-refusal-" });
+      const statePath = path.join(root, "runtime", "service-state.json");
+      const stateDir = path.join(root, "userdata");
+      const dbPath = path.join(stateDir, "statev2.sqlite");
+      const backupDir = path.join(root, "runtime", "db-backup", "trial");
+      yield* fs.makeDirectory(stateDir);
+      {
+        using db = new NodeSqlite.DatabaseSync(dbPath);
+        db.exec("CREATE TABLE messages (body TEXT)");
+      }
+      yield* writeFakeRuntime(
+        fs,
+        path,
+        path.join(root, "runtime", "goat", "versions", "1.0.0"),
+        "process.exit(0);",
+      );
+      yield* writeFakeRuntime(
+        fs,
+        path,
+        path.join(root, "runtime", "goat", "versions", "1.1.0"),
+        `
+import { DatabaseSync } from "node:sqlite";
+const legacyLock = new DatabaseSync(${JSON.stringify(path.join(stateDir, "server-owner.sqlite"))});
+legacyLock.exec("BEGIN EXCLUSIVE");
+const db = new DatabaseSync(${JSON.stringify(dbPath)});
+db.exec("INSERT INTO messages VALUES ('committed by the legacy owner')");
+db.close();
+legacyLock.close();
+process.exit(${SERVER_EXIT_CODE_STATE_DIR_OWNED});
+`,
+      );
+      const state = {
+        protocol: SERVICE_LAUNCHER_PROTOCOL,
+        activeVersion: "1.0.0",
+        update: {
+          id: "trial",
+          fromVersion: "1.0.0",
+          targetVersion: "1.1.0",
+          dbPath,
+          status: "pending" as const,
+        },
+      };
+      yield* Effect.promise(() => writeServiceState(statePath, state));
+      const launcher = new Launcher(root, state, { stateDirOwnerPollMs: 5 });
+      yield* Effect.addFinalizer(() => Effect.promise(() => launcher.stop("SIGTERM")));
+      assert.include(
+        String(yield* Effect.promise(() => launcher.run().catch((error: unknown) => error))),
+        "Active child exited unexpectedly (0)",
+      );
+      using live = new NodeSqlite.DatabaseSync(dbPath, { readOnly: true });
+      assert.equal(
+        live.prepare("SELECT body FROM messages").get()?.body,
+        "committed by the legacy owner",
+      );
+      using backup = new NodeSqlite.DatabaseSync(path.join(backupDir, "database"), {
+        readOnly: true,
+      });
+      assert.isUndefined(backup.prepare("SELECT body FROM messages").get());
+      const outcome = (yield* Effect.promise(() => readServiceState(statePath))).update;
+      assert.equal(
+        outcome?.status === "failed" ? outcome.reason : undefined,
+        "state-dir-owned;db-kept-for-other-server",
+      );
+    }),
+  );
 });

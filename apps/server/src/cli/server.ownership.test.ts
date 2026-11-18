@@ -14,17 +14,23 @@ import {
   SERVICE_LAUNCHER_PROTOCOL,
 } from "../cloud/serviceProtocol.ts";
 import { tryAcquireServerOwnerLock } from "../serverOwnerLockFile.ts";
+import { tryAcquireLegacyServerOwnerLock } from "../serviceLauncherOwner.ts";
 
-const startBlockedTrial = (trialOwnerRefusal: boolean) =>
+const startBlockedTrial = (trialOwnerRefusal: boolean, owner: "tracked" | "legacy" = "tracked") =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-trial-ownership-" });
     const stateDir = path.join(home, "userdata");
     yield* fs.makeDirectory(stateDir);
-    const lock = tryAcquireServerOwnerLock(stateDir, "server:desktop");
-    assert.isDefined(lock);
-    yield* Effect.addFinalizer(() => Effect.sync(() => lock?.release()));
+    const backupDir = path.join(home, "runtime", "db-backup", "trial");
+    yield* fs.makeDirectory(backupDir, { recursive: true });
+    const release =
+      owner === "legacy"
+        ? tryAcquireLegacyServerOwnerLock(stateDir)
+        : tryAcquireServerOwnerLock(stateDir, "server:desktop")?.release;
+    assert.isDefined(release);
+    yield* Effect.addFinalizer(() => Effect.sync(release));
     const first = Promise.withResolvers<number | "waiting" | null>();
     const closed = Promise.withResolvers<void>();
     const child = guardChild(
@@ -75,7 +81,8 @@ const startBlockedTrial = (trialOwnerRefusal: boolean) =>
     child.stdout.on("data", observe);
     child.stderr.on("data", observe);
     const outcome = yield* Effect.promise(() => first.promise);
-    return { outcome, output };
+    const marked = yield* fs.exists(path.join(backupDir, ".untracked-owner"));
+    return { outcome, output, marked };
   });
 
 describe("ownership of a home during a managed CLI trial", () => {
@@ -90,6 +97,17 @@ describe("ownership of a home during a managed CLI trial", () => {
     Effect.gen(function* () {
       const { outcome, output } = yield* startBlockedTrial(false);
       assert.equal(outcome, "waiting", output);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.live("records legacy ownership durably before returning exit 78", () =>
+    Effect.gen(function* () {
+      const { outcome, output, marked } = yield* startBlockedTrial(true, "legacy");
+      assert.equal(outcome, SERVER_EXIT_CODE_STATE_DIR_OWNED, output);
+      assert.isTrue(
+        marked,
+        "The trial must record its refusal even without a launcher observing it",
+      );
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 });

@@ -739,6 +739,11 @@ export class Launcher {
     if (this.#child !== child || this.#stopping) return;
     this.#child = null;
     if (code === STATE_DIR_OWNED_EXIT_CODE) {
+      const pending = this.#state.update;
+      if (child.role === "trial" && pending?.status === "pending") {
+        // Exit 78 alone cannot tell us whether the owner was in the generation log.
+        await markUntrackedDatabaseOwner(this.#baseDir, pending.id);
+      }
       await this.#idleWhileRefused("state-dir-owned");
       return;
     }
