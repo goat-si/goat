@@ -1,3 +1,4 @@
+import { detectComposerTrigger } from "@goat/shared/composerTrigger";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@goat/contracts";
 import type { ModelOption } from "../../lib/modelOptions";
@@ -57,6 +58,28 @@ import {
   resolveComposerMenuSelection,
   resolveComposerSendIntercept,
 } from "./use-composer-command-menu";
+
+it("keeps the built-in model picker selectable after typing the complete command", () => {
+  const draftMessage = "/MODEL";
+  const trigger = detectComposerTrigger(draftMessage, draftMessage.length);
+  if (trigger?.kind !== "slash-command") throw new Error("Expected the slash command menu");
+  const items = buildComposerSlashCommandItems({
+    query: trigger.query,
+    atMessageStart: true,
+    hasThread: true,
+    allowInteractionMode: false,
+    selectedProviderStatus: null,
+  });
+  expect(items).toEqual([
+    {
+      id: "cmd:model",
+      type: "slash-command",
+      command: "model",
+      label: "/model",
+      description: "Switch model",
+    },
+  ]);
+});
 
 describe("resolveComposerMenuSelection", () => {
   it("prefers the caret an insertion placed in the current draft text", () => {

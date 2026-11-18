@@ -38,7 +38,7 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { useComposerDraftStore, DraftId } from "../../composerDraftStore";
-import { getProviderModelCapabilities } from "../../providerModels";
+import { getProviderModelCapabilities, keepsUnavailableModelOptions } from "../../providerModels";
 import { cn } from "~/lib/utils";
 import { Badge } from "../ui/badge";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
@@ -134,9 +134,7 @@ function getSelectedTraits(
   planModeEnabled: boolean,
 ) {
   const caps = getProviderModelCapabilities(models, model, provider, planModeEnabled);
-  const modelIsUnavailable =
-    (provider === "opencode" || provider === "cursor") &&
-    !models.some((candidate) => candidate.slug === normalizeModelSlug(model, provider));
+  const modelIsUnavailable = keepsUnavailableModelOptions(provider, model, models);
   const descriptors = modelIsUnavailable
     ? buildUnavailableModelOptionDescriptors(
         planModeEnabled

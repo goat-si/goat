@@ -10,6 +10,7 @@ import type * as Ref from "effect/Ref";
 import type { OrchestratorProjectionError, OrchestratorV2Error } from "../Orchestrator.ts";
 import type { ProjectionStoreV2Shape } from "../ProjectionStore.ts";
 import { dropQueuedPullRequestWakes as dropQueuedWakes } from "./PullRequestDigest.ts";
+import { pullRequestWakesEnd } from "./PullRequestWatchWakes.ts";
 
 export interface PullRequestWakeDropsDeps {
   readonly projectionStore: ProjectionStoreV2Shape;
@@ -38,7 +39,7 @@ export const makePullRequestWakeDrops = ({
   const dropQueuedPullRequestWakes = (
     command: Extract<OrchestrationV2ServerCommand, ThreadPullRequestKey>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-    headSha?: string,
+    headSha?: string | { readonly resumed: true },
   ) => {
     const read = Effect.mapError(
       (cause: unknown) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
@@ -63,5 +64,16 @@ export const makePullRequestWakeDrops = ({
     );
   };
 
-  return { dropQueuedPullRequestWakes };
+  /** After a watch, unwatch, unlink or link sync: ends drop the queued wakes, a new watch resumes. */
+  const settleQueuedPullRequestWakes = (
+    command: Parameters<typeof pullRequestWakesEnd>[0],
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) =>
+    pullRequestWakesEnd(command)
+      ? dropQueuedPullRequestWakes(command, events)
+      : command.type === "thread.pull-request.watch"
+        ? dropQueuedPullRequestWakes(command, events, { resumed: true })
+        : Effect.void;
+
+  return { dropQueuedPullRequestWakes, settleQueuedPullRequestWakes };
 };
