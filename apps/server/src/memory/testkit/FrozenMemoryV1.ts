@@ -133,3 +133,20 @@ export const decodeLegacyUpsert = Schema.decodeUnknownSync(
   }),
   options,
 );
+
+export const decodeLegacyPushResult = Schema.decodeUnknownSync(
+  Schema.Struct({
+    receipts: Schema.Array(
+      Schema.Struct({
+        operationId: M.MemoryOperationId,
+        memoryId: M.MemoryId,
+        operationDigest: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
+        outcome: Schema.Literals(["accepted", "conflicted", "deleted", "rejected"]),
+        hubSequence: Schema.NullOr(Schema.Int.check(Schema.isGreaterThan(0))),
+        failureCode,
+        capacity,
+      }),
+    ),
+  }),
+  options,
+);

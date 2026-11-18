@@ -1,3 +1,4 @@
+import { decodeLegacyPushResult, decodeLegacyUpsert } from "./testkit/FrozenMemoryV1.ts";
 import { makeMemorySaveSuggestions } from "./MemorySaveSuggestions.ts";
 import { scanReplicaMemory } from "./testkit/ScanReplicaMemory.ts";
 import { assert, describe, it } from "@effect/vitest";
@@ -122,6 +123,54 @@ describe("memory hub floor", () => {
         .pipe(Effect.flip);
       assert.include(refusal, { code: "hub_upgrade_required" });
       assert.deepStrictEqual(Reflect.get(refusal, "upgradeRequiredMembers"), blockers);
+    }).pipe(checkUsage, Effect.provide(live), enabled),
+  );
+
+  it.effect("returns a terminal V1 receipt for a payload that exceeds the new tail envelope", () =>
+    Effect.gen(function* () {
+      yield* seed;
+      const hub = yield* Hub.MemoryHubService;
+      const op = newMemory(94);
+      const { payload } = decodeLegacyUpsert({
+        memorySpaceId: space,
+        memoryId: op.memoryId,
+        operationId: op.operationId,
+        expectedHeads: [],
+        scope: op.revision.scope,
+        assertionKind: op.revision.assertionKind,
+        baseBoundary: null,
+        payload: {
+          ...op.payload,
+          evidence: [
+            {
+              origin: "thread",
+              sourceThread: {
+                environmentId: hubEnv,
+                threadId: M.ThreadId.make("synthetic-thread"),
+              },
+              watermark: {
+                fromEventId: M.EventId.make("e".repeat(63000)),
+                toEventId: M.EventId.make("end"),
+                throughSequence: 1,
+              },
+              messageIds: [],
+            },
+          ],
+        },
+      });
+      const request = pushInput({ ...op, payload });
+      const legacy = yield* hub.push(request, principal());
+      assert.include(decodeLegacyPushResult(legacy).receipts[0], {
+        outcome: "rejected",
+        hubSequence: null,
+        failureCode: "payload_too_large",
+      });
+      const updated = yield* hub.push({ ...request, features }, principal());
+      assert.include(updated.receipts[0], {
+        outcome: "rejected",
+        failureCode: "capacity_exceeded",
+      });
+      assert.propertyVal(updated.receipts[0]?.capacity, "dimension", "payload_bytes");
     }).pipe(checkUsage, Effect.provide(live), enabled),
   );
 
