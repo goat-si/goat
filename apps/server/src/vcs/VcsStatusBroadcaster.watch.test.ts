@@ -12,6 +12,7 @@ import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { NativeHeadWatch } from "./headWatchSignals.ts";
+import * as GitFixture from "./testing/gitFixture.ts";
 import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
 import {
   baseLocalStatus,
@@ -423,5 +424,104 @@ describe("VCS HEAD watchers", () => {
         Effect.scoped,
       );
     }),
+  );
+  it.effect(
+    "publishes native linked worktree removal during HEAD.lock churn and closes the watch",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "vcs-linked-head-watch-" });
+        const main = path.join(root, "main");
+        const linked = path.join(root, "linked");
+        yield* fs.makeDirectory(main);
+        yield* GitFixture.git(main, ["init", "-b", "main"]);
+        yield* GitFixture.git(main, [
+          "-c",
+          "user.email=t@t",
+          "-c",
+          "user.name=t",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "init",
+        ]);
+        yield* GitFixture.git(main, ["worktree", "add", "-b", "topic", linked]);
+        const headPath = yield* GitFixture.git(linked, [
+          "rev-parse",
+          "--path-format=absolute",
+          "--git-path",
+          "HEAD",
+        ]);
+
+        const adminDir = path.dirname(headPath);
+        const pendingProbe = yield* Deferred.make<void>();
+        const permitProbe = yield* Deferred.make<void>();
+        let removing = false;
+        const closed = yield* Deferred.make<void>();
+        const startWatch = yield* NativeHeadWatch;
+        const state: Parameters<typeof layerTestFor>[0] = {
+          currentLocalStatus: { ...baseLocalStatus, refName: "topic" },
+          currentRemoteStatus: null,
+          localStatusCalls: 0,
+          remoteStatusCalls: 0,
+          localInvalidationCalls: 0,
+          remoteInvalidationCalls: 0,
+          headPath,
+          fileSystem: {
+            ...fs,
+            exists: (target) =>
+              removing && target === adminDir
+                ? Deferred.succeed(pendingProbe, undefined).pipe(
+                    Effect.andThen(Deferred.await(permitProbe)),
+                    Effect.andThen(fs.exists(target)),
+                  )
+                : fs.exists(target),
+          },
+          branchRead: () =>
+            fs.readFileString(headPath).pipe(
+              Effect.map((contents) => contents.trim().replace(/^ref: refs\/heads\//, "")),
+              Effect.orElseSucceed(() => {
+                state.currentLocalStatus = { ...baseLocalStatus, isRepo: false, refName: null };
+                return null;
+              }),
+            ),
+        };
+
+        yield* Effect.gen(function* () {
+          const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+          const branches = yield* Stream.toPull(broadcaster.streamBranchStatus({ cwd: linked }));
+          assert.deepEqual(yield* branches, [{ refName: "topic", isRepo: true }]);
+
+          const lock = headPath + ".lock";
+          for (let index = 0; index < 8; index++) {
+            yield* fs.writeFileString(lock, "ref: refs/heads/topic\n");
+            yield* fs.remove(lock);
+          }
+          yield* GitFixture.git(linked, ["symbolic-ref", "HEAD", "refs/heads/other"]);
+
+          assert.deepEqual(yield* branches, [{ refName: "other", isRepo: true }]);
+
+          assert.isFalse(yield* Deferred.isDone(closed));
+
+          removing = true;
+          yield* fs.writeFileString(lock, "ref: refs/heads/other\n");
+          yield* Deferred.await(pendingProbe);
+          yield* GitFixture.git(main, ["worktree", "remove", "--force", linked]);
+          yield* Deferred.succeed(permitProbe, undefined);
+
+          assert.deepEqual(yield* branches, [{ refName: null, isRepo: false }]);
+          yield* Deferred.await(closed);
+          assert.strictEqual(state.localStatusCalls, 0);
+          assert.strictEqual(state.remoteStatusCalls, 0);
+        }).pipe(
+          Effect.provide(layerTestFor(state)),
+          Effect.provideService(NativeHeadWatch, (directory, notify, onError) => {
+            const watcher = startWatch(directory, notify, onError);
+            watcher.once("close", () => Deferred.doneUnsafe(closed, Effect.void));
+            return watcher;
+          }),
+        );
+      }).pipe(Effect.provide(GitFixture.layerTest), Effect.scoped),
   );
 });
