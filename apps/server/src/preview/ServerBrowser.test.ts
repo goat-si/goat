@@ -60,7 +60,9 @@ import {
   makePageContext,
   makeDesktopViewer,
   holdTitleObservation,
-  crashRenderer,
+  assertCrashReload,
+  assertStopThroughFailedRecovery,
+  type ContextSetupGate,
   viewerInput,
   mockCopy,
   refClickTarget,
@@ -78,8 +80,10 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
     async contextFor(profileId: string, isolationKey?: string) {
       contextRequests.push({ profileId, isolated: isolationKey !== undefined });
       if (contextFailure) throw contextFailure;
-      await contextGate?.promise;
+      const gate = contextGate;
+      await gate?.promise;
       const context = makeContext(this.onClose);
+      gate?.prepare?.(context);
       contexts.push(context);
       return context as unknown as BrowserContext;
     }
@@ -123,7 +127,7 @@ export const makeContext = (onClose?: (context: BrowserContext) => void, initial
 const contexts: ReturnType<typeof makeContext>[] = [];
 const encoderStreams: Array<{ frameRate: number | undefined; bitsPerSecond: number }> = [];
 const contextRequests: Array<{ profileId: string; isolated: boolean }> = [];
-let contextGate: PromiseWithResolvers<void> | null = null;
+let contextGate: ContextSetupGate | null = null;
 let decodeGate: Promise<void> | undefined;
 let contextFailure: Error | null = null;
 let pageSetupFailure: Error | null = null;
@@ -2542,29 +2546,22 @@ it.effect.each(["plain", "stopAll", "settle", "failed"] as const)(
     Effect.scoped(
       Effect.gen(function* () {
         const { browser, broker, tabId } = yield* ready;
-        const url = `https://example.com/app?${"a".repeat(3000)}`;
-        const replacement = yield* crashRenderer(contexts[0]!, browser, tabId, url, duringRecovery);
-        if (duringRecovery === "failed") return;
-        expect(replacement.newPage).toHaveBeenCalled();
-        const status = yield* broker.invoke<PreviewAutomationStatus>({
-          scope,
-          tabId,
-          operation: "status",
-          input: {},
-        });
-        expect(status.tabId).toBe(tabId);
-        expect(status.loadError).toEqual({
-          url: url.slice(0, 2048),
-          code: -2,
-          description: "Page crashed",
-        });
-        // The crashed page cannot load anything again, so Reload goes to the page that replaced it.
-        const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
-        yield* viewer.input({ type: "takeControl" });
-        yield* viewer.input({ type: "reload" });
-        expect(replacement.page.goto).toHaveBeenCalledWith(url, expect.anything());
+        yield* assertCrashReload(contexts[0]!, browser, broker, tabId, duringRecovery);
       }),
     ).pipe(Effect.provide(layer)),
+);
+
+const setContextGate = (gate: ContextSetupGate | null) => {
+  contextGate = gate;
+};
+
+it.effect.each(["context", "viewport"] as const)(
+  "Stop All survives failed recovery during reconnect at %s",
+  (stage) =>
+    Effect.gen(function* () {
+      const { browser, tabId } = yield* ready;
+      yield* assertStopThroughFailedRecovery(contexts[0]!, browser, tabId, setContextGate, stage);
+    }).pipe(Effect.scoped, Effect.provide(layer)),
 );
 
 it.effect("a popup opens in its opener's appearance", () =>

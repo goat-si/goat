@@ -319,7 +319,7 @@ const make = Effect.gen(function* () {
       };
     }
   >();
-  const browserControls = makeServerBrowserControls(tabs, pendingTabs);
+  const browserControls = makeServerBrowserControls();
   const screen = ServerBrowserScreen.makeSurface<ServerTab>(
     (threadId, tabId) => tabs.get(tabKey(threadId, tabId)),
     (key, cursor) => runFork(desktopChannel.cursorState?.(key, cursor) ?? Effect.void),
@@ -514,6 +514,7 @@ const make = Effect.gen(function* () {
     if (!replacingRenderer) blockedTabs.drop(tab.threadId, tab.tabId);
     screen.notify({ kind: "stop", reason: "tabClosed", threadId: tab.threadId, tabId: tab.tabId });
     tabs.delete(key);
+    browserControls.detach(key, tab.control);
     if (tab.openerTabId && !replacingRenderer)
       closedPopups.record(tab.threadId, tab.tabId, tab.openerTabId);
     tab.titleWatcher.stop();
@@ -551,7 +552,6 @@ const make = Effect.gen(function* () {
     const control = tab.control.replacement(() => {
       if (page) ServerBrowserPage.invalidateRefs(page);
     });
-    browserControls.rememberStop(key, control);
     const recovery = {
       threadId: tab.threadId,
       tabId: tab.tabId,
@@ -561,6 +561,7 @@ const make = Effect.gen(function* () {
       },
     };
     screen.watchHandoffs(recovery);
+    browserControls.bind(key, control, { preserveStop: true });
     const replacement = Promise.resolve()
       .then(async () => {
         await runPromise(
@@ -583,6 +584,7 @@ const make = Effect.gen(function* () {
         return createTab(snapshot, tab);
       })
       .catch((cause: unknown) => {
+        browserControls.detach(key, control);
         void control.close().catch(constVoid);
         runFork(Effect.logWarning("server preview renderer could not recover", { cause }));
         if (tab.isolatedContext) void tab.page.context().close().catch(constVoid);
@@ -908,6 +910,7 @@ const make = Effect.gen(function* () {
       }
       page.on("close", () => dropTab(tab, !tab.closing));
       page.on("crash", () => recoverRenderer(tab));
+      browserControls.bind(key, control);
       tabs.set(key, tab);
       opened.length = 0;
       tab.control.onChange(ServerBrowserScreen.authorityReporter(tab, screen.notify));
@@ -1053,6 +1056,7 @@ const make = Effect.gen(function* () {
     if (pending?.promise) return pending.promise;
     const existing = tabs.get(key);
     if (existing) return Promise.resolve(existing);
+    browserControls.reserve(key);
     const adopted = adoptedPages.get(key);
     const opening = createTab(snapshot)
       .catch(async (cause: unknown) => {
@@ -1139,6 +1143,7 @@ const make = Effect.gen(function* () {
             beforePublish: (snapshot) => {
               pendingTabs.delete(key);
               key = tabKey(snapshot.threadId, snapshot.tabId);
+              if (snapshot.runtime === "server") browserControls.reserve(key);
               pendingTabs.set(key, reservation);
               input.beforePublish?.(snapshot);
             },
@@ -2121,6 +2126,7 @@ const make = Effect.gen(function* () {
     Effect.promise(async () => {
       if (event.type === "opened" && event.snapshot.runtime === "server") {
         const key = tabKey(event.snapshot.threadId, event.snapshot.tabId);
+        browserControls.reserve(key);
         if (event.snapshot.automationOwner === undefined || pendingTabs.has(key) || tabs.has(key))
           await ensureTab(event.snapshot).catch(constVoid);
         return;

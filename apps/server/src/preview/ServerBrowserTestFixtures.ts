@@ -1,9 +1,16 @@
 import type { BrowserContext, Page } from "playwright-core";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
+import {
+  EnvironmentId,
+  ProviderInstanceId,
+  ThreadId,
+  type PreviewAutomationStatus,
+  type PreviewTabId,
+} from "@goat/contracts";
 import * as Queue from "effect/Queue";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { expect } from "@effect/vitest";
+import type * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import type * as Manager from "./Manager.ts";
 import type * as ServerBrowser from "./ServerBrowser.ts";
 // @effect-diagnostics nodeBuiltinImport:off - a mocked CDP session for ServerBrowser tests; no Effect runtime.
@@ -332,27 +339,29 @@ export const holdTitleObservation = ({ page, sessions }: ReturnType<typeof makeP
   return { page, observeTitle, change };
 };
 
-export const crashRenderer = Effect.fn("TestBrowser.crashRenderer")(function* (
+const crashRenderer = Effect.fn("TestBrowser.crashRenderer")(function* (
   original: ReturnType<typeof makePageContext>,
   browser: ServerBrowser.ServerBrowser["Service"],
   tabId: string,
   url: string,
-  duringRecovery: "plain" | "stopAll" | "settle" | "failed",
+  duringRecovery: "plain" | "stopAll" | "settle" | "failed" | "setupFailure",
 ) {
   const replacement = makePageContext({
     initialNavigation: () => undefined,
     setupFailure: () => null,
     desktopSize: () => undefined,
   });
-  replacement.page.context = () => original;
-  original.newPage.mockImplementationOnce(replacement.newPage);
+  const context = original.page.context();
+  replacement.page.context = () => context;
+  context.newPage.mockImplementationOnce(replacement.newPage);
   original.page.commit(url);
   const paused = Promise.withResolvers<void>();
   const resume = Promise.withResolvers<void>();
   replacement.page.setViewportSize.mockImplementationOnce(async () => {
     paused.resolve();
     await resume.promise;
-    if (duringRecovery === "failed") throw new Error("Replacement renderer setup failed");
+    if (duringRecovery === "failed" || duringRecovery === "setupFailure")
+      throw new Error("Replacement renderer setup failed");
   });
   const key = { threadId: scope.thread.threadId, tabId };
   if (duringRecovery === "stopAll" || duringRecovery === "settle") {
@@ -393,11 +402,110 @@ export const crashRenderer = Effect.fn("TestBrowser.crashRenderer")(function* (
     return replacement;
   }
   const sessions = yield* browser.sessions;
-  if (duringRecovery !== "plain") {
+  if (duringRecovery === "setupFailure") {
+    expect(sessions.find((session) => session.tabId === tabId)).toBeUndefined();
+  } else if (duringRecovery !== "plain") {
     expect(sessions.find((session) => session.tabId === tabId)).toMatchObject({
       handoffReason: null,
       agentStopped: duringRecovery === "stopAll",
     });
   }
   return replacement;
+});
+
+export const assertCrashReload = Effect.fn("TestBrowser.assertCrashReload")(function* (
+  context: ReturnType<typeof makePageContext>,
+  browser: ServerBrowser.ServerBrowser["Service"],
+  broker: Broker.PreviewAutomationBroker["Service"],
+  tabId: PreviewTabId,
+  duringRecovery: "plain" | "stopAll" | "settle" | "failed",
+) {
+  const url = `https://example.com/app?${"a".repeat(3000)}`;
+  const replacement = yield* crashRenderer(context, browser, tabId, url, duringRecovery);
+  if (duringRecovery === "failed") return;
+  expect(replacement.newPage).toHaveBeenCalled();
+  const status = yield* broker.invoke<PreviewAutomationStatus>({
+    scope,
+    tabId,
+    operation: "status",
+    input: {},
+  });
+  expect(status.tabId).toBe(tabId);
+  expect(status.loadError).toEqual({
+    url: url.slice(0, 2048),
+    code: -2,
+    description: "Page crashed",
+  });
+  // The crashed page cannot load anything again, so Reload goes to the page that replaced it.
+  const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
+  yield* viewer.input({ type: "takeControl" });
+  yield* viewer.input({ type: "reload" });
+  expect(replacement.page.goto).toHaveBeenCalledWith(url, expect.anything());
+});
+
+export interface ContextSetupGate {
+  readonly promise: Promise<void>;
+  readonly prepare?: (context: ReturnType<typeof makePageContext>) => void;
+}
+
+const assertStoppedOnReconnect = Effect.fn("TestBrowser.assertStoppedOnReconnect")(function* (
+  browser: ServerBrowser.ServerBrowser["Service"],
+  tabId: string,
+  setSetupGate: (gate: ContextSetupGate | null) => void,
+  stage: "context" | "viewport",
+) {
+  const paused = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  setSetupGate(
+    stage === "context"
+      ? {
+          get promise() {
+            paused.resolve();
+            return resume.promise;
+          },
+        }
+      : {
+          promise: Promise.resolve(),
+          prepare: ({ page }) => {
+            page.setViewportSize.mockImplementationOnce(async () => {
+              paused.resolve();
+              await resume.promise;
+            });
+          },
+        },
+  );
+  const reconnect = yield* browser.attachViewer(viewerInput(tabId, true)).pipe(Effect.forkChild);
+  yield* Effect.promise(() => paused.promise);
+  yield* browser.stopAllAgents;
+  setSetupGate(null);
+  resume.resolve();
+  yield* Fiber.join(reconnect);
+  expect((yield* browser.sessions).find((session) => session.tabId === tabId)).toMatchObject({
+    agentStopped: true,
+  });
+});
+
+export const assertStopThroughFailedRecovery = Effect.fn(
+  "TestBrowser.assertStopThroughFailedRecovery",
+)(function* (
+  original: ReturnType<typeof makePageContext>,
+  browser: ServerBrowser.ServerBrowser["Service"],
+  tabId: string,
+  setSetupGate: (gate: ContextSetupGate | null) => void,
+  stage: "context" | "viewport",
+) {
+  const url = "https://example.com/";
+  let live = original;
+  if (stage === "viewport") {
+    const key = { threadId: scope.thread.threadId, tabId };
+    yield* browser.stopAllAgents;
+    expect((yield* browser.sessions).find((session) => session.tabId === tabId)).toMatchObject({
+      agentStopped: true,
+    });
+    expect(yield* browser.controlSession({ ...key, control: "handBack" })).toBe(true);
+    live = yield* crashRenderer(live, browser, tabId, url, "stopAll");
+    expect(yield* browser.controlSession({ ...key, control: "handBack" })).toBe(true);
+  }
+  yield* crashRenderer(live, browser, tabId, url, "setupFailure");
+  yield* assertStoppedOnReconnect(browser, tabId, setSetupGate, stage);
 });

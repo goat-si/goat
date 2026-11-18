@@ -2,44 +2,46 @@ import * as Effect from "effect/Effect";
 import { tabKey } from "./ServerBrowserPointer.ts";
 import type { SessionControl } from "./SessionControl.ts";
 
-interface ControlTab {
-  readonly threadId: string;
-  readonly tabId: string;
-  readonly control: SessionControl;
+interface LogicalTabControl {
+  stopped: boolean;
+  control?: SessionControl;
 }
 
-export const makeServerBrowserControls = (
-  tabs: ReadonlyMap<string, ControlTab>,
-  pendingTabs: ReadonlyMap<string, { readonly recovery?: ControlTab }>,
-) => {
-  const stopped = new Map<string, boolean>();
-  const find = (threadId: string, tabId: string) => {
-    const key = tabKey(threadId, tabId);
-    return pendingTabs.get(key)?.recovery ?? tabs.get(key);
-  };
-  const rememberStop = (key: string, control: SessionControl) => {
-    if (control.isAgentStopped) stopped.set(key, true);
-  };
-  const stop = (key: string, control: SessionControl) => {
-    control.stopAgents();
-    rememberStop(key, control);
+export const makeServerBrowserControls = () => {
+  // The preview manager closes the logical tab independently of its renderer attempts.
+  const records = new Map<string, LogicalTabControl>();
+  const stop = (record: LogicalTabControl) => {
+    record.stopped = true;
+    record.control?.stopAgents();
   };
   return {
-    find,
-    rememberStop,
+    reserve: (key: string) => {
+      if (!records.has(key)) records.set(key, { stopped: false });
+    },
+    find: (threadId: string, tabId: string) => {
+      const control = records.get(tabKey(threadId, tabId))?.control;
+      return control ? { threadId, tabId, control } : undefined;
+    },
+    bind: (key: string, control: SessionControl, { preserveStop = false } = {}) => {
+      const record = records.get(key);
+      if (!record) return;
+      record.control = control;
+      if (preserveStop && control.isAgentStopped) record.stopped = true;
+      if (record.stopped) control.stopAgents();
+      else if (control.isAgentStopped) control.resumeAgents();
+    },
+    detach: (key: string, control: SessionControl) => {
+      const record = records.get(key);
+      if (record?.control === control) delete record.control;
+    },
     restoreStop: (key: string, control: SessionControl) => {
-      if (stopped.get(key)) control.stopAgents();
+      if (records.get(key)?.stopped) control.stopAgents();
     },
     close: (key: string) => {
-      stopped.delete(key);
+      records.delete(key);
     },
     stopAllAgents: Effect.sync(() => {
-      for (const [key, tab] of tabs) {
-        if (!pendingTabs.get(key)?.recovery) stop(key, tab.control);
-      }
-      for (const [key, { recovery }] of pendingTabs) {
-        if (recovery) stop(key, recovery.control);
-      }
+      for (const record of records.values()) stop(record);
     }),
     controlSession: (input: {
       readonly threadId: string;
@@ -47,13 +49,12 @@ export const makeServerBrowserControls = (
       readonly control: "stop" | "handBack";
     }) =>
       Effect.sync(() => {
-        const tab = find(input.threadId, input.tabId);
-        if (!tab) return false;
-        const key = tabKey(input.threadId, input.tabId);
-        if (input.control === "stop") stop(key, tab.control);
+        const record = records.get(tabKey(input.threadId, input.tabId));
+        if (!record) return false;
+        if (input.control === "stop") stop(record);
         else {
-          tab.control.resumeAgents();
-          if (stopped.has(key)) stopped.set(key, false);
+          record.stopped = false;
+          record.control?.resumeAgents();
         }
         return true;
       }),
