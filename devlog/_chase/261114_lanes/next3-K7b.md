@@ -208,3 +208,70 @@ B2. Readers and writers of each map, at 9fb762a2b5 plus R1:
 - The route-check use: checkDescriptor itself reads neither map. It always fetches the descriptor fresh, with `cache: "no-store"` and `credentials: "omit"` (driver.ts:205-220). So an entry of GOAT's looser cache can never answer a route check, and an entry of the checked map can never outlive one use or come from a plain-LAN address.
 - Cases: (1) a connect fills bearerDescriptors, then a route check for the same environment and URL still fetches, counted by the fake HTTP client, and its answer decides "answered" or "silent" on its own; (2) a bearerDescriptors entry for http://192.168.x does not land in checkedDescriptors and is not handed to the next connect as a checked descriptor; (3) the reverse: a checked entry, once used, is gone, and a second connect reads the bearer map or fetches.
 
+
+## K7b implementation cut, pen-mac-studio
+
+C4 at `f82d2df4b0`, with K7 present. K7b-2 precedes K7b-1. Within K7b-2 the order is R4 (2917f28465 catalog), R5 (8b2763f638 digests), R6 (8b2763f638 omitProviders). K7b-1 starts with R2 (9557ab46c5), then R1 (dc3fdc6a3e), then R3 (2482b03a01). The coordinator owns integration and C4 review. No dev server on this host. The byte measurement will use the production config handler in process against data from a read-only seeded .goat copy, recording the exact input and any fixture substitution.
+
+- R4/R5: an older client receives the same full catalogs unless it explicitly opts into R4's names-only projection. An older server strips unknown opt-in keys and returns full lists. The client interprets an absent digest as authoritative lists, and a new digest as requiring a fetch. The server projects only providers that scan a cwd, including on replacement. Skill name and label survive R4. Failed scans retain the pending marker. GOAT's providerStatusChanges remains the wire delta, so its application and initial seeding must account for held lists. A late cwd reply applies its machine catalog only when the digest agrees. The client never sends loadedCatalogDigest. Project-scoped identities and provider RPC permission checks still apply.
+- R6: older clients get providers by default. Older servers may return them even on the wait-only path. Explicit per-instance or per-cwd refreshes still carry their reply. Denied callers receive the existing authorization error before any side effects.
+- R2/R3: an older client sends no fallback or resume query and continues to get the snapshot. An older server strips unknown subscribe keys and might respond to a resume query with a full snapshot. The new client accepts either response and skips early load without the descriptor flags. Cache origin and cursor share one record, version 4, bound to the server's random per-process instance ID, server build, age, omissions and database migration. Restarted, forward-cursor, old-schema and hub-without-instance records go through a fresh snapshot. The early HTTP request uses the existing authorization and must not be applied after a session closes.
+- R1: older servers without thread pagination continue to open over HTTP, and older clients have no new requirement. A declined/dropped cold socket open can retry once over HTTP, except an authorization denial. GOAT's ten-second bearer cache remains connect-only, and independent checked descriptors are one-use and five seconds. Route checks fetch without credentials, ignore the bearer cache, and evict a checked entry on failure. Cases include plain LAN, environment mismatch, expired cache, reused entry, and a retargeted loopback forward.
+
+Cut anchors for the first gate: apps/server/src/ws.ts:1582 (initial config), :2289 (refresh), :3220 (subscription); packages/contracts/src/rpc.ts:862 and :2217 (the two RPC payloads), server.ts:689 (GOAT changes event); packages/client-runtime/src/state/server.ts:1503 (guarded refresh), rpc/session.ts:201 (wire options); packages/client-runtime/src/state/shell.ts:440–466 and platform/orchestrationCache.ts:12 (current same-instance and storage version); apps/server/src/runtimeIdentity.ts:16 (per-process UUID), packages/client-runtime/src/authorization/service.ts:151, :165, :230, :550, :613 (bearer owner and callers), connection/driver.ts:205 (fresh check). Every implementation hunk is checked against the current consumers as it lands.
+
+### Upstream range 93cbca3fcbd..8a6342e7613
+
+Exact upstream files touched by the five supplied commits have 52 newer commits in this range. The follow-up search by feature identifier (`providerCatalogsOnDemand|providerCatalogDigests|loadedCatalogDigest|omitRefreshedProviders|knownProjectIdentities|loadShellUnlessResumable|rememberCheckedDescriptor|httpSnapshotFallback|socketOnlyOpen|canResumeShellFrom|CACHE_RESUME_MAX_AGE`) returned no commits. Path matches follow for subsequent chase triage.
+- 055b44919e feat(web,mobile,desktop): translate the whole app into every supported language (#37893)
+- 2ebe7f8e22 fix(pi): fork historical turns from their original session (#38315)
+- 74b1f97ce9 fix(web): reopening Settings reloads WSL distributions (#38281)
+- 10784e01f8 fix: expired-session error card asks to pair again and names the rejected request's trace (#38041)
+- 2904c397ad fix(server): fork a running Claude thread natively (#37955)
+- 86863beede feat(issues): add Linear as a standalone issue tracker (#19274)
+- 0597b9edcd feat(issues): link issues to threads and expose issue tools to agents (#19270)
+- 85dcfa61ca feat(web): add the Issues page and issue detail panel (#19260)
+- 20501a0221 feat(issues): add issue tracking core with GitHub issues (#19259)
+- 9d28fc921b feat(themes): theme CSS can hold 100,000 characters (#37781)
+- 9e32c95576 fix(client-runtime): show routes whose host refused this device's sign-in (#33199)
+- 4ffa1da7cf fix(server): t3_thread_launch refuses an explicit branch that already exists (#31279)
+- 27411651a4 fix(auth): bind automatic pairing codes to peer links (#37825)
+- b79d277cdd fix(server): a thread_send follow-up waits only on background work its own runs started (#37793)
+- ca432d7ed6 fix(server): log the connections the private-network gate closes (#31647)
+- 7d32075e37 feat(web): themes can use full-size background images (#36680)
+- 19b33eca4c fix(server): remote tasks report their actual model (#37332)
+- c2e54e3ac9 fix(acp): recognize sessions already owned by a thread (#37244)
+- 14f295e011 fix(terminal): one web viewer answers shared PTY queries (#37233)
+- dcaedc9800 fix(server): skills linked by a SessionStart hook appear in the $ picker in the same session (#37165)
+- 46f3ab39f2 fix(web): open terminal file links naming the server hostname (#37133)
+- 94edd64e74 perf(server): skip compression for the desktop's local connection (#30832)
+- efddcfeb20 perf(server): batch terminal output that arrives within 2 ms (#37060)
+- 17db7082c0 fix(server): preview port discovery stops polling while no client is in the foreground (#29782)
+- a62bc8156d perf(server): message ordinals are read through an index, not a scan (#30873)
+- ec844a3995 fix(client-runtime): omit machine labels from relay spans (#30940)
+- e82050b8b9 feat(themes): theme CSS can hold 50,000 characters (#36656)
+- b60abf32e0 perf(server): Windows process launches no longer block the RPC thread (#32260)
+- 7f7a1a447a fix(install): launch t3 by absolute path (#13794)
+- 3a5d7f39a8 fix(server): Swift TestFlight clients can read settings again (#26455)
+- eec0a37227 fix(server): a zero Git fetch interval also stops the status upstream fetch (#33845)
+- a4bf7922f5 fix(clients): undoing a settle puts the thread back where you placed it (#33248)
+- 1e9f93a48e fix(mobile): stop showing "cannot control this task" while permissions load or after a network blip (#28708)
+- 719042d942 fix(server): MCP-launched threads no longer flash in Inbox before Working (#36682)
+- 2b596b8690 fix(web): context meter no longer keeps the retired provider's usage (#28581)
+- a575d45286 fix(web,server): the branch label no longer flips back after a switch (#28575)
+- 77ad2ebec5 fix(server): end obsolete link cards after a matching retry succeeds (#26944)
+- 5958d00ede perf(web): Update everything downloads a server's update while providers install (#35346)
+- 953ce60d12 fix(web): changed root files with a leading space open in the diff panel (#36606)
+- 9e19b7f7e1 feat(server): resume stopped provider threads natively (#36526)
+- ca7a9448b8 fix(client-runtime): Reconnect works while the network reports offline (#24932)
+- 33372a25a2 fix(pi): info notifications no longer render as warnings (#23506)
+- cf60628ef9 fix(client-runtime): cache running threads when their view closes (#25213)
+- 9803d1adb5 fix(web): paint the selected environment theme from the first frame on launch (#36042)
+- bd9ff7eb2a fix(client-runtime): recover thread list updates after stream defects (#33244)
+- fcf50ffe38 fix(connect): T3 Connect recovers when its tunnel is routed to a dead local port (#24247)
+- 757f71a7f6 fix(client-runtime): new T3 Connect machines appear without signing in again (#29788)
+- 913181c439 fix(server): stop the relay client a crashed server left running (#36465)
+- a2edd281df feat(connect): require approval for new T3 Connect devices (#36419)
+- 42057b82d0 feat: agents can restyle T3 Code with theme colors and CSS (#35247)
+- 88d4d06ea3 perf(desktop): provider checks no longer compete with server startup (#35712)
+- 2d80cb6bc7 fix(clients): live working timers count on the host's clock (#36420)
