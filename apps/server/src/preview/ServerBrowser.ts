@@ -305,6 +305,23 @@ const make = Effect.gen(function* () {
     pushFileChooser,
     uploadFiles,
   } = makeFileChoosers(tabs);
+  const pendingTabs = new Map<
+    string,
+    {
+      readonly agentId: string | null;
+      promise?: Promise<ServerTab>;
+      readonly recovery?: {
+        readonly threadId: ThreadId;
+        readonly tabId: string;
+        readonly control: SessionControl;
+        readonly bindPage: (page: Page) => void;
+      };
+    }
+  >();
+  const findControlTab = (threadId: string, tabId: string) => {
+    const key = tabKey(threadId, tabId);
+    return pendingTabs.get(key)?.recovery ?? tabs.get(key);
+  };
   const screen = ServerBrowserScreen.makeSurface<ServerTab>(
     (threadId, tabId) => tabs.get(tabKey(threadId, tabId)),
     (key, cursor) => runFork(desktopChannel.cursorState?.(key, cursor) ?? Effect.void),
@@ -319,13 +336,9 @@ const make = Effect.gen(function* () {
         )
         .catch(constVoid);
     },
+    findControlTab,
   );
   const sessionChanges = yield* PubSub.sliding<void>(1);
-  const pendingTabs = new Map<
-    string,
-    { readonly agentId: string | null; promise?: Promise<ServerTab> }
-  >();
-
   const closedPendingTabs = new Set<string>();
   const adoptedPages = new Map<string, AdoptedPage>();
   const popupNavigation = new PopupNavigationRequests(
@@ -536,38 +549,54 @@ const make = Effect.gen(function* () {
       description: "Page crashed",
     };
     tab.crash = { error: crash, url };
-    const replacement = (async () => {
-      dropTab(tab, false, true);
-      await runPromise(
-        manager.reportStatus({
-          threadId: tab.threadId,
-          tabId: tab.tabId,
-          serverControlled: true,
-          navStatus: { _tag: "LoadFailed", title: "", ...crash },
-          canGoBack: false,
-          canGoForward: false,
-        }),
-      );
-      await tab.page.close().catch(constVoid);
-      const { sessions } = await runPromise(manager.list({ threadId: tab.threadId }));
-      const snapshot = sessions.find(
-        (session) => session.tabId === tab.tabId && session.runtime === "server",
-      );
-      if (!snapshot)
-        throw new ServerBrowserTabNotFoundError({ threadId: tab.threadId, tabId: tab.tabId });
-      return createTab(snapshot, tab);
-    })()
+    let page: Page | undefined;
+    const control = tab.control.replacement(() => {
+      if (page) ServerBrowserPage.invalidateRefs(page);
+    });
+    const recovery = {
+      threadId: tab.threadId,
+      tabId: tab.tabId,
+      control,
+      bindPage: (replacement: Page) => {
+        page = replacement;
+      },
+    };
+    screen.watchHandoffs(recovery);
+    const replacement = Promise.resolve()
+      .then(async () => {
+        await runPromise(
+          manager.reportStatus({
+            threadId: tab.threadId,
+            tabId: tab.tabId,
+            serverControlled: true,
+            navStatus: { _tag: "LoadFailed", title: "", ...crash },
+            canGoBack: false,
+            canGoForward: false,
+          }),
+        );
+        await tab.page.close().catch(constVoid);
+        const { sessions } = await runPromise(manager.list({ threadId: tab.threadId }));
+        const snapshot = sessions.find(
+          (session) => session.tabId === tab.tabId && session.runtime === "server",
+        );
+        if (!snapshot)
+          throw new ServerBrowserTabNotFoundError({ threadId: tab.threadId, tabId: tab.tabId });
+        return createTab(snapshot, tab);
+      })
       .catch((cause: unknown) => {
-        tab.control.endHandoff("ended");
+        void control.close().catch(constVoid);
         runFork(Effect.logWarning("server preview renderer could not recover", { cause }));
         if (tab.isolatedContext) void tab.page.context().close().catch(constVoid);
         throw cause;
       })
       .finally(() => {
-        pendingTabs.delete(key);
-        closedPendingTabs.delete(key);
+        if (pendingTabs.get(key)?.promise === replacement) {
+          pendingTabs.delete(key);
+          closedPendingTabs.delete(key);
+        }
       });
-    pendingTabs.set(key, { agentId: tab.control.agentId, promise: replacement });
+    pendingTabs.set(key, { agentId: control.agentId, promise: replacement, recovery });
+    dropTab(tab, false, true);
     return replacement.then(constVoid, constVoid);
   };
 
@@ -658,10 +687,14 @@ const make = Effect.gen(function* () {
       openSignal?.throwIfAborted();
       page.setDefaultTimeout(NAVIGATION_TIMEOUT_MS);
       page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
-      const invalidate = () => ServerBrowserPage.invalidateRefs(page);
+      const recovery =
+        replaced && pendingTabs.get(tabKey(snapshot.threadId, snapshot.tabId))?.recovery;
+      recovery?.bindPage(page);
       const control =
-        replaced?.control.replacement(invalidate) ??
-        new SessionControl(snapshot.automationOwner ?? null, invalidate);
+        recovery?.control ??
+        new SessionControl(snapshot.automationOwner ?? null, () =>
+          ServerBrowserPage.invalidateRefs(page),
+        );
       opened.push(() => control.close());
       control.onDispatchCut(inputFence(cdp));
       const diagnostics = new ServerBrowserDiagnostics(
@@ -877,7 +910,6 @@ const make = Effect.gen(function* () {
       page.on("close", () => dropTab(tab, !tab.closing));
       page.on("crash", () => recoverRenderer(tab));
       tabs.set(key, tab);
-      if (replaced) screen.watchHandoffs(tab);
       opened.length = 0;
       tab.control.onChange(ServerBrowserScreen.authorityReporter(tab, screen.notify));
       tab.control.onChange(() => (broadcastControl(tab), reportLiveTabs()));
@@ -2604,11 +2636,14 @@ const make = Effect.gen(function* () {
     sessionChanges: Stream.fromPubSub(sessionChanges),
     ...screen.service,
     stopAllAgents: Effect.sync(() => {
-      for (const tab of tabs.values()) tab.control.stopAgents();
+      for (const [key, tab] of tabs) {
+        if (!pendingTabs.get(key)?.recovery) tab.control.stopAgents();
+      }
+      for (const { recovery } of pendingTabs.values()) recovery?.control.stopAgents();
     }),
     controlSession: (input) =>
       Effect.sync(() => {
-        const tab = tabs.get(tabKey(input.threadId, input.tabId));
+        const tab = findControlTab(input.threadId, input.tabId);
         if (!tab) return false;
         if (input.control === "stop") tab.control.stopAgents();
         else tab.control.resumeAgents();

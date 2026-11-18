@@ -620,9 +620,10 @@ export class SessionControl {
     const next = new SessionControl(this.agentId, invalidate);
     next.epoch = this.epoch + 1;
     next.authorityEpoch = this.authorityEpoch + 1;
-    next.agentStopped = this.agentStopped;
+    next.agentStopped = this.agentStopped || (this.owner !== null && this.requested === null);
     next.requested = this.requested;
     next.requestId = this.requestId;
+    next.notice = this.notice;
     return next;
   }
 

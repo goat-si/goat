@@ -2,6 +2,8 @@ import type { BrowserContext, Page } from "playwright-core";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Queue from "effect/Queue";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import { expect } from "@effect/vitest";
 import type * as Manager from "./Manager.ts";
 import type * as ServerBrowser from "./ServerBrowser.ts";
 // @effect-diagnostics nodeBuiltinImport:off - a mocked CDP session for ServerBrowser tests; no Effect runtime.
@@ -329,3 +331,55 @@ export const holdTitleObservation = ({ page, sessions }: ReturnType<typeof makeP
   );
   return { page, observeTitle, change };
 };
+
+export const crashRenderer = Effect.fn("TestBrowser.crashRenderer")(function* (
+  original: ReturnType<typeof makePageContext>,
+  browser: ServerBrowser.ServerBrowser["Service"],
+  tabId: string,
+  url: string,
+  duringRecovery: "plain" | "stopAll" | "settle",
+) {
+  const replacement = makePageContext({
+    initialNavigation: () => undefined,
+    setupFailure: () => null,
+    desktopSize: () => undefined,
+  });
+  replacement.page.context = () => original;
+  original.newPage.mockImplementationOnce(replacement.newPage);
+  original.page.commit(url);
+  const paused = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  replacement.page.setViewportSize.mockImplementationOnce(async () => {
+    paused.resolve();
+    await resume.promise;
+  });
+  const key = { threadId: scope.thread.threadId, tabId };
+  if (duringRecovery !== "plain") {
+    expect(
+      yield* (
+        browser.requestHandoff?.({
+          ...key,
+          reason: "Approve the sign-in",
+          requestId: "recovery-request",
+        }) ?? Effect.succeed(false)
+      ),
+    ).toBe(true);
+  }
+  const crash = yield* Effect.promise(() => original.page.emitAsync("crash")).pipe(
+    Effect.forkChild,
+  );
+  yield* Effect.promise(() => paused.promise);
+  if (duringRecovery === "stopAll") yield* browser.stopAllAgents;
+  if (duringRecovery === "settle") yield* browser.endHandoff?.(key) ?? Effect.void;
+  resume.resolve();
+  yield* Fiber.join(crash);
+
+  const sessions = yield* browser.sessions;
+  if (duringRecovery !== "plain") {
+    expect(sessions.find((session) => session.tabId === tabId)).toMatchObject({
+      handoffReason: null,
+      agentStopped: duringRecovery === "stopAll",
+    });
+  }
+  return replacement;
+});
