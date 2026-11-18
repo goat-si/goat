@@ -1,3 +1,4 @@
+import { unsentManualContinuationSource } from "./manualContinuation.ts";
 import { makeMemoryRefreshFactory } from "./goat/MemoryRefreshFactory.ts";
 import { makeNativeForkRecovery } from "./goat/NativeForkRecovery.ts";
 import { ProviderTurnStartError } from "./ProviderTurnStartTypes.ts";
@@ -236,6 +237,21 @@ export const layer: Layer.Layer<
           cause: `Run ${runId} is missing its execution projection state.`,
         });
       }
+      const manualResume =
+        run.manualContinuationOfRunId !== undefined && attempt.reason !== "steering_restart";
+      const replaySource = manualResume
+        ? unsentManualContinuationSource(run, projection)
+        : undefined;
+      const providerMessage =
+        replaySource === undefined
+          ? message
+          : projection.messages.find((source) => source.id === replaySource.userMessageId);
+      if (providerMessage === undefined)
+        return yield* new ProviderTurnStartError({
+          runId,
+          cause: "The unaccepted Resume message is missing.",
+        });
+      const nativeResume = manualResume && replaySource === undefined;
       const settleRunBeforeStart = makeSettleRunBeforeStart({
         eventSink,
         idAllocator,
@@ -245,9 +261,12 @@ export const layer: Layer.Layer<
         attempt,
         expectedStartStatus,
       });
-      if (message.attachments.length === 0 && message.text.trimStart().startsWith("/")) {
+      if (
+        providerMessage.attachments.length === 0 &&
+        providerMessage.text.trimStart().startsWith("/")
+      ) {
         const isEmptyCompaction =
-          message.text.trim().toLowerCase() === "/compact" && !projection.hasConversation;
+          providerMessage.text.trim().toLowerCase() === "/compact" && !projection.hasConversation;
         // Preparation may select a new provider; account commands still target the last native session.
         const nativeThreads = new Map(
           projection.providerThreads
@@ -278,8 +297,8 @@ export const layer: Layer.Layer<
               providerAuth.tryHandlePromptCommand({
                 instanceId: authInstanceId,
                 text: projectComposerContextForProvider({
-                  text: message.text,
-                  records: message.context?.records ?? [],
+                  text: providerMessage.text,
+                  records: providerMessage.context?.records ?? [],
                 }),
                 hasAttachments: false,
                 // A scheduled run replays a stored prompt that an agent may have edited since.
@@ -319,7 +338,7 @@ export const layer: Layer.Layer<
                 : {
                     type: "command_execution",
                     title: "Provider signed out",
-                    input: message.text.trim(),
+                    input: providerMessage.text.trim(),
                     output: "Provider signed out",
                     exitCode: 0,
                   },
@@ -607,13 +626,13 @@ export const layer: Layer.Layer<
           runId: run.id,
           startsTurn:
             input.reattach !== true &&
-            !(yield* startsNoModelTurn(codexSurvivors, run, message, noteContinuation)),
+            !(yield* startsNoModelTurn(codexSurvivors, run, providerMessage, noteContinuation)),
           ...(run.delegatedTaskId === undefined ? {} : { delegatedTaskId: run.delegatedTaskId }),
           threadId: projection.thread.id,
           providerSessionId,
           modelSelection: run.modelSelection,
           runtimePolicy: resolvedRuntimePolicy,
-          ...RunExecutionService.runPrepareInput({ run, message, projection }),
+          ...RunExecutionService.runPrepareInput({ run, message: providerMessage, projection }),
           ...(existingSessionProjection === undefined
             ? {}
             : { resumeFromSession: existingSessionProjection }),
@@ -646,6 +665,27 @@ export const layer: Layer.Layer<
         return;
       }
       const session = sessionResult.success;
+      if (
+        nativeResume &&
+        (session.resumeInterruptedTurn === undefined ||
+          providerThread.nativeThreadRef === null ||
+          !projection.runs.some(
+            (source) =>
+              source.id === run.manualContinuationOfRunId &&
+              source.providerThreadId === providerThread.id,
+          ))
+      ) {
+        yield* settleStartFailure({
+          signal: "resume-unsupported",
+          title: "Native resume is unavailable",
+          error: new ProviderAdapter.ProviderResumeUnsupportedError({
+            driver: session.driver,
+            providerThreadId: providerThread.id,
+          }),
+        });
+        return;
+      }
+
       if (!(yield* isCurrentAttemptInStatus(expectedStartStatus))) return;
       const loadFromProvider = Effect.fn("ProviderTurnStartService.loadFromProvider")(function* (
         load: Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapter.ProviderAdapterV2Error>,
@@ -664,14 +704,16 @@ export const layer: Layer.Layer<
       let effectiveHandoffs = cloud ? [] : handoffs;
       let resumeFellBack = false;
       let forkFellBack = false;
-      const userText = yield* providerTextWithSkills(Option.some(serverSettings), {
-        message,
-        driver: session.driver,
-        globalSkillsDir,
-        project: Effect.succeed(projection.thread.projectId),
-      });
+      const userText = nativeResume
+        ? ""
+        : yield* providerTextWithSkills(Option.some(serverSettings), {
+            message: providerMessage,
+            driver: session.driver,
+            globalSkillsDir,
+            project: Effect.succeed(projection.thread.projectId),
+          });
       const goalDriver = hasNativeGoals(session);
-      const goalCommand = goalDriver && parseGoalCommand(message) !== null;
+      const goalCommand = goalDriver && parseGoalCommand(providerMessage) !== null;
       const restartCancelledWork = pendingRestartCancelledBackgroundWork({
         runs: projection.runs,
         providerTurns: projection.providerTurns,
@@ -705,7 +747,8 @@ export const layer: Layer.Layer<
           cwd: resolvedRuntimePolicy.cwd,
           userText,
           restartNote,
-          attachments: message.attachments,
+          attachments: providerMessage.attachments,
+          ...(replaySource === undefined ? {} : { replayedRunId: replaySource.id }),
         });
       let recoveryTurnItem: OrchestrationV2TurnItem | undefined;
       let resumedRetryHandoff: ReadonlyArray<OrchestrationV2ContextHandoff> | undefined;
@@ -830,7 +873,7 @@ export const layer: Layer.Layer<
               }),
         );
         if (resumed._tag === "Success") {
-          if (cloud) return resumed.success;
+          if (cloud || nativeResume) return resumed.success;
           const context = handoffContextForThread(resumed.success);
           context.budget = yield* Effect.cached(context.budget);
           resumedHandoffContext = context;
@@ -839,7 +882,7 @@ export const layer: Layer.Layer<
             handoffs: [...handoffs, ...resumedRetryHandoff],
             providerThread: { ...resumed.success, id: providerThread.id },
             budget: context.budget,
-            deferInline: isCompactionCommandMessage(message) || goalCommand,
+            deferInline: isCompactionCommandMessage(providerMessage) || goalCommand,
             alreadyDeliveredItemIds: context.deliveredItemIds,
             persist: () => Effect.void,
           }).pipe(
@@ -888,7 +931,7 @@ export const layer: Layer.Layer<
 
         if (
           resumed._tag === "Failure" &&
-          (cloud || resumed.failure._tag === "ProviderAdapterThreadInUseError")
+          (cloud || nativeResume || resumed.failure._tag === "ProviderAdapterThreadInUseError")
         )
           return yield* loadFromProvider(Effect.fail(resumed.failure));
         yield* Effect.logWarning("Recovering provider context in a fresh native session", {
@@ -1030,7 +1073,9 @@ export const layer: Layer.Layer<
         legacyInputRunIds,
         budget,
       } = handoffContext;
-      const retryHandoff = resumedRetryHandoff ?? (yield* prepareRetryHandoff(handoffContext));
+      const retryHandoff = nativeResume
+        ? []
+        : (resumedRetryHandoff ?? (yield* prepareRetryHandoff(handoffContext)));
       // Retain accepted ownership evidence until the provider commits its next acceptance.
       const acceptedCloudTask = providerThread.nativeThreadRef?.nativeId
         ? providerThread.cloudTask
@@ -1305,7 +1350,8 @@ export const layer: Layer.Layer<
         commandId: CommandId.make(`command:effect:provider-turn.start:${run.id}`),
         appThread: projection.thread,
         providerSessionId,
-        session: cloud ? session : deliverySession,
+        session: cloud || nativeResume ? session : deliverySession,
+        resume: nativeResume,
         run: runningRun,
         rootNode: runningRootNode,
         checkpointScope: cloud ? null : (checkpointScope ?? null),
@@ -1351,7 +1397,7 @@ export const layer: Layer.Layer<
         message: {
           messageId: message.id,
           text: userText,
-          attachments: message.attachments,
+          attachments: providerMessage.attachments,
           createdBy: message.createdBy,
           creationSource: message.creationSource,
           ...(message.scheduledTaskId === undefined

@@ -7246,6 +7246,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 }),
             ),
           ),
+          resumeInterruptedTurn: (input) =>
+            runtime.startTurn(ProviderAdapter.resumeTurnInput(input)),
           startTurn: (turnInput) =>
             verifySessionRoute(turnInput.runtimePolicy.cwd ?? routeInput.execution.cwd).pipe(
               Effect.mapError(
@@ -7261,7 +7263,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               Effect.andThen(
                 Effect.suspend(() => {
                   const goalCommand =
-                    turnInput.restartContinuationOfRunId === undefined
+                    !turnInput.resume && turnInput.restartContinuationOfRunId === undefined
                       ? parseGoalCommand(turnInput.message)
                       : null;
                   if (goalCommand !== null) return runGoalCommand(turnInput, goalCommand);
@@ -7299,6 +7301,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       );
                     const nativeThreadId = turnInput.providerThread.nativeThreadRef?.nativeId;
                     if (
+                      !turnInput.resume &&
                       turnInput.restartContinuationOfRunId === undefined &&
                       nativeThreadId != null &&
                       goalsPausedForWake.has(nativeThreadId) &&
@@ -7311,7 +7314,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                         true,
                       );
                     }
-                    yield* startNativeTurn(turnInput, yield* toCodexInput(turnInput), true);
+                    yield* startNativeTurn(
+                      turnInput,
+                      turnInput.resume ? [] : yield* toCodexInput(turnInput),
+                      true,
+                    );
                   }).pipe(
                     Effect.mapError(
                       (cause) =>

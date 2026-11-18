@@ -68,6 +68,7 @@ export function makeLocalCommandHarness(input: {
   readonly fileSystem?: FileSystem.FileSystem;
   readonly previousNativeSession?: boolean;
   readonly previousMessages?: ReadonlyArray<string>;
+  readonly manualResume?: { readonly accepted: boolean; readonly supported: boolean };
   readonly logoutFailure?: string;
   readonly createdBy?: "user" | "agent";
   readonly scheduledTaskId?: ScheduledTaskId;
@@ -120,6 +121,9 @@ export function makeLocalCommandHarness(input: {
     modelSelection: { instanceId: newInstanceId, model: "gpt-5.4" },
     providerThreadId,
     userMessageId: messageId,
+    ...(input.manualResume === undefined
+      ? {}
+      : { manualContinuationOfRunId: RunId.make("previous-failed-run") }),
     rootNodeId,
     activeAttemptId: attemptId,
     status: "starting",
@@ -320,6 +324,9 @@ export function makeLocalCommandHarness(input: {
           id: previousRunId,
           ordinal: 1,
           status: input.previousTurn.runStatus,
+          ...(input.manualResume === undefined
+            ? {}
+            : { userMessageId: MessageId.make("resume-source-message") }),
           ...(input.previousTurn.terminationCause === undefined
             ? {}
             : { terminationCause: { kind: input.previousTurn.terminationCause } }),
@@ -344,19 +351,34 @@ export function makeLocalCommandHarness(input: {
           },
         },
       ],
-      providerTurns: [
-        {
-          id: previousTurnId,
-          providerThreadId: previousProviderThreadId,
-          nodeId: NodeId.make("previous-root"),
-          runAttemptId: previousAttemptId,
-          ordinal: 1,
-          nativeTurnRef: null,
-          status: input.previousTurn.turnStatus,
-          startedAt: now,
-          completedAt: input.previousTurn.turnStatus === "running" ? null : now,
-        },
-      ],
+      messages:
+        input.manualResume === undefined
+          ? projection.messages
+          : [
+              {
+                ...message,
+                id: MessageId.make("resume-source-message"),
+                runId: previousRunId,
+                text: "Original prompt",
+              },
+              ...projection.messages,
+            ],
+      providerTurns:
+        input.manualResume?.accepted === false
+          ? []
+          : [
+              {
+                id: previousTurnId,
+                providerThreadId: previousProviderThreadId,
+                nodeId: NodeId.make("previous-root"),
+                runAttemptId: previousAttemptId,
+                ordinal: 1,
+                nativeTurnRef: null,
+                status: input.previousTurn.turnStatus,
+                startedAt: now,
+                completedAt: input.previousTurn.turnStatus === "running" ? null : now,
+              },
+            ],
     };
   }
   const continuation = input.restartContinuation;
@@ -476,6 +498,9 @@ export function makeLocalCommandHarness(input: {
                   },
                   ensureThread: () => Effect.succeed(providerThread),
                   resumeThread: () => Effect.succeed(projection.providerThreads[0]),
+                  ...(input.manualResume?.supported === true
+                    ? { resumeInterruptedTurn: () => Effect.void }
+                    : {}),
                 } as never)
               : Effect.die("A local command must not open a native session."),
   );
@@ -647,7 +672,7 @@ export function makeLocalCommandHarness(input: {
               projection.runs.find((candidate) => candidate.id === id),
             ),
           getTurnStartHistory: () =>
-            input.previousTurn?.supersededTurn
+            input.previousTurn?.supersededTurn || input.manualResume !== undefined
               ? Effect.succeed([])
               : Effect.fail(
                   new ProjectionStore.ProjectionStoreReadError({

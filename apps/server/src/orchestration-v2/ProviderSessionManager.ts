@@ -2017,6 +2017,7 @@ export const layerWithOptions = (
               ),
             ),
           );
+        const { resumeInterruptedTurn } = runtime;
         return {
           ...runtime,
           // Pi replaces its session snapshot as metadata changes.
@@ -2132,6 +2133,11 @@ export const layerWithOptions = (
                 .startTurn(input)
                 .pipe(providerTurnMetrics(runtime.driver, "send", input.modelSelection.model)),
             ),
+          ...(resumeInterruptedTurn === undefined
+            ? {}
+            : {
+                resumeInterruptedTurn: (input) => trackTurn(input, resumeInterruptedTurn(input)),
+              }),
           ...(runtime.resumeTurn === undefined
             ? {}
             : {

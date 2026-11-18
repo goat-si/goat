@@ -335,6 +335,7 @@ export interface RunExecutionServiceV2StartRootRunInput {
   readonly refreshMemoryContext?: ProviderAdapter.ProviderAdapterV2TurnInput["refreshMemoryContext"];
   readonly cloudSource?: import("@goat/contracts").OrchestrationV2CloudTask["source"];
   readonly reattach?: boolean;
+  readonly resume?: boolean;
   readonly cloudLaunchSource?: ProviderAdapter.ProviderAdapterV2CloudLaunchSource;
   readonly commandId: CommandId;
   readonly appThread: OrchestrationV2AppThread;
@@ -1762,7 +1763,7 @@ export const layer: Layer.Layer<
           text: entry.text,
         }));
         const inbox =
-          input.reattach === true
+          input.reattach === true || input.resume === true
             ? { texts: [], reports: [], throughId: null }
             : yield* remoteReportInbox
                 .pending(input.run.threadId)

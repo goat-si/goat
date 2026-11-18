@@ -3,6 +3,7 @@ import type {
   OrchestrationV2ProviderThread,
   OrchestrationV2Run,
   OrchestrationV2ThreadProjection,
+  RunId,
   ThreadId,
 } from "@goat/contracts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -38,6 +39,7 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
     userText,
     restartNote,
     attachments,
+    replayedRunId,
   }: {
     readonly threadId: ThreadId;
     readonly projection: Pick<
@@ -50,6 +52,7 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
     readonly cwd: string | null;
     readonly userText: string;
     readonly restartNote: string;
+    readonly replayedRunId?: RunId;
     readonly attachments: OrchestrationV2ThreadProjection["messages"][number]["attachments"];
   }) {
     const tokenCap = yield* handoffTokenCapConfig.pipe(
@@ -175,7 +178,9 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
       // retry copy after it would rank older missed requests as the newest history.
       const missedRuns = resumeFellBack
         ? []
-        : missedTurnInputRuns(projection, run, deliveredAttemptIds);
+        : missedTurnInputRuns(projection, run, deliveredAttemptIds).filter(
+            (source) => source.id !== replayedRunId,
+          );
       const missedRunIds = new Set(missedRuns.map((source) => source.id));
       return {
         sameNativeThread,

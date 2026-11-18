@@ -3415,7 +3415,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       if (state.active !== turn || turn.interrupted) return;
       yield* prepareMemory(sessionId, state, turnInput);
       const files = yield* promptFiles(turnInput.message.attachments);
-      const messageText = yield* promptText(turnInput);
+      const messageText = turnInput.resume ? "" : yield* promptText(turnInput);
       if (!sending()) return;
       return yield* client.session
         .prompt({
@@ -3575,6 +3575,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
                 ? cause
                 : new ProviderAdapter.ProviderAdapterResumeThreadError({
                     driver,
+                    resumeInterruptedTurn: (input) =>
+                      runtime.startTurn(ProviderAdapter.resumeTurnInput(input)),
                     providerSessionId: input.providerSessionId,
                     providerThreadId: threadInput.providerThread.id,
                     cause,

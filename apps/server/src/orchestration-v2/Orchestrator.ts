@@ -1,4 +1,9 @@
 import { makeNextTurnItemOrdinal } from "./TurnItemOrdinal.ts";
+import {
+  manualResumeCommand,
+  manualResumeNotification,
+  manualResumeRunFields,
+} from "./manualResumeCommand.ts";
 import { threadCreateMessage } from "./threadCreateMessage.ts";
 import { contextHandoffTurnItem } from "./ContextHandoffTurnItem.ts";
 import { retainedUserItemFailures } from "./goat/RetainedQueuedInput.ts";
@@ -5063,6 +5068,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
   ) {
+    command = manualResumeCommand(command);
     // A compacted thread reads every run and turn item, but attempts, nodes, messages and provider
     // turns only for its recent runs and the runs this command names. An idle compaction reads
     // in full: its busy check below looks for a delegated result's message under any old run.
@@ -5657,6 +5663,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }
       }
     }
+    const notification = manualResumeNotification(command);
     const dispatchText =
       delegatedCompletion === undefined
         ? command.text
@@ -5730,7 +5737,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             : (projection.runs.find((run) => run.id === dispatchMode.targetRunId)?.modelSelection ??
               modelSelection),
         delegatedCompletion,
-        ...(command.notification === undefined ? {} : { notification: command.notification }),
+        ...(notification === undefined ? {} : { notification }),
         targetRunId: dispatchMode.targetRunId,
         messageId: command.messageId,
         text: dispatchText,
@@ -5955,6 +5962,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const steerFollowUpPosition = steerFollowUpQueuePosition(command, projection);
       const run: OrchestrationV2Run = {
         memoryGrantCeiling: command.memoryGrantCeiling ?? "none",
+        ...manualResumeRunFields(command),
         id: runId,
         threadId: command.threadId,
         ordinal,
@@ -6048,7 +6056,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         createdAt: now,
         updatedAt: now,
         ...(delegatedCompletion === undefined ? {} : { delegatedCompletion }),
-        ...(command.notification === undefined ? {} : { notification: command.notification }),
+        ...(notification === undefined ? {} : { notification }),
       };
       const emitEvent = emit(events, command);
       if (targetProviderThread === undefined) {
@@ -6379,6 +6387,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               );
       const run: OrchestrationV2Run = {
         memoryGrantCeiling: command.memoryGrantCeiling ?? "none",
+        ...manualResumeRunFields(command),
         id: runId,
         threadId: command.threadId,
         ordinal,
@@ -6459,7 +6468,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         createdAt: now,
         updatedAt: now,
         ...(delegatedCompletion === undefined ? {} : { delegatedCompletion }),
-        ...(command.notification === undefined ? {} : { notification: command.notification }),
+        ...(notification === undefined ? {} : { notification }),
       };
       const turnItem: OrchestrationV2TurnItem = {
         createdBy: command.createdBy,
@@ -7111,6 +7120,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           );
     const run: OrchestrationV2Run = {
       memoryGrantCeiling: command.memoryGrantCeiling ?? "none",
+      ...manualResumeRunFields(command),
       id: runId,
       threadId: command.threadId,
       ordinal,
@@ -7192,7 +7202,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       createdAt: now,
       updatedAt: now,
       ...(delegatedCompletion === undefined ? {} : { delegatedCompletion }),
-      ...(command.notification === undefined ? {} : { notification: command.notification }),
+      ...(notification === undefined ? {} : { notification }),
     };
     const turnItem: OrchestrationV2TurnItem = {
       createdBy: command.createdBy,

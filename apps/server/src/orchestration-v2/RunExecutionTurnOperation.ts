@@ -26,6 +26,18 @@ export function providerTurnOperation(
       fail("This cloud provider cannot reattach observation. Open the saved task link.")
     );
   }
+  if (input.resume === true) {
+    const { message, cloudLaunchSource: _source, ...resumeInput } = turnInput;
+    return (
+      session.resumeInterruptedTurn?.({ ...resumeInput, messageId: message.messageId }) ??
+      fail(
+        new ProviderAdapter.ProviderResumeUnsupportedError({
+          driver: session.driver,
+          providerThreadId: providerThread.id,
+        }),
+      )
+    );
+  }
   if (compact)
     return (
       session.compactThread?.(turnInput) ??

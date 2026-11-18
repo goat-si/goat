@@ -9162,6 +9162,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             existing.nativeThreadId === nativeThreadId &&
             existing.queryPolicyKey === queryPolicyKey &&
             !existing.stopping &&
+            !turnInput.resume &&
             existing.selection.queryIdentity !== compiledSelection.queryIdentity &&
             canApplyClaudeSelectionLive(existing.selection, compiledSelection) &&
             (existing.selection.apiModelId === compiledSelection.apiModelId ||
@@ -9174,6 +9175,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             existing.nativeThreadId === nativeThreadId &&
             existing.queryPolicyKey === queryPolicyKey &&
             !existing.stopping &&
+            !turnInput.resume &&
             existing.selection.queryIdentity === compiledSelection.queryIdentity
           ) {
             // Enabling or disabling computer use reaches a live process here,
@@ -9259,7 +9261,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const hasPersistedProviderTurn =
             turnInput.nativeThreadHasTurns ?? turnInput.providerTurnOrdinal > 1;
           const shouldResume =
-            resumeSessionAt !== undefined || openedWithResume || hasPersistedProviderTurn;
+            turnInput.resume ||
+            resumeSessionAt !== undefined ||
+            openedWithResume ||
+            hasPersistedProviderTurn;
           // A capped process on a Claude Code that ignores the cap opens without Agent instead.
           const openedSubagentPolicy =
             subagentPolicy.key.startsWith("cap:") && !(yield* claudeSubagentCapSupported)
@@ -9325,6 +9330,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             threadId: turnInput.threadId,
             providerSessionId: input.providerSessionId,
             options: pinClaudeHomeSettings(queryOptions),
+            ...(turnInput.resume ? { interruptedResume: true } : {}),
           });
           // The SDK spawns the CLI per turn, so only the open waits for a provider update.
           const querySession = yield* (
@@ -9561,7 +9567,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             }
             const [skills, queryPolicy] = yield* Effect.all(
               [
-                promptUuid === null
+                promptUuid === null || turnInput.resume
                   ? Effect.undefined
                   : userInvocableSkills(turnInput.runtimePolicy.cwd),
                 queryPolicyForTurn(turnInput),
@@ -9576,26 +9582,33 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               turnInput.message.text,
               compileClaudeModelSelection(turnInput.modelSelection, modelCatalog).promptEffort,
             );
-            const userMessage =
+            const userMessage: SDKUserMessage | null =
               promptUuid === null
                 ? null
-                : yield* makeClaudeUserMessageWithAttachments({
-                    text: promptText,
-                    ...handoffSkillOffset(
-                      promptText,
-                      turnInput.message.text,
-                      turnInput.inlineContextLength,
-                    ),
-                    attachments: turnInput.message.attachments,
-                    attachmentsDir,
-                    fileSystem,
-                    pdfReservation,
-                    ...(skills === undefined ? {} : { skills }),
-                    uuid: promptUuid,
-                  }).pipe(
-                    Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-                    Effect.provideService(Path.Path, path),
-                  );
+                : turnInput.resume
+                  ? {
+                      type: "user",
+                      message: { role: "user", content: [] },
+                      parent_tool_use_id: null,
+                      uuid: promptUuid,
+                    }
+                  : yield* makeClaudeUserMessageWithAttachments({
+                      text: promptText,
+                      ...handoffSkillOffset(
+                        promptText,
+                        turnInput.message.text,
+                        turnInput.inlineContextLength,
+                      ),
+                      attachments: turnInput.message.attachments,
+                      attachmentsDir,
+                      fileSystem,
+                      pdfReservation,
+                      ...(skills === undefined ? {} : { skills }),
+                      uuid: promptUuid,
+                    }).pipe(
+                      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+                      Effect.provideService(Path.Path, path),
+                    );
             const querySession = yield* openQuery(turnInput, nativeThreadId, queryPolicy);
             const context: ActiveClaudeTurnContext = {
               autoCompactWindow: yield* resolveAutoCompactWindow({
@@ -9653,7 +9666,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               subagentsByToolUseId: new Map(),
               subagentNodesByTaskId: new Map(),
               promptUuid,
-              promptEcho: isClaudeProviderContinuationTurn(turnInput) ? "confirmed" : "pending",
+              promptEcho:
+                isClaudeProviderContinuationTurn(turnInput) || turnInput.resume
+                  ? "confirmed"
+                  : "pending",
               promptStarted: false,
               nativeWakeStarted: false,
               gatedFramesBeforeEcho: 0,
@@ -9728,7 +9744,25 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 }),
               });
             });
-            if (userMessage !== null) {
+            const offerUserMessage = (message: SDKUserMessage) =>
+              startUserTurnForWakeReports(nativeThreadId).pipe(
+                Effect.andThen(
+                  Effect.uninterruptibleMask((restore) =>
+                    restore(
+                      querySession.query.offer(message, () => {
+                        pdfReservation.commit();
+                      }),
+                    ).pipe(
+                      Effect.tap(() =>
+                        Effect.sync(() => {
+                          pdfReservation.commit();
+                        }),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            if (userMessage !== null && !turnInput.resume) {
               const admittedMessage = nativeControl
                 ? userMessage
                 : yield* withFreshMemory(userMessage, turnInput).pipe(
@@ -9746,20 +9780,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   .pipe(Effect.provideService(Scope.Scope, sessionScope));
               }
               yield* attachTurn;
-              yield* startUserTurnForWakeReports(nativeThreadId);
-              yield* Effect.uninterruptibleMask((restore) =>
-                restore(
-                  querySession.query.offer(admittedMessage, () => {
-                    pdfReservation.commit();
-                  }),
-                ).pipe(
-                  Effect.tap(() =>
-                    Effect.sync(() => {
-                      pdfReservation.commit();
-                    }),
-                  ),
-                ),
-              );
+              yield* offerUserMessage(admittedMessage);
               return;
             }
             // Transcript reads suspend replay; hold SDK frames until the buffer is applied to preserve order.
@@ -9775,6 +9796,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 const wakeAbsorbed = (yield* Ref.get(absorbedWakes)).has(nativeThreadId);
                 yield* forgetAbsorbedWake(nativeThreadId);
                 if (drained.length === 0) {
+                  if (turnInput.resume) return;
                   const completedAt = yield* DateTime.now;
                   yield* finalizeActiveTurn({ context, status: "completed", completedAt });
                   return;
@@ -9839,7 +9861,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 if (wakeAbsorbed || (hasOpaqueTaskNotification && !context.nativeWakeStarted)) {
                   const completedAt = yield* DateTime.now;
                   yield* finalizeActiveTurn({ context, status: "completed", completedAt });
-                } else if (!context.nativeWakeStarted) {
+                } else if (!context.nativeWakeStarted && !turnInput.resume) {
                   yield* Effect.sleep(CLAUDE_WAKE_TURN_START_DEADLINE).pipe(
                     Effect.andThen(
                       sdkMessageLock.withPermits(1)(
@@ -9869,6 +9891,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 }
               }),
             );
+            if (userMessage !== null) {
+              yield* sdkMessageLock.withPermits(1)(
+                Effect.gen(function* () {
+                  if ((yield* Ref.get(activeTurn)) === context)
+                    yield* offerUserMessage(userMessage);
+                }),
+              );
+            }
           },
           (effect, turnInput, _nativeControl = false) =>
             effect.pipe(
@@ -10424,6 +10454,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ),
           ),
           startTurn,
+          resumeInterruptedTurn: (input) => startTurn(ProviderAdapter.resumeTurnInput(input), true),
           compactThread: (turnInput) =>
             startTurn(
               {

@@ -47,7 +47,7 @@ import {
 } from "./ProjectionShellThreadRows.ts";
 import { makeServerActivityReads } from "./goat/ServerActivityReads.ts";
 import { gateThreadReads, ThreadArchiveGate } from "./ThreadArchiveGate.ts";
-import { MAX_CONTINUATION_CHAIN } from "./ContinuationChain.ts";
+import { turnStartMessageIds } from "./manualContinuation.ts";
 import { LEGACY_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
 import { isProviderNativeSubagentThread, pendingGuestMessageCount } from "@goat/contracts";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
@@ -4143,22 +4143,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               WHERE bindings.thread_id = ${threadId}
               ORDER BY sessions.updated_at ASC, sessions.provider_session_id ASC
             `.pipe(Effect.flatMap(decodeRows(decodeProviderSessionPayload, threadId)));
-            // Read only the current prompt and its bounded automatic-continuation ancestry.
-            const memoryMessageIds = [];
-            let memoryRun = runs.find((candidate) => candidate.id === runId);
-            for (
-              let depth = 0;
-              memoryRun !== undefined && depth <= MAX_CONTINUATION_CHAIN;
-              depth++
-            ) {
-              memoryMessageIds.push(memoryRun.userMessageId);
-              const sourceId =
-                memoryRun.restartContinuationOfRunId ?? memoryRun.usageLimitContinuationOfRunId;
-              memoryRun =
-                sourceId === undefined
-                  ? undefined
-                  : runs.find((candidate) => candidate.id === sourceId);
-            }
+            const memoryMessageIds = turnStartMessageIds(
+              runs.find((run) => run.id === runId),
+              { runs, attempts, providerTurns },
+            );
             const messages = yield* sql<PayloadRow>`
               SELECT payload_json FROM orchestration_v2_projection_messages
               WHERE thread_id = ${threadId} AND (

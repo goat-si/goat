@@ -401,6 +401,35 @@ effectIt.effect.each(["interrupted", "rolled_back"] as const)(
     }),
 );
 
+effectIt.effect.each(["native", "unsupported", "unaccepted"] as const)(
+  "handles manual Resume with a %s source",
+  (scenario) =>
+    Effect.gen(function* () {
+      const harness = makeLocalCommandHarness({
+        text: "Continue where you left off.",
+        manualResume: { accepted: scenario !== "unaccepted", supported: scenario === "native" },
+        previousTurn: { runStatus: "interrupted", turnStatus: "interrupted" },
+      });
+      yield* harness.start;
+      if (scenario === "unsupported") {
+        expect(harness.projection().turnItems).toMatchObject([
+          {
+            type: "error",
+            failure: {
+              message:
+                "This provider cannot resume without a new message. Send a message to continue.",
+            },
+          },
+        ]);
+        expect(harness.startRootRun).not.toHaveBeenCalled();
+      } else {
+        const started = harness.startRootRun.mock.calls.at(-1)?.[0];
+        expect(started?.resume).toBe(scenario === "native");
+        expect(started?.message.text).toBe(scenario === "native" ? "" : "Original prompt");
+      }
+    }),
+);
+
 effectIt.effect("hands the run worker the reason its Stop recorded, read for that run only", () =>
   Effect.gen(function* () {
     const harness = makeLocalCommandHarness({
