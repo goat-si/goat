@@ -435,7 +435,7 @@ describe("negotiated memory scope moves", () => {
         value,
       );
     }
-    const expectedTail = `00010000000000004000800000000000000101${record.receipt.memoryId.replaceAll("-", "")}${"a".repeat(64)}010100000000000000000000`;
+    const expectedTail = `00010000000000004000800000000000000101${record.receipt.memoryId.replaceAll("-", "")}${"a".repeat(64)}01010000000000000000000000`;
     for (const [ordinal, operationKind] of (
       ["upsert", "forget", "resolve", "revert"] as const
     ).entries()) {
