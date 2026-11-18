@@ -4,12 +4,11 @@ import type {
   OrchestrationV2ProviderThread,
   OrchestrationV2Run,
   RunAttemptId,
-  ThreadId,
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
 } from "@goat/contracts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
-import { createOrchestrationV2TurnItemVisibility } from "@goat/shared/orchestrationV2Timeline";
+import { makeForkHistoryReader } from "../ForkHistoryReader.ts";
 import {
   knownProviderFailureMessage,
   makeProviderFailure,
@@ -28,51 +27,7 @@ export const makeNativeForkRecovery = Effect.gen(function* () {
   const sink = yield* EventSink.EventSinkV2;
   const ids = yield* IdAllocator.IdAllocatorV2;
   const positions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
-  const readOwnItems = (
-    source: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "attempts">,
-    throughOrdinal: number,
-  ) =>
-    store
-      .getThreadRecords(source.thread.id, ["turnItems"], {
-        turnItemRunIds: [
-          ...source.runs.filter((run) => run.ordinal <= throughOrdinal).map((run) => run.id),
-          ...(source.thread.historyOrigin === "v1_import" ? [null] : []),
-        ],
-      })
-      .pipe(
-        // Rewound runs and cancelled queued input are not part of the conversation.
-        Effect.map(({ turnItems }) =>
-          turnItems.filter(
-            createOrchestrationV2TurnItemVisibility({
-              runs: source.runs,
-              attempts: source.attempts,
-              items: turnItems,
-            }),
-          ),
-        ),
-      );
-  // The source's timeline starts with what it inherited from its own fork ancestors.
-  const readInheritedItems = Effect.fn("ProviderTurnStartService.readInheritedForkItems")(
-    function* (thread: OrchestrationV2ThreadProjection["thread"]) {
-      const segments: Array<ReadonlyArray<OrchestrationV2TurnItem>> = [];
-      const seen = new Set<ThreadId>([thread.id]);
-      let forkedFrom = thread.forkedFrom;
-      while (forkedFrom?.type === "run" && !seen.has(forkedFrom.threadId)) {
-        const { threadId, runId } = forkedFrom;
-        seen.add(threadId);
-        const parent = yield* store
-          .getThreadRecords(threadId, ["runs", "attempts"])
-          .pipe(
-            Effect.catchTags({ ProjectionStoreThreadNotFoundError: () => Effect.succeed(null) }),
-          );
-        const forkRun = parent?.runs.find((run) => run.id === runId);
-        if (parent === null || forkRun === undefined) break;
-        segments.unshift(yield* readOwnItems(parent, forkRun.ordinal));
-        forkedFrom = parent.thread.forkedFrom;
-      }
-      return segments.flat();
-    },
-  );
+  const { readInheritedItems, readOwnItems } = makeForkHistoryReader(store);
   return Effect.fn("ProviderTurnStartService.recoverNativeFork")(function* (input: {
     projection: Pick<OrchestrationV2ThreadProjection, "thread">;
     source: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "attempts">;
