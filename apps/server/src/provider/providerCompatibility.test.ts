@@ -1,3 +1,4 @@
+import { fromRunner } from "@goat/provider-core/server/textGenerationOperations";
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
 import { assert, describe, it } from "@effect/vitest";
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@goat/contracts";
@@ -354,7 +355,7 @@ it.effect("a remote policy refresh preserves a newer health result on the regist
           ),
       },
       orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-      textGeneration: {} as ProviderInstance["textGeneration"],
+      textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
     };
     const refresh = Deferred.succeed(started, undefined).pipe(
       Effect.andThen(Deferred.await(release)),

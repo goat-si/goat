@@ -6,8 +6,10 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { createModelSelection } from "@goat/shared/model";
 import { beforeEach, vi } from "vite-plus/test";
 import { makeCursorTextGeneration } from "./textGeneration.ts";
@@ -128,6 +130,7 @@ const provideMemoryTest = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 
 const cursorSdkMock = vi.hoisted(() => ({
   resume: vi.fn(),
+  prewarm: vi.fn<() => Promise<() => Promise<void>>>(),
   create: vi.fn<(options: unknown) => Promise<unknown>>(),
   send: vi.fn<(prompt: string) => Promise<unknown>>(),
   close: vi.fn(),
@@ -145,7 +148,13 @@ const cursorSdkMock = vi.hoisted(() => ({
 vi.mock("./sdk.ts", () => ({
   loadCursorSdk: () => ({
     Agent: { create: cursorSdkMock.create, resume: cursorSdkMock.resume },
-    createAgentPlatform: vi.fn(),
+    createAgentPlatform: async () => ({ prewarmLocalWorkspace: cursorSdkMock.prewarm }),
+    JsonlLocalAgentStore: class {
+      constructor(root: string) {
+        this.root = root;
+      }
+      readonly root: string;
+    },
   }),
   loadCursorSqlite: () => ({ SqliteLocalAgentStore: { open: cursorSdkMock.storeOpen } }),
 }));
@@ -154,6 +163,7 @@ let hasCustomPolicy = false;
 
 const layerFs = FileSystem.layerNoop({
   exists: () => Effect.succeed(hasCustomPolicy),
+  makeDirectory: () => Effect.void,
   makeTempDirectoryScoped: () => Effect.succeed("/isolated-text-generation"),
 });
 
@@ -167,6 +177,7 @@ beforeEach(() => {
   hasCustomPolicy = false;
   memoryEvents = [];
   cursorSdkMock.resume.mockReset();
+  cursorSdkMock.prewarm.mockReset().mockResolvedValue(async () => {});
   cursorSdkMock.create.mockReset();
   cursorSdkMock.send.mockReset();
   cursorSdkMock.create.mockImplementation(async (options) => {
@@ -219,6 +230,9 @@ describe("CursorTextGeneration", () => {
         Layer.succeed(CursorSdk.CursorSdk, {
           load: loadCursorSdk,
           loadSqlite: loadCursorSqlite,
+          supportsLocalSandbox: Effect.succeed(true),
+          markLocalSandboxUnsupported: Effect.void,
+          localSandboxRefusal: { isRevoked: () => false, changes: Stream.empty },
           agentTransportRefusal: () =>
             Effect.succeed(CursorSdk.CURSOR_AGENT_TRANSPORT_RESTART_MESSAGE),
         }).pipe(Layer.provideMerge(Layer.merge(layerFs, Path.layer))),
@@ -591,6 +605,7 @@ describe("CursorTextGeneration", () => {
           { id: "fastMode", value: true },
         ],
       });
+      expect(yield* generation.memoryCapabilities).toEqual({ summary: true, conflict: true });
       const generated = yield* runMemory(generation, operation, selection);
       expect(generated.result?.text).toBe(memoryOutput.text);
       expect(generated.execution).toEqual({
@@ -685,6 +700,63 @@ describe("CursorTextGeneration", () => {
   );
 
   it.effect.each(memoryOperations)(
+    "declares no support when the local sandbox cannot be prewarmed for %s",
+    (operation) =>
+      Effect.gen(function* () {
+        cursorSdkMock.prewarm.mockRejectedValue(new Error("sandboxing is not supported"));
+        const generation = yield* makeCursorTextGeneration(
+          cursorSettings,
+          { CURSOR_API_KEY: "synthetic-key" },
+          undefined,
+          undefined,
+          memoryContext,
+        );
+        const expected = { summary: false, conflict: false };
+        expect(yield* generation.memoryCapabilities).toEqual(expected);
+        expect(yield* generation.memoryCapabilities).toEqual(expected);
+        const error = yield* runMemory(generation, operation).pipe(Effect.flip);
+        expect(error.cause).toEqual(new MemoryGenerationRunnerError({ code: "unavailable" }));
+        expect(cursorSdkMock.prewarm).toHaveBeenCalledOnce();
+        expect(cursorSdkMock.create).not.toHaveBeenCalled();
+      }).pipe(provideMemoryTest),
+  );
+
+  it.effect("bounds the shared sandbox probe when prewarming stalls", () =>
+    Effect.gen(function* () {
+      let started!: () => void;
+      const entered = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      cursorSdkMock.prewarm.mockImplementation(() => {
+        started();
+        return new Promise(() => {});
+      });
+      const make = () =>
+        makeCursorTextGeneration(
+          cursorSettings,
+          { CURSOR_API_KEY: "synthetic-key" },
+          undefined,
+          undefined,
+          memoryContext,
+        );
+      const first = yield* make();
+      const second = yield* make();
+      const read = yield* Effect.all([first.memoryCapabilities, second.memoryCapabilities], {
+        concurrency: "unbounded",
+      }).pipe(Effect.forkScoped);
+      yield* Effect.promise(() => entered);
+      yield* TestClock.adjust("5 seconds");
+      expect(yield* Fiber.join(read)).toEqual([
+        { summary: false, conflict: false },
+        { summary: false, conflict: false },
+      ]);
+      expect(yield* second.memoryCapabilities).toEqual({ summary: false, conflict: false });
+      expect(cursorSdkMock.prewarm).toHaveBeenCalledOnce();
+      expect(cursorSdkMock.create).not.toHaveBeenCalled();
+    }).pipe(provideMemoryTest, Effect.scoped),
+  );
+
+  it.effect.each(memoryOperations)(
     "memory requests refuse unsafe sandbox fallback: %s",
     (operation) =>
       Effect.gen(function* () {
@@ -696,10 +768,15 @@ describe("CursorTextGeneration", () => {
           undefined,
           memoryContext,
         );
+        expect(yield* generation.memoryCapabilities).toEqual({ summary: true, conflict: true });
         const error = yield* runMemory(generation, operation).pipe(Effect.flip);
         expect(error.operation).toBe(operation);
         expect(error.detail).toContain("requires its isolated sandbox");
         expect(error.cause).toEqual(new MemoryGenerationRunnerError({ code: "unavailable" }));
+        expect(yield* generation.memoryCapabilities).toEqual({ summary: false, conflict: false });
+        expect(Option.isSome(yield* Stream.runHead(generation.memoryRevocation.changes))).toBe(
+          true,
+        );
         expect(cursorSdkMock.create).toHaveBeenCalledOnce();
         expect(cursorSdkMock.create).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -784,6 +861,7 @@ describe("CursorTextGeneration", () => {
           undefined,
           memoryContext,
         );
+        expect(yield* disabled.memoryCapabilities).toEqual({ summary: false, conflict: false });
         expect((yield* runMemory(disabled, operation).pipe(Effect.flip)).detail).toContain(
           "disabled",
         );
@@ -794,6 +872,7 @@ describe("CursorTextGeneration", () => {
           undefined,
           memoryContext,
         );
+        expect(yield* missing.memoryCapabilities).toEqual({ summary: false, conflict: false });
         expect((yield* runMemory(missing, operation).pipe(Effect.flip)).detail).toContain(
           "Sign in",
         );
@@ -805,6 +884,7 @@ describe("CursorTextGeneration", () => {
           undefined,
           memoryContext,
         );
+        expect(yield* custom.memoryCapabilities).toEqual({ summary: false, conflict: false });
         expect((yield* runMemory(custom, operation).pipe(Effect.flip)).detail).toContain(
           "custom ~/.cursor/sandbox.json",
         );

@@ -5,7 +5,6 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as RcMap from "effect/RcMap";
 import * as Schema from "effect/Schema";
 
 import type {
@@ -29,6 +28,7 @@ import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
 import * as WorkspaceSearchIndex from "./WorkspaceSearchIndex.ts";
+import { WorkspaceSearchFinderCache } from "./workspaceSearchFinderCache.ts";
 
 export class WorkspaceEntriesWindowsPathUnsupportedError extends Schema.TaggedError<WorkspaceEntriesWindowsPathUnsupportedError>()(
   "WorkspaceEntriesWindowsPathUnsupportedError",
@@ -156,7 +156,7 @@ const resolveBrowseTarget = Effect.fn("WorkspaceEntries.resolveBrowseTarget")(fu
 export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
-  const workspaceSearchIndexes = yield* WorkspaceSearchIndex.WorkspaceSearchIndexMap;
+  const workspaceSearchIndexes = yield* WorkspaceSearchFinderCache;
   const vcsProcess = yield* VcsProcess.VcsProcess;
 
   const normalizeWorkspaceRoot = Effect.fn("WorkspaceEntries.normalizeWorkspaceRoot")(function* (
@@ -171,15 +171,10 @@ export const make = Effect.gen(function* () {
         Effect.orElseSucceed(() => cwd),
       );
       for (const variant of WorkspaceSearchIndex.WORKSPACE_SEARCH_INDEX_VARIANTS) {
-        const indexKey = WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, variant);
-        if (!(yield* RcMap.has(workspaceSearchIndexes.rcMap, indexKey))) {
-          continue;
-        }
         const recoverRefreshFailure = Effect.fn("WorkspaceEntries.recoverRefreshFailure")(
           function* (
             cause:
               | WorkspaceSearchIndex.WorkspaceSearchIndexCreateFailed
-              | WorkspaceSearchIndex.WorkspaceSearchIndexScanTimedOut
               | WorkspaceSearchIndex.WorkspaceSearchIndexRefreshFailed,
           ) {
             yield* Effect.logWarning("Failed to refresh workspace search index", {
@@ -187,19 +182,18 @@ export const make = Effect.gen(function* () {
               variant,
               cause,
             });
-            yield* workspaceSearchIndexes.invalidate(indexKey);
+            yield* workspaceSearchIndexes.invalidate(normalizedCwd, variant);
           },
         );
         yield* Effect.gen(function* () {
-          const searchIndex = yield* WorkspaceSearchIndex.WorkspaceSearchIndex;
-          yield* searchIndex.refresh();
+          const searchIndex = yield* workspaceSearchIndexes.getExisting(normalizedCwd, variant);
+          if (searchIndex) yield* searchIndex.refresh();
         }).pipe(
-          Effect.provide(workspaceSearchIndexes.get(indexKey)),
           Effect.catchTags({
             WorkspaceSearchIndexCreateFailed: recoverRefreshFailure,
-            WorkspaceSearchIndexScanTimedOut: recoverRefreshFailure,
             WorkspaceSearchIndexRefreshFailed: recoverRefreshFailure,
           }),
+          Effect.scoped,
         );
       }
     },
@@ -261,15 +255,9 @@ export const make = Effect.gen(function* () {
         trimLeadingPattern: /^[@./]+/,
       });
       const result = yield* Effect.gen(function* () {
-        const searchIndex = yield* WorkspaceSearchIndex.WorkspaceSearchIndex;
+        const searchIndex = yield* workspaceSearchIndexes.get(normalizedCwd, "paths");
         return yield* searchIndex.search(normalizedQuery, input.limit, input.kind, input.imageOnly);
-      }).pipe(
-        Effect.provide(
-          workspaceSearchIndexes.get(
-            WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, "paths"),
-          ),
-        ),
-      );
+      }).pipe(Effect.scoped);
       if (input.kind === "directory" || input.imageOnly) return result;
       const worktreeFiles = yield* findNestedWorktreeFiles(
         normalizedCwd,
@@ -307,23 +295,31 @@ export const make = Effect.gen(function* () {
     ) {
       return [];
     }
-    const listed = yield* vcsProcess
-      .run({
-        operation: "WorkspaceEntries.listWorktrees",
-        command: "git",
-        args: ["worktree", "list", "--porcelain"],
-        cwd,
-        allowNonZeroExit: true,
-        timeoutMs: 5_000,
-      })
-      .pipe(Effect.orElseSucceed(() => undefined));
-    if (!listed || listed.exitCode !== 0) return [];
-    const realCwd = yield* Effect.promise(() => NodeFSP.realpath(cwd).catch(() => cwd));
-    const worktreeRoots = listed.stdout.split(/\n\s*\n/).flatMap((record) => {
-      const lines = record.split("\n");
-      const worktree = lines.find((line) => line.startsWith("worktree "));
+    const listWorktrees = (args: ReadonlyArray<string>) =>
+      vcsProcess
+        .run({
+          operation: "WorkspaceEntries.listWorktrees",
+          command: "git",
+          args: ["worktree", "list", "--porcelain", ...args],
+          cwd,
+          allowNonZeroExit: true,
+          timeoutMs: 5_000,
+        })
+        .pipe(
+          Effect.map((result) => (result.exitCode === 0 ? result.stdout : undefined)),
+          Effect.orElseSucceed(() => undefined),
+        );
+    // Only NUL framing keeps a newline in a worktree path. Pre-2.36 Git rejects `-z`.
+    const listed =
+      (yield* listWorktrees(["-z"])) ?? (yield* listWorktrees([]))?.replaceAll("\n", "\0");
+    if (listed === undefined) return [];
+    const realCwd = yield* Effect.promise(() => NodeFSP.realpath(cwd).catch(() => undefined));
+    if (realCwd === undefined) return [];
+    const worktreeRoots = listed.split("\0\0").flatMap((record) => {
+      const fields = record.split("\0");
+      const worktree = fields.find((field) => field.startsWith("worktree "));
       // A `prunable` record's directory is gone; another checkout may now sit there.
-      if (worktree === undefined || lines.some((line) => line.startsWith("prunable"))) return [];
+      if (worktree === undefined || fields.some((field) => field.startsWith("prunable"))) return [];
       const root = worktree.slice("worktree ".length);
       const relativeRoot = path.relative(realCwd, root);
       return relativeRoot === "" ||
@@ -337,7 +333,18 @@ export const make = Effect.gen(function* () {
       Promise.all(
         worktreeRoots.map(async (relativeRoot) => {
           const candidate = `${relativeRoot}/${relativePath}`;
-          const stat = await NodeFSP.stat(path.join(realCwd, candidate)).catch(() => null);
+          const target = await NodeFSP.realpath(path.join(realCwd, candidate)).catch(() => null);
+          if (target === null) return null;
+          const relativeTarget = path.relative(realCwd, target);
+          if (
+            relativeTarget === ".." ||
+            relativeTarget.startsWith(`..${path.sep}`) ||
+            path.isAbsolute(relativeTarget) ||
+            relativeTarget.split(path.sep).includes(".git")
+          ) {
+            return null;
+          }
+          const stat = await NodeFSP.stat(target).catch(() => null);
           return stat?.isFile() ? candidate : null;
         }),
       ),
@@ -352,15 +359,9 @@ export const make = Effect.gen(function* () {
   )(function* (input) {
     const normalizedCwd = yield* normalizeWorkspaceRoot(input.cwd);
     return yield* Effect.gen(function* () {
-      const searchIndex = yield* WorkspaceSearchIndex.WorkspaceSearchIndex;
+      const searchIndex = yield* workspaceSearchIndexes.get(normalizedCwd, "content");
       return yield* searchIndex.searchContents(input);
-    }).pipe(
-      Effect.provide(
-        workspaceSearchIndexes.get(
-          WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, "content"),
-        ),
-      ),
-    );
+    }).pipe(Effect.scoped);
   });
 
   const list: WorkspaceEntries["Service"]["list"] = Effect.fn("WorkspaceEntries.list")(
@@ -536,15 +537,9 @@ export const make = Effect.gen(function* () {
         };
       }
       return yield* Effect.gen(function* () {
-        const searchIndex = yield* WorkspaceSearchIndex.WorkspaceSearchIndex;
+        const searchIndex = yield* workspaceSearchIndexes.get(normalizedCwd, "paths");
         return yield* searchIndex.list();
-      }).pipe(
-        Effect.provide(
-          workspaceSearchIndexes.get(
-            WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, "paths"),
-          ),
-        ),
-      );
+      }).pipe(Effect.scoped);
     },
   );
 
@@ -605,6 +600,6 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(WorkspaceEntries, make).pipe(
-  Layer.provide(WorkspaceSearchIndex.WorkspaceSearchIndexMap.layer),
+  Layer.provide(WorkspaceSearchFinderCache.layer),
   Layer.provide(VcsProcess.layer),
 );

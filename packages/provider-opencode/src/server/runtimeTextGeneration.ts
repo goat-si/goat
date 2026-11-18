@@ -6,6 +6,7 @@ import {
   MemoryGenerationRunnerError,
   type MemoryOperationName,
 } from "@goat/provider-core/server/memoryGenerationRunner";
+import { NO_MEMORY_GENERATION } from "@goat/shared/memoryGenerationCapabilities";
 import {
   classifySpawnFailure,
   isCommandMissingCause,
@@ -15,7 +16,7 @@ import type { ProviderTextGeneration } from "@goat/provider-core/server/textGene
 import { LaunchEnvironment } from "./launchEnvironment.ts";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import { findSpawnFailure } from "./spawnFailure.ts";
-import { requireOpenCodeMemoryIsolation } from "./textGeneration.ts";
+import { requireOpenCodeMemoryIsolation } from "./memoryIsolation.ts";
 import type { ProbedOpenCode } from "./versionProbe.ts";
 
 const decodeMemoryContext = Schema.decodeEffect(MemoryGenerationRunnerContext);
@@ -89,15 +90,14 @@ export function selectOpenCodeRuntimeTextGeneration(
         ),
       ),
     );
-  const unsupportedMemory = (operation: MemoryOperationName) =>
-    Effect.fail(
-      new TextGenerationError({
-        operation,
-        detail: "The selected OpenCode runtime has no memory runner.",
-        cause: new MemoryGenerationRunnerError({ code: "unsupported_operation" }),
-      }),
-    );
   return {
+    // Admission does not start a version probe. Both possible runtimes must support the operation.
+    memoryCapabilities: external
+      ? Effect.succeed(NO_MEMORY_GENERATION)
+      : Effect.zipWith(v1.memoryCapabilities, v2.memoryCapabilities, (first, second) => ({
+          summary: first.summary && second.summary,
+          conflict: first.conflict && second.conflict,
+        })),
     resolveMemoryConflict: (input) =>
       memoryPreflight("resolveMemoryConflict", input.modelSelection).pipe(
         Effect.andThen(
@@ -105,14 +105,8 @@ export function selectOpenCodeRuntimeTextGeneration(
             "resolveMemoryConflict",
             resolve,
             {
-              v1:
-                v1.resolveMemoryConflict === undefined
-                  ? unsupportedMemory("resolveMemoryConflict")
-                  : v1.resolveMemoryConflict(input),
-              v2:
-                v2.resolveMemoryConflict === undefined
-                  ? unsupportedMemory("resolveMemoryConflict")
-                  : v2.resolveMemoryConflict(input),
+              v1: v1.resolveMemoryConflict(input),
+              v2: v2.resolveMemoryConflict(input),
             },
             true,
           ),
@@ -125,14 +119,8 @@ export function selectOpenCodeRuntimeTextGeneration(
             "generateMemorySummary",
             resolve,
             {
-              v1:
-                v1.generateMemorySummary === undefined
-                  ? unsupportedMemory("generateMemorySummary")
-                  : v1.generateMemorySummary(input),
-              v2:
-                v2.generateMemorySummary === undefined
-                  ? unsupportedMemory("generateMemorySummary")
-                  : v2.generateMemorySummary(input),
+              v1: v1.generateMemorySummary(input),
+              v2: v2.generateMemorySummary(input),
             },
             true,
           ),

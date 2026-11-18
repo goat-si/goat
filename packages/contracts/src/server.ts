@@ -267,6 +267,9 @@ export const ServerProvider = Schema.Struct({
   requiresNewThreadForModelChange: Schema.optional(Schema.Boolean),
   supportsConversationRollback: Schema.optional(Schema.Boolean),
   supportsTextGeneration: Schema.optional(Schema.Boolean),
+  memoryGeneration: Schema.optionalKey(
+    Schema.Struct({ summary: Schema.Boolean, conflict: Schema.Boolean }),
+  ),
   setup: Schema.optional(
     Schema.Struct({
       canAuthenticate: Schema.Boolean,
@@ -296,6 +299,7 @@ export const ServerProvider = Schema.Struct({
   // server. Null means unknown; absence keeps legacy snapshots on `version`.
   installedVersion: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   status: ServerProviderState,
+  awaitingFirstCheck: Schema.optionalKey(Schema.Literal(true)),
   auth: ServerProviderAuth,
   checkedAt: IsoDateTime,
   message: Schema.optional(TrimmedNonEmptyString),
