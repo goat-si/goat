@@ -38,13 +38,14 @@ export const makeEnsureFlightFixture = Effect.gen(function* () {
     launchFails: false,
     holdPairing: false,
     holdUpload: true,
+    configuredPort: uploadTarget.port,
   };
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.gen(function* () {
       if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
       if (command.args.includes("-G"))
         return makeSuccessfulProcess(
-          `hostname ${uploadTarget.hostname}\nuser ${uploadTarget.username}\nport ${uploadTarget.port}\n`,
+          `hostname ${uploadTarget.hostname}\nuser ${uploadTarget.username}\nport ${state.configuredPort}\n`,
         );
       if (command.args.includes("-N")) {
         count.forwards++;

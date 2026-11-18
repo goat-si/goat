@@ -3828,8 +3828,15 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     return yield* finishEnsureEnvironment(lease.value, ticket, requestOptions);
   });
 
-  const ensureEnvironment: SshEnvironmentManagerShape["ensureEnvironment"] = (...args) =>
-    withSshCost(Effect.scoped(ensureEnvironmentAttempt(...args)), "ssh.ensure.request.cost");
+  const ensureEnvironment: SshEnvironmentManagerShape["ensureEnvironment"] = (target, options) =>
+    withSshCost(
+      Effect.scoped(ensureEnvironmentAttempt(target, options)),
+      "ssh.ensure.request.cost",
+    ).pipe(
+      Effect.map((result) =>
+        "type" in result ? result : { ...result, target: { ...result.target, port: target.port } },
+      ),
+    );
 
   const revalidateTunnels = Effect.fn("ssh/tunnel.revalidateTunnels")(function* () {
     yield* Effect.forEach(

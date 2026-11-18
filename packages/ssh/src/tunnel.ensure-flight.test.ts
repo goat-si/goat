@@ -20,6 +20,25 @@ import { uploadTarget } from "./tunnel.fixture.ts";
 import { SshEnvironmentManager } from "./tunnel.ts";
 
 describe("real manager preparation sharing", () => {
+  it.effect("returns a savable alias that follows later SSH config port changes", () =>
+    Effect.gen(function* () {
+      const f = yield* makeEnsureFlightFixture;
+      f.state.holdUpload = false;
+      yield* Effect.gen(function* () {
+        const manager = yield* SshEnvironmentManager;
+        f.state.configuredPort = 2222;
+        const first = yield* manager.ensureEnvironment({ ...uploadTarget, port: null });
+        if ("type" in first) return yield* Effect.die("Expected a ready attachment");
+        assert.isNull(first.target.port);
+        f.state.configuredPort = 2223;
+        const second = yield* manager.ensureEnvironment(first.target);
+        if ("type" in second) return yield* Effect.die("Expected a ready attachment");
+        assert.isNull(second.target.port);
+        assert.equal(f.count.forwards, 2);
+      }).pipe(Effect.provide(f.layer), Effect.scoped);
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
+  );
+
   it.effect(
     "two windows join one 258-second acquisition/upload; leader cancellation leaves independent pairing tokens",
     () =>
