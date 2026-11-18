@@ -122,7 +122,7 @@ vi.mock("@tanstack/react-router", async (original) => ({
   useNavigate: () => state.navigate,
 }));
 import { memoryEnvironment } from "../../state/memory";
-import { MemoryDetails } from "./MemorySettings";
+import { measureMemoryListRow, memoryListPageIdentity, MemoryDetails } from "./MemorySettings";
 import { validateMemorySettingsSearch } from "./MemorySettings.logic";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -755,3 +755,23 @@ it.each([
     expect(memoryText(screen) !== null).toBe(!pendingSync);
   },
 );
+
+it("keeps only row ids and sizes in a measured list page", () => {
+  const items = [original];
+  const page = memoryListPageIdentity(items);
+  const layout = measureMemoryListRow(null, page, original.memoryId, 100);
+  expect(layout).toEqual({
+    page: { rowIds: [original.memoryId] },
+    height: 100,
+    sizes: new Map([[original.memoryId, 100]]),
+  });
+  expect(memoryListPageIdentity(items)).toBe(page);
+  const fresh = memoryListPageIdentity([saved]);
+  const remeasured = measureMemoryListRow(layout, fresh, saved.memoryId, 72);
+  expect(remeasured).toEqual({
+    page: { rowIds: [saved.memoryId] },
+    height: 72,
+    sizes: new Map([[saved.memoryId, 72]]),
+  });
+  expect(fresh).not.toBe(page);
+});

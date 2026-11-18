@@ -432,10 +432,8 @@ beforeEach(() => {
   state.exposure = readyMemoryExposure(id(1));
   state.projects = [];
   state.requests = [];
-  state.queries.clear();
-  state.executors.clear();
-  state.refresh.mockClear();
-  state.calls.mockClear();
+  for (const map of [state.queries, state.executors]) map.clear();
+  for (const mock of [state.refresh, state.calls]) mock.mockClear();
   state.environment = null;
   state.environments = [
     "remote-owner",
@@ -1071,12 +1069,15 @@ it("reads memory status again when memory is turned off or its model changes", a
 });
 
 it("automatically opens the ready space and keeps saved memories read-only after disabling", async () => {
-  state.responses.set("syncStatus", success({ state: "online", memorySpaceId: id(1) }));
   state.queries.set("list", Option.some({ items: [activeItem], nextCursor: null }));
-  await supportedScreen(false);
+  const { render } = await supportedScreen(false);
   expect(container.textContent).toContain("Synthetic original");
   expect(container.querySelector('[aria-label="Memory space ID"]')).toBeNull();
   expect(container.textContent).not.toContain("remote-owner ·");
+  state.queries.delete("list");
+  await render();
+  expect(container.textContent).not.toContain("Synthetic original");
+  state.queries.set("list", Option.some({ items: [{ ...activeItem }], nextCursor: null }));
   state.responses.set("syncStatus", success({ state: "disabled", memorySpaceId: null }));
   state.responses.set(
     "hubSettingsUpdate",

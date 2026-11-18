@@ -524,6 +524,43 @@ function MemoryRecords({
   );
 }
 
+interface MemoryListPageIdentity {
+  readonly rowIds: ReadonlyArray<MemoryId>;
+}
+
+interface MemoryListLayout {
+  readonly page: MemoryListPageIdentity;
+  readonly height: number;
+  readonly sizes: ReadonlyMap<string, number>;
+}
+
+const EMPTY_MEMORY_LIST: ReadonlyArray<MemoryItem> = [];
+const memoryListPageIdentities = new WeakMap<ReadonlyArray<MemoryItem>, MemoryListPageIdentity>();
+
+export function memoryListPageIdentity(items: ReadonlyArray<MemoryItem>): MemoryListPageIdentity {
+  const current = memoryListPageIdentities.get(items);
+  if (current) return current;
+  const page = { rowIds: items.map((item) => item.memoryId) };
+  memoryListPageIdentities.set(items, page);
+  return page;
+}
+
+export function measureMemoryListRow(
+  previous: MemoryListLayout | null,
+  page: MemoryListPageIdentity,
+  itemKey: string,
+  size: number,
+): MemoryListLayout {
+  if (previous?.page === page && previous.sizes.get(itemKey) === size) return previous;
+  const sizes = new Map(previous?.page === page ? previous.sizes : []);
+  sizes.set(itemKey, size);
+  const height = Math.min(
+    320,
+    Math.ceil(page.rowIds.reduce((total, id) => total + (sizes.get(id) ?? 88), 0)),
+  );
+  return { page, height, sizes };
+}
+
 function ScopedMemoryRecords({
   target,
   environmentId,
@@ -564,15 +601,12 @@ function ScopedMemoryRecords({
         }),
   );
   const value = page.data ? Option.getOrNull(page.data) : null;
-  const items = value?.items ?? [];
+  const items = value?.items ?? EMPTY_MEMORY_LIST;
   const coverage = value?.indexCoverage
     ? presentMemoryCoverage(value.indexCoverage, items.length)
     : null;
-  const [listLayout, setListLayout] = useState<{
-    items: readonly MemoryItem[];
-    height: number;
-    sizes: ReadonlyMap<string, number>;
-  } | null>(null);
+  const listPage = memoryListPageIdentity(items);
+  const [listLayout, setListLayout] = useState<MemoryListLayout | null>(null);
   function select(item: MemoryItem) {
     void navigate({
       to: "/settings/memory",
@@ -711,22 +745,12 @@ function ScopedMemoryRecords({
             estimatedItemSize={72}
             style={{
               height:
-                listLayout?.items === items ? listLayout.height : Math.min(320, items.length * 88),
+                listLayout?.page === listPage
+                  ? listLayout.height
+                  : Math.min(320, items.length * 88),
             }}
             onItemSizeChanged={({ itemKey, size }) => {
-              setListLayout((previous) => {
-                if (previous?.items === items && previous.sizes.get(itemKey) === size)
-                  return previous;
-                const sizes = new Map(previous?.items === items ? previous.sizes : []);
-                sizes.set(itemKey, size);
-                const height = Math.min(
-                  320,
-                  Math.ceil(
-                    items.reduce((total, item) => total + (sizes.get(item.memoryId) ?? 88), 0),
-                  ),
-                );
-                return { items, height, sizes };
-              });
+              setListLayout((previous) => measureMemoryListRow(previous, listPage, itemKey, size));
             }}
             renderItem={({ item }) => (
               <SettingsRow
