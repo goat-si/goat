@@ -215,12 +215,18 @@ verified backup.
 2. Make separate copies of any remaining snapshot files and the live SQLite files
    (the database and any `-wal`, `-shm`, or `-journal` files) before changing anything.
    Save any files in the sibling snapshot directory ending in `.staging` too.
-3. If the service log says it could not open `server-owner.lock` because the log
-   is damaged, create an empty directory beside the reported file. With every
-   owner still stopped, move `server-owner.lock` and any of its `-journal`,
-   `-wal`, and `-shm` sidecars into that directory so you keep the originals.
-   Leave the separate `server-owner.sqlite` lock in place. The launcher creates
-   a new ownership log on restart.
+3. If the service log identifies a damaged ownership file, use the procedure
+   for that file with every owner still stopped.
+   - For a damaged ownership log (`server-owner.lock`), create an empty
+     directory beside the path reported in the service log. Move the log
+     and any of its `-journal`, `-wal`, and `-shm` sidecars into that
+     directory to preserve the originals. The launcher creates a new
+     ownership log on restart.
+   - For confirmed corruption of the legacy ownership lock
+     (`server-owner.sqlite`), create a separate empty directory beside the
+     path reported in the service log. Move the legacy lock and any of its
+     `-journal`, `-wal`, and `-shm` sidecars into that directory to preserve
+     the originals. The launcher creates a new legacy lock on restart.
 4. Put a complete, verified SQLite file set that the previous GOAT release can
    open at the live path. To restore the pre-update snapshot, copy `database`
    and any `database-wal` and `database-shm` files to the corresponding live

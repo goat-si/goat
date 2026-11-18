@@ -434,8 +434,8 @@ export async function selectDatabaseRollback(
   try {
     try {
       releaseLegacy = tryAcquireLegacyServerOwnerLock(stateDir);
-    } catch {
-      throw requireRecovery("The legacy database ownership lock could not be opened.");
+    } catch (cause) {
+      throw requireRecovery(cause instanceof Error ? cause.message : String(cause));
     }
     if (releaseLegacy === undefined || (await livePreLockServerOwner(stateDir))) {
       if (canKeep) return "busy";

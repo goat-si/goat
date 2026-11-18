@@ -13,19 +13,28 @@ import { serverOwnerLockHeld } from "./serverOwnerLockFile.ts";
 
 /** Hold the SQLite lock used by servers that predate the generation log. */
 export function tryAcquireLegacyServerOwnerLock(stateDir: string): (() => void) | undefined {
-  const db = new NodeSqlite.DatabaseSync(NodePath.join(stateDir, "server-owner.sqlite"));
+  const lockPath = NodePath.join(stateDir, "server-owner.sqlite");
   try {
-    db.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
+    const db = new NodeSqlite.DatabaseSync(lockPath);
+    try {
+      db.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
+    } catch (cause) {
+      db.close();
+      throw cause;
+    }
+    return () => db.close();
   } catch (cause) {
-    db.close();
     if (
       cause instanceof Error &&
       (("errcode" in cause && cause.errcode === 5) || cause.message === "database is locked")
     )
       return undefined;
-    throw cause;
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    throw new Error(
+      `The legacy database ownership lock at ${lockPath} could not be opened (${detail}).`,
+      { cause },
+    );
   }
-  return () => db.close();
 }
 
 export async function stateDirOwner(

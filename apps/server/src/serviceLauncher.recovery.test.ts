@@ -409,4 +409,52 @@ process.exit(1);
       );
     }),
   );
+
+  it.effect("keeps a damaged legacy lock until it is moved aside offline", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture(
+        "process.exit(1);",
+        `
+import { dirname, join } from "node:path";
+const lock = new DatabaseSync(join(dirname(dbPath), "server-owner.sqlite"));
+lock.exec("BEGIN EXCLUSIVE");
+const db = new DatabaseSync(dbPath, { readOnly: true });
+db.prepare("SELECT * FROM messages").all();
+db.close();
+lock.close();
+`,
+      );
+      const stateDir = f.path.dirname(f.dbPath);
+      const lockPath = f.path.join(stateDir, "server-owner.sqlite");
+      {
+        using lock = new NodeSqlite.DatabaseSync(lockPath);
+        lock.exec("CREATE TABLE lock_fixture (id INTEGER PRIMARY KEY)");
+      }
+      yield* f.fs.truncate(lockPath, 1024);
+      const damaged = yield* f.fs.readFile(lockPath);
+      const hint = `The legacy database ownership lock at ${lockPath} could not be opened`;
+      assert.include(yield* expectBlocked(f), hint);
+
+      yield* f.fs.makeDirectory(f.backupDir, { recursive: true });
+      const snapshot = f.path.join(f.backupDir, "database");
+      yield* f.fs.copyFile(f.dbPath, snapshot);
+      yield* f.fs.writeFileString(
+        f.path.join(f.runtime, "db-update-recovery.phase"),
+        "keep-live\n",
+      );
+      assert.include(yield* expectBlocked(f), hint);
+      assert.deepEqual(yield* f.fs.readFile(lockPath), damaged);
+
+      const savedDir = f.path.join(stateDir, "saved-legacy-lock");
+      yield* f.fs.makeDirectory(savedDir);
+      const savedLock = f.path.join(savedDir, "server-owner.sqlite");
+      yield* f.fs.rename(lockPath, savedLock);
+      assert.include(String(yield* f.run()), "Active child exited unexpectedly (0)");
+      assert.isTrue(yield* f.fs.exists(f.previousStarted));
+      assert.isTrue(yield* f.fs.exists(lockPath));
+      assert.deepEqual(yield* f.fs.readFile(savedLock), damaged);
+      assert.deepEqual(yield* f.fs.readFile(f.dbPath), f.baseline);
+      assert.deepEqual(yield* f.fs.readFile(snapshot), f.baseline);
+    }),
+  );
 });
