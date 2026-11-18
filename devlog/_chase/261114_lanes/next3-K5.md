@@ -649,3 +649,15 @@ K5 at 50e90aaac349a2fe5f23124b3429327060d3b9d7 (unchanged; the fix-delta review 
 
 Time note: the lane coordinator's "01:15 UTC" on the READY rule relay above was written without a clock (lane coordinator, 01:17 UTC); the real send time is in the thread log. The content stands. No git stash was used in this lane; git stash list holds no entry naming K5 or its branch.
 
+
+### Rule 3, value imports (coordinator 01:17:54 UTC, section II, verbatim)
+
+> II. RULE 3, standing rule extended (beside the 00:35:17 rule), every lane: a VALUE import added to an existing import line of an existing test file needs no word from me when only appended cases or appended helpers use the new names and no existing title, body, setup value or expectation changes. The lane quotes the line before and after in its record; the fresh review lists it. An import that changes what an existing case runs against (a different module, a fake in place of a real service) still comes to me.
+
+K5's imports in test files that exist on dev (git diff 8c59f73519 HEAD):
+- apps/server/src/process/agentScope.test.ts: new line `import * as ProviderProcesses from "./providerProcesses.ts";`. Upstream e4025c8528 adds the same line in its own copy; covered by R2 (IV (i)), both hunks quoted above.
+- apps/server/src/orchestration-v2/Adapters/ClaudeAgentSdkQueryRunner.test.ts: a NEW import line (not a name appended to an existing line), added in 67c1d0a4d5 (86e2cb21c9):
+  before (lines 34-35): `import { spawnClaudeProcessGroup } from "./ClaudeProcessSpawn.ts";` then a blank line
+  after (lines 34-36): `import { spawnClaudeProcessGroup } from "./ClaudeProcessSpawn.ts";` / `import { claudeProcessExitFailure } from "./ClaudeQueryRunnerErrors.ts";` / blank line
+  The name is used once, at line 717, inside the appended GOAT case "a CLI that exits during boot reports its exit, not a start-up timeout"; no existing case runs against it. Asked of the coordinator because the rule names an existing import line, and this one is new.
+
