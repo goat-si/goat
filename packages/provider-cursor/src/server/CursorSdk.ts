@@ -33,6 +33,13 @@ const classifyCursorRejection = (reason: unknown) => {
   ) {
     return "Cursor SDK wrote to an ended request stream.";
   }
+  if (
+    reason.name === "AbortError" &&
+    typeof reason.stack === "string" &&
+    /^[ \t]+at (?:\S+\.)?onStall \(.*[\\/]@cursor[\\/]sdk[\\/]dist[\\/]/m.test(reason.stack)
+  ) {
+    return "Cursor SDK aborted a stalled request.";
+  }
   return undefined;
 };
 

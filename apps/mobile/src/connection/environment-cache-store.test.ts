@@ -547,6 +547,33 @@ describe("mobile SQLite environment cache store", () => {
     }),
   );
 
+  it.effect("stores the shell resume origin with its rows and discards an old schema", () =>
+    Effect.gen(function* () {
+      const memory = makeDatabase();
+      const store = yield* make().pipe(
+        Effect.provideService(MobileDatabase.MobileDatabase, memory.database),
+      );
+      const origin = {
+        instanceId: "running-environment",
+        serverVersion: "1.0.0",
+        databaseMigration: 89,
+        omitIdleSubagents: false,
+        omitOlderSettled: false,
+        snapshotAt: 0,
+      };
+      yield* store.saveShell(ENVIRONMENT_ID, SHELL_SNAPSHOT, origin);
+      const snapshot = Option.getOrThrow(yield* store.loadShell(ENVIRONMENT_ID));
+      expect(snapshot.origin).toEqual(origin);
+      expect(snapshot.snapshotSequence).toBe(SHELL_SNAPSHOT.snapshotSequence);
+
+      const key = cacheId(ENVIRONMENT_ID, "shell", "snapshot");
+      const encoded = JSON.parse(memory.values.get(key)!);
+      memory.values.set(key, JSON.stringify({ ...encoded, schemaVersion: 3 }));
+      expect(yield* store.loadShell(ENVIRONMENT_ID)).toEqual(Option.none());
+      expect(memory.values.has(key)).toBe(false);
+    }),
+  );
+
   it.effect("returns cached threads before their pull request links, which load after", () =>
     Effect.gen(function* () {
       const memory = makeDatabase();

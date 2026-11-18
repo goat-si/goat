@@ -1,3 +1,4 @@
+import type * as Duration from "effect/Duration";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import type { PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
@@ -2990,7 +2991,7 @@ function runBackgroundItemScenario(
   makeEvents: (ids: BackgroundScenarioIds) => ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>,
   options?: {
     readonly keepEventStreamOpen?: boolean;
-    readonly closeDeadline?: string;
+    readonly closeDeadline?: Duration.Input;
     readonly hasPendingBackgroundWorkForThread?: (
       providerThread: OrchestrationV2ProviderThread,
     ) => Effect.Effect<boolean>;

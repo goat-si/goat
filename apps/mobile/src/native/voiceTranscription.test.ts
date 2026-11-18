@@ -309,6 +309,7 @@ describe("mobile remote voice integration", () => {
     const remoteAuthorization = RemoteEnvironmentAuthorization.of({
       authorizeBearer: () => Effect.die("unexpected bearer authorization"),
       authorizeDpop: () => Effect.die("unexpected socket authorization"),
+      rememberCheckedDescriptor: () => Effect.void,
       authorizeDpopHttp: (input) =>
         Effect.sync(() => {
           authorizations.push(input);

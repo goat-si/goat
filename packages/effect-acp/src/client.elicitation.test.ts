@@ -176,6 +176,7 @@ it.effect.each(["session/elicitation", "_session/elicitation", "elicitation/crea
           yield* encodeJsonl(jsonRpcRequest(method, Schema.Unknown), {
             jsonrpc: "2.0",
             id,
+            headers: [],
             method,
             params,
           }),

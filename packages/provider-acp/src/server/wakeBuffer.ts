@@ -1,8 +1,10 @@
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import type * as AcpSchema from "effect-acp/compat";
 
 const MAX_WAKE_FRAMES = 128;
 const MAX_WAKE_CHARACTERS = 4 * 1024 * 1024;
+const encodeWakeFrame = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 export function makeAcpWakeBuffer() {
   const frames: Array<{ notification: AcpSchema.SessionNotification; characters: number }> = [];
@@ -16,7 +18,7 @@ export function makeAcpWakeBuffer() {
     clear: Effect.sync(clear),
     append: (notification: AcpSchema.SessionNotification) =>
       Effect.sync(() => {
-        const characters = JSON.stringify(notification).length;
+        const characters = encodeWakeFrame(notification).length;
         if (characters > MAX_WAKE_CHARACTERS) return false;
         while (
           frames.length >= MAX_WAKE_FRAMES ||

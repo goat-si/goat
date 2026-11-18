@@ -213,6 +213,7 @@ const makeRelayBroker = Effect.fn("clientRuntime.connection.broker.makeRelay")(f
     function* (target: RelayConnectionTarget) {
       const authorized = yield* remote.authorizeDpop({
         expectedEnvironmentId: target.environmentId,
+        readDescriptor: true,
       });
       return {
         environmentId: authorized.environmentId,
@@ -220,6 +221,7 @@ const makeRelayBroker = Effect.fn("clientRuntime.connection.broker.makeRelay")(f
         httpBaseUrl: authorized.httpBaseUrl,
         socketUrl: authorized.socketUrl,
         httpAuthorization: authorized.httpAuthorization,
+        ...(authorized.descriptor === undefined ? {} : { descriptor: authorized.descriptor }),
         target,
       } satisfies PreparedConnection;
     },
@@ -422,15 +424,17 @@ export const make = Effect.gen(function* () {
           return ssh({ ...entry, target }, onHostAnswered, options);
       }
     })();
+    const preparedConnection: PreparedConnection = prepared;
     const descriptor =
       verifiedEndpoint?.httpBaseUrl === prepared.httpBaseUrl
         ? verifiedEndpoint.descriptor
-        : yield* fetchRemoteEnvironmentDescriptor({
+        : (preparedConnection.descriptor ??
+          (yield* fetchRemoteEnvironmentDescriptor({
             httpBaseUrl: prepared.httpBaseUrl,
           }).pipe(
             Effect.mapError(mapRemoteEnvironmentError),
             Effect.provideService(HttpClient.HttpClient, httpClient),
-          );
+          )));
     if (descriptor.environmentId !== target.environmentId) {
       return yield* environmentMismatchError({
         expected: target.environmentId,
@@ -452,6 +456,7 @@ export const make = Effect.gen(function* () {
     }
     return {
       ...prepared,
+      descriptor,
       socketUrl: appendOrchestrationProtocol(prepared.socketUrl),
     };
   });

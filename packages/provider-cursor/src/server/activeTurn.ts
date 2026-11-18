@@ -41,12 +41,22 @@ export interface ActiveCursorSubagent {
   readonly turnItemId: OrchestrationV2TurnItem["id"];
   readonly turnItemOrdinal: number;
   nextChildOrdinal: number;
+  readonly projection: CursorTaskProjectionState;
   resultProjected: boolean;
+}
+
+export interface CursorTaskProjectionState {
+  readonly tools: Map<string, ActiveCursorToolCall | null>;
+  readonly assistantSegments: ActiveCursorTextSegment[];
+  readonly assistant: ActiveCursorTextStream;
+  readonly reasoning: ActiveCursorTextStream;
+  remainingText: number;
 }
 
 export interface ActiveCursorTextSegment {
   readonly nativeItemId: string;
   readonly startedAt: DateTime.Utc;
+  readonly ordinal: number;
   text: string;
 }
 
