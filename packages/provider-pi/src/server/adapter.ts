@@ -4,6 +4,7 @@ import { readPiEntries, piSessionListing, walkPiBranch } from "./entries.ts";
 import { piExtensionDisplayName } from "./extensionDisplayName.ts";
 import { contentText } from "./piContentText.ts";
 import { piSubagentOutput } from "./subagentOutput.ts";
+import { awaitPromptAcknowledgment } from "./promptAcknowledgment.ts";
 import { piForkBoundary, piForkEntry, type PiForkBoundary } from "./forkBoundary.ts";
 import { piQuestion, piUiResponse } from "./extensionDialog.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -341,6 +342,19 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         ProviderAdapter.ProviderAdapterV2Error | Cause.Done
       >();
       const pendingPrompts = new Map<string, PendingPiPrompt>();
+      const awaitPromptAck = (
+        drained: Deferred.Deferred<void, ProviderAdapter.ProviderAdapterProtocolError>,
+      ) =>
+        awaitPromptAcknowledgment(
+          drained,
+          () => pendingPrompts.size > 0,
+          (cause) =>
+            new ProviderAdapter.ProviderAdapterProtocolError({
+              driver,
+              detail: cause.message,
+              cause,
+            }),
+        );
       const sessionApprovals = new Set<string>();
       // Pi can settle immediately after dialog response; serialize so terminal cannot overtake request resolution.
       const sessionEventPermit = yield* Semaphore.make(1);
@@ -2663,7 +2677,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               if (closed || stopRequested)
                 return yield* protocolError("Cannot start a Pi turn after session closure");
               if (pendingPromptResponsesDrained === null) break;
-              yield* Deferred.await(pendingPromptResponsesDrained);
+              yield* awaitPromptAck(pendingPromptResponsesDrained);
             }
             if (
               state.providerThread.nativeThreadRef?.nativeId !==
@@ -2824,7 +2838,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               );
               if (pendingAck === null) break;
               // The native event pump needs the permit to consume the actual ACK.
-              yield* Deferred.await(pendingAck);
+              yield* awaitPromptAck(pendingAck);
             }
             // Pi acks `prompt` only after slash-command expansion completes,
             // and extension commands may block on user dialogs indefinitely.
