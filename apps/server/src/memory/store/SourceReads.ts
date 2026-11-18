@@ -128,7 +128,10 @@ export const makeSourceReads = (
     if (
       aggregate.tombstone ||
       aggregate.pendingForget ||
-      aggregate.identity?.scopeVersion !== request.scopeVersion
+      !aggregate.identity ||
+      aggregate.identity.scopeVersion !== request.scopeVersion ||
+      (aggregate.identity.scope.kind === "thread" &&
+        aggregate.identity.scope.thread.environmentId !== request.requesterEnvironmentId)
     )
       return false;
     if (!aggregate.item || aggregate.item.localAvailability.exposure !== "visible") return false;

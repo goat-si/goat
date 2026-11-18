@@ -134,6 +134,7 @@ export class MemoryService extends Context.Service<
     readonly prepareSourceRead: (
       input: M.MemoryReadSourceInput,
       permit: Permit,
+      requesterEnvironmentId?: M.EnvironmentId,
     ) => Effect.Effect<ValidatedSourceRequest, MemoryServiceError>;
     readonly validateSourceOutcome: (
       input: { request: ValidatedSourceRequest; outcome: M.MemorySourceReadOutcome },
@@ -560,8 +561,8 @@ const make = Effect.fnUntraced(function* (
     const stream = yield* store.changes(value.memorySpaceId);
     return stream.pipe(Stream.tap(() => permit));
   });
-  const requireScope = (scope: M.MemoryScope) =>
-    scope.kind === "thread" && scope.thread.environmentId !== environmentId
+  const requireScope = (scope: M.MemoryScope, requester = environmentId) =>
+    scope.kind === "thread" && scope.thread.environmentId !== requester
       ? Effect.fail(new MemoryAccessError({ code: "identity_mismatch" }))
       : Effect.void;
   const decide = (
@@ -1856,6 +1857,7 @@ const make = Effect.fnUntraced(function* (
   });
   const sourceLocator = Effect.fn("MemoryService.sourceLocator")(function* (
     input: M.MemoryReadSourceInput,
+    requesterEnvironmentId = environmentId,
   ) {
     const aggregate = yield* store.loadAggregate(
       input.memorySpaceId,
@@ -1865,8 +1867,13 @@ const make = Effect.fnUntraced(function* (
     );
     if (aggregate.tombstone || aggregate.pendingForget)
       return yield* new Store.MemoryStoreConflict({ code: "forgotten" });
-    if (!aggregate.item || aggregate.item.localAvailability.exposure !== "visible")
+    if (
+      !aggregate.identity ||
+      !aggregate.item ||
+      aggregate.item.localAvailability.exposure !== "visible"
+    )
       return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
+    yield* requireScope(aggregate.identity.scope, requesterEnvironmentId);
     const thread = yield* decode(encodeSourceThread(input.sourceThread));
     for (const pair of aggregate.revisions) {
       const provenance = pair.revision.provenance;
@@ -1894,7 +1901,7 @@ const make = Effect.fnUntraced(function* (
       if (input.messageIds.every((id) => evidence.has(id)))
         return {
           generation: aggregate.generation,
-          scopeVersion: aggregate.identity?.scopeVersion,
+          scopeVersion: aggregate.identity.scopeVersion,
           sourceWatermark: provenance.sourceWatermark,
           pair,
         };
@@ -1903,12 +1910,12 @@ const make = Effect.fnUntraced(function* (
   });
   const prepareSourceRead: MemoryService["Service"]["prepareSourceRead"] = Effect.fn(
     "MemoryService.prepareSourceRead",
-  )(function* (input, permit) {
+  )(function* (input, permit, requesterEnvironmentId) {
     const value = yield* decode(decodeReadSource(input, strict));
     return yield* store.transact(
       Effect.gen(function* () {
         yield* permit;
-        const locator = yield* sourceLocator(value);
+        const locator = yield* sourceLocator(value, requesterEnvironmentId);
         const encoded = yield* decode(encodeReadSource(value));
         return {
           generation: locator.generation,
