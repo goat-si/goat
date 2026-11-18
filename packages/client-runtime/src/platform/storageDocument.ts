@@ -397,8 +397,11 @@ function mergeExtensions<A>(
     .sort((a, b) => a.index - b.index);
   const result: Array<A | undefined> = [...legacy];
   for (const entry of placed) result.splice(entry.index, 0, entry.value);
-  // A record dropped for its value keeps its slot until hub and Pen records are both placed.
-  return result;
+  // Every slot stays until hub and Pen records are both placed: a dropped record holds its own, and
+  // one whose position is unknown holds one at the end, so later absolute indexes stay in range.
+  // A field that is not a list hides its slot count (Infinity); its records add no slots.
+  const unplaced = Number.isFinite(total) ? total - result.length : 0;
+  return [...result, ...Array.from({ length: unplaced }, () => undefined)];
 }
 
 const present = <A>(values: ReadonlyArray<A | undefined>) =>
