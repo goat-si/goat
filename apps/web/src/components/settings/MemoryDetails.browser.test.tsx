@@ -928,6 +928,12 @@ it.each(["lost reply", "hub_unavailable"] as const)(
     await using screen = await renderDetails(registry);
     await click(screen, "Edit");
     await type(screen, "Typed once");
+    const catchUpOtherOrigin = () =>
+      update(() => {
+        state.exposure = withMemorySignal(state.exposure, id(1), "invalidate", id(9));
+      });
+    await catchUpOtherOrigin();
+    expect(memoryText(screen)?.value).toBe("Typed once");
     await save(screen);
     expect(screen.container.textContent).toContain("The save could not be confirmed.");
     expect(memoryText(screen)?.disabled).toBe(true);
@@ -935,6 +941,7 @@ it.each(["lost reply", "hub_unavailable"] as const)(
       _tag: "Success",
       value: { outcome: "accepted", pendingSync: false },
     });
+    await catchUpOtherOrigin();
     await click(screen, "Retry memory request");
     expect(state.calls).toHaveBeenCalledTimes(2);
     expect(state.calls.mock.calls[1]?.[0]).toEqual(state.calls.mock.calls[0]?.[0]);

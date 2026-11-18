@@ -4,10 +4,12 @@ import {
   WS_METHODS,
   MemoryItem,
   MemoryHistoryPage,
+  MemoryId,
   MemorySourcePage,
   MemoryRpcError,
   type MemoryUpsertInput,
 } from "@goat/contracts";
+import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
@@ -327,6 +329,36 @@ it("typing is not replaced when the memory is read again (#3601)", async () => {
   await act(async () => h.registry.refresh(h.memory.read(target)));
   await answered();
   expect(field()?.value).toBe("Typed while it reloads");
+});
+
+it("keeps draft text and a save retry when another memory's origin changes", async () => {
+  const typed = "Typed before the origin catch-up";
+  await openEditor(typed);
+  const catchUpOtherOrigin = (projectionWatermark: number) =>
+    act(async () => {
+      await h.signal({
+        kind: "invalidate",
+        memorySpaceId: nativeSpace,
+        memoryId: MemoryId.make("00000000-0000-4000-8000-000000000009"),
+        projectionWatermark,
+      });
+    });
+  await catchUpOtherOrigin(2);
+  expect(field()?.value).toBe(typed);
+  h.responses.set(WS_METHODS.memoryUpsert, () =>
+    Effect.fail(new MemoryRpcError({ code: "hub_unavailable" })),
+  );
+  await view.click("Save memory");
+  await catchUpOtherOrigin(3);
+  h.responses.set(WS_METHODS.memoryUpsert, accept);
+  await view.click("Retry save request");
+  const writes = h.calls.filter(({ method }) => method === WS_METHODS.memoryUpsert);
+  expect(writes).toHaveLength(2);
+  expect(writes[1]?.input).toEqual(writes[0]?.input);
+  expect(writes[0]?.input).toMatchObject({
+    payload: { text: typed },
+    expectedHeads: [startingRevision],
+  });
 });
 
 it("guard: a forget closes the editor and drops its text (#3601)", async () => {

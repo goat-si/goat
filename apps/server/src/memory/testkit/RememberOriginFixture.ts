@@ -2,6 +2,7 @@ import * as M from "@goat/contracts";
 import { assert } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Hub from "../MemoryHubService.ts";
@@ -33,6 +34,7 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
     VALUES (${space},${Member.local},${"c".repeat(64)},1,'active',0)`;
   let active = false;
   let offline = false;
+  let holdOrigin = scenario === "already ready";
   const negotiation = () => (active ? { features: M.MEMORY_FLOOR_2 } : {});
   const ensureOnline = Effect.suspend(() =>
     offline ? Effect.fail(new M.MemoryHubError({ code: "unavailable" })) : Effect.void,
@@ -52,12 +54,15 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
             Effect.map((result) => ({ ...result, hubEnvironmentId: connection.hubEnvironmentId })),
             Effect.orDie,
           ),
-      pull: (_connection, input) =>
-        ensureOnline.pipe(
+      pull: (_connection, input) => {
+        const { afterOriginSequence: _held, ...ordered } = input;
+        const request = holdOrigin && member === memberEnv ? ordered : input;
+        return ensureOnline.pipe(
           Effect.andThen(
-            hub.pull({ ...input, ...negotiation() }, principal(member)).pipe(Effect.orDie),
+            hub.pull({ ...request, ...negotiation() }, principal(member)).pipe(Effect.orDie),
           ),
-        ),
+        );
+      },
       push: (_connection, input, prepare) =>
         ensureOnline.pipe(
           Effect.andThen(prepare ?? Effect.succeed(input)),
@@ -230,20 +235,25 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
     yield* sync.syncOnce;
     assert.propertyVal(yield* sync.readLocalReadiness(), "bootstrap", "ready");
     for (const op of attempts) yield* scanReplicaMemory(op.memoryId);
-    const page = yield* service.list(
-      {
-        memorySpaceId: space,
-        origin,
-        limit: 10,
-        includeQuarantined: false,
-      },
+    const list = service.list(
+      { memorySpaceId: space, origin, limit: 10, includeQuarantined: false },
       Effect.void,
     );
+    if (scenario === "already ready") {
+      assert.isEmpty((yield* list).items);
+      const store = yield* Store.MemoryStore;
+      const changes = yield* Stream.toPull(yield* store.changes(space));
+      assert.propertyVal((yield* changes)[0], "kind", "reset");
+      holdOrigin = false;
+      yield* sync.syncOnce;
+      assert.include((yield* changes)[0], { kind: "invalidate", memoryId: attempts[0]?.memoryId });
+    }
+    const page = yield* list;
     assert.sameMembers(
       page.items.map(({ memoryId }) => memoryId),
       attempts.map(({ memoryId }) => memoryId),
     );
   });
-  if (readyPeer) yield* checkReplica.pipe(Effect.provide(readyPeer));
-  else yield* checkReplica.pipe(Effect.provide(Layer.fresh(replica)));
+  if (readyPeer) yield* checkReplica.pipe(Effect.scoped, Effect.provide(readyPeer));
+  else yield* checkReplica.pipe(Effect.scoped, Effect.provide(Layer.fresh(replica)));
 });
