@@ -31,7 +31,10 @@ import { serverEnvironment } from "../../state/server";
 import { decisionInbox, environmentThreads, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { sideChatAnswer } from "../../state/answer-side-chat";
-import { setUserInputDraftCustomAnswer } from "../../state/user-input-drafts";
+import {
+  clearUserInputDraftAnswers,
+  setUserInputDraftCustomAnswer,
+} from "../../state/user-input-drafts";
 
 /** How the inbox opens a thread's side chat for "/side ..." typed as an answer. */
 export interface DecisionInboxSideChat {
@@ -283,16 +286,21 @@ export function useDecisionInbox(
     }
     const submittedAnswers = buildPendingUserInputAnswers(item.request.questions, draft);
     if (submittedAnswers === null) return;
-    return runResponse(item, () =>
-      respondToUserInput({
+    return runResponse(item, async () => {
+      const result = await respondToUserInput({
         environmentId: item.ref.environmentId,
         input: {
           threadId: item.ref.threadId,
           requestId: item.request.requestId,
           answers: submittedAnswers,
         },
-      }),
-    );
+      });
+      if (result._tag === "Success")
+        clearUserInputDraftAnswers(
+          userInputDraftKey(item.ref.environmentId, item.ref.threadId, item.request.requestId),
+        );
+      return result;
+    });
   }
 
   function editableItem(requestId: RuntimeRequestId) {

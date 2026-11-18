@@ -73,6 +73,14 @@ export function setUserInputDraftCustomAnswer(
   });
 }
 
+/** Drops a request's answers once they were sent; nothing is left to return to the thread. */
+export function clearUserInputDraftAnswers(requestKey: string): void {
+  const current = appAtomRegistry.get(userInputDraftsByRequestKeyAtom);
+  if (!(requestKey in current)) return;
+  const { [requestKey]: _sent, ...rest } = current;
+  appAtomRegistry.set(userInputDraftsByRequestKeyAtom, rest);
+}
+
 /**
  * The question drafts of `requestId` with a typed answer or a question draft, in answer order;
  * the draft-only ones come from the rule web shares (client-runtime unsent-question-answers).
