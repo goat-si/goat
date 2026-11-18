@@ -1187,6 +1187,10 @@ export const make = Effect.gen(function* () {
             snapshot.claudeFields,
             snapshot.droppedMessageCount,
           );
+          if (parsedThread === "empty") {
+            transcriptsRemaining += 1;
+            return Option.none<AgentSessionRecentThread>();
+          }
           if (parsedThread === null) {
             return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
           }

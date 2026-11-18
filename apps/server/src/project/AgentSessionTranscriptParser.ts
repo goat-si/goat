@@ -155,7 +155,8 @@ export function parseAgentSessionTranscript(
     input.source === "claudeAgent"
       ? records.reduce(foldClaudeFields, emptyClaudeFields)
       : emptyClaudeFields;
-  return parseAgentSessionRecords(input, records, claudeFields, 0);
+  const thread = parseAgentSessionRecords(input, records, claudeFields, 0);
+  return thread === "empty" ? null : thread;
 }
 
 export function parseAgentSessionRecords(
@@ -163,7 +164,7 @@ export function parseAgentSessionRecords(
   records: ReadonlyArray<DecodedTranscriptRecord>,
   claudeFields: ClaudeFields,
   droppedMessageCount: number,
-): AgentSessionThread | null {
+): AgentSessionThread | "empty" | null {
   const fallbackTimestamp = DateTime.formatIso(DateTime.makeUnsafe(input.lastActiveAtMs));
   // Claude filenames are session IDs. Codex rollout filenames include extra
   // timestamp text, so only transcript metadata can provide a resumable ID.
@@ -356,10 +357,12 @@ export function parseAgentSessionRecords(
     });
   }
 
+  if (providerSessionId.trim().length === 0) return null;
+  if (conversationMessageCount === 0 && droppedMessageCount === 0) return "empty";
   const visibleMessages = messages.map(
     ({ codexResponseUser: _codexResponseUser, ...message }) => message,
   );
-  if (providerSessionId.trim().length === 0 || firstUserMessage === undefined) return null;
+  if (firstUserMessage === undefined) return null;
   const firstUserMessageRetained = messages.includes(firstUserMessage);
   const { codexResponseUser: _codexResponseUser, ...visibleFirstUserMessage } = firstUserMessage;
   const retainedMessages = firstUserMessageRetained

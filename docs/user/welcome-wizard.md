@@ -86,11 +86,12 @@ same user turn. Ambiguous legacy or response-only context stays in the imported
 conversation so GOAT does not remove user text. It reads one conversation at
 a time and skips files larger than 4 GiB. It also skips a conversation when the
 message text and metadata it keeps need more than 32 MiB of memory. Tool output
-does not count toward that limit. It ignores malformed records and skips
-unreadable or unparseable conversations.
+does not count toward that limit. It ignores malformed records and sessions
+without visible messages. It skips unreadable or unparseable conversations.
 
 Each import attempt reads up to 100 conversations and 4 GiB per project, with up
-to 100,000 input records. Run import again to continue a large batch.
+to 100,000 input records per file. Empty sessions count toward the byte limit.
+Run import again to continue a large batch.
 Completed conversations are not imported again. You can continue without the
 remaining history.
 
