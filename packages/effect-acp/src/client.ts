@@ -312,11 +312,11 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
     | undefined;
   let negotiatedProtocolGeneration: 1 | 2 | undefined;
   let sessionDeleteSupported = false;
-  let advertisedClientCapabilities: AcpSchema.InitializeRequest["clientCapabilities"];
+  let advertisedClientCapabilities: NonNullable<AcpSchema.InitializeRequest["clientCapabilities"]> =
+    {};
   const validateElicitation = (
     request: AcpSchema.CreateElicitationRequest,
   ): Effect.Effect<AcpSchema.CreateElicitationRequest, AcpSchemaV2.Error> =>
-    advertisedClientCapabilities !== undefined &&
     (request.mode === "form" || request.mode === "url") &&
     advertisedClientCapabilities.elicitation?.[request.mode] == null
       ? Effect.fail(
@@ -624,12 +624,12 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
     agent: {
       initialize: (payload) =>
         Effect.suspend(() => {
-          advertisedClientCapabilities = payload.clientCapabilities ?? {};
           return callRpc(
             AGENT_METHODS.initialize,
             rpc[AGENT_METHODS.initialize](toNegotiatingInitializeRequest(payload)),
           ).pipe(
             Effect.map((response) => {
+              advertisedClientCapabilities = payload.clientCapabilities ?? {};
               // ACP v1 protocolVersion values were not generation identifiers in
               // every shipped agent. Antigravity, for example, reports version 2
               // with the v1 agentInfo/agentCapabilities response shape.

@@ -30,13 +30,35 @@ const decodeWireError = Schema.decodeEffect(
   Schema.fromJsonString(Schema.Struct({ error: Schema.Struct({ code: Schema.Finite }) })),
 );
 
+const decodeRequestId = Schema.decodeEffect(
+  Schema.fromJsonString(Schema.Struct({ id: Schema.Finite })),
+);
+
+const makeInitializedFormClient = Effect.gen(function* () {
+  const transport = yield* makeInMemoryStdio();
+  const acp = yield* AcpClient.make(transport.stdio);
+  const initializing = yield* acp.agent
+    .initialize({ protocolVersion: 2, clientCapabilities: { elicitation: { form: {} } } })
+    .pipe(Effect.forkChild);
+  const request = yield* decodeRequestId(yield* Queue.take(transport.output));
+  yield* Queue.offer(
+    transport.input,
+    yield* encodeJsonl(jsonRpcResponse(Schema.Unknown), {
+      jsonrpc: "2.0",
+      id: request.id,
+      result: { protocolVersion: 2, info: { name: "fixture", version: "1" } },
+    }),
+  );
+  yield* Fiber.join(initializing);
+  return { acp, ...transport };
+});
+
 it.effect.each(["accept", "decline", "cancel"] as const)(
   "returns a flat %s action to the SDK and preserves the legacy response",
   (action) =>
     Effect.gen(function* () {
       for (const method of ["elicitation/create", "session/elicitation"]) {
-        const { stdio, input, output } = yield* makeInMemoryStdio();
-        const acp = yield* AcpClient.make(stdio);
+        const { acp, input, output } = yield* makeInitializedFormClient;
         const answer = action === "accept" ? { action, content: { choice: "yes" } } : { action };
         const response = { ...answer, _meta: { trace: "fixture" } };
         yield* acp.handleElicitation((request) => {
@@ -113,8 +135,7 @@ it.effect("rejects malformed SDK elicitation without calling the question handle
 
 it.effect("returns method-not-found when SDK elicitation has no question handler", () =>
   Effect.gen(function* () {
-    const { stdio, input, output } = yield* makeInMemoryStdio();
-    yield* AcpClient.make(stdio);
+    const { input, output } = yield* makeInitializedFormClient;
     yield* Queue.offer(
       input,
       yield* encodeJsonl(jsonRpcRequest("elicitation/create", AcpSchema.CreateElicitationRequest), {
@@ -128,6 +149,42 @@ it.effect("returns method-not-found when SDK elicitation has no question handler
     const response = yield* decodeWireError(yield* Queue.take(output));
     assert.equal(response.error.code, -32601);
   }).pipe(Effect.scoped),
+);
+
+it.effect.each(["session/elicitation", "_session/elicitation", "elicitation/create"])(
+  "denies unsolicited form and URL requests before initialization via %s",
+  (method) =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const acp = yield* AcpClient.make(stdio);
+      let calls = 0;
+      yield* acp.handleElicitation(() => {
+        calls++;
+        return Effect.succeed({ action: "accept" as const });
+      });
+      const url = {
+        sessionId: "session-1",
+        mode: "url",
+        message: "Sign in",
+        url: "https://example.test/auth",
+        elicitationId: "auth-1",
+      };
+      const codes = [];
+      for (const [id, params] of [url, elicitationForm].entries()) {
+        yield* Queue.offer(
+          input,
+          yield* encodeJsonl(jsonRpcRequest(method, Schema.Unknown), {
+            jsonrpc: "2.0",
+            id,
+            method,
+            params,
+          }),
+        );
+        const response = yield* decodeWireResponse(yield* Queue.take(output));
+        codes.push((response as { error?: { code: number } }).error?.code);
+      }
+      assert.deepEqual({ calls, codes }, { calls: 0, codes: [-32602, -32602] });
+    }).pipe(Effect.scoped),
 );
 
 it.effect.each([
