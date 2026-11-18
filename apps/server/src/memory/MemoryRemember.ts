@@ -37,6 +37,7 @@ export const makeRemember = (deps: {
     input: M.MemoryUpsertInput,
     permit: Effect.Effect<void, MemoryAccessError>,
     sourceThread?: M.ScopedThreadRef,
+    remember?: { readonly allowUnverified: boolean },
   ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
   readonly stableUuid: (text: string) => string;
 }) =>
@@ -118,5 +119,6 @@ export const makeRemember = (deps: {
       },
       permit,
       sourceThread,
+      { allowUnverified: input.memoryId === undefined },
     );
   });

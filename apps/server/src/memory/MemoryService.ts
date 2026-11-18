@@ -30,8 +30,9 @@ import type {
 import * as Quota from "./MemoryQuotaService.ts";
 import { checkedHistoryPage, checkedPage } from "./memoryDiagnostics.ts";
 import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts";
-import { redactMemoryText, scanMemoryValue } from "./MemorySecretScanner.ts";
+import { scanMemoryValue } from "./MemorySecretScanner.ts";
 import { makeCommitSummary, type SummaryCommit } from "./MemorySummaryCommit.ts";
+import { makeUpsert } from "./MemoryUpsert.ts";
 import { makeRemember, type MemoryRememberScopeUnavailable } from "./MemoryRemember.ts";
 
 export class MemoryAccessError extends Schema.TaggedError<MemoryAccessError>()(
@@ -293,7 +294,6 @@ const encodeBindingUpdate = Schema.encodeSync(
   Schema.fromJsonString(M.MemoryProjectBindingUpdateInput),
 );
 const decodeChanges = Schema.decodeUnknownEffect(M.MemoryChangesInput);
-const decodeUpsert = Schema.decodeUnknownEffect(M.MemoryUpsertInput);
 const decodeForget = Schema.decodeUnknownEffect(M.MemoryForgetInput);
 const decodeRevert = Schema.decodeUnknownEffect(M.MemoryRevertResolutionInput);
 const decodeRead = Schema.decodeUnknownEffect(M.MemoryReadInput);
@@ -1148,123 +1148,17 @@ const make = Effect.fnUntraced(function* (
     }
     yield* store.appendThreadLineage(thread, space, [...revisions]);
   });
-  const upsert = Effect.fn("MemoryService.upsert")(function* (
-    input: M.MemoryUpsertInput,
-    permit: Permit,
-    sourceThread?: M.ScopedThreadRef,
-  ) {
-    const value = yield* decode(decodeUpsert(input, strict));
-    return yield* store.transact(
-      Effect.gen(function* () {
-        yield* permit;
-        yield* requireSharing(value.memorySpaceId);
-        yield* requireCaller(sourceThread);
-        const requestDigest = hash(
-          yield* decode(
-            Schema.encodeEffect(
-              Schema.fromJsonString(
-                Schema.Struct({
-                  input: M.MemoryUpsertInput,
-                  caller: Schema.NullOr(M.ScopedThreadRef),
-                }),
-              ),
-            )({ input: value, caller: sourceThread ?? null }),
-          ),
-        );
-        const prior = yield* store.receipt(value.memorySpaceId, value.operationId);
-        if (prior) {
-          const rows = yield* query(sql<{
-            request_digest: string | null;
-            origin_environment_id: string;
-          }>`
-            SELECT json_extract(compact_json,'$.upsertRequestDigest') AS request_digest,
-              json_extract(compact_json,'$.originEnvironmentId') AS origin_environment_id
-            FROM memory_compact_receipts WHERE space=${value.memorySpaceId} AND operation_id=${value.operationId}
-            UNION ALL SELECT json_extract(metadata_json,'$.revision.provenance.upsertRequestDigest') AS request_digest,origin_environment_id
-            FROM memory_events WHERE memory_space_id=${value.memorySpaceId} AND operation_id=${value.operationId} LIMIT 1`);
-          if (
-            rows[0]?.origin_environment_id !== environmentId ||
-            rows[0]?.request_digest !== requestDigest
-          )
-            return yield* new Store.MemoryStoreConflict({ code: "operation_id_reused" });
-          // Receipt recovery precedes the new-write lineage fence and dependency reads.
-          // Never reconstruct the first operation with today's context or revive its body.
-          if (!("hubSequence" in prior.receipt)) return prior;
-          const acknowledged = prior.receipt;
-          const receipt: M.MemoryMutationReceipt = {
-            operationId: acknowledged.operationId,
-            memoryId: acknowledged.memoryId,
-            outcome: acknowledged.outcome,
-            revisionId:
-              acknowledged.outcome === "rejected"
-                ? null
-                : M.MemoryRevisionId.make(
-                    memoryStableUuid(`${value.memorySpaceId}:${value.operationId}:revision`),
-                  ),
-            pendingSync: false,
-            ...(acknowledged.failureCode ? { failureCode: acknowledged.failureCode } : {}),
-            ...(acknowledged.capacity ? { capacity: acknowledged.capacity } : {}),
-            ...(acknowledged.forgetExpansion
-              ? { forgetExpansion: acknowledged.forgetExpansion }
-              : {}),
-            ...(acknowledged.forgetRetryOf ? { forgetRetryOf: acknowledged.forgetRetryOf } : {}),
-          };
-          return { operationDigest: prior.operationDigest, receipt };
-        }
-        yield* requireScope(value.scope);
-        const lineage = yield* requireCompleteLineage(value.memorySpaceId, sourceThread);
-        const revisionId = M.MemoryRevisionId.make(
-          memoryStableUuid(`${value.memorySpaceId}:${value.operationId}:revision`),
-        );
-        let payload: M.MemoryPayload = yield* normalizeMemoryDependencies(
-          value.memorySpaceId,
-          redactMemoryText(value.payload),
-        ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
-        if (lineage) {
-          payload = yield* decode(
-            decodeSummaryPayload(
-              {
-                ...payload,
-                derivedFromMemoryRevisions: [
-                  ...new Set([...payload.derivedFromMemoryRevisions, ...lineage.revisions]),
-                ],
-              },
-              strict,
-            ),
-          );
-          yield* validateSummaryDependencies(value.memorySpaceId, payload).pipe(
-            Effect.provideService(SqlClient.SqlClient, sql),
-          );
-        }
-        const op: M.MemoryOperation = {
-          protocolVersion: 1,
-          kind: "upsert",
-          memorySpaceId: value.memorySpaceId,
-          memoryId: value.memoryId,
-          operationId: value.operationId,
-          originEnvironmentId: environmentId,
-          expectedHeads: value.expectedHeads,
-
-          revision: {
-            memorySpaceId: value.memorySpaceId,
-            memoryId: value.memoryId,
-            operationId: value.operationId,
-            revisionId,
-            payloadRef: revisionId,
-            parents: value.expectedHeads,
-            scope: value.scope,
-            assertionKind: value.assertionKind,
-            provenance: { environmentId, upsertRequestDigest: requestDigest },
-            createdAtUtc: M.MemoryUtcTimestamp.make(
-              DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
-            ),
-          },
-          payload,
-        };
-        return yield* apply(op, Store.localIntent, permit);
-      }),
-    );
-  }, Quota.withStoreReclaim(environmentId));
+  const upsert = makeUpsert({
+    sql,
+    store,
+    environmentId,
+    requireSharing,
+    requireCaller,
+    requireScope,
+    apply,
+    stableUuid: memoryStableUuid,
+    hash,
+  });
   const remember = makeRemember({
     sql,
     environmentId,

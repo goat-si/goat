@@ -11,6 +11,24 @@ const decode = <A, E>(effect: Effect.Effect<A, E>) =>
 const decodeDependencyEdges = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Array(M.MemoryRevisionId)),
 );
+export const closureCap = Effect.fn("MemoryService.closureCap")(function* (space: M.MemorySpaceId) {
+  const sql = yield* SqlClient.SqlClient;
+  const [row] = yield* sql<{ derived_cap: number }>`
+    SELECT derived_cap FROM memory_space_features WHERE space=${space}`.pipe(
+    Effect.mapError((cause) => new Store.MemoryStorageError({ stage: "derived-cap", cause })),
+  );
+  return row?.derived_cap === M.MEMORY_DERIVED_REVISIONS_MAX
+    ? M.MEMORY_DERIVED_REVISIONS_MAX
+    : M.MEMORY_DERIVED_REVISIONS_MAX_V1;
+});
+
+export const requireClosureCapacity = (count: number, limit: number) =>
+  count > limit
+    ? Effect.fail(
+        new Store.MemoryCapacityError({ dimension: "dependencies", current: count, limit }),
+      )
+    : Effect.void;
+
 /** Expand direct edges at authoritative writes. Internally captured closed sets may
  * outlive their bodies; they still require canonical live owners and all available edges. */
 export const normalizeMemoryDependencies = Effect.fn("MemoryService.normalizeMemoryDependencies")(
@@ -22,10 +40,10 @@ export const normalizeMemoryDependencies = Effect.fn("MemoryService.normalizeMem
     resolvingMemoryId?: M.MemoryId,
   ) {
     const sql = yield* SqlClient.SqlClient;
-    const revisions = [...new Set(payload.derivedFromMemoryRevisions)];
+    const limit = yield* closureCap(space);
+    const revisions = new Set(payload.derivedFromMemoryRevisions);
+    yield* requireClosureCapacity(revisions.size, limit);
     for (const revision of revisions) {
-      if (revisions.length > 100)
-        return yield* new Store.MemoryStoreConflict({ code: "invalid_output" });
       // Only authoritative resolution inputs may use this memory's own history
       // while its current frontier is quarantined. Foreign owners still need visibility.
       const rows = yield* sql<{ dependencies_json: string | null }>`
@@ -47,10 +65,11 @@ export const normalizeMemoryDependencies = Effect.fn("MemoryService.normalizeMem
         return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
       if (rows[0].dependencies_json !== null) {
         const edges = yield* decode(decodeDependencyEdges(rows[0].dependencies_json, strict));
-        for (const edge of edges) if (!revisions.includes(edge)) revisions.push(edge);
+        for (const edge of edges) revisions.add(edge);
+        yield* requireClosureCapacity(revisions.size, limit);
       }
     }
-    return { ...payload, derivedFromMemoryRevisions: revisions };
+    return { ...payload, derivedFromMemoryRevisions: [...revisions] };
   },
 );
 /** Consumers of a previously admitted closed set verify every still-available edge. */

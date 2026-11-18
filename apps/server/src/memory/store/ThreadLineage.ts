@@ -1,5 +1,6 @@
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { stored } from "./StoreCodecs.ts";
 import type { StoreKernel } from "./StoreKernel.ts";
 import type { MemoryStorageError } from "./StoreModel.ts";
@@ -12,6 +13,7 @@ export interface ThreadLineage {
 // Bounds the walk over app-owned task results.
 const MAX_TASK_RESULT_SOURCES = 100;
 const limit = M.MEMORY_THREAD_LINEAGE_MAX;
+const encodeRevisions = Schema.encodeSync(Schema.fromJsonString(Schema.Array(M.MemoryRevisionId)));
 
 export const makeThreadLineage = ({ sql, transact }: Pick<StoreKernel, "sql" | "transact">) => {
   const readOwnLineage = Effect.fn("ThreadLineage.readOwn")(function* (thread: M.ScopedThreadRef) {
@@ -151,7 +153,7 @@ export const makeThreadLineage = ({ sql, transact }: Pick<StoreKernel, "sql" | "
             "thread-lineage-write",
             sql`INSERT INTO memory_thread_lineage_revisions (environment_id,thread_id,ordinal,revision_id)
               SELECT ${environmentId},${threadId},key+${own.revisions.length},value
-              FROM json_each(${JSON.stringify(added)})`,
+              FROM json_each(${encodeRevisions(added)})`,
           );
         return true;
       }),

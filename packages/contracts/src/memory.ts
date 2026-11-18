@@ -9,6 +9,17 @@ import { EnvironmentId, EventId, MessageId, NonNegativeInt, PositiveInt } from "
 import { ScopedThreadRef, ScopedProjectRef } from "./environment.ts";
 import { ProviderDriverKind } from "./providerInstance.ts";
 
+import {
+  MEMORY_BODY_MAX_UTF8_BYTES,
+  MEMORY_CONTEXT_MAX_CHARS,
+  MEMORY_CONTEXT_MAX_UTF8_BYTES,
+  MEMORY_CONTEXT_OUTER_FRAME,
+  MEMORY_DERIVED_REVISIONS_MAX,
+  MEMORY_PAGE_MAX_UTF8_BYTES,
+  MEMORY_PAYLOAD_MAX_UTF8_BYTES,
+} from "./memoryLimits.ts";
+export * from "./memoryLimits.ts";
+
 const utf8 = (s: string) => new TextEncoder().encode(s).length;
 const jsonBytes = (value: unknown) => utf8(JSON.stringify(value));
 const unique = (values: readonly unknown[]) =>
@@ -88,46 +99,11 @@ export const MemoryUtcTimestamp = Schema.String.check(
   ),
 );
 export const MEMORY_PROTOCOL_VERSION = 1;
-export const MEMORY_CONTEXT_MAX_CHARS = 6000;
-export const MEMORY_CONTEXT_MAX_UTF8_BYTES = 24 * 1024;
-export const MEMORY_CONTEXT_OUTER_FRAME = "<external_goat_memory></external_goat_memory>";
-export const MEMORY_PAGE_MAX_ITEMS = 100;
-export const MEMORY_PAGE_MAX_UTF8_BYTES = 64 * 1024;
-export const MEMORY_PAYLOAD_MAX_UTF8_BYTES = 64 * 1024;
 export const MEMORY_LEASE_MS = 120000;
 export const MEMORY_LEASE_RENEW_MS = 30000;
 export const MEMORY_RESOLUTION_ATTEMPT_MAX_MS = 600000;
 export const MEMORY_SOURCE_READ_TIMEOUT_MS = 75000;
 export const MEMORY_SOURCE_READ_POLL_MS = 1000;
-export const MEMORY_DEFERRED_SWEEP_MAX_ITEMS = 256;
-export const MEMORY_DEFERRED_SWEEP_MAX_BYTES = 8 * 1024 * 1024;
-export const MEMORY_BODY_MAX_UTF8_BYTES = 16384;
-export const MEMORY_USER_MAX_ITEMS = 2000;
-export const MEMORY_PROJECT_MAX_ITEMS = 2000;
-export const MEMORY_THREAD_MAX_SUMMARIES = 1;
-export const MEMORY_THREAD_MAX_EXPLICIT_ITEMS = 100;
-export const MEMORY_SPACE_MAX_LIVE_ITEMS = 20000;
-export const MEMORY_ENVIRONMENT_MAX_LIVE_ITEMS = 20000;
-export const MEMORY_LIVE_MAX_PAYLOAD_BYTES = 134217728;
-export const MEMORY_SUBSTRING_MAX_ITEMS = 2000;
-export const MEMORY_SUBSTRING_MAX_UTF8_BYTES = 8388608;
-export const MEMORY_TRIGRAM_EXPERIMENT_MAX_BODY_BYTES = 33554432;
-export const MEMORY_TRIGRAM_EXPERIMENT_MAX_ITEMS = 5000;
-export const MEMORY_TRIGRAM_EXPERIMENT_MAX_ALLOCATED_BYTES = 67108864;
-export const MEMORY_IMPORT_SNAPSHOT_MAX_UTF8_BYTES = 8388608;
-export const MEMORY_IMPORT_PREVIEW_MAX_ITEMS = 128;
-export const MEMORY_IMPORT_APPLY_MAX_ITEMS = 32;
-export const MEMORY_IMPORT_SESSION_MAX_NEW_ITEMS = 128;
-export const MEMORY_IMPORT_SESSION_MAX_BODY_BYTES = 2097152;
-export const MEMORY_IMPORT_MAX_LIVE_ITEMS = 10000;
-export const MEMORY_IMPORT_MAX_LIVE_BODY_BYTES = 67108864;
-export const MEMORY_IMPORT_MAX_SOURCE_ITEMS = 50000;
-export const MEMORY_IMPORT_MAX_ALIASES = 100000;
-export const MEMORY_IMPORT_MAX_CONTENT_DIGESTS = 100000;
-export const MEMORY_IMPORT_LINEAGE_MAX_RECORDS_PER_MEMORY = 1000;
-export const MEMORY_IMPORT_LINEAGE_MAX_BYTES = 33554432;
-export const MEMORY_IMPORT_KEY_MAX_UTF8_BYTES = 512;
-export const MEMORY_IMPORT_DIGEST_MAX_UTF8_BYTES = 64;
 export const MEMORY_REVERT_WINDOW_MS = 2592000000;
 export const MEMORY_REPLACED_PAYLOAD_RETENTION_MS = 2592000000;
 export const MEMORY_RESOLUTION_PAYLOAD_RETENTION_MS = 2592000000;
@@ -317,6 +293,7 @@ export const MemoryFailureCode = Schema.Literals([
   "storage_failed",
   "source_invalidated",
   "thread_lineage_incomplete",
+  "hub_upgrade_required",
   "capacity_exceeded",
   "base_compacted",
   "revert_expired",
@@ -455,7 +432,7 @@ export const MemoryPayload = bounded(
   struct({
     text,
     evidence: array(MemoryEvidence),
-    derivedFromMemoryRevisions: distinct(MemoryRevisionId),
+    derivedFromMemoryRevisions: distinct(MemoryRevisionId, MEMORY_DERIVED_REVISIONS_MAX),
   }),
   MEMORY_PAYLOAD_MAX_UTF8_BYTES,
 );
@@ -836,6 +813,8 @@ export const MemoryCapacityDimension = Schema.Literals([
   "fts_admission_brake",
   "import_lineage_records",
   "import_lineage_bytes",
+  "dependencies",
+  "payload_bytes",
 ]);
 export type MemoryCapacityDimension = typeof MemoryCapacityDimension.Type;
 

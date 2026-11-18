@@ -189,7 +189,7 @@ it.effect.each(["fork", "import", "transfer", "overflow"] as const)(
         yield* store.appendThreadLineage(
           ref(),
           Fixture.space,
-          Array.from({ length: 101 }, (_, n) => M.MemoryRevisionId.make(Fixture.id(17000 + n))),
+          Array.from({ length: 1001 }, (_, n) => M.MemoryRevisionId.make(Fixture.id(17000 + n))),
         );
       else {
         const payload =
@@ -246,7 +246,7 @@ it.effect("r5 writer transaction observes lineage changed while upsert waits", (
           yield* store.appendThreadLineage(
             ref(),
             Fixture.space,
-            Array.from({ length: 101 }, (_, n) => M.MemoryRevisionId.make(Fixture.id(18000 + n))),
+            Array.from({ length: 1001 }, (_, n) => M.MemoryRevisionId.make(Fixture.id(18000 + n))),
           );
         }),
       )
@@ -333,7 +333,7 @@ it.effect("r5 read recording fails closed and metadata-only reads leave no linea
 );
 
 it.effect(
-  "r5 101st read persists sticky overflow but returns body; unknown read preserves fence",
+  "r5 1001st read persists sticky overflow but returns body; unknown read preserves fence",
   () =>
     Effect.gen(function* () {
       yield* setup;
@@ -342,12 +342,12 @@ it.effect(
       yield* store.appendThreadLineage(
         ref(),
         Fixture.space,
-        Array.from({ length: 100 }, (_, n) => M.MemoryRevisionId.make(Fixture.id(22000 + n))),
+        Array.from({ length: 1000 }, (_, n) => M.MemoryRevisionId.make(Fixture.id(22000 + n))),
       );
       const input = { memorySpaceId: Fixture.space, memoryId: a.input.memoryId };
       expect((yield* Fixture.call("memory_read", input, caller())).result.isError).not.toBe(true);
       expect((yield* store.readThreadLineage(ref(), Fixture.space)).state).toBe("overflow");
-      expect((yield* store.readThreadLineage(ref(), Fixture.space)).revisions).toHaveLength(100);
+      expect((yield* store.readThreadLineage(ref(), Fixture.space)).revisions).toHaveLength(1000);
       expect((yield* Fixture.call("memory_upsert", Fixture.upsert(), caller())).body).toMatchObject(
         { code: "thread_lineage_incomplete" },
       );
@@ -560,6 +560,9 @@ it.effect("remember with 101 sources on the new floor persists every edge for fo
       },
       Effect.void,
     );
-    expect((yield* store.loadAggregate(Fixture.space, memoryId)).item?.status).toBe("forgotten");
+    const after = yield* store.loadAggregate(Fixture.space, memoryId);
+    expect(after.item?.status).toBe("blocked");
+    expect(after.item).toMatchObject({ failureCode: "source_invalidated" });
+    expect(after.revisions.every((entry) => entry.payload === null)).toBe(true);
   }).pipe(Effect.provide(Fixture.layer)),
 );

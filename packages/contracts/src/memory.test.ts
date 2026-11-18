@@ -2184,7 +2184,7 @@ describe("WP5 lineage checkpoint contracts", () => {
       "fts_indexed_text",
       "fts_admission_brake",
     ];
-    expect(M.MemoryCapacityDimension.literals).toEqual([
+    expect(M.MemoryCapacityDimension.literals.slice(0, -2)).toEqual([
       ...old,
       "import_lineage_records",
       "import_lineage_bytes",

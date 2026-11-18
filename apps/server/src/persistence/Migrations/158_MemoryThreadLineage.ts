@@ -1,8 +1,8 @@
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
+import { MemoryStorageError } from "../../memory/store/StoreModel.ts";
 
 const decodeLegacyLineage = Schema.decodeUnknownEffect(
   Schema.fromJsonString(
@@ -16,9 +16,13 @@ const decodeLegacyLineage = Schema.decodeUnknownEffect(
   ),
 );
 
-const malformedLineage = new Migrator.MigrationError({
-  kind: "BadState",
-  message: "Invalid legacy memory thread lineage.",
+const encodeThread = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Tuple([M.EnvironmentId, M.ThreadId])),
+);
+const encodeRevisions = Schema.encodeSync(Schema.fromJsonString(Schema.Array(M.MemoryRevisionId)));
+const malformedLineage = new MemoryStorageError({
+  stage: "legacy-thread-lineage",
+  cause: undefined,
 });
 
 export default Effect.gen(function* () {
@@ -81,7 +85,7 @@ export default Effect.gen(function* () {
       ).pipe(Effect.mapError(() => malformedLineage));
       const { environmentId, threadId } = sourceThread;
       if (
-        row.id !== `memory:thread-lineage:${JSON.stringify([environmentId, threadId])}` ||
+        row.id !== `memory:thread-lineage:${encodeThread([environmentId, threadId])}` ||
         new Set(revisions).size !== revisions.length
       )
         return yield* malformedLineage;
@@ -90,7 +94,7 @@ export default Effect.gen(function* () {
       if (revisions.length)
         yield* sql`INSERT INTO memory_thread_lineage_revisions
           (environment_id,thread_id,ordinal,revision_id)
-          SELECT ${environmentId},${threadId},key,value FROM json_each(${JSON.stringify(revisions)})`;
+          SELECT ${environmentId},${threadId},key,value FROM json_each(${encodeRevisions(revisions)})`;
       yield* sql`DELETE FROM memory_outbox WHERE id=${row.id}`;
       cursor = row.id;
     }
