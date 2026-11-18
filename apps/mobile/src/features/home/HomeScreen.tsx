@@ -98,6 +98,7 @@ import type { HomeListFilterMenuEnvironment } from "./home-list-filter-menu";
 import {
   buildHomeProjectScopes,
   findHomeProjectScope,
+  homeProjectFilterOptions,
   type HomeProjectSortOrder,
 } from "./homeThreadList";
 import { createSwipeRowActivation } from "./swipe-row-activation";
@@ -759,6 +760,10 @@ export function HomeScreen(props: HomeScreenProps) {
     );
   }
 
+  const projectOptions = useMemo(
+    () => homeProjectFilterOptions(projectScopes, props.threads),
+    [projectScopes, props.threads],
+  );
   const listHeader = Platform.OS === "ios" ? undefined : <HomeTopContentSpacer />;
 
   const v2ListHeader = (
@@ -769,10 +774,7 @@ export function HomeScreen(props: HomeScreenProps) {
         <ThreadListFilters
           gutter={primaryColumn ? 8 : 0}
           environments={props.environments}
-          projects={pickableProjectGroups(projectScopes).map((scope) => ({
-            key: scope.key,
-            label: scope.title,
-          }))}
+          projects={projectOptions}
           selectedEnvironmentId={props.selectedEnvironmentId}
           selectedProjectKey={props.selectedProjectKey}
           onEnvironmentChange={props.onEnvironmentChange}
