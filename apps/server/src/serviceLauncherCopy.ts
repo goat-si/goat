@@ -30,3 +30,15 @@ export async function copyDatabaseFile(
   signal?.throwIfAborted();
   await NodeFSP.copyFile(source, destination);
 }
+
+// Fsync makes renames durable; Windows returns EPERM and NTFS journals them itself.
+export async function syncDirectory(directory: string): Promise<void> {
+  const handle = await NodeFSP.open(directory, "r");
+  try {
+    await handle.sync();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+  } finally {
+    await handle.close();
+  }
+}
