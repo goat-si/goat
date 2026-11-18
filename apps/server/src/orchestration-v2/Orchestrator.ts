@@ -4417,6 +4417,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     const appendSteeringMessage = Effect.fn("Orchestrator.appendSteeringMessage")(
       function* (messageInput: {
+        readonly ordinal?: number;
         readonly runId: OrchestrationV2Run["id"];
         readonly nodeId: OrchestrationV2ExecutionNode["id"];
         readonly providerTurnId: typeof providerTurn.id | null;
@@ -4464,7 +4465,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           providerTurnId: messageInput.providerTurnId,
           nativeItemRef: null,
           parentItemId: null,
-          ordinal: yield* nextTurnItemOrdinal(input.projection),
+          ordinal: messageInput.ordinal ?? (yield* nextTurnItemOrdinal(input.projection)),
           status: "completed",
           title: null,
           startedAt: now,
@@ -4989,7 +4990,35 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       messageId: targetRun.userMessageId,
       now,
     });
+    const steeringOrdinal = yield* nextTurnItemOrdinal(input.projection);
+    if (restartHandoff !== null) {
+      const { from, to } = restartHandoff.coveredRunOrdinals;
+      yield* emitEvent({
+        type: "turn-item.updated",
+        threadId: input.command.threadId,
+        runId: targetRun.id,
+        nodeId: nextRootNodeId,
+        providerInstanceId: input.modelSelection.instanceId,
+        occurredAt: now,
+        payload: contextHandoffTurnItem({
+          idAllocator,
+          handoff: restartHandoff,
+          threadId: input.command.threadId,
+          runId: targetRun.id,
+          rootNodeId: nextRootNodeId,
+          providerThreadId: restartProviderThread.id,
+          selection: input.modelSelection,
+          sourceRuns: input.projection.runs.filter(
+            (run) => run.ordinal >= from && run.ordinal <= to,
+          ),
+          ordinal: steeringOrdinal,
+          now,
+          title: "Provider handoff",
+        }),
+      });
+    }
     yield* appendSteeringMessage({
+      ordinal: restartHandoff === null ? steeringOrdinal : steeringOrdinal + 1,
       runId: targetRun.id,
       nodeId: nextRootNodeId,
       providerTurnId: null,
