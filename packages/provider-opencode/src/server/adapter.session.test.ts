@@ -223,6 +223,7 @@ it.effect.each([
   "overflow",
   "large-output",
   "capacity",
+  "capacity-started",
   "capacity-error",
 ] as const)("keeps a detached task running until child %s", (ending) =>
   Effect.gen(function* () {
@@ -231,6 +232,8 @@ it.effect.each([
     const root = "ses_root";
     const child = "ses_child";
     const resumed = ending === "resume" || ending === "resume-busy-before-link";
+    const atCapacity =
+      ending === "capacity" || ending === "capacity-started" || ending === "capacity-error";
     let promptId = "";
     const abortStarted = promiseGate<void>();
     const releaseAbort = promiseGate<void>();
@@ -345,7 +348,7 @@ it.effect.each([
     }
     yield* push(taskPart("completed", child, resumed ? "resume" : "detached"));
     if (ending === "resume-busy-before-link") yield* push(childError("UnknownError"));
-    if (ending === "capacity" || ending === "capacity-error") {
+    if (atCapacity) {
       for (let index = 0; index < 128; index++) {
         const id = `ses_child_${index}`;
         yield* push(created(id));
@@ -356,7 +359,7 @@ it.effect.each([
     const rootEvents = yield* Fiber.join(terminal);
     const rootTerminal = rootEvents.find((event) => event.type === "turn.terminal");
     assert.equal(rootTerminal?.status, "completed");
-    if (ending === "capacity" || ending === "capacity-error") {
+    if (atCapacity) {
       const projected = new Map(
         rootEvents.flatMap((event) =>
           event.type === "subagent.updated" ? [[event.subagent.id, event.subagent] as const] : [],
@@ -370,7 +373,10 @@ it.effect.each([
       assert.equal(oldest?.result, "Tracking lost. Outcome unknown.");
       if (oldest === undefined) return yield* Effect.die("The evicted card was not projected.");
       if (ending === "capacity-error") yield* push(childError("UnknownError"));
-      else yield* push(status(child, "idle"));
+      else {
+        if (ending === "capacity-started") yield* push(status(child, "busy"));
+        yield* push(status(child, "idle"));
+      }
       nativeEvents.close();
       const late = yield* harness.runtime.events.pipe(Stream.runCollect);
       const confirmed = late.find(
@@ -378,7 +384,11 @@ it.effect.each([
       );
       assert.equal(
         confirmed?.type === "subagent.updated" ? confirmed.subagent.status : undefined,
-        ending === "capacity-error" ? "failed" : "completed",
+        ending === "capacity-error"
+          ? "failed"
+          : ending === "capacity-started"
+            ? "completed"
+            : undefined,
       );
       return;
     }

@@ -2369,11 +2369,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 if (owner !== undefined) {
                   if (!threads.has(info.id)) relatedSessionOwners.set(info.id, owner);
                   if (event.type === "session.created")
-                    childOutcomes.created(
-                      info.id,
-                      subagentsByChildSessionId.get(info.id)?.childExecution,
-                      busySessionIds.has(info.id),
-                    );
+                    childOutcomes.created(info.id, busySessionIds.has(info.id));
                 }
               }
               return;

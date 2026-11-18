@@ -36,12 +36,11 @@ export function makeDetachedChildOutcomes(
       outcomes.delete(sessionId);
       return {
         resumed,
-        awaitingStart: resumed ? !observedStart : !(busy || unstarted.has(sessionId)),
+        awaitingStart: resumed ? !observedStart : !busy,
         outcome,
       };
     },
-    created(sessionId: string, execution: OpenCodeChildExecution | undefined, busy: boolean) {
-      if (execution !== undefined && !execution.resumed) execution.awaitingStart = false;
+    created(sessionId: string, busy: boolean) {
       if (!busy && unstarted.size < MAX_UNCORRELATED_OUTCOMES) unstarted.add(sessionId);
     },
     isUnstarted: (sessionId: string) => unstarted.has(sessionId),
