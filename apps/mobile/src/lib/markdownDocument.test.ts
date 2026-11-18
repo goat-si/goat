@@ -156,17 +156,17 @@ it.each([
 });
 
 it.each([
-  ["Plan\n $x +\n    y$", "x + y"],
-  ["Plan \\(\n$x +\n    y$", "x + y"],
-  ["Plan\n $x \\(a\\) +\n    y$", "x \\(a\\) + y"],
-])("passes the original multiline TeX to the native math node: %s", async (source, tex) => {
-  const markdown = markdownForNativeRendering(source, ENRICHED_INLINE_FILE_LINK_REGEX, true, true);
+  "Plan\n $x +\n    y$",
+  "Plan \\(\n$x +\n    y$",
+  "Plan\n $x \\(a\\) +\n    y$",
+  "Plan\n $$x + \\text{`$z$`}\n    + y$$",
+  "Plan\n   `one\n    two`",
+])("leaves native math and code blocks unchanged: %s", async (source) => {
   const flags = { ...MOBILE_FLAGS, hardSoftBreaks: true };
-  const math = (node: NativeNode) =>
-    node.children?.[0]?.children?.find((child) => child.type === "LatexMathInline");
-  const original = math(await parseMarkdown(source, flags));
-  expect(original?.children?.[0]?.content).toBe(tex);
-  expect(math(await parseMarkdown(markdown, flags))).toEqual(original);
+  const baseline = markdownForNativeRendering(source, ENRICHED_INLINE_FILE_LINK_REGEX);
+  const restored = markdownForNativeRendering(source, ENRICHED_INLINE_FILE_LINK_REGEX, true);
+  expect(await parseMarkdown(restored, flags)).toEqual(await parseMarkdown(baseline, flags));
+  expect(restored).toBe(baseline);
 });
 
 it.each(["ftp://example.com/path", "https://example.com/a?b=1&c=2"])(

@@ -2,7 +2,6 @@ import type { Root } from "mdast";
 import type { Transformer } from "unified";
 
 import { GITHUB_ALERT_MARKER } from "./markdownGithubAlerts.ts";
-import { nativeMathSpans } from "./markdownCjkEmphasis.ts";
 
 interface MarkdownPoint {
   readonly line: number;
@@ -35,7 +34,6 @@ interface Cursor {
 interface Source {
   readonly text: string;
   readonly lineStarts: readonly number[];
-  readonly nativeMath?: boolean;
   readonly onIndentation?: (indentation: Indentation, content: MarkdownNode) => void;
 }
 
@@ -258,15 +256,14 @@ function restoreParagraph(
 ): void {
   const start = paragraph.position?.start;
   if (start?.offset === undefined || !paragraph.children) return;
+  // Native math and code spans can cross source lines within a paragraph.
   const end = paragraph.position?.end.offset;
-  const math =
-    source.nativeMath && end !== undefined ? nativeMathSpans(source.text, start.offset, end) : [];
-  const typed = (at: number) => {
-    const entry = typedWhitespace(source, at, start, chain);
-    return entry && !math.some(([from, to]) => entry.offset > from && entry.offset < to)
-      ? entry
-      : undefined;
-  };
+  if (
+    source.onIndentation &&
+    (end === undefined || /[`$]|\\[()[\]]/.test(source.text.slice(start.offset, end)))
+  )
+    return;
+  const typed = (at: number) => typedWhitespace(source, at, start, chain);
   const inserted = new Map<MarkdownNode, Indentation>();
   const indentation = (entry: Indentation) => {
     const node = whitespaceNode(entry.value);
@@ -422,11 +419,7 @@ function nativeLinkAt(markdown: string, offset: number, content: MarkdownNode) {
   return url ? { end: offset + url.length, text: `<${url}>` } : undefined;
 }
 
-export function markdownWithLeadingWhitespace(
-  markdown: string,
-  parse: (text: string) => Root,
-  nativeMath = false,
-) {
+export function markdownWithLeadingWhitespace(markdown: string, parse: (text: string) => Root) {
   const source = positionedSource(markdown);
   if (!source) return markdown;
   const edits = new Map<number, { end: number; text: string }>();
@@ -434,7 +427,6 @@ export function markdownWithLeadingWhitespace(
   visit(
     {
       ...source,
-      nativeMath,
       onIndentation: ({ offset, value }, content) => {
         const whitespace = value.replaceAll(" ", "&#32;").replaceAll("\t", "&#9;");
         // An entity's semicolon prevents md4c from recognizing a following bare link.
