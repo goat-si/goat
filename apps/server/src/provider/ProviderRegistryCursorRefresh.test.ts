@@ -14,6 +14,7 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
@@ -67,9 +68,9 @@ it("drops Cursor models a completed catalog read no longer returns", () => {
   );
 });
 
-it.effect(
-  "routes the next memory summary and new conflict away from Cursor on a capability update",
-  () =>
+it.effect.each(["before commit", "during the cache write"] as const)(
+  "routes memory away from Cursor and returns revoked capabilities when refresh pauses %s",
+  (pause) =>
     Effect.gen(function* () {
       const cursor = ProviderInstanceId.make("cursor");
       const codex = ProviderInstanceId.make("codex");
@@ -88,6 +89,10 @@ it.effect(
       const healthRefreshed = yield* Ref.make(false);
       const healthPublishStarted = yield* Deferred.make<void>();
       const releaseHealthPublish = yield* Deferred.make<void>();
+      const refreshedAt = "2026-10-30T00:01:00.000Z";
+      const pauseRefresh = Deferred.succeed(healthPublishStarted, undefined).pipe(
+        Effect.andThen(Deferred.await(releaseHealthPublish)),
+      );
       const makeInstance = (name: "cursor" | "codex", model: string) => {
         const instanceId = ProviderInstanceId.make(name);
         const driverKind = ProviderDriverKind.make(name);
@@ -104,6 +109,7 @@ it.effect(
           slashCommands: [],
           skills: [],
         } as const satisfies ServerProvider;
+        const refreshed = { ...snapshot, checkedAt: refreshedAt };
         const textGeneration = {
           ...fromRunner("fixture", () => Effect.die("Unexpected generation.")),
           memoryCapabilities: (name === "cursor"
@@ -133,8 +139,10 @@ it.effect(
                   packageName: null,
                 }),
               ),
-            getSnapshot: Effect.succeed(snapshot),
-            refresh: Ref.set(healthRefreshed, true).pipe(Effect.as(snapshot)),
+            getSnapshot: Ref.get(healthRefreshed).pipe(
+              Effect.map((changed) => (name === "cursor" && changed ? refreshed : snapshot)),
+            ),
+            refresh: Ref.set(healthRefreshed, true).pipe(Effect.as(refreshed)),
             streamChanges: Stream.empty,
             applyUsageLimits: () => Effect.void,
           },
@@ -161,9 +169,12 @@ it.effect(
                 return {
                   ...manifest,
                   current: Effect.gen(function* () {
-                    if ((yield* HoldHealthPublication) && (yield* Ref.get(healthRefreshed))) {
-                      yield* Deferred.succeed(healthPublishStarted, undefined);
-                      yield* Deferred.await(releaseHealthPublish);
+                    if (
+                      pause === "before commit" &&
+                      (yield* HoldHealthPublication) &&
+                      (yield* Ref.get(healthRefreshed))
+                    ) {
+                      yield* pauseRefresh;
                     }
                     return yield* manifest.current;
                   }),
@@ -173,7 +184,24 @@ it.effect(
             ServerConfig.layerTest(process.cwd(), { prefix: "goat-cursor-memory-update-" }),
           ),
         ),
-        Layer.provide(NodeServices.layer),
+        Layer.provide(
+          Layer.merge(
+            NodeServices.layer,
+            Layer.effect(
+              FileSystem.FileSystem,
+              Effect.map(FileSystem.FileSystem, (fs) => ({
+                ...fs,
+                writeFileString: (path, data, options) =>
+                  Effect.gen(function* () {
+                    if (pause === "during the cache write" && (yield* HoldHealthPublication)) {
+                      yield* pauseRefresh;
+                    }
+                    return yield* fs.writeFileString(path, data, options);
+                  }),
+              })),
+            ).pipe(Layer.provide(NodeServices.layer)),
+          ),
+        ),
       );
       yield* Effect.gen(function* () {
         const registry = yield* ProviderRegistry.ProviderRegistry;
@@ -186,6 +214,13 @@ it.effect(
           .refreshInstance(cursor)
           .pipe(Effect.provideService(HoldHealthPublication, true), Effect.forkScoped);
         yield* Deferred.await(healthPublishStarted);
+        if (pause === "during the cache write") {
+          const committed = (yield* registry.getProviders).find(
+            (provider) => provider.instanceId === cursor,
+          );
+          assert.equal(committed?.checkedAt, refreshedAt);
+          assert.deepEqual(committed?.memoryGeneration, { summary: true, conflict: true });
+        }
         yield* Ref.set(sandboxSupported, false);
         assert.equal((yield* hold.resolveModel(settings))?.instanceId, codex);
         assert.equal((yield* hold.resolveModel(settings, "conflict"))?.instanceId, codex);

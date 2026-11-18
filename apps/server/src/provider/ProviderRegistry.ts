@@ -250,6 +250,11 @@ export const layer = Layer.effect(
     const liveSubsRef = yield* Ref.make<ReadonlyMap<ProviderInstanceId, ProviderInstance>>(
       new Map(),
     );
+    const getProviders = Ref.get(providersRef).pipe(
+      Effect.map((providers) =>
+        applyProviderMemoryRevocations(providers, Ref.getUnsafe(liveSubsRef)),
+      ),
+    );
     const syncSemaphore = yield* Semaphore.make(1);
     const watchers = makeProviderSnapshotWatchers(serviceScope);
     const isCurrentInstance = (instance: ProviderInstance) =>
@@ -351,7 +356,7 @@ export const layer = Layer.effect(
             Effect.flatMap((current) => (current ? commit : Effect.undefined)),
             Effect.provideService(Scheduler.PreventSchedulerYield, true),
           );
-      if (committed === undefined) return yield* Ref.get(providersRef);
+      if (committed === undefined) return yield* getProviders;
       const [previousProviders, providers, providersToPersist] = committed;
 
       if (haveProvidersChanged(previousProviders, providers)) {
@@ -363,11 +368,11 @@ export const layer = Layer.effect(
         }
         if (options?.publish !== false) {
           // A newer upsert may have committed and published during the cache write; never republish an older array.
-          yield* PubSub.publish(changesPubSub, yield* Ref.get(providersRef));
+          yield* PubSub.publish(changesPubSub, yield* getProviders);
         }
       }
 
-      return providers;
+      return yield* getProviders;
     });
 
     // Assigned after refreshInstance is built; breaks the snapshot/refresh
@@ -387,7 +392,7 @@ export const layer = Layer.effect(
       instance: ProviderInstance,
       provider: ServerProvider,
     ) {
-      if (!(yield* isCurrentInstance(instance))) return yield* Ref.get(providersRef);
+      if (!(yield* isCurrentInstance(instance))) return yield* getProviders;
       const previous = (yield* Ref.get(providersRef)).find(
         (candidate) => candidate.instanceId === provider.instanceId,
       );
@@ -407,7 +412,7 @@ export const layer = Layer.effect(
         });
       }
       const providers = yield* upsertProviders([provider], { instance });
-      if (!(yield* isCurrentInstance(instance))) return providers;
+      if (!(yield* isCurrentInstance(instance))) return yield* getProviders;
       yield* GlobalSkillRegistry.refreshDependentAuth(
         previous,
         provider,
@@ -416,7 +421,7 @@ export const layer = Layer.effect(
         serviceScope,
       );
       yield* refreshCompatibility;
-      return providers;
+      return yield* getProviders;
     });
 
     const setProviderMaintenanceActionState = Effect.fn("setProviderMaintenanceActionState")(
@@ -436,7 +441,7 @@ export const layer = Layer.effect(
           return next;
         });
 
-        const existingProviders = yield* Ref.get(providersRef);
+        const existingProviders = yield* getProviders;
         const matchingProvider = existingProviders.find(
           (candidate) => candidate.instanceId === input.instanceId,
         );
@@ -454,7 +459,7 @@ export const layer = Layer.effect(
     const refreshOneSource = Effect.fn("refreshOneSource")(function* (instance: ProviderInstance) {
       const source = buildSnapshotSource(instance);
       const probe = yield* source.refresh.pipe(Effect.andThen(source.getSnapshot), Effect.exit);
-      if (!(yield* isCurrentInstance(instance))) return yield* Ref.get(providersRef);
+      if (!(yield* isCurrentInstance(instance))) return yield* getProviders;
       const snapshot = yield* probe;
       return yield* correlateSnapshotWithSource(source, snapshot).pipe(
         Effect.flatMap((provider) => syncProvider(instance, provider)),
@@ -499,7 +504,7 @@ export const layer = Layer.effect(
                   discard: true,
                 }),
               ),
-              Effect.andThen(Ref.get(providersRef)),
+              Effect.andThen(getProviders),
             ),
           )
           .pipe(
@@ -527,7 +532,7 @@ export const layer = Layer.effect(
       }
       yield* syncLiveSourcesAndContinue;
       const instance = (yield* Ref.get(liveSubsRef)).get(defaultInstanceIdForDriver(provider));
-      return instance ? yield* refreshOneSource(instance) : yield* Ref.get(providersRef);
+      return yield* instance ? refreshOneSource(instance) : getProviders;
     });
 
     const refreshInstance = Effect.fn("refreshInstance")(function* (
@@ -535,7 +540,7 @@ export const layer = Layer.effect(
     ) {
       yield* syncLiveSourcesAndContinue;
       const instance = (yield* Ref.get(liveSubsRef)).get(instanceId);
-      return instance ? yield* refreshOneSource(instance) : yield* Ref.get(providersRef);
+      return yield* instance ? refreshOneSource(instance) : getProviders;
     });
     refreshAuthDependents = GlobalSkillRegistry.makeRefreshAuthDependents(refreshInstance);
 
@@ -619,7 +624,7 @@ export const layer = Layer.effect(
       const refreshedInstanceIds = new Set(
         refreshedInstances.map((instance) => instance.instanceId),
       );
-      return (yield* Ref.get(providersRef)).filter((candidate) =>
+      return (yield* getProviders).filter((candidate) =>
         refreshedInstanceIds.has(candidate.instanceId),
       );
     });
@@ -781,7 +786,7 @@ export const layer = Layer.effect(
       yield* Effect.logError("provider registry refresh failed; preserving cached providers", {
         cause: Cause.pretty(cause),
       });
-      return yield* Ref.get(providersRef);
+      return yield* getProviders;
     });
 
     const updateProviders = (
@@ -796,7 +801,7 @@ export const layer = Layer.effect(
             ? PubSub.publish(changesPubSub, nextProviders)
             : Effect.void,
         ),
-        Effect.map(([, nextProviders]) => nextProviders),
+        Effect.andThen(getProviders),
       );
 
     const rescanGlobalSkills = globalSkills.rescan(updateProviders);
@@ -817,7 +822,7 @@ export const layer = Layer.effect(
           ),
         );
       }
-      const providers = yield* Ref.get(providersRef);
+      const providers = yield* getProviders;
       const provider = providers.find((candidate) => candidate.instanceId === input.instanceId);
       const workspaceSnapshotOf = (candidate: ServerProvider | undefined) =>
         candidate?.workspaceSnapshots?.find((s) => s.cwd === input.cwd);
@@ -843,7 +848,7 @@ export const layer = Layer.effect(
       const refreshMachineSnapshot = input.fresh
         ? (instance.invalidateCaches ?? Effect.void).pipe(
             Effect.andThen(refreshInstance(input.instanceId)),
-            Effect.andThen(Ref.get(providersRef)),
+            Effect.andThen(getProviders),
             Effect.map((current) =>
               workspaceSnapshotOf(
                 current.find((candidate) => candidate.instanceId === input.instanceId),
@@ -862,7 +867,7 @@ export const layer = Layer.effect(
         Effect.flatMap(({ scanBase, scopedSnapshot }) =>
           instanceRegistry.getInstance(input.instanceId).pipe(
             Effect.flatMap((currentInstance) => {
-              if (currentInstance !== instance) return Ref.get(providersRef);
+              if (currentInstance !== instance) return getProviders;
               return updateProviders((currentProviders) => {
                 // Read ownership inside the update so a newer claim cannot race publication.
                 if (Ref.getUnsafe(workspaceRefreshesRef).get(instance)?.get(input.cwd) !== token) {
@@ -918,7 +923,7 @@ export const layer = Layer.effect(
       );
       // Wait for the running scan: on-demand clients get its result only in this reply.
       if ("inFlight" in claim) {
-        return yield* Deferred.await(claim.inFlight).pipe(Effect.andThen(Ref.get(providersRef)));
+        return yield* Deferred.await(claim.inFlight).pipe(Effect.andThen(getProviders));
       }
       return yield* Fiber.join(claim.scan);
     });
@@ -952,11 +957,7 @@ export const layer = Layer.effect(
     });
 
     return {
-      getProviders: Ref.get(providersRef).pipe(
-        Effect.map((providers) =>
-          applyProviderMemoryRevocations(providers, Ref.getUnsafe(liveSubsRef)),
-        ),
-      ),
+      getProviders,
       rescanGlobalSkills,
       refresh: (provider?: ProviderDriverKind) =>
         refresh(provider).pipe(Effect.catchCause(recoverRefreshFailure)),
