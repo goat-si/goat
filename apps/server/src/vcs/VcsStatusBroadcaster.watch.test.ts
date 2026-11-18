@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
@@ -266,5 +267,52 @@ describe("VCS HEAD watchers", () => {
         yield* Deferred.await(first.sawRef("two"));
       }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+  it.effect("a HEAD watch ends when its git directory is removed", () =>
+    Effect.gen(function* () {
+      const gitDir = "/repo/.git/worktrees/feature";
+      const events = yield* Queue.unbounded<FileSystem.WatchEvent>();
+      const closed = yield* Deferred.make<void>();
+      let gitDirExists = true;
+      const state: Parameters<typeof layerTestFor>[0] = {
+        currentLocalStatus: { ...baseLocalStatus, refName: "main" },
+        currentRemoteStatus: null,
+        localStatusCalls: 0,
+        remoteStatusCalls: 0,
+        localInvalidationCalls: 0,
+        remoteInvalidationCalls: 0,
+        headPath: `${gitDir}/HEAD`,
+        fileSystem: FileSystem.makeNoop({
+          realPath: (target) => Effect.succeed(target),
+          exists: (target) => Effect.succeed(target !== gitDir || gitDirExists),
+          watch: (_target, options) =>
+            Stream.fromQueue(events).pipe(
+              Stream.onStart(Effect.sync(() => options?.onReady?.())),
+              Stream.ensuring(Deferred.succeed(closed, undefined)),
+            ),
+        }),
+      };
+
+      yield* Effect.gen(function* () {
+        const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+        const branches = yield* Stream.toPull(broadcaster.streamBranchStatus({ cwd: "/repo" }));
+        assert.deepEqual(yield* branches, [{ refName: "main", isRepo: true }]);
+
+        // Every checkout removes HEAD.lock, which leaves the watch running.
+        state.currentLocalStatus = { ...baseLocalStatus, refName: "other" };
+        yield* Queue.offer(events, { _tag: "Remove", path: "HEAD.lock" });
+        yield* Queue.offer(events, { _tag: "Update", path: "HEAD" });
+        assert.deepEqual(yield* branches, [{ refName: "other", isRepo: true }]);
+
+        // `git worktree remove` deletes the watched directory; Windows keeps reporting it.
+        gitDirExists = false;
+        state.currentLocalStatus = { ...baseLocalStatus, isRepo: false, refName: null };
+        yield* Queue.offer(events, { _tag: "Remove", path: gitDir });
+        assert.deepEqual(yield* branches, [{ refName: null, isRepo: false }]);
+        yield* Deferred.await(closed);
+        assert.strictEqual(state.localStatusCalls, 0);
+        assert.strictEqual(state.remoteStatusCalls, 0);
+      }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);
+    }),
   );
 });

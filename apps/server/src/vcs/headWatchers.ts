@@ -37,13 +37,21 @@ export const makeHeadWatchers = Effect.fn("VcsStatusBroadcaster.makeHeadWatchers
   const watchHead = Effect.fnUntraced(function* (cwd: string, ready: Deferred.Deferred<void>) {
     const headPath = yield* headPathFor(cwd);
     if (headPath === null) return;
+    const headDirectory = path.dirname(headPath);
     // Git replaces HEAD by renaming HEAD.lock, which a watch on the file itself would lose.
     yield* fs
-      .watch(path.dirname(headPath), {
+      .watch(headDirectory, {
         onReady: () => Deferred.doneUnsafe(ready, Exit.void),
       })
       .pipe(
-        Stream.filter((event) => path.basename(event.path) === "HEAD"),
+        // Windows can keep reporting removals after the watched directory is gone.
+        Stream.mapEffect((event) =>
+          event._tag === "Remove"
+            ? fs.exists(headDirectory).pipe(Effect.map((exists) => ({ event, removed: !exists })))
+            : Effect.succeed({ event, removed: false }),
+        ),
+        Stream.takeUntil(({ removed }) => removed),
+        Stream.filter(({ event, removed }) => removed || path.basename(event.path) === "HEAD"),
         // A rebase moves HEAD many times; refresh once for whatever arrived during a refresh.
         Stream.buffer({ capacity: 1, strategy: "sliding" }),
         Stream.runForEach(() =>
