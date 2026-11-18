@@ -513,11 +513,30 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       const { runtime, thread } = yield* resumed([
         out("session.prompt", { sessionID: SESSION, text: "<any>" }),
         promptAccepted,
+        event("session.retry.scheduled", {
+          sessionID: SESSION,
+          assistantMessageID: "msg_retry",
+          attempt: 2,
+          at: 2_001,
+          error,
+        }),
         event("session.execution.failed", { sessionID: SESSION, error }),
       ]);
-      const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+      const collected = yield* runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
       yield* runtime.startTurn(turnInput(thread));
-      const ended = yield* Fiber.join(terminal);
+      const seen = yield* Fiber.join(collected);
+      const retry = seen.find(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "error",
+      );
+      assert.deepInclude(retry?.turnItem, {
+        status: "running",
+        failure: { class: failureClass, code: error.type, message: error.message, retryable: true },
+      });
+      const ended = seen.find((event) => event.type === "turn.terminal");
       assert.equal(ended?.status, "failed");
       assert.deepEqual(ended?.failure, {
         class: failureClass,

@@ -52,7 +52,7 @@ import {
   subagentOutput,
   isContinuation,
   wakeTurnId,
-  claudeUsageLimit,
+  providerUsageLimit,
   boundaryAfter,
   promptOf,
   sessionOfEvent,
@@ -1752,21 +1752,14 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           return yield* endExecution(state, turn, { status: "interrupted" });
         case "session.execution.failed": {
           const { type, message, status, response } = event.data.error;
-          // OpenCode types an empty balance as provider.quota too, but it answers
-          // that with HTTP 402 and it never resets. Usage windows and budgets are 429.
-          const claudeLimit =
-            type === "provider.unknown" && status !== 402 ? claudeUsageLimit(message) : undefined;
-          const usageLimit =
-            (type === "provider.quota" && status !== 402) ||
-            (type === "provider.rate-limit" && status !== 402) ||
-            claudeLimit !== undefined;
+          const limit = providerUsageLimit(event.data.error);
           return yield* endExecution(state, turn, {
             status: "failed",
             failure: makeProviderFailure({
               message: readableProviderErrorMessage(message, status, response?.body),
               code: type,
-              class: usageLimit ? "usage_limit" : "provider_error",
-              resetAt: claudeLimit?.resetAt ?? null,
+              class: limit === undefined ? "provider_error" : "usage_limit",
+              resetAt: limit?.resetAt ?? null,
             }),
           });
         }
