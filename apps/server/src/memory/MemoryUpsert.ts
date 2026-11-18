@@ -1,5 +1,9 @@
 import type { MemoryRefusedSaveHook } from "./MemoryRemember.ts";
-import { bindPendingSuggestion, suggestionForgetGeneration } from "./store/SaveSuggestions.ts";
+import {
+  acceptingSuggestionOperation,
+  bindPendingSuggestion,
+  suggestionForgetGeneration,
+} from "./store/SaveSuggestions.ts";
 import { floorWriteId } from "./store/FloorWrites.ts";
 import { hubReceiptCodec } from "./store/StoreCodecs.ts";
 import * as M from "@goat/contracts";
@@ -96,6 +100,7 @@ export const makeUpsert = (deps: {
     remember?: { readonly allowUnverified: boolean },
     acceptance?: MemorySuggestionAcceptance,
     captureRefusal?: (candidate: Omit<Refusal, "reason">) => void,
+    followOperationId?: M.MemoryOperationId,
   ) {
     const value = yield* decode(decodeUpsert(input, strict));
     return yield* store.transact(
@@ -112,7 +117,19 @@ export const makeUpsert = (deps: {
             }),
           ),
         );
-        const prior = yield* store.receipt(value.memorySpaceId, value.operationId);
+        const accepting =
+          followOperationId ??
+          (remember && sourceThread && !value.expectedHeads.length
+            ? yield* acceptingSuggestionOperation(
+                sql,
+                value.memorySpaceId,
+                value.memoryId,
+                sourceThread,
+              )
+            : undefined);
+        const operationId = accepting ?? value.operationId;
+        const joined = operationId !== value.operationId;
+        const prior = yield* store.receipt(value.memorySpaceId, operationId);
         if (prior) {
           const rows = yield* sql<{
             request_digest: string | null;
@@ -120,16 +137,16 @@ export const makeUpsert = (deps: {
           }>`
             SELECT json_extract(compact_json,'$.upsertRequestDigest') AS request_digest,
               json_extract(compact_json,'$.originEnvironmentId') AS origin_environment_id
-            FROM memory_compact_receipts WHERE space=${value.memorySpaceId} AND operation_id=${value.operationId}
+            FROM memory_compact_receipts WHERE space=${value.memorySpaceId} AND operation_id=${operationId}
             UNION ALL SELECT json_extract(metadata_json,'$.revision.provenance.upsertRequestDigest') AS request_digest,origin_environment_id
-            FROM memory_events WHERE memory_space_id=${value.memorySpaceId} AND operation_id=${value.operationId} LIMIT 1`.pipe(
+            FROM memory_events WHERE memory_space_id=${value.memorySpaceId} AND operation_id=${operationId} LIMIT 1`.pipe(
             Effect.mapError(
               (cause) => new Store.MemoryStorageError({ stage: "upsert-replay", cause }),
             ),
           );
           if (
             rows[0]?.origin_environment_id !== environmentId ||
-            rows[0]?.request_digest !== requestDigest
+            (!joined && rows[0]?.request_digest !== requestDigest)
           )
             return yield* new Store.MemoryStoreConflict({ code: "operation_id_reused" });
           // Receipt recovery precedes the new-write lineage fence and dependency reads.
@@ -144,7 +161,7 @@ export const makeUpsert = (deps: {
               acknowledged.outcome === "rejected"
                 ? null
                 : M.MemoryRevisionId.make(
-                    stableUuid(`${value.memorySpaceId}:${value.operationId}:revision`),
+                    stableUuid(`${value.memorySpaceId}:${operationId}:revision`),
                   ),
             pendingSync: false,
             ...(acknowledged.failureCode ? { failureCode: acknowledged.failureCode } : {}),
@@ -156,10 +173,10 @@ export const makeUpsert = (deps: {
           };
           return { operationDigest: prior.operationDigest, receipt };
         }
-        const workId = floorWriteId(value.memorySpaceId, value.operationId);
+        const workId = floorWriteId(value.memorySpaceId, operationId);
         const staged = yield* store.readWork(workId);
         if (staged && "authorityFirst" in staged.metadata && staged.metadata.authorityFirst) {
-          if (staged.metadata.revision?.provenance.upsertRequestDigest !== requestDigest)
+          if (!joined && staged.metadata.revision?.provenance.upsertRequestDigest !== requestDigest)
             return yield* new Store.MemoryStoreConflict({ code: "operation_id_reused" });
           const [row] = yield* sql<{ completed_receipt_json: string | null }>`
             SELECT completed_receipt_json FROM memory_outbox WHERE id=${workId}`.pipe(
@@ -183,7 +200,7 @@ export const makeUpsert = (deps: {
           return {
             operationDigest: staged.metadata.authorityFirst,
             receipt: {
-              operationId: value.operationId,
+              operationId,
               memoryId: value.memoryId,
               outcome: terminal?.outcome ?? ("accepted" as const),
               revisionId: null,
@@ -191,6 +208,7 @@ export const makeUpsert = (deps: {
             },
           };
         }
+        if (joined) return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
         yield* requireScope(value.scope);
         const space = value.memorySpaceId;
         const limit = yield* closureCap(space);
@@ -350,10 +368,18 @@ export const makeUpsert = (deps: {
     return yield* Effect.gen(function* () {
       const staged = yield* stage;
       if (!deps.submitFloorWrite || !waiting(staged)) return staged;
-      stagedOperationId = input.operationId;
+      stagedOperationId = staged.receipt.operationId;
       yield* permit;
       yield* deps.submitFloorWrite;
-      const settled = yield* stage;
+      const settled = yield* write(
+        input,
+        permit,
+        sourceThread,
+        remember,
+        undefined,
+        capture,
+        stagedOperationId,
+      );
       if (waiting(settled))
         return yield* new Store.MemoryStoreConflict({ code: "hub_unavailable" });
       return settled;

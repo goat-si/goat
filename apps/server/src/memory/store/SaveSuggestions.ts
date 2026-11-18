@@ -24,6 +24,23 @@ export const suggestionForgetGeneration = Effect.fn("MemorySuggestions.forgetGen
   },
 );
 
+export const acceptingSuggestionOperation = Effect.fn("MemorySuggestions.acceptingOperation")(
+  function* (
+    sql: SqlClient.SqlClient,
+    space: M.MemorySpaceId,
+    memoryId: M.MemoryId,
+    origin: M.ScopedThreadRef,
+  ) {
+    const [row] = yield* stored(
+      "suggestion-accepting-operation",
+      sql<{ accept_operation_id: M.MemoryOperationId }>`SELECT accept_operation_id
+      FROM memory_save_suggestions WHERE space=${space} AND id=${memoryId} AND state='accepting'
+        AND origin_environment_id=${origin.environmentId} AND origin_thread_id=${origin.threadId}`,
+    );
+    return row?.accept_operation_id;
+  },
+);
+
 export const bindPendingSuggestion = Effect.fn("MemorySuggestions.bindPending")(function* (
   sql: SqlClient.SqlClient,
   { memorySpaceId: space, memoryId, operationId }: M.MemoryOperation,
