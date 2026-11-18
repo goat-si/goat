@@ -1,3 +1,4 @@
+import { makeHubAcknowledgement } from "./MemoryHubAcknowledgement.ts";
 import * as NodeUtil from "node:util";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- stable server-owned hashes.
 import * as NodeCrypto from "node:crypto";
@@ -350,6 +351,14 @@ const make = Effect.fnUntraced(function* (
     effect.pipe(
       Effect.mapError((cause) => new Store.MemoryStorageError({ stage: "service-read", cause })),
     );
+  const readBoundMemoryHubId = Effect.fn("MemoryService.readBoundMemoryHubId")(function* (
+    space: M.MemorySpaceId,
+  ) {
+    const { settings } = yield* committedSettings.read;
+    if (settings.mode === "disabled" || settings.memorySpaceId !== space)
+      return yield* new MemoryAccessError({ code: "bootstrap_required" });
+    return settings.mode === "hub" ? environmentId : settings.hubEnvironmentId;
+  });
   const requireSharing = Effect.fnUntraced(function* (space: M.MemorySpaceId) {
     const binding = yield* committedSettings.read;
     if (binding.settings.mode === "disabled" || binding.settings.memorySpaceId !== space)
@@ -638,6 +647,29 @@ const make = Effect.fnUntraced(function* (
         }
         if (admission.kind !== "approvedReplica") yield* requireImportNotSuppressed(op);
         const decision = yield* decide(current, op, admission, approval, ancestry);
+        if (
+          admission.kind === "localIntent" &&
+          op.kind === "upsert" &&
+          M.requiresMemoryFloor2(op)
+        ) {
+          if (!(yield* store.hubFloorActive(op.memorySpaceId)))
+            return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
+          return yield* quota.withAdmission(
+            { operation: op, admission, environmentId, receipt: decision.receipt },
+            Effect.andThen(permit, store.stageFloorWrite(op)).pipe(
+              Effect.as({
+                operationDigest: digest,
+                receipt: { ...decision.receipt, revisionId: null, pendingSync: true },
+              }),
+            ),
+          );
+        }
+        if (
+          admission.kind === "approvedReplica" &&
+          M.requiresMemoryFloor2(op) &&
+          !(yield* store.hubFloorActive(op.memorySpaceId))
+        )
+          return yield* new Store.MemoryStoreConflict({ code: "unsupported_protocol" });
         return yield* quota.commit(decision, environmentId, permit);
       }).pipe(
         Effect.tap(() =>
@@ -1186,6 +1218,7 @@ const make = Effect.fnUntraced(function* (
     store,
     environmentId,
     requireSharing,
+    readBoundMemoryHubId,
     requireCaller,
     requireScope,
     apply,
@@ -1541,9 +1574,21 @@ const make = Effect.fnUntraced(function* (
         yield* validateSummaryDependencies(value.memorySpaceId, original.payload).pipe(
           Effect.provideService(SqlClient.SqlClient, sql),
         );
+        const unverified = !(yield* store.areAutomaticallyUsable(value.memorySpaceId, [
+          original.revision.revisionId,
+        ]));
+        if (unverified && !(yield* store.hubFloorActive(value.memorySpaceId)))
+          return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
+        const forgetFence = unverified
+          ? yield* store.readCursor(
+              value.memorySpaceId,
+              yield* readBoundMemoryHubId(value.memorySpaceId),
+            )
+          : undefined;
         const revisionId = M.MemoryRevisionId.make(memoryStableUuid(`${value.operationId}:revert`));
         const operation = {
           protocolVersion: 1 as const,
+          ...(forgetFence === undefined ? {} : { forgetFence }),
           kind: "revert" as const,
           memorySpaceId: value.memorySpaceId,
           memoryId: value.memoryId,
@@ -1559,20 +1604,12 @@ const make = Effect.fnUntraced(function* (
             operationId: value.operationId,
             parents: value.expectedHeads,
             payloadRef: revisionId,
-            provenance: { environmentId },
+            provenance: { environmentId, ...(unverified ? { unverified: true as const } : {}) },
             createdAtUtc: M.MemoryUtcTimestamp.make(DateTime.formatIso(DateTime.makeUnsafe(now))),
           },
         };
         yield* requireMemoryTailFit(operation);
         yield* store.stageRevertIntent({ requestDigest: hash(encodeRevert(value)), operation });
-        if (
-          !(yield* store.areAutomaticallyUsable(value.memorySpaceId, [
-            original.revision.revisionId,
-          ]))
-        )
-          yield* markUnverified(value.memorySpaceId, revisionId).pipe(
-            Effect.provideService(SqlClient.SqlClient, sql),
-          );
         return { ...result, status: "pending" as const };
       }),
     );
@@ -2470,146 +2507,9 @@ const make = Effect.fnUntraced(function* (
       }),
     );
   });
-  const reconcileResolutionSubmission: MemoryService["Service"]["reconcileResolutionSubmission"] =
-    Effect.fn("MemoryService.reconcileResolutionSubmission")(function* (input) {
-      return yield* store.transact(
-        Effect.gen(function* () {
-          yield* input.reauthorize;
-          const result = yield* store.reconcileResolutionSubmissionTx(input);
-          if (!result || result.outcome !== "admitted") return result;
-          const operation = result.row.submission!.operation;
-          yield* settleHubEntryTx({
-            memorySpaceId: input.ownership.memorySpaceId,
-            hubEnvironmentId: input.hubEnvironmentId,
-            localEnvironmentId: input.localEnvironmentId,
-            entry: {
-              kind: "operation",
-              operation,
-              receipt: result.receipt,
-              hubSequence: result.receipt.hubSequence!,
-            },
-          });
-          yield* input.reauthorize;
-          const row = yield* store.transitionResolutionTicketTx({
-            ownership: { ...input.ownership, version: result.row.version },
-            now: input.now,
-            nextState: "terminal",
-            ownedUntil: null,
-            nextAttemptAt: input.now,
-          });
-          if (!row) return yield* new Store.MemoryStoreConflict({ code: "fenced" });
-          return { ...result, row };
-        }),
-      );
-    });
-  const settleHubAcknowledgement: MemoryService["Service"]["settleHubAcknowledgement"] = Effect.fn(
-    "MemoryService.settleHubAcknowledgement",
-  )(function* (input) {
-    const receipt = yield* decode(decodeHubReceipt(input.receipt, strict));
-    return yield* store.transact(
-      Effect.gen(function* () {
-        yield* input.reauthorize;
-        const work = yield* store.readWork(input.workId);
-        if (
-          !work ||
-          work.space !== input.memorySpaceId ||
-          !("operationId" in work.metadata) ||
-          work.metadata.operationId !== input.operation.operationId ||
-          receipt.operationId !== input.operation.operationId ||
-          receipt.operationDigest !== input.operation.operationDigest ||
-          work.memoryId !== receipt.memoryId
-        )
-          return yield* new Store.MemoryStoreConflict({ code: "identity_mismatch" });
-        const stored = yield* store.receipt(input.memorySpaceId, input.operation.operationId);
-        const operation = yield* store.readWorkOperation(input.workId);
-        if (
-          (stored && stored.operationDigest !== input.operation.operationDigest) ||
-          (operation && memoryOperationDigest(operation) !== input.operation.operationDigest)
-        )
-          return yield* new Store.MemoryStoreConflict({ code: "operation_id_reused" });
-        if (!stored && !operation)
-          return yield* new Store.MemoryStoreConflict({ code: "identity_mismatch" });
-        if (receipt.hubSequence === null) {
-          if (receipt.outcome !== "rejected") return yield* invalid();
-          yield* store.acknowledgeOutbox(input.workId, receipt);
-          return {
-            receipt,
-            incorporated: false,
-            intent: work.kind === "revert_intent" ? ("rejected" as const) : ("none" as const),
-          };
-        }
-        if (
-          !M.validateMemoryResolutionApproval(
-            work.metadata.kind === "resolve" ? "resolve" : (operation?.kind ?? "upsert"),
-            operation?.kind === "resolve"
-              ? operation.resolution.resolutionId
-              : work.metadata.kind === "resolve"
-                ? work.metadata.resolution?.resolutionId
-                : null,
-            receipt,
-          )
-        )
-          return yield* new Store.MemoryStoreConflict({ code: "unsupported_protocol" });
-        if (operation)
-          return yield* settleHubEntryTx({
-            ...input,
-            entry: { kind: "operation", operation, receipt, hubSequence: receipt.hubSequence },
-          });
-        if (!("protocolVersion" in work.metadata)) return yield* invalid();
-        const meta = work.metadata;
-        const resolutionId =
-          meta.kind === "resolve"
-            ? meta.resolution?.resolutionId
-            : meta.kind === "revert"
-              ? meta.revertsResolutionId
-              : null;
-        const compactReceipt: M.MemoryCompactReceipt = {
-          memorySpaceId: input.memorySpaceId,
-          originEnvironmentId: meta.originEnvironmentId,
-          operationKind: meta.kind,
-          ...(meta.kind === "upsert" && meta.revision?.provenance.upsertRequestDigest !== undefined
-            ? { upsertRequestDigest: meta.revision.provenance.upsertRequestDigest }
-            : {}),
-          receipt,
-          revisionId:
-            receipt.outcome === "rejected" || meta.kind === "forget"
-              ? null
-              : (meta.revision?.revisionId ?? null),
-          resolutionId: resolutionId ?? null,
-          revertsResolutionId: meta.kind === "revert" ? (resolutionId ?? null) : null,
-          attemptId: meta.kind === "resolve" ? meta.operationId : null,
-          fencingToken: meta.kind === "resolve" ? (meta.fencingToken ?? null) : null,
-          reportGuard:
-            resolutionId && receipt.outcome !== "rejected"
-              ? {
-                  reportId: Store.resolutionReportId(
-                    input.memorySpaceId,
-                    meta.operationId,
-                    resolutionId,
-                  ),
-                  resolvingEnvironmentId: meta.originEnvironmentId,
-                  resolutionId,
-                  outcome: meta.kind === "resolve" ? "resolved" : "reverted",
-                }
-              : null,
-        };
-        return yield* settleHubEntryTx({
-          ...input,
-          entry: {
-            kind: "metadata",
-            operationKind: work.metadata.kind,
-            compactReceipt,
-            ...(meta.revision ? { revision: meta.revision } : {}),
-            memoryId: receipt.memoryId,
-            receipt,
-            hubSequence: receipt.hubSequence,
-            ...(work.metadata.kind === "resolve" && work.metadata.resolution
-              ? { resolutionId: work.metadata.resolution.resolutionId }
-              : {}),
-          },
-        });
-      }),
-    );
+  const { reconcileResolutionSubmission, settleHubAcknowledgement } = makeHubAcknowledgement({
+    store,
+    settleHubEntryTx,
   });
   return MemoryService.of({
     consumeReturned: (space, thread, pairs) =>

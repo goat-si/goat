@@ -33,6 +33,7 @@ import { makeResolutionTickets } from "./store/ResolutionTickets.ts";
 import { makeReports } from "./store/Reports.ts";
 import { makeCheckpoints } from "./store/Checkpoints.ts";
 import { makeLocalIntents } from "./store/LocalIntents.ts";
+import { makeFloorWrites } from "./store/FloorWrites.ts";
 import { makeHubFloor } from "./store/HubFloor.ts";
 import { makeHubMembership } from "./store/HubMembership.ts";
 import { makeHubUsage } from "./store/HubUsage.ts";
@@ -414,6 +415,7 @@ const make = Effect.gen(function* () {
     retireFrozenClaimTx,
     advanceBootstrapTx,
     ...makeHubFloor(kernel),
+    ...makeFloorWrites(kernel, itemWrites),
     readHubMembers,
     readHubMember,
     findHubMemberByCredential,

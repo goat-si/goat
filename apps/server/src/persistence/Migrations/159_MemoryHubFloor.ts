@@ -9,4 +9,12 @@ export default Effect.gen(function* () {
     space TEXT PRIMARY KEY,
     last_forget_sequence INTEGER NOT NULL
   )`;
+  // Compacted V1 forget receipts can already be gone at first negotiation.
+  yield* sql`INSERT INTO memory_space_counters(space,last_forget_sequence)
+    SELECT space, max(sequence) FROM (
+      SELECT space,checkpoint_sequence AS sequence FROM memory_hub_retention
+      UNION ALL
+      SELECT space,hub_sequence FROM memory_hub_operations
+      WHERE json_extract(entry_json,'$.receipt.outcome')='deleted'
+    ) GROUP BY space`;
 });

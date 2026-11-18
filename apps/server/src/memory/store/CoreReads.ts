@@ -685,9 +685,9 @@ export const makeCoreReads = (kernel: Pick<StoreKernel, "sql" | "transact">) => 
       sql<WorkRow>`SELECT * FROM memory_outbox WHERE id=${id} AND kind IN ('sync','resolve','revert_intent')`,
     );
     const work = (yield* workRows(rows))[0];
-    return work && "protocolVersion" in work.metadata
-      ? yield* operationFromMetadata(work.metadata)
-      : undefined;
+    if (!work || !("protocolVersion" in work.metadata)) return undefined;
+    const { authorityFirst: _authorityFirst, ...metadata } = work.metadata;
+    return yield* operationFromMetadata(metadata);
   });
   return {
     receipt,

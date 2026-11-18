@@ -1,3 +1,5 @@
+import { floorWriteId } from "./store/FloorWrites.ts";
+import { hubReceiptCodec } from "./store/StoreCodecs.ts";
 import * as M from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -12,11 +14,7 @@ import {
   requireClosureCapacity,
   validateSummaryDependencies,
 } from "./MemoryDependencies.ts";
-import {
-  areAutomaticallyUsable,
-  markUnverified,
-  recordMemoryOrigin,
-} from "./MemoryRevisionMarks.ts";
+import { areAutomaticallyUsable, recordMemoryOrigin } from "./MemoryRevisionMarks.ts";
 import { matchesActivePersonWords } from "./MemoryPersonWords.ts";
 import { redactMemoryText } from "./MemorySecretScanner.ts";
 import type { MemoryAccessError, MemoryServiceError } from "./MemoryService.ts";
@@ -40,6 +38,9 @@ export const makeUpsert = (deps: {
   readonly sql: SqlClient.SqlClient;
   readonly store: Store.MemoryStore["Service"];
   readonly environmentId: M.EnvironmentId;
+  readonly readBoundMemoryHubId: (
+    space: M.MemorySpaceId,
+  ) => Effect.Effect<M.EnvironmentId, MemoryServiceError>;
   readonly requireSharing: (space: M.MemorySpaceId) => Permit;
   readonly requireCaller: (sourceThread?: M.ScopedThreadRef) => Permit;
   readonly requireScope: (scope: M.MemoryScope) => Permit;
@@ -56,6 +57,7 @@ export const makeUpsert = (deps: {
     store,
     environmentId,
     requireSharing,
+    readBoundMemoryHubId,
     requireCaller,
     requireScope,
     apply,
@@ -121,6 +123,40 @@ export const makeUpsert = (deps: {
           };
           return { operationDigest: prior.operationDigest, receipt };
         }
+        const workId = floorWriteId(value.memorySpaceId, value.operationId);
+        const staged = yield* store.readWork(workId);
+        if (staged && "authorityFirst" in staged.metadata && staged.metadata.authorityFirst) {
+          if (staged.metadata.revision?.provenance.upsertRequestDigest !== requestDigest)
+            return yield* new Store.MemoryStoreConflict({ code: "operation_id_reused" });
+          const [row] = yield* sql<{ completed_receipt_json: string | null }>`
+            SELECT completed_receipt_json FROM memory_outbox WHERE id=${workId}`.pipe(
+            Effect.mapError(
+              (cause) => new Store.MemoryStorageError({ stage: "floor-write-replay", cause }),
+            ),
+          );
+          const terminal = row?.completed_receipt_json
+            ? yield* hubReceiptCodec.decode(row.completed_receipt_json, strict)
+            : undefined;
+          if (terminal?.outcome === "rejected")
+            return yield* new Store.MemoryStoreConflict({
+              code: terminal.failureCode ?? "invalid_output",
+            });
+          if (staged.status === "cancelled")
+            return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
+          const pending = yield* store.readWorkOperation(workId);
+          return {
+            operationDigest:
+              terminal?.operationDigest ??
+              (pending ? hash(M.encodeMemoryOperation(pending)) : requestDigest),
+            receipt: {
+              operationId: value.operationId,
+              memoryId: value.memoryId,
+              outcome: "accepted" as const,
+              revisionId: null,
+              pendingSync: !terminal,
+            },
+          };
+        }
         yield* requireScope(value.scope);
         const space = value.memorySpaceId;
         const limit = yield* closureCap(space);
@@ -185,9 +221,23 @@ export const makeUpsert = (deps: {
           );
           yield* validateSummaryDependencies(space, payload);
         }
+        const marked =
+          unverified ||
+          !(yield* areAutomaticallyUsable(
+            space,
+            heads.map((head) => head.revision.revisionId),
+          ));
+        if (marked && limit === M.MEMORY_DERIVED_REVISIONS_MAX_V1)
+          return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
+        const origin = remember && !current?.identity ? sourceThread : undefined;
+        const wide = payload.derivedFromMemoryRevisions.length > M.MEMORY_DERIVED_REVISIONS_MAX_V1;
+        const forgetFence = marked
+          ? yield* store.readCursor(space, yield* readBoundMemoryHubId(space))
+          : undefined;
         const op: M.MemoryOperation = {
           protocolVersion: 1,
           kind: "upsert",
+          ...(forgetFence === undefined ? {} : { forgetFence }),
           memorySpaceId: value.memorySpaceId,
           memoryId: value.memoryId,
           operationId: value.operationId,
@@ -203,7 +253,12 @@ export const makeUpsert = (deps: {
             parents: value.expectedHeads,
             scope: value.scope,
             assertionKind: value.assertionKind,
-            provenance: { environmentId, upsertRequestDigest: requestDigest },
+            provenance: {
+              environmentId,
+              upsertRequestDigest: requestDigest,
+              ...(marked ? { unverified: true as const } : {}),
+              ...(origin && (marked || wide) ? { originThreadId: origin.threadId } : {}),
+            },
             createdAtUtc: M.MemoryUtcTimestamp.make(
               DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
             ),
@@ -211,18 +266,8 @@ export const makeUpsert = (deps: {
           payload,
         };
         const result = yield* apply(op, Store.localIntent, permit);
-        if (result.receipt.outcome !== "rejected") {
-          if (remember && !current?.identity && sourceThread)
-            yield* recordMemoryOrigin(space, value.memoryId, sourceThread);
-          if (
-            unverified ||
-            !(yield* areAutomaticallyUsable(
-              space,
-              heads.map((head) => head.revision.revisionId),
-            ))
-          )
-            yield* markUnverified(space, revisionId);
-        }
+        if (result.receipt.outcome !== "rejected" && origin && !M.requiresMemoryFloor2(op))
+          yield* recordMemoryOrigin(space, value.memoryId, origin);
         return result;
       }).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
     );

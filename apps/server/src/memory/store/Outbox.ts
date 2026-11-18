@@ -209,6 +209,14 @@ export const makeOutbox = (
             submissionState: "rejected",
           }).pipe(Effect.catchTags({ MemoryCapacityError: () => Effect.void }));
         }
+        if ("authorityFirst" in work.metadata && work.metadata.authorityFirst && work.payloadRef)
+          yield* stored(
+            "floor-remove-staged-body",
+            sql`
+            DELETE FROM memory_payloads WHERE space=${work.space} AND payload_ref=${work.payloadRef}
+            AND NOT EXISTS (SELECT 1 FROM memory_revisions r WHERE r.space=memory_payloads.space
+              AND r.payload_ref=memory_payloads.payload_ref)`,
+          );
         if (result.outcome === "rejected" && work.kind === "revert_intent") {
           yield* stored(
             "revert-refusal-terminal",
