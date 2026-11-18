@@ -5,7 +5,11 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import type { DesktopUpdateCheckResult, DesktopUpdateState } from "@goat/contracts";
+import type {
+  DesktopUpdateActionResult,
+  DesktopUpdateCheckResult,
+  DesktopUpdateState,
+} from "@goat/contracts";
 
 import * as Electron from "electron";
 import { vi } from "vite-plus/test";
@@ -61,21 +65,26 @@ const layerElectronApp = Layer.succeed(ElectronApp.ElectronApp, {
 
 interface MenuServices {
   readonly checkResult?: DesktopUpdateCheckResult;
+  readonly installResult?: DesktopUpdateActionResult;
+  readonly answerMessageBox?: (options: Electron.MessageBoxOptions) => number;
   readonly shownMessageBox?: Deferred.Deferred<Electron.MessageBoxOptions>;
 }
 
-const layerElectronDialog = ({ shownMessageBox }: MenuServices) =>
+const layerElectronDialog = ({ shownMessageBox, answerMessageBox }: MenuServices) =>
   Layer.succeed(ElectronDialog.ElectronDialog, {
     pickFolder: () => Effect.succeedNone,
     pickFiles: () => Effect.succeed([]),
     showMessageBox: (options) =>
       (shownMessageBox ? Deferred.succeed(shownMessageBox, options) : Effect.void).pipe(
-        Effect.as({ response: options.cancelId ?? 0, checkboxChecked: false }),
+        Effect.map(() => ({
+          response: answerMessageBox?.(options) ?? options.cancelId ?? 0,
+          checkboxChecked: false,
+        })),
       ),
     showErrorBox: () => Effect.void,
   } satisfies ElectronDialog.ElectronDialog["Service"]);
 
-const layerDesktopUpdates = ({ checkResult }: MenuServices) =>
+const layerDesktopUpdates = ({ checkResult, installResult }: MenuServices) =>
   Layer.succeed(DesktopUpdates.DesktopUpdates, {
     getState: Effect.die("unexpected getState"),
     isActionActive: Effect.succeed(false),
@@ -88,7 +97,7 @@ const layerDesktopUpdates = ({ checkResult }: MenuServices) =>
     setChannel: () => Effect.die("unexpected setChannel"),
     check: () => (checkResult ? Effect.succeed(checkResult) : Effect.die("unexpected check")),
     download: Effect.die("unexpected download"),
-    install: Effect.die("unexpected install"),
+    install: installResult ? Effect.succeed(installResult) : Effect.die("unexpected install"),
     installPrepared: () => Effect.die("unexpected installPrepared"),
   } satisfies DesktopUpdates.DesktopUpdates["Service"]);
 
@@ -152,7 +161,10 @@ const configureMenu = (
     ),
   );
 
-const checkForUpdatesFromMacMenu = (state: Partial<DesktopUpdateState>) =>
+const checkForUpdatesFromMacMenu = (
+  state: Partial<DesktopUpdateState>,
+  services: MenuServices = {},
+) =>
   Effect.gen(function* () {
     const applicationMenuTemplate =
       yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
@@ -175,6 +187,7 @@ const checkForUpdatesFromMacMenu = (state: Partial<DesktopUpdateState>) =>
           },
         },
         shownMessageBox,
+        ...services,
       },
     );
 
@@ -386,6 +399,50 @@ describe("DesktopApplicationMenu", () => {
         downloadPercent: 100,
       });
       assert.include(`${dialog.title ?? ""} ${dialog.message} ${dialog.detail ?? ""}`, "0.1.7");
+    }),
+  );
+  it.effect.each([
+    { name: "warns after a refused restart", accepted: false, errorContext: "install" },
+    { name: "warns after an accepted replacement fails", accepted: true, errorContext: "download" },
+    { name: "lets an accepted restart proceed silently", accepted: true, errorContext: null },
+  ] as const)("$name", ({ accepted, errorContext }) =>
+    Effect.gen(function* () {
+      const dialogs: Electron.MessageBoxOptions[] = [];
+      const message = "Desktop update check on channel latest did not finish within 2 minutes.";
+      const downloaded = {
+        ...createInitialDesktopUpdateState(
+          "0.1.5",
+          { hostArch: "arm64", appArch: "arm64", runningUnderArm64Translation: false },
+          "latest",
+        ),
+        enabled: true,
+        status: "downloaded" as const,
+        availableVersion: "0.1.7",
+        downloadedVersion: "0.1.7",
+      };
+      yield* checkForUpdatesFromMacMenu(downloaded, {
+        installResult: {
+          accepted,
+          completed: false,
+          state: {
+            ...downloaded,
+            errorContext,
+            canRetry: errorContext !== null,
+            message: errorContext ? message : null,
+          },
+        },
+        answerMessageBox: (options) => {
+          dialogs.push(options);
+          return 0;
+        },
+      });
+      assert.deepEqual(dialogs[0]?.buttons, ["Restart", "Later"]);
+      if (errorContext === null) {
+        assert.lengthOf(dialogs, 1);
+      } else {
+        assert.equal(dialogs[1]?.type, "warning");
+        assert.equal(dialogs[1]?.detail, message);
+      }
     }),
   );
 });
