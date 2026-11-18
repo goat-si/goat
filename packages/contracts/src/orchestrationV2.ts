@@ -1,3 +1,5 @@
+import { OrchestrationV2ThreadLaunchWorkspaceStrategy } from "./orchestrationV2Launch.ts";
+export { OrchestrationV2ThreadLaunchWorkspaceStrategy } from "./orchestrationV2Launch.ts";
 export { isOrchestrationV2WorkActive } from "./orchestrationV2WorkActive.ts";
 import { PiExtensionStatuses } from "./piExtensionStatus.ts";
 import {
@@ -672,26 +674,6 @@ export const OrchestrationV2RunBackgroundWorkCancelled = Schema.Struct({
 });
 export type OrchestrationV2RunBackgroundWorkCancelled =
   typeof OrchestrationV2RunBackgroundWorkCancelled.Type;
-
-export const OrchestrationV2ThreadLaunchWorkspaceStrategy = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal("root"),
-    branch: Schema.optional(TrimmedNonEmptyString),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("existing_worktree"),
-    worktreePath: TrimmedNonEmptyString,
-    branch: Schema.optional(TrimmedNonEmptyString),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("worktree"),
-    baseRef: TrimmedNonEmptyString,
-    branch: Schema.optional(TrimmedNonEmptyString),
-    startFromOrigin: Schema.optional(Schema.Boolean),
-  }),
-]);
-export type OrchestrationV2ThreadLaunchWorkspaceStrategy =
-  typeof OrchestrationV2ThreadLaunchWorkspaceStrategy.Type;
 
 export const ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE = "workspace_preparation_failed";
 
