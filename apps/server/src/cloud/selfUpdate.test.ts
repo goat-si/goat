@@ -381,6 +381,32 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server self upda
       }),
   );
 
+  it.effect(
+    "stages a boot-service update while busy without draining or requesting a restart",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness({ activity: () => "busy" });
+        const staged = yield* h.selfUpdate.update({ targetVersion: "1.1.0", stageOnly: true });
+        expect(staged).toEqual({ targetVersion: "1.1.0", method: "boot-service" });
+        expect(h.order).toEqual(["download", "extract", "preflight"]);
+        expect(yield* h.selfUpdate.isUpdating).toBe(false);
+      }),
+  );
+
+  it.effect("refuses stage-only for a desktop-managed back end without preparing the app", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ mode: "desktop" });
+      const failure = yield* h.selfUpdate
+        .update({
+          targetVersion: "1.1.0",
+          stageOnly: true,
+        })
+        .pipe(Effect.flip);
+      expect(failure.reason).toContain("Background preparation requires a launcher-managed server");
+      expect(h.order).toEqual([]);
+    }),
+  );
+
   it.effect("background preparation refuses a checksum mismatch before preflight or handoff", () =>
     Effect.gen(function* () {
       const h = yield* makeHarness({ corruptChecksum: true });

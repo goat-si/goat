@@ -1,9 +1,11 @@
 import { makeFiniteRequestGuard } from "@goat/provider-core/server/finiteProviderRequest";
 import * as Deferred from "effect/Deferred";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
 import * as EffectAcpErrors from "effect-acp/errors";
+import type * as EffectAcpSchema from "effect-acp/compat";
 import type { AcpSessionRequestLogEvent } from "./AcpSessionRuntime.ts";
 
 export const makeAcpRequestRunner = Effect.fn("AcpRequestDeadline.make")(function* (options: {
@@ -67,3 +69,29 @@ export const makeAcpRequestRunner = Effect.fn("AcpRequestDeadline.make")(functio
     );
   });
 });
+
+export const completeAcpSessionLoad = Effect.fn("AcpSessionRuntime.completeLoad")(
+  (
+    response: Effect.Effect<EffectAcpSchema.LoadSessionResponse, EffectAcpErrors.AcpError>,
+    timeout: Duration.Duration,
+    replayIdle?: Effect.Effect<EffectAcpSchema.LoadSessionResponse>,
+  ) =>
+    (replayIdle === undefined ? response : Effect.raceFirst(response, replayIdle)).pipe(
+      Effect.timeoutOption(timeout),
+      Effect.flatMap((result) =>
+        Effect.fromOption(
+          result,
+          () =>
+            new EffectAcpErrors.AcpTransportError({
+              operation: "call-rpc",
+              method: "session/load",
+              detail:
+                replayIdle === undefined
+                  ? "session/load timed out waiting for RPC response"
+                  : "session/load timed out waiting for RPC response or replay idle gap",
+              cause: undefined,
+            }),
+        ),
+      ),
+    ),
+);

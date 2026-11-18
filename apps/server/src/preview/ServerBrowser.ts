@@ -44,7 +44,6 @@ import {
   type PreviewAutomationScrollInput,
   type PreviewAutomationSelectInput,
   type PreviewAutomationSetColorSchemeInput,
-  type PreviewAutomationSnapshotInput,
   type PreviewAutomationStatus,
   type PreviewAutomationTypeInput,
   type PreviewAutomationUploadInput,
@@ -106,6 +105,7 @@ import {
   captureFinalRecordingFrame,
   encodeFinalFrame,
 } from "./ServerBrowserRecordingFinal.ts";
+import { snapshotCaptureOptions } from "./snapshotOptions.ts";
 import { awaitRevealedViewer, viewerArrived } from "./ServerBrowserRevealWait.ts";
 import { saveRecording } from "./ServerBrowserRecordingExport.ts";
 import {
@@ -370,6 +370,7 @@ const make = Effect.gen(function* () {
   const contexts = new ServerBrowserContexts({
     profilesDir: NodePath.join(config.stateDir, "server-browser", "profiles"),
     executable: () => runPromise(previewBrowser.executable),
+    chromeVersion: previewBrowser.managedReleaseVersion,
     // Playwright's launch error drops Chrome's own output; its sandbox note survives.
     diagnose: (executable, cause) =>
       Effect.runPromiseWith(launchServices)(
@@ -1659,7 +1660,12 @@ const make = Effect.gen(function* () {
                   force: reveal === true,
                 }),
               );
-              shown = awaitRevealedViewer(tab, reveal, deadlineMs);
+              shown = awaitRevealedViewer(tab, reveal, deadlineMs, (timeout) =>
+                desktopChannel.awaitShown && desktopChannel.isShown?.(tab) === false
+                  ? runPromise(desktopChannel.awaitShown(tab, timeout), { signal: actionSignal })
+                  : Promise.resolve(false),
+              );
+              void shown.catch(constVoid);
             }
             await checkOpenBlocked(
               () => blockedTabs.assertTab(tab, request.runId, url),
@@ -1843,7 +1849,7 @@ const make = Effect.gen(function* () {
   ) => {
     signal?.throwIfAborted();
     const input = request.input;
-    await secretFill.guard(tab, request);
+    const mayMeasure = await secretFill.guard(tab, request, tab.desktop === null);
     signal?.throwIfAborted();
     ServerBrowserScreen.assertScreenExpectation(tab, request);
     const actionGate = (destination?: string) =>
@@ -1939,10 +1945,9 @@ const make = Effect.gen(function* () {
               {
                 ...tab,
                 renderScale: tab.desktop ? "display" : RENDER_SCALE,
-                ...(input as PreviewAutomationSnapshotInput & { fullScreenshot?: boolean }),
+                ...snapshotCaptureOptions(request, mayMeasure),
                 agentSessionId: request.agentSessionId,
                 actionChannel: actionGate().channel,
-                captureImage: (input as { readonly captureImage?: boolean }).captureImage !== false,
                 timeoutMs: deadlineMs - performance.now(),
               },
               timing,
