@@ -21,6 +21,7 @@ import {
   PreviewAutomationTabNotFoundError,
   PreviewAutomationTargetNotEditableError,
   PreviewAutomationTimeoutError,
+  PreviewAutomationSnapshotStages,
   PreviewAutomationUnsupportedClientError,
   PreviewTabId,
   type PreviewAutomationError,
@@ -58,6 +59,7 @@ export interface PreviewAutomationInvokeInput {
   /** Code-mode new-tab creation cannot select an older host without the exact expectation gate. */
   readonly serverHostOnly?: boolean;
   readonly timeoutMs?: number;
+  readonly measureSnapshotFrame?: boolean;
   /** Background metadata reads must not change the agent's current tab. */
   readonly updateCurrentTab?: boolean;
   readonly onTargetTab?: (tabId: PreviewTabId | undefined) => void;
@@ -238,6 +240,8 @@ function remoteDetailKind(detail: unknown): RemoteDetailKind {
   }
 }
 
+const decodeSnapshotStages = Schema.decodeUnknownOption(PreviewAutomationSnapshotStages);
+
 const readRemoteTimeoutMs = (detail: unknown): number | undefined => {
   if (typeof detail !== "object" || detail === null || !("timeoutMs" in detail)) return undefined;
   const timeoutMs = detail.timeoutMs;
@@ -367,6 +371,15 @@ const classifyResponseError = (
     }
     case "PreviewAutomationTimeoutError": {
       const remoteTimeoutMs = readRemoteTimeoutMs(error.detail);
+      const pendingStages = decodeSnapshotStages(
+        remoteTimeoutMs !== undefined &&
+          context.operation === "snapshot" &&
+          typeof error.detail === "object" &&
+          error.detail !== null &&
+          "pendingStages" in error.detail
+          ? error.detail.pendingStages
+          : undefined,
+      );
       const interceptedBy =
         typeof error.detail === "object" &&
         error.detail !== null &&
@@ -381,6 +394,7 @@ const classifyResponseError = (
         ...remoteDiagnostics,
         ...notSent,
         ...(interceptedBy ? { interceptedBy } : {}),
+        ...(Option.isSome(pendingStages) ? { pendingStages: pendingStages.value } : {}),
         ...(context.clientId === SERVER_BROWSER_AUTOMATION_CLIENT_ID && remoteReason !== undefined
           ? { reason: remoteReason.slice(0, MAX_REASON_CHARS) }
           : {}),
@@ -797,6 +811,9 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
             ...(runId === undefined ? {} : { runId }),
             operation: input.operation,
             input: input.input,
+            ...(connection.inProcess && input.operation === "snapshot" && input.measureSnapshotFrame
+              ? { measureSnapshotFrame: true }
+              : {}),
             timeoutMs,
           },
         }).pipe(Effect.map((offered) => [offered, current] as const));

@@ -14,6 +14,7 @@ import * as NodeHttp from "node:http";
 import * as ProcessRunner from "../processRunner.ts";
 import * as BootService from "./bootService.ts";
 import { pinnedRuntimePaths } from "./pinnedRuntime.ts";
+import { serviceStateActiveVersion } from "./serviceProtocol.ts";
 
 const macInstallerPath =
   "/opt/homebrew/bin:/Users/sam/.npm-global/bin:/Users/sam/.nvm/versions/node/v22.16.0/bin:/usr/bin:/bin";
@@ -48,6 +49,7 @@ export const makeHarness = Effect.fn("test.make_boot_service_harness")(function*
   const control: {
     failCommand: string | undefined;
     stateAfterStop?: string;
+    stateOnActivate?: string;
     linger: string | undefined;
     managerReachable: boolean;
     busNeedsRuntimeDir: boolean;
@@ -58,6 +60,8 @@ export const makeHarness = Effect.fn("test.make_boot_service_harness")(function*
     /** When false, a start command returns success but the server never answers. */
     answers: boolean;
     answeredVersion: string | undefined;
+    reportedVersion?: string;
+    readinessRequests: number;
   } = {
     failCommand: undefined,
     linger: "yes",
@@ -69,6 +73,7 @@ export const makeHarness = Effect.fn("test.make_boot_service_harness")(function*
     startLimitHit: false,
     answers: true,
     answeredVersion: undefined,
+    readinessRequests: 0,
   };
   const readinessServer = NodeHttp.createServer((request, response) => {
     if (
@@ -127,8 +132,18 @@ export const makeHarness = Effect.fn("test.make_boot_service_harness")(function*
           const contents = yield* fs.readFileString(unitFile).pipe(Effect.option);
           if (Option.isNone(contents)) return;
           const served = BootService.bootServiceBaseDirOf(contents.value);
-          const version = /versions\/([^/]+)\/goat/.exec(contents.value)?.[1];
-          if (served === undefined || version === undefined) return;
+          if (served === undefined) return;
+          const version =
+            control.stateOnActivate === undefined
+              ? /versions\/([^/]+)\/goat/.exec(contents.value)?.[1]
+              : serviceStateActiveVersion(control.stateOnActivate);
+          if (version === undefined) return;
+          if (control.stateOnActivate !== undefined) {
+            yield* fs.writeFileString(
+              path.join(served, "runtime", "service-state.json"),
+              control.stateOnActivate,
+            );
+          }
           control.answeredVersion = version;
           control.active = true;
           const runtimePath = path.join(served, "userdata", "server-runtime.json");
@@ -238,12 +253,15 @@ export const makeHarness = Effect.fn("test.make_boot_service_harness")(function*
             HttpClient.make((request) =>
               Effect.suspend(() => {
                 const url = String(request.url);
+                if (url.includes("/.well-known/goat/environment")) control.readinessRequests++;
                 return url.includes("/.well-known/goat/environment") &&
                   control.answeredVersion !== undefined
                   ? Effect.succeed(
                       HttpClientResponse.fromWeb(
                         request,
-                        Response.json({ serverVersion: control.answeredVersion }),
+                        Response.json({
+                          serverVersion: control.reportedVersion ?? control.answeredVersion,
+                        }),
                       ),
                     )
                   : Effect.die(`no release download expected: ${url}`);

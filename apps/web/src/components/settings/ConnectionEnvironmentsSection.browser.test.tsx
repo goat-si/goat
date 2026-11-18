@@ -346,7 +346,7 @@ it("keeps thread jump chords inside the SSH host suggestions", async () => {
   expect(state.connectSshEnvironment).not.toHaveBeenCalled();
   await act(async () => button("Connect", dialog).click());
   expect(state.connectSshEnvironment).toHaveBeenCalledWith(
-    expect.objectContaining({ target: expect.objectContaining({ alias: "devbox" }) }),
+    expect.objectContaining({ target: expect.objectContaining({ alias: "devbox", port: null }) }),
   );
 });
 

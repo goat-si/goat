@@ -41,7 +41,6 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import {
   buildTemporaryWorktreeBranchName,
@@ -59,6 +58,7 @@ import * as ProviderAdapters from "./ProviderAdapterRegistry.ts";
 import { isCloudExecution } from "@goat/provider-core/server/cloudTask";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
+import { ThreadLaunchWorkspaceMissingError } from "./threadLaunchWorkspaceMissing.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as EventSink from "./EventSink.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
@@ -74,7 +74,13 @@ import {
   withPreparationLog,
 } from "./preparationLog.ts";
 import { confirmLaunchStep, type LaunchConfirm } from "./goat/LaunchConfirm.ts";
-import { classifyPreparationFailure } from "./goat/PreparationFailure.ts";
+import { checkedOutTo, submoduleProgress } from "./goat/worktreeSubmoduleProgress.ts";
+import {
+  failureDetail,
+  preparationFailureClass,
+  ThreadLaunchError,
+} from "./goat/ThreadLaunchError.ts";
+export { preparationFailureClass, ThreadLaunchError } from "./goat/ThreadLaunchError.ts";
 import { makeLaunchCommandSlots } from "./goat/launchCommandSlots.ts";
 import {
   preparationRunStopped,
@@ -164,54 +170,7 @@ export interface ThreadLaunchResult {
   readonly sequence?: number;
 }
 
-export class ThreadLaunchError extends Schema.TaggedError<ThreadLaunchError>()(
-  "ThreadLaunchError",
-  {
-    operation: Schema.Literals([
-      "resolve-project",
-      "read-receipt",
-      "generate-metadata",
-      "provision-worktree",
-      "run-setup-script",
-      "create-thread",
-      "update-thread",
-      "dispatch-message",
-      "release-run",
-      "fail-run",
-    ]),
-    commandId: CommandId,
-    projectId: ProjectId,
-    threadId: Schema.optional(ThreadId),
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Thread launch ${this.commandId} failed during ${this.operation}.`;
-  }
-}
-
-/**
- * An agent or server launch named a folder that is gone from this machine, such as a
- * project whose checkout was deleted or never cloned here. Refused before any thread exists.
- */
-export class ThreadLaunchWorkspaceMissingError extends Schema.TaggedError<ThreadLaunchWorkspaceMissingError>()(
-  "ThreadLaunchWorkspaceMissingError",
-  {
-    projectId: ProjectId,
-    projectTitle: Schema.String,
-    /** `project` is the project's own folder; `worktree` an existing worktree the launch named. */
-    kind: Schema.Literals(["project", "worktree"]),
-    path: Schema.String,
-    /** The project's remote, when GOAT still knows it, so a caller can clone it back. */
-    remoteUrl: Schema.NullOr(Schema.String),
-  },
-) {
-  override get message(): string {
-    return this.kind === "project"
-      ? `Project "${this.projectTitle}" points at ${this.path}, which does not exist on this machine. No thread was created.`
-      : `Worktree ${this.path} of project "${this.projectTitle}" does not exist on this machine. No thread was created.`;
-  }
-}
+export { ThreadLaunchWorkspaceMissingError };
 
 export class ThreadLaunchService extends Context.Service<
   ThreadLaunchService,
@@ -250,20 +209,6 @@ export class ThreadLaunchService extends Context.Service<
     readonly prepareRun: (input: ThreadLaunchPreparationInput) => Effect.Effect<void>;
   }
 >()("goat/orchestration-v2/ThreadLaunchService") {}
-
-const isThreadLaunchError = Schema.is(ThreadLaunchError);
-
-function failureDetail(error: unknown): string {
-  if (isThreadLaunchError(error)) {
-    const cause = error.cause;
-    const detail = cause instanceof Error ? cause.message : String(cause);
-    return `Workspace preparation failed during ${error.operation.replaceAll("-", " ")}: ${detail}`;
-  }
-  return `Workspace preparation failed: ${error instanceof Error ? error.message : String(error)}`;
-}
-
-export const preparationFailureClass = (error: unknown) =>
-  classifyPreparationFailure(isThreadLaunchError(error) ? error.cause : error);
 
 const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
@@ -425,7 +370,7 @@ const make = Effect.gen(function* () {
         threadId,
         branch: input.workspaceStrategy.branch ?? null,
         baseRef: input.workspaceStrategy.baseRef,
-        stages: ["fetch", "checkout", "setup-script", "agent"],
+        stages: ["fetch", "checkout", "submodules", "setup-script", "agent"],
         fiber: yield* Effect.fiber,
       });
     } else if (reused !== undefined) {
@@ -468,6 +413,7 @@ const make = Effect.gen(function* () {
               modelSelection,
             })
             .pipe(
+              Effect.provideService(TextGeneration.TextGenerationProject, input.projectId),
               Effect.map((result) => ({
                 branch: result.branch,
                 exactName: settings.branchNamingMode === "custom",
@@ -603,6 +549,7 @@ const make = Effect.gen(function* () {
                   Effect.sync(() => {
                     worktreesDirectoryNotice = `Used the default folder: ${configured} ${describeWorktreesDirectoryUnavailable(unavailable.reason)}`;
                   }),
+                ...submoduleProgress(setupTracker, threadId),
                 onCheckoutProgress: (progress) =>
                   setupTracker.stage(threadId, "checkout", { percent: progress.percent }),
                 onHookStarted: (hookName) =>
@@ -640,7 +587,7 @@ const make = Effect.gen(function* () {
         if (existingBranchNotice !== null) {
           yield* Effect.logInfo(existingBranchNotice, { threadId, worktreePath });
         }
-        yield* setupTracker.update(threadId, (snapshot) => ({ ...snapshot, worktreePath, branch }));
+        yield* setupTracker.update(threadId, checkedOutTo(worktreePath, branch));
         const checkoutWarning = worktreesDirectoryNotice ?? hookStallNotice;
         yield* checkoutWarning === null
           ? setupTracker.stageStatus(

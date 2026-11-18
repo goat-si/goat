@@ -23,6 +23,8 @@ import {
 } from "./toolPresentation.ts";
 import type { makeTaskTextSnapshots } from "./taskTextSnapshots.ts";
 
+export const MAX_CURSOR_STREAMED_OUTPUT_CHARS = 256 * 1024;
+
 export function makeCursorTurnProjection(
   derive: IdAllocatorV2Derive,
   path: Path.Path,
@@ -281,7 +283,9 @@ export function makeCursorTurnProjection(
       | "completedAt"
       | "updatedAt"
     >;
-    const outputText = cursorToolOutputText(toolCall) || active.streamedOutput;
+    const outputText =
+      cursorToolOutputText(toolCall) ||
+      active.streamedOutput.slice(-MAX_CURSOR_STREAMED_OUTPUT_CHARS);
     let turnItem: OrchestrationV2TurnItem;
     switch (toolCall.type) {
       case "shell":

@@ -4,6 +4,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
 import type { ProviderSnapshotSource } from "./builtInProviderCatalog.ts";
+import { markAwaitingFirstCheck } from "./providerGenerationSnapshot.ts";
 import {
   hydrateCachedProvider,
   isCachedProviderCorrelated,
@@ -75,7 +76,10 @@ export const loadBootProviderSnapshots = Effect.fn("ProviderRegistry.loadBootPro
                   cachedDriver: cachedProvider.driver ?? null,
                 }).pipe(Effect.as(placeholder));
               }
-              return Effect.succeed(hydrateCachedProvider(correlation));
+              const hydrated = hydrateCachedProvider(correlation);
+              return Effect.succeed(
+                placeholder === undefined ? hydrated : markAwaitingFirstCheck(hydrated),
+              );
             }),
           );
         }),

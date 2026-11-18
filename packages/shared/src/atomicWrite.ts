@@ -18,19 +18,23 @@ const LOCKED_RENAME_RETRIES = 20;
 const LOCKED_RENAME_RETRY_DELAY = "100 millis";
 const CHUNK_WRITE_LENGTH = 1 << 20;
 
-/** Resolves symlink targets before renaming so writes preserve the link. Iterable contents stream in bounded batches. */
+/** Preserves symlinks by default. Iterable contents stream in bounded batches. */
 export const writeFileStringAtomically = (input: {
   readonly filePath: string;
   readonly contents: string | Iterable<string>;
-  /** Requires an exclusive writer and reserves the resolved destination's `.staging` sibling. */
+  /** Requires an exclusive writer and reserves the destination's `.staging` sibling. */
   readonly reuseStagingFile?: true;
+  /** Stages beside the configured path and renames over a symlink at that path. */
+  readonly replaceSymlink?: true;
 }) =>
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const platform = yield* HostProcess.Platform;
-      const targetPath = yield* resolveSymlinkTarget(input.filePath);
+      const targetPath = input.replaceSymlink
+        ? path.resolve(input.filePath)
+        : yield* resolveSymlinkTarget(input.filePath);
       const targetDirectory = path.dirname(targetPath);
 
       yield* fs.makeDirectory(targetDirectory, { recursive: true });
@@ -82,7 +86,9 @@ export const writeFileStringAtomically = (input: {
       if (platform !== "win32") return yield* fs.rename(tempPath, targetPath);
 
       // Stop retrying if another save changes the target; read-only targets also return permanent EPERM.
-      const targetVersion = fs.stat(targetPath).pipe(
+      const targetVersion = (
+        input.replaceSymlink ? fs.lstat(targetPath) : fs.stat(targetPath)
+      ).pipe(
         Effect.map((info) => ({
           id: `${Option.getOrUndefined(info.ino)}:${info.size}:${Option.getOrUndefined(info.mtime)?.getTime()}`,
           readOnly: (info.mode & 0o200) === 0,

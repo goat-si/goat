@@ -12,8 +12,6 @@ import type {
 } from "@ff-labs/fff-node";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as LayerMap from "effect/LayerMap";
 import * as Schema from "effect/Schema";
 
 import type {
@@ -29,6 +27,10 @@ import * as HostProcess from "@goat/shared/HostProcess";
 
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { isNonRepositoryGitStderr } from "../vcs/gitNonRepository.ts";
+import { isWholeWordRange, mapContentMatchRanges } from "./workspaceContentMatchRanges.ts";
+import { searchContentsWithGit } from "./workspaceGitContentSearch.ts";
+import { makeIgnoreFileDecider } from "./workspaceIgnoreFiles.ts";
+import { makeSymlinkScan, mergeSymlinkMatches } from "./workspaceSymlinkScan.ts";
 
 // fff-node's native library stays external; single-executables require disk packages instead of importing them.
 const requireForFff = NodeModule.createRequire(import.meta.url);
@@ -38,7 +40,6 @@ const WORKSPACE_INDEX_MAX_ENTRIES = 25_000;
 const WORKSPACE_INDEX_PAGE_SIZE = WORKSPACE_INDEX_MAX_ENTRIES + 2;
 const WORKSPACE_INDEX_SCAN_TIMEOUT = "15 seconds";
 const WORKSPACE_INDEX_SCAN_TIMEOUT_MS = 15_000;
-const WORKSPACE_INDEX_IDLE_TTL = "15 minutes";
 const CONTENT_SEARCH_TIME_BUDGET_MS = 250;
 const CONTENT_SEARCH_MAX_MATCHES_PER_FILE = 100;
 
@@ -119,7 +120,10 @@ export class WorkspaceSearchIndex extends Context.Service<
     ) => Effect.Effect<ProjectSearchEntriesResult, WorkspaceSearchIndexSearchFailed>;
     readonly searchContents: (
       input: Omit<ProjectSearchContentsInput, "cwd">,
-    ) => Effect.Effect<ProjectSearchContentsResult, WorkspaceSearchIndexSearchFailed>;
+    ) => Effect.Effect<
+      ProjectSearchContentsResult,
+      WorkspaceSearchIndexScanTimedOut | WorkspaceSearchIndexSearchFailed
+    >;
     readonly refresh: () => Effect.Effect<void, WorkspaceSearchIndexRefreshFailed>;
   }
 >()("goat/workspace/WorkspaceSearchIndex") {}
@@ -221,21 +225,6 @@ function mapMixedSearchResult(
   };
 }
 
-const WORD_CHARACTER = /[\p{Letter}\p{Mark}\p{Number}_]/u;
-
-function codePointAt(line: string, index: number): string | undefined {
-  const codePoint = line.codePointAt(index);
-  return codePoint === undefined ? undefined : String.fromCodePoint(codePoint);
-}
-
-function codePointBefore(line: string, index: number): string | undefined {
-  if (index <= 0) return undefined;
-  const previousCodeUnit = line.charCodeAt(index - 1);
-  const previousIndex =
-    previousCodeUnit >= 0xdc00 && previousCodeUnit <= 0xdfff ? index - 2 : index - 1;
-  return codePointAt(line, previousIndex);
-}
-
 function buildContentSearchQuery(input: Omit<ProjectSearchContentsInput, "cwd">): {
   readonly searchQuery: string;
   readonly regexMode: boolean;
@@ -246,37 +235,6 @@ function buildContentSearchQuery(input: Omit<ProjectSearchContentsInput, "cwd">)
   return input.useRegex
     ? { searchQuery: `(?i)${input.query}`, regexMode: true }
     : { searchQuery: input.query.toLowerCase(), regexMode: false };
-}
-
-function mapContentMatchRanges(
-  line: string,
-  byteRanges: ReadonlyArray<readonly [number, number]>,
-): Array<{ readonly start: number; readonly end: number }> {
-  const lineBytes = Buffer.from(line);
-  const toStringIndex = (byteOffset: number) => lineBytes.subarray(0, byteOffset).toString().length;
-  return byteRanges.map(([startByte, endByte]) => ({
-    start: toStringIndex(startByte),
-    end: toStringIndex(endByte),
-  }));
-}
-
-// Post-filter whole words: consuming boundary regexes swallow adjacent separators and widen ranges; \b misses punctuation edges.
-function isWholeWordRange(
-  line: string,
-  range: { readonly start: number; readonly end: number },
-): boolean {
-  if (range.end <= range.start) return false;
-  const isWord = (character: string | undefined) =>
-    character !== undefined && WORD_CHARACTER.test(character);
-  const leftIsBoundary =
-    range.start === 0 ||
-    !isWord(codePointBefore(line, range.start)) ||
-    !isWord(codePointAt(line, range.start));
-  const rightIsBoundary =
-    range.end >= line.length ||
-    !isWord(codePointAt(line, range.end)) ||
-    !isWord(codePointBefore(line, range.end));
-  return leftIsBoundary && rightIsBoundary;
 }
 
 function withDirectoryAncestors(entries: ReadonlyArray<ProjectEntry>): ProjectEntry[] {
@@ -293,12 +251,15 @@ function withDirectoryAncestors(entries: ReadonlyArray<ProjectEntry>): ProjectEn
   return [...entryByPath.values()];
 }
 
-// fff applies .gitignore files only; Git also ignores paths from .git/info/exclude and the global excludes file.
-const listGitIgnoredPaths = Effect.fn("WorkspaceSearchIndex.listGitIgnoredPaths")(function* (
+// Git also lists exclusions from .git/info/exclude and the global excludes file.
+const loadGitIgnoredPaths = Effect.fn("WorkspaceSearchIndex.listGitIgnoredPaths")(function* (
   vcsProcess: VcsProcess.VcsProcess["Service"],
   cwd: string,
   hostIsWindows: boolean,
 ) {
+  const ignored = new Set<string>();
+  const reincluded: string[] = [];
+  const paths = { ignored, reincluded };
   const result = yield* vcsProcess
     .run({
       operation: "WorkspaceSearchIndex.listGitIgnoredPaths",
@@ -328,7 +289,7 @@ const listGitIgnoredPaths = Effect.fn("WorkspaceSearchIndex.listGitIgnoredPaths"
         ).pipe(Effect.as(null)),
       ),
     );
-  if (result === null) return new Set<string>();
+  if (result === null) return paths;
   if (result.exitCode !== 0 || result.stdoutTruncated || result.stderrTruncated) {
     if (result.exitCode === 0 || !isNonRepositoryGitStderr(result.stderr)) {
       yield* Effect.logWarning("Could not list Git ignored paths; continuing without them.", {
@@ -336,14 +297,17 @@ const listGitIgnoredPaths = Effect.fn("WorkspaceSearchIndex.listGitIgnoredPaths"
         exitCode: result.exitCode,
       });
     }
-    return new Set<string>();
+    return paths;
   }
-  return new Set(
-    result.stdout
-      .split("\0")
-      .filter((entry) => entry.length > 0)
-      .map((entry) => trimDirectorySeparator(toPosixPath(entry, hostIsWindows))),
-  );
+  const decide = makeIgnoreFileDecider(cwd);
+  for (const entry of result.stdout.split("\0")) {
+    if (entry === "") continue;
+    const relative = toPosixPath(entry, hostIsWindows);
+    const path = trimDirectorySeparator(relative);
+    if ((yield* decide(path, relative.endsWith("/"))) === "included") reincluded.push(relative);
+    else ignored.add(path);
+  }
+  return paths;
 });
 
 function mixedItemPath(item: MixedItem): string {
@@ -430,36 +394,38 @@ const waitForIndexReady = Effect.fn("WorkspaceSearchIndex.waitForIndexReady")(fu
 export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
   cwd: string,
   variant: WorkspaceSearchIndexVariant = "paths",
+  onDestroyFailure: Effect.Effect<void> = Effect.void,
 ) {
   const hostIsWindows = yield* HostProcess.isWindows;
   const finder = yield* Effect.acquireRelease(createFinder(cwd, variant), (finder) =>
-    Effect.try({
-      try: () => finder.destroy(),
+    Effect.tryPromise({
+      try: () => finder.destroyAsync(),
       catch: (cause) => new WorkspaceSearchIndexDestroyFailed({ cwd, cause }),
-    }).pipe(Effect.orDie),
+    }).pipe(Effect.catch((cause) => Effect.andThen(onDestroyFailure, Effect.die(cause)))),
   );
   let initialScanTimedOut = false;
   const vcsProcess = yield* VcsProcess.VcsProcess;
-  let ignoredPaths = yield* listGitIgnoredPaths(vcsProcess, cwd, hostIsWindows);
-  yield* waitForIndexReady(
-    cwd,
-    finder,
-    ({ reason, cause }) =>
-      new WorkspaceSearchIndexCreateFailed({
-        cwd,
-        reason,
-        cause,
+  let gitIgnore = yield* loadGitIgnoredPaths(vcsProcess, cwd, hostIsWindows);
+  if (variant === "paths") {
+    yield* waitForIndexReady(
+      cwd,
+      finder,
+      ({ reason, cause }) =>
+        new WorkspaceSearchIndexCreateFailed({
+          cwd,
+          reason,
+          cause,
+        }),
+    ).pipe(
+      Effect.catchTags({
+        WorkspaceSearchIndexScanTimedOut: () =>
+          Effect.sync(() => {
+            initialScanTimedOut = true;
+          }),
       }),
-  ).pipe(
-    Effect.catchTags({
-      WorkspaceSearchIndexScanTimedOut: (error) =>
-        variant === "paths"
-          ? Effect.sync(() => {
-              initialScanTimedOut = true;
-            })
-          : Effect.fail(error),
-    }),
-  );
+    );
+  }
+  let contentIndexPending = variant === "content";
 
   // fff's isScanning takes the picker lock too, so progress is read off the JS thread.
   const isScanning = Effect.promise(async () => {
@@ -501,6 +467,14 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
     return result.value;
   });
 
+  const { listSymlinkEntries, invalidateSymlinkScan, filterIndexed } = yield* makeSymlinkScan({
+    finder,
+    cwd,
+    isScanning,
+    toPosix: (relativePath) => toPosixPath(relativePath, hostIsWindows),
+    isIgnored: (relativePath) => isIgnoredPath(gitIgnore.ignored, relativePath, hostIsWindows),
+  });
+
   // Grows the first page until hidden entries can no longer crowd visible ones out of it.
   const searchVisible = Effect.fn("WorkspaceSearchIndex.searchVisible")(function* <I>(
     query: string,
@@ -513,6 +487,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
     while (true) {
       const fetchSize = size;
       const result = yield* runSearch(query, fetchSize, operation, () => execute(fetchSize));
+      const ignoredPaths = gitIgnore.ignored;
       if (ignoredPaths.size === 0) return result;
       const items = result.items.filter(
         (item) => !isIgnoredPath(ignoredPaths, pathOf(item), hostIsWindows),
@@ -562,7 +537,8 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
           cause,
         }),
     ).pipe(Effect.catchTags({ WorkspaceSearchIndexScanTimedOut: () => Effect.void }));
-    ignoredPaths = yield* listGitIgnoredPaths(vcsProcess, cwd, hostIsWindows);
+    gitIgnore = yield* loadGitIgnoredPaths(vcsProcess, cwd, hostIsWindows);
+    invalidateSymlinkScan();
   });
 
   const list: WorkspaceSearchIndex["Service"]["list"] = Effect.fn("WorkspaceSearchIndex.list")(
@@ -576,14 +552,22 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
         mixedItemPath,
       );
       const mapped = mapMixedSearchResult(result, WORKSPACE_INDEX_MAX_ENTRIES, hostIsWindows);
-      const sortedEntries = withDirectoryAncestors(mapped.entries).toSorted((left, right) =>
-        left.path.localeCompare(right.path),
+      const symlinks = yield* listSymlinkEntries();
+      // fff's watcher can index a link the scan rejected; only accepted links are listed.
+      const indexed = (yield* filterIndexed(mapped.entries, symlinks)).filter(
+        (entry) => !symlinks.linkPaths.has(entry.path),
+      );
+      const sortedEntries = withDirectoryAncestors([...indexed, ...symlinks.entries]).toSorted(
+        (left, right) => left.path.localeCompare(right.path),
       );
       const entries = sortedEntries.slice(0, WORKSPACE_INDEX_MAX_ENTRIES);
       return {
         entries,
         truncated:
-          incompleteBeforeQuery || mapped.truncated || entries.length < sortedEntries.length,
+          incompleteBeforeQuery ||
+          mapped.truncated ||
+          symlinks.truncated ||
+          entries.length < sortedEntries.length,
       };
     },
   );
@@ -594,7 +578,28 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
     kind: ProjectEntryKind | undefined,
     imageOnly: boolean | undefined,
   ) {
-    const pageSize = imageOnly ? WORKSPACE_INDEX_PAGE_SIZE : Math.max(1, limit + 1);
+    const scan = yield* listSymlinkEntries();
+    const { linkPaths } = scan;
+    const symlinks = scan.entries.filter((entry) =>
+      imageOnly
+        ? entry.kind === "file" && isProjectFaviconPath(entry.path)
+        : kind === undefined || entry.kind === kind,
+    );
+    // Index results that are filtered-out links get dropped in the merge, so fetch past them.
+    const indexLimit = limit + linkPaths.size - symlinks.length;
+    const pageSize = imageOnly ? WORKSPACE_INDEX_PAGE_SIZE : Math.max(1, indexLimit + 1);
+    const merge = (indexed: ProjectSearchEntriesResult) =>
+      filterIndexed(indexed.entries, scan).pipe(
+        Effect.map((entries) =>
+          mergeSymlinkMatches(
+            { entries, truncated: indexed.truncated || scan.truncated },
+            linkPaths,
+            symlinks,
+            query,
+            limit,
+          ),
+        ),
+      );
     if (kind === "file" || imageOnly) {
       const result = yield* searchVisible(
         query,
@@ -603,7 +608,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
         (size) => finder.fileSearchAsync(query, { pageSize: size }),
         (item) => item.relativePath,
       );
-      return mapFileSearchResult(result, limit, hostIsWindows, imageOnly);
+      return yield* merge(mapFileSearchResult(result, indexLimit, hostIsWindows, imageOnly));
     }
     if (kind === "directory") {
       const result = yield* searchVisible(
@@ -613,7 +618,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
         (size) => finder.directorySearchAsync(query, { pageSize: size }),
         (item) => item.relativePath,
       );
-      return mapDirectorySearchResult(result, limit, hostIsWindows);
+      return yield* merge(mapDirectorySearchResult(result, indexLimit, hostIsWindows));
     }
     const result = yield* searchVisible(
       query,
@@ -622,7 +627,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
       (size) => finder.mixedSearchAsync(query, { pageSize: size }),
       mixedItemPath,
     );
-    return mapMixedSearchResult(result, limit, hostIsWindows);
+    return yield* merge(mapMixedSearchResult(result, indexLimit, hostIsWindows));
   });
 
   const search: WorkspaceSearchIndex["Service"]["search"] = Effect.fn(
@@ -643,6 +648,28 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
   const searchContents: WorkspaceSearchIndex["Service"]["searchContents"] = Effect.fn(
     "WorkspaceSearchIndex.searchContents",
   )(function* (input) {
+    if (contentIndexPending) {
+      const progress = yield* Effect.tryPromise(() => finder.getScanProgressAsync()).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      if (!progress?.ok || progress.value.isScanning || !progress.value.isWarmupComplete) {
+        const fallback = yield* searchContentsWithGit(vcsProcess, cwd, input, gitIgnore.reincluded);
+        if (fallback !== undefined) return fallback;
+        yield* waitForIndexReady(
+          cwd,
+          finder,
+          ({ reason, cause }) =>
+            new WorkspaceSearchIndexSearchFailed({
+              cwd,
+              queryLength: input.query.length,
+              pageSize: input.limit,
+              reason,
+              cause,
+            }),
+        );
+      }
+      contentIndexPending = false;
+    }
     let { searchQuery, regexMode } = buildContentSearchQuery(input);
     const deadline = performance.now() + CONTENT_SEARCH_TIME_BUDGET_MS;
     // Grep cursors advance per file; whole-word filtering needs enough raw candidates before advancing.
@@ -675,7 +702,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
       }
 
       for (const match of result.items) {
-        if (isIgnoredPath(ignoredPaths, match.relativePath, hostIsWindows)) continue;
+        if (isIgnoredPath(gitIgnore.ignored, match.relativePath, hostIsWindows)) continue;
         const matchRanges = mapContentMatchRanges(match.lineContent, match.matchRanges).filter(
           (range) => !input.wholeWord || isWholeWordRange(match.lineContent, range),
         );
@@ -707,31 +734,3 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
 
 export const WORKSPACE_SEARCH_INDEX_VARIANTS = ["paths", "content"] as const;
 export type WorkspaceSearchIndexVariant = (typeof WORKSPACE_SEARCH_INDEX_VARIANTS)[number];
-
-export const workspaceSearchIndexKey = (cwd: string, variant: WorkspaceSearchIndexVariant) =>
-  `${variant}\n${cwd}`;
-
-function parseWorkspaceSearchIndexKey(key: string): {
-  readonly cwd: string;
-  readonly variant: WorkspaceSearchIndexVariant;
-} {
-  const separatorIndex = key.indexOf("\n");
-  return {
-    variant: key.slice(0, separatorIndex) as WorkspaceSearchIndexVariant,
-    cwd: key.slice(separatorIndex + 1),
-  };
-}
-
-/** @public */
-export const layer = (key: string) => {
-  const { cwd, variant } = parseWorkspaceSearchIndexKey(key);
-  return Layer.effect(WorkspaceSearchIndex, make(cwd, variant));
-};
-
-export class WorkspaceSearchIndexMap extends LayerMap.Service<WorkspaceSearchIndexMap>()(
-  "goat/workspace/WorkspaceSearchIndexMap",
-  {
-    lookup: layer,
-    idleTimeToLive: WORKSPACE_INDEX_IDLE_TTL,
-  },
-) {}

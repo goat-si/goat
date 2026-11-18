@@ -156,8 +156,12 @@ const TerminalSessionInput = Schema.Struct({
 });
 export type TerminalSessionInput = Schema.Codec.Encoded<typeof TerminalSessionInput>;
 
+// New error tags are sent only to a client that opted in on this request.
+const TerminalErrorMessageOptIn = Schema.optional(Schema.Literal(true));
+
 export const TerminalOpenInput = Schema.Struct({
   ...TerminalSessionInput.fields,
+  terminalErrorMessage: TerminalErrorMessageOptIn,
   cwd: TrimmedNonEmptyStringSchema,
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
   cols: Schema.optional(TerminalColsSchema),
@@ -170,6 +174,7 @@ export type TerminalOpenInput = typeof TerminalOpenInput.Type;
 
 export const TerminalAttachInput = Schema.Struct({
   ...TerminalSessionInput.fields,
+  terminalErrorMessage: TerminalErrorMessageOptIn,
   cwd: Schema.optional(TrimmedNonEmptyStringSchema),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
   cols: Schema.optional(TerminalColsSchema),
@@ -206,6 +211,7 @@ export type TerminalClearInput = Schema.Codec.Encoded<typeof TerminalClearInput>
 
 export const TerminalRestartInput = Schema.Struct({
   ...TerminalSessionInput.fields,
+  terminalErrorMessage: TerminalErrorMessageOptIn,
   cwd: TrimmedNonEmptyStringSchema,
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
   cols: TerminalColsSchema,
@@ -500,7 +506,13 @@ export class TerminalResizeError extends Schema.TaggedError<TerminalResizeError>
   }
 }
 
+export class TerminalRequestError extends Schema.TaggedError<TerminalRequestError>()(
+  "TerminalRequestError",
+  { message: TrimmedNonEmptyString },
+) {}
+
 export const TerminalError = Schema.Union([
+  TerminalRequestError,
   TerminalCwdError,
   TerminalHistoryError,
   TerminalSessionLookupError,

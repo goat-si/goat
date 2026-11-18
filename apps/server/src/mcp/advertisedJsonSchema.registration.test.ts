@@ -14,7 +14,7 @@ import * as McpHttpServer from "./McpHttpServer.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import * as McpToolAccessTestkit from "./McpToolAccess.testkit.ts";
-import { ScreenToolkit } from "./toolkits/screen/tools.ts";
+import { ScreenRunTool, ScreenToolkit } from "./toolkits/screen/tools.ts";
 import { PlacementAdmissionEnabled } from "../fleet/admission/PlacementKey.ts";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
@@ -98,6 +98,31 @@ it.effect("omits redundant safe-integer bounds from every registered input schem
       expect(serialized, tool.name).not.toContain(`"maximum":${Number.MAX_SAFE_INTEGER}`);
       expect(serialized, tool.name).not.toContain(`"minimum":${Number.MIN_SAFE_INTEGER}`);
     }
+  }).pipe(Effect.provide(registered)),
+);
+
+const patternsOf = (schema: unknown, found: Array<string> = []): Array<string> => {
+  if (Array.isArray(schema)) for (const item of schema) patternsOf(item, found);
+  else if (Predicate.isObject(schema))
+    for (const [key, value] of Object.entries(schema))
+      if (key === "pattern" && typeof value === "string") found.push(value);
+      else patternsOf(value, found);
+  return found;
+};
+
+// regression: Antigravity refused every GOAT tool because goat_screen_run's title pattern had \u
+it.effect("advertises only patterns Go's RE2 accepts, keeping their meaning in JavaScript", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    for (const { tool } of server.tools)
+      for (const pattern of patternsOf(tool.inputSchema))
+        expect(pattern, tool.name).not.toMatch(/(?<!\\)(?:\\\\)*\\u/);
+    const screen = server.tools.find(({ tool }) => tool.name === ScreenRunTool.name);
+    const [title] = patternsOf(screen?.tool.inputSchema.properties?.title);
+    const accepts = new RegExp(title ?? "", "u");
+    expect(
+      ["Terminal: run the tests", "a\u2028b", "a\u2029b", "a\u0085b"].map((t) => accepts.test(t)),
+    ).toEqual([true, false, false, false]);
   }).pipe(Effect.provide(registered)),
 );
 

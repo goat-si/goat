@@ -4,6 +4,9 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId, TurnItemId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import { ASSET_ROUTE_PREFIX, issueAssetUrl } from "./AssetAccess.ts";
 import * as Layer from "effect/Layer";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -87,3 +90,23 @@ export const layerTest = Layer.mergeAll(
   NativeAppIconResolver.layer.pipe(Layer.provide(layerConfig)),
   ServerSecretStore.layer.pipe(Layer.provide(layerConfig)),
 ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
+
+export const scopedMediaFixture = Effect.fn("test.scopedMediaFixture")(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-preview-media-identity-" });
+  const html = path.join(root, "report.html");
+  const media = path.join(root, "clip.mp4");
+  const replacement = path.join(root, "replacement.mp4");
+  yield* fs.writeFileString(html, "<video src='clip.mp4'></video>");
+  yield* fs.writeFileString(media, "original fixture");
+  yield* fs.writeFileString(replacement, "replacement fixture");
+  const mediaPath = yield* fs.realPath(media);
+  const issued = yield* issueAssetUrl({
+    resource: { _tag: "draft-workspace-file", cwd: root, path: "report.html" },
+    workspaceRoot: root,
+  });
+  const token = issued.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length).split("/")[0];
+  if (!token) throw new Error("Expected a scoped asset token");
+  return { fs, token, media, replacement, mediaPath };
+});

@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 import type * as CodexClient from "effect-codex-app-server/client";
 import type * as CodexErrors from "effect-codex-app-server/errors";
+import type { makeCodexThreadClosings } from "./CodexThreadClosings.ts";
 
 /** Added to a turn whose computer use change waits for a quiet conversation (#1564). */
 export const CUA_DEFERRED_NOTE =
@@ -143,18 +144,18 @@ export function makeCodexThreadStatuses() {
      * Rebuilds a thread from these overrides: without a subscriber Codex drops the loaded thread, and
      * the resume loads it again. A failed resume leaves it dropped until one succeeds.
      */
-    reload: (
+    reload: <E, R>(
       client: CodexClient.CodexAppServerClient["Service"],
       threadId: string,
+      closings: Pick<ReturnType<typeof makeCodexThreadClosings>, "unsubscribe">,
+      resume: (threadId: string, params: Record<string, unknown>) => Effect.Effect<unknown, E, R>,
       params: Record<string, unknown>,
     ) =>
-      client
-        .request("thread/unsubscribe", { threadId })
+      closings
+        .unsubscribe(client, threadId)
         .pipe(
           Effect.andThen(Effect.sync(() => unloaded.add(threadId))),
-          Effect.andThen(
-            client.raw.request("thread/resume", { threadId, excludeTurns: true, ...params }),
-          ),
+          Effect.andThen(resume(threadId, { excludeTurns: true, ...params })),
           Effect.andThen(Effect.sync(() => unloaded.delete(threadId))),
         ),
     /** Whether a failed reload left this thread dropped, so only a resume can serve its next turn. */

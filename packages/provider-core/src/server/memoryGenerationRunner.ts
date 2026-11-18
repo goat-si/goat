@@ -1,4 +1,8 @@
 import * as M from "@goat/contracts";
+import {
+  declareMemoryGeneration,
+  NO_MEMORY_GENERATION,
+} from "@goat/shared/memoryGenerationCapabilities";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type { Request } from "./textGenerationOperations.ts";
@@ -41,14 +45,38 @@ export class MemoryGenerationRunnerError extends Schema.TaggedError<MemoryGenera
     return "Memory runner cannot execute this request.";
   }
 }
-export const unsupportedMemoryRunner: MemoryRunner = (request) =>
+const unsupportedMemoryOperation = (operation: MemoryOperationName) =>
   Effect.fail(
     new M.TextGenerationError({
-      operation: request.operation,
-      detail: "This provider has no memory runner.",
+      operation,
+      detail: "unsupported_operation",
       cause: new MemoryGenerationRunnerError({ code: "unsupported_operation" }),
     }),
   );
+
+export const noMemoryGeneration = {
+  memoryCapabilities: Effect.succeed(NO_MEMORY_GENERATION),
+  resolveMemoryConflict: () => unsupportedMemoryOperation("resolveMemoryConflict"),
+  generateMemorySummary: () => unsupportedMemoryOperation("generateMemorySummary"),
+};
+
+export const memoryRunnerCapabilities = (
+  driver: string,
+  context: MemoryGenerationRunnerContext | undefined,
+  options: {
+    readonly config?: Parameters<typeof declareMemoryGeneration>[1];
+    readonly available?: Effect.Effect<boolean>;
+  } = {},
+) =>
+  context?.environmentId === undefined
+    ? noMemoryGeneration.memoryCapabilities
+    : decodeContext(context, { onExcessProperty: "error" }).pipe(
+        Effect.andThen(options.available ?? Effect.succeed(true)),
+        Effect.map((allowed) =>
+          allowed ? declareMemoryGeneration(driver, options.config) : NO_MEMORY_GENERATION,
+        ),
+        Effect.orElseSucceed(() => NO_MEMORY_GENERATION),
+      );
 
 /** The provider passes metadata from its successful selection, never from generated JSON. */
 export function withMemoryExecution(

@@ -137,6 +137,18 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("PreviewBrowser",
       }),
   );
 
+  it.effect("offers the managed archive version to the launcher only for a managed browser", () =>
+    Effect.gen(function* () {
+      const { browser: managed } = yield* makeHarness({ version: "157.1.2.3" });
+      const { browser: custom } = yield* makeHarness({
+        version: "157.1.2.3",
+        executablePath: "/fixture/custom-chrome",
+      });
+      expect(managed.managedReleaseVersion).toBe("157.1.2.3");
+      expect(custom.managedReleaseVersion).toBeUndefined();
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("fails when a custom executable override is missing or not executable", () =>
     Effect.gen(function* () {
       const { browser, requests } = yield* makeHarness({

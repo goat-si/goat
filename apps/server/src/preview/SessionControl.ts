@@ -541,6 +541,18 @@ export class SessionControl {
     return this.action(() => this.owner === viewerId, run);
   }
 
+  nativeViewer<A>(run: () => Promise<A>) {
+    return this.action(
+      () =>
+        this.owner === null &&
+        this.agentId === null &&
+        !this.hasAgentWork &&
+        this.requested === null &&
+        !this.privateMode,
+      run,
+    );
+  }
+
   /**
    * Merge into only adjacent waiting work with the same key; the running action and
    * intervening actions keep their order. Work sharing a key must share its input type.
@@ -616,10 +628,22 @@ export class SessionControl {
       await this.releaseOwner(viewerId, afterDrain ?? (async () => {}), false);
   }
 
-  async close() {
+  replacement(invalidate: () => void) {
+    const next = new SessionControl(this.agentId, invalidate);
+    next.epoch = this.epoch + 1;
+    next.authorityEpoch = this.authorityEpoch + 1;
+    next.agentStopped = this.agentStopped || (this.owner !== null && this.requested === null);
+    next.requested = this.requested;
+    next.requestId = this.requestId;
+    next.notice = this.notice;
+    return next;
+  }
+
+  async close({ preserveHandoff = false } = {}) {
     if (!this.closed) {
       this.closed = true;
-      this.clearRequest("ended");
+      if (preserveHandoff) this.agentStopped ||= this.owner !== null && this.requested === null;
+      else this.clearRequest("ended");
       this.changeOwner(null);
     }
     await this.tail;

@@ -122,6 +122,10 @@ export const PreviewAutomationSnapshot = Schema.Struct({
       ...Screen.ScreenshotPlacementFields,
     }),
   ),
+  /** Dimensions of the captured viewport when the caller requested no image bytes. */
+  screenshotSize: Schema.optional(
+    Schema.Struct({ width: Schema.Int, height: Schema.Int, ...Screen.ScreenshotPlacementFields }),
+  ),
   /** The capture before `screenshot` was capped for the agent, when a saved file asked for it. */
   fullScreenshot: Schema.optional(
     Schema.Struct({ data: Schema.String, width: Schema.Int, height: Schema.Int }),

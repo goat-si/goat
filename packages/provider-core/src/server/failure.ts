@@ -119,6 +119,7 @@ function curatedCauseMessages(cause: unknown): {
         case "ClaudeMcpRegistrationTimeoutError":
         case "ClaudeCodeRootRefusalError":
         case "CursorModelUnavailableError":
+        case "PiPromptAcknowledgmentTimeoutError":
         case "CodexGoalObjectiveTooLongError":
         case "ProviderAdapterThreadInUseError":
         case "ProviderSetupError":

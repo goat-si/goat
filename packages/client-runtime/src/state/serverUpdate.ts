@@ -16,9 +16,18 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import type * as EnvironmentRegistry from "../connection/registry.ts";
-import { isRpcClientError, subscribeDynamicWithSession } from "../rpc/client.ts";
+import {
+  isRpcClientError,
+  subscribeDynamicWithSession,
+  type EnvironmentRpcInput,
+} from "../rpc/client.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import { IDLE_SERVER_UPDATE_STATE, type ServerUpdateState } from "./server.ts";
+
+export interface ServerUpdateTarget {
+  readonly environmentId: EnvironmentId;
+  readonly input: EnvironmentRpcInput<typeof WS_METHODS.serverUpdateServer>;
+}
 
 export class ServerUpdateResumeTimeoutError extends Schema.TaggedError<ServerUpdateResumeTimeoutError>()(
   "ServerUpdateResumeTimeoutError",

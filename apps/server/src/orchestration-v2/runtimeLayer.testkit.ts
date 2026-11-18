@@ -1,4 +1,7 @@
+import { fromRunner } from "@goat/provider-core/server/textGenerationOperations";
+import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
 import * as DocumentText from "../provider/DocumentText.ts";
+import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
@@ -84,7 +87,7 @@ const providerInstance = {
   enabled: true,
   snapshot: { getSnapshot: Effect.succeed({}) } as unknown as ProviderInstance["snapshot"],
   orchestrationAdapter,
-  textGeneration: {} as ProviderInstance["textGeneration"],
+  textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
 } satisfies ProviderInstance;
 const alternateProviderInstance = {
   ...providerInstance,
@@ -250,5 +253,47 @@ export const layerLegacyImportTest = RuntimeLayer.layer.pipe(
   Layer.provide(layerTestProviderInstanceRegistry),
   Layer.provide(layerGitWorkflowTest),
   Layer.provide(layerProjectServiceTest),
+  Layer.provide(layerPlatformTest),
+);
+
+export const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
+  RuntimeLayer.layer.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
+  RuntimeLayer.layerProjectService,
+  RuntimeLayer.layerEventSink,
+  RuntimeLayer.layerEventInfrastructure,
+).pipe(
+  Layer.provide(
+    Layer.mock(WorkspacePaths.WorkspacePaths)({
+      normalizeWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
+    }),
+  ),
+  Layer.provide(
+    Layer.mock(ProjectEnrichmentService.ProjectEnrichmentService)({
+      peek: () =>
+        Effect.succeed({
+          repositoryIdentity: null,
+          faviconPath: null,
+          repositoryIdentityResolved: false,
+        }),
+      request: () => Effect.void,
+      getAvailable: () =>
+        Effect.succeed({
+          repositoryIdentity: null,
+          faviconPath: null,
+          repositoryIdentityResolved: false,
+        }),
+      awaitRepositoryIdentity: () => Effect.succeed(null),
+      invalidate: () => Effect.void,
+      subscribeChanges: Effect.never,
+    }),
+  ),
+  Layer.provide(McpSessionRegistryTestkit.layer),
+  Layer.provide(McpProviderSessions.layer),
+  Layer.provideMerge(SqlitePersistence.layerMemory),
+  Layer.provide(layerCheckpointStoreTest),
+  Layer.provide(layerServerConfig),
+  Layer.provide(ServerSettings.layerTest()),
+  Layer.provide(layerTestProviderInstanceRegistry),
+  Layer.provide(layerGitWorkflowTest),
   Layer.provide(layerPlatformTest),
 );

@@ -34,6 +34,7 @@ interface DiffCommentAnnotationProps {
   placeholder?: string;
   submitLabel?: string;
   pending?: boolean;
+  submitDisabledReason?: string | undefined;
   secondaryAction?: DiffCommentSecondaryAction;
   focusOnMount?: boolean;
   /** Set only for pull request comments, where `@` completes the repository's users. */
@@ -52,6 +53,7 @@ export function DiffCommentAnnotation({
   placeholder = "Add a comment…",
   submitLabel = "Comment",
   pending = false,
+  submitDisabledReason,
   secondaryAction,
   focusOnMount = true,
   completionScope = null,
@@ -60,6 +62,7 @@ export function DiffCommentAnnotation({
   const [localDraftText, setLocalDraftText] = useState("");
   const displayedText = kind === "draft" && !onTextChange ? localDraftText : text;
   const trimmedText = displayedText.trim();
+  const submitDisabled = pending || submitDisabledReason !== undefined;
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useLayoutEffect(() => {
@@ -136,7 +139,7 @@ export function DiffCommentAnnotation({
             isCommentSubmitShortcut(
               event,
               trimmedText,
-              pending || (speech?.voice.blocksSubmission() ?? false),
+              submitDisabled || (speech?.voice.blocksSubmission() ?? false),
             )
           ) {
             event.preventDefault();
@@ -144,8 +147,15 @@ export function DiffCommentAnnotation({
           }
         }}
       />
-      <div className="mt-1.5 flex flex-wrap items-center gap-1">
-        <span className="mr-auto text-3xs text-muted-foreground/70">⌘/Ctrl Enter to send</span>
+      {submitDisabledReason ? (
+        <p role="status" className="mt-1 text-xs text-muted-foreground">
+          {submitDisabledReason}
+        </p>
+      ) : null}
+      <div className="mt-1.5 flex flex-wrap items-center justify-end gap-1">
+        {submitDisabledReason ? null : (
+          <span className="mr-auto text-3xs text-muted-foreground/70">⌘/Ctrl Enter to send</span>
+        )}
         {speech ? <CommentSpeechControls speech={speech} /> : null}
         <Button variant="ghost-muted" size="xs" onClick={onCancel}>
           Cancel
@@ -166,7 +176,7 @@ export function DiffCommentAnnotation({
         ) : null}
         <Button
           size="xs"
-          disabled={pending || !trimmedText || (speech?.voice.blocksSubmission() ?? false)}
+          disabled={submitDisabled || !trimmedText || (speech?.voice.blocksSubmission() ?? false)}
           onClick={() => onComment(trimmedText)}
         >
           {submitLabel}

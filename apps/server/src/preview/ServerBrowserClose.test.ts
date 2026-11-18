@@ -1,7 +1,18 @@
+import { ThreadId } from "@goat/contracts";
+import { it as effectIt } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import type { ServerTab } from "./ServerBrowserTab.ts";
+import { tabKey } from "./ServerBrowserPointer.ts";
 import * as NodeEvents from "node:events";
 import type { Dialog, Page } from "playwright-core";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { acceptClosingDialog, closeServerPage, unloadDesktopPage } from "./ServerBrowserClose.ts";
+import {
+  acceptClosingDialog,
+  closeServerPage,
+  makeBeforePreviewClose,
+  unloadDesktopPage,
+} from "./ServerBrowserClose.ts";
 function fixture() {
   const events = new NodeEvents.EventEmitter();
   let closed = false;
@@ -76,3 +87,38 @@ it("accepts a beforeunload guard only when the tab is closing", () => {
   expect(acceptClosingDialog(true, dialog)).toBe(true);
   expect(accept).toHaveBeenCalledOnce();
 });
+
+effectIt.effect("marks a pending open for unload before letting the close complete", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("thread");
+    const tabId = "tab";
+    const key = tabKey(threadId, tabId);
+    const opening = Promise.withResolvers<ServerTab>();
+    const closedPending = new Set<string>();
+    const beforeClose = makeBeforePreviewClose(
+      new Map(),
+      new Map([[key, { promise: opening.promise }]]),
+      closedPending,
+    );
+    const closed = vi.fn();
+    const closing = yield* beforeClose([
+      {
+        threadId,
+        tabId,
+        runtime: "server",
+        navStatus: { _tag: "Idle" },
+        canGoBack: false,
+        canGoForward: false,
+        updatedAt: "2026-11-18T00:00:00.000Z",
+      },
+    ]).pipe(
+      Effect.tap(() => Effect.sync(closed)),
+      Effect.forkChild({ startImmediately: true }),
+    );
+    expect(closedPending.has(key)).toBe(true);
+    expect(closed).not.toHaveBeenCalled();
+    opening.reject(new Error("The guest closed while opening"));
+    yield* Fiber.join(closing);
+    expect(closed).toHaveBeenCalledOnce();
+  }),
+);

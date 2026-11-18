@@ -1,5 +1,6 @@
 import { sdkBackendMatches } from "./cloud/credentials.ts";
 import {
+  memoryRunnerCapabilities,
   withMemoryExecution,
   type MemoryGenerationRunnerContext,
 } from "@goat/provider-core/server/memoryGenerationRunner";
@@ -73,7 +74,8 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
 ) {
   const fs = yield* FileSystem.FileSystem;
   const sdk = yield* CursorSdk.CursorSdk;
-
+  const home = yield* HostProcess.HomeDirectory;
+  const customSandbox = fs.exists(`${home}/.cursor/sandbox.json`);
   const resolveCursorApiKey = Effect.fn("CursorTextGeneration.resolveCursorApiKey")(function* (
     operation: TextGenerationOperations.Operation,
     requestEnvironment: NodeJS.ProcessEnv,
@@ -98,6 +100,52 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
     return apiKey;
   });
 
+  const verifyBackend = (
+    operation: TextGenerationOperations.Operation,
+    environment: NodeJS.ProcessEnv,
+  ) =>
+    sdkBackendMatches(environment.CURSOR_BACKEND_URL)
+      ? Effect.void
+      : Effect.fail(
+          new TextGenerationError({
+            operation,
+            detail:
+              "Cursor backend differs from the loaded SDK or current environment. Restart GOAT to use a different Cursor backend.",
+          }),
+        );
+
+  const sandboxFailure = (operation: TextGenerationOperations.Operation) =>
+    new TextGenerationError({
+      operation,
+      detail: "Cursor memory generation requires its isolated sandbox.",
+      cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
+    });
+
+  const preflight = Effect.fn("CursorTextGeneration.preflight")(function* (
+    operation: TextGenerationOperations.Operation,
+    requestEnvironment: NodeJS.ProcessEnv,
+  ) {
+    const apiKey = yield* resolveCursorApiKey(operation, requestEnvironment);
+    yield* verifyBackend(operation, requestEnvironment);
+    const transportRefusal =
+      sdk.agentTransportRefusal === undefined
+        ? undefined
+        : yield* sdk.agentTransportRefusal(requestEnvironment);
+    if (transportRefusal !== undefined)
+      return yield* new TextGenerationError({ operation, detail: transportRefusal });
+    // sandbox.json expands writable paths independently of settingSources; the public API cannot override it.
+    if (yield* customSandbox)
+      return yield* new TextGenerationError({
+        operation,
+        detail:
+          "Cursor text generation cannot enforce workspace isolation with a custom ~/.cursor/sandbox.json. Use another text-generation provider.",
+        cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
+      });
+    if (TextGenerationOperations.isMemoryOperation(operation) && !(yield* sdk.supportsLocalSandbox))
+      return yield* sandboxFailure(operation);
+    return apiKey;
+  });
+
   // Ignores `cwd`: the agent runs in an empty temp directory, away from the project.
   const runCursorSelected = Effect.fn("CursorTextGeneration.runCursorJson")(
     function* <S extends Schema.Top>(input: TextGenerationOperations.Request<S>) {
@@ -105,32 +153,8 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       const isMemory = TextGenerationOperations.isMemoryOperation(operation);
       // One capture gives the request its key and every backend and transport check.
       const requestEnvironment = { ...(yield* currentEnvironment) };
-      const apiKey = yield* resolveCursorApiKey(operation, requestEnvironment);
-      if (!sdkBackendMatches(requestEnvironment.CURSOR_BACKEND_URL)) {
-        return yield* new TextGenerationError({
-          operation,
-          detail:
-            "Cursor backend differs from the loaded SDK or current environment. Restart GOAT to use a different Cursor backend.",
-        });
-      }
-      const transportRefusal =
-        sdk.agentTransportRefusal === undefined
-          ? undefined
-          : yield* sdk.agentTransportRefusal(requestEnvironment);
-      if (transportRefusal !== undefined) {
-        return yield* new TextGenerationError({ operation, detail: transportRefusal });
-      }
+      const apiKey = yield* preflight(operation, requestEnvironment);
       const { Agent } = yield* Effect.try(sdk.load);
-      // sandbox.json expands writable paths independently of settingSources; the public API cannot override it.
-      if (yield* fs.exists(`${yield* HostProcess.HomeDirectory}/.cursor/sandbox.json`)) {
-        return yield* new TextGenerationError({
-          operation,
-          detail:
-            "Cursor text generation cannot enforce workspace isolation with a custom ~/.cursor/sandbox.json. Use another text-generation provider.",
-          // Typed so memory pauses this model: the policy refuses every request.
-          cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
-        });
-      }
       const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cursor-text-" });
       const selectedModel = cursorSdkModelSelection(
         modelSelection,
@@ -164,13 +188,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       const createCursorAgent = Effect.fn("CursorTextGeneration.createAgent")(function* (
         sandboxEnabled: boolean,
       ) {
-        if (!sdkBackendMatches(requestEnvironment.CURSOR_BACKEND_URL)) {
-          return yield* new TextGenerationError({
-            operation,
-            detail:
-              "Cursor backend differs from the loaded SDK or current environment. Restart GOAT to use a different Cursor backend.",
-          });
-        }
+        yield* verifyBackend(operation, requestEnvironment);
         return yield* Effect.tryPromise((signal) =>
           Agent.create(
             sandboxEnabled
@@ -222,7 +240,10 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
           ),
           Effect.catchIf(
             (cause) => sandboxEnabled && cursorSandboxUnsupported(cause),
-            (cause) => Effect.fail(new CursorSandboxUnavailable({ cause })),
+            (cause) =>
+              sdk.markLocalSandboxUnsupported.pipe(
+                Effect.andThen(Effect.fail(new CursorSandboxUnavailable({ cause }))),
+              ),
           ),
         );
         yield* Effect.addFinalizer(() =>
@@ -268,15 +289,8 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       const request = runPrompt(true).pipe(
         Effect.catchTags({
           CursorSandboxUnavailable: () =>
-            isMemory
-              ? Effect.fail(
-                  new TextGenerationError({
-                    operation,
-                    detail: "Cursor memory generation requires its isolated sandbox.",
-                    cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
-                  }),
-                )
-              : runPrompt(false),
+            // The fallback still uses the empty workspace and disabled setting sources.
+            isMemory ? Effect.fail(sandboxFailure(operation)) : runPrompt(false),
         }),
       );
       const promptResult = yield* request.pipe(
@@ -330,17 +344,26 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
     },
   );
 
-  return TextGenerationOperations.fromRunner(
+  const generation = TextGenerationOperations.fromRunner(
     "CursorTextGeneration",
     TextGenerationOperations.withoutInvestigation("Cursor", (request) =>
       runCursorSelected(request).pipe(Effect.map((selected) => selected.result)),
     ),
     {
-      memoryRunner: withMemoryExecution(
-        memoryRunnerContext,
-        ProviderDriverKind.make("cursor"),
-        runCursorSelected,
-      ),
+      memory: {
+        capabilities: memoryRunnerCapabilities("cursor", memoryRunnerContext, {
+          available: currentEnvironment.pipe(
+            Effect.flatMap((environment) => preflight("generateMemorySummary", environment)),
+            Effect.isSuccess,
+          ),
+        }),
+        run: withMemoryExecution(
+          memoryRunnerContext,
+          ProviderDriverKind.make("cursor"),
+          runCursorSelected,
+        ),
+      },
     },
   );
+  return { ...generation, memoryRevocation: sdk.localSandboxRefusal };
 });

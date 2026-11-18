@@ -1,10 +1,13 @@
 import { assert, it } from "@effect/vitest";
 import { CommandId, MessageId, ScheduledTask, ScheduledTaskRun, ThreadId } from "@goat/contracts";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import { runMigrations } from "../persistence/Migrations.ts";
+import firstBindMigration from "../persistence/Migrations/159_ScheduledTaskFirstBindIntent.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Runs from "./ScheduledTaskRuns.ts";
 
@@ -73,6 +76,72 @@ const finish = (id: string, rejected = false) => ({
   at,
   dispatchEvidence: rejected ? ("rejected" as const) : ("unresolved" as const),
 });
+
+it.effect("upgrades existing firings and accepts older writes without inferring bind intent", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const runs = yield* Runs.ScheduledTaskRuns;
+    yield* runMigrations({ toMigrationInclusive: 157 });
+    const task = makeTask();
+    yield* seed(task);
+    yield* sql`UPDATE scheduled_tasks SET thread_mode='continue'`;
+    const writeLegacyFiring = Effect.fn("ScheduledTaskRunsTest.writeLegacyFiring")(function* (
+      id: string,
+    ) {
+      const snapshot: ScheduledTaskRun = {
+        firingId: CommandId.make(id),
+        dispatchStatus: "dispatching",
+        status: "dispatching",
+        threadId: null,
+        runId: null,
+        requestedAt: at,
+        dispatchedAt: null,
+        startedAt: null,
+        completedAt: null,
+      };
+      yield* sql`INSERT INTO scheduled_task_runs (firing_id,task_id,task_created_at,message_id,trigger_kind,admitted_schedule_digest,admitted_enabled,dispatch_status,status,requested_at,snapshot_json)
+        VALUES (${id}, ${task.id}, ${task.createdAt}, ${`message:${id}`}, 'manual', ${yield* encodeSchedule(task.schedule)}, 1, 'dispatching', 'dispatching', ${at}, ${yield* encodeRun(snapshot)})`;
+      return snapshot;
+    });
+    const before = yield* writeLegacyFiring("legacy-before");
+    assert.deepEqual(yield* runMigrations(), [
+      [158, "AuthSessionPenMember"],
+      [159, "ScheduledTaskFirstBindIntent"],
+    ]);
+    assert.deepEqual(yield* runs.readFiring(before.firingId), before);
+    yield* runs.reconcile;
+    const after = yield* writeLegacyFiring("legacy-after");
+    assert.deepEqual(yield* runs.readFiring(after.firingId), after);
+    assert.deepEqual(
+      yield* sql`SELECT first_bind_project_id FROM scheduled_task_runs ORDER BY firing_id`,
+      [{ first_bind_project_id: null }, { first_bind_project_id: null }],
+    );
+    assert.deepEqual(yield* runMigrations(), []);
+  }).pipe(
+    Effect.provide(
+      Runs.layer.pipe(Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" }))),
+    ),
+  ),
+);
+
+it.effect("a failed first-bind migration rolls back its column and can rerun", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* runMigrations({ toMigrationInclusive: 158 });
+    yield* sql`ALTER TABLE scheduled_tasks RENAME TO test_scheduled_tasks`;
+    yield* Effect.flip(runMigrations());
+    assert.deepEqual(
+      yield* sql`SELECT name FROM pragma_table_info('scheduled_task_runs') WHERE name='first_bind_project_id'`,
+      [],
+    );
+    assert.deepEqual(yield* sql`SELECT name FROM effect_sql_migrations WHERE migration_id >= 158`, [
+      { name: "AuthSessionPenMember" },
+    ]);
+    yield* sql`ALTER TABLE test_scheduled_tasks RENAME TO scheduled_tasks`;
+    assert.deepEqual(yield* runMigrations(), [[159, "ScheduledTaskFirstBindIntent"]]);
+    yield* firstBindMigration;
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
 
 it.effect(
   "counts one admission, reserves dispatch until bookkeeping and treats return-only success as unknown",

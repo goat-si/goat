@@ -6214,7 +6214,7 @@ it.effect("SSH workspace push propagates key-auth refusal", () =>
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
 
-it.effect("preserves a rewritten checkout head under the GOAT pre-refresh ref", () =>
+it.effect("keeps a divergent checkout at its current head", () =>
   Effect.gen(function* () {
     const driver = yield* GitVcsDriver.GitVcsDriver;
     const cwd = yield* makeTmpDir();
@@ -6227,11 +6227,9 @@ it.effect("preserves a rewritten checkout head under the GOAT pre-refresh ref", 
     const result = yield* driver.refreshCheckedOutBranch({
       cwd,
       targetCommit: target,
-      resetWhenHeadCommit: previous,
     });
-    assert.isTrue(result.moved);
-    assert.equal(yield* git(cwd, ["rev-parse", "refs/goat/pre-refresh"]), previous);
-    assert.equal(yield* git(cwd, ["rev-parse", "HEAD"]), target);
+    assert.deepEqual(result, { headCommit: previous, moved: false, onTarget: false });
+    assert.equal(yield* git(cwd, ["rev-parse", "HEAD"]), previous);
   }).pipe(Effect.provide(layerTest)),
 );
 

@@ -5,6 +5,7 @@ import {
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   type ExecutionEnvironmentDescriptor,
 } from "@goat/contracts";
+import { supportsKeepAwake } from "../background/KeepAwake.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { sshHostsRefusal } from "@goat/ssh/hostAccess";
 import {
@@ -281,6 +282,8 @@ export const make = Effect.gen(function* () {
       pullRequests: true,
       pullRequestChecks: true,
       linkedThreadRefreshes: true,
+      revisionBoundPullRequestReviews: true,
+      vcsBranchStatus: true,
       inlineMessageContext: true,
       requiredWorktreeBootstrap: true,
       threadSettlement: true,
@@ -342,10 +345,13 @@ export const make = Effect.gen(function* () {
       ...(serverSelfUpdate === "boot-service" || desktopAppUpdate
         ? { serverSelfUpdateProgress: true }
         : {}),
+      ...(serverSelfUpdate === "boot-service" ? { serverUpdateStaging: true } : {}),
       ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
       serverBrowser: true,
       replyToResponse: true,
       serverBrowserStopLoading: true,
+      nativeServerBrowserStopLoading: true,
+      ...(supportsKeepAwake(hostPlatform) ? { keepAwakeWhileAgentsWork: true } : {}),
       sshActivity: true,
       hubProxy: true,
       drainRestart: true,

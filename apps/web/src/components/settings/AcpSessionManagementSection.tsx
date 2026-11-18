@@ -256,17 +256,32 @@ function InstanceSessionManagement(
     if (generation !== projectGeneration.current) return;
     setImportingSessionId(null);
     if (result._tag === "Success") {
+      const { threadId, imported, nativeHistoryPending, nativeHistoryError } = result.value;
       setSessions((current) =>
         current.map((candidate) =>
           candidate.sessionId === session.sessionId
-            ? { ...candidate, importedThreadId: result.value.threadId }
+            ? {
+                ...candidate,
+                importedThreadId: threadId,
+                nativeHistoryPending: nativeHistoryPending === true,
+              }
             : candidate,
         ),
       );
-      toastManager.add({
-        type: "success",
-        title: result.value.imported ? "ACP session imported" : "ACP session already imported",
-      });
+      if (nativeHistoryPending === true) {
+        toastManager.add({
+          type: "warning",
+          title: "ACP session linked",
+          description:
+            nativeHistoryError ??
+            "Earlier history could not be copied. Select Import history to retry.",
+        });
+      } else {
+        toastManager.add({
+          type: "success",
+          title: imported ? "ACP session imported" : "ACP session already imported",
+        });
+      }
       return;
     }
     reportFailure("Could not import ACP session", result);
@@ -517,16 +532,19 @@ function InstanceSessionManagement(
                         disabled={
                           !canOperate ||
                           !canImport ||
-                          session.importedThreadId !== null ||
+                          (session.importedThreadId !== null &&
+                            session.nativeHistoryPending !== true) ||
                           importingSessionId !== null
                         }
                         onClick={() => void importNativeSession(session)}
                       >
-                        {session.importedThreadId !== null
-                          ? "Imported"
-                          : importingSessionId === session.sessionId
-                            ? "Importing"
-                            : "Import"}
+                        {importingSessionId === session.sessionId
+                          ? "Importing"
+                          : session.nativeHistoryPending
+                            ? "Import history"
+                            : session.importedThreadId === null
+                              ? "Import"
+                              : "Imported"}
                       </Button>
                       {canDelete ? (
                         <Button

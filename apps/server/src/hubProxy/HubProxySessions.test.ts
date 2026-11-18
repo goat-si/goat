@@ -50,6 +50,19 @@ it.effect("caches sessions by the exact scope set, independent of scope order", 
   }).pipe(Effect.scoped),
 );
 
+it.effect("a Pen node is dialled only under the Pen binding the hub read with its route", () =>
+  Effect.gen(function* () {
+    const pen = { meshId: "m".repeat(26), nodeId: "a".repeat(26), noisePub: "a".repeat(43) };
+    const route = sshNode.routes[0]!;
+    const nodes = yield* makeNodes({ ...sshNode, routes: [{ ...route, pen }] });
+    const ssh = makeSsh("http://127.0.0.1:1/");
+    const sessions = yield* makeSessions(nodes.service, ssh.service, makeSecrets().service);
+    yield* nodes.subscribed;
+    yield* sessions.open("node-1", readScopes);
+    expect(ssh.pens).toEqual([pen, pen]);
+  }).pipe(Effect.scoped),
+);
+
 it.effect("a cached session follows the node's forward to its new port after a relaunch", () =>
   Effect.gen(function* () {
     const { sessions, ssh } = yield* fixture();

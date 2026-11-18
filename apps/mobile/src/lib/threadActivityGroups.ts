@@ -8,7 +8,7 @@ import type {
   ThreadFeedActivity,
   ThreadFeedActivityGroup,
   ThreadFeedEntry,
-} from "./threadActivity";
+} from "./threadActivityTypes";
 
 const activityGroupsCache = new WeakMap<ThreadFeedActivity, ThreadFeedActivityGroup>();
 

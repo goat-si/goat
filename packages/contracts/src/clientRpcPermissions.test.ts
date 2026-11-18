@@ -326,3 +326,9 @@ it("forking a thread needs the operate grant the server checks", () => {
     "orchestration:operate",
   ]);
 });
+
+it("requires environment maintenance authority to stage a server update", () => {
+  for (const method of [WS_METHODS.serverUpdateServer, WS_METHODS.serverUpdateServerWithProgress]) {
+    expect(clientRpcRequiredScopes(method, { stageOnly: true })).toEqual(["environment:maintain"]);
+  }
+});

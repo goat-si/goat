@@ -32,6 +32,8 @@ export const REMOTE_ARCHIVE_LOCK_WAIT_SECONDS = 360;
 export const REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS = 900_000;
 
 export interface RemoteGoatRunnerOptions {
+  /** Attach to or start what the host already has; never acquire, upgrade, replace or publish. */
+  readonly installation?: "existing-only";
   readonly nodeScriptPath?: string | null;
   readonly nodeEngineRange?: string | null;
   readonly archiveVersion?: string | null;
@@ -53,6 +55,7 @@ export interface RemoteGoatRunnerOptions {
   readonly archiveDirectory?: string | null;
   /** Read-only packaged archives. Never create, repair, or download into this directory. */
   readonly bundledArchiveDirectory?: string | null;
+  readonly bundledFontAssetDirectory?: string;
   /**
    * Ask the host to download a published release itself before this client uploads one.
    * The desktop app and the server's SSH dispatch set it; without it the client always

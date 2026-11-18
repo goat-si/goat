@@ -12,9 +12,11 @@ import { AbsolutePath, Location, Model, Provider, Session } from "@opencode/clie
 import { ProviderDriverKind, TextGenerationError } from "@goat/contracts";
 import {
   MemoryGenerationRunnerError,
+  memoryRunnerCapabilities,
   withMemoryExecution,
   type MemoryGenerationRunnerContext,
 } from "@goat/provider-core/server/memoryGenerationRunner";
+import { requireOpenCodeMemoryIsolation } from "../memoryIsolation.ts";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
 import * as NodeURL from "node:url";
 import * as FileSystem from "effect/FileSystem";
@@ -28,7 +30,6 @@ import { isProviderNativeImageAttachment } from "@goat/provider-core/server/atta
 import * as OpenCode2Server from "./OpenCode2Server.ts";
 import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
 import * as TextGenerationOperations from "@goat/provider-core/server/textGenerationOperations";
-import { requireOpenCodeMemoryIsolation } from "../textGeneration.ts";
 
 const isTextGenerationError = Schema.is(TextGenerationError);
 
@@ -295,24 +296,19 @@ const runOnServer = Effect.fn("Opencode2TextGeneration.runOnServer")(function* (
 export const make = Effect.fn("OpenCode2TextGeneration.make")(function* (
   options: {
     readonly memoryRunnerContext?: MemoryGenerationRunnerContext;
-    readonly external?: boolean;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const server = yield* OpenCode2Server.OpenCode2Server;
   const host = yield* ProviderHost.ProviderHost;
   const runSelected = <S extends Schema.Top>(input: TextGenerationOperations.Request<S>) =>
-    (TextGenerationOperations.isMemoryOperation(input.operation) && options.external
-      ? requireOpenCodeMemoryIsolation(input.operation)
-      : TextGenerationOperations.isMemoryOperation(input.operation)
-        ? server.withMemoryConnection === undefined
-          ? requireOpenCodeMemoryIsolation(input.operation)
-          : server.withMemoryConnection(
-              input.operation,
-              input.modelSelection.model.split("/")[0] ?? "",
-              (connection) => runOnServer(connection, input),
-            )
-        : server.withConnection((connection) => runOnServer(connection, input))
+    (TextGenerationOperations.isMemoryOperation(input.operation)
+      ? server.withMemoryConnection(
+          input.operation,
+          input.modelSelection.model.split("/")[0] ?? "",
+          (connection) => runOnServer(connection, input),
+        )
+      : server.withConnection((connection) => runOnServer(connection, input))
     ).pipe(
       Effect.timeoutOrElse({
         duration: GENERATION_TIMEOUT,
@@ -354,11 +350,16 @@ export const make = Effect.fn("OpenCode2TextGeneration.make")(function* (
       runSelected(input).pipe(Effect.map((selected) => selected.result)),
     ),
     {
-      memoryRunner: withMemoryExecution(
-        options.memoryRunnerContext,
-        ProviderDriverKind.make("opencode"),
-        runSelected,
-      ),
+      memory: {
+        capabilities: memoryRunnerCapabilities("opencode", options.memoryRunnerContext, {
+          available: server.supportsMemoryConnection,
+        }),
+        run: withMemoryExecution(
+          options.memoryRunnerContext,
+          ProviderDriverKind.make("opencode"),
+          runSelected,
+        ),
+      },
     },
   );
 });

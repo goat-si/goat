@@ -2,6 +2,8 @@
 // or non-blocking open flags, and the response must keep the validated descriptor.
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import * as NodeStream from "@effect/platform-node/NodeStream";
 import * as Effect from "effect/Effect";
@@ -44,13 +46,61 @@ const realpathLikeFileSystem = (filePath: string) =>
     NodeFS.realpath(filePath, (error, resolved) => (error ? reject(error) : resolve(resolved)));
   });
 
+const workspaceAncestors = async (filePath: string, root: string) => {
+  const relative = NodePath.relative(root, filePath);
+  if (
+    !relative ||
+    relative === ".." ||
+    relative.startsWith(`..${NodePath.sep}`) ||
+    NodePath.isAbsolute(relative)
+  )
+    return null;
+  const parents: string[] = [];
+  for (let directory = NodePath.dirname(filePath); ; directory = NodePath.dirname(directory)) {
+    parents.push(directory);
+    if (directory === NodePath.dirname(directory)) break;
+  }
+  const chain: Array<{ path: string; info: NodeFS.BigIntStats; inWorkspace: boolean }> = [];
+  let inWorkspace = false;
+  for (const path of parents.reverse()) {
+    const info = await NodeFSP.lstat(path, { bigint: true });
+    if (!info.isDirectory() || info.ino === 0n) return null;
+    if (NodePath.relative(root, path) === "") inWorkspace = true;
+    chain.push({ path, info, inWorkspace });
+  }
+  return chain;
+};
+
+const sameAncestors = async (
+  chain: NonNullable<Awaited<ReturnType<typeof workspaceAncestors>>>,
+) => {
+  for (const { path, info, inWorkspace } of chain) {
+    const after = await NodeFSP.lstat(path, { bigint: true });
+    if (
+      !after.isDirectory() ||
+      after.dev !== info.dev ||
+      after.ino !== info.ino ||
+      (inWorkspace && after.ctimeNs !== info.ctimeNs)
+    )
+      return false;
+  }
+  return true;
+};
+
 export const openMediaFile = Effect.fn("openMediaFile")(function* (
   filePath: string,
   identity?: { readonly device: string; readonly inode: string },
+  workspaceRoot?: string,
 ) {
+  const platform = yield* HostProcess.Platform;
   return yield* Effect.acquireRelease(
     Effect.tryPromise({
       try: async () => {
+        const ancestors =
+          workspaceRoot === undefined
+            ? undefined
+            : await workspaceAncestors(filePath, workspaceRoot);
+        if (ancestors === null) return null;
         const before = await NodeFSP.lstat(filePath, { bigint: true });
         if (!before.isFile() || before.ino === 0n) return null;
         if (
@@ -81,6 +131,16 @@ export const openMediaFile = Effect.fn("openMediaFile")(function* (
           if ((await realpathLikeFileSystem(filePath)) !== filePath) return null;
           const after = await NodeFSP.lstat(filePath, { bigint: true });
           if (!after.isFile() || info.dev !== after.dev || info.ino !== after.ino) return null;
+          if (ancestors) {
+            // On Linux the kernel can name the descriptor itself. Elsewhere bracket the open
+            // with non-symlink directory identities and compare the authorized inode.
+            if (
+              platform === "linux" &&
+              (await NodeFSP.readlink(`/proc/self/fd/${handle.fd}`)) !== filePath
+            )
+              return null;
+            if (!(await sameAncestors(ancestors))) return null;
+          }
           accepted = true;
           return { handle, info } satisfies OpenMediaFile;
         } finally {

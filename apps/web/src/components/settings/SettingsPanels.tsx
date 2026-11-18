@@ -57,6 +57,7 @@ import {
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
+  NO_PROVIDER_MODEL_SELECTION,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
@@ -71,6 +72,7 @@ import { ScopedSwitch } from "./ScopedSwitch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   getChangedBrowserSettingLabels,
+  getChangedSettingLabels,
   getChangedTypographySettingLabels,
   hasChangedBackgroundActivitySettings,
   isProjectGroupingEnabled,
@@ -233,19 +235,14 @@ export function useSettingsRestore(onRestored?: () => void) {
       ? ["Composer context"]
       : []),
     ...getChangedTypographySettingLabels(settings),
-    ...(settings.diffFilesCollapsed !== DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed
-      ? ["Default diff file state"]
-      : []),
-    ...(settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
-      ? ["Diff whitespace changes"]
-      : []),
-    ...(settings.diffLayout !== DEFAULT_UNIFIED_SETTINGS.diffLayout ? ["Diff layout"] : []),
-    ...(settings.proactivePanelsEnabled !== DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled
-      ? ["Open pull requests and changes panels proactively"]
-      : []),
-    ...(settings.showSkillsInSlashMenu !== DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu
-      ? ["Show skills in slash menu"]
-      : []),
+    ...getChangedSettingLabels(settings, {
+      diffFilesCollapsed: "Default diff file state",
+      diffIgnoreWhitespace: "Diff whitespace changes",
+      diffLayout: "Diff layout",
+      proactivePanelsEnabled: "Open pull requests and changes panels proactively",
+      showPenMachines: "Show my Pen machines",
+      showSkillsInSlashMenu: "Show skills in slash menu",
+    }),
     ...(settings.composerCollapseOnScroll !== DEFAULT_UNIFIED_SETTINGS.composerCollapseOnScroll
       ? ["Collapse composer on scroll"]
       : []),
@@ -388,6 +385,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout,
       proactivePanelsEnabled: DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled,
+      showPenMachines: DEFAULT_UNIFIED_SETTINGS.showPenMachines,
       showSkillsInSlashMenu: DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu,
       composerCollapseOnScroll: DEFAULT_UNIFIED_SETTINGS.composerCollapseOnScroll,
       composerRichTextEnabled: DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled,
@@ -577,9 +575,11 @@ export function GeneralSettingsPanel() {
   const textGenerationProviders = serverProviders.filter(
     (provider) => provider.supportsTextGeneration !== false,
   );
+  const projectId = target?.projectId ?? null;
   const textGenerationModelSelection = resolveAppModelSelectionState(
     settings,
     textGenerationProviders,
+    projectId,
   );
   const textGenInstanceId = textGenerationModelSelection.instanceId;
   const textGenModel = textGenerationModelSelection.model;
@@ -597,8 +597,7 @@ export function GeneralSettingsPanel() {
   const textGenInstanceEntry = textGenerationModelInstanceEntries.find(
     (entry) => entry.instanceId === textGenInstanceId,
   );
-  const textGenProvider: ProviderDriverKind =
-    textGenInstanceEntry?.driverKind ?? DEFAULT_DRIVER_KIND;
+  const textGenProvider = textGenInstanceEntry?.driverKind ?? DEFAULT_DRIVER_KIND;
   const textGenerationModelOptionsByInstance = getTextGenerationModelOptionsByInstance(
     settings,
     textGenerationProviders,
@@ -609,6 +608,16 @@ export function GeneralSettingsPanel() {
     settings.textGenerationModelSelection ?? null,
     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
   );
+  const saveTextGenerationModel = (selection: ReturnType<typeof createModelSelection>) => {
+    const effective = resolveAppModelSelectionState(
+      { ...settings, textGenerationModelSelection: selection },
+      textGenerationProviders,
+      projectId,
+    );
+    if (effective !== NO_PROVIDER_MODEL_SELECTION) {
+      updateSettings({ textGenerationModelSelection: effective });
+    }
+  };
   const textGenerationModelDisabledReason = useScopedModelDisabledReason(
     settings,
     textGenerationModelInstanceEntries,
@@ -1325,11 +1334,16 @@ export function GeneralSettingsPanel() {
                   environmentId={environmentId}
                   activeInstanceId={textGenInstanceId}
                   model={textGenModel}
+                  preserveSelectedModel
                   lockedProvider={null}
                   instanceEntries={textGenerationModelInstanceEntries}
                   modelOptionsByInstance={textGenerationModelOptionsByInstance}
                   triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                  {...(mixedTextGenerationModel ? { triggerLabel: "Mixed" } : {})}
+                  {...(textGenerationModelSelection === NO_PROVIDER_MODEL_SELECTION
+                    ? { triggerLabel: "Unavailable" }
+                    : mixedTextGenerationModel
+                      ? { triggerLabel: "Mixed" }
+                      : {})}
                   getModelDisabledReason={textGenerationModelDisabledReason}
                   {...(environmentId
                     ? {
@@ -1351,15 +1365,7 @@ export function GeneralSettingsPanel() {
                       });
                       return;
                     }
-                    updateSettings({
-                      textGenerationModelSelection: resolveAppModelSelectionState(
-                        {
-                          ...settings,
-                          textGenerationModelSelection: createModelSelection(instanceId, model),
-                        },
-                        textGenerationProviders,
-                      ),
-                    });
+                    saveTextGenerationModel(createModelSelection(instanceId, model));
                   }}
                 />
                 {textGenInstanceEntry ? (
@@ -1373,21 +1379,11 @@ export function GeneralSettingsPanel() {
                       settings.planModeEnabled || selectsPlanAgent(textGenModelOptions)
                     }
                     triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                    onModelOptionsChange={(nextOptions) => {
-                      updateSettings({
-                        textGenerationModelSelection: resolveAppModelSelectionState(
-                          {
-                            ...settings,
-                            textGenerationModelSelection: createModelSelection(
-                              textGenInstanceId,
-                              textGenModel,
-                              nextOptions,
-                            ),
-                          },
-                          textGenerationProviders,
-                        ),
-                      });
-                    }}
+                    onModelOptionsChange={(nextOptions) =>
+                      saveTextGenerationModel(
+                        createModelSelection(textGenInstanceId, textGenModel, nextOptions),
+                      )
+                    }
                   />
                 ) : null}
               </div>

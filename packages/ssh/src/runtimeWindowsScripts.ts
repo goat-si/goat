@@ -1,3 +1,7 @@
+import {
+  SHARED_HOME_DESKTOP_UPDATE_MARKER,
+  SHARED_HOME_DESKTOP_UPDATE_TTL_SECONDS,
+} from "@goat/shared/desktopAppServer";
 import * as NodeBuffer from "node:buffer";
 
 import { GOAT_RUNTIME_CONTROL_HEADER, GOAT_RUNTIME_DRAIN_PATH } from "@goat/contracts";
@@ -231,6 +235,28 @@ try {
  * rather than adopting another environment, replacing a running runtime or reusing an
  * unverified executable; an installed version directory is immutable once published.
  */
+const SHARED_HOME_WAIT = String.raw`function Wait-DesktopUpdate {
+  $marker=Join-Path (Join-Path $baseDir 'runtime') '${SHARED_HOME_DESKTOP_UPDATE_MARKER}'
+  $notice=Join-Path $baseDir 'userdata\server-runtime.json'
+  $observed=$false
+  for ($i=0; $i -lt ${SHARED_HOME_DESKTOP_UPDATE_TTL_SECONDS}; $i++) {
+    $info=Get-Item -LiteralPath $marker -ErrorAction SilentlyContinue
+    if ($null -eq $info -or $info.PSIsContainer -or ($info.Attributes -band [IO.FileAttributes]::ReparsePoint)) { break }
+    try { $entry=([IO.File]::ReadAllText($marker)).Trim() } catch { break }
+    if ($entry -notmatch '^([1-9][0-9]{0,11}) [0-9-]+$') { break }
+    $expiry=[long]$Matches[1]
+    $now=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    if ($expiry -le $now -or $expiry -gt ($now + ${SHARED_HOME_DESKTOP_UPDATE_TTL_SECONDS})) { break }
+    $observed=$true
+    $record=Get-Item -LiteralPath $notice -ErrorAction SilentlyContinue
+    if ($null -ne $record -and -not ($record.Attributes -band [IO.FileAttributes]::ReparsePoint) -and
+        $record.LastWriteTimeUtc -gt $info.LastWriteTimeUtc) { break }
+    Start-Sleep -Seconds 1
+  }
+  return $observed
+}
+`;
+
 const OPERATIONS = String.raw`param($r,[byte[]]$archive)
 @@COMMON@@
 if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64' -and $env:PROCESSOR_ARCHITEW6432 -ne 'AMD64') { throw 'unsupported-architecture' }
@@ -239,6 +265,8 @@ function Report($selection,[bool]$live,$signals) {
   if ($null -ne $signals) { $out.signals=$signals }
   $out | ConvertTo-Json -Depth 20 -Compress
 }
+${SHARED_HOME_WAIT}$sharedUpdate=$false
+if ($r.waitDesktopUpdate -eq $true -or $r.op -eq 'launch') { $sharedUpdate=Wait-DesktopUpdate }
 if ($r.op -eq 'inspect' -or $r.op -eq 'install') {
   foreach ($other in @((Join-Path $baseDir 'desktop\userdata'),(Join-Path (Split-Path $baseDir) '.t3\userdata'))) {
     Assert-Tree $other
@@ -340,6 +368,9 @@ try {
       if (Get-Process -Id ([int]$owner.pid) -ErrorAction SilentlyContinue) {
         [void](Live $owner); @{selection=$owner; live=$true; reused=$true} | ConvertTo-Json -Depth 20 -Compress; return
       }
+    }
+    if ($sharedUpdate -and (Test-Path -LiteralPath (Join-Path $baseDir 'userdata\server-runtime.json'))) {
+      throw 'existing-environment-unavailable'
     }
     if ($r.nonce -notmatch '^[0-9a-f]{32}$') { throw 'nonce' }
     $script=Join-Path $state ($r.nonce+'.ps1'); $requestFile=Join-Path $state ($r.nonce+'.json')
