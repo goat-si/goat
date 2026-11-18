@@ -211,7 +211,7 @@ describe("runMigrations database ahead of this build", () => {
           last_forget_sequence: 13,
           origin_update_sequence: 1,
         },
-      ];
+      ] as const;
       assert.deepStrictEqual(yield* counters, before);
       assert.deepStrictEqual(
         yield* sql`SELECT after_sequence,after_origin_sequence,bootstrap_state FROM memory_sync_cursors WHERE space=${space}`,

@@ -251,7 +251,9 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
       refuseOriginPull = false;
       holdOrigin = false;
       yield* sync.syncOnce;
-      assert.include((yield* changes)[0], { kind: "invalidate", memoryId: attempts[0]?.memoryId });
+      const [attempt] = attempts;
+      if (!attempt) throw new Error("Expected the narrow remember");
+      assert.include((yield* changes)[0], { kind: "invalidate", memoryId: attempt.memoryId });
     }
     const page = yield* list;
     assert.sameMembers(
