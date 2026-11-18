@@ -2164,8 +2164,13 @@ interface ActiveClaudeProviderRetry {
   readonly itemOrdinal: number;
 }
 
+interface ClaudeWorkflowStop {
+  readonly requestedAt: number;
+  accepted: boolean;
+}
+
 interface ActiveClaudeSubagent {
-  workflowStop?: { readonly requestedAt: number };
+  workflowStop?: ClaudeWorkflowStop;
   task: OrchestrationV2Subagent;
   readonly nativeTaskType: string | undefined;
   readonly confirmedOutcome: ProviderAdapter.ProviderAdapterV2SubagentOutcome | undefined;
@@ -2232,7 +2237,8 @@ interface ActiveClaudeToolCall {
 }
 
 interface ClaudeSubagentProjectionTarget {
-  readonly workflowStopRequestedAt?: number;
+  readonly workflowStop?: ClaudeWorkflowStop;
+  observedWorkflowStop?: ClaudeWorkflowStop;
   readonly childThreadId: ThreadId;
   readonly childRootNodeId: OrchestrationV2ExecutionNode["id"];
   readonly nextOrdinal: () => number;
@@ -2849,6 +2855,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               readonly agentId: string | undefined;
               readonly transcriptCursor: WorkflowAgentTranscriptCursor;
               readonly transcriptMetadata: WorkflowAgentMetadata | undefined;
+              readonly observedWorkflowStop: ClaudeWorkflowStop | undefined;
               readonly nextItemOrdinal: number;
               readonly toolCalls: Map<string, ActiveClaudeToolCall>;
               readonly textShown: boolean;
@@ -4257,16 +4264,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               return;
             const memberKey = `${input.coordinator.childThreadId}:agent:${member.index}`;
             const previous = seen.get(memberKey);
-            const stopRequestedAt = input.coordinator.workflowStop?.requestedAt;
-            const status =
+            const stop = input.coordinator.workflowStop;
+            const mightBeStopped =
+              member.state === "failed" && stop?.accepted === true && previous?.status !== "failed";
+            let status =
               (member.state === "queued" || member.state === "running") &&
               input.coordinator.task.status !== "running"
                 ? input.coordinator.task.status
                 : member.state === "queued"
                   ? "pending"
-                  : member.state === "failed" &&
-                      stopRequestedAt !== undefined &&
-                      previous?.status !== "failed"
+                  : mightBeStopped &&
+                      previous !== undefined &&
+                      previous.observedWorkflowStop === stop &&
+                      previous.attempt === (member.attempt ?? previous.attempt) &&
+                      previous.agentId === member.agentId
                     ? "cancelled"
                     : member.state;
             const settled = status !== "pending" && status !== "running";
@@ -4397,10 +4408,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               startedAt,
               completedAt,
             };
-            if (changed) {
+            const emitMember = Effect.fnUntraced(function* () {
               for (const node of [
                 {
                   ...nodeBase,
+                  status,
                   id: nodeId,
                   threadId: parentThread.id,
                   parentNodeId: input.coordinator.childRootNodeId,
@@ -4409,6 +4421,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 },
                 {
                   ...nodeBase,
+                  status,
                   id: childRootNodeId,
                   threadId: childThreadId,
                   parentNodeId: null,
@@ -4421,9 +4434,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               yield* emitProviderEvent({
                 type: "subagent.updated",
                 driver: CLAUDE_PROVIDER,
-                subagent: task,
+                subagent: { ...task, status },
               });
-            }
+            });
+            if (changed && !mightBeStopped) yield* emitMember();
 
             const toolCalls = previous?.toolCalls ?? new Map<string, ActiveClaudeToolCall>();
             let nextItemOrdinal = previous?.nextItemOrdinal ?? 100;
@@ -4432,9 +4446,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               childRootNodeId,
               nextOrdinal: () => ++nextItemOrdinal,
               toolCalls,
-              ...(stopRequestedAt === undefined
+              ...(stop === undefined ? {} : { workflowStop: stop }),
+              ...(newIdentity || previous.observedWorkflowStop === undefined
                 ? {}
-                : { workflowStopRequestedAt: stopRequestedAt }),
+                : { observedWorkflowStop: previous.observedWorkflowStop }),
             };
             const endOpenToolCalls = Effect.fnUntraced(function* () {
               if (toolCalls.size === 0) return;
@@ -4518,6 +4533,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 if (!(yield* drain())) return;
               }
             }
+            if (mightBeStopped && target.observedWorkflowStop === stop) status = "cancelled";
+            if (mightBeStopped && (changed || status !== previous?.status)) yield* emitMember();
             if (transcriptRead)
               reportedMembers[memberIndex] = withWorkflowAgentMetadata(member, metadata ?? {});
             if (settled) {
@@ -4556,6 +4573,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   (readTranscript ? 1 : 0),
                 transcriptCursor,
                 transcriptMetadata: metadata,
+                observedWorkflowStop: target.observedWorkflowStop,
                 nextItemOrdinal,
                 toolCalls,
                 textShown,
@@ -5456,6 +5474,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 presentation: undefined,
                 startedAt: at,
               }));
+            const stop = target.workflowStop;
+            const stopDenial =
+              stop !== undefined &&
+              timestamp !== undefined &&
+              isClaudeToolResultError(toolResult) &&
+              field(line, "toolDenialKind") === "user-rejected" &&
+              DateTime.toEpochMillis(timestamp) >= stop.requestedAt;
+            if (stopDenial) target.observedWorkflowStop = stop;
             yield* settleToolCall({
               context: null,
               toolCall,
@@ -5464,11 +5490,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               toolResult,
               output,
               completedAt: at,
-              stoppedByWorkflow:
-                timestamp !== undefined &&
-                target.workflowStopRequestedAt !== undefined &&
-                field(line, "toolDenialKind") === "user-rejected" &&
-                DateTime.toEpochMillis(timestamp) >= target.workflowStopRequestedAt,
+              stoppedByWorkflow: stopDenial && stop.accepted,
             });
           }
           if (line.type !== "assistant") return false;
@@ -10431,10 +10453,18 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 detail: "No running workflow task belongs to this provider thread",
               });
             }
-            const stop = { requestedAt: DateTime.toEpochMillis(yield* DateTime.now) };
+            const stop = {
+              requestedAt: DateTime.toEpochMillis(yield* DateTime.now),
+              accepted: false,
+            };
             const previousStop = task.workflowStop;
             task.workflowStop = stop;
             yield* liveQuery.query.stopTask(taskId).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  stop.accepted = true;
+                }),
+              ),
               Effect.onError(() =>
                 Ref.get(sessionSubagentsByTaskId).pipe(
                   Effect.map((tasks) => {

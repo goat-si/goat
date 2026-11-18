@@ -14114,6 +14114,48 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         ...(stopReason === undefined ? {} : { stop_reason: stopReason }),
       },
     });
+  it.effect("keeps a workflow member failed when a pending Stop is rejected", () =>
+    Effect.gen(function* () {
+      const stopping = yield* Deferred.make<void>();
+      const reject = yield* Deferred.make<void>();
+      const harness = yield* makeWorkflowHarnessWithOptions({
+        stopTask: () =>
+          Deferred.succeed(stopping, undefined).pipe(
+            Effect.andThen(Deferred.await(reject)),
+            Effect.andThen(
+              new ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerError({
+                method: "stopTask",
+                cause: "rejected",
+              }),
+            ),
+          ),
+      });
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("workflow-rejected-stop"),
+          text: "Run a workflow.",
+          attachments: [],
+        }),
+      );
+      yield* launchWorkflow({ harness, snapshotUuid: "workflow-rejected-stop-start" });
+      const stop = yield* harness.runtime.stopTask!({
+        providerThread: harness.providerThread,
+        taskId: WORKFLOW_TASK_ID,
+      }).pipe(Effect.exit, Effect.forkChild);
+      yield* Deferred.await(stopping);
+      yield* harness.offerAndWait(
+        workflowSnapshot({ uuid: "workflow-real-failure", state: "error" }),
+      );
+      assert.equal(workflowMemberEvents(harness.events, 1).at(-1)?.subagent.status, "failed");
+      yield* Deferred.succeed(reject, undefined);
+      assert.isTrue(Exit.isFailure(yield* Fiber.join(stop)));
+      assert.equal(workflowMemberEvents(harness.events, 1).at(-1)?.subagent.status, "failed");
+    }).pipe(Effect.scoped, Effect.provide(layerAdapterTest)),
+  );
+
   it.effect("shows a workflow member's tool as stopped when Stop cancels the workflow", () =>
     Effect.scoped(
       Effect.gen(function* () {
