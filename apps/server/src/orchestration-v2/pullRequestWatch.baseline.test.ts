@@ -253,11 +253,10 @@ describe("evaluatePullRequestWatch on a watch awaiting its baseline", () => {
   });
 
   it("a fork whose approval lookup always fails reports a check that starts failing after the baseline", () => {
-    // A head SHA with the approval read unavailable ends the check baseline; approvals keep waiting.
     const unavailable = { ...check("Workflow approval status", "pending"), placeholder: true };
     const first = evaluate(
       watch({ awaitingBaseline: "all" }),
-      detail({ checks: [unavailable] }),
+      detail({ checks: [check("test", "pending"), unavailable] }),
       noRemarks,
     );
     assert.deepEqual(first.changes, []);
@@ -277,6 +276,22 @@ describe("evaluatePullRequestWatch on a watch awaiting its baseline", () => {
       evaluate(already.next, detail({ checks: [failing, unavailable] }), noRemarks).changes,
       [],
     );
+  });
+
+  it("baselines an already failing check when the first read showed only a placeholder", () => {
+    const unavailable = { ...check("Workflow approval status", "pending"), placeholder: true };
+    const empty = detail({ checks: [unavailable] });
+    const first = evaluate(watch({ awaitingBaseline: "all" }), empty, noRemarks);
+    const stillEmpty = evaluate(first.next, empty, noRemarks);
+    const failing = detail({ checks: [check("test", "failure"), unavailable] });
+    const baseline = evaluate(stillEmpty.next, failing, noRemarks);
+
+    assert.deepEqual(baseline.changes, []);
+    assert.deepEqual(baseline.next.failedChecks, ["test"]);
+    const populated = detail({
+      checks: [check("test", "failure"), { ...check("CI", "action-required"), url: run(1) }],
+    });
+    assert.deepEqual(evaluate(baseline.next, populated, noRemarks).changes, []);
   });
 
   it("reports pending advisory checks finishing after a required-check baseline", () => {
