@@ -18,6 +18,7 @@ import {
   workflowMemberEvents,
   WORKFLOW_TASK_ID,
 } from "./ClaudeAdapterV2.workflow.testkit.ts";
+import { ClaudeAgentSdkQueryRunnerError } from "./ClaudeAgentSdkQueryRunner.ts";
 import { layerClaudeAdapterTest } from "./ClaudeAdapterTestLayer.testkit.ts";
 import { makeClaudeTestTurnInput } from "./ClaudeTestInput.testkit.ts";
 import { claudeSdkFrame, WAKE_NATIVE_SESSION } from "./ClaudeWakeFrames.testkit.ts";
@@ -126,6 +127,20 @@ it.effect(
     }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
 );
 
+const writeHeldDenial = (fs: FileSystem.FileSystem, path: string) =>
+  fs.writeFileString(
+    path,
+    '{"type":"user","uuid":"tool-denied","timestamp":"2026-10-17T06:00:01.000Z","toolDenialKind":"user-rejected","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_fixture","is_error":true,"content":"Rejected"}]}}\n',
+    { flag: "a" },
+  );
+
+const heldToolOutcomes = (harness: Effect.Success<ReturnType<typeof makeWorkflow>>) =>
+  harness.events.flatMap((event) =>
+    event.type === "turn_item.updated" && event.turnItem.nativeItemRef?.nativeId === "tool_fixture"
+      ? [event.turnItem.status]
+      : [],
+  );
+
 it.effect.each([false, true])(
   "settles held evidence for a confirmed workflow Stop (timeout before EOF: %s)",
   (timeoutBeforeEof) =>
@@ -142,24 +157,14 @@ it.effect.each([false, true])(
         : harness.stop;
       const stopping = yield* request.pipe(Effect.exit, Effect.forkChild);
       yield* Deferred.await(requested);
-      yield* fs.writeFileString(
-        harness.transcript,
-        '{"type":"user","uuid":"tool-denied","timestamp":"2026-10-17T06:00:01.000Z","toolDenialKind":"user-rejected","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_fixture","is_error":true,"content":"Rejected"}]}}\n',
-        { flag: "a" },
-      );
+      yield* writeHeldDenial(fs, harness.transcript);
       yield* harness.offerAndWait(frames.workflowSnapshot({ uuid: "held-member", state: "error" }));
       yield* harness.offerAndWait(
         frames.workflowNotification({ uuid: "workflow-stopped", status: "stopped" }),
       );
       assert.isUndefined(stopping.pollUnsafe());
       assert.equal(workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status, "cancelled");
-      const toolOutcomes = () =>
-        harness.events.flatMap((event) =>
-          event.type === "turn_item.updated" &&
-          event.turnItem.nativeItemRef?.nativeId === "tool_fixture"
-            ? [event.turnItem.status]
-            : [],
-        );
+      const toolOutcomes = () => heldToolOutcomes(harness);
       if (timeoutBeforeEof) {
         yield* TestClock.adjust("15 seconds");
         assert.isTrue(Exit.isFailure(yield* Fiber.join(stopping)));
@@ -187,5 +192,64 @@ it.effect.each([false, true])(
       }
       yield* harness.awaitEventsRecorded;
       assert.deepEqual(toolOutcomes(), ["running", "interrupted"]);
+    }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
+);
+
+it.effect.each(["stopped", "rejected", "EOF"] as const)(
+  "reconciles a locally timed-out workflow Stop when the native result is %s",
+  (nativeResult) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const requested = yield* Deferred.make<void>();
+      const reply = yield* Deferred.make<void, ClaudeAgentSdkQueryRunnerError>();
+      const harness = yield* makeWorkflow(() =>
+        Deferred.succeed(requested, undefined).pipe(Effect.andThen(Deferred.await(reply))),
+      );
+      yield* TestClock.setTime(Date.parse("2026-10-17T06:00:00.000Z"));
+      const request = yield* harness.stop.pipe(
+        Effect.timeout("15 seconds"),
+        Effect.result,
+        Effect.forkChild,
+      );
+      yield* Deferred.await(requested);
+      yield* writeHeldDenial(fs, harness.transcript);
+      yield* harness.offerAndWait(frames.workflowSnapshot({ uuid: "held-denial", state: "error" }));
+      yield* TestClock.adjust("15 seconds");
+      const timeout = yield* Fiber.join(request);
+      assert.equal(timeout._tag === "Failure" ? timeout.failure._tag : undefined, "TimeoutError");
+      yield* harness.awaitEventsRecorded;
+      if (nativeResult === "stopped") {
+        yield* harness.offerAndWait(
+          frames.workflowNotification({ uuid: "late-stopped", status: "stopped" }),
+        );
+        assert.deepEqual(heldToolOutcomes(harness), ["running", "interrupted"]);
+        assert.equal(
+          workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status,
+          "cancelled",
+        );
+        assert.equal(workflowMemberEvents(harness.events, 1).at(-1)?.subagent.status, "cancelled");
+      } else {
+        assert.deepEqual(heldToolOutcomes(harness), ["running"]);
+      }
+      if (nativeResult === "rejected") {
+        yield* Deferred.fail(
+          reply,
+          new ClaudeAgentSdkQueryRunnerError({
+            method: "stopTask",
+            cause: "Provider rejected the request",
+          }),
+        );
+        yield* harness.awaitUntil(
+          () => heldToolOutcomes(harness).length > 1,
+          "late explicit rejection settled",
+        );
+        assert.deepEqual(heldToolOutcomes(harness), ["running", "failed"]);
+      }
+      yield* Queue.shutdown(harness.sdkMessages);
+      yield* harness.awaitQueryExit(harness.sdkMessages);
+      assert.deepEqual(heldToolOutcomes(harness), [
+        "running",
+        nativeResult === "stopped" ? "interrupted" : "failed",
+      ]);
     }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
 );

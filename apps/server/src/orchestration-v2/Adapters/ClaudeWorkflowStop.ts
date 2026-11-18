@@ -5,6 +5,10 @@ import type {
 } from "@goat/contracts";
 import type * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import type * as Scope from "effect/Scope";
 import type { WorkflowAgentMetadata } from "../workflowAgentAnswers.ts";
 import type { WorkflowAgentTranscriptCursor } from "../workflowAgentTranscript.ts";
 
@@ -17,6 +21,7 @@ export interface ClaudeWorkflowStop {
   readonly requestedAt: number;
   readonly owner: ClaudeAgentSdkQuerySession;
   acknowledged: boolean;
+  waitInterrupted: boolean;
   readonly tools: Map<string, SettleDenial>;
   outcome: "pending" | "accepted" | "rejected";
   readonly members: Map<number, OrchestrationV2WorkflowAgent>;
@@ -30,11 +35,50 @@ export function makeClaudeWorkflowStop(
     owner,
     requestedAt,
     acknowledged: false,
+    waitInterrupted: false,
     tools: new Map(),
     outcome: "pending",
     members: new Map(),
   };
 }
+
+export const requestClaudeWorkflowStop = Effect.fn("ClaudeWorkflowStop.request")(function* (
+  stop: ClaudeWorkflowStop,
+  taskId: string,
+  closed: Deferred.Deferred<void>,
+  sessionScope: Scope.Scope,
+  reconcile: (confirmedOnly: boolean) => Effect.Effect<void>,
+) {
+  yield* Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      // The RPC only waits for the reply. The native request can still answer after its deadline.
+      const noWaiter = yield* Deferred.make<void>();
+      const retireRequest = Deferred.await(noWaiter).pipe(
+        Effect.andThen(Deferred.await(closed)),
+        Effect.andThen(Effect.interrupt),
+      );
+      const request = yield* stop.owner.stopTask(taskId).pipe(
+        Effect.raceFirst(retireRequest),
+        Effect.onExit((exit) => {
+          if (Exit.hasInterrupts(exit)) return Effect.void;
+          stop.acknowledged = Exit.isSuccess(exit);
+          return reconcile(false);
+        }),
+        Effect.forkIn(sessionScope, { uninterruptible: false }),
+      );
+      yield* restore(Fiber.join(request)).pipe(
+        Effect.onInterrupt(() =>
+          Effect.sync(() => {
+            stop.waitInterrupted = true;
+          }).pipe(
+            Effect.andThen(Deferred.succeed(noWaiter, undefined)),
+            Effect.andThen(reconcile(true)),
+          ),
+        ),
+      );
+    }),
+  );
+});
 
 export function holdClaudeStopDenial(
   stop: ClaudeWorkflowStop,

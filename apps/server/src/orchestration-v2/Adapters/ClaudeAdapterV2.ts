@@ -1,10 +1,10 @@
-import * as Exit from "effect/Exit";
 import {
   beforeClaudeStopProjection,
   holdClaudeStopDenial,
   holdClaudeWorkflowMember,
   makeClaudeWorkflowStop,
   reconcileClaudeWorkflowStop,
+  requestClaudeWorkflowStop,
   type ClaudeWorkflowMemberState,
   type ClaudeWorkflowStop,
 } from "./ClaudeWorkflowStop.ts";
@@ -4959,6 +4959,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               coordinator: subagent,
               workflow: workflowWithThreads,
             });
+            const stop = subagent.workflowStop;
+            if (
+              input.nativeOutcome !== undefined &&
+              stop?.waitInterrupted === true &&
+              (yield* Ref.get(queryContext))?.query === stop.owner
+            )
+              yield* reconcileClaudeWorkflowStop(subagent, stop, projectClaudeWorkflowMembers);
             if ((yield* Ref.get(sessionSubagentsByTaskId)).get(input.taskId) !== subagent) return;
           }
           yield* emitProviderEvent({
@@ -7139,9 +7146,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                       entry.subtype === "task_started" &&
                       entry.task_id === message.task_id,
                   ) ?? false;
+              const stop = registered?.workflowStop;
               const canApplyOutcome =
                 subagentStopOutcomes.has(message.task_id) ||
-                (!hasBufferedStart && registered?.task.workflow === undefined);
+                (!hasBufferedStart &&
+                  (registered?.task.workflow === undefined ||
+                    (stop?.owner === liveQuery.query && stop.waitInterrupted)));
               if (registered !== undefined && settled !== undefined && canApplyOutcome) {
                 yield* discardBufferedSubagentStarts(
                   liveQuery.nativeThreadId,
@@ -10465,16 +10475,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             );
             const previousStop = task.workflowStop;
             task.workflowStop = stop;
-            yield* liveQuery.query.stopTask(taskId).pipe(
-              Effect.onExit((exit) => {
-                stop.acknowledged = Exit.isSuccess(exit);
-                return sdkMessageLock
+            yield* requestClaudeWorkflowStop(
+              stop,
+              taskId,
+              liveQuery.closed,
+              sessionScope,
+              (confirmedOnly) =>
+                sdkMessageLock
                   .withPermits(1)(
                     Effect.gen(function* () {
                       const current = (yield* Ref.get(sessionSubagentsByTaskId)).get(taskId);
                       if (
                         current?.workflowStop !== stop ||
-                        (yield* Ref.get(queryContext)) !== liveQuery
+                        (yield* Ref.get(queryContext)) !== liveQuery ||
+                        (confirmedOnly && current.confirmedOutcome === undefined)
                       )
                         return;
                       yield* reconcileClaudeWorkflowStop(
@@ -10488,8 +10502,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                       }
                     }),
                   )
-                  .pipe(Effect.interruptible, Effect.forkIn(sessionScope), Effect.asVoid);
-              }),
+                  .pipe(Effect.forkIn(sessionScope, { uninterruptible: false }), Effect.asVoid),
+            ).pipe(
               Effect.mapError(
                 (cause) =>
                   new ProviderAdapter.ProviderAdapterProtocolError({
