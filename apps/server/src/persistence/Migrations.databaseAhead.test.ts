@@ -142,10 +142,16 @@ describe("runMigrations database ahead of this build", () => {
   it.effect("backfills origin catch-up on a ready database and publishes the next sequence", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
+      const previous = migrationEntries.find(([, name]) => name === "MemoryCompactMoveReceipts");
       const upgrade = migrationEntries.find(([, name]) => name === "MemoryOriginCatchup");
-      if (!upgrade) throw new Error("Expected the origin catch-up migration");
+      if (!previous || !upgrade) throw new Error("Expected both origin upgrade migrations");
+      const [previousId, previousName] = previous;
       const [migrationId, migrationName] = upgrade;
-      yield* runMigrations({ toMigrationInclusive: migrationId - 1 });
+      assert.deepStrictEqual([previousId, migrationId], [163, 164]);
+      assert.deepStrictEqual((yield* runMigrations({ toMigrationInclusive: previousId })).at(-1), [
+        previousId,
+        previousName,
+      ]);
       const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
       const space = M.MemorySpaceId.make(id(1));
       const secondSpace = M.MemorySpaceId.make(id(2));
@@ -221,7 +227,7 @@ describe("runMigrations database ahead of this build", () => {
       const upgradedLedger = yield* ledger;
       assert.isEmpty(yield* runMigrations());
       assert.deepStrictEqual(yield* ledger, upgradedLedger);
-      const manifest = migrationEntries.filter(([id]) => id < migrationId);
+      const manifest = migrationEntries.filter(([id]) => id <= previousId);
       const failure = yield* Effect.flip(assertMemoryMigrationsCompatible(manifest));
       assert.include(failure.message, "Unreleased memory DB is incompatible");
 
