@@ -3,7 +3,11 @@ import { encodeComposerContextClipboardHtml } from "@goat/shared/composerContext
 
 const MAX_FINGERPRINT_PIXELS = 16 * 1024 * 1024;
 const SNAPSHOT_PNG_ATTRIBUTE = "data-goat-snapshot-png";
-const SNAPSHOT_WRAPPER = /<pre[^>]*\sdata-goat-snapshot-png="([0-9]+x[0-9]+:[0-9a-f]{64})"[^>]*>/;
+// A single snapshot's escaped accessibility data and icon fit under this ceiling.
+const MAX_SNAPSHOT_HTML_CHARS = 2 * 1024 * 1024;
+const FINGERPRINT_ASSIGNMENT = `${SNAPSHOT_PNG_ATTRIBUTE}=`;
+const HTML_WHITESPACE = /[\t\n\f\r ]/;
+const FINGERPRINT = /^[0-9]{1,8}x[0-9]{1,8}:[0-9a-f]{64}$/;
 
 export function snapshotClipboardHtml(
   text: string,
@@ -17,9 +21,45 @@ export function snapshotClipboardHtml(
 }
 
 export function readSnapshotClipboardWrapper(html: string) {
-  const wrapper = SNAPSHOT_WRAPPER.exec(html);
-  const fingerprint = wrapper?.[1];
-  return wrapper && fingerprint ? { html: wrapper[0], fingerprint } : null;
+  if (html.length > MAX_SNAPSHOT_HTML_CHARS) return null;
+
+  let cursor = 0;
+  while (cursor < html.length) {
+    const start = html.indexOf("<", cursor);
+    if (start === -1) return null;
+    if (html.startsWith("<!--", start)) {
+      const end = html.indexOf("-->", start + 4);
+      if (end === -1) return null;
+      cursor = end + 3;
+      continue;
+    }
+
+    const pre = html.startsWith("<pre", start) && HTML_WHITESPACE.test(html.charAt(start + 4));
+    let fingerprint: string | undefined;
+    let end = start + 1;
+    for (; end < html.length; end += 1) {
+      const char = html[end];
+      if (char === "<" || char === ">") break;
+      if (char !== '"' && char !== "'") continue;
+      const closeQuote = html.indexOf(char, end + 1);
+      if (closeQuote === -1) return null;
+      const nameStart = end - FINGERPRINT_ASSIGNMENT.length;
+      if (
+        pre &&
+        HTML_WHITESPACE.test(html.charAt(nameStart - 1)) &&
+        html.startsWith(FINGERPRINT_ASSIGNMENT, nameStart)
+      ) {
+        const value = html.slice(end + 1, closeQuote);
+        if (FINGERPRINT.test(value)) fingerprint = value;
+      }
+      end = closeQuote;
+    }
+    if (html[end] === ">" && fingerprint) {
+      return { html: html.slice(start, end + 1), fingerprint };
+    }
+    cursor = html[end] === "<" ? end : end + 1;
+  }
+  return null;
 }
 
 export async function fingerprintSnapshotPng(png: Blob): Promise<string | null> {
