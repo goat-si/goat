@@ -329,8 +329,11 @@ it("copies with the pointer and restores the shadow row after keyboard dismissal
   await userEvent.click(action);
   await vi.waitFor(() => expect(state.copy).toHaveBeenCalledWith("[README.md](README.md)"));
   await userEvent.keyboard("{Tab}");
+  await userEvent.hover(document.body);
   target.focus();
   await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+  await expect.element(action).toBeVisible();
+  await userEvent.keyboard("{End}{ArrowUp}");
   await expect.element(action).toHaveFocus();
   await userEvent.keyboard("{Escape}");
   await vi.waitFor(() => expect(treeRoot(screen.container).activeElement).toBe(target));
