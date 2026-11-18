@@ -536,7 +536,6 @@ function WorkspaceStackView(props: ViewProps & { readonly nativeColumns: boolean
     render: () => (
       <WorkspaceNativeTabs
         hidden={
-          !workspacePage &&
           projection.detail.length > 0 &&
           !primaryVisible &&
           !layout.usesSplitView &&
