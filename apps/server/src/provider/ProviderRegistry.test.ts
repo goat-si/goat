@@ -2425,22 +2425,22 @@ it.layer(
             ),
             Stream.filter((provider): provider is ServerProvider => provider !== undefined),
           );
-          const firstError = yield* Stream.toPull(
-            codexSnapshots.pipe(Stream.filter((provider) => provider.status === "error")),
-          );
+          // A pending snapshot can publish immediately because it skips the cache write.
+          const observeNextCodex = (matches: (provider: ServerProvider) => boolean) =>
+            Stream.runCollect(codexSnapshots.pipe(Stream.filter(matches), Stream.take(1))).pipe(
+              Effect.forkScoped({ startImmediately: true }),
+            );
+          const firstError = yield* observeNextCodex((provider) => provider.status === "error");
           const currentCodex = (yield* registry.getProviders).find(
             (provider) => provider.instanceId === "codex",
           );
           const initialCodex =
-            currentCodex?.status === "error" ? currentCodex : (yield* firstError)[0];
-          assert.strictEqual(initialCodex?.status, "error");
-          assert.strictEqual(initialCodex?.installed, false);
+            currentCodex?.status === "error" ? currentCodex : (yield* Fiber.join(firstError))[0];
+          expect(initialCodex).toMatchObject({ status: "error", installed: false });
           assert.deepStrictEqual(spawnedCommands, [firstMissing]);
 
-          const pendingRebuild = yield* Stream.toPull(
-            codexSnapshots.pipe(
-              Stream.filter((provider) => provider.status === "warning" && !provider.installed),
-            ),
+          const pendingRebuild = yield* observeNextCodex(
+            (provider) => provider.status === "warning" && !provider.installed,
           );
           yield* serverSettings.updateSettings({
             providerInstances: {
@@ -2455,15 +2455,14 @@ it.layer(
           yield* Deferred.succeed(allowLazySettingsStream, undefined);
 
           yield* Deferred.await(secondProbeStarted);
-          yield* pendingRebuild;
-          const rebuiltError = yield* Stream.toPull(
-            codexSnapshots.pipe(Stream.filter((provider) => provider.status === "error")),
-          );
+          const [pendingCodex] = yield* Fiber.join(pendingRebuild);
+          assert.strictEqual(pendingCodex?.awaitingFirstCheck, true);
+          const rebuiltError = yield* observeNextCodex((provider) => provider.status === "error");
           yield* Deferred.succeed(releaseSecondProbe, undefined);
-          const [reprobedCodex] = yield* rebuiltError;
+          const [reprobedCodex] = yield* Fiber.join(rebuiltError);
           assert.deepStrictEqual(spawnedCommands, [firstMissing, secondMissing]);
-          assert.strictEqual(reprobedCodex?.status, "error");
-          assert.strictEqual(reprobedCodex?.installed, false);
+          expect(reprobedCodex).toMatchObject({ status: "error", installed: false });
+          assert.strictEqual(reprobedCodex?.awaitingFirstCheck, undefined);
         }).pipe(Effect.provide(runtimeServices));
       }),
     );
