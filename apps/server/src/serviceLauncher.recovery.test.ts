@@ -7,6 +7,7 @@ import * as Path from "effect/Path";
 import * as NodeSqlite from "node:sqlite";
 
 import { SERVICE_LAUNCHER_PROTOCOL } from "./cloud/serviceProtocol.ts";
+import { tryAcquireServerOwnerLock } from "./serverOwnerLockFile.ts";
 import { Launcher, readServiceState, writeServiceState } from "./serviceLauncher.ts";
 import { writeFakeRuntime } from "./serviceLauncher.testkit.ts";
 
@@ -89,9 +90,11 @@ legacy.close();
 
 const expectBlocked = (f: Effect.Success<ReturnType<typeof fixture>>) =>
   Effect.gen(function* () {
-    assert.include(String(yield* f.run()), "Database recovery required");
+    const outcome = String(yield* f.run());
+    assert.include(outcome, "Database recovery required");
     assert.isFalse(yield* f.fs.exists(f.previousStarted));
     assert.deepEqual(yield* Effect.promise(() => readServiceState(f.statePath)), f.state);
+    return outcome;
   });
 
 it.layer(NodeServices.layer)("conservative launcher recovery", (it) => {
@@ -323,5 +326,41 @@ process.exit(1);
         using db = new NodeSqlite.DatabaseSync(f.dbPath, { readOnly: true });
         assert.equal(db.prepare("SELECT count(*) AS count FROM messages").get()?.count, 3);
       }),
+  );
+
+  it.effect("keeps a damaged ownership log until it is moved aside offline", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture("process.exit(1);");
+      const stateDir = f.path.dirname(f.dbPath);
+      const logPath = f.path.join(stateDir, "server-owner.lock");
+      const original = tryAcquireServerOwnerLock(stateDir, "previous");
+      assert.isDefined(original);
+      original.release();
+      yield* f.fs.truncate(logPath, 1024);
+      const damaged = yield* f.fs.readFile(logPath);
+      const hint = `The database ownership log at ${logPath} could not be opened`;
+      assert.include(yield* expectBlocked(f), hint);
+
+      yield* f.fs.writeFileString(
+        f.path.join(f.runtime, "db-update-recovery.phase"),
+        "keep-live\n",
+      );
+      assert.include(yield* expectBlocked(f), hint);
+      assert.deepEqual(yield* f.fs.readFile(logPath), damaged);
+
+      const savedDir = f.path.join(stateDir, "saved-owner-log");
+      yield* f.fs.makeDirectory(savedDir);
+      const savedLog = f.path.join(savedDir, "server-owner.lock");
+      yield* f.fs.rename(logPath, savedLog);
+      assert.include(String(yield* f.run()), "Active child exited unexpectedly");
+      assert.isTrue(yield* f.fs.exists(f.previousStarted));
+      assert.deepEqual(yield* f.fs.readFile(savedLog), damaged);
+      assert.deepEqual(yield* f.fs.readFile(f.dbPath), f.baseline);
+      using replacement = new NodeSqlite.DatabaseSync(logPath, { readOnly: true });
+      assert.equal(
+        replacement.prepare("SELECT owner FROM owner_generations").get()?.owner,
+        "service-launcher:recovery",
+      );
+    }),
   );
 });

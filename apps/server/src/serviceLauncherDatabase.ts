@@ -9,7 +9,11 @@ import * as NodeSqlite from "node:sqlite";
 import * as NodeURL from "node:url";
 
 import type { PendingServiceUpdate } from "./cloud/serviceProtocol.ts";
-import { serverOwnerLogFileIdentity, tryAcquireServerOwnerLock } from "./serverOwnerLockFile.ts";
+import {
+  serverOwnerLogFileIdentity,
+  serverOwnerLogPath,
+  tryAcquireServerOwnerLock,
+} from "./serverOwnerLockFile.ts";
 import { replaceFileDurably } from "./serviceUnitRepoint.ts";
 import { livePreLockServerOwner, tryAcquireLegacyServerOwnerLock } from "./serviceLauncherOwner.ts";
 
@@ -163,6 +167,18 @@ export interface DatabaseSnapshot {
   readonly files: ReadonlySet<DatabaseSuffix>;
 }
 
+function acquireDatabaseOwnerLock(stateDir: string, owner: string) {
+  try {
+    return tryAcquireServerOwnerLock(stateDir, owner);
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    throw new Error(
+      `The database ownership log at ${serverOwnerLogPath(stateDir)} could not be opened (${detail}).`,
+      { cause },
+    );
+  }
+}
+
 export async function backupDatabase(
   baseDir: string,
   pending: PendingServiceUpdate,
@@ -170,7 +186,7 @@ export async function backupDatabase(
 ): Promise<DatabaseSnapshot | undefined> {
   signal.throwIfAborted();
   const stateDir = ownerLockDir(pending);
-  const lock = tryAcquireServerOwnerLock(stateDir, launcherOwner(pending.id));
+  const lock = acquireDatabaseOwnerLock(stateDir, launcherOwner(pending.id));
   if (lock === undefined) return undefined;
   let releaseLegacy: (() => void) | undefined;
   try {
@@ -403,11 +419,11 @@ export async function selectDatabaseRollback(
 
   const stateDir = ownerLockDir(pending);
   const owner = launcherOwner(pending.id);
-  let lock: ReturnType<typeof tryAcquireServerOwnerLock>;
+  let lock: ReturnType<typeof acquireDatabaseOwnerLock>;
   try {
-    lock = tryAcquireServerOwnerLock(stateDir, owner);
-  } catch {
-    throw requireRecovery("The database ownership log could not be opened.");
+    lock = acquireDatabaseOwnerLock(stateDir, owner);
+  } catch (cause) {
+    throw requireRecovery(cause instanceof Error ? cause.message : String(cause));
   }
   if (lock === undefined) {
     if (canKeep) return "busy";

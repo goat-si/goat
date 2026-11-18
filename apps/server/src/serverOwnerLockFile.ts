@@ -5,10 +5,11 @@ import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
 
 const SERVER_OWNER_LOCK_FILE = "server-owner.lock";
-const lockPath = (stateDir: string) => NodePath.join(stateDir, SERVER_OWNER_LOCK_FILE);
+export const serverOwnerLogPath = (stateDir: string) =>
+  NodePath.join(stateDir, SERVER_OWNER_LOCK_FILE);
 
 export function serverOwnerLogFileIdentity(stateDir: string): string {
-  const { dev, ino } = NodeFS.statSync(lockPath(stateDir), { bigint: true });
+  const { dev, ino } = NodeFS.statSync(serverOwnerLogPath(stateDir), { bigint: true });
   return `${dev}:${ino}`;
 }
 
@@ -29,7 +30,7 @@ const isBusy = (cause: unknown) =>
 
 /** Probe an existing generation lock without recording an owner. */
 export function serverOwnerLockHeld(stateDir: string): boolean {
-  const path = lockPath(stateDir);
+  const path = serverOwnerLogPath(stateDir);
   if (!NodeFS.existsSync(path)) return false;
   using db = new NodeSqlite.DatabaseSync(path, { readOnly: true });
   try {
@@ -46,7 +47,7 @@ export function tryAcquireServerOwnerLock(
   stateDir: string,
   owner: string,
 ): ServerOwnerLock | undefined {
-  const db = new NodeSqlite.DatabaseSync(lockPath(stateDir));
+  const db = new NodeSqlite.DatabaseSync(serverOwnerLogPath(stateDir));
   try {
     // Exclusive locking mode keeps the lock past the commit below, until close.
     db.exec("PRAGMA busy_timeout = 0; PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE");

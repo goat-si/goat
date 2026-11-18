@@ -200,26 +200,34 @@ directory and pair with the running server.
 
 If the service log says **Database recovery required**, it gives the paths to
 the live database, the pre-update snapshot directory, and the recovery
-acknowledgement file. The launcher stops when an update was interrupted or
-when it cannot verify that going back to the previous release preserves the
-database. The live files may be incomplete or contain newer writes. If the
+acknowledgement file. The launcher stops when it cannot safely resume an
+interrupted update or verify the database before starting either release.
+The live files may be incomplete or contain newer writes. If the
 snapshot is missing, use a verified copy of the live database or another
 verified backup.
 
-1. Stop every server using that home, including the background service. On
-   Linux, run `systemctl --user stop goat.service`. On macOS, run
+1. Stop every server using that home, including any desktop instance, foreground
+   server, or background service that uses it. On Linux, run
+   `systemctl --user stop goat.service`. On macOS, run
    `launchctl bootout "gui/$(id -u)/si.goat.service"`. Use the installed unit
-   or agent name if it differs.
+   or agent name if it differs. Keep every server stopped until the restart in
+   the final step.
 2. Make separate copies of any remaining snapshot files and the live SQLite files
-   (the database and any `-wal` and `-shm` files) before changing anything.
+   (the database and any `-wal`, `-shm`, or `-journal` files) before changing anything.
    Save any files in the sibling snapshot directory ending in `.staging` too.
-3. Put a complete, verified SQLite file set that the previous GOAT release can
+3. If the service log says it could not open `server-owner.lock` because the log
+   is damaged, create an empty directory beside the reported file. With every
+   owner still stopped, move `server-owner.lock` and any of its `-journal`,
+   `-wal`, and `-shm` sidecars into that directory so you keep the originals.
+   Leave the separate `server-owner.sqlite` lock in place. The launcher creates
+   a new ownership log on restart.
+4. Put a complete, verified SQLite file set that the previous GOAT release can
    open at the live path. To restore the pre-update snapshot, copy `database`
    and any `database-wal` and `database-shm` files to the corresponding live
    names. Remove stale live sidecars that are absent from the snapshot. If the
    live database is a symlink, copy to its target and place the sidecars beside
    the target.
-4. Run `sync` after the live files are in place. Write a single line containing
+5. Run `sync` after the live files are in place. Write a single line containing
    `keep-live` to the acknowledgement file printed in the service log. Run
    `sync` again, then run `goat service restart` for that home. The launcher
    checks the live file set before starting the previous version and retains
