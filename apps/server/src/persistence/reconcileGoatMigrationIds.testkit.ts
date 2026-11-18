@@ -38,6 +38,7 @@ export const shiftMigrations = goatNames.filter(
   (name) => currentRow(name)[0] <= currentRow("DisposableMachineEnrollment")[0],
 );
 export const threadLineageRow = [158, "MemoryThreadLineage"] as const;
+export const hubFloorRow = [159, "MemoryHubFloor"] as const;
 
 export const history = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
