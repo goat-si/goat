@@ -1,7 +1,6 @@
 import * as Hash from "effect/Hash";
 import { File, Paths } from "expo-file-system";
 import * as Haptics from "expo-haptics";
-import type { DiagramType } from "pele/lazy";
 import { Suspense, use, useRef, useState } from "react";
 import { PixelRatio, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { parse, Svg, SvgXml } from "react-native-svg";
@@ -9,91 +8,14 @@ import { parse, Svg, SvgXml } from "react-native-svg";
 import { MediaImagePreview } from "../components/MediaImagePreview";
 import { copyTextWithHaptic } from "../lib/copyTextWithHaptic";
 import { mermaidSvgForNative, withDiagramBackground } from "../lib/mermaidSvg";
+import { type Diagram, loadDiagram } from "./mermaidDiagrams";
 import { themeColorWithAlpha } from "../lib/mobileTheme";
 import { CodeBlockFrame, CodeBlockHeaderButton } from "./CodeBlockFrame";
 import type { NativeMarkdownTextStyle } from "./SelectableMarkdownText.types";
 
-type Pele = typeof import("pele/lazy");
-type Diagram =
-  | {
-      readonly status: "ready";
-      readonly svg: string;
-      readonly width: number;
-      readonly height: number;
-    }
-  | { readonly status: "error"; readonly message: string };
-
-let peleLoad: Promise<Pele | null> | null = null;
-// Each diagram type is its own chunk, so a thread with one flowchart only
-// evaluates the flowchart parser and layout.
-const typeLoads = new Map<DiagramType, Promise<boolean>>();
-// A message scrolled back into view reuses its settled promise, which `use`
-// reads without suspending, instead of flashing the source.
-const diagramLoads = new Map<string, Promise<Diagram>>();
-const DIAGRAM_CACHE_LIMIT = 64;
-
-function loadDiagram(source: string): Promise<Diagram> {
-  let load = diagramLoads.get(source);
-  if (!load) {
-    if (diagramLoads.size >= DIAGRAM_CACHE_LIMIT) {
-      const oldest = diagramLoads.keys().next();
-      if (!oldest.done) diagramLoads.delete(oldest.value);
-    }
-    load = renderDiagram(source);
-    diagramLoads.set(source, load);
-  }
-  return load;
-}
-
 const MONOSPACE = Platform.OS === "ios" ? "Menlo" : "monospace";
 // Pele measures labels with metrics close to Helvetica when no canvas is available.
 const DIAGRAM_FONT = Platform.OS === "ios" ? "Helvetica" : "sans-serif";
-
-async function renderDiagram(source: string): Promise<Diagram> {
-  peleLoad ??= import("pele/lazy").catch(() => null);
-  const pele = await peleLoad;
-  if (!pele) {
-    // Not cached, so the next mount tries again.
-    peleLoad = null;
-    diagramLoads.delete(source);
-    return { status: "error", message: "The diagram renderer failed to load." };
-  }
-  let type: DiagramType | null = null;
-  try {
-    type = pele.detectType(source);
-  } catch {
-    // An unknown type falls through to render, which reports why.
-  }
-  if (type) {
-    let load = typeLoads.get(type);
-    if (!load) {
-      load = pele.load(type).then(
-        () => true,
-        () => false,
-      );
-      typeLoads.set(type, load);
-    }
-    if (!(await load)) {
-      typeLoads.delete(type);
-      diagramLoads.delete(source);
-      return { status: "error", message: "The diagram renderer failed to load." };
-    }
-  }
-  try {
-    const { svg, width, height } = pele.render(source, {
-      links: false,
-      images: false,
-      // Keep the author's direction; a wide diagram scales down to fit instead of turning vertical.
-      autoDirection: false,
-    });
-    return { status: "ready", svg, width, height };
-  } catch (error) {
-    return {
-      status: "error",
-      message: error instanceof Error ? error.message : "The diagram could not be rendered.",
-    };
-  }
-}
 
 // The image viewer zooms a bitmap: about twice a phone's screen leaves room to zoom while
 // bounding the memory one image takes.
