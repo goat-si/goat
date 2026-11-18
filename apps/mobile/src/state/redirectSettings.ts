@@ -25,6 +25,16 @@ interface RedirectMessage {
 }
 
 /**
+ * The screen's step before a message redirects pending approvals. It calls saveMode only on the
+ * decline path (after approval feedback and its own early returns), as web orders it.
+ */
+export type RedirectBeforeDispatch = (
+  text: string,
+  hasAttachmentsOrContext: boolean,
+  saveMode: () => Promise<boolean>,
+) => Promise<boolean | "responded">;
+
+/**
  * A redirect declines pending approvals, so a mode change it carries is saved first: a server
  * that refuses it while the turn runs (goat#3558) then declines nothing, as on web. The command
  * id is the one the outbox's settings step uses for this message, so the server applies it once.

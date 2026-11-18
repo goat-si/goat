@@ -124,7 +124,7 @@ import {
 } from "./queued-run-edit";
 import { setPendingConnectionError } from "../state/use-remote-environment-registry";
 import { clearThreadComposerError, setThreadComposerError } from "./thread-composer-error";
-import { useSaveRuntimeModeBeforeRedirect } from "./redirectSettings";
+import { type RedirectBeforeDispatch, useSaveRuntimeModeBeforeRedirect } from "./redirectSettings";
 import {
   useSelectedThreadProjection,
   useSelectedThreadVisibleTurnItems,
@@ -554,10 +554,7 @@ export function useThreadComposerState() {
 
   const onSendMessage = async (
     followUpOverride?: ActiveTurnComposerAction,
-    beforeDispatch?: (
-      text: string,
-      hasAttachmentsOrContext: boolean,
-    ) => Promise<boolean | "responded">,
+    beforeDispatch?: RedirectBeforeDispatch,
     onWillEnqueue?: () => void,
   ) => {
     if (
@@ -683,14 +680,14 @@ export function useThreadComposerState() {
 
     const metadata = makeQueuedMessageMetadata();
     if (beforeDispatch !== undefined) {
-      const refusal = await saveModeBeforeRedirect(thread, draft.runtimeMode, metadata);
-      if (refusal !== null) {
-        setThreadComposerError(threadKey, refusal);
-        return null;
-      }
       const response = await beforeDispatch(
         text,
         attachments.length > 0 || draft.context !== undefined,
+        async () => {
+          const refusal = await saveModeBeforeRedirect(thread, draft.runtimeMode, metadata);
+          if (refusal !== null) setThreadComposerError(threadKey, refusal);
+          return refusal === null;
+        },
       );
       if (!response) return null;
       // A context paste still landing, or any draft or settings change while approvals were
