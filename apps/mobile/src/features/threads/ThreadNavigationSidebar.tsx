@@ -11,7 +11,7 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import { threadSearchMatchKey } from "@goat/client-runtime/state/thread-search";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
-import { THREAD_LIST_ROW_LAYOUT } from "./threadListAnimations";
+import { THREAD_SIDEBAR_ROW_LAYOUT } from "./threadListAnimations";
 import type { MenuAction, NativeActionEvent } from "@react-native-menu/menu";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -798,7 +798,7 @@ function ThreadNavigationSidebarPane(
             <GestureDetector gesture={sidebarScrollGesture}>
               <AnimatedLegendList
                 renderScrollComponent={Platform.OS === "ios" ? NativeScrollView : undefined}
-                itemLayoutAnimation={THREAD_LIST_ROW_LAYOUT}
+                itemLayoutAnimation={THREAD_SIDEBAR_ROW_LAYOUT}
                 data={listItems}
                 ListHeaderComponent={<DecisionInboxRow onPress={props.onOpenDecisions} />}
                 drawDistance={500}
@@ -872,7 +872,7 @@ function ThreadNavigationSidebarPane(
             <GestureDetector gesture={sidebarScrollGesture}>
               {/* oxlint-disable-next-line goat/require-registered-list-scroll -- Only the non-native workspace layout (Android and the fallback) renders this sidebar, which has no native header to register with. */}
               <AnimatedLegendList
-                itemLayoutAnimation={THREAD_LIST_ROW_LAYOUT}
+                itemLayoutAnimation={THREAD_SIDEBAR_ROW_LAYOUT}
                 data={listItems}
                 ListHeaderComponent={<DecisionInboxRow onPress={props.onOpenDecisions} />}
                 drawDistance={500}
