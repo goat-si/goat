@@ -536,6 +536,7 @@ it.effect("an open gate leaves a stored route whose profile names no Pen member"
       removeRoute: (_env, route) => Effect.sync(() => void removed.push(route)),
       reorderRoutes: unused,
       removeRelayEnvironments: unused,
+      setPenLive: unused,
       retryNow: unused,
       reconnect: unused,
       setEnabled: unused,
