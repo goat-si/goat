@@ -1,4 +1,8 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@goat/client-runtime/state/runtime";
 import { deriveThreadQueueWorkflowState } from "@goat/client-runtime/state/thread-workflows";
 import { resolveUserMessagePresentation } from "@goat/client-runtime/user-message";
 import { assistantCitationsToPlainText } from "@goat/shared/assistantCitations";
@@ -32,6 +36,7 @@ import { isImageAttachment, type ChatMessage } from "../../types";
 import { cn } from "~/lib/utils";
 import { ComposerBanner } from "./ComposerBanner";
 import { Button } from "../ui/button";
+import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export interface EditQueuedRunRequest {
@@ -122,8 +127,8 @@ export function QueuedRunsControl({
     scopeThreadRef(props.environmentId, props.threadId),
   )?.projection;
   const reorder = useAtomCommand(threadEnvironment.reorderQueuedRun);
-  const promote = useAtomCommand(threadEnvironment.promoteQueuedRun);
-  const resume = useAtomCommand(threadEnvironment.resumeThreadQueue);
+  const promote = useAtomCommand(threadEnvironment.promoteQueuedRun, { reportFailure: false });
+  const resume = useAtomCommand(threadEnvironment.resumeThreadQueue, { reportFailure: false });
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun);
   const [expanded, setExpanded] = useState(true);
   const queueListId = useId();
@@ -221,19 +226,27 @@ export function QueuedRunsControl({
     if (!canSend || steerInFlightRef.current) return;
     steerInFlightRef.current = true;
     setBusyRunId(queuedRunId);
-    if (workflow?.canSendNow) {
-      await resume({
-        environmentId: props.environmentId,
-        input: { threadId: props.threadId, runId: queuedRunId },
-      });
-    } else if (activeRun !== null) {
-      await promote({
-        environmentId: props.environmentId,
-        input: { threadId: props.threadId, queuedRunId, targetRunId: activeRun.id },
-      });
-    }
+    const result = workflow?.canSendNow
+      ? await resume({
+          environmentId: props.environmentId,
+          input: { threadId: props.threadId, runId: queuedRunId },
+        })
+      : activeRun !== null
+        ? await promote({
+            environmentId: props.environmentId,
+            input: { threadId: props.threadId, queuedRunId, targetRunId: activeRun.id },
+          })
+        : null;
     steerInFlightRef.current = false;
     setBusyRunId(null);
+    if (result?._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: "Could not send queued message",
+        description: error instanceof Error ? error.message : "Try again.",
+      });
+    }
   };
 
   useImperativeHandle(ref, () => ({

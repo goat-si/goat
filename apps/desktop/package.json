@@ -17,6 +17,7 @@
     "@effect/platform-node": "catalog:",
     "@goat/client-runtime": "workspace:*",
     "@goat/contracts": "workspace:*",
+    "@goat/pen-protocol": "workspace:*",
     "@goat/shared": "workspace:*",
     "@goat/ssh": "workspace:*",
     "@goat/tailscale": "workspace:*",

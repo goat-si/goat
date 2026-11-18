@@ -48,7 +48,7 @@ class AgentNotificationsTest {
       }
     )
     AgentNotifications.clear(context)
-    AgentNotifications.configure(context, "device", "user", "t3code-dev", true)
+    AgentNotifications.configure(context, "device", "user", "goat-dev", true)
     AgentNotifications.setThreadOnScreen("/threads/environment/thread")
   }
 

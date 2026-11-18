@@ -1,10 +1,8 @@
 import { setActiveComposerDraftText } from "../../state/queued-run-edit";
 import { useSidebarWorkspaceTabs } from "../workspace/useSystemWorkspaceTabBar";
 import * as Dialog from "../../components/ui/Dialog";
-import type { ComposerTextPaste } from "../../native/GoatComposerEditor.types";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
-import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import { threadContextsOutsideEnvironment } from "@goat/shared/composerContextReferences";
 import { useThreadContextHosts } from "../../lib/useThreadContextHosts";
 import { settlePromise, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
@@ -15,20 +13,12 @@ import { pastedTextDisposition, replaceTextSelection } from "@goat/client-runtim
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
-  type ChatAttachment,
-  type EnvironmentId,
-  type MessageId,
-  type ModelSelection,
-  type ProviderInteractionMode,
-  type RuntimeMode,
-  type ServerConfig as GoatServerConfig,
-  type UsageLimitsReport,
 } from "@goat/contracts";
 import { collectProviderUsageLimits, hasProviderUsageLimits } from "@goat/shared/usageLimits";
 import { StackActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { ReactNode } from "react";
 import { useModelMentionOptions } from "./useModelMentionOptions";
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Keyboard, Platform, View, type ViewStyle } from "react-native";
 import { useCompactComposerEditor } from "./useCompactComposerEditor";
 import { useComposerStopGuard } from "./useComposerStopGuard";
@@ -88,11 +78,9 @@ import {
   isModelSelectionUnavailable,
   serverConfigForCwd,
 } from "../../lib/modelOptions";
-import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
-import type { RemoteClientConnectionState } from "../../lib/connection";
+import { useComposerTextRole } from "../settings/appearance/useScaledTextRole";
 import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
 import type { ActiveTurnComposerAction } from "@goat/client-runtime/state/composer-dispatch";
-import type { FollowUpBehavior } from "../../lib/followUpBehavior";
 import { resolveComposerSendPresentation } from "./composerSendPresentation";
 import { FOLLOW_UP_ACTION_LABEL, SendActionButton } from "./SendActionButton";
 import { ComposerCommandPopover } from "./ComposerCommandPopover";
@@ -122,59 +110,9 @@ import {
   useThreadSettingsSheetPresentation,
   type NavigationWithFinishTransitioning,
 } from "./use-thread-settings-sheet-presentation";
+import type { ThreadComposerProps } from "./thread-composer-props";
+
 export const COMPOSER_COLLAPSED_CHROME = 60;
-export interface ThreadComposerProps {
-  readonly isDraft?: boolean;
-  readonly canOperateThread: boolean;
-  readonly placeholder: string;
-  readonly contentMaxWidth?: number;
-  readonly draftControls?: ReactNode;
-  readonly bottomInset?: number;
-  readonly connectionState: RemoteClientConnectionState;
-  readonly environmentLabel: string | null;
-  readonly threadSyncPhase?: "loading" | "syncing" | null;
-  readonly selectedThread: EnvironmentThreadShell;
-  readonly reportedModelSelection?: ModelSelection | null;
-  readonly hasCompactableConversation: boolean;
-  readonly serverConfig: GoatServerConfig | null;
-  readonly queueCount: number;
-  readonly activeThreadBusy: boolean;
-  readonly canStopThread: boolean;
-  readonly environmentId: EnvironmentId;
-  readonly projectCwd: string | null;
-  readonly sendBlockedReason?: string | null;
-  readonly interactionLocked?: boolean;
-  readonly draftKey?: string;
-  readonly queuedEdit?: {
-    readonly existingAttachments: ReadonlyArray<ChatAttachment>;
-    readonly saving: boolean;
-    readonly onRemoveExistingAttachment: (attachmentId: string) => void;
-  } | null;
-  readonly followUpBehavior: FollowUpBehavior;
-  readonly canSteerActiveTurn: boolean;
-  readonly hidden: boolean;
-  readonly editorRef?: RefObject<ComposerEditorHandle | null>;
-  readonly onChangeDraftMessage: (value: string) => void;
-  readonly onPickDraftMedia: () => Promise<void>;
-  readonly onPickDraftFiles: () => Promise<void>;
-  readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
-  readonly onNativePasteText: (paste: ComposerTextPaste) => Promise<void>;
-  readonly onRemoveDraftImage: (imageId: string) => void;
-  readonly onStopThread: () => void;
-  /** Present while the thread's queue is held. */
-  readonly onResumeQueue: (() => Promise<void>) | null;
-  /** `stillSendable` reports whether the draft is unchanged after any wait before sending. */
-  readonly onSendMessage: (
-    followUp?: ActiveTurnComposerAction,
-    stillSendable?: () => boolean,
-  ) => Promise<MessageId | null>;
-  readonly onShowUsageLimits: (report: UsageLimitsReport | null) => void;
-  readonly canSwitchProvider: boolean;
-  readonly onUpdateModelSelection: (modelSelection: ModelSelection) => void;
-  readonly onUpdateRuntimeMode: (runtimeMode: RuntimeMode) => void;
-  readonly onUpdateInteractionMode?: (interactionMode: ProviderInteractionMode) => void;
-  readonly onEditorFocusChange?: (focused: boolean) => void;
-}
 // Share of the one-row composer the draft keeps; a long model name truncates first.
 const INLINE_EDITOR_MIN_WIDTH = "40%";
 
@@ -258,7 +196,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   const composerPanel = materialTheme["--color-composer-panel"];
   const navigation = useNavigation();
   const foregroundColor = useUniwindTheme()["--color-foreground"];
-  const bodyText = useScaledTextRole("body");
+  const bodyText = useComposerTextRole();
   const fallbackInputRef = useRef<ComposerEditorHandle>(null);
   const inputRef = props.editorRef ?? fallbackInputRef;
   const [isFocused, setIsFocused] = useState(false);
@@ -406,6 +344,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     onFork: composerFork.startFork,
     hasCompactableConversation: props.hasCompactableConversation,
     onChangeDraftMessage: props.onChangeDraftMessage,
+    onOpenModelPicker: openSettings,
     onUpdateInteractionMode:
       selectedProviderStatus?.showInteractionModeToggle === false
         ? undefined
@@ -628,10 +567,10 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     runtimeMode: currentRuntimeMode,
     onUpdateRuntimeMode: props.onUpdateRuntimeMode,
   } satisfies ExistingThreadSettingsRouteSession;
-  const openSettings = () => {
+  function openSettings() {
     settingsRoutePresentation.present(settingsRouteSession);
     settingsSheetPresentation.open();
-  };
+  }
 
   const { present: presentSettingsRoute } = settingsRoutePresentation;
   useEffect(() => {

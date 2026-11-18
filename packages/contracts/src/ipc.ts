@@ -1,7 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type { PreviewCaptureFailureEncoded } from "./previewCapture.ts";
-
 import { SnapShotSource } from "./chatAttachment.ts";
 import { EnvironmentId, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
@@ -13,6 +12,12 @@ import type {
 import { AuthAccessTokenResult, AuthSessionState } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import type { DesktopBridgeParts } from "./desktopBridgeParts.ts";
+import {
+  DesktopSshEnvironmentTargetSchema,
+  type DesktopSshEnvironmentTarget,
+} from "./desktopSshTarget.ts";
+import type * as PenMembers from "./penMembers.ts";
+import { penEnsureOptionFields } from "./penMembers.ts";
 import type { SystemSettingsPane } from "./desktopPermissions.ts";
 import {
   type SshHostResult,
@@ -29,7 +34,6 @@ import type { DesktopPreviewCaptureEvent, DesktopPreviewCursorEvent } from "./de
 import { DesktopPreviewTabIdSchema } from "./desktopBrowser.ts";
 import type { AnnotationVoiceBridge, AnnotationVoicePick } from "./previewAnnotationVoice.ts";
 export { DesktopPreviewTabIdSchema } from "./desktopBrowser.ts";
-
 import type {
   DesktopAppActivationRequest,
   DesktopAppActivationResponse,
@@ -426,13 +430,7 @@ export const DesktopEnvironmentBootstrapSchema = Schema.Struct({
   accessTokenExpiresAt: Schema.optionalKey(Schema.String),
 });
 
-export const DesktopSshEnvironmentTargetSchema = Schema.Struct({
-  alias: Schema.String,
-  hostname: Schema.String,
-  username: Schema.NullOr(Schema.String),
-  port: Schema.NullOr(Schema.Number),
-});
-export type DesktopSshEnvironmentTarget = typeof DesktopSshEnvironmentTargetSchema.Type;
+export * from "./desktopSshTarget.ts";
 
 export const DesktopSshHostStatusInputSchema = Schema.Struct({
   target: DesktopSshEnvironmentTargetSchema,
@@ -566,6 +564,7 @@ export const DesktopSshAttemptContextSchema = Schema.Struct({
 export type DesktopSshAttemptContext = typeof DesktopSshAttemptContextSchema.Type;
 
 export const DesktopSshEnvironmentEnsureOptionsSchema = Schema.Struct({
+  ...penEnsureOptionFields,
   preparedAttachmentId: Schema.optionalKey(TrimmedNonEmptyString),
   issuePairingToken: Schema.optionalKey(Schema.Boolean),
   keyOnly: Schema.optionalKey(Schema.Boolean),
@@ -1141,7 +1140,7 @@ export interface DesktopSystemWakeEvent {
   readonly asleepMs: number | null;
 }
 
-export interface DesktopBridge extends DesktopBridgeParts {
+export interface DesktopBridge extends DesktopBridgeParts, PenMembers.DesktopPenBridge {
   getAppBranding: () => DesktopAppBranding | null;
   getRelayTelemetryEnabled?: () => boolean;
   getPathForFile?: (file: File) => string;
@@ -1202,7 +1201,7 @@ export interface DesktopBridge extends DesktopBridgeParts {
   supportsSshPreparationPhases?: true;
   ensureSshEnvironment: (
     target: DesktopSshEnvironmentTarget,
-    options?: {
+    options?: PenMembers.DesktopPenEnsureOptions & {
       issuePairingToken?: boolean;
       keyOnly?: boolean;
       preparedAttachmentId?: string;

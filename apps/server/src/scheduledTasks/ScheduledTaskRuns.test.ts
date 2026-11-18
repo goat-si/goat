@@ -7,7 +7,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import { runMigrations } from "../persistence/Migrations.ts";
-import firstBindMigration from "../persistence/Migrations/158_ScheduledTaskFirstBindIntent.ts";
+import firstBindMigration from "../persistence/Migrations/159_ScheduledTaskFirstBindIntent.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Runs from "./ScheduledTaskRuns.ts";
 
@@ -104,8 +104,9 @@ it.effect("upgrades existing firings and accepts older writes without inferring 
       return snapshot;
     });
     const before = yield* writeLegacyFiring("legacy-before");
-    assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 158 }), [
-      [158, "ScheduledTaskFirstBindIntent"],
+    assert.deepEqual(yield* runMigrations(), [
+      [158, "AuthSessionPenMember"],
+      [159, "ScheduledTaskFirstBindIntent"],
     ]);
     assert.deepEqual(yield* runs.readFiring(before.firingId), before);
     yield* runs.reconcile;
@@ -115,7 +116,7 @@ it.effect("upgrades existing firings and accepts older writes without inferring 
       yield* sql`SELECT first_bind_project_id FROM scheduled_task_runs ORDER BY firing_id`,
       [{ first_bind_project_id: null }, { first_bind_project_id: null }],
     );
-    assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 158 }), []);
+    assert.deepEqual(yield* runMigrations(), []);
   }).pipe(
     Effect.provide(
       Runs.layer.pipe(Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" }))),
@@ -126,18 +127,18 @@ it.effect("upgrades existing firings and accepts older writes without inferring 
 it.effect("a failed first-bind migration rolls back its column and can rerun", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 157 });
+    yield* runMigrations({ toMigrationInclusive: 158 });
     yield* sql`ALTER TABLE scheduled_tasks RENAME TO test_scheduled_tasks`;
-    yield* Effect.flip(runMigrations({ toMigrationInclusive: 158 }));
+    yield* Effect.flip(runMigrations());
     assert.deepEqual(
       yield* sql`SELECT name FROM pragma_table_info('scheduled_task_runs') WHERE name='first_bind_project_id'`,
       [],
     );
-    assert.deepEqual(yield* sql`SELECT name FROM effect_sql_migrations WHERE migration_id=158`, []);
-    yield* sql`ALTER TABLE test_scheduled_tasks RENAME TO scheduled_tasks`;
-    assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 158 }), [
-      [158, "ScheduledTaskFirstBindIntent"],
+    assert.deepEqual(yield* sql`SELECT name FROM effect_sql_migrations WHERE migration_id >= 158`, [
+      { name: "AuthSessionPenMember" },
     ]);
+    yield* sql`ALTER TABLE test_scheduled_tasks RENAME TO scheduled_tasks`;
+    assert.deepEqual(yield* runMigrations(), [[159, "ScheduledTaskFirstBindIntent"]]);
     yield* firstBindMigration;
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

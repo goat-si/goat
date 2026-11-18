@@ -254,7 +254,6 @@ function parsePorcelainPath(record: string): string | null {
   return filePath.length > 0 ? filePath : null;
 }
 
-/** Git prints `C:/Users/...` where Node joins `C:\Users\...`, and NTFS folds case. */
 export function uniqueCommitsProblem(count: number, baseRef: string): string {
   return `has ${count} commit${count === 1 ? "" : "s"} that ${baseRef} does not`;
 }

@@ -3,7 +3,11 @@ import { CONTEXT_LINK_PROTOCOLS } from "@goat/contracts/legacyT3Names";
 import { hasPendingThreadPick, type PendingThreadIdsAtom } from "./state/modelPickPending";
 import * as draftModels from "./lib/persistedModelSelections";
 import { stripInlineContextReferences } from "./lib/composerContextReferences";
-import { composerFileAttachmentMimeType } from "./components/chat/composerAttachmentFiles";
+import {
+  composerFileDedupKey,
+  composerFileMatchesReattachMarker,
+  composerImageDedupKey,
+} from "./components/chat/composerAttachmentFiles";
 import { elementContextToPreviewAnnotation } from "./lib/elementContext";
 import {
   ElementContextDetails,
@@ -61,7 +65,6 @@ import {
   DEFAULT_RUNTIME_MODE,
   type ChatFileAttachment,
   type ChatImageAttachment,
-  videoMimeType,
 } from "./types";
 import {
   type TerminalContextDraft,
@@ -719,42 +722,6 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     runtimeMode: null,
     interactionMode: null,
   };
-}
-
-function composerImageDedupKey(image: ComposerImageAttachment): string {
-  // Hydrated images get fresh lastModified values, so exclude it from dedupe.
-  return `${image.mimeType}\u0000${image.sizeBytes}\u0000${image.name}`;
-}
-
-export function composerFileDedupKey(
-  file: Pick<ComposerFileAttachment, "mimeType" | "sizeBytes" | "name">,
-): string {
-  return `${file.mimeType}\u0000${file.sizeBytes}\u0000${file.name}`;
-}
-
-export function composerFileMatchesReattachMarker(
-  marker: Pick<ComposerFileAttachment, "mimeType" | "sizeBytes" | "name">,
-  file: Pick<ComposerFileAttachment, "mimeType" | "sizeBytes" | "name">,
-): boolean {
-  if (marker.name !== file.name || marker.sizeBytes !== file.sizeBytes) return false;
-  if (marker.mimeType === file.mimeType) return true;
-  const normalizedMarkerMimeType = composerFileAttachmentMimeType({
-    name: marker.name,
-    type: marker.mimeType,
-  });
-  if (
-    normalizedMarkerMimeType === "image/x-adobe-dng" &&
-    normalizedMarkerMimeType ===
-      composerFileAttachmentMimeType({ name: file.name, type: file.mimeType })
-  ) {
-    return true;
-  }
-  const markerMimeType = marker.mimeType.toLowerCase();
-  return (
-    (markerMimeType === "" || markerMimeType === "application/octet-stream") &&
-    videoMimeType(marker) !== null &&
-    videoMimeType(file) !== null
-  );
 }
 
 function terminalContextDedupKey(context: TerminalContextDraft): string {
@@ -3971,7 +3938,10 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 destination.images.length -
                 destination.files.length,
             );
-            const movedImages = source.images.slice(0, remainingAttachmentSlots);
+            const destinationImageIds = new Set(destination.images.map((image) => image.id));
+            const movedImages = source.images
+              .filter((image) => !destinationImageIds.has(image.id))
+              .slice(0, remainingAttachmentSlots);
             const movedImageIds = new Set(movedImages.map((image) => image.id));
             const retainedImages = source.images.filter((image) => !movedImageIds.has(image.id));
             const movedFiles = transferableFiles

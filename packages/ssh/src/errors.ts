@@ -22,7 +22,7 @@ export class SshCommandError extends Data.TaggedError("SshCommandError")<{
 
 export class SshLaunchError extends Data.TaggedError("SshLaunchError")<{
   /** `archive-unavailable`: no source supplied a usable runtime archive for this launch. */
-  readonly reason?: "runtime-newer" | "archive-unavailable";
+  readonly reason?: "runtime-newer" | "archive-unavailable" | "existing-runtime-required";
   readonly acquisition?: {
     readonly requestedVersion: string;
     readonly platformKey: string | null;
@@ -37,7 +37,7 @@ export class SshLaunchError extends Data.TaggedError("SshLaunchError")<{
 
 export class SshPairingError extends Data.TaggedError("SshPairingError")<{
   /** `memory-scopes-unsupported`: the remote CLI cannot issue the memory grants a task asked for. */
-  readonly reason?: "memory-scopes-unsupported";
+  readonly reason?: "memory-scopes-unsupported" | "pen-member-unsupported";
   readonly message: string;
   readonly stdout: string;
   readonly cause?: unknown;
