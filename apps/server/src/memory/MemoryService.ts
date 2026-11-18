@@ -46,7 +46,6 @@ import {
 } from "./MemoryRemember.ts";
 import { makeMemoryViewProjection } from "./MemoryViewProjection.ts";
 import { requireMemoryTailFit } from "./MemoryTailAdmission.ts";
-import { markUnverified } from "./MemoryRevisionMarks.ts";
 
 export class MemoryAccessError extends Schema.TaggedError<MemoryAccessError>()(
   "MemoryAccessError",
@@ -957,11 +956,25 @@ const make = Effect.fnUntraced(function* (
             observation.contentFingerprint !== candidate.contentFingerprint
           )
             return yield* new Store.MemoryStoreConflict({ code: "identity_mismatch" });
+          const markedAlias =
+            alias &&
+            !(yield* store.areAutomaticallyUsable(batch.memorySpaceId, [
+              alias.revision.revisionId,
+            ]));
+          if (markedAlias && !(yield* store.hubFloorActive(batch.memorySpaceId)))
+            return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
+          const forgetFence = markedAlias
+            ? yield* store.readCursor(
+                batch.memorySpaceId,
+                yield* readBoundMemoryHubId(batch.memorySpaceId),
+              )
+            : undefined;
           const operation = yield* decode(
             decodeOperation(
               {
                 protocolVersion: 1,
                 kind: "upsert",
+                ...(forgetFence === undefined ? {} : { forgetFence }),
                 memorySpaceId: batch.memorySpaceId,
                 memoryId: next.memoryId,
                 operationId: selection.operationId,
@@ -979,6 +992,7 @@ const make = Effect.fnUntraced(function* (
                   createdAtUtc: batch.createdAtUtc,
                   provenance: {
                     environmentId,
+                    ...(markedAlias ? { unverified: true as const } : {}),
                     importSource: {
                       sourceId: registration.sourceId,
                       format: provenanceImportFormat(registration.source.format),
@@ -1008,13 +1022,6 @@ const make = Effect.fnUntraced(function* (
             return yield* new Store.MemoryStoreConflict({ code: "revision_changed" });
           if (receipt.receipt.outcome === "rejected")
             return yield* new Store.MemoryStoreConflict({ code: "invalid_output" });
-          if (
-            alias &&
-            !(yield* store.areAutomaticallyUsable(batch.memorySpaceId, [alias.revision.revisionId]))
-          )
-            yield* markUnverified(batch.memorySpaceId, operation.revision.revisionId).pipe(
-              Effect.provideService(SqlClient.SqlClient, sql),
-            );
           // Parent-aware intent records the frozen operation, unlike the initial-only local draft materializer.
           yield* store.enqueueWork({
             id: `import:${environmentId}:${batch.operationId}:${selection.operationId}`,
