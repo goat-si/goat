@@ -782,20 +782,22 @@ const layerBase: Layer.Layer<
       const afterSequence = input?.afterSequence ?? 0;
       const matches = (stored: OrchestrationV2StoredEvent) =>
         (input?.threadId === undefined || stored.event.threadId === input.threadId) &&
-        (input?.eventType === undefined || stored.event.type === input.eventType);
+        (input?.eventType === undefined || stored.event.type === input.eventType) &&
+        (input?.eventTypes === undefined || input.eventTypes.includes(stored.event.type));
       const replayRange = (afterSequence: number, throughSequence: number) =>
         catchUp({
           afterSequence,
           throughSequence,
           ...(input?.threadId === undefined ? {} : { threadId: input.threadId }),
           ...(input?.eventType === undefined ? {} : { eventType: input.eventType }),
+          ...(input?.eventTypes === undefined ? {} : { eventTypes: input.eventTypes }),
         }).pipe(Stream.filter(matches));
       const replay = (through: number) => replayRange(afterSequence, through);
       if (input?.throughSequence !== undefined) return replay(input.throughSequence);
       if (input?.journal === true)
         return journal.stream({
           afterSequence,
-          eventType: input.eventType,
+          eventTypes: input.eventType === undefined ? input.eventTypes : [input.eventType],
           latestSequence: eventStore.latestSequence(),
           onSubscribed: input.onSubscribed,
           replay: replayRange,

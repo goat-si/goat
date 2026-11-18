@@ -10,21 +10,23 @@ import * as Stream from "effect/Stream";
 
 export const makeEventJournalTail = Effect.sync(() => {
   type EventType = OrchestrationV2DomainEvent["type"];
-  const makeFeed = PubSub.sliding<number>(1).pipe(
-    Effect.map((signals) => ({ signals, published: 0 })),
-  );
-  const feeds = new Map<
-    EventType | undefined,
-    { signals: PubSub.PubSub<number>; published: number }
-  >();
+  const makeFeed = (eventTypes: ReadonlyArray<EventType> | undefined) =>
+    PubSub.sliding<number>(1).pipe(
+      Effect.map((signals) => ({
+        matches: eventTypes === undefined ? undefined : new Set(eventTypes),
+        signals,
+        published: 0,
+      })),
+    );
+  const feeds = new Map<string, Effect.Success<ReturnType<typeof makeFeed>>>();
   return {
     // One call per commit, under the event sink's tracing boundary.
     publish: Effect.fnUntraced(function* (events: ReadonlyArray<OrchestrationV2StoredEvent>) {
-      for (const [eventType, feed] of feeds) {
+      for (const feed of feeds.values()) {
         const last =
-          eventType === undefined
+          feed.matches === undefined
             ? events.at(-1)
-            : events.findLast(({ event }) => event.type === eventType);
+            : events.findLast(({ event }) => feed.matches?.has(event.type));
         if (last === undefined || last.sequence <= feed.published) continue;
         feed.published = last.sequence;
         yield* PubSub.publish(feed.signals, feed.published);
@@ -32,7 +34,7 @@ export const makeEventJournalTail = Effect.sync(() => {
     }),
     stream: <E>(input: {
       readonly afterSequence: number;
-      readonly eventType: EventType | undefined;
+      readonly eventTypes: ReadonlyArray<EventType> | undefined;
       readonly latestSequence: Effect.Effect<number, E>;
       readonly onSubscribed: Effect.Effect<void> | undefined;
       readonly replay: (
@@ -42,11 +44,12 @@ export const makeEventJournalTail = Effect.sync(() => {
     }) =>
       Stream.unwrap(
         Effect.gen(function* () {
-          let feed = feeds.get(input.eventType);
+          const key = input.eventTypes?.toSorted().join(",") ?? "*";
+          let feed = feeds.get(key);
           if (feed === undefined) {
-            const candidate = yield* makeFeed;
-            feed = feeds.get(input.eventType) ?? candidate;
-            feeds.set(input.eventType, feed);
+            const candidate = yield* makeFeed(input.eventTypes);
+            feed = feeds.get(key) ?? candidate;
+            feeds.set(key, feed);
           }
           const subscription = yield* PubSub.subscribe(feed.signals);
           const highWater = yield* input.latestSequence;
@@ -73,6 +76,7 @@ export const makeEventJournalCatchUp =
     readonly throughSequence: number;
     readonly threadId?: ThreadId;
     readonly eventType?: OrchestrationV2DomainEvent["type"];
+    readonly eventTypes?: ReadonlyArray<OrchestrationV2DomainEvent["type"]>;
   }): Stream.Stream<OrchestrationV2StoredEvent, EventStoreV2Error> => {
     const pageSize = 256;
     const loop = (
@@ -85,6 +89,7 @@ export const makeEventJournalCatchUp =
             throughSequence: input.throughSequence,
             ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
             ...(input.eventType === undefined ? {} : { eventType: input.eventType }),
+            ...(input.eventTypes === undefined ? {} : { eventTypes: input.eventTypes }),
             limit: pageSize,
           })
           .pipe(

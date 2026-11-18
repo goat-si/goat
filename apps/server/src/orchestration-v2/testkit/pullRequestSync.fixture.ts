@@ -1,7 +1,9 @@
+import * as EventSink from "../EventSink.ts";
 import {
   SourceControlProviderKind,
   type OrchestrationV2Run,
   RunId,
+  TurnItemId,
   MessageId,
   EventId,
   ProjectId,
@@ -9,6 +11,7 @@ import {
   ThreadId,
   type OrchestrationV2Command as OrchestrationCommand,
   type OrchestrationV2DomainEvent,
+  type OrchestrationV2StoredEvent,
   type OrchestrationV2InternalCommand,
   type OrchestrationProjectShell,
   type PullRequestRef,
@@ -170,6 +173,7 @@ interface HarnessOptions {
   readonly stack?: (
     input: PullRequestRef,
   ) => Effect.Effect<PullRequestStack | null, PullRequestOperationError>;
+  readonly onLink?: (command: LinkCommand) => Effect.Effect<unknown>;
   readonly onSync?: (command: SyncCommand) => Effect.Effect<unknown>;
 }
 
@@ -185,6 +189,7 @@ export const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (
   const summaryCalls = yield* Ref.make<ReadonlyArray<PullRequestRef>>([]);
   const stackCalls = yield* Ref.make<ReadonlyArray<PullRequestRef>>([]);
   const domainEvents = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
+  const journal: OrchestrationV2StoredEvent[] = [];
   const stateChanges = yield* Queue.unbounded<ThreadPullRequestKey>();
   const reopenCommands = yield* Queue.unbounded<ChecksReopenCommand>();
 
@@ -214,6 +219,7 @@ export const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (
     }
     if (command.type === "thread.pull-request.link") {
       return Ref.update(linkCommands, (recorded) => [...recorded, command]).pipe(
+        Effect.andThen(options.onLink?.(command) ?? Effect.void),
         Effect.as({ sequence: 1, storedEvents: [] }),
       );
     }
@@ -270,13 +276,35 @@ export const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (
           ),
         ),
     }),
+    Layer.mock(EventSink.EventSinkV2)({
+      latestSequence: () => Effect.sync(() => journal.length),
+      stream: (input) => {
+        const matches = ({ event, sequence }: OrchestrationV2StoredEvent) =>
+          sequence > (input?.afterSequence ?? 0) &&
+          (input?.threadId === undefined || event.threadId === input.threadId) &&
+          (input?.eventTypes === undefined || input.eventTypes.includes(event.type));
+        if (input?.throughSequence !== undefined) {
+          const through = input.throughSequence;
+          return Stream.fromIterable(
+            journal.filter((entry) => entry.sequence <= through && matches(entry)),
+          );
+        }
+        return Stream.fromQueue(domainEvents).pipe(
+          Stream.map((event) => {
+            const entry = { sequence: journal.length + 1, event, commandId: null };
+            journal.push(entry);
+            return entry;
+          }),
+          Stream.filter(matches),
+        );
+      },
+    }),
     Layer.mock(Orchestrator.OrchestratorV2)({
       getShellSnapshot: () =>
         Ref.update(shellSnapshotReads, (count) => count + 1).pipe(
           Effect.andThen(Effect.die(new Error("pull request sync must not read the shell"))),
         ),
       dispatch,
-      streamDomainEvents: Stream.fromQueue(domainEvents),
     }),
     Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
     Layer.succeed(SecureRandom.SecureRandom, testCrypto),
@@ -346,6 +374,42 @@ export function runUpdated(
       completedAt: at,
       checkpointId: null,
       contextHandoffId: null,
+    },
+  };
+}
+
+export function commandRan(
+  threadId: ThreadId,
+  input: string,
+  output?: string,
+  name = "command",
+): OrchestrationV2DomainEvent {
+  const runId = RunId.make(`run:${threadId}:1`);
+  const at = DateTime.makeUnsafe(NOW);
+  return {
+    type: "turn-item.updated",
+    id: EventId.make(`event:${threadId}:${name}`),
+    threadId,
+    runId,
+    occurredAt: at,
+    payload: {
+      id: TurnItemId.make(`item:${threadId}:${name}`),
+      threadId,
+      runId,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed",
+      title: null,
+      startedAt: at,
+      completedAt: at,
+      updatedAt: at,
+      type: "command_execution",
+      input,
+      ...(output === undefined ? {} : { output }),
     },
   };
 }
