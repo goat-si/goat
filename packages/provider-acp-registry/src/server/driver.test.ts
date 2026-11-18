@@ -367,6 +367,40 @@ describe("acpRegistrySnapshotReadiness", () => {
     });
   });
 
+  it("keeps absent, unsupported and advertised reasoning metadata distinct by model", () => {
+    const effort = {
+      id: "effort",
+      name: "Effort",
+      category: "thought_level",
+      type: "select" as const,
+      currentValue: "high",
+      options: [{ value: "high", name: "High" }],
+    };
+    const modelState = {
+      currentModelId: "current",
+      availableModels: [
+        { modelId: "current", name: "Current" },
+        {
+          modelId: "advertised",
+          name: "Advertised",
+          _meta: {
+            reasoningEfforts: [{ value: "low", label: "Low" }],
+            reasoningEffort: "low",
+          },
+        },
+        { modelId: "unsupported", name: "Unsupported", _meta: { supportsReasoningEffort: false } },
+        { modelId: "legacy", name: "Legacy" },
+      ],
+    };
+    const discovery = normalizeAcpRegistryLiveConfiguration([effort], undefined, modelState);
+    expect(discovery.models.map((model) => model.reasoningEffort)).toEqual([
+      undefined,
+      expect.objectContaining({ id: "effort", options: [{ id: "low", label: "Low" }] }),
+      null,
+      undefined,
+    ]);
+  });
+
   it("projects discovery without claiming authentication when no login methods are advertised", () => {
     const snapshot = buildCheckedAcpRegistrySnapshot({
       ...identity,
