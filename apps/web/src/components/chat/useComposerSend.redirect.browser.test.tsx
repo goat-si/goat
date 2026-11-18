@@ -1,7 +1,12 @@
-import type { ComposerContextId } from "@goat/contracts";
+import { ThreadId, type ComposerContextId } from "@goat/contracts";
 import { setupSshComposer, state } from "~/test/sshComposerFixture";
 import { useLayoutEffect, useRef } from "react";
 import { expect, it, vi } from "vite-plus/test";
+
+const { changeLink } = vi.hoisted(() => ({ changeLink: vi.fn() }));
+vi.mock(import("../../hooks/usePullRequestLinking"), () => ({
+  usePullRequestLinking: () => ({ changeLink }) as never,
+}));
 
 /**
  * A server thread with one pending command approval and a send that redirects the agent: the
@@ -345,4 +350,115 @@ it("a plan follow-up with a reply that fails to send puts the reply back with it
     .getComposerDraft({ environmentId, threadId: "redirect-thread" } as never);
   expect(draft?.prompt).toBe("Stop that and list the files instead.");
   expect(draft?.replyTo?.contextId).toBe("response_m9");
+});
+
+it.each([
+  {
+    title: "links each acknowledged first-send model thread to the checkout pull request",
+    checkoutBranch: "feature",
+    links: true,
+  },
+  {
+    title: "omits the checkout pull request when a multiple-model draft changed branches",
+    checkoutBranch: "old-feature",
+    links: false,
+  },
+])("$title", async ({ checkoutBranch, links }) => {
+  await using fixture = await setupSshComposer();
+  const { EnvironmentId, ProjectId, ProviderDriverKind, ProviderInstanceId } =
+    await import("@goat/contracts");
+  const { scopeProjectRef } = await import("@goat/client-runtime/environment");
+  const { AsyncResult } = await import("effect/reactivity");
+  const Cause = await import("effect/Cause");
+  const { DraftId, useComposerDraftStore } = await import("~/composerDraftStore");
+  const { appAtomRegistry } = await import("~/rpc/atomRegistry");
+  const { environmentPresentations } = await import("~/state/presentation");
+  const { makeThreadFixture } = await import("~/test-fixtures");
+  const { deriveProviderInstanceEntries } = await import("~/providerInstances");
+  changeLink.mockReset().mockResolvedValue(undefined);
+  const environmentId = EnvironmentId.make("redirect-env");
+  const projectId = ProjectId.make("project");
+  const threadId = ThreadId.make("redirect-thread");
+  const draftId = DraftId.make("fanout-checkout");
+  const url = "https://github.com/org/repo/pull/1";
+  const branch = "feature";
+  const store = useComposerDraftStore.getState();
+  store.setProjectDraftThreadId(scopeProjectRef(environmentId, projectId), draftId, {
+    threadId,
+    branch,
+    checkoutPullRequest: { url, branch: checkoutBranch },
+  });
+  const instanceId = ProviderInstanceId.make("codex");
+  const selections = ["first", "second", "failed"].map((model) => ({ instanceId, model }));
+  const providerInstanceEntries = deriveProviderInstanceEntries([
+    {
+      instanceId,
+      driver: ProviderDriverKind.make("codex"),
+      enabled: true,
+      installed: true,
+      status: "ready",
+      auth: { status: "authenticated" },
+      version: null,
+      checkedAt: "2026-11-18T00:00:00Z",
+      models: [],
+      slashCommands: [],
+      skills: [],
+    },
+  ]);
+  const get = vi.mocked(appAtomRegistry.get);
+  const prior = get.getMockImplementation()!;
+  get.mockImplementation(((atom: unknown) =>
+    atom === environmentPresentations.presentationsAtom
+      ? new Map([
+          [
+            environmentId,
+            {
+              serverConfig: { environment: { capabilities: { requiredWorktreeBootstrap: true } } },
+            },
+          ],
+        ])
+      : prior(atom as never)) as never);
+  const sender = await redirectSend(fixture, {
+    composerMode: "full-access",
+    refuse: false,
+    input: {
+      activeThread: makeThreadFixture({ id: threadId, environmentId, projectId, branch }),
+      activeProject: { id: projectId, environmentId, workspaceRoot: "/repo" },
+      isServerThread: false,
+      isLocalDraftThread: true,
+      draftId,
+      draftThread: store.getDraftSession(draftId),
+      composerDraftTarget: draftId,
+      routeThreadKey: checkoutBranch,
+      currentRouteThreadKeyRef: { current: checkoutBranch },
+      activeThreadBranch: branch,
+      activeMessageCount: 0,
+      pendingApprovals: [],
+      phase: "ready",
+      isGitRepo: true,
+      providerInstanceEntries,
+    },
+    sendContext: { multipleModelSelections: selections, shownPendingApprovalIds: [] },
+  });
+  const started: ThreadId[] = [];
+  state.normal.mockImplementation(
+    async ({ input }: { input: { threadId: ThreadId; modelSelection: { model: string } } }) => {
+      if (input.modelSelection.model === "failed")
+        return AsyncResult.failure(Cause.fail(new Error("offline")));
+      started.push(input.threadId);
+      return AsyncResult.success({ sequence: 1 });
+    },
+  );
+
+  await sender.send();
+
+  expect(sender.errors.filter(Boolean)).toEqual([]);
+  expect(state.normal).toHaveBeenCalledTimes(3);
+  expect(started).toHaveLength(2);
+  expect(changeLink.mock.calls).toHaveLength(links ? started.length : 0);
+  if (links) {
+    for (const id of started) {
+      expect(changeLink).toHaveBeenCalledWith({ environmentId, threadId: id }, url, true);
+    }
+  }
 });

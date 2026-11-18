@@ -80,7 +80,7 @@ export async function startFanoutThread(input: {
   readonly uncertainSubmissions: Map<string, ThreadId>;
   readonly start: (threadId: ThreadId) => Promise<AtomCommandResult<unknown, unknown>>;
   readonly openThread: (threadId: ThreadId) => void;
-}): Promise<boolean> {
+}): Promise<ThreadId | null> {
   const { retryKey, uncertainSubmissions } = input;
   const uncertainThreadId = uncertainSubmissions.get(retryKey);
   const targetThreadId = uncertainThreadId ?? newThreadId();
@@ -100,7 +100,7 @@ export async function startFanoutThread(input: {
       }
       throw error;
     }
-    return true;
+    return targetThreadId;
   } catch (error) {
     if (requestMayHaveStarted && !uncertainSubmissions.has(retryKey)) {
       uncertainSubmissions.set(retryKey, targetThreadId);
@@ -145,7 +145,7 @@ export async function startFanoutThread(input: {
           : {}),
       }),
     );
-    return false;
+    return null;
   }
 }
 

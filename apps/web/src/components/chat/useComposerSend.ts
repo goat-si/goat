@@ -250,19 +250,7 @@ export function useComposerSend(input: ComposerSendInput) {
   const setComposerDraftThreadContexts = useComposerDraftStore((store) => store.setThreadContexts);
   const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
   const forkCommand = useComposerForkCommand(input);
-  const sendToMultipleModels = useMultipleModelSend({
-    environmentId,
-    routeThreadKey,
-    currentRouteThreadKeyRef,
-    draftId,
-    composerDraftTarget,
-    composerRef,
-    promptRef,
-    runtimeMode,
-    startFromOrigin,
-    resetLocalDispatch,
-    setThreadError,
-  });
+  const sendToMultipleModels = useMultipleModelSend(input, checkoutLink);
   const submitPlanFollowUp = usePlanFollowUpSend({
     environmentId,
     routeThreadKey,
