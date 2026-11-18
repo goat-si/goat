@@ -80,6 +80,15 @@ describe("labels and reference links", () => {
     }
   });
 
+  it.each(["goat-context", "t3-context"])("keeps brackets outside a %s reference", (protocol) => {
+    const reference = `[#30296](${protocol}://v1/review-comment/ctx_pr)`;
+    expect(collectComposerContextReferences(`[${reference}]`)[0]).toMatchObject({
+      label: "#30296",
+      source: reference,
+      start: 1,
+    });
+  });
+
   it("recognizes a prompt made only of image references", () => {
     const image = "![a.png](t3-context://v1/image/ctx_1)";
     const file = "[notes.md](t3-context://v1/file/ctx_3)";

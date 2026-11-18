@@ -28,7 +28,6 @@ import {
   type AuthWebSocketTicketResult,
   type AuthWebSocketTicketUse,
   type ChildSetupPurpose,
-  type RuntimeMode,
   type SessionPrincipalKind,
 } from "@goat/contracts";
 import { encodeOAuthScope } from "@goat/shared/oauthScope";
@@ -207,15 +206,9 @@ export class EnvironmentAuth extends Context.Service<
       readonly excludeSubjects?: ReadonlyArray<string>;
     }) => Effect.Effect<ReadonlyArray<AuthPairingLink>, ServerAuthInternalError>;
     readonly revokePairingLink: (id: string) => Effect.Effect<boolean, ServerAuthInternalError>;
-    readonly issueSession: (input?: {
-      readonly ttl?: Duration.Duration;
-      readonly subject?: string;
-      readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
-      readonly label?: string;
-      /** Caps the threads an `mcp-client` session may start or change; see `authenticateMcpClient`. */
-      readonly runtimeModeCeiling?: RuntimeMode;
-      readonly childSetupPurpose?: ChildSetupPurpose;
-    }) => Effect.Effect<IssuedBearerSession, ServerAuthInternalError>;
+    readonly issueSession: (
+      input?: IssuedEnvironmentSession.IssueSessionInput,
+    ) => Effect.Effect<IssuedBearerSession, ServerAuthInternalError>;
     readonly listSessions: () => Effect.Effect<
       ReadonlyArray<AuthClientSession>,
       ServerAuthInternalError

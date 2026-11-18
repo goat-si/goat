@@ -162,7 +162,7 @@ function emitClientSettingsHydrationChange() {
   }
 }
 
-function getClientSettingsSnapshot(): ClientSettings {
+export function getClientSettingsSnapshot(): ClientSettings {
   return clientSettingsSnapshot;
 }
 

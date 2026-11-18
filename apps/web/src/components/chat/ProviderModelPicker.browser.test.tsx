@@ -1,3 +1,4 @@
+import { compileResolvedKeybindingsConfig } from "@goat/shared/keybindings";
 import {
   EnvironmentId,
   ProviderDriverKind,
@@ -325,4 +326,118 @@ it("lets a Pi model select an advertised service tier", async () => {
   await userEvent.click(screen.getByRole("button", { name: /Reasoning:/ }));
   await userEvent.click(page.getByRole("button", { name: "Fast", exact: true }));
   expect(change).toHaveBeenCalledWith([{ id: "serviceTier", value: "priority" }]);
+});
+
+it.each([true, false])(
+  "focuses the model search appropriately when coarse pointer is %s",
+  async (coarse) => {
+    const codex = providerEntry("codex", "codex");
+    const claude = providerEntry("claudeAgent", "claudeAgent");
+    const matchMedia = window.matchMedia.bind(window);
+    using _pointer = vi.spyOn(window, "matchMedia").mockImplementation((query) => {
+      const result = matchMedia(query);
+      if (query === "(pointer: coarse)")
+        Object.defineProperty(result, "matches", { value: coarse });
+      return result;
+    });
+
+    await using screen = await render(
+      <ProviderModelPicker
+        environmentId={null}
+        activeInstanceId={codex.instanceId}
+        model="codex"
+        lockedProvider={null}
+        instanceEntries={[codex, claude]}
+        modelOptionsByInstance={
+          new Map([
+            [codex.instanceId, [{ slug: "codex", name: "Codex model" }]],
+            [claude.instanceId, [{ slug: "opus", name: "Claude model" }]],
+          ])
+        }
+        triggerAriaLabel="Choose model"
+        onInstanceModelChange={() => {}}
+      />,
+    );
+    await screen.getByRole("button", { name: "Choose model" }).click();
+    const search = page.getByPlaceholder("Search models...");
+    await expect.element(search).toBeVisible();
+    const popup = search.element().closest('[data-slot="popover-popup"]');
+    expect(popup).not.toBeNull();
+    await vi.waitFor(() => expect(document.activeElement).toBe(coarse ? popup : search.element()));
+
+    await page.getByRole("button", { name: /^Claude/ }).click();
+    await expect.element(page.getByRole("option", { name: /Claude model/ })).toBeVisible();
+    if (coarse) {
+      await expect.element(search).not.toHaveFocus();
+      await search.click();
+    }
+    await expect.element(search).toHaveFocus();
+  },
+);
+
+it("lists a model reported twice by one provider once, with contiguous jump shortcuts", async () => {
+  const instanceId = ProviderInstanceId.make("claude");
+  const entries = deriveProviderInstanceEntries([
+    {
+      instanceId,
+      driver: ProviderDriverKind.make("claudeAgent"),
+      enabled: true,
+      installed: true,
+      version: null,
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-01-01T00:00:00.000Z",
+      models: [],
+      slashCommands: [],
+      skills: [],
+    },
+  ]);
+  const options = new Map([
+    [
+      instanceId,
+      ["a", "b", "c", "c", "d", "d"].map((slug) => ({
+        slug,
+        name: `Model ${slug.toUpperCase()}`,
+      })),
+    ],
+  ]);
+  const keybindings = compileResolvedKeybindingsConfig(
+    ([1, 2, 3, 4, 5, 6] as const).map((index) => ({
+      key: `mod+${index}`,
+      command: `modelPicker.jump.${index}` as const,
+      when: "modelPickerOpen",
+    })),
+  );
+
+  await using screen = await render(
+    <ProviderModelPicker
+      environmentId={null}
+      activeInstanceId={instanceId}
+      model="a"
+      lockedProvider={null}
+      instanceEntries={entries}
+      modelOptionsByInstance={options}
+      keybindings={keybindings}
+      triggerAriaLabel="Choose model"
+      onInstanceModelChange={() => {}}
+    />,
+  );
+  await screen.getByRole("button", { name: "Choose model" }).click();
+  await expect.element(page.getByRole("option", { name: /Model A/ })).toBeVisible();
+  await vi.waitFor(() =>
+    expect(
+      page
+        .getByRole("option")
+        .elements()
+        .map((row) => [
+          row.textContent?.match(/Model [A-Z]/)?.[0],
+          row.querySelector("kbd")?.textContent?.slice(-1),
+        ]),
+    ).toEqual([
+      ["Model A", "1"],
+      ["Model B", "2"],
+      ["Model C", "3"],
+      ["Model D", "4"],
+    ]),
+  );
 });

@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import { vi } from "vite-plus/test";
+import { idleThreadProjection, liveThreadShell } from "./mcp/McpToolAccess.testkit.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
@@ -114,4 +115,107 @@ it.effect("shares each live event item across subscribers and dedupes bodies per
       live.length,
     );
   }).pipe(Effect.scoped, Effect.provide(ReplayTestLayer)),
+);
+
+it.effect("negotiates compact visits for both persisted replay and the live tail", () =>
+  Effect.gen(function* () {
+    const store = yield* OrchestrationEventStore.OrchestrationEventStore;
+    const threadId = ThreadId.make("thread:wire-visit");
+    const visitedAt = DateTime.makeUnsafe("2026-11-01T00:00:00.000Z");
+    const nextVisit = DateTime.makeUnsafe("2026-11-02T00:00:00.000Z");
+    const projection = idleThreadProjection({
+      ...liveThreadShell(threadId),
+      lastVisitedAt: visitedAt,
+    });
+    const recorded = yield* store.appendAgentEvents({
+      events: [
+        {
+          type: "thread.visit-recorded",
+          id: EventId.make("event:wire-visit:stored"),
+          threadId,
+          occurredAt: visitedAt,
+          payload: { lastVisitedAt: visitedAt },
+        },
+      ],
+    });
+    const sequence = recorded[0]!.sequence;
+    const next: OrchestrationV2StoredEvent = {
+      commandId: null,
+      sequence: sequence + 1,
+      event: {
+        type: "thread.visit-recorded",
+        id: EventId.make("event:wire-visit:live"),
+        threadId,
+        occurredAt: nextVisit,
+        payload: { lastVisitedAt: nextVisit },
+      },
+    };
+    const archived = {
+      ...projection,
+      thread: { ...projection.thread, lastVisitedAt: nextVisit, archivedAt: nextVisit },
+    };
+    const archive: OrchestrationV2StoredEvent = {
+      commandId: null,
+      sequence: next.sequence + 1,
+      event: {
+        type: "thread.archived",
+        id: EventId.make("event:wire-visit:archive"),
+        threadId,
+        occurredAt: nextVisit,
+        payload: archived.thread,
+      },
+    };
+    const afterArchive: OrchestrationV2StoredEvent = {
+      commandId: null,
+      sequence: archive.sequence + 1,
+      event: {
+        type: "thread.unarchived",
+        id: EventId.make("event:wire-visit:unarchive"),
+        threadId,
+        occurredAt: nextVisit,
+        payload: { ...archived.thread, archivedAt: null },
+      },
+    };
+    const subscribe = (acceptCompactVisits: boolean) => {
+      let servedInitialSnapshot = false;
+      return subscribeOrchestrationV2Thread({
+        threadId,
+        afterSequence: 0,
+        ...(acceptCompactVisits ? { acceptCompactVisits } : {}),
+      }).pipe(
+        Effect.flatMap(Stream.runCollect),
+        Effect.map((items) => Array.from(items)),
+        Effect.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            ensureLegacyTranscript: () => Effect.void,
+            streamStoredEventsFrom: () => Stream.make(next, archive, afterArchive),
+            getThreadSnapshot: () =>
+              Effect.sync(() => {
+                if (servedInitialSnapshot)
+                  return {
+                    schemaVersion: 2 as const,
+                    snapshotSequence: archive.sequence,
+                    projection: archived,
+                  };
+                servedInitialSnapshot = true;
+                return { schemaVersion: 2 as const, snapshotSequence: sequence, projection };
+              }),
+          }),
+        ),
+      );
+    };
+
+    const [oldClient, newClient] = yield* Effect.all([subscribe(false), subscribe(true)] as const);
+    assert.deepEqual(oldClient, [
+      { kind: "snapshot", snapshotSequence: sequence, projection },
+      { kind: "snapshot", snapshotSequence: archive.sequence, projection: archived },
+      { kind: "event", sequence: afterArchive.sequence, event: afterArchive.event },
+    ]);
+    assert.deepEqual(newClient, [
+      { kind: "event", sequence, event: recorded[0]!.event },
+      { kind: "event", sequence: next.sequence, event: next.event },
+      { kind: "event", sequence: archive.sequence, event: archive.event },
+      { kind: "event", sequence: afterArchive.sequence, event: afterArchive.event },
+    ]);
+  }).pipe(Effect.provide(ReplayTestLayer)),
 );

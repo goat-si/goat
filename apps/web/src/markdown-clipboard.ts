@@ -471,6 +471,10 @@ export function chatMarkdownClipboardPayload(
     if (range.collapsed) continue;
     const container = document.createElement("div");
     container.appendChild(range.cloneContents());
+    // Pasted display indentation could turn a paragraph into an indented code block.
+    for (const indentation of container.querySelectorAll("[data-leading-whitespace]")) {
+      indentation.remove();
+    }
     const ancestor = range.commonAncestorContainer;
     const ancestorElement =
       ancestor.nodeType === Node.ELEMENT_NODE ? (ancestor as Element) : ancestor.parentElement;

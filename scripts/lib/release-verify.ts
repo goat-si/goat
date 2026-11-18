@@ -15,6 +15,7 @@ import {
 import type { PlatformError } from "effect/PlatformError";
 import { runtimeManifestAssetName } from "@goat/shared/runtimeManifest";
 import { checkReleaseRuntimeManifest } from "./runtime-manifest.ts";
+import { resolveDesktopUpdateChannel, VERSION_FREE_APPIMAGES } from "./desktop-release-channel.ts";
 import { parseUpdateManifest, type UpdateManifest } from "./update-manifest.ts";
 import { SOURCE_REPOSITORY_REFERENCE } from "./source-repository.ts";
 
@@ -497,13 +498,19 @@ export function requiredReleaseAssets(version: string): string[] {
     for (const ext of ["zip", "exe"]) names.push(`GOAT-${version}-${arch}.${ext}.blockmap`);
   }
   // electron-builder names Linux x64 packages by distro convention.
-  names.push(`GOAT-${version}-arm64.AppImage`, `GOAT-${version}-arm64.deb`);
-  names.push(`GOAT-${version}-x86_64.AppImage`, `GOAT-${version}-amd64.deb`);
+  names.push(releaseAppImageName(version, "arm64"), `GOAT-${version}-arm64.deb`);
+  names.push(releaseAppImageName(version, "x86_64"), `GOAT-${version}-amd64.deb`);
   for (const key of ["darwin-arm64", "linux-x64", "linux-arm64", "win32-x64", "win32-arm64"]) {
     names.push(`goat-${version}-${key}.${key.startsWith("win32") ? "zip" : "tar.gz"}`);
   }
   return names.toSorted();
 }
+/** Published AppImages carry no version: electron-updater replaces an installed one in place only then. */
+export function releaseAppImageName(version: string, arch: "arm64" | "x86_64"): string {
+  if (!VERSION_FREE_APPIMAGES) return `GOAT-${version}-${arch}.AppImage`;
+  return `GOAT${resolveDesktopUpdateChannel(version) === "nightly" ? "-Nightly" : ""}-${arch}.AppImage`;
+}
+const VERSION_FREE_APPIMAGE = /^GOAT(?:-Nightly)?-(?:arm64|x86_64)\.AppImage$/;
 export function matchesReleaseGlob(name: string, glob: string): boolean {
   return new RegExp(
     "^" +
@@ -520,7 +527,7 @@ export function releaseAssetKey(name: string): string | undefined {
   const cli = /^goat-.+-(darwin|linux|win32)-(arm64|x64)\.(tar\.gz|zip)$/.exec(name);
   if (cli)
     return `cli-${cli[1] === "darwin" ? "mac" : cli[1] === "win32" ? "win" : "linux"}-${cli[2]}`;
-  const desktop = /^GOAT-.+-(arm64|x64|x86_64|amd64)\.(dmg|zip|exe|AppImage|deb)$/.exec(name);
+  const desktop = /^GOAT-(?:.+-)?(arm64|x64|x86_64|amd64)\.(dmg|zip|exe|AppImage|deb)$/.exec(name);
   if (desktop) {
     const arch = desktop[1] === "arm64" ? "arm64" : "x64";
     const platform = ["dmg", "zip"].includes(desktop[2]!)
@@ -533,6 +540,7 @@ export function releaseAssetKey(name: string): string | undefined {
   return undefined;
 }
 export function releaseAssetVersion(name: string): string | undefined {
+  if (VERSION_FREE_APPIMAGE.test(name)) return undefined;
   return (/^goat-(.+)-(?:darwin|linux|win32)-(?:arm64|x64)\.(?:tar\.gz|zip)$/.exec(name) ??
     /^GOAT-(.+)-(?:arm64|x64|x86_64|amd64)\.(?:dmg|zip|exe|AppImage|deb)$/.exec(name))?.[1];
 }
@@ -741,9 +749,9 @@ export const assembleRelease = Effect.fn("assembleRelease")(function* (
           : name === `${prefix}.yml`
             ? /^GOAT-.*\.exe$/.test(asset.name)
             : name === `${prefix}-linux-arm64.yml`
-              ? /^GOAT-.*-arm64\.AppImage$/.test(asset.name)
+              ? /^GOAT-(?:.*-)?arm64\.AppImage$/.test(asset.name)
               : name === `${prefix}-linux.yml`
-                ? /^GOAT-.*-x86_64\.AppImage$/.test(asset.name)
+                ? /^GOAT-(?:.*-)?x86_64\.AppImage$/.test(asset.name)
                 : false,
       );
       for (const asset of expected)

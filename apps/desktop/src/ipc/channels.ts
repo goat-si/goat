@@ -1,4 +1,6 @@
+export const START_FILE_DRAG_CHANNEL = "desktop:start-file-drag";
 export const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
+export const TO_LOCAL_BACKEND_PATH_CHANNEL = "desktop:to-local-backend-path";
 export const SET_NOTIFICATION_BADGE_CHANNEL = "desktop:set-notification-badge";
 export const SET_TRAY_MENU_CHANNEL = "desktop:set-tray-menu";
 export const TRAY_ACTION_CHANNEL = "desktop:tray-action";
@@ -70,6 +72,9 @@ export const GET_CONNECTION_CATALOG_UNREADABLE_CHANNEL =
   "desktop:get-connection-catalog-unreadable";
 export const CLEAR_CONNECTION_CATALOG_CHANNEL = "desktop:clear-connection-catalog";
 export const DISCOVER_SSH_HOSTS_CHANNEL = "desktop:discover-ssh-hosts";
+export const GET_PEN_MEMBERS_CHANNEL = "desktop:get-pen-members";
+export const PEN_MEMBERS_CHANGED_CHANNEL = "desktop:pen-members-changed";
+export const ISSUE_PEN_MEMBER_SESSION_CHANNEL = "desktop:issue-pen-member-session";
 export const RESOLVE_SSH_HOST_CHANNEL = "desktop:resolve-ssh-host";
 export const SSH_ENVIRONMENT_ANSWERED_CHANNEL = "desktop:ssh-environment-answered";
 export const SSH_ENVIRONMENT_PROGRESS_CHANNEL = "desktop:ssh-environment-progress";

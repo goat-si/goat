@@ -3,6 +3,7 @@ import {
   connectionRouteId,
   connectionRouteKind,
   connectionRouteLabel,
+  penRouteOwner,
   connectionRoutes,
   usableRoutes,
   type ConnectionCatalogEntry,
@@ -76,7 +77,9 @@ export function environmentTransportLabel(
     Option.isSome(entry.profile) &&
     entry.profile.value._tag === "SshConnectionProfile"
   ) {
-    return `SSH ${formatDesktopSshTarget(entry.profile.value.target)}`;
+    return penRouteOwner(entry.target.connectionId) === null
+      ? `SSH ${formatDesktopSshTarget(entry.profile.value.target)}`
+      : "Pen";
   }
   return environment.displayUrl ?? "Remote link";
 }

@@ -33,6 +33,7 @@ import * as ServerConfig from "./config.ts";
 import * as DesktopStopIntentReader from "./desktopStopIntent.ts";
 import * as PersistenceRecoveryOwner from "./persistence/PersistenceRecoveryOwner.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
+import { repointCommittedLaunchers } from "./cloud/repointCommittedLaunchers.ts";
 import { flushCompileCache } from "./compileCache.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -819,7 +820,15 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
       }),
     );
 
+    const trialPending = launcher.lastUpdate?.status === "pending";
     const updateOutcome = yield* launcher.prepareTrial;
+    // Only the start that commits the trial moves the goat command; later starts report the same outcome.
+    if (trialPending && updateOutcome?.status === "committed") {
+      yield* repointCommittedLaunchers({
+        baseDir: serverConfig.baseDir,
+        targetVersion: updateOutcome.targetVersion,
+      });
+    }
 
     yield* Ref.set(startupPhase, "publishing welcome event");
     yield* Effect.logDebug("startup phase: publishing welcome event", {

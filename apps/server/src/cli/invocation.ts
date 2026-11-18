@@ -10,6 +10,9 @@ import { CLI_NPM_PACKAGE_NAME, cliNpmExecCommand, cliNpmPackageUrl } from "@goat
 import { resolveCommandPath } from "@goat/shared/shell";
 
 import packageJson from "../../package.json" with { type: "json" };
+import { resolveLauncherPath } from "../cloud/pinnedRuntime.ts";
+
+const PINNED_RUNTIME_ENTRY = /^(.*)\/runtime\/goat\/versions\/[^/]+\/goat$/;
 
 export type CliRunner = "npx" | "pnpm dlx" | "bunx";
 
@@ -111,6 +114,21 @@ export const resolveServerInstallation = Effect.gen(function* () {
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
   const entry = yield* fs.realPath(yield* resolveEntryPath);
+  const runtime = PINNED_RUNTIME_ENTRY.exec(entry);
+  if (runtime) {
+    const launcher = yield* resolveLauncherPath;
+    if (launcher === undefined) return null;
+    // Fails for a runtime started directly, as SSH launches do, or through a copy.
+    const link = yield* fs.readLink(launcher);
+    // Keep the home as the link spells it; `goat update` only repoints links into that spelling.
+    const linked = PINNED_RUNTIME_ENTRY.exec(path.resolve(path.dirname(launcher), link));
+    if (!linked || (yield* fs.realPath(linked[1] || "/")) !== (runtime[1] || "/")) return null;
+    return {
+      kind: "goat-launcher",
+      launcher,
+      baseDir: linked[1] || "/",
+    } satisfies ServerInstallation;
+  }
   if (platform === "win32") {
     const owned = yield* resolveWindowsNpmGlobal(entry);
     if (owned !== null) return owned;

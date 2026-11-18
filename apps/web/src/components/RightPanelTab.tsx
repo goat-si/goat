@@ -89,6 +89,11 @@ const TAB_DRAG_MODIFIERS = [restrictToHorizontalAxis, restrictToFirstScrollableA
 
 export type TabAudioState = "none" | "audible" | "muted";
 
+export function tabAudioState(overlay: DesktopPreviewOverlay | null): TabAudioState {
+  if (!overlay?.audible) return "none";
+  return overlay.audioMuted ? "muted" : "audible";
+}
+
 function PreviewFavicon({ capturedUrl, url }: { capturedUrl: string | null; url: string | null }) {
   const publicProviderUrl = faviconUrlForOrigin(url, 32);
   return (

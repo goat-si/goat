@@ -612,6 +612,7 @@ interface DevRunnerCliInput {
   readonly port: number | undefined;
   readonly devUrl: URL | undefined;
   readonly dryRun: boolean;
+  readonly watch?: boolean | undefined;
   readonly share: boolean;
   readonly seed?: boolean | undefined;
   readonly built: boolean;
@@ -686,6 +687,10 @@ export const runDevRunnerWithInput = Effect.fn("dev-runner.runDevRunnerWithInput
     devUrl: input.devUrl,
   });
 
+  const watch = input.watch !== false;
+  if (watch) delete env.GOAT_DEV_NO_WATCH;
+  else env.GOAT_DEV_NO_WATCH = "1";
+
   const selectionSuffix =
     serverOffset !== offset || webOffset !== offset
       ? ` selectedOffset(server=${serverOffset},web=${webOffset})`
@@ -693,7 +698,7 @@ export const runDevRunnerWithInput = Effect.fn("dev-runner.runDevRunnerWithInput
   const baseDir = env.GOAT_HOME ?? (yield* DEFAULT_GOAT_HOME);
 
   yield* Effect.logInfo(
-    `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.GOAT_PORT)} webPort=${String(env.PORT)} baseDir=${baseDir}`,
+    `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.GOAT_PORT)} webPort=${String(env.PORT)} baseDir=${baseDir}${watch ? "" : " watch=off"}`,
   );
 
   // Before the share block: --dry-run only resolves and prints. Sharing would
@@ -794,7 +799,11 @@ export const runDevRunnerWithInput = Effect.fn("dev-runner.runDevRunnerWithInput
     env,
   });
 
-  const args = [...(built ? BUILT_DEV_ARGS : MODE_ARGS[input.mode]), ...input.runArgs];
+  const modeArgs = built ? BUILT_DEV_ARGS : MODE_ARGS[input.mode];
+  const watchableTask = built || input.mode === "dev" || input.mode === "dev:server";
+  const taskArgs =
+    !watch && watchableTask ? [...modeArgs.slice(0, -1), `${modeArgs.at(-1)}:once`] : modeArgs;
+  const args = [...taskArgs, ...input.runArgs];
   const spawnCommand = yield* resolveSpawnCommand("vp", args, { env });
   const processContext = {
     mode: input.mode,
@@ -901,6 +910,12 @@ const devRunnerCli = Command.make("dev-runner", {
   dryRun: Flag.Boolean("dry-run").pipe(
     Flag.withDescription("Resolve mode/ports/env and print, but do not spawn Vite+."),
     Flag.withDefault(false),
+  ),
+  watch: Flag.Boolean("watch").pipe(
+    Flag.withDescription(
+      "Watch server and web source files. Pass --no-watch for a client test pass with manual restarts.",
+    ),
+    Flag.withDefault(true),
   ),
   share: Flag.Boolean("share").pipe(
     Flag.withDescription(

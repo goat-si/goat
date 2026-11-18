@@ -30,6 +30,7 @@ export function secretRequestAsPendingInput(
     kind: "user_input",
     createdAt: item.startedAt ?? item.updatedAt,
     blocking: true,
+    userOnly: true,
     ...(item.type === "human_handoff"
       ? {
           handoff: {

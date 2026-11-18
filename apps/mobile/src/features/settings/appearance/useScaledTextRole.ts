@@ -1,6 +1,7 @@
 import { useMemo } from "react";
+import { Platform, useWindowDimensions } from "react-native";
 
-import { resolveScaledTextRole } from "../../../lib/appearancePreferences";
+import { resolveComposerTextRole, resolveScaledTextRole } from "../../../lib/appearancePreferences";
 import { MOBILE_TYPOGRAPHY } from "../../../lib/typography";
 import { useAppearancePreferences } from "./AppearancePreferencesProvider";
 
@@ -16,4 +17,10 @@ export function useScaledTextRole(role: keyof typeof MOBILE_TYPOGRAPHY): ScaledT
     () => resolveScaledTextRole(role, appearance.baseFontSize),
     [appearance.baseFontSize, role],
   );
+}
+
+export function useComposerTextRole(): ScaledTextRole {
+  const body = useScaledTextRole("body");
+  const { fontScale } = useWindowDimensions();
+  return resolveComposerTextRole(body, fontScale, Platform.OS);
 }

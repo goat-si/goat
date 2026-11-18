@@ -39,8 +39,13 @@ export function isUndeliveredMailboxSteer(
   );
 }
 
-export function followsCurrentConversation(message: NotificationIdentity | undefined): boolean {
+export function followsCurrentConversation(
+  message:
+    | (NotificationIdentity & Pick<OrchestrationV2ConversationMessage, "followsThreadSelection">)
+    | undefined,
+): boolean {
   return (
+    message?.followsThreadSelection === true ||
     message?.delegatedCompletion !== undefined ||
     (message?.notification?.source.kind === "monitor" && !isBufferedProviderNotification(message))
   );

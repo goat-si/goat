@@ -31,13 +31,20 @@ import { mapRemoteEnvironmentError } from "./errors.ts";
 import {
   BearerConnectionTarget,
   ConnectionBlockedError,
+  ConnectionAttemptSuperseded,
   SshConnectionTarget,
   type ConnectionAttemptError,
 } from "./model.ts";
 import * as Persistence from "../platform/persistence.ts";
 import * as EnvironmentRegistry from "./registry.ts";
 import { orchestrationProtocolCompatibilityError } from "./compatibility.ts";
-import { connectionRouteId, connectionRoutes, routeEntry, sshTargetKey } from "./routes.ts";
+import {
+  connectionRouteId,
+  connectionRoutes,
+  penRouteConnectionId,
+  routeEntry,
+  sshTargetKey,
+} from "./routes.ts";
 
 export interface PairingConnectionInput {
   readonly pairingUrl?: string;
@@ -54,6 +61,9 @@ export interface PairingConnectionInput {
 export interface SshConnectionInput {
   readonly onPreparationProgress?: (progress: DesktopSshPreparationProgress) => Effect.Effect<void>;
   readonly keyOnly?: boolean;
+  readonly installation?: "existing-only";
+  readonly pen?: { readonly meshId: string; readonly nodeId: string };
+  readonly confirm?: Effect.Effect<boolean>;
   readonly addedBy?: ConnectionAddedBy;
   readonly target: DesktopSshEnvironmentTarget;
   readonly label?: string;
@@ -289,13 +299,23 @@ export const prepareSshRegistration = Effect.fn(
   "clientRuntime.connection.onboarding.prepareSshRegistration",
 )(function* (input: SshConnectionInput) {
   const gateway = yield* ClientCapabilities.SshEnvironmentGateway;
+  const managedId =
+    input.pen === undefined ? undefined : penRouteConnectionId(input.pen.meshId, input.pen.nodeId);
   const provisioned = yield* gateway.provision(input.target, input.expectedEnvironmentId, {
+    ...(input.installation === undefined ? {} : { installation: input.installation }),
+    ...(input.pen === undefined
+      ? {}
+      : {
+          penNodeId: input.pen.nodeId,
+          connectionId: penRouteConnectionId(input.pen.meshId, input.pen.nodeId),
+        }),
     ...(input.keyOnly === undefined ? {} : { keyOnly: input.keyOnly }),
     ...(input.onPreparationProgress === undefined
       ? {}
       : { onPreparationProgress: input.onPreparationProgress }),
   });
-  const connectionId = `ssh:${provisioned.environmentId}:${sshTargetKey(provisioned.bootstrap.target)}`;
+  const connectionId =
+    managedId ?? `ssh:${provisioned.environmentId}:${sshTargetKey(provisioned.bootstrap.target)}`;
   const label = input.label?.trim() || provisioned.label || provisioned.bootstrap.target.alias;
 
   return new SshConnectionRegistration({
@@ -331,7 +351,18 @@ const registerSshConnection = Effect.fn(
     return yield* differentMachineError(registration.target.label);
   }
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-  yield* registry.register(registration);
+  yield* Effect.gen(function* () {
+    if (!(yield* input.confirm ?? Effect.succeed(true))) {
+      return yield* new ConnectionAttemptSuperseded({
+        reason: "superseded",
+        detail: "The Pen member list changed before this machine was saved.",
+      });
+    }
+    yield* registry.register(
+      registration,
+      input.pen === undefined ? undefined : { unlessSameAddress: true },
+    );
+  }).pipe(Effect.uninterruptible);
   return registration.target.environmentId;
 });
 
