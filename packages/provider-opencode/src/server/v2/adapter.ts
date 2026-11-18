@@ -665,6 +665,13 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       itemBase,
     });
 
+    const retainedRequestsOf = (turn: ActiveTurn) => {
+      const ids = [...pending.values()].flatMap((entry) =>
+        entry.turn === turn ? [entry.request.id] : [],
+      );
+      return ids.length === 0 ? {} : { retainedRuntimeRequestIds: ids };
+    };
+
     const emitProviderTurn = (
       state: ThreadState,
       turn: ActiveTurn,
@@ -676,6 +683,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         driver,
         threadId: turn.input.threadId,
         providerTurn,
+        ...(providerTurn.completedAt === null ? {} : retainedRequestsOf(turn)),
       });
     };
 
@@ -1259,6 +1267,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         providerTurnId: turn.providerTurn.id,
         runOrdinal: turn.input.runOrdinal,
         threadDisposition,
+        ...retainedRequestsOf(turn),
       };
       yield* emit(
         terminal.status === "failed"

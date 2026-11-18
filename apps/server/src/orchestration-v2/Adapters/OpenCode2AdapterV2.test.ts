@@ -2888,6 +2888,38 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("keeps a background child's question open past its parent's turn end", () =>
+    Effect.gen(function* () {
+      const form = { ...colorForm, sessionID: CHILD };
+      const { runtime, thread } = yield* resumed([
+        ...launchedAndRunning,
+        event("form.created", { form }),
+        event("session.execution.succeeded", { sessionID: SESSION }),
+      ]);
+      const ended = yield* runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      yield* runtime.startTurn(withLineage(thread));
+      const events = yield* Fiber.join(ended);
+      const request = events.find((event) => event.type === "runtime_request.updated");
+      assert.equal(request?.runtimeRequest.nativeRequestRef?.nativeId, form.id);
+      const terminals = events.filter(
+        (event) =>
+          event.type === "turn.terminal" ||
+          (event.type === "provider_turn.updated" && event.providerTurn.status === "completed"),
+      );
+      assert.lengthOf(terminals, 2);
+      for (const event of terminals) {
+        assert.deepEqual(
+          "retainedRuntimeRequestIds" in event ? event.retainedRuntimeRequestIds : undefined,
+          [request?.runtimeRequest.id],
+        );
+      }
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("keeps a background child's requests when its parent stops during reconciliation", () =>
     Effect.gen(function* () {
       const reading = yield* Deferred.make<void>();
