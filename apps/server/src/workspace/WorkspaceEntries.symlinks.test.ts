@@ -78,6 +78,34 @@ const searchWorkspaceEntries = (input: {
 // Symlink cases of WorkspaceEntries.test.ts, here because that file is near its line cap.
 it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries symlinks", (it) => {
   describe("search", () => {
+    it.effect("checks canonical containment for exact matches in a newline-named worktree", () =>
+      Effect.gen(function* () {
+        if ((yield* HostProcess.Platform) === "win32") return;
+        const cwd = yield* makeTempDir({ git: true });
+        const outside = yield* makeTempDir();
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        yield* writeTextFile(cwd, ".gitignore", ".worktrees/\n");
+        yield* git(cwd, ["add", ".gitignore"]);
+        yield* git(cwd, ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "init"]);
+        const worktree = ".worktrees/line\nname";
+        yield* git(cwd, ["worktree", "add", "--detach", worktree]);
+        yield* writeTextFile(outside, "outside.txt");
+        yield* writeTextFile(cwd, "fixtures/inside.txt");
+        yield* fs.symlink(outside, path.join(cwd, worktree, "external"));
+        yield* fs.symlink(path.join(cwd, "fixtures"), path.join(cwd, worktree, "internal"));
+        const search = (query: string) => searchWorkspaceEntries({ cwd, query, limit: 25 });
+
+        expect((yield* search("external/outside.txt")).entries).not.toContainEqual({
+          kind: "file",
+          path: `${worktree}/external/outside.txt`,
+        });
+        expect((yield* search("internal/inside.txt")).entries).toContainEqual({
+          kind: "file",
+          path: `${worktree}/internal/inside.txt`,
+        });
+      }),
+    );
     it.effect("indexes symlinked files and directories inside the workspace", () =>
       Effect.gen(function* () {
         if ((yield* HostProcess.Platform) === "win32") return;

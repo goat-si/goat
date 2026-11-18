@@ -323,7 +323,8 @@ export const make = Effect.gen(function* () {
     const listed =
       (yield* listWorktrees(["-z"])) ?? (yield* listWorktrees([]))?.replaceAll("\n", "\0");
     if (listed === undefined) return [];
-    const realCwd = yield* Effect.promise(() => NodeFSP.realpath(cwd).catch(() => cwd));
+    const realCwd = yield* Effect.promise(() => NodeFSP.realpath(cwd).catch(() => undefined));
+    if (realCwd === undefined) return [];
     const worktreeRoots = listed.split("\0\0").flatMap((record) => {
       const fields = record.split("\0");
       const worktree = fields.find((field) => field.startsWith("worktree "));
@@ -342,7 +343,18 @@ export const make = Effect.gen(function* () {
       Promise.all(
         worktreeRoots.map(async (relativeRoot) => {
           const candidate = `${relativeRoot}/${relativePath}`;
-          const stat = await NodeFSP.stat(path.join(realCwd, candidate)).catch(() => null);
+          const target = await NodeFSP.realpath(path.join(realCwd, candidate)).catch(() => null);
+          if (target === null) return null;
+          const relativeTarget = path.relative(realCwd, target);
+          if (
+            relativeTarget === ".." ||
+            relativeTarget.startsWith(`..${path.sep}`) ||
+            path.isAbsolute(relativeTarget) ||
+            relativeTarget.split(path.sep).includes(".git")
+          ) {
+            return null;
+          }
+          const stat = await NodeFSP.stat(target).catch(() => null);
           return stat?.isFile() ? candidate : null;
         }),
       ),
