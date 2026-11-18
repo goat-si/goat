@@ -370,3 +370,67 @@ it.effect("an index closed while its watcher subscription is pending keeps no wa
     expect(handlers).toEqual([]);
   }).pipe(Effect.scoped, Effect.provide(testLayer)),
 );
+
+it.effect(
+  "truncates the symlink directory scan and verifies native entries from unscanned folders",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        if ((yield* HostProcess.Platform) === "win32") return;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* fs.makeTempDirectoryScoped();
+        const outside = yield* fs.makeTempDirectoryScoped();
+        const extra = path.join(cwd, "extra");
+        yield* fs.makeDirectory(extra);
+        yield* fs.writeFileString(path.join(extra, "safe.ts"), "");
+        yield* fs.symlink(outside, path.join(extra, "unverified.ts"));
+        const dirs = [...Array.from({ length: 4_096 }, (_, i) => `absent-${i}`), "extra"];
+        fakeSymlinkFinder(dirs, {
+          indexed: [
+            { path: "extra/safe.ts", kind: "file" },
+            { path: "extra/unverified.ts", kind: "file" },
+          ],
+        });
+        const index = yield* WorkspaceSearchIndex.make(cwd);
+        const listed = yield* index.list();
+        const searched = yield* index.search("ts", 10, "file");
+        expect(listed.truncated).toBe(true);
+        expect(searched).toEqual({
+          entries: [{ path: "extra/safe.ts", kind: "file" }],
+          truncated: true,
+        });
+        expect(listed.entries.map((entry) => entry.path)).toEqual(["extra", "extra/safe.ts"]);
+      }),
+    ).pipe(Effect.provide(testLayer)),
+);
+
+it.effect(
+  "omits aliases whose ignore file exceeds the scan read budget and marks results truncated",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        if ((yield* HostProcess.Platform) === "win32") return;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* fs.makeTempDirectoryScoped();
+        yield* fs.writeFileString(
+          path.join(cwd, ".ignore"),
+          `#${"x".repeat(64 * 1024)}\nlink.ts\n`,
+        );
+        yield* fs.writeFileString(path.join(cwd, "target.ts"), "");
+        yield* fs.symlink("target.ts", path.join(cwd, "link.ts"));
+        fakeSymlinkFinder([], {
+          indexed: [
+            { path: "link.ts", kind: "file" },
+            { path: "target.ts", kind: "file" },
+          ],
+        });
+        const index = yield* WorkspaceSearchIndex.make(cwd);
+        expect(yield* index.search("ts", 10, "file")).toEqual({
+          entries: [{ path: "target.ts", kind: "file" }],
+          truncated: true,
+        });
+      }),
+    ).pipe(Effect.provide(testLayer)),
+);

@@ -12,8 +12,6 @@ import type {
 } from "@ff-labs/fff-node";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as LayerMap from "effect/LayerMap";
 import * as Schema from "effect/Schema";
 
 import type {
@@ -42,7 +40,6 @@ const WORKSPACE_INDEX_MAX_ENTRIES = 25_000;
 const WORKSPACE_INDEX_PAGE_SIZE = WORKSPACE_INDEX_MAX_ENTRIES + 2;
 const WORKSPACE_INDEX_SCAN_TIMEOUT = "15 seconds";
 const WORKSPACE_INDEX_SCAN_TIMEOUT_MS = 15_000;
-const WORKSPACE_INDEX_IDLE_TTL = "15 minutes";
 const CONTENT_SEARCH_TIME_BUDGET_MS = 250;
 const CONTENT_SEARCH_MAX_MATCHES_PER_FILE = 100;
 
@@ -469,7 +466,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
     return result.value;
   });
 
-  const { listSymlinkEntries, invalidateSymlinkScan } = yield* makeSymlinkScan({
+  const { listSymlinkEntries, invalidateSymlinkScan, filterIndexed } = yield* makeSymlinkScan({
     finder,
     cwd,
     isScanning,
@@ -556,7 +553,9 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
       const mapped = mapMixedSearchResult(result, WORKSPACE_INDEX_MAX_ENTRIES, hostIsWindows);
       const symlinks = yield* listSymlinkEntries();
       // fff's watcher can index a link the scan rejected; only accepted links are listed.
-      const indexed = mapped.entries.filter((entry) => !symlinks.linkPaths.has(entry.path));
+      const indexed = (yield* filterIndexed(mapped.entries, symlinks)).filter(
+        (entry) => !symlinks.linkPaths.has(entry.path),
+      );
       const sortedEntries = withDirectoryAncestors([...indexed, ...symlinks.entries]).toSorted(
         (left, right) => left.path.localeCompare(right.path),
       );
@@ -564,7 +563,10 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
       return {
         entries,
         truncated:
-          incompleteBeforeQuery || mapped.truncated || entries.length < sortedEntries.length,
+          incompleteBeforeQuery ||
+          mapped.truncated ||
+          symlinks.truncated ||
+          entries.length < sortedEntries.length,
       };
     },
   );
@@ -575,8 +577,9 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
     kind: ProjectEntryKind | undefined,
     imageOnly: boolean | undefined,
   ) {
-    const { entries: allSymlinks, linkPaths } = yield* listSymlinkEntries();
-    const symlinks = allSymlinks.filter((entry) =>
+    const scan = yield* listSymlinkEntries();
+    const { linkPaths } = scan;
+    const symlinks = scan.entries.filter((entry) =>
       imageOnly
         ? entry.kind === "file" && isProjectFaviconPath(entry.path)
         : kind === undefined || entry.kind === kind,
@@ -585,7 +588,17 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
     const indexLimit = limit + linkPaths.size - symlinks.length;
     const pageSize = imageOnly ? WORKSPACE_INDEX_PAGE_SIZE : Math.max(1, indexLimit + 1);
     const merge = (indexed: ProjectSearchEntriesResult) =>
-      mergeSymlinkMatches(indexed, linkPaths, symlinks, query, limit);
+      filterIndexed(indexed.entries, scan).pipe(
+        Effect.map((entries) =>
+          mergeSymlinkMatches(
+            { entries, truncated: indexed.truncated || scan.truncated },
+            linkPaths,
+            symlinks,
+            query,
+            limit,
+          ),
+        ),
+      );
     if (kind === "file" || imageOnly) {
       const result = yield* searchVisible(
         query,
@@ -594,7 +607,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
         (size) => finder.fileSearchAsync(query, { pageSize: size }),
         (item) => item.relativePath,
       );
-      return merge(mapFileSearchResult(result, indexLimit, hostIsWindows, imageOnly));
+      return yield* merge(mapFileSearchResult(result, indexLimit, hostIsWindows, imageOnly));
     }
     if (kind === "directory") {
       const result = yield* searchVisible(
@@ -604,7 +617,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
         (size) => finder.directorySearchAsync(query, { pageSize: size }),
         (item) => item.relativePath,
       );
-      return merge(mapDirectorySearchResult(result, indexLimit, hostIsWindows));
+      return yield* merge(mapDirectorySearchResult(result, indexLimit, hostIsWindows));
     }
     const result = yield* searchVisible(
       query,
@@ -613,7 +626,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
       (size) => finder.mixedSearchAsync(query, { pageSize: size }),
       mixedItemPath,
     );
-    return merge(mapMixedSearchResult(result, indexLimit, hostIsWindows));
+    return yield* merge(mapMixedSearchResult(result, indexLimit, hostIsWindows));
   });
 
   const search: WorkspaceSearchIndex["Service"]["search"] = Effect.fn(
@@ -720,31 +733,3 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
 
 export const WORKSPACE_SEARCH_INDEX_VARIANTS = ["paths", "content"] as const;
 export type WorkspaceSearchIndexVariant = (typeof WORKSPACE_SEARCH_INDEX_VARIANTS)[number];
-
-export const workspaceSearchIndexKey = (cwd: string, variant: WorkspaceSearchIndexVariant) =>
-  `${variant}\n${cwd}`;
-
-function parseWorkspaceSearchIndexKey(key: string): {
-  readonly cwd: string;
-  readonly variant: WorkspaceSearchIndexVariant;
-} {
-  const separatorIndex = key.indexOf("\n");
-  return {
-    variant: key.slice(0, separatorIndex) as WorkspaceSearchIndexVariant,
-    cwd: key.slice(separatorIndex + 1),
-  };
-}
-
-/** @public */
-export const layer = (key: string) => {
-  const { cwd, variant } = parseWorkspaceSearchIndexKey(key);
-  return Layer.effect(WorkspaceSearchIndex, make(cwd, variant));
-};
-
-export class WorkspaceSearchIndexMap extends LayerMap.Service<WorkspaceSearchIndexMap>()(
-  "goat/workspace/WorkspaceSearchIndexMap",
-  {
-    lookup: layer,
-    idleTimeToLive: WORKSPACE_INDEX_IDLE_TTL,
-  },
-) {}

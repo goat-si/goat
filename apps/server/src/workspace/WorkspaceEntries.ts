@@ -5,7 +5,6 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as RcMap from "effect/RcMap";
 import * as Schema from "effect/Schema";
 
 import type {
@@ -29,6 +28,7 @@ import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
 import * as WorkspaceSearchIndex from "./WorkspaceSearchIndex.ts";
+import { WorkspaceSearchFinderCache } from "./workspaceSearchFinderCache.ts";
 
 export class WorkspaceEntriesWindowsPathUnsupportedError extends Schema.TaggedError<WorkspaceEntriesWindowsPathUnsupportedError>()(
   "WorkspaceEntriesWindowsPathUnsupportedError",
@@ -156,7 +156,7 @@ const resolveBrowseTarget = Effect.fn("WorkspaceEntries.resolveBrowseTarget")(fu
 export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
-  const workspaceSearchIndexes = yield* WorkspaceSearchIndex.WorkspaceSearchIndexMap;
+  const workspaceSearchIndexes = yield* WorkspaceSearchFinderCache;
   const vcsProcess = yield* VcsProcess.VcsProcess;
 
   const normalizeWorkspaceRoot = Effect.fn("WorkspaceEntries.normalizeWorkspaceRoot")(function* (
@@ -171,10 +171,6 @@ export const make = Effect.gen(function* () {
         Effect.orElseSucceed(() => cwd),
       );
       for (const variant of WorkspaceSearchIndex.WORKSPACE_SEARCH_INDEX_VARIANTS) {
-        const indexKey = WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, variant);
-        if (!(yield* RcMap.has(workspaceSearchIndexes.rcMap, indexKey))) {
-          continue;
-        }
         const recoverRefreshFailure = Effect.fn("WorkspaceEntries.recoverRefreshFailure")(
           function* (
             cause:
@@ -186,18 +182,18 @@ export const make = Effect.gen(function* () {
               variant,
               cause,
             });
-            yield* workspaceSearchIndexes.invalidate(indexKey);
+            yield* workspaceSearchIndexes.invalidate(normalizedCwd, variant);
           },
         );
         yield* Effect.gen(function* () {
-          const searchIndex = yield* WorkspaceSearchIndex.WorkspaceSearchIndex;
-          yield* searchIndex.refresh();
+          const searchIndex = yield* workspaceSearchIndexes.getExisting(normalizedCwd, variant);
+          if (searchIndex) yield* searchIndex.refresh();
         }).pipe(
-          Effect.provide(workspaceSearchIndexes.get(indexKey)),
           Effect.catchTags({
             WorkspaceSearchIndexCreateFailed: recoverRefreshFailure,
             WorkspaceSearchIndexRefreshFailed: recoverRefreshFailure,
           }),
+          Effect.scoped,
         );
       }
     },
@@ -259,15 +255,9 @@ export const make = Effect.gen(function* () {
         trimLeadingPattern: /^[@./]+/,
       });
       const result = yield* Effect.gen(function* () {
-        const searchIndex = yield* WorkspaceSearchIndex.WorkspaceSearchIndex;
+        const searchIndex = yield* workspaceSearchIndexes.get(normalizedCwd, "paths");
         return yield* searchIndex.search(normalizedQuery, input.limit, input.kind, input.imageOnly);
-      }).pipe(
-        Effect.provide(
-          workspaceSearchIndexes.get(
-            WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, "paths"),
-          ),
-        ),
-      );
+      }).pipe(Effect.scoped);
       if (input.kind === "directory" || input.imageOnly) return result;
       const worktreeFiles = yield* findNestedWorktreeFiles(
         normalizedCwd,
@@ -369,15 +359,9 @@ export const make = Effect.gen(function* () {
   )(function* (input) {
     const normalizedCwd = yield* normalizeWorkspaceRoot(input.cwd);
     return yield* Effect.gen(function* () {
-      const searchIndex = yield* WorkspaceSearchIndex.WorkspaceSearchIndex;
+      const searchIndex = yield* workspaceSearchIndexes.get(normalizedCwd, "content");
       return yield* searchIndex.searchContents(input);
-    }).pipe(
-      Effect.provide(
-        workspaceSearchIndexes.get(
-          WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, "content"),
-        ),
-      ),
-    );
+    }).pipe(Effect.scoped);
   });
 
   const list: WorkspaceEntries["Service"]["list"] = Effect.fn("WorkspaceEntries.list")(
@@ -553,15 +537,9 @@ export const make = Effect.gen(function* () {
         };
       }
       return yield* Effect.gen(function* () {
-        const searchIndex = yield* WorkspaceSearchIndex.WorkspaceSearchIndex;
+        const searchIndex = yield* workspaceSearchIndexes.get(normalizedCwd, "paths");
         return yield* searchIndex.list();
-      }).pipe(
-        Effect.provide(
-          workspaceSearchIndexes.get(
-            WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, "paths"),
-          ),
-        ),
-      );
+      }).pipe(Effect.scoped);
     },
   );
 
@@ -622,6 +600,6 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(WorkspaceEntries, make).pipe(
-  Layer.provide(WorkspaceSearchIndex.WorkspaceSearchIndexMap.layer),
+  Layer.provide(WorkspaceSearchFinderCache.layer),
   Layer.provide(VcsProcess.layer),
 );

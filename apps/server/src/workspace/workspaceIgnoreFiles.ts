@@ -11,7 +11,7 @@ const MAX_IGNORE_DIRECTORIES = 1_024;
 const MAX_IGNORE_BYTES = 256 * 1024;
 const MAX_IGNORE_FILE_BYTES = 64 * 1024;
 
-async function readIgnoreFile(path: string) {
+export async function readIgnoreFile(path: string, maxBytes = MAX_IGNORE_FILE_BYTES) {
   const handle = await NodeFSP.open(
     path,
     NodeFS.constants.O_RDONLY |
@@ -21,7 +21,7 @@ async function readIgnoreFile(path: string) {
   try {
     const stat = await handle.stat();
     if (!stat.isFile()) return undefined;
-    if (stat.size > MAX_IGNORE_FILE_BYTES) return "unavailable" as const;
+    if (stat.size > Math.min(maxBytes, MAX_IGNORE_FILE_BYTES)) return "unavailable" as const;
     const buffer = Buffer.alloc(stat.size + 1);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
     if (bytesRead !== stat.size) return "unavailable" as const;
