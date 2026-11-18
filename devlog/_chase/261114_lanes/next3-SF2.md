@@ -59,3 +59,38 @@ Final focused checks on `4fbddd1b25caf920d42501a7a29d2b2e5e3292c1`:
 - Plain push of `4fbddd1b25caf920d42501a7a29d2b2e5e3292c1` created `chase/t3-261114-next3-sf2`.
 
 NOT RUN: Native Linux spawner parity on this macOS host (3 existing cases), the other 5 cases skipped by the local gate, legacy binaries, live media timing and hosted provider CLI probes, P1 real-client pass, PR #3700 CI, or full repo-wide suites.
+
+
+## Fix round 1
+
+Base `4fbddd1b25caf920d42501a7a29d2b2e5e3292c1`. The coordinator accepted P2-1, P2-2, P2-3 and P3 and approved SF2b. #3533 is deferred. The writer admission threshold stays in place and the issue stays open.
+
+### Prior art and compatibility
+
+- P2-1 (#3640). Effect 4.1.3 provides `SqlClient.make.onCommitFailure` for cleanup on the still-leased connection. Its `makeSqliteAcquirers` also quarantines after a failed cleanup and retries before lease reuse (`effect/src/sql/SqlClient.ts`). GOAT will route the hook through the rollback protection already shared by both drivers. Older and newer clients use the same SQL-backed requests and existing error formats in either direction. Deferred FK violations and rollback failure must leave the next read and transaction isolated. No migration or wire change.
+- P2-2 (#3538). Effect's `NodeFileSystem.makeTempFileScoped` creates a generic prefix plus six generated characters. GOAT will give new writes a reserved prefix and leave all ambiguous legacy names alone, including empty directories and apparently valid legacy temp files. Old and new clients attach through the same terminal snapshot format. Older servers ignore the new names and new servers preserve ambiguous older names. The persisted history log format stays the same.
+- P2-3 (#3538). GOAT's `PendingAttachmentSweepCursor.ts` uses Node's `opendir` with a 32-entry native buffer to bound cleanup memory. Terminal cleanup can use a scoped directory handle for the parent and a two-entry buffer for candidate inspection. Client and log compatibility follow P2-2. A candidate with a second entry must survive, and scanning must proceed to the rest of the parent.
+- P3. The transaction cleanup notes in `devlog/_chase/010_fork_delta.md` track the original Effect migration. Replace references to the removed wrapper and preserve the reason for patching both read and transaction leases.
+- SF2b (#3670). The existing `PullRequestService` uses fresh reads outside scoped bulk operations and refines SSH remotes with ambiguous web hosts. The media fast path will use an authoritative match from one fresh project read, with the existing refinement for uncertain matches and without retaining positive decisions. Old or new clients get the same media response on either server version, including older clients that supply only a cwd. Check project removal, host mismatch, unresolved remotes, cross-host identity, and the existing fail-closed paths. No storage/schema or API changes.
+
+### Round verdicts and failing-first evidence
+
+| Finding or row | Commit | Evidence before the fix |
+| --- | --- | --- |
+| P2-1 / #3640 | `a51cedd7502f18ec47ca8f709b13a0c35d520852` | `vp test run packages/shared/src/nodeSqliteRollback.test.ts` exited 1. Three failed and two passed. The next lease saw row 7 after a rejected COMMIT on both the direct and worker drivers. On the direct driver, the injected cleanup failure also failed to quarantine the next read. |
+| P2-2 / #3538 | `ff1df5205fea8015db3ea71867b5304d7c877554` | `vp test run packages/shared/src/nodeSqliteRollback.test.ts apps/server/src/terminal/Manager.history.test.ts` exited 1. The provenance case listed a new GOAT temp dir still present and both ambiguous legacy dirs missing. The replacement prefix is reserved for new GOAT compactions. |
+| P2-3 / #3538 | `ff00d58a8ac48aead41ffe0fd0372f474570c4e6` | From `apps/server`, `GOAT_TEST_TMP_GUARD=fail vp test run src/terminal/Manager.history.test.ts` exited 1. One failed and eight passed. The bounded-scan case observed zero directory cursors on the bulk-listing path. The new scan opens the parent with a 32-entry buffer, opens candidates with a two-entry buffer and stops at the second entry. |
+| P3 | `d4ce607cb9239161b02612512881b04bf43167cb` | The stale-name check against `devlog/_chase/010_fork_delta.md` exited 1 and printed the removed hook at line 202. After the edit it exited 0. The new references resolve to transaction controls and both lease routes. |
+| SF2b / #3670 | `dd3ba54cdcff65aff1a40d9a546447c857b12914` | From `apps/server`, `GOAT_TEST_TMP_GUARD=fail vp test run src/pullRequest/PullRequestForkListing.test.ts` exited 1. One failed and five passed. Thirty image requests did 30 reads, 30 unrelated remote refinements and 30 missing-identity lookups. Afterward they did 30 reads and zero of each unrelated lookup. Request 31 sent no token after project removal. A differently hosted SSH match still went through host verification. |
+
+The final guarded server run used `GOAT_TEST_TMP_GUARD=fail vp test run --reporter=verbose src/terminal/Manager.history.test.ts src/pullRequest/PullRequestForkListing.test.ts src/pullRequest/PullRequestService.test.ts src/assets/sourceControlMediaCredential.test.ts src/auth/http.test.ts` from `apps/server`. Exit 0, 154 passed across five files: terminal history 9, fork listing 6, pull request service 127, media credential 8, auth HTTP 4.
+
+This round adds five commits directly on the published lane head. Integration was not merged.
+
+`vp test run --reporter=verbose packages/shared/src/nodeSqliteRollback.test.ts packages/shared/src/nodeSqliteClient.test.ts packages/shared/src/nodeSqliteWriter.test.ts` exited 0. 72 passed across three files: rollback 5, client 40, writer 27. `vp run --filter ./apps/server typecheck` and the shared package typecheck also exited 0.
+
+P1: exercise terminal reopen after history compaction in a scratch project. For #3670, open private PR media from a listed project and exercise a fresh media fetch after removal in a scratch environment. The fixture covers no token on the very next fetch.
+
+`vp run check:changed origin/chase/t3-261114-next3` exited 0 on `dd3ba54cdcff65aff1a40d9a546447c857b12914`. The integration merge base was `2c0e0002a996ec5d46c708919be5a43f579176fa`. 339 files passed and 3 were skipped, with 4,990 passed and 8 skipped tests. Both Knip passes, format, lint, GraphQL, agent surface audit and context budget, and typecheck for 42 packages passed. The plain push fast-forwarded the remote lane ref from `4fbddd1b25`.
+
+NOT RUN: the eight existing gate skips, including three Linux-only spawner cases, legacy binaries, live media timing and hosting CLI probes, P1 real-client verification, PR #3700 CI, and full repo-wide suites.
