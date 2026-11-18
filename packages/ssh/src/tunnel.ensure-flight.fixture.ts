@@ -32,6 +32,7 @@ export const makeEnsureFlightFixture = Effect.gen(function* () {
   const pairingEntered = yield* Deferred.make<void>();
   const releasePairing = yield* Deferred.make<void>();
   const count = { acquisitions: 0, uploads: 0, launches: 0, pairings: 0, forwards: 0, kills: 0 };
+  const forwardedPorts: string[] = [];
   const state = {
     forwardAlive: true,
     pairingFails: false,
@@ -49,6 +50,8 @@ export const makeEnsureFlightFixture = Effect.gen(function* () {
         );
       if (command.args.includes("-N")) {
         count.forwards++;
+        const port = command.args[command.args.indexOf("-p") + 1];
+        if (port !== undefined) forwardedPorts.push(String(port));
         state.forwardAlive = true;
         return {
           ...makeRunningProcess(() => count.kills++),
@@ -149,6 +152,7 @@ export const makeEnsureFlightFixture = Effect.gen(function* () {
     layer,
     runner,
     count,
+    forwardedPorts,
     state,
     uploadEntered,
     releaseUpload,
