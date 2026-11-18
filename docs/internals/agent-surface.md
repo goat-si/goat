@@ -471,8 +471,9 @@ callable ([toolListing.ts](../../apps/server/src/mcp/toolListing.ts)). Both list
 `available.now` refuses for the caller, except that a profile that does not resolve hides
 nothing, because a client keeps its listing for the session. The server setting
 `agentToolListing` picks the listing of the agents GOAT runs: `full` (every other tool) or `core` (entries whose registry `listing` is `core`); core entries carry
-`_meta["anthropic/alwaysLoad"]` in both, so harnesses that defer tools keep them resident. Entries marked `prompt` stay out of every tools/list response because a provider prompt
-introduces their path. Every tool stays callable by each of its names. The default is `core` (D21), `full` is the rollback for
+`_meta["anthropic/alwaysLoad"]` in both, so harnesses that defer tools keep them resident. The Claude prompt introduces `prompt` entries.
+`tools/list` omits them, and `goat_describe` shows them only to Claude threads.
+Every tool stays callable by each of its names, subject to its normal access checks. The default is `core` (D21), `full` is the rollback for
 a harness that regresses, and a change to the setting or to the goatclaw policy sends
 `notifications/tools/list_changed`.
 [context-budget.ts](../../scripts/agent-surface/context-budget.ts) measures what each harness

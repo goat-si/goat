@@ -26,7 +26,6 @@ import { hostOfCursor, THIS_BUILD } from "./hostDescribe.ts";
 import { type Match, nearestPaths, searchEntries } from "./search.ts";
 import type { DescribeResult } from "./tools.ts";
 
-const entries: ReadonlyArray<AgentSurfaceRegistryEntry> = Object.values(agentSurfaceRegistry);
 const guideOf = (entry: AgentSurfaceEntry) => entry.guide;
 const examplesOf = (entry: AgentSurfaceEntry) => entry.examples ?? [];
 
@@ -45,7 +44,14 @@ export const surfaceVersionOf = (
     }
   return hash.toString(16).padStart(8, "0");
 };
-const surfaceVersion = surfaceVersionOf(entries);
+const catalogOf = (entries: ReadonlyArray<AgentSurfaceRegistryEntry>) => ({
+  entries,
+  surfaceVersion: surfaceVersionOf(entries),
+});
+const claudeCatalog = catalogOf(Object.values(agentSurfaceRegistry));
+const defaultCatalog = catalogOf(
+  claudeCatalog.entries.filter((entry) => !("listing" in entry && entry.listing === "prompt")),
+);
 
 const DEFAULT_LIMIT = 10;
 const SEARCHED_FIELDS = ["path", "name", "summary", "description", "guide"] as const;
@@ -57,6 +63,7 @@ const PATH_SIGNATURE_DEPTH = 1;
 interface Caller {
   readonly scope: McpInvocationContext.McpInvocationScope;
   readonly profile: CallerProfile | undefined;
+  readonly catalog: ReturnType<typeof catalogOf>;
   /** What this host knows now, read once per describe. */
   readonly host: HostConditions;
 }
@@ -156,6 +163,7 @@ export const makeDescribe = (
       readonly cursor: string | undefined;
     },
   ) {
+    const { entries, surfaceVersion } = caller.catalog;
     const within =
       input.path === undefined
         ? entries
@@ -245,11 +253,17 @@ export const makeDescribe = (
     // The surface depth names resources only, so it never pays for resolving a profile.
     const caller: Caller = {
       scope,
+      catalog: scope.thread?.providerDriver === "claudeAgent" ? claudeCatalog : defaultCatalog,
       profile:
         input.path === undefined && input.query === undefined && input.paths === undefined
           ? undefined
           : yield* callerProfile(permissions, scope),
       host: yield* hostConditions,
+    };
+    const { entries, surfaceVersion } = caller.catalog;
+    const resolveVisible = (name: string) => {
+      const entry = resolveAgentSurfaceEntry(name);
+      return entry !== undefined && entries.includes(entry) ? entry : undefined;
     };
     if (input.paths !== undefined) {
       if (input.path !== undefined || input.query !== undefined || input.cursor !== undefined)
@@ -259,7 +273,7 @@ export const makeDescribe = (
       const found = new Map<string, AgentSurfaceRegistryEntry>();
       const missing: Array<{ path: string; nearest: Array<string> }> = [];
       for (const name of input.paths) {
-        const entry = resolveAgentSurfaceEntry(name);
+        const entry = resolveVisible(name);
         if (entry === undefined)
           missing.push({ path: name, nearest: [...nearestPaths(entries, name)] });
         else found.set(entry.path, entry);
@@ -285,7 +299,7 @@ export const makeDescribe = (
         limit,
         cursor: input.cursor,
       });
-    const entry = input.path === undefined ? undefined : resolveAgentSurfaceEntry(input.path);
+    const entry = input.path === undefined ? undefined : resolveVisible(input.path);
     const isResource = entries.some((candidate) => candidate.resource === input.path);
     // A name that is no path or resource is searched, never answered with absence; its cursor
     // continues that search.

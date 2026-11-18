@@ -786,7 +786,15 @@ it.effect("goat_describe answers at three depths with availability for this call
     const resources = (
       surface.resources as ReadonlyArray<{ resource: string; verbs: string[] }>
     ).map(({ resource }) => resource);
-    expect(resources).toEqual([...new Set(entries.map((entry) => entry.resource))].sort());
+    expect(resources).toEqual(
+      [
+        ...new Set(
+          entries
+            .filter((entry) => !("listing" in entry && entry.listing === "prompt"))
+            .map((entry) => entry.resource),
+        ),
+      ].sort(),
+    );
 
     const threadResource = yield* describe(thread, "thread");
     expect(

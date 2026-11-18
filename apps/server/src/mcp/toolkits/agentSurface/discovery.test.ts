@@ -5,6 +5,7 @@ import {
   MemoryRecallInput,
   MemoryRememberInput,
   MemorySearchInput,
+  ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
@@ -20,18 +21,19 @@ import { type ListedTool, serveCatalogOverHttp, toolkits } from "../../agentSurf
 import type { McpInvocationScope } from "../../McpInvocationContext.ts";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
-const thread: McpInvocationScope = {
+const thread = {
   environmentId: EnvironmentId.make("environment"),
   requestNamespace: "provider:thread",
   thread: {
     threadId: ThreadId.make("thread"),
     providerSessionId: "provider:thread",
     providerInstanceId: ProviderInstanceId.make("codex"),
+    providerDriver: ProviderDriverKind.make("codex"),
   },
   client: undefined,
   capabilities: new Set(["orchestration", "worktree", "pull-requests", "preview"]),
   issuedAt: 0,
-};
+} satisfies McpInvocationScope;
 
 const serve = serveCatalogOverHttp(
   {
@@ -170,6 +172,70 @@ interface Described {
   readonly signature?: string;
   readonly inputSchema?: unknown;
 }
+
+it.effect("keeps prompt-only tools out of discovery for outside clients and Codex", () =>
+  Effect.gen(function* () {
+    const http = yield* serve;
+    for (const caller of ["client", "thread"]) {
+      const discover = (args: object) => http.callTool(caller, "goat_describe", args);
+      const inventory = structured<{ resources: ReadonlyArray<{ resource: string }> }>(
+        yield* discover({}),
+      );
+      const search = structured<{ entries: ReadonlyArray<Described>; nearest?: string[] }>(
+        yield* discover({ query: "goat_message_show" }),
+      );
+      const exact = structured<{ depth: string }>(yield* discover({ path: "message.show" }));
+      const resource = structured<{ depth: string }>(yield* discover({ path: "message" }));
+      const batch = structured<{
+        entries: ReadonlyArray<Described>;
+        missing: ReadonlyArray<{ path: string; nearest: string[] }>;
+      }>(yield* discover({ paths: ["goat_message_show", "thread.read"] }));
+      expect
+        .soft(
+          inventory.resources.map(({ resource }) => resource),
+          caller,
+        )
+        .not.toContain("message");
+      expect
+        .soft(
+          search.entries.map(({ path }) => path),
+          caller,
+        )
+        .not.toContain("message.show");
+      expect.soft(search.nearest ?? [], caller).not.toContain("message.show");
+      expect.soft(exact.depth, caller).toBe("search");
+      expect.soft(resource.depth, caller).toBe("search");
+      expect
+        .soft(
+          batch.entries.map(({ path }) => path),
+          caller,
+        )
+        .toEqual(["thread.read"]);
+      expect.soft(batch.missing, caller).toMatchObject([{ path: "goat_message_show" }]);
+      expect.soft(batch.missing[0]?.nearest ?? [], caller).not.toContain("message.show");
+    }
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
+);
+
+it.effect("lets a Claude thread discover message.show with a custom instance ID", () =>
+  Effect.gen(function* () {
+    const http = yield* serveCatalogOverHttp(
+      {
+        claude: {
+          ...thread,
+          thread: {
+            ...thread.thread,
+            providerDriver: ProviderDriverKind.make("claudeAgent"),
+            providerInstanceId: ProviderInstanceId.make("writing-account"),
+          },
+        },
+      },
+      "full",
+    );
+    const result = yield* http.callTool("claude", "goat_describe", { path: "message.show" });
+    expect(structured(result)).toMatchObject({ depth: "path", entry: { path: "message.show" } });
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
+);
 
 it.effect("goat_describe answers several paths at once and shows signatures in lists", () =>
   Effect.gen(function* () {
