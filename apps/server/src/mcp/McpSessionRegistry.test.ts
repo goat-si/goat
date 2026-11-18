@@ -9,6 +9,7 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import { HttpServer } from "effect/http";
 import * as NetAddress from "effect/net/NetAddress";
+import * as TestClock from "effect/testing/TestClock";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import type * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
@@ -26,10 +27,10 @@ const fakeEnvironment = ServerEnvironment.ServerEnvironment.of({
   getDescriptor: Effect.die("unused"),
 });
 
-const makeRegistry = (now: () => number, httpServer = fakeHttpServer) =>
+const makeRegistry = (now?: () => number, httpServer = fakeHttpServer) =>
   McpSessionRegistry.__testing
     .make({
-      now,
+      ...(now === undefined ? {} : { now }),
       livenessWindowMs: 100,
     })
     .pipe(
@@ -143,6 +144,32 @@ it.effect("expires credentials once their session stops showing signs of life", 
     });
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
     timestamp += 101;
+    expect(yield* registry.resolve(token)).toBeUndefined();
+  }),
+);
+
+it.effect("a backward clock step does not extend or revive an MCP credential", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry();
+    const issue = (threadId: ThreadId) =>
+      registry
+        .issue({ threadId, providerInstanceId: ProviderInstanceId.make("codex") })
+        .pipe(Effect.map(({ config }) => config.authorizationHeader.replace(/^Bearer\s+/, "")));
+    const threadId = ThreadId.make("rollback");
+    yield* TestClock.setTime(10_000);
+    const token = yield* issue(threadId);
+    yield* TestClock.setTime(1_000);
+    yield* TestClock.adjust(50);
+    expect(yield* registry.inspect(token)).toEqual({ threadId, recheckAt: 1_101 });
+    yield* TestClock.adjust(51);
+    expect(yield* registry.resolve(token)).toBeUndefined();
+    yield* TestClock.setTime(0);
+    expect(yield* registry.resolve(token)).toBeUndefined();
+
+    yield* registry.touch(threadId);
+    expect((yield* registry.resolve(token))?.thread.threadId).toBe(threadId);
+    yield* registry.revokeThread(threadId);
+    yield* registry.touch(threadId);
     expect(yield* registry.resolve(token)).toBeUndefined();
   }),
 );
