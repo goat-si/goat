@@ -1,3 +1,4 @@
+import type { seedCodexHistory as seedHistory } from "./codexUsageHistory.testkit.ts";
 // @effect-diagnostics nodeBuiltinImport:off - fixture writes provider transcript files.
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
@@ -20,7 +21,7 @@ const decodeUnknownJsonString = Schema.decodeSync(Schema.fromJsonString(Schema.U
 export function registerCodexTierReparseTest(
   setup: typeof Main.setup,
   layerService: typeof Main.layerService,
-  seedCodexHistory: typeof Main.seedCodexHistory,
+  seedCodexHistory: typeof seedHistory,
 ) {
   it.live(
     "keeps resolved Codex tiers when a grown pre-v15 cache entry re-parses without history",
