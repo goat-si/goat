@@ -24,7 +24,7 @@ import {
 } from "@goat/client-runtime/state/thread-settled";
 import { childThreadRequestsTitle } from "@goat/client-runtime/state/shell";
 import { useKeyboardChatComposerInset, useKeyboardScrollToEnd } from "@legendapp/list/keyboard";
-import { resolveThreadProviderSkills } from "@goat/client-runtime/providerSkills";
+import { useThreadTranscriptSkills } from "./use-thread-transcript-skills";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { NativeLayoutObserver } from "../../native/NativeLayoutObserver";
@@ -998,14 +998,8 @@ function ThreadDetailBody(
         }
       : { width: "auto", right: controlInsets.right },
   );
-  const selectedInstanceId = props.selectedThread.modelSelection.instanceId;
   useAtomMount(threadStreamHaptics(props.selectedThreadDetailRef));
-  const selectedProviderSkills = resolveThreadProviderSkills(
-    props.serverConfig,
-    selectedInstanceId,
-    props.threadCwd ?? props.projectWorkspaceRoot,
-    props.selectedThread.projectId,
-  );
+  const selectedProviderSkills = useThreadTranscriptSkills(props, isProviderSubagent);
   const currentPendingApprovals = () =>
     props.selectedThreadDetailRef === null
       ? []

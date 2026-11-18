@@ -17,12 +17,12 @@ import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as Sink from "effect/Sink";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { baseConfig, layerHttpClient, makeProcess } from "./DesktopBackendProcess.testkit.ts";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import { registerBackendStopTests } from "./DesktopBackendStopTestHelpers.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
@@ -35,67 +35,12 @@ const decodeDesktopBackendBootstrap = Schema.decodeEffect(
 const encodeDesktopTelemetryControl = Schema.encodeSync(
   Schema.fromJsonString(DesktopTelemetryControlMessage),
 );
-const baseConfig: DesktopBackendManager.DesktopBackendStartConfig = {
-  executablePath: "/electron",
-  args: ["/server/bin.mjs", "--bootstrap-fd", "3"],
-  entryPath: "/server/bin.mjs",
-  cwd: "/server",
-  env: { ELECTRON_RUN_AS_NODE: "1" },
-  bootstrap: {
-    mode: "desktop",
-    noBrowser: true,
-    port: 3773,
-    goatHome: "/tmp/t3",
-    host: "127.0.0.1",
-    desktopBootstrapToken: "token",
-    tailscaleServeEnabled: false,
-    tailscaleServePort: 443,
-    desktopTelemetryFd: 4,
-    desktopTelemetryControlFd: 5,
-  },
-  bootstrapDelivery: "fd3",
-  extendEnv: true,
-  httpBaseUrl: new URL("http://127.0.0.1:3773"),
-  captureOutput: true,
-  preflightFailure: Option.none(),
-};
 const configWithObservability: DesktopBackendBootstrapValue = {
   ...baseConfig.bootstrap,
   tailscaleServeEnabled: true,
   desktopTelemetryFd: 4,
   otlpTracesUrl: "http://127.0.0.1:4318/v1/traces",
 };
-export function makeProcess(options?: {
-  readonly stdout?: Stream.Stream<Uint8Array, PlatformError.PlatformError>;
-  readonly stderr?: Stream.Stream<Uint8Array, PlatformError.PlatformError>;
-  readonly exitCode?: Effect.Effect<ChildProcessSpawner.ExitCode, PlatformError.PlatformError>;
-  readonly kill?: ChildProcessSpawner.ChildProcessHandle["kill"];
-  readonly getOutputFd?: ChildProcessSpawner.ChildProcessHandle["getOutputFd"];
-}): ChildProcessSpawner.ChildProcessHandle {
-  return ChildProcessSpawner.makeHandle({
-    pid: ChildProcessSpawner.ProcessId(123),
-    stdout: options?.stdout ?? Stream.empty,
-    stderr: options?.stderr ?? Stream.empty,
-    all: Stream.merge(options?.stdout ?? Stream.empty, options?.stderr ?? Stream.empty),
-    exitCode: options?.exitCode ?? Effect.succeed(ChildProcessSpawner.ExitCode(0)),
-    isRunning: Effect.succeed(false),
-    kill: options?.kill ?? (() => Effect.void),
-    stdin: Sink.drain,
-    getInputFd: () => Sink.drain,
-    getOutputFd: options?.getOutputFd ?? (() => Stream.empty),
-    unref: Effect.succeed(Effect.void),
-  });
-}
-function layerHttpClient(
-  handler: (
-    request: HttpClientRequest.HttpClientRequest,
-  ) => Effect.Effect<HttpClientResponse.HttpClientResponse>,
-) {
-  return Layer.succeed(
-    HttpClient.HttpClient,
-    HttpClient.make((request) => handler(request)),
-  );
-}
 const layerHealthyHttpClient = layerHttpClient((request) =>
   Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status: 200 }))),
 );
@@ -991,3 +936,5 @@ it.effect("six ready-then-exit80 runs pause; Retry explicitly restores the same 
     }),
   ),
 );
+
+export { makeProcess };

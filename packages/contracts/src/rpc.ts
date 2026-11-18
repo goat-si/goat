@@ -24,12 +24,11 @@ import {
   CuaHostStatus,
 } from "./cua.ts";
 import {
-  PreviewSessionControlInput,
-  PreviewSessionControlResult,
-  PreviewSessionFrameEvent,
-  PreviewSessionFramesInput,
-  PreviewSessionsSnapshot,
-} from "./previewSession.ts";
+  PREVIEW_SESSION_METHODS,
+  WsPreviewSessionsSubscribeRpc,
+  WsPreviewSessionsControlRpc,
+  WsPreviewSessionsFramesRpc,
+} from "./rpcPreviewSessions.ts";
 import {
   SshHostAddInput,
   SshPreflightInput,
@@ -648,9 +647,7 @@ export const WS_METHODS = {
   computerUseRemoveAllowedApp: "computerUse.removeAllowedApp",
   computerUseResume: "computerUse.resume",
   computerUseApps: "computerUse.apps",
-  previewSessionsSubscribe: "previewSessions.subscribe",
-  previewSessionsControl: "previewSessions.control",
-  previewSessionsFrames: "previewSessions.frames",
+  ...PREVIEW_SESSION_METHODS,
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
@@ -830,28 +827,6 @@ const WsComputerUseResumeRpc = Rpc.make(WS_METHODS.computerUseResume, {
   error: EnvironmentAuthorizationError,
 });
 
-/** Every browser and desktop preview session on this host, again whenever one changes. */
-const WsPreviewSessionsSubscribeRpc = Rpc.make(WS_METHODS.previewSessionsSubscribe, {
-  payload: Schema.Struct({}),
-  success: PreviewSessionsSnapshot,
-  error: EnvironmentAuthorizationError,
-  stream: true,
-});
-
-/** A person's takeover, hand back, stop or kill switch on a preview session. */
-const WsPreviewSessionsControlRpc = Rpc.make(WS_METHODS.previewSessionsControl, {
-  payload: PreviewSessionControlInput,
-  success: PreviewSessionControlResult,
-  error: Schema.Union([EnvironmentAuthorizationError, HandoffError]),
-});
-
-const WsPreviewSessionsFramesRpc = Rpc.make(WS_METHODS.previewSessionsFrames, {
-  payload: PreviewSessionFramesInput,
-  success: PreviewSessionFrameEvent,
-  error: EnvironmentAuthorizationError,
-  stream: true,
-});
-
 const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
   payload: Schema.Struct({}),
   success: ServerConfig,
@@ -872,6 +847,12 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
      * refresh, at most one TTL later.
      */
     workspaceSnapshotsOnDemand: Schema.optional(Schema.Boolean),
+    /** With on-demand workspace snapshots, supply a pending catalog when a cwd scan is unavailable. */
+    providerCatalogsOnDemand: Schema.optional(Schema.Boolean),
+    /** Include the machine catalog names and digest with the cwd snapshot. */
+    machineCatalog: Schema.optional(Schema.Boolean),
+    /** For a machine refresh, deliver the updated providers through the config stream only. */
+    omitProviders: Schema.optional(Schema.Boolean),
     /** As on `subscribeServerConfig`: add /usage-limits to the replied snapshot. */
     usageLimitsCommand: Schema.optional(Schema.Boolean),
   }),
@@ -2201,6 +2182,10 @@ export const WsSubscribeServerConfigRpc = Rpc.make(WS_METHODS.subscribeServerCon
     usageLimitsCommand: Schema.optional(Schema.Boolean),
     /** Omit per-cwd provider snapshots; the client fetches its cwd through `server.refreshProviders`. */
     workspaceSnapshotsOnDemand: Schema.optional(Schema.Boolean),
+    /** With on-demand workspace snapshots, trim catalogs for providers that scan the cwd. */
+    providerCatalogsOnDemand: Schema.optional(Schema.Boolean),
+    /** Send a digest in place of each on-demand machine catalog. */
+    providerCatalogDigests: Schema.optional(Schema.Boolean),
     /** Send `providerStatusChanges` instead of resending every provider on each change. */
     providerStatusChanges: Schema.optional(Schema.Boolean),
   }),
