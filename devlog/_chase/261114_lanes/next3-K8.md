@@ -360,3 +360,16 @@ From `apps/server`, `GOAT_TEST_TMP_GUARD=fail vp test run src/assets/NativeAppIc
 After the gate, the latest fetched integration head `3d683c091e517f93c2fa6fefb487b9af60f28fce` was also conflict-free by `git merge-tree --write-tree HEAD origin/chase/t3-261114-next3` with exit 0 and the same merge base. A plain fast-forward push updated K8 from `4b4df3ba11` to `59efd3bcf939497e65fae372035204a7d4f6d8df`. `git ls-remote` verified the exact head.
 
 NOT RUN: hosted lane CI, integrated P1, a live shared-home installer/SSH reconnect, and dependency reinstall (lockfile unchanged).
+
+## Review round 3 Find follow-up
+
+C1 subscription change on the fast-forwarded integration head `b95bc9ddbdbc330494a708a6cf08db919d55ea06`. GOAT already uses a derived boolean for preview automation ownership in `apps/web/src/previewStateStore.ts` (`agentDrivenTabAtom`). Find uses the same subscription pattern alongside a constant false atom for a missing tab or incomplete bridge. The render-isolation regression drives the production stores through eligible, ineligible and closed-preview states.
+
+One GOAT-authored commit, `fa93d0e5ec1df325425ad57b192a2f5155540f55`. `git merge --ff-only origin/chase/t3-261114-next3` and `vp i` both exited 0. The incoming integration lockfile changed and the follow-up leaves it untouched.
+
+- `vp test run apps/web/src/components/preview/findAvailability.browser.test.tsx` exited 1 before the fix. Changing back-navigation state caused one extra render with the same eligibility value.
+- Whole focused files via `vp test run` exited 0 with 50 passed and zero skips. Find availability 1, reopen shortcut 8, palette composition 17, palette Find items 1, preview view 19, chat route commands 4.
+- `vp run check:changed origin/chase/t3-261114-next3` exited 0 on the pushed SHA. It compared two changed files, passed typecheck for two packages and passed 2,023 tests in four files with zero skips. It did not cache the result because files changed during the run. The tracked worktree was clean at push.
+- Plain push exited 0. `git ls-remote` verified lane head `fa93d0e5ec1df325425ad57b192a2f5155540f55`.
+
+NOT RUN: hosted lane CI, integrated real-client P1, and separate guarded server tests (no server files changed).
