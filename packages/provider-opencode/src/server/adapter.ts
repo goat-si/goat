@@ -2850,28 +2850,20 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             interruptInput: ProviderAdapter.ProviderAdapterV2InterruptInput,
             deadline: OpenCodeStopDeadline,
           ) {
-            const sessionId = nativeThreadId(interruptInput.providerThread);
+            const { providerThread, providerTurnId, requestRuntimeRestart } = interruptInput;
+            const sessionId = nativeThreadId(providerThread);
             const state = threads.get(sessionId);
             const turn = state?.activeTurn;
-            if (
-              (turn === undefined || turn === null) &&
-              interruptInput.requestRuntimeRestart === true
-            ) {
+            const resolveRootStop = resolveOpenCodeRootStop.bind(null, interruptInput, deadline);
+            if (turn == null && requestRuntimeRestart === true) {
               for (const controller of commandControllers.get(sessionId) ?? []) controller.abort();
-              yield* interruptInput.onRootStopResolved ?? Effect.void;
-              if (state === undefined) yield* cleanupSessionWork(sessionId, Effect.void);
-              else yield* background.stop(state);
+              yield* state === undefined
+                ? cleanupSessionWork(sessionId, interruptInput.onRootStopResolved ?? Effect.void)
+                : background.stop(state, resolveRootStop);
               return;
             }
-            if (
-              state === undefined ||
-              turn === null ||
-              turn === undefined ||
-              turn.providerTurnId !== interruptInput.providerTurnId
-            ) {
-              return yield* protocolError(
-                `OpenCode turn ${interruptInput.providerTurnId} is not active`,
-              );
+            if (state === undefined || turn == null || turn.providerTurnId !== providerTurnId) {
+              return yield* protocolError(`OpenCode turn ${providerTurnId} is not active`);
             }
             turn.interrupted = true;
             for (const controller of commandControllers.get(sessionId) ?? []) controller.abort();
@@ -2889,7 +2881,13 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             }
             yield* cleanupSessionWork(
               sessionId,
-              resolveOpenCodeRootStop(abortRoot(sessionId), turn, interruptInput, deadline),
+              resolveRootStop(
+                abortRoot(sessionId),
+                () => turn.finalized,
+                () => {
+                  turn.interrupted = false;
+                },
+              ),
             );
           },
           (effect, interruptInput) => {

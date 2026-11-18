@@ -6,7 +6,6 @@ import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
 import type { OpenCodeRuntimeError } from "./OpenCodeRuntime.ts";
 import { OPENCODE_PROVIDER } from "./adapterProtocol.ts";
-import type { ActiveOpenCodeTurn } from "./adapterState.ts";
 
 export const STOP_CONFIRM_TIMEOUT_MS = 10_000;
 
@@ -31,10 +30,11 @@ export const runOpenCodeStop = Effect.fn("OpencodeAdapter.runStop")(function* <E
 });
 
 export const resolveOpenCodeRootStop = Effect.fn("OpencodeAdapter.resolveRootStop")(function (
-  abort: Effect.Effect<unknown, Cause.TimeoutError | OpenCodeRuntimeError>,
-  turn: ActiveOpenCodeTurn,
   input: ProviderAdapter.ProviderAdapterV2InterruptInput,
   deadline: OpenCodeStopDeadline,
+  abort: Effect.Effect<unknown, Cause.TimeoutError | OpenCodeRuntimeError>,
+  isSettled: () => boolean,
+  onUnconfirmed?: () => void,
 ) {
   return abort.pipe(
     Effect.catch(
@@ -44,8 +44,8 @@ export const resolveOpenCodeRootStop = Effect.fn("OpencodeAdapter.resolveRootSto
         void,
         OpenCodeRuntimeError | ProviderAdapter.ProviderAdapterInterruptTimeoutError
       > => {
-        if (turn.finalized) return Effect.void;
-        turn.interrupted = false;
+        if (isSettled()) return Effect.void;
+        onUnconfirmed?.();
         if (cause._tag !== "TimeoutError") return Effect.fail(cause);
         const timeout = new ProviderAdapter.ProviderAdapterInterruptTimeoutError({
           driver: OPENCODE_PROVIDER,

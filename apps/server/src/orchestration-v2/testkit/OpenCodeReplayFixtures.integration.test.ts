@@ -1,12 +1,15 @@
 import { assert, describe, it } from "@effect/vitest";
 import { ProviderDriverKind, ThreadId, type ProviderReplayEntry } from "@goat/contracts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
+import * as Continuations from "@goat/provider-core/server/ProviderContinuationRequests";
 import * as OpenCodeRuntime from "@goat/provider-opencode/server/OpenCodeRuntime";
 import type { OpencodeClient } from "@opencode-ai/sdk/v2";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -67,7 +70,7 @@ describe("OpenCode replay fixtures", () => {
     }),
   );
 
-  it.effect.each(["root-running", "root-settled"] as const)(
+  it.effect.each(["root-running", "root-settled", "held-wake", "held-wake-settled"] as const)(
     "separates the OpenCode 1.x root Stop deadline from child cleanup when %s",
     (scenario) =>
       Effect.gen(function* () {
@@ -77,7 +80,9 @@ describe("OpenCode replay fixtures", () => {
         const abortRoot = Promise.withResolvers<AbortSignal>();
         const abortChild = Promise.withResolvers<AbortSignal>();
         const unanswered = Promise.withResolvers<never>();
+        const offeredWake = yield* Deferred.make<Continuations.ProviderContinuationRequest>();
         let prompts = 0;
+        let promptId = "";
         const client = {
           mcp: { add: async () => ({ data: true }) },
           event: {
@@ -89,8 +94,9 @@ describe("OpenCode replay fixtures", () => {
             create: async () => ({ data: root }),
             get: async () => ({ data: root }),
             messages: async () => ({ data: [] }),
-            promptAsync: async () => {
+            promptAsync: async ({ messageID }: { messageID: string }) => {
               prompts++;
+              promptId = messageID;
               return { data: true };
             },
             children: async ({ sessionID }: { sessionID: string }) => ({
@@ -113,7 +119,15 @@ describe("OpenCode replay fixtures", () => {
               }),
             createOpenCodeSdkClient: () => client as unknown as OpencodeClient,
           }),
-        ).pipe(Layer.orDie);
+        ).pipe(
+          Layer.provide(
+            Layer.succeed(Continuations.ProviderContinuationRequests, {
+              offer: (request) => Deferred.succeed(offeredWake, request).pipe(Effect.asVoid),
+              take: Effect.never,
+            }),
+          ),
+          Layer.orDie,
+        );
         yield* Effect.gen(function* () {
           const store = yield* EventSink.EventSinkV2;
           const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -183,6 +197,35 @@ describe("OpenCode replay fixtures", () => {
             type: "session.idle",
             properties: { sessionID: root.id },
           }).pipe(Effect.andThen(Fiber.join(terminal)));
+          const held = scenario === "held-wake" || scenario === "held-wake-settled";
+          const settlesDuringAbort =
+            scenario === "root-settled" || scenario === "held-wake-settled";
+          let wake: Continuations.ProviderContinuationRequest | undefined;
+          if (held) {
+            yield* Queue.offer(nativeEvents, {
+              type: "message.updated",
+              properties: {
+                sessionID: root.id,
+                info: { id: promptId, sessionID: root.id, role: "user", time: { created: 1 } },
+              },
+            });
+            yield* settleRoot;
+            yield* Queue.offerAll(nativeEvents, [
+              {
+                type: "message.updated",
+                properties: {
+                  sessionID: root.id,
+                  info: { id: "held-wake", sessionID: root.id, role: "user", time: { created: 2 } },
+                },
+              },
+              {
+                type: "session.status",
+                properties: { sessionID: root.id, status: { type: "busy" } },
+              },
+            ]);
+            wake = yield* Deferred.await(offeredWake);
+            assert.isTrue(Option.isSome(yield* wake.dispatchIfCurrent!(Effect.void)));
+          }
           const stopping = yield* runtime
             .interruptTurn({
               providerThread,
@@ -191,10 +234,12 @@ describe("OpenCode replay fixtures", () => {
             })
             .pipe(Effect.result, Effect.forkChild);
           const rootSignal = yield* Effect.promise(() => abortRoot.promise);
-          if (scenario === "root-settled") yield* settleRoot;
+          if (settlesDuringAbort) yield* settleRoot;
+          if (wake !== undefined)
+            assert.isTrue(Option.isNone(yield* wake.dispatchIfCurrent!(Effect.void)));
           yield* TestClock.adjust("10 seconds");
           assert.isTrue(rootSignal.aborted);
-          if (scenario === "root-running") {
+          if (!settlesDuringAbort) {
             assert.isDefined(
               stopping.pollUnsafe(),
               "the root timeout must reach the caller at ten seconds",
@@ -210,10 +255,10 @@ describe("OpenCode replay fixtures", () => {
           yield* TestClock.adjust("5 seconds");
           assert.isFalse(childSignal.aborted, "the manager watchdog must leave cleanup running");
           assert.equal(prompts, 1, "cleanup still owns admission to the next turn");
-          if (scenario === "root-settled") assert.isUndefined(stopping.pollUnsafe());
+          if (settlesDuringAbort) assert.isUndefined(stopping.pollUnsafe());
           yield* TestClock.adjust("5 seconds");
           assert.isTrue(childSignal.aborted);
-          if (scenario === "root-settled") {
+          if (settlesDuringAbort) {
             assert.nestedInclude(yield* Fiber.join(stopping), {
               "failure._tag": "ProviderAdapterInterruptError",
               "failure.cause._tag": "TimeoutError",
