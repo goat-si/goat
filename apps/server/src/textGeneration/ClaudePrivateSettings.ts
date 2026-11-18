@@ -16,50 +16,70 @@ const MAX_REMOVALS = 32;
 const SWEEP_INTERVAL_MS = 60_000;
 const GENERATED_SUFFIX = /^(?:p[1-9]\d*-)?[a-zA-Z0-9]{6}$/;
 
+type NativeDirectory = Awaited<ReturnType<typeof NodeFSP.opendir>>;
+interface SweepCursor {
+  readonly root: string;
+  readonly directory: NativeDirectory;
+  reading: Promise<unknown> | undefined;
+}
+
+const closeDirectory = (directory: NativeDirectory) => directory.close().catch(() => undefined);
+
 export const makeClaudePrivateSettingsSweep = Effect.fn("ClaudePrivateSettings.makeSweep")(
   function* (path: Path.Path, uid: number | undefined) {
     let nextSweep = Number.NEGATIVE_INFINITY;
-    let cursor:
-      | { readonly root: string; readonly directory: Awaited<ReturnType<typeof NodeFSP.opendir>> }
-      | undefined;
+    let cursor: SweepCursor | undefined;
+    let retired = false;
     const lock = yield* Semaphore.make(1);
-    const close = Effect.fn("ClaudePrivateSettings.closeCursor")(function* () {
-      if (cursor === undefined) return;
-      const { directory } = cursor;
+    const close = async () => {
+      const current = cursor;
       cursor = undefined;
-      yield* Effect.tryPromise(() => directory.close()).pipe(Effect.ignore);
-    }, Effect.uninterruptible);
-    yield* Effect.addFinalizer(() => lock.withPermits(1)(close()));
+      if (current === undefined) return;
+      await current.reading?.catch(() => undefined);
+      await closeDirectory(current.directory);
+    };
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        retired = true;
+        // A native read or close may still be pending when the provider retires.
+        void close();
+      }),
+    );
 
     return Effect.fn("ClaudePrivateSettings.sweep")(
       function* (root: string) {
         const now = yield* Clock.currentTimeMillis;
-        if (now < nextSweep) return;
+        if (retired || now < nextSweep) return;
         nextSweep = now + SWEEP_INTERVAL_MS;
         if (cursor?.root !== root) {
-          yield* close();
-          yield* Effect.tryPromise(() => NodeFSP.opendir(root, { bufferSize: 32 })).pipe(
-            Effect.tap((directory) =>
-              Effect.sync(() => {
-                cursor = { root, directory };
-              }),
-            ),
-            Effect.ignore,
-            Effect.uninterruptible,
-          );
+          yield* Effect.promise(close);
+          yield* Effect.tryPromise(async (signal) => {
+            const directory = await NodeFSP.opendir(root, { bufferSize: 32 });
+            if (signal.aborted || retired) {
+              await closeDirectory(directory);
+              return;
+            }
+            cursor = { root, directory, reading: undefined };
+          }).pipe(Effect.ignore);
         }
-        const directory = cursor?.directory;
-        if (directory === undefined) return;
+        const current = cursor;
+        if (current === undefined) return;
         let removals = 0;
         for (let visits = 0; visits < MAX_VISITS && removals < MAX_REMOVALS; visits++) {
-          const entry = yield* Effect.tryPromise(() => directory.read()).pipe(
-            Effect.uninterruptible,
-            Effect.orElseSucceed(() => null),
-          );
+          const entry = yield* Effect.tryPromise(async () => {
+            const reading = current.directory.read();
+            current.reading = reading;
+            try {
+              return await reading;
+            } finally {
+              current.reading = undefined;
+            }
+          }).pipe(Effect.orElseSucceed(() => null));
           if (entry === null) {
-            yield* close();
+            yield* Effect.promise(close);
             return;
           }
+          if (retired) return;
           const name = entry.name;
           if (
             !name.startsWith(CLAUDE_SETTINGS_TEMP_PREFIX) ||
@@ -68,7 +88,7 @@ export const makeClaudePrivateSettingsSweep = Effect.fn("ClaudePrivateSettings.m
             continue;
           const owner = claudeSettingsTempOwner(name);
           if (owner !== undefined && isProcessAlive(owner)) continue;
-          const removed = yield* Effect.tryPromise(async () => {
+          const removed = yield* Effect.tryPromise(async (signal) => {
             const directory = path.join(root, name);
             const info = await NodeFSP.lstat(directory);
             if (
@@ -90,6 +110,8 @@ export const makeClaudePrivateSettingsSweep = Effect.fn("ClaudePrivateSettings.m
               return false;
             const current = await NodeFSP.lstat(directory);
             if (
+              signal.aborted ||
+              retired ||
               !current.isDirectory() ||
               current.dev !== info.dev ||
               current.ino !== info.ino ||
