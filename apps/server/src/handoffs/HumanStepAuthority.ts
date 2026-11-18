@@ -37,3 +37,8 @@ export const canResolveHumanStep = (resolver: HumanStepResolver, step: HumanStep
   (step === "runtime_approval" &&
     (resolver.kind === "proxied_person" ||
       (resolver.kind === "outside_client" && resolver.approvals)));
+
+export const personIngress = (session: Parameters<typeof sessionResolver>[0]) =>
+  session.principalKind === "person" || session.principalKind === "proxied_person"
+    ? ("person" as const)
+    : undefined;

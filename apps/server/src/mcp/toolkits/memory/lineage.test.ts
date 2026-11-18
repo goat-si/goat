@@ -13,6 +13,7 @@ import * as Settings from "../../../serverSettings.ts";
 import { liveThreadShell } from "../../McpToolAccess.testkit.ts";
 import * as Service from "../../../memory/MemoryService.ts";
 import * as Store from "../../../memory/MemoryStore.ts";
+import { MemoryRefusedSaveHook } from "../../../memory/MemoryRemember.ts";
 import * as Fixture from "./handlers.testkit.ts";
 import {
   appOwnedTaskResultEvents,
@@ -513,6 +514,30 @@ const rememberSetup = Effect.gen(function* () {
 const remember = (text: string) =>
   Fixture.call("goat_memory_remember", { scope: "user", text }, caller());
 
+it.effect("remember offers a refused wide save to the suggestion hook", () => {
+  const offered: Parameters<MemoryRefusedSaveHook["Service"]["onRefusedSave"]>[0][] = [];
+  const hook = Layer.succeed(MemoryRefusedSaveHook, {
+    onRefusedSave: (candidate) =>
+      Effect.sync(() => {
+        offered.push(candidate);
+      }),
+  });
+  return Effect.gen(function* () {
+    yield* rememberSetup;
+    yield* appendLineage(ref(), Fixture.space, revisions(31000, 101));
+    expect((yield* remember("offer these words")).body).toMatchObject({
+      code: "hub_upgrade_required",
+    });
+    expect(offered).toMatchObject([
+      {
+        thread: ref(),
+        reason: "hub_upgrade_required",
+        input: { payload: { text: "offer these words" } },
+      },
+    ]);
+  }).pipe(Effect.provide(Fixture.layer.pipe(Layer.provide(hook))));
+});
+
 it.effect("remember with 101 sources on the old floor asks for a hub upgrade", () =>
   Effect.gen(function* () {
     yield* rememberSetup;
@@ -620,6 +645,9 @@ it.effect("an overflowed thread can save only the person's own words as unverifi
     expect(yield* sql`SELECT environment_id,thread_id FROM memory_origins`).toEqual([
       { environment_id: ref().environmentId, thread_id: ref().threadId },
     ]);
+    expect((yield* remember("café on Saturday")).body).toMatchObject({
+      code: "thread_lineage_incomplete",
+    });
     yield* sql`UPDATE orchestration_v2_projection_runs SET status='completed'`;
     expect((yield* remember("on Saturday")).body).toMatchObject({
       code: "thread_lineage_incomplete",

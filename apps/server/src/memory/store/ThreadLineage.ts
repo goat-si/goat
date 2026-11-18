@@ -104,7 +104,8 @@ export const makeThreadLineage = ({ sql, transact }: Pick<StoreKernel, "sql" | "
           continue;
         }
         visited.add(source);
-        if (visited.size > MAX_TASK_RESULT_SOURCES + 1) return result("overflow");
+        if (visited.size > MAX_TASK_RESULT_SOURCES + 1)
+          return result(state === "unknown" ? state : "overflow");
         const child = { ...thread, threadId: M.ThreadId.make(source) };
         const lineage = yield* readOwnLineage(child);
         if (lineage.space !== undefined && lineage.space !== space) {
@@ -112,7 +113,7 @@ export const makeThreadLineage = ({ sql, transact }: Pick<StoreKernel, "sql" | "
           continue;
         }
         for (const revision of lineage.revisions) revisions.add(revision);
-        if (revisions.size > limit) return result("overflow");
+        if (revisions.size > limit) return result(state === "unknown" ? state : "overflow");
         if ((yield* hasUnknownOrigin(child)) || lineage.state === "unknown") state = "unknown";
         else if (state === "tracked" && lineage.state === "overflow") state = "overflow";
         pending.push(child.threadId);

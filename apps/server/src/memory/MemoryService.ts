@@ -33,7 +33,12 @@ import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts
 import { scanMemoryValue } from "./MemorySecretScanner.ts";
 import { makeCommitSummary, type SummaryCommit } from "./MemorySummaryCommit.ts";
 import { makeUpsert } from "./MemoryUpsert.ts";
-import { makeRemember, type MemoryRememberScopeUnavailable } from "./MemoryRemember.ts";
+import {
+  makeRemember,
+  MemoryRefusedSaveHook,
+  type MemoryRememberScopeUnavailable,
+} from "./MemoryRemember.ts";
+import { areAutomaticallyUsable } from "./MemoryRevisionMarks.ts";
 
 export class MemoryAccessError extends Schema.TaggedError<MemoryAccessError>()(
   "MemoryAccessError",
@@ -1146,7 +1151,14 @@ const make = Effect.fnUntraced(function* (
       revisions.add(pair.revision.revisionId);
       for (const id of closed.derivedFromMemoryRevisions) revisions.add(id);
     }
-    yield* store.appendThreadLineage(thread, space, [...revisions]);
+    const bodies = pairs
+      .filter((pair) => pair.payload !== null)
+      .map((pair) => pair.revision.revisionId);
+    const unknown = !(yield* areAutomaticallyUsable(space, bodies).pipe(
+      Effect.provideService(SqlClient.SqlClient, sql),
+    ));
+    if (!(yield* store.appendThreadLineage(thread, space, [...revisions], unknown)))
+      return yield* new Store.MemoryStoreConflict({ code: "space_mismatch" });
   });
   const upsert = makeUpsert({
     sql,
@@ -1159,7 +1171,10 @@ const make = Effect.fnUntraced(function* (
     stableUuid: memoryStableUuid,
     hash,
   });
+  const refusedSave = yield* Effect.serviceOption(MemoryRefusedSaveHook);
   const remember = makeRemember({
+    onRefusedSave:
+      refusedSave._tag === "Some" ? refusedSave.value.onRefusedSave : () => Effect.void,
     sql,
     environmentId,
     store,

@@ -8,6 +8,7 @@ import * as HubRpcSocket from "./auth/HubRpcSocket.ts";
 import * as SettingsRpc from "./auth/SettingsRpc.ts";
 import * as SettingsSessionPermit from "./auth/settingsSessionPermit.ts";
 import { canResolveHumanStep, sessionResolver } from "./handoffs/HumanStepAuthority.ts";
+import { personIngress, stampClientCommand } from "./orchestration-v2/ThreadPersonIngress.ts";
 import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as DecisionClient from "./goatclaw/DecisionClient.ts";
 import { threadForkRpcHandlers } from "./orchestration-v2/goat/ThreadForkRpc.ts";
@@ -1842,11 +1843,7 @@ export const layerWsRpc = (
                 (command.type === "prepared-run.retry"
                   ? retryPreparedRun(command).pipe(Effect.provide(intakeContext))
                   : ThreadMessageIntake.dispatchCommand(
-                      ThreadManagementService.withCreationProvenance(command, {
-                        createdBy: "user",
-                        creationSource:
-                          "creationSource" in command ? command.creationSource : "web",
-                      }),
+                      stampClientCommand(command, currentSession),
                       channelOwner,
                     )
                 ).pipe(Effect.provide(intakeContext)),
@@ -2024,6 +2021,7 @@ export const layerWsRpc = (
                                 ...(input.initialMessage.messageId === undefined
                                   ? {}
                                   : { messageId: input.initialMessage.messageId }),
+                                ingress: personIngress(currentSession),
                                 text: input.initialMessage.text,
                                 attachments: input.initialMessage.attachments,
                                 ...(input.initialMessage.context === undefined

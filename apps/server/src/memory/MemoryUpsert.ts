@@ -17,6 +17,7 @@ import {
   markUnverified,
   recordMemoryOrigin,
 } from "./MemoryRevisionMarks.ts";
+import { matchesActivePersonWords } from "./MemoryPersonWords.ts";
 import { redactMemoryText } from "./MemorySecretScanner.ts";
 import type { MemoryAccessError, MemoryServiceError } from "./MemoryService.ts";
 
@@ -146,8 +147,19 @@ export const makeUpsert = (deps: {
           limit === M.MEMORY_DERIVED_REVISIONS_MAX_V1
         )
           return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
-        if (lineage && lineage.state !== "tracked")
-          return yield* new Store.MemoryStoreConflict({ code: "thread_lineage_incomplete" });
+        const unverified = lineage !== undefined && lineage.state !== "tracked";
+        if (unverified) {
+          if (
+            !sourceThread ||
+            !remember?.allowUnverified ||
+            current?.identity ||
+            !(yield* matchesActivePersonWords(sourceThread.threadId, value.payload.text))
+          )
+            return yield* new Store.MemoryStoreConflict({ code: "thread_lineage_incomplete" });
+          if (limit === M.MEMORY_DERIVED_REVISIONS_MAX_V1)
+            return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
+        }
+
         yield* requireClosureCapacity(known.size, limit);
         const revisionId = M.MemoryRevisionId.make(
           stableUuid(`${space}:${value.operationId}:revision`),
@@ -203,6 +215,7 @@ export const makeUpsert = (deps: {
           if (remember && !current?.identity && sourceThread)
             yield* recordMemoryOrigin(space, value.memoryId, sourceThread);
           if (
+            unverified ||
             !(yield* areAutomaticallyUsable(
               space,
               heads.map((head) => head.revision.revisionId),

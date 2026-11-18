@@ -217,6 +217,7 @@ import { EventSinkV2 } from "./EventSink.ts";
 import {
   guestShareAfterCancelledSend,
   editedQueuedPayload,
+  rootDispatchAttribution,
   withServerAttribution,
 } from "./GuestShareDecider.ts";
 import { makeGuestShare } from "./goat/GuestShare.ts";
@@ -6026,12 +6027,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         completedAt: null,
       };
       const message: OrchestrationV2ConversationMessage = {
-        createdBy: command.createdBy,
-        creationSource: command.creationSource,
-        ...(command.scheduledTaskId === undefined
-          ? {}
-          : { scheduledTaskId: command.scheduledTaskId }),
-        ...(command.senderThreadId === undefined ? {} : { senderThreadId: command.senderThreadId }),
+        ...rootDispatchAttribution(command),
         ...(command.idleCompaction === undefined ? {} : { idleCompaction: command.idleCompaction }),
         id: command.messageId,
         threadId: command.threadId,
@@ -6437,12 +6433,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         completedAt: null,
       };
       const message: OrchestrationV2ConversationMessage = {
-        createdBy: command.createdBy,
-        creationSource: command.creationSource,
-        ...(command.scheduledTaskId === undefined
-          ? {}
-          : { scheduledTaskId: command.scheduledTaskId }),
-        ...(command.senderThreadId === undefined ? {} : { senderThreadId: command.senderThreadId }),
+        ...rootDispatchAttribution(command),
         ...(command.idleCompaction === undefined ? {} : { idleCompaction: command.idleCompaction }),
         id: command.messageId,
         threadId: command.threadId,
@@ -7170,12 +7161,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       completedAt: null,
     };
     const message: OrchestrationV2ConversationMessage = {
-      createdBy: command.createdBy,
-      creationSource: command.creationSource,
-      ...(command.scheduledTaskId === undefined
-        ? {}
-        : { scheduledTaskId: command.scheduledTaskId }),
-      ...(command.senderThreadId === undefined ? {} : { senderThreadId: command.senderThreadId }),
+      ...rootDispatchAttribution(command),
       ...(command.idleCompaction === undefined ? {} : { idleCompaction: command.idleCompaction }),
       id: command.messageId,
       threadId: command.threadId,
@@ -7194,6 +7180,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const turnItem: OrchestrationV2TurnItem = {
       createdBy: command.createdBy,
       creationSource: command.creationSource,
+      ingress: command.ingress,
       ...(command.scheduledTaskId === undefined
         ? {}
         : { scheduledTaskId: command.scheduledTaskId }),
@@ -9057,7 +9044,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(queuedRun.rootNodeId === null ? {} : { nodeId: queuedRun.rootNodeId }),
       providerInstanceId: queuedRun.providerInstanceId,
       occurredAt: now,
-      payload: editedQueuedPayload(queuedMessage, command, editedAttachments, now),
+      payload: {
+        ...editedQueuedPayload(queuedMessage, command, editedAttachments, now),
+        ingress: undefined,
+      },
     });
     if (queuedTurnItem !== undefined && queuedTurnItem.type === "user_message") {
       yield* emitEvent({
