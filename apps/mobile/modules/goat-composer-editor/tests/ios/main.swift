@@ -1,4 +1,5 @@
 import UIKit
+import UniformTypeIdentifiers
 
 func check(_ passed: @autoclosure () -> Bool, _ message: String) {
   guard passed() else {
@@ -72,3 +73,29 @@ do {
   check(view.editor.accessibilityLabel == "Ask anything", "VoiceOver cannot name the message field")
   print("Message field accessibility label passed")
 }
+
+// Two frames: compare original data so a still image cannot satisfy this check.
+private let gifBytes = Data(base64Encoded: "R0lGODlhAQABAIEAAP8AAAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQACgAAACwAAAAAAQABAAAIBAABBAQAIfkEAAoAAAAsAAAAAAEAAQCBAP8AAAAAAAAAAAAACAQAAQQEADs=")!
+private let gifProvider = NSItemProvider()
+gifProvider.registerDataRepresentation(forTypeIdentifier: UTType.gif.identifier, visibility: .all) { completion in
+  completion(gifBytes, nil)
+  return nil
+}
+
+private let stillImage = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { context in
+  UIColor.red.setFill()
+  context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+}
+private let pasteEditor = ComposerTextView()
+pasteEditor.onPasteImages = { uris in
+  let urls = uris.compactMap(URL.init(string:))
+  let contents = urls.compactMap { try? Data(contentsOf: $0) }
+  urls.forEach { try? FileManager.default.removeItem(at: $0) }
+  check(urls.map(\.pathExtension) == ["gif", "png"], "Mixed image paste changed formats or order: \(uris)")
+  check(contents.first == gifBytes, "A pasted GIF lost its original bytes")
+  check(contents.count == 2 && contents[1] == stillImage.pngData(), "The still image did not attach as PNG")
+  print("Mixed GIF and PNG paste passed")
+  exit(0)
+}
+pasteEditor.loadImages(from: [gifProvider, NSItemProvider(object: stillImage)])
+dispatchMain()
