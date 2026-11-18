@@ -31,7 +31,50 @@ it("only offers a verified vp runner when downloads are enabled", () => {
     command: "vp env exec --node 26.12.1 -- node scripts/setup-worktree.ts",
     tool: "vp",
   };
+  const vpWithPm = {
+    command:
+      "vp env exec --node 26.12.1 --package-manager pnpm@12.14.0 -- node scripts/setup-worktree.ts",
+    tool: "vp",
+  };
   assert.deepEqual(pinnedNodeRunners({ pinned: "26.12.1", vp: true, autoDownload: true }), [vp]);
+  assert.deepEqual(
+    pinnedNodeRunners({
+      pinned: "26.12.1",
+      vp: true,
+      autoDownload: true,
+      packageManager: "pnpm@12.14.0",
+    }),
+    [vpWithPm],
+  );
+  assert.deepEqual(
+    pinnedNodeRunners({
+      pinned: "26.12.1",
+      vp: true,
+      autoDownload: true,
+      packageManager: "pnpm@12.14.0+sha512-abc",
+    }),
+    [vpWithPm],
+  );
+  assert.deepEqual(
+    pinnedNodeRunners({
+      pinned: "26.12.1",
+      vp: true,
+      autoDownload: true,
+      packageManager: "pnpm@12.14.0",
+      packageManagerFlag: true,
+    }),
+    [vpWithPm],
+  );
+  assert.deepEqual(
+    pinnedNodeRunners({
+      pinned: "26.12.1",
+      vp: true,
+      autoDownload: true,
+      packageManager: "pnpm@12.14.0",
+      packageManagerFlag: false,
+    }),
+    [vp],
+  );
   assert.deepEqual(pinnedNodeRunners({ pinned: "26.12.1", vp: false, autoDownload: true }), []);
   assert.deepEqual(pinnedNodeRunners({ pinned: "26.12.1", vp: true, autoDownload: false }), []);
 });
@@ -77,7 +120,7 @@ function setupFixture(
     "catalog:\n  vite-plus: 1.4.0\n",
   );
   const windows = HostProcess.Platform.defaultValue() === "win32";
-  const nodeRunner = `printf '%s' "$SETUP_TEST_PIN" > package.json; export SETUP_TEST_RERUN_PID=$$; exec "$SETUP_TEST_NODE" "$7"`;
+  const nodeRunner = `for arg in "$@"; do script="$arg"; done; printf '%s' "$SETUP_TEST_PIN" > package.json; export SETUP_TEST_RERUN_PID=$$; exec "$SETUP_TEST_NODE" "$script"`;
   const hangingRunner = `"$(dirname "$0")/vp-child" &\nwait`;
   if (runnerMode === "hangs") {
     NodeFS.writeFileSync(
@@ -89,7 +132,7 @@ function setupFixture(
   if (vp !== "absent" || runnerMode !== "installer") {
     const runner =
       vp === "wrong-node"
-        ? `"$SETUP_TEST_NODE" "$7"; code=$?; ls .goat | tr '\\n' ' ' >> "$SETUP_TEST_LOG.markers"; exit $code`
+        ? `for arg in "$@"; do script="$arg"; done; "$SETUP_TEST_NODE" "$script"; code=$?; ls .goat | tr '\\n' ' ' >> "$SETUP_TEST_LOG.markers"; exit $code`
         : vp === "partial-result"
           ? `printf 'fai' > ".goat/setup-rerun-$GOAT_SETUP_PINNED_NODE"; exit 1`
           : runnerMode === "hangs"
@@ -97,7 +140,7 @@ function setupFixture(
             : nodeRunner;
     NodeFS.writeFileSync(
       NodePath.join(bin, "vp"),
-      `#!/bin/sh\nif [ "$1" = "--version" ] && [ -n "$SETUP_TEST_USE_CUSTOM_VERSION" ]; then printf '%s' "$SETUP_TEST_CUSTOM_VERSION"; exit \${SETUP_TEST_VERSION_EXIT:-0}; fi\nif [ "$1" = "--version" ]; then : > "$SETUP_TEST_LOG.version"; printf 'vp v%s\\n' "\${SETUP_TEST_VP_VERSION:-1.5.0}"; exit 0; fi\nprintf 'vp %s\\n' "$1" >> "$SETUP_TEST_LOG"\nif [ "$1" = "env" ]; then ${runner}; fi\nif [ -n "$SETUP_TEST_KILL_RERUN" ]; then kill -9 "$SETUP_TEST_RERUN_PID"; fi\nif [ -n "$SETUP_TEST_VP_FAIL" ]; then printf '%s\\n' "$SETUP_TEST_VP_FAIL" >&2; exit 3; fi\nexit 0\n`,
+      `#!/bin/sh\nif [ "$1" = "--version" ] && [ -n "$SETUP_TEST_USE_CUSTOM_VERSION" ]; then printf '%s' "$SETUP_TEST_CUSTOM_VERSION"; exit \${SETUP_TEST_VERSION_EXIT:-0}; fi\nif [ "$1" = "--version" ]; then : > "$SETUP_TEST_LOG.version"; printf 'vp v%s\\n' "\${SETUP_TEST_VP_VERSION:-1.5.0}"; exit 0; fi\nprintf 'vp %s\\n' "$1" >> "$SETUP_TEST_LOG"\nif [ "$1" = "env" ]; then printf '%s\\n' "$*" >> "$SETUP_TEST_LOG.env-args"; ${runner}; fi\nif [ -n "$SETUP_TEST_KILL_RERUN" ]; then kill -9 "$SETUP_TEST_RERUN_PID"; fi\nif [ -n "$SETUP_TEST_VP_FAIL" ]; then printf '%s\\n' "$SETUP_TEST_VP_FAIL" >&2; exit 3; fi\nexit 0\n`,
       { mode: 0o755 },
     );
   }
@@ -208,6 +251,31 @@ wait
   },
 );
 
+it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "reports --package-manager support only for vite-plus 0.3.1 or later",
+  () => {
+    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-vp-pm-flag-"));
+    const executable = NodePath.join(root, "vp");
+    try {
+      for (const [version, expectedFlag] of [
+        ["0.3.0", false],
+        ["0.3.1", true],
+        ["1.1.0", true],
+      ] as const) {
+        NodeFS.writeFileSync(executable, `#!/bin/sh\nprintf 'vp v${version}\\n'\n`, {
+          mode: 0o755,
+        });
+        const result = vpSupportsVerifiedNodeDownload(2_000, executable);
+        assert.isTrue(result.supported, version);
+        assert.isFalse(result.timedOut, version);
+        assert.equal(result.packageManagerFlag, expectedFlag, version);
+      }
+    } finally {
+      NodeFS.rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+
 describe("worktree setup contract", () => {
   it("#2178 refuses an unsupported Node it cannot replace, before running any installer", () => {
     const [major = 0] = process.versions.node.split(".").map(Number);
@@ -258,6 +326,28 @@ describe("worktree setup contract", () => {
         ]);
       } finally {
         fixture.cleanup();
+      }
+    },
+  );
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "passes --package-manager on vp 0.3.1+ and omits it on vp 0.3.0 (#3711)",
+    () => {
+      const [major = 0] = process.versions.node.split(".").map(Number);
+      for (const [vpVersion, expectFlag] of [
+        ["0.3.0", false],
+        ["0.3.1", true],
+      ] as const) {
+        const fixture = setupFixture(`${major + 1}.0.0`, "unexpected install", 0, "runs-node");
+        fixture.env.SETUP_TEST_VP_VERSION = vpVersion;
+        try {
+          const result = fixture.run();
+          assert.equal(result.status, 0, result.stderr);
+          const envArgs = NodeFS.readFileSync(`${fixture.log}.env-args`, "utf8").trim();
+          assert.equal(envArgs.includes("--package-manager pnpm@12.14.0"), expectFlag, envArgs);
+        } finally {
+          fixture.cleanup();
+        }
       }
     },
   );
