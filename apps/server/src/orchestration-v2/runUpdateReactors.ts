@@ -15,7 +15,7 @@ type EventType = "run.updated" | "provider-thread.updated" | "subagent.updated";
 const MAX_TRACKED_ROSTERS = 1_024;
 const MAX_TRACKED_TASKS_PER_ROSTER = 256;
 
-function makeChildWorkSettlementFilter() {
+export function makeChildWorkSettlementFilter() {
   const rosters = new Map<ProviderThreadId, ReadonlySet<string>>();
   let incompleteHistory = false;
   return ({ event }: OrchestrationV2StoredEvent): boolean => {
@@ -55,10 +55,11 @@ export const runUpdateReactors = Effect.fn("Orchestrator.runUpdateReactors")(fun
     readonly eventType: EventType;
   }) => Stream.Stream<OrchestrationV2StoredEvent, E, R>;
   readonly handleRun: (event: OrchestrationV2StoredEvent) => Effect.Effect<unknown, never, R2>;
-  readonly handleChild: (event: OrchestrationV2StoredEvent) => Effect.Effect<unknown, never, R2>;
+  readonly handleChild: (
+    event: OrchestrationV2StoredEvent,
+  ) => Effect.Effect<unknown, never, R2> | undefined;
 }) {
   const reactions = yield* KeyedLock.makeRunner<ThreadId>();
-  const settlesChildWork = makeChildWorkSettlementFilter();
   yield* Effect.all(
     (["run.updated", "provider-thread.updated", "subagent.updated"] as const).map((eventType) =>
       runResumableReactor(
@@ -87,11 +88,12 @@ export const runUpdateReactors = Effect.fn("Orchestrator.runUpdateReactors")(fun
               ),
             ),
         (stored) => {
-          if (eventType === "run.updated")
-            return reactions.run(stored.event.threadId, input.handleRun(stored));
-          return settlesChildWork(stored)
-            ? reactions.run(stored.event.threadId, input.handleChild(stored))
-            : Effect.void;
+          const reaction = (eventType === "run.updated" ? input.handleRun : input.handleChild)(
+            stored,
+          );
+          return reaction === undefined
+            ? Effect.void
+            : reactions.run(stored.event.threadId, reaction);
         },
       ),
     ),

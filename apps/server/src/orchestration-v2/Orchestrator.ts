@@ -68,7 +68,7 @@ import {
   completionDeliveryMessage,
 } from "./goat/DelegatedCompletionMerge.ts";
 import { markThreadUnread } from "./ProjectionRunNotification.ts";
-import { runUpdateReactors } from "./runUpdateReactors.ts";
+import { makeChildWorkSettlementFilter, runUpdateReactors } from "./runUpdateReactors.ts";
 import { makeRemoteDelegatedTasks } from "./goat/RemoteDelegatedTasks.ts";
 import { canSteerDelegatedCompletionIntoRun } from "./goat/DelegatedCompletionRouting.ts";
 import * as RuntimeAdmission from "../runtimeAdmission.ts";
@@ -12995,12 +12995,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   // Projections already contain historical terminals; replaying them delays startup queue promotion with database size.
   const terminalEventsAfterSequence = yield* eventSink.latestSequence().pipe(Effect.orDie);
+  const settlesChildWork = makeChildWorkSettlementFilter();
   yield* runUpdateReactors({
     afterSequence: terminalEventsAfterSequence,
     stream: eventSink.stream,
     handleRun: handleRunUpdate,
-    handleChild: (stored) =>
-      Effect.gen(function* () {
+    handleChild: (stored) => {
+      if (!settlesChildWork(stored)) return;
+      return Effect.gen(function* () {
         const childThreadId = stored.event.threadId;
         const parentThreadId = yield* appOwnedSubagentParentThreadId(childThreadId);
         if (parentThreadId === undefined) return;
@@ -13013,7 +13015,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             cause,
           }),
         ),
-      ),
+      );
+    },
   }).pipe(Effect.forkScoped);
 
   const recoverDelegatedTasks = Effect.gen(function* () {
