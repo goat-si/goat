@@ -55,3 +55,41 @@ Lane branch `chase/t3-261114-next3-k3` was plain-pushed and its remote head veri
 - The gate selected 399 test files and finished in 3058.7 seconds. Server batch: 363 passed files, 2 skipped files, 4,855 passed tests, 4 skipped tests. Workspace batch: 34 passed files and 3,810 passed tests. Total: 397 passed files, 2 skipped files, 8,665 passed tests, 4 skipped tests, zero failures. The existing skips came from the memory growth suites and `src/cloud/autoUpdate.test.ts`.
 - Guarded whole-file run: `GOAT_TEST_TMP_GUARD=fail vp test run <12 changed test files> apps/web/src/state/vcs.test.ts apps/web/src/components/Sidebar.renderIsolation.browser.test.tsx`, exit 0, 14 files and 146 tests, zero failures or skips.
 - `git diff --check HEAD^2...HEAD` exited 0. The worktree was clean at handoff.
+
+## Fix round 1
+
+C4 review of `16806c18cc27b153d3bc1a3a7d2f31f189cf7c7f` returned BLOCK with no P0/P1. Each accepted finding has one commit and a failing check recorded before the fix.
+
+| Finding | Commit | Failing case and correction |
+| --- | --- | --- |
+| P2-1 | `0f7c3f95613ae37fe97c7e3e22eb6e20f9c019ac` | The newer node advertised branch status but the unknown relay still received both branch RPC tags. A new Hub explicitly advertises forwarding support on its authenticated descriptor response. The prepared socket carries that separate proof alongside the node's own initial config. With an older Hub, the stream uses `includeRemote: false` and branch refresh is skipped. The server, connection resolver, and session dispatch have focused coverage. |
+| P2-2 | `224c22103b268d00a5b654844f578db49c5472f8` | A burst of 64 lock-rename events ran 64 existence probes. The native callback now uses a capacity-one wake queue and two dirty flags before filesystem probing. One burst caused one probe. Native errors are guarded, and a missing admin directory closes the watcher before the final refresh. |
+| P2-3 | `6fcca8778dd458b117bd481b39eabdd720fb2211` | Reopening a passive stream after a terminal switch returned `feature/status-broadcast` and its prior PR. The cached subscription snapshot now checks HEAD under the local lock. Mismatch reloads local status and the snapshot includes a remote result only when its branch matches. The reopen test observed the new branch, no old PR, and no additional remote read. |
+| P2-4 | `f35582392b3a401dbcdbc5085e856670d3f790f0` | The fresh subscriber had no snapshot while the older detail read held its barrier. It now reads and publishes HEAD, captures the revision, and schedules detailed reconciliation separately. The test receives the fresh snapshot while the detail read remains suspended. |
+| P3 | `a34e788e8f5540714aed0e303eb78fdf22d61bf8` | The selector test failed because the Windows suite omitted both proof paths. It now selects `GitWorkflowService.test.ts` and `VcsStatusBroadcaster.watch.test.ts`. The native test runs a real Git linked worktree, moves HEAD after lock churn, then removes the worktree while a probe triggered by the native watcher is pending. It asserts `{ refName: null, isRepo: false }`, the watch close event, and zero detailed or remote reads. |
+
+The native case passed on macOS. Its first version waited for an additional OS notification after removal and timed out on that host. The final test controls when the already-observed native churn signal probes the directory, so actual deletion falls inside that processing window without timing-based waits. Windows remains the hosted proof.
+
+Integration advanced from `9af811b8fc` to `593f1a546485e78216218641731d15918bc1e34c` before the one merge. The merge had no conflicts. Node `v26.12.1`. Server `vp run typecheck` exited 0. The guarded whole-file command selected 14 Vitest files and passed 205 tests with zero failures and skips. The isolated Windows selector test passed on macOS.
+
+### Verification corrections
+
+- The first gate found a type error at the existing Hub snapshot decoder. The relay header is now observed with a separate optional callback. The decoder signature stays intact, so the pre-existing callers and their parse options still typecheck.
+- The next gate found that adding a separate CI-script test file changed the existing exact test-selection list. The two Windows assertions moved into the existing selector test without changing its prior expectations. The whole selector suite passed all 74 tests.
+- A guarded run hit a timeout in the existing index-lock retry fixture while it awaited an OS notification. The fixture now drives the native callback explicitly before observing the simulated failure and advancing TestClock. Its retry assertion stayed the same. The separate linked-worktree case still exercises real native notifications.
+
+Code anchors on the fix-round lane:
+
+- Relay proof and session use at `apps/server/src/hubProxy/http.ts`, `packages/client-runtime/src/connection/resolver.ts`, and `packages/client-runtime/src/rpc/client.ts`.
+- Native coalescing and close at `apps/server/src/vcs/headWatchSignals.ts`. Legacy cached status and branch snapshots at `apps/server/src/vcs/VcsStatusBroadcaster.ts`.
+- Windows selector at `.github/scripts/goat-ci-scope.cjs`. Native and synthetic watch proofs at `apps/server/src/vcs/VcsStatusBroadcaster.watch.test.ts`.
+
+### READY
+
+The lane was plain-pushed from `16806c18cc` and verified at `b23ae88a12af01eece80e318ad1d0062011acf66` on `chase/t3-261114-next3-k3`. The tested integration parent is `593f1a546485e78216218641731d15918bc1e34c`. A dry merge against the current integration tip `a3255d1fd41b38f1d767a982e1c11b9361e1d842` exited 0. The gate ran on the lane head.
+
+- `vp run check:changed origin/chase/t3-261114-next3` exited 0 on Node `v26.12.1`. It checked 46 changed files. Format, lint, both Knip checks, server GraphQL, agent surface audit, agent context budget, and typecheck of 42 packages passed.
+- Vitest selected 474 files. Server: 365 passed files, 2 skipped files, 4,924 tests passed, and 4 skipped. Workspace: 107 files and 4,795 tests passed. Total: 472 files and 9,719 tests passed, with 2 files and 4 tests skipped and zero failures. The separate Node selector suite passed 74 tests with zero skips or failures.
+- With `GOAT_TEST_TMP_GUARD=fail`, all 14 changed Vitest files passed whole, 205 tests total. This included the real linked-worktree removal case on macOS. `git diff --check HEAD^2...HEAD` exited 0 and the worktree was clean.
+
+NOT RUN: Hosted Windows on PR #3700, integrated live web/desktop/mobile P1, independent fix-round review, and repo-wide checks. The Windows selector includes both proof files. Hosted evidence must show native HEAD replacement and removal while the lock churn signal is pending, the missing-repository payload, and watcher teardown.
