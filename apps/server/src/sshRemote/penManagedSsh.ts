@@ -49,6 +49,7 @@ export const guardPenManaged = (
     existingEnvironmentOther,
     issueExistingMcpSession,
     revokeExistingMcpSession,
+    provisionedRuntimeExecutable,
   } = manager;
   return {
     ...manager,
@@ -81,6 +82,23 @@ export const guardPenManaged = (
           revokeExistingMcpSession: (target, environmentId, sessionId) =>
             admitted(target.alias, revokeExistingMcpSession(target, environmentId, sessionId)),
         }),
+    ...(provisionedRuntimeExecutable === undefined
+      ? {}
+      : {
+          provisionedRuntimeExecutable: (target) =>
+            admitted(target.alias, provisionedRuntimeExecutable(target)),
+        }),
+    // Forgetting clears what this machine holds even when Pen cannot vouch, but never stops the
+    // runtime: GOAT only attaches to a Pen machine's GOAT.
+    forgetEnvironment: (target, options) =>
+      Effect.flatMap(ExpectedPenRoute, (expected) =>
+        manager.forgetEnvironment(
+          target,
+          expected !== undefined || routes.isManaged(target.alias)
+            ? { ...options, stopRuntime: "no" }
+            : options,
+        ),
+      ),
     status: (target) => admitted(target.alias, manager.status(target)),
     readyEnvironment: (target) => admitted(target.alias, manager.readyEnvironment(target)),
     runRemoteScript: (target, input) =>

@@ -37,7 +37,15 @@ const fixture = () => {
     publishSetupOutcome: unused,
     publishProviderDiagnosis: unused,
     closeAllTunnels: Effect.void,
-    forgetEnvironment: unused,
+    forgetEnvironment: (_target, options) => {
+      calls.push({ method: "forget", options });
+      return Effect.succeed({ status: "ok" } as never);
+    },
+    provisionedRuntimeExecutable: () =>
+      Effect.sync(() => {
+        calls.push({ method: "executable", options: undefined });
+        return "/usr/bin/goat";
+      }),
     disconnectEnvironment: () => Effect.void,
     revalidateTunnels: () => Effect.void,
     runRemoteScript: unused,
@@ -181,6 +189,22 @@ describe("guardPenManaged", () => {
       expect(rejected._tag).toBe("SshInvalidTargetError");
       expect(calls).toEqual([]);
     }).pipe(Effect.provide(testServices)),
+  );
+
+  it.effect(
+    "a Pen alias's runtime lookup is admitted first, and forgetting it never stops its runtime",
+    () =>
+      Effect.gen(function* () {
+        const { guarded, calls, state } = fixture();
+        state.admitted = false;
+        const looked = yield* Effect.exit(
+          guarded.provisionedRuntimeExecutable?.(target) ?? Effect.die("absent"),
+        );
+        expect(looked._tag).toBe("Failure");
+        // Pen's list cannot be confirmed, yet what this machine holds for the alias still goes.
+        yield* guarded.forgetEnvironment(target, { stopRuntime: "if_idle" });
+        expect(calls).toEqual([{ method: "forget", options: { stopRuntime: "no" } }]);
+      }).pipe(Effect.provide(testServices)),
   );
 
   it.effect("leaves ordinary aliases and optional manager methods alone", () =>
