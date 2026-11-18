@@ -297,6 +297,30 @@ describe("CDP relay screencasts", () => {
     expect(acks()).toHaveLength(1);
   });
 
+  it("keeps one latest skipped frame for a slow viewer without stalling a fast viewer", async () => {
+    const { pages, command, send, frameTo, written } = await makeScreencastRelay(2);
+    const [slow, fast] = pages as [string, string];
+    await command("Page.startScreencast", slow, small);
+    await command("Page.startScreencast", fast, small);
+    const ack = (viewer: string) => command("Page.screencastFrameAck", viewer, { sessionId: 4 });
+    expect(frameTo({ sessionId: 4, data: "first" })).toEqual([slow, fast]);
+    expect(frameTo({ sessionId: 4, data: "skipped" })).toEqual([]);
+    await ack(fast);
+    await ack(fast);
+    expect(frameTo({ sessionId: 4, data: "latest" })).toEqual([fast]);
+    await ack(fast);
+    await ack(slow);
+    const delivered = written
+      .filter((message) => message.method === "Page.screencastFrame" && message.sessionId === slow)
+      .map((message) => message.params);
+    expect(delivered).toEqual([{ sessionId: 4, data: "latest" }]);
+    await command("Page.stopScreencast", slow);
+    await ack(fast);
+    expect(send.mock.calls.filter(([method]) => method === "Page.screencastFrameAck")).toHaveLength(
+      3,
+    );
+  });
+
   it("releases the frames a viewer owed when it detaches without stopping", async () => {
     const { pages, browser, command, send, screencast, frameTo } = await makeScreencastRelay(2);
     const [first, second] = pages as [string, string];
