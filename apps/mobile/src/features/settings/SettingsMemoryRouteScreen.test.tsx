@@ -18,6 +18,7 @@ import {
   MemoryItem,
   MemorySourcePage,
   MemoryUpsertInput,
+  MemoryRpcError,
   MemoryHistoryPage,
   MemoryRevertResult,
   type MemoryRevertResolutionInput,
@@ -463,21 +464,26 @@ describe("native Memory with shared factory", () => {
     expect(view.container.textContent).toContain("Update this environment");
     expect(h.calls).toEqual([]);
   });
-  it("preserves one save intent after a lost response and explicitly retries the same payload", async () => {
-    await mount();
-    h.responses.set(WS_METHODS.memoryUpsert, () => {
-      throw new Error("Synthetic lost response");
-    });
-    await view.click("Remember something");
-    await view.type("Memory text", "Synthetic retry fact");
-    await view.click("Save memory");
-    expect(view.container.textContent).toContain("Retry uses the same request");
-    h.responses.set(WS_METHODS.memoryUpsert, () => ({ outcome: "accepted", pendingSync: true }));
-    await view.click("Retry save request");
-    const writes = h.calls.filter((call) => call.method === WS_METHODS.memoryUpsert);
-    expect(writes).toHaveLength(2);
-    expect(writes[0]!.input).toEqual(writes[1]!.input);
-  });
+  it.each(["lost reply", "hub_unavailable"] as const)(
+    "preserves one save intent after an uncertain response and retries the same payload: %s",
+    async (failure) => {
+      await mount();
+      h.responses.set(WS_METHODS.memoryUpsert, () =>
+        failure === "hub_unavailable"
+          ? Effect.fail(new MemoryRpcError({ code: failure }))
+          : Effect.die(new Error("Synthetic lost response")),
+      );
+      await view.click("Remember something");
+      await view.type("Memory text", "Synthetic retry fact");
+      await view.click("Save memory");
+      expect(view.container.textContent).toContain("Retry uses the same request");
+      h.responses.set(WS_METHODS.memoryUpsert, () => ({ outcome: "accepted", pendingSync: true }));
+      await view.click("Retry save request");
+      const writes = h.calls.filter((call) => call.method === WS_METHODS.memoryUpsert);
+      expect(writes).toHaveLength(2);
+      expect(writes[0]!.input).toEqual(writes[1]!.input);
+    },
+  );
   it("keeps reading available on a read-only connection without allowing a write", async () => {
     await mount(["memory:read"]);
     expect(view.container.textContent).toContain("Synthetic memory body");
