@@ -640,7 +640,6 @@ describe("Memory hub assembled HTTP scenarios", () => {
         );
       }).pipe(Effect.provide(NodeServices.layer)),
   );
-
   it.effect(
     "relays only the owner's synthetic source through four actual routes and purges it",
     () =>
@@ -848,6 +847,7 @@ describe("Memory hub assembled HTTP scenarios", () => {
         resolutionInputs: true,
         retainedLocalSpace: true,
         provenanceProjection: true,
+        derivedCap: 1000,
         generationHold: true,
         hubDiagnostics: true,
         siteNotes: true,
