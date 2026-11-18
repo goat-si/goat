@@ -70,26 +70,28 @@ export const threadCreatedEvent = Effect.fn("ProviderEventIngestorTest.threadCre
   },
 );
 
-export const makeSharedWorktree = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const git = yield* GitVcsDriver.GitVcsDriver;
-  const directory = yield* fs.makeTempDirectoryScoped({ prefix: "ingestor-worktree-" });
-  const repo = `${directory}/repo`;
-  const worktreePath = `${directory}/shared`;
-  yield* fs.makeDirectory(repo);
-  const command = (cwd: string, args: string[]) =>
-    git.execute({ operation: "ingestor-test", cwd, args });
-  yield* command(repo, ["init", "-b", "main"]);
-  yield* command(repo, [
-    "-c",
-    "user.name=Test",
-    "-c",
-    "user.email=test@example.test",
-    "commit",
-    "--allow-empty",
-    "-m",
-    "initial",
-  ]);
-  yield* command(repo, ["worktree", "add", "-b", "t3/abcd1234", worktreePath]);
-  return { repo, worktreePath, command };
-});
+export const makeSharedWorktree = Effect.fn("ProviderEventIngestorTest.makeSharedWorktree")(
+  function* (branch: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const git = yield* GitVcsDriver.GitVcsDriver;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "ingestor-worktree-" });
+    const repo = `${directory}/repo`;
+    const worktreePath = `${directory}/shared`;
+    yield* fs.makeDirectory(repo);
+    const command = (cwd: string, args: string[]) =>
+      git.execute({ operation: "ingestor-test", cwd, args });
+    yield* command(repo, ["init", "-b", "main"]);
+    yield* command(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.test",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "initial",
+    ]);
+    yield* command(repo, ["worktree", "add", "-b", branch, worktreePath]);
+    return { repo, worktreePath, command };
+  },
+);

@@ -1930,7 +1930,7 @@ layer("ProviderEventIngestorV2", (it) => {
     "rechecks a pending native child's branch after the rename scan: %j",
     ({ parentMoved, failure, temporaryBranch }) =>
       Effect.gen(function* () {
-        const { worktreePath, command } = yield* makeSharedWorktree;
+        const { worktreePath, command } = yield* makeSharedWorktree("t3/abcd1234");
         if (temporaryBranch !== "t3/abcd1234")
           yield* command(worktreePath, ["branch", "-m", temporaryBranch]);
         const git = yield* GitVcsDriver.GitVcsDriver;
@@ -2061,7 +2061,7 @@ layer("ProviderEventIngestorV2", (it) => {
     "preserves a native child's branch when the checkout needs no correction: %s",
     (scenario) =>
       Effect.gen(function* () {
-        const { worktreePath, command } = yield* makeSharedWorktree;
+        const { worktreePath, command } = yield* makeSharedWorktree("t3/abcd1234");
         const git = yield* GitVcsDriver.GitVcsDriver;
         const branch = scenario === "explicit" ? "child-feature" : "t3/abcd1234";
         if (scenario === "explicit") yield* command(worktreePath, ["branch", "-m", branch]);
