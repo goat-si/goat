@@ -1,10 +1,10 @@
+import { layerRecordingTools } from "./McpHttpServer.recordingTools.testkit.ts";
 import { snapshotResult } from "./toolkits/preview/snapshotTransport.testkit.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
-  OrchestratorMcpFailure,
   PREVIEW_AUTOMATION_SERVER_OPERATIONS,
   PreviewTabId,
   ProviderInstanceId,
@@ -18,7 +18,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { McpSchema, McpServer, Toolkit } from "effect/ai";
+import { McpSchema, McpServer } from "effect/ai";
 import {
   HttpBody,
   HttpClient,
@@ -34,17 +34,12 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectService from "../project/ProjectService.ts";
-import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
-import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as McpToolAccessTestkit from "./McpToolAccess.testkit.ts";
-import * as McpToolAccess from "./McpToolAccess.ts";
-import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
-import { ProjectToolkit } from "./toolkits/project/tools.ts";
 import { inertPullRequestServices } from "./toolkits/pullRequests/pullRequestServices.testkit.ts";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
@@ -102,15 +97,23 @@ const layerPullRequestsTest = McpHttpServer.layerPullRequestsToolkit.pipe(
   ),
 );
 
-const serveSnapshots = (clientId: string, result: unknown) =>
+const serveSnapshots = (
+  clientId: string,
+  result: unknown,
+  frameRequests?: Array<boolean | undefined>,
+) =>
   Effect.gen(function* () {
     const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const connected = yield* Deferred.make<void>();
     const inputs: Array<unknown> = [];
-    const events = yield* broker.connect({ clientId, environmentId });
+    const events = yield* broker.connect(
+      { clientId, environmentId },
+      frameRequests === undefined ? undefined : { inProcess: true },
+    );
     yield* Stream.runForEach(events, (event) => {
       if (event.type === "connected") return Deferred.succeed(connected, undefined);
       inputs.push(event.request.input);
+      frameRequests?.push(event.request.measureSnapshotFrame);
       return broker.respond({
         clientId,
         connectionId: event.connectionId,
@@ -135,45 +138,6 @@ const callTool = (name: string, args: Record<string, unknown>) =>
   });
 
 const callSnapshot = (args: Record<string, unknown>) => callTool("goat_preview_snapshot", args);
-
-const layerRecordingTools = (calls: Array<unknown>) => {
-  const RecordingToolkit = Toolkit.make(
-    OrchestratorToolkit.tools.delegate_task,
-    OrchestratorToolkit.tools.goat_thread_read,
-    OrchestratorToolkit.tools.goat_thread_wait,
-    ProjectToolkit.tools.goat_project_update,
-  );
-  const record = McpToolAccess.reads((params: unknown) =>
-    Effect.sync(() => calls.push(params)).pipe(
-      Effect.andThen(
-        Effect.fail(new OrchestratorMcpFailure({ code: "thread_not_found", message: "Recorded." })),
-      ),
-    ),
-  );
-  return McpHttpServer.toolkitRegistration(
-    RecordingToolkit,
-    McpToolAccess.toLayer(RecordingToolkit, {
-      delegate_task: record,
-      goat_thread_read: record,
-      goat_thread_wait: record,
-      goat_project_update: record,
-    }),
-  ).pipe(
-    Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
-    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
-    Layer.provide(
-      Layer.mergeAll(
-        McpToolAccessTestkit.liveThreadsLayer,
-        Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({}),
-        Layer.mock(ProjectService.ProjectService)({}),
-        Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({}),
-        Layer.mock(ThreadResultService.ThreadResultService)({}),
-        NodeServices.layer,
-        NodeCrypto.layer,
-      ),
-    ),
-  );
-};
 
 it.effect.each([{}, { includeImage: false }])(
   "returns bounded structural preview snapshot failures %#",
@@ -387,6 +351,34 @@ it.effect("refuses preview tools to a client outside a thread before they run", 
       { type: "text", text: expect.stringContaining("needs an agent running inside GOAT") },
     ]);
   }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("reports frame dimensions in text and refuses a requested image with no pixels", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const dimensions = { width: 1280, height: 800 };
+      const frameRequests: Array<boolean | undefined> = [];
+      const { screenshot: _image, ...page } = snapshotResult;
+      yield* serveSnapshots(
+        "mcp-dimensions-client",
+        {
+          ...page,
+          screenshotSize: dimensions,
+        },
+        frameRequests,
+      );
+      const text = yield* callSnapshot({});
+      expect(text.isError).toBe(false);
+      expect(text.structuredContent).toMatchObject({ screenshot: dimensions });
+      expect(text.content.every((part) => part.type === "text")).toBe(true);
+      for (const input of [{ includeImage: true }, { save: true }]) {
+        const missing = yield* callSnapshot(input);
+        expect(missing.isError).toBe(true);
+        expect(JSON.stringify(missing.content)).toContain("did not contain requested PNG pixels");
+      }
+      expect(frameRequests).toEqual([true, undefined, undefined]);
+    }),
+  ).pipe(Effect.provide(layerTest)),
 );
 
 it.effect("saves full-page captures without replaying images and keeps clipping metadata", () =>

@@ -3,6 +3,8 @@ import * as NodeStream from "@effect/platform-node/NodeStream";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Exit from "effect/Exit";
@@ -82,6 +84,56 @@ it.effect("protects unknown desktop visibility until an explicit hidden report a
   }).pipe(
     Effect.provide(
       ServerConfig.layerTest(process.cwd(), { prefix: "desktop-browser-channel-" }).pipe(
+        Layer.provide(NodeServices.layer),
+      ),
+    ),
+  ),
+);
+
+it.effect("waits for the revealed desktop tab and ends the wait on detach or deadline", () =>
+  Effect.gen(function* () {
+    const input = yield* Queue.unbounded<Uint8Array>();
+    vi.mocked(NodeStream.fromReadable).mockReturnValue(Stream.fromQueue(input));
+    const config = yield* ServerConfig.ServerConfig;
+    yield* Effect.gen(function* () {
+      const channel = yield* DesktopBrowserChannel.DesktopBrowserChannel;
+      const key = { threadId: "thread-1", tabId: "tab-1" };
+      const send = (event: object) =>
+        Queue.offer(input, new TextEncoder().encode(`${JSON.stringify(event)}\n`));
+      const awaitShown = () => channel.awaitShown?.(key, "3 seconds") ?? Effect.succeed(false);
+      const hideAndDrain = (tabId: string) =>
+        Effect.gen(function* () {
+          yield* send({ type: "shown", ...key, shown: false });
+          yield* send({ type: "attached", ...key, tabId });
+          yield* channel.awaitAttached({ ...key, tabId }, "1 second");
+        });
+      yield* send({ type: "attached", ...key });
+      yield* hideAndDrain("other");
+      const shown = yield* awaitShown().pipe(Effect.forkScoped);
+      yield* send({ type: "shown", ...key, tabId: "other", shown: true });
+      yield* send({ type: "shown", ...key, shown: true });
+      expect(yield* Fiber.join(shown)).toBe(true);
+
+      yield* hideAndDrain("before-timeout");
+      const timedOut = yield* awaitShown().pipe(Effect.forkScoped);
+      yield* TestClock.adjust("3 seconds");
+      expect(yield* Fiber.join(timedOut)).toBe(false);
+      yield* hideAndDrain("before-detach");
+      const detached = yield* awaitShown().pipe(Effect.forkScoped);
+      yield* send({ type: "detached", ...key });
+      expect(yield* Fiber.join(detached)).toBe(false);
+    }).pipe(
+      Effect.provide(
+        DesktopBrowserChannel.layer.pipe(
+          Layer.provide(
+            ServerConfig.layer({ ...config, desktopBrowserFd: 41, desktopBrowserControlFd: 42 }),
+          ),
+        ),
+      ),
+    );
+  }).pipe(
+    Effect.provide(
+      ServerConfig.layerTest(process.cwd(), { prefix: "desktop-browser-shown-" }).pipe(
         Layer.provide(NodeServices.layer),
       ),
     ),

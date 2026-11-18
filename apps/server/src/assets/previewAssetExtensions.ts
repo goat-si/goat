@@ -1,0 +1,33 @@
+import { WORKSPACE_BROWSER_PREVIEW_EXTENSIONS } from "@goat/shared/filePreview";
+
+export const PREVIEW_ASSET_EXTENSIONS = new Set([
+  ...WORKSPACE_BROWSER_PREVIEW_EXTENSIONS,
+  // Keep HTML dependency grants independent of newly supported file viewers.
+  ".avif",
+  ".gif",
+  ".ico",
+  ".jpeg",
+  ".jpg",
+  ".png",
+  ".svg",
+  ".webp",
+  ".m4v",
+  ".mp4",
+  ".ogv",
+  ".webm",
+  ".aac",
+  ".flac",
+  ".m4a",
+  ".mp3",
+  ".oga",
+  ".ogg",
+  ".opus",
+  ".wav",
+  ".css",
+  ".js",
+  ".mjs",
+  ".otf",
+  ".ttf",
+  ".woff",
+  ".woff2",
+]);
