@@ -178,6 +178,7 @@ export class MemoryService extends Context.Service<
       hubEnvironmentId: M.EnvironmentId;
       localEnvironmentId: M.EnvironmentId;
       expectedSequence: number;
+      afterOriginSequence?: number;
       page: M.MemoryHubPullResult;
       reauthorize: Permit;
     }) => Effect.Effect<readonly Store.Settlement[], MemoryServiceError>;
@@ -2458,16 +2459,29 @@ const make = Effect.fnUntraced(function* (
         if (page.derivedCap)
           yield* store.learnHubFloor(input.memorySpaceId, yield* Clock.currentTimeMillis);
         const current = yield* store.readCursor(input.memorySpaceId, input.hubEnvironmentId);
-        if (current >= page.throughSequence) return [];
-        return yield* store.withReceivedCursor(
-          {
-            memorySpaceId: input.memorySpaceId,
-            hubEnvironmentId: input.hubEnvironmentId,
-            expectedSequence: input.expectedSequence,
-            afterSequence: page.throughSequence,
-          },
-          Effect.forEach(page.entries, (entry) => settleHubEntryTx({ ...input, entry })),
-        );
+        const settled =
+          current >= page.throughSequence
+            ? []
+            : yield* store.withReceivedCursor(
+                {
+                  memorySpaceId: input.memorySpaceId,
+                  hubEnvironmentId: input.hubEnvironmentId,
+                  expectedSequence: input.expectedSequence,
+                  afterSequence: page.throughSequence,
+                },
+                Effect.forEach(page.entries, (entry) => settleHubEntryTx({ ...input, entry })),
+              );
+        if (page.originPage) {
+          if (input.afterOriginSequence === undefined)
+            return yield* new Store.MemoryStoreConflict({ code: "invalid_cursor" });
+          yield* store.receiveOriginPageTx(
+            input.memorySpaceId,
+            input.hubEnvironmentId,
+            input.afterOriginSequence,
+            page.originPage,
+          );
+        }
+        return settled;
       }),
     );
   });

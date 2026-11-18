@@ -9,6 +9,7 @@ export const moveFloorCapabilities = {
   derivedCap: 1000,
   originFilter: true,
   originUpdates: true,
+  originCatchup: true,
   scopeMoves: true,
   saveSuggestions: true,
   mutationFailureDetails: true,

@@ -224,7 +224,7 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
     yield* compactor.compact(principal());
   }
 
-  yield* Effect.gen(function* () {
+  const checkReplica = Effect.gen(function* () {
     const sync = yield* Sync.MemorySyncService;
     const service = yield* Service.MemoryService;
     yield* sync.syncOnce;
@@ -243,5 +243,7 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
       page.items.map(({ memoryId }) => memoryId),
       attempts.map(({ memoryId }) => memoryId),
     );
-  }).pipe(Effect.provide(readyPeer ?? Layer.fresh(replica)));
+  });
+  if (readyPeer) yield* checkReplica.pipe(Effect.provide(readyPeer));
+  else yield* checkReplica.pipe(Effect.provide(Layer.fresh(replica)));
 });

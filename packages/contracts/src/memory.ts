@@ -2664,11 +2664,12 @@ export const MemoryHubJoinResult = struct({
 );
 export type MemoryHubJoinResult = typeof MemoryHubJoinResult.Type;
 
-export const MemoryOriginUpdate = struct({
+const memoryOriginUpdateFields = {
   memoryId: MemoryId,
   createOperationId: MemoryOperationId,
   threadId: ThreadId,
-});
+};
+export const MemoryOriginUpdate = struct(memoryOriginUpdateFields);
 export type MemoryOriginUpdate = typeof MemoryOriginUpdate.Type;
 export const MEMORY_ORIGIN_UPDATE_MAX = 100;
 
@@ -2697,18 +2698,35 @@ export type MemoryHubPushInput = typeof MemoryHubPushInput.Type;
 export const MemoryHubPushResult = struct({ receipts: array(MemoryHubReceipt) });
 export type MemoryHubPushResult = typeof MemoryHubPushResult.Type;
 
+const memoryOriginPage = struct({
+  throughSequence: NonNegativeInt,
+  hasMore: Schema.Boolean,
+  updates: array(
+    struct({
+      ...memoryOriginUpdateFields,
+      environmentId: EnvironmentId,
+      sequence: PositiveInt,
+    }),
+    MEMORY_ORIGIN_UPDATE_MAX,
+  ),
+});
+export type MemoryOriginPage = typeof memoryOriginPage.Type;
+
 export const MemoryHubPullInput = struct({
   ...hub,
   ...hubFeatures,
   environmentId: EnvironmentId,
   afterSequence: NonNegativeInt,
+  afterOriginSequence: Schema.optionalKey(NonNegativeInt),
   limit,
   highWatermark: Schema.optionalKey(NonNegativeInt),
   snapshotToken: Schema.optionalKey(canonical),
   cursor: Schema.optionalKey(canonical),
 }).check(
   Schema.makeFilter((v) =>
-    v.snapshotToken !== undefined ? v.highWatermark === undefined : v.cursor === undefined,
+    v.snapshotToken !== undefined
+      ? v.highWatermark === undefined && v.afterOriginSequence === undefined
+      : v.cursor === undefined,
   ),
 );
 export type MemoryHubPullInput = typeof MemoryHubPullInput.Type;
@@ -2721,11 +2739,17 @@ export const MemoryHubPullResult = bounded(
     hasMore: Schema.Boolean,
     entries: array(MemoryHubEntry),
     checkpoint: Schema.optionalKey(MemoryHubCheckpointPage),
+    originPage: Schema.optionalKey(memoryOriginPage),
+    originCatchupPending: Schema.optionalKey(Schema.Literal(true)),
     derivedCap: Schema.optionalKey(Schema.Literal(1000)),
   }).check(
     Schema.makeFilter(
       (v) =>
         v.throughSequence <= v.highWatermark &&
+        ((v.originPage === undefined && v.originCatchupPending === undefined) ||
+          (v.checkpoint === undefined &&
+            !v.hasMore &&
+            !(v.originPage && v.originCatchupPending))) &&
         (v.checkpoint === undefined ||
           (v.entries.length === 0 &&
             v.throughSequence === v.checkpoint.checkpointSequence &&

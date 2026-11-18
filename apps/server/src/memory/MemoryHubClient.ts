@@ -260,6 +260,11 @@ const make = Effect.gen(function* () {
           const prepared = prepare ? yield* prepare : input;
           const wire = { ...prepared };
           delete wire.features;
+          if (
+            descriptor.capabilities.memory?.originCatchup !== true &&
+            "afterOriginSequence" in wire
+          )
+            delete (wire as { afterOriginSequence?: number }).afterOriginSequence;
           const body = yield* encode(advertised ? { ...wire, ...floor } : wire).pipe(
             Effect.mapError(() => new M.MemoryHubError({ code: "invalid_output" })),
           );

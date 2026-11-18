@@ -33,11 +33,13 @@ export const makePullMemoryTail = <R extends TailRoute>(deps: {
     let highWatermark: number | undefined;
     while (budget.pages < 10 && budget.entries < 1000) {
       const after = yield* store.readCursor(space, r.hubId);
+      const afterOriginSequence = yield* store.readOriginCursor(space, r.hubId);
       const page = yield* callPull(r, {
         protocolVersion: 1,
         memorySpaceId: space,
         environmentId: local,
         afterSequence: after,
+        afterOriginSequence,
         limit: Math.min(100, 1000 - budget.entries),
         ...(highWatermark === undefined ? {} : { highWatermark }),
       }).pipe(
@@ -72,18 +74,19 @@ export const makePullMemoryTail = <R extends TailRoute>(deps: {
         (page.hasMore && page.throughSequence === after)
       )
         return yield* new M.MemoryHubError({ code: "invalid_output" });
-      highWatermark = page.highWatermark;
+      highWatermark = page.hasMore ? page.highWatermark : undefined;
       yield* service.receiveHubPage({
         memorySpaceId: space,
         hubEnvironmentId: r.hubId,
         localEnvironmentId: local,
         expectedSequence: after,
+        afterOriginSequence,
         page,
         reauthorize: ensureEpoch(r.settings.memoryHubVersion),
       });
       budget.pages++;
       budget.entries += page.entries.length;
-      if (!page.hasMore) break;
+      if (!page.hasMore && !page.originPage?.hasMore && !page.originCatchupPending) break;
     }
   });
 };

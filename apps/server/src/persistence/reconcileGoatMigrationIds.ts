@@ -83,6 +83,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "MemoryHubFloor",
   "MemoryScopeVersion",
   "MemoryCompactMoveReceipts",
+  "MemoryOriginCatchup",
 ]);
 
 type MigrationEntry<E> = readonly [

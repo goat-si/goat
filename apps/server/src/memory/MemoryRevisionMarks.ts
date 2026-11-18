@@ -65,6 +65,7 @@ export const recordCanonicalMemoryOrigin = Effect.fn("MemoryStore.recordCanonica
         json_extract(identity_json,'$.createOperationId')=${createOperationId ?? null})
       AND json_type(identity_json,'$.origin') IS NULL
       AND NOT EXISTS (SELECT 1 FROM memory_tombstones t WHERE t.space=${space} AND t.memory_id=${memoryId})
+      AND NOT EXISTS (SELECT 1 FROM memory_pending_forget_intents f WHERE f.space=${space} AND f.memory_id=${memoryId})
       RETURNING memory_id`,
     );
     if (changed) yield* recordMemoryOrigin(space, memoryId, origin);

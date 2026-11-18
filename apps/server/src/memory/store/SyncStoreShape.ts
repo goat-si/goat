@@ -1,3 +1,4 @@
+import type { OriginCatchup } from "./OriginCatchup.ts";
 import type * as M from "@goat/contracts";
 import type * as Effect from "effect/Effect";
 import type {
@@ -33,7 +34,7 @@ import type {
   WorkHold,
 } from "./StoreModel.ts";
 
-export interface SyncStoreShape {
+export interface SyncStoreShape extends OriginCatchup {
   readonly acquireSyncWorkTx: (input: {
     workId: string;
     operationId: M.MemoryOperationId;

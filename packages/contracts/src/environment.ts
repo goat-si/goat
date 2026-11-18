@@ -101,6 +101,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       mutationFailureDetails: Schema.optionalKey(Schema.Boolean),
       saveSuggestions: Schema.optionalKey(Schema.Boolean),
       originUpdates: Schema.optionalKey(Schema.Boolean),
+      originCatchup: Schema.optionalKey(Schema.Boolean),
       originFilter: Schema.optionalKey(Schema.Boolean),
       hub: Schema.optionalKey(Schema.Boolean),
       importProvider: Schema.optionalKey(Schema.Boolean),
