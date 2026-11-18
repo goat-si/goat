@@ -8,6 +8,7 @@ export const DesktopPreviewFindInput = Schema.Struct({
   forward: Schema.Boolean,
   newSession: Schema.Boolean,
 });
+export type DesktopPreviewFindInput = typeof DesktopPreviewFindInput.Type;
 
 export interface DesktopPreviewFindResult {
   readonly tabId: string;

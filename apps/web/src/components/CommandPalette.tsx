@@ -417,6 +417,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         <CommandPaletteDialog mode={state.mode} setOpen={setOpen}>
           <OpenCommandPaletteDialog
             open={state.open}
+            previewOpen={previewOpen}
             openIntent={state.openIntent}
             setOpen={setOpen}
             openChildSearch={openChildSearch}
@@ -431,6 +432,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
 
 function OpenCommandPaletteDialog(props: {
   readonly open: boolean;
+  readonly previewOpen: boolean;
   readonly openIntent: CommandPaletteOpenIntent | null;
   readonly setOpen: (open: boolean) => void;
   readonly openChildSearch: (
@@ -1278,7 +1280,7 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
-  appendFindItems(actionItems, activeThreadKey, supportsThreadFind);
+  appendFindItems(actionItems, activeThreadKey, supportsThreadFind, props.previewOpen);
 
   const promptLinkTarget = paletteRouteTarget
     ? paletteRouteTarget.kind === "server"

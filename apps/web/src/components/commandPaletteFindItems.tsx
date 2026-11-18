@@ -1,3 +1,5 @@
+import { dispatchPreviewAction } from "./preview/previewActionBus";
+import { previewBridge } from "./preview/previewBridge";
 import { TextSearchIcon } from "./solar";
 import { openThreadFind } from "./chat/threadFindStore";
 import {
@@ -10,6 +12,7 @@ export function appendFindItems(
   actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem>,
   activeThreadKey: string | null,
   activeThreadCanFind: boolean,
+  previewOpen: boolean,
 ) {
   if (activeThreadKey !== null && activeThreadCanFind) {
     actionItems.push({
@@ -22,6 +25,18 @@ export function appendFindItems(
       run: async () => {
         openThreadFind(activeThreadKey);
       },
+    });
+  }
+
+  if (previewOpen && previewBridge?.findInPage) {
+    actionItems.push({
+      kind: "action",
+      value: "find-in-browser-page",
+      title: "Find in browser page",
+      searchTerms: ["find", "search", "browser", "page"],
+      icon: <TextSearchIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "preview.find",
+      run: async () => dispatchPreviewAction("find"),
     });
   }
 }
