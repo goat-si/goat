@@ -28,7 +28,8 @@ import { isConnectedWithConfig } from "../components/settings/scopedSettings";
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { environmentAtomList } from "./environmentAtomList";
-import { primaryEnvironmentIdAtom, themeEnvironmentIdAtom } from "./primaryEnvironment";
+import { themeEnvironmentIdAtom } from "./desktopHostEnvironment";
+import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
 import { environmentSession } from "./session";
 import { reuseProvidersIgnoringCheckedAt } from "./serverProviders.logic";
 

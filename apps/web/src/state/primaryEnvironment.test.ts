@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { selectThemeEnvironment } from "./primaryEnvironment";
+import { selectThemeEnvironment } from "./desktopHostEnvironment";
 
 describe("theme environment", () => {
   it("prefers a primary environment", () => {

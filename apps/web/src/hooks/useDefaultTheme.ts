@@ -1,7 +1,7 @@
 import { migratingStorage } from "@goat/client-runtime/storage-migration";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
-import { themeEnvironmentIdAtom } from "../state/primaryEnvironment";
+import { themeEnvironmentIdAtom } from "../state/desktopHostEnvironment";
 import { themeServerSettingsAtom } from "../state/server";
 import { getThemeDefinition, singleAppearanceOf, subscribeToCustomThemes } from "../themePalette";
 import { setAppearanceMode, setTheme } from "./useTheme";

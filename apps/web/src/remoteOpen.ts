@@ -14,7 +14,7 @@ import { browserClientOs, type BrowserIdentity } from "~/connection/clientMetada
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { isLoopbackHostname } from "~/environments/primary/target";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
-import { hostEnvironmentIdAtom } from "~/state/primaryEnvironment";
+import { hostEnvironmentIdAtom } from "~/state/desktopHostEnvironment";
 import { environmentPresentations } from "~/state/presentation";
 
 export interface RemoteOpenHost {

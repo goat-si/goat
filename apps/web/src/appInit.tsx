@@ -28,7 +28,7 @@ import { isHostedStaticApp } from "./hostedPairing";
 import { openLaunchRoute } from "./launchRoute";
 import { isLocalEnvironmentDisabled } from "./localEnvironment";
 import { useComposerDraftStore } from "./composerDraftStore";
-import { startHostEnvironmentLookup } from "./state/primaryEnvironment";
+import { startHostEnvironmentLookup } from "./state/desktopHostEnvironment";
 import { startDefaultThemeAdoption } from "./hooks/useDefaultTheme";
 import {
   getClientSettings,
