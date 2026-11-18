@@ -202,9 +202,6 @@ import {
 } from "@goat/provider-core/server/subagentProjection";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { providerThreadFromCodexThread } from "./codexProviderThread.ts";
-
-// A phase newer than this build reads as none, so it is never stored.
-const isAssistantMessagePhase = Schema.is(AssistantMessagePhase);
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { codexFileChangeLineCounts } from "../fileChangeLineCounts.ts";
 import { codexFileChangePatch } from "../fileChangePatch.ts";
@@ -241,6 +238,8 @@ import {
   toCodexUserInputAnswers,
 } from "./CodexApprovalResponses.ts";
 
+// A phase newer than this build reads as none, so it is never stored.
+const isAssistantMessagePhase = Schema.is(AssistantMessagePhase);
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
 // How long Stop waits for Codex to end the turn before the user is offered Force stop.
 const CODEX_STOP_CONFIRM_TIMEOUT_MS = 10_000;
