@@ -39,6 +39,7 @@ export interface ActiveTurn {
   readonly input: TurnOwner;
   providerTurn: OrchestrationV2ProviderTurn;
   readonly texts: Map<string, OpenBlock>;
+  answer: string | undefined;
   readonly tools: Map<string, { readonly name: string; input: Record<string, unknown> }>;
   readonly startedAt: Map<string, DateTime.Utc>;
   readonly ordinals: Map<string, number>;
@@ -91,7 +92,8 @@ export interface SubagentCall {
   agent: string | undefined;
   model: string | null;
   background: boolean;
-  joined: SubagentCall | undefined;
+  run: number | undefined;
+  answer: string | undefined;
   child: ThreadState | undefined;
   status: OrchestrationV2Subagent["status"];
   result: string | null;

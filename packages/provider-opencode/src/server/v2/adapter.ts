@@ -487,6 +487,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       if (completed) turn.texts.delete(nativeId);
       else turn.texts.set(nativeId, entry);
       if (entry.text.length === 0) return;
+      if (completed && kind === "text") turn.answer = entry.text;
       const status = completed ? "completed" : "running";
       const completedAt = completed ? updatedAt : null;
       const nodeKind = kind === "text" ? "assistant_message" : "reasoning";
@@ -696,6 +697,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       },
       providerTurn,
       texts: new Map(),
+      answer: undefined,
       tools: new Map(),
       startedAt: new Map(),
       ordinals: new Map(),
@@ -964,13 +966,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         updatedAt: now,
       };
       const previous = threads.get(childId);
-      // Repeated subagent calls steer the same run; OpenCode reports it once for every joined call.
-      if (previous?.active !== undefined) {
-        call.joined = [...call.state.calls.values()].findLast(
-          (candidate) =>
-            candidate !== call && candidate.child === previous && candidate.joined === undefined,
-        );
-      }
+      // A call to a running child steers that same run.
+      if (previous?.active !== undefined) call.run = previous.subagent?.turns;
       const subagent = {
         call,
         appThread,
@@ -1013,7 +1010,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       if (result !== undefined) call.result = result;
       call.state.calls.delete(call.toolId);
       const child = call.child;
-      if (child !== undefined) {
+      if (child?.subagent?.call === call) {
         for (const nested of Array.from(child.calls.values())) {
           if (nested.background && status !== "failed") continue;
           yield* settleCall(nested, status === "completed" ? "interrupted" : status);
@@ -1036,6 +1033,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const subagent = child.subagent;
       if (subagent === undefined || child.active !== undefined) return;
       subagent.turns += 1;
+      for (const call of callsAttachedTo(child)) call.run ??= subagent.turns;
       const startedAt = yield* DateTime.now;
       const nativeTurnId = `${child.sessionId}:turn:${subagent.turns}`;
       const rootNodeId = idAllocator.derive.nodeFromProviderItem({
@@ -1225,7 +1223,10 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       });
       // Subagent turns are runless; their calls own settlement.
       if (state.subagent !== undefined) {
-        const call = state.subagent.call;
+        const { call, turns } = state.subagent;
+        for (const attached of callsAttachedTo(state)) {
+          if (attached.run === turns) attached.answer = turn.answer;
+        }
         if (!call.background && terminal.status !== "completed") {
           yield* settleCall(call, terminal.status);
         }
@@ -1600,7 +1601,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         agent: undefined,
         model: null,
         background: false,
-        joined: undefined,
+        run: undefined,
+        answer: undefined,
         child: undefined,
         status: "running",
         result: null,
@@ -1909,12 +1911,19 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const childId = stringField(payload.metadata, "childID");
       if (stringField(payload.metadata, "source") !== "subagent" || childId === undefined) return;
       strays.delete(childId);
-      const call = [...state.calls.values()].find(
+      const open = [...state.calls.values()].filter(
         (candidate) => candidate.child?.sessionId === childId,
       );
-      const calls = [...state.calls.values()].filter(
-        (candidate) => candidate === call || (call !== undefined && candidate.joined === call),
-      );
+      const output = subagentOutput(payload.text);
+      const started = open
+        .flatMap((call) => (call.run === undefined ? [] : [{ call, run: call.run }]))
+        .sort((a, b) => a.run - b.run);
+      // Reports arrive in order. Matching a later known answer proves earlier reports were skipped.
+      const next = started.find(({ call }) => call.answer === undefined || call.answer === output);
+      const matchedRun = next?.call.answer === output ? next?.run : undefined;
+      const call = matchedRun === undefined ? open[0] : next?.call;
+      const calls =
+        call?.run === undefined ? open.slice(0, 1) : open.filter((each) => each.run === call.run);
       const outcome = reportOutcome(stringField(payload.metadata, "state"));
       state.reports.set(inboxId, {
         inboxId,
@@ -1934,7 +1943,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           : outcome === "cancelled"
             ? "cancelled"
             : "completed";
-      for (const each of calls) yield* settleCall(each, status, subagentOutput(payload.text));
+      for (const earlier of started) {
+        if (matchedRun !== undefined && earlier.run < matchedRun) {
+          yield* settleCall(earlier.call, "completed", earlier.call.answer);
+        }
+      }
+      for (const each of calls) yield* settleCall(each, status, output);
     });
 
     const holderOf = (sessionId: string) => {

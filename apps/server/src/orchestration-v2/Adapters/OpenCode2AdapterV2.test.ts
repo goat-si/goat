@@ -921,8 +921,11 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       metadata: { sessionID: CHILD, status: "running" },
       executed: true,
     });
-  const callAgain = (input: Record<string, unknown>): ReadonlyArray<ProviderReplayEntry> => {
-    const tool = { sessionID: SESSION, assistantMessageID: "msg_assistant", id: "call-again" };
+  const callAgain = (
+    input: Record<string, unknown>,
+    { id = "call-again", writesRules = true } = {},
+  ): ReadonlyArray<ProviderReplayEntry> => {
+    const tool = { sessionID: SESSION, assistantMessageID: "msg_assistant", id };
     return [
       event("session.tool.input.started", { ...tool, name: "subagent" }),
       event("session.tool.called", {
@@ -935,8 +938,12 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         ...tool,
         metadata: { sessionID: CHILD, status: "running" },
       }),
-      out("session.update", { sessionID: CHILD, permissions: "<any>" }),
-      reply("session.update", null),
+      ...(writesRules
+        ? [
+            out("session.update", { sessionID: CHILD, permissions: "<any>" }),
+            reply("session.update", null),
+          ]
+        : []),
       returnedRunning(tool.id),
     ];
   };
@@ -951,7 +958,9 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         string,
         Record<string, { status: string; result: string | null }>
       >();
-      const state: { roster: ReadonlyArray<unknown> | undefined } = { roster: undefined };
+      const state: { roster: ReadonlyArray<unknown> | undefined; terminal?: boolean } = {
+        roster: undefined,
+      };
       let wake = yield* Deferred.make<void>();
       yield* runtime.events.pipe(
         Stream.tap((event) =>
@@ -978,6 +987,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
               }
               childTurns.set(id, event.providerTurn.status);
             }
+            if (event.type === "turn.terminal") state.terminal = true;
             yield* Deferred.succeed(wake, undefined);
           }),
         ),
@@ -1047,6 +1057,42 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       });
       yield* watch.until(() => watch.calls.get("Again")?.status === "completed");
       assert.deepEqual(watch.calls.get("Again"), { status: "completed", result: "SECOND_OK" });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("settles skipped calls from their own answers when a later child report arrives", () =>
+    Effect.gen(function* () {
+      const answer = (text: string, run: number) =>
+        event("session.text.ended", {
+          sessionID: CHILD,
+          assistantMessageID: `msg_child_${run}`,
+          ordinal: 0,
+          text,
+        });
+      const { runtime, thread } = yield* resumed([
+        ...launchedAndRunning,
+        ...callAgain({ background: true }),
+        answer("FIRST_OK", 1),
+        event("session.execution.succeeded", { sessionID: CHILD }),
+        ...callAgain(
+          { background: true, description: "Later" },
+          { id: "call-later", writesRules: false },
+        ),
+        event("session.execution.started", { sessionID: CHILD }),
+        answer("SECOND_OK", 2),
+        event("session.execution.succeeded", { sessionID: CHILD }),
+        childReport("msg_report_2", "SECOND_OK"),
+        event("session.execution.succeeded", { sessionID: SESSION }),
+      ]);
+      const watch = yield* watchCalls(runtime, thread);
+      yield* runtime.startTurn(withLineage(thread));
+      yield* watch.until(() => watch.state.terminal === true);
+      assert.deepEqual(Object.fromEntries(watch.calls), {
+        Sleep: { status: "completed", result: "FIRST_OK" },
+        Again: { status: "completed", result: "FIRST_OK" },
+        Later: { status: "completed", result: "SECOND_OK" },
+      });
+      assert.deepEqual(watch.state.roster, []);
     }).pipe(Effect.scoped),
   );
 
