@@ -286,6 +286,7 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
   return yield* Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const progress = yield* makeStartupProgress();
+    const serverReady = yield* Deferred.make<void>();
     const bootstrapJson = yield* encodeBootstrapJson(options.bootstrap).pipe(
       Effect.mapError(
         (cause) =>
@@ -390,11 +391,11 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
     );
     yield* options.onStarted?.(handle.pid) ?? Effect.void;
     if (
-      options.bootstrap.desktopTelemetryControlFd !== undefined &&
-      options.onDesktopTelemetryControl !== undefined
+      options.bootstrapDelivery === "fd3" &&
+      options.bootstrap.desktopTelemetryControlFd !== undefined
     ) {
       const controlFd = options.bootstrap.desktopTelemetryControlFd;
-      const handleControl = options.onDesktopTelemetryControl;
+      const handleControl = options.onDesktopTelemetryControl ?? (() => Effect.void);
       const dispatch = yield* makeControlDispatch({
         handle: handleControl,
         onFailure: () =>
@@ -414,7 +415,11 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
         Stream.filter((line) => line.trim().length > 0),
         Stream.mapEffect((line) =>
           decodeDesktopTelemetryControlLine(line).pipe(
-            Effect.flatMap(dispatch.offer),
+            Effect.flatMap((message) =>
+              message.type === "serverReady"
+                ? Deferred.succeed(serverReady, undefined).pipe(Effect.as(true))
+                : dispatch.offer(message),
+            ),
             Effect.catchCause((cause) =>
               logBackendProcessWarning("ignored invalid desktop telemetry control message", {
                 fd: controlFd,
@@ -458,13 +463,16 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
     }
     // Cold WSL boots across /mnt/c can exceed one probe budget; retry while the backend is alive.
     const probeReadiness = Effect.fn("desktop.backendProcess.probeReadiness")(() =>
-      waitForHttpReady({
-        executablePath: options.executablePath,
-        entryPath: options.entryPath,
-        cwd: options.cwd,
-        httpBaseUrl: options.httpBaseUrl,
-        timeout: options.readinessTimeout ?? DEFAULT_BACKEND_READINESS_TIMEOUT,
-      }).pipe(
+      Effect.raceFirst(
+        waitForHttpReady({
+          executablePath: options.executablePath,
+          entryPath: options.entryPath,
+          cwd: options.cwd,
+          httpBaseUrl: options.httpBaseUrl,
+          timeout: options.readinessTimeout ?? DEFAULT_BACKEND_READINESS_TIMEOUT,
+        }),
+        Deferred.await(serverReady),
+      ).pipe(
         Effect.flatMap(() =>
           progress.ready.pipe(Effect.andThen(options.onReady?.() ?? Effect.void)),
         ),

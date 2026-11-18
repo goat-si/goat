@@ -1,3 +1,4 @@
+import { DesktopTelemetryReceiver } from "./resourceTelemetry/DesktopTelemetryReceiver.ts";
 import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
 import {
   CommandId,
@@ -845,6 +846,13 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
     yield* options?.activate ?? Effect.void;
     yield* Effect.logDebug("Accepting commands");
     yield* commandGate.signalCommandReady;
+    const receiver = yield* Effect.serviceOption(DesktopTelemetryReceiver);
+    if (Option.isSome(receiver)) {
+      yield* receiver.value.announceServerReady.pipe(
+        Effect.ignore({ log: true }),
+        Effect.forkScoped,
+      );
+    }
     yield* stopHeartbeat;
     yield* Ref.set(startupPhase, "publishing ready event");
     yield* Effect.logDebug("startup phase: publishing ready event");
