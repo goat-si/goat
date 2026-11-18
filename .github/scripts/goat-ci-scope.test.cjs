@@ -25,6 +25,7 @@ const {
   webBrowserTests,
 } = require("./goat-ci-scope.cjs");
 const fs = require("node:fs");
+const { fakeGraph } = require("./goat-ci-scope.testkit.cjs");
 const { buildImportGraph, listWorkspaceFiles } = require("./goat-ci-imports.cjs");
 
 // The real workspace and import graphs, so these cases follow the code as it exists.
@@ -34,17 +35,6 @@ const graph = buildImportGraph(root);
 const weights = readServerWeights(root);
 const select = (...files) => selectTasks(files, workspace, { graph, weights });
 const tasksFor = (...files) => select(...files).tasks;
-
-/** A hand-made graph: files maps each file to its source text, edges lists [importer, imported]. */
-function fakeGraph(files, edges = []) {
-  const importers = new Map();
-  for (const [from, to] of edges) {
-    if (!importers.has(to)) importers.set(to, new Set());
-    importers.get(to).add(from);
-  }
-  const sources = new Map(Object.entries(files).filter(([file]) => /\.[cm]?[jt]sx?$/.test(file)));
-  return { files: new Set(Object.keys(files)), sources, importers, packageDirs: ["apps/server"] };
-}
 
 describe("selectTasks", () => {
   it("runs every package when the shared provider environment scrubber changes", () => {
