@@ -701,6 +701,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
 
   func setPlaceholder(_ placeholder: String) {
     placeholderLabel.text = placeholder
+    textView.accessibilityLabel = placeholder
     setNeedsLayout()
   }
 

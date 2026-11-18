@@ -65,3 +65,10 @@ do {
   check(view.text.utf16.elementsEqual(normalized.utf16), "A renormalized chip kept the old UTF-16")
   print("Exact UTF-16 source passed")
 }
+
+do {
+  let view = makeEditor("")
+  view.setPlaceholder("Ask anything")
+  check(view.editor.accessibilityLabel == "Ask anything", "VoiceOver cannot name the message field")
+  print("Message field accessibility label passed")
+}
