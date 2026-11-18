@@ -1231,6 +1231,8 @@ export const OrchestrationV2ConversationMessage = Schema.Struct({
   notification: Schema.optional(OrchestrationV2Notification),
   ...OrchestrationV2CreationFields,
   scheduledTaskId: Schema.optional(ScheduledTaskId),
+  /** A scheduled delivery that omitted an explicit model selection. */
+  followsThreadSelection: Schema.optional(Schema.Literal(true)),
   senderThreadId: Schema.optional(ThreadId),
   /** Kept so stored rows and older clients decode; the server no longer writes or reads it. */
   senderRunId: Schema.optional(RunId),

@@ -1,3 +1,4 @@
+import { makeGoalCommandPolicy } from "./goat/GoalCommandPolicy.ts";
 import {
   holdUndeliveredSteers,
   runDeferredSteeringReactor,
@@ -646,47 +647,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const threadDispatch = yield* ThreadCommandExecutor.ThreadCommandExecutor;
   const messageIntake = yield* KeyedLock.make<ThreadId>();
 
-  /** The driver when this provider runs `/goal` natively, else undefined. */
-  const goalDriverFor = Effect.fn("Orchestrator.goalDriverFor")(function* (
-    command: OrchestrationV2ServerCommand,
-    providerInstanceId: ProviderInstanceId,
-  ) {
-    const adapter = yield* providerAdapters.get(providerInstanceId).pipe(mapDispatchError(command));
-    const { driver } = adapter;
-    if (driver === "opencode" || driver === "antigravity") {
-      const capabilities = yield* adapter.getCapabilities().pipe(mapDispatchError(command));
-      return capabilities.turns.supportsNativeGoals === true ? driver : undefined;
-    }
-    return driver === "codex" || driver === "claudeAgent" ? driver : undefined;
+  const { goalDriverFor, ensureGoalCommandSupported } = makeGoalCommandPolicy({
+    providerAdapters,
+    OrchestratorDispatchError,
   });
-
-  /** Unsupported goal controls can become new objectives in native providers. */
-  const ensureGoalCommandSupported = Effect.fn("Orchestrator.ensureGoalCommandSupported")(
-    function* (
-      command: OrchestrationV2ServerCommand,
-      message: { readonly text: string; readonly attachments: ReadonlyArray<ChatAttachment> },
-      providerInstanceId: ProviderInstanceId,
-    ) {
-      const goalCommand = parseGoalCommand(message);
-      if (goalCommand === null || goalCommand.type === "set") return;
-      const driver = yield* goalDriverFor(command, providerInstanceId);
-      if (driver === "antigravity") {
-        return yield* new OrchestratorDispatchError({
-          commandId: command.commandId,
-          commandType: command.type,
-          cause:
-            "Antigravity accepts /goal followed by an objective. Interrupt the running turn, then ask Antigravity to stop the current goal.",
-        });
-      }
-      if (goalCommand.type !== "pause" && goalCommand.type !== "resume") return;
-      if (driver !== "claudeAgent") return;
-      return yield* new OrchestratorDispatchError({
-        commandId: command.commandId,
-        commandType: command.type,
-        cause: "Claude goals cannot be paused or resumed. Send /goal clear to remove the goal.",
-      });
-    },
-  );
 
   const mapDispatchError =
     (command: OrchestrationV2ServerCommand) =>
@@ -1333,6 +1297,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
 
       const commandId = CommandId.make(`command:system:start-queued:${queuedRun.id}`);
+      if (queuedMessage.followsThreadSelection === true)
+        yield* ensureGoalCommandSupported(
+          { commandId, type: "message.dispatch" },
+          queuedMessage,
+          queuedRun.providerInstanceId,
+        );
       const now = yield* DateTime.now;
       const held = takeHeldPullRequestContext({
         thread: projection.thread,
@@ -1364,7 +1334,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ? activeProviderThread
           : rootProviderThreadsForProvider(projection, queuedRun.providerInstanceId)[0]
         : freshContext &&
-            (storedProviderThread.firstRunOrdinal !== null ||
+            (storedProviderThread.providerInstanceId !== queuedRun.providerInstanceId ||
+              storedProviderThread.firstRunOrdinal !== null ||
               storedProviderThread.nativeThreadRef !== null)
           ? undefined
           : storedProviderThread;
@@ -4238,6 +4209,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly createdBy: OrchestrationV2ConversationMessage["createdBy"];
     readonly creationSource: OrchestrationV2ConversationMessage["creationSource"];
     readonly scheduledTaskId?: OrchestrationV2ConversationMessage["scheduledTaskId"];
+    readonly followsThreadSelection?: true | undefined;
     readonly senderThreadId?: OrchestrationV2ConversationMessage["senderThreadId"];
     readonly idleCompaction?: OrchestrationV2ConversationMessage["idleCompaction"];
     readonly delegatedCompletion?: OrchestrationV2ConversationMessage["delegatedCompletion"];
@@ -4388,6 +4360,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(input.scheduledTaskId === undefined
             ? {}
             : { scheduledTaskId: input.scheduledTaskId }),
+          ...(input.followsThreadSelection === true ? { followsThreadSelection: true } : {}),
           ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
           ...(input.idleCompaction === undefined ? {} : { idleCompaction: input.idleCompaction }),
           id: input.messageId,
@@ -5720,7 +5693,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       dispatchMode.type === "start_immediately" ||
       dispatchMode.type === "queue_after_active";
     const shouldQueue = queueBehindRun !== undefined && startsOrQueuesRun;
-    const incomingMessage = { ...command, delegatedCompletion };
+    const followsThreadSelection =
+      command.scheduledTaskId !== undefined && command.modelSelection === undefined
+        ? (true as const)
+        : undefined;
+    const incomingMessage = { ...command, delegatedCompletion, followsThreadSelection };
     if (
       shouldQueue &&
       steerWhenReadyAttemptId === undefined &&
@@ -5977,6 +5954,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(command.scheduledTaskId === undefined
           ? {}
           : { scheduledTaskId: command.scheduledTaskId }),
+        ...(followsThreadSelection === true ? { followsThreadSelection } : {}),
         ...(command.senderThreadId === undefined ? {} : { senderThreadId: command.senderThreadId }),
         ...(command.idleCompaction === undefined ? {} : { idleCompaction: command.idleCompaction }),
         id: command.messageId,
@@ -8576,8 +8554,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Queued run ${command.queuedRunId} is not queued.`,
       });
     }
+    const modelSelection = queuedRunModelSelection(projection, queuedRun);
     const promotionAdapter = yield* providerAdapters
-      .get(queuedRun.providerInstanceId)
+      .get(modelSelection.instanceId)
       .pipe(mapDispatchError(command));
     const promotionCapabilities = yield* promotionAdapter
       .getCapabilities()
@@ -8586,7 +8565,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       commandPolicy.ensureFollowUp({
         commandId: command.commandId,
         threadId: command.threadId,
-        providerInstanceId: queuedRun.providerInstanceId,
+        providerInstanceId: modelSelection.instanceId,
         capabilities: promotionCapabilities,
         projection,
         excludingRunId: queuedRun.id,
@@ -8638,7 +8617,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const parsedGoalCommand = parseGoalCommand(queuedMessage);
     const goalCommand =
       parsedGoalCommand === null ||
-      (yield* goalDriverFor(command, queuedRun.providerInstanceId)) === undefined
+      (yield* goalDriverFor(command, modelSelection.instanceId)) === undefined
         ? null
         : parsedGoalCommand;
     const target = projection.runs.find((run) => run.id === command.targetRunId);
@@ -8651,7 +8630,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       isCompactionCommandMessage(targetMessage)
     ) {
       if (goalCommand !== null) {
-        yield* ensureGoalCommandSupported(command, queuedMessage, queuedRun.providerInstanceId);
+        yield* ensureGoalCommandSupported(command, queuedMessage, modelSelection.instanceId);
       }
       yield* emitEvent({
         type: "run.updated",
@@ -8684,7 +8663,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     }
     if (goalCommand !== null) {
-      yield* ensureGoalCommandSupported(command, queuedMessage, queuedRun.providerInstanceId);
+      yield* ensureGoalCommandSupported(command, queuedMessage, modelSelection.instanceId);
       const goal = projection.providerThreads.find(
         (candidate) => candidate.id === target?.providerThreadId,
       )?.goal;
@@ -8785,10 +8764,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       effects,
       projection,
       modelSelection:
-        queuedMessage.createdBy === "agent"
-          ? (projection.runs.find((run) => run.id === command.targetRunId)?.modelSelection ??
-            projection.thread.modelSelection)
-          : queuedRun.modelSelection,
+        queuedMessage.createdBy === "agent" && queuedMessage.scheduledTaskId === undefined
+          ? (target?.modelSelection ?? projection.thread.modelSelection)
+          : modelSelection,
       targetRunId: command.targetRunId,
       messageId: queuedMessage.id,
       text: queuedMessage.text,
@@ -8799,6 +8777,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(queuedMessage.scheduledTaskId === undefined
         ? {}
         : { scheduledTaskId: queuedMessage.scheduledTaskId }),
+      followsThreadSelection: queuedMessage.followsThreadSelection,
       ...(queuedMessage.senderThreadId === undefined
         ? {}
         : { senderThreadId: queuedMessage.senderThreadId }),
@@ -9010,7 +8989,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     yield* ensureGoalCommandSupported(
       command,
       { text: command.text, attachments: command.attachments ?? queuedMessage.attachments },
-      queuedRun.providerInstanceId,
+      queuedRunModelSelection(projection, queuedRun).instanceId,
     );
     const queuedTurnItem = projection.turnItems.find(
       (candidate) => candidate.type === "user_message" && candidate.messageId === queuedMessage.id,
