@@ -295,6 +295,59 @@ async function matchesSnapshot(
   return backupFiles.size === 0;
 }
 
+async function validWal(path: string): Promise<boolean> {
+  const stat = await NodeFSP.stat(path);
+  if (!stat.isFile()) return false;
+  if (stat.size === 0) return true;
+
+  await using wal = await NodeFSP.open(path, "r");
+  const header = Buffer.alloc(32);
+  if ((await wal.read(header)).bytesRead !== header.length) return false;
+  const magic = header.readUInt32BE(0);
+  const pageSize = header.readUInt32BE(8);
+  const frameSize = pageSize + 24;
+  if (
+    (magic !== 0x377f0682 && magic !== 0x377f0683) ||
+    header.readUInt32BE(4) !== 3007000 ||
+    pageSize < 512 ||
+    pageSize > 65536 ||
+    (pageSize & (pageSize - 1)) !== 0 ||
+    (stat.size - header.length) % frameSize !== 0
+  ) {
+    return false;
+  }
+
+  // SQLite's WAL checksum runs across the header and all frame payloads.
+  const littleEndian = magic === 0x377f0682;
+  let first = 0;
+  let second = 0;
+  const checksum = (view: DataView, start: number, end: number) => {
+    for (let offset = start; offset < end; offset += 8) {
+      first = (first + view.getUint32(offset, littleEndian) + second) >>> 0;
+      second = (second + view.getUint32(offset + 4, littleEndian) + first) >>> 0;
+    }
+  };
+  checksum(new DataView(header.buffer, header.byteOffset, header.length), 0, 24);
+  if (first !== header.readUInt32BE(24) || second !== header.readUInt32BE(28)) return false;
+
+  const frame = Buffer.alloc(frameSize);
+  const frameView = new DataView(frame.buffer, frame.byteOffset, frame.length);
+  for (let offset = header.length; offset < stat.size; offset += frameSize) {
+    if ((await wal.read(frame)).bytesRead !== frameSize) return false;
+    if (
+      frame.readUInt32BE(0) === 0 ||
+      frame.readUInt32BE(8) !== header.readUInt32BE(16) ||
+      frame.readUInt32BE(12) !== header.readUInt32BE(20)
+    ) {
+      return false;
+    }
+    checksum(frameView, 0, 8);
+    checksum(frameView, 24, frameSize);
+    if (first !== frame.readUInt32BE(16) || second !== frame.readUInt32BE(20)) return false;
+  }
+  return true;
+}
+
 async function usableDatabase(file: string): Promise<boolean> {
   let scratch: string | undefined;
   try {
@@ -310,28 +363,7 @@ async function usableDatabase(file: string): Promise<boolean> {
     const walPath = `${file}-wal`;
     let uri = NodeURL.pathToFileURL(file);
     if (await pathExists(walPath)) {
-      const walSize = await NodeFSP.stat(walPath);
-      if (!walSize.isFile()) return false;
-      if (walSize.size > 0) {
-        const header = Buffer.alloc(32);
-        const wal = await NodeFSP.open(walPath, "r");
-        try {
-          if ((await wal.read(header)).bytesRead !== header.length) return false;
-        } finally {
-          await wal.close();
-        }
-        const magic = header.readUInt32BE(0);
-        const pageSize = header.readUInt32BE(8);
-        if (
-          (magic !== 0x377f0682 && magic !== 0x377f0683) ||
-          pageSize < 512 ||
-          pageSize > 65536 ||
-          (pageSize & (pageSize - 1)) !== 0 ||
-          (walSize.size - header.length) % (pageSize + 24) !== 0
-        ) {
-          return false;
-        }
-      }
+      if (!(await validWal(walPath))) return false;
       // SQLite may create or rewrite the WAL index even on a read-only connection.
       scratch = await NodeFSP.mkdtemp(NodePath.join(NodePath.dirname(file), ".goat-db-check-"));
       const copy = NodePath.join(scratch, "database");

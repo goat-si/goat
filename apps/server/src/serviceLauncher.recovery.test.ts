@@ -12,7 +12,7 @@ import { writeFakeRuntime } from "./serviceLauncher.testkit.ts";
 
 const lockModule = JSON.stringify(new URL("./serverOwnerLockFile.ts", import.meta.url).href);
 
-const fixture = (trial: string) =>
+const fixture = (trial: string, previousAction = "") =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -41,7 +41,10 @@ const fixture = (trial: string) =>
       },
     };
     const previous = `import { writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+const dbPath = ${JSON.stringify(dbPath)};
 writeFileSync(${JSON.stringify(previousStarted)}, "");
+${previousAction}
 process.exit(0);`;
     yield* writeFakeRuntime(fs, path, path.join(runtime, "goat", "versions", "1.0.0"), previous);
     yield* writeFakeRuntime(
@@ -263,5 +266,53 @@ process.exit(1);
       assert.deepEqual(yield* f.fs.readFile(f.dbPath), f.baseline);
       assert.deepEqual(yield* f.fs.readFile(snapshot), f.baseline);
     }),
+  );
+
+  it.effect.each(["header checksum", "frame salt", "frame checksum"] as const)(
+    "blocks a full-length WAL with a bad %s after manual acknowledgement",
+    (damage) =>
+      Effect.gen(function* () {
+        const f = yield* fixture(
+          "process.exit(1);",
+          'const db = new DatabaseSync(dbPath); db.prepare("SELECT * FROM messages").all(); db.close();',
+        );
+        const walPath = f.dbPath + "-wal";
+        let main: Uint8Array;
+        let validWal: Buffer;
+        {
+          using db = new NodeSqlite.DatabaseSync(f.dbPath);
+          db.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
+          main = yield* f.fs.readFile(f.dbPath);
+          db.exec("INSERT INTO messages VALUES ('first commit');");
+          db.exec("INSERT INTO messages VALUES ('second commit');");
+          validWal = Buffer.from(yield* f.fs.readFile(walPath));
+        }
+        const frameSize = 24 + validWal.readUInt32BE(8);
+        const lastFrame = validWal.length - frameSize;
+        assert.isAbove(lastFrame, 32);
+        assert.isAbove(validWal.readUInt32BE(lastFrame + 4), 0);
+        const damaged = Buffer.from(validWal);
+        const offset = {
+          "header checksum": 24,
+          "frame salt": lastFrame + 8,
+          "frame checksum": lastFrame + 24,
+        }[damage];
+        damaged.writeUInt8(damaged.readUInt8(offset) ^ 1, offset);
+        yield* f.fs.writeFile(f.dbPath, main);
+        yield* f.fs.writeFile(walPath, damaged);
+        yield* f.fs.writeFileString(
+          f.path.join(f.runtime, "db-update-recovery.phase"),
+          "keep-live\n",
+        );
+        yield* expectBlocked(f);
+        assert.deepEqual(yield* f.fs.readFile(f.dbPath), main);
+        assert.deepEqual(Buffer.from(yield* f.fs.readFile(walPath)), damaged);
+
+        yield* f.fs.writeFile(walPath, validWal);
+        assert.include(String(yield* f.run()), "Active child exited unexpectedly");
+        assert.isTrue(yield* f.fs.exists(f.previousStarted));
+        using db = new NodeSqlite.DatabaseSync(f.dbPath, { readOnly: true });
+        assert.equal(db.prepare("SELECT count(*) AS count FROM messages").get()?.count, 3);
+      }),
   );
 });
