@@ -32,6 +32,12 @@ export const makeNavigationProbe = (debuggee: Pick<Electron.Debugger, "sendComma
   };
 };
 
+export const needsNavigationProbe = (operation: string) =>
+  operation === "goBack" ||
+  operation === "goForward" ||
+  operation === "refresh" ||
+  operation === "hardReload";
+
 export const computeNavStatus = (wc: Electron.WebContents): PreviewNavStatus => {
   const url = wc.getURL();
   const title = wc.getTitle();

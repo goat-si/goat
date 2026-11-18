@@ -1,4 +1,4 @@
-import { computeNavStatus, makeNavigationProbe } from "./previewNavigation.ts";
+import * as PreviewNavigation from "./previewNavigation.ts";
 import { confirmPreviewPaint } from "./confirmPreviewPaint.ts";
 import { isPreviewInputSignal } from "./previewInputSignal.ts";
 import {
@@ -223,7 +223,7 @@ interface BrowserControlSession {
   readonly webContentsId: number;
   // Retain the attached Debugger to prevent GC crashes (electron/electron#53376); wc.debugger throws after destruction.
   readonly debugger: Electron.Debugger;
-  readonly navigation: ReturnType<typeof makeNavigationProbe>;
+  readonly navigation: ReturnType<typeof PreviewNavigation.makeNavigationProbe>;
   readonly semaphore: Semaphore.Semaphore;
   readonly scope: Scope.Closeable;
   readonly onMessage: (
@@ -827,7 +827,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
               yield* Queue.offer(consoleReleases, undefined);
             }
           });
-          const navigation = makeNavigationProbe(wcDebugger);
+          const navigation = PreviewNavigation.makeNavigationProbe(wcDebugger);
           const onMessage: BrowserControlSession["onMessage"] = (_event, method, params) => {
             navigation.observe(method);
             runFork(handleDebuggerMessage(method, params));
@@ -940,7 +940,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       confirmedNavigation = false,
     ) {
       if (wc.isDestroyed()) return;
-      const computedNavStatus = computeNavStatus(wc);
+      const computedNavStatus = PreviewNavigation.computeNavStatus(wc);
       const canGoBack = wc.navigationHistory.canGoBack();
       const canGoForward = wc.navigationHistory.canGoForward();
       const updatedAt = yield* currentIso;
@@ -1645,7 +1645,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             failure && (pendingUrl === null || pendingUrl === failure.url)
               ? { kind: "LoadFailed", title: wc.getTitle(), ...failure }
               : pendingUrl === null
-                ? computeNavStatus(wc)
+                ? PreviewNavigation.computeNavStatus(wc)
                 : current.navStatus,
           canGoBack: wc.navigationHistory.canGoBack(),
           canGoForward: wc.navigationHistory.canGoForward(),
@@ -1852,7 +1852,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     use: (wc: Electron.WebContents) => void,
   ) {
     const wc = yield* requireWebContents(tabId);
-    if (operation !== "stopLoading") yield* leaveBusyPage(wc);
+    if (PreviewNavigation.needsNavigationProbe(operation)) yield* leaveBusyPage(wc);
     yield* attempt({ operation, tabId, webContentsId: wc.id }, () => use(wc));
   });
 
