@@ -173,6 +173,7 @@ vi.mock("~/state/threads", async (original) => {
             removeRoute: unexpected,
             reorderRoutes: unexpected,
             removeRelayEnvironments: unexpected,
+            setPenLive: unexpected,
             retryNow: () => Effect.void,
             reconnect: () => Effect.void,
             setEnabled: unexpected,
