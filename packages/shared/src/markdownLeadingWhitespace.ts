@@ -395,6 +395,33 @@ function positionedSource(text: string): Source | undefined {
   return { text, lineStarts };
 }
 
+// GFM misses some URLs md4c accepts, including FTP and single-label hosts.
+const NATIVE_SCHEME_LINK =
+  /(?:https?|ftp):\/\/[a-z0-9_][^\s<>"'\[\]{}()]*(?:\([^\s()]*\)[^\s<>"'\[\]{}()]*)*/iy;
+
+function nativeLinkAt(markdown: string, offset: number, content: MarkdownNode) {
+  const end = content.position?.end.offset;
+  if (
+    content.type === "link" &&
+    content.url &&
+    content.position?.start.offset === offset &&
+    end !== undefined &&
+    markdown[offset] !== "[" &&
+    markdown[offset] !== "<"
+  ) {
+    const label = markdown.slice(offset, end);
+    if (content.url === label || content.url === `mailto:${label}`) {
+      return { end, text: `<${label}>` };
+    }
+    const escaped = label.replace(/[\\[\]`*_~.:@&]/g, (char) => `&#${char.charCodeAt(0)};`);
+    const href = content.url.replaceAll("&", "&amp;").replaceAll(">", "%3E");
+    return { end, text: `[${escaped}](<${href}>)` };
+  }
+  NATIVE_SCHEME_LINK.lastIndex = offset;
+  const url = NATIVE_SCHEME_LINK.exec(markdown)?.[0].replace(/[?!.,:;*]+$/, "");
+  return url ? { end: offset + url.length, text: `<${url}>` } : undefined;
+}
+
 export function markdownWithLeadingWhitespace(
   markdown: string,
   parse: (text: string) => Root,
@@ -410,22 +437,9 @@ export function markdownWithLeadingWhitespace(
       nativeMath,
       onIndentation: ({ offset, value }, content) => {
         const whitespace = value.replaceAll(" ", "&#32;").replaceAll("\t", "&#9;");
-        const end = content.position?.end.offset;
         // An entity's semicolon prevents md4c from recognizing a following bare link.
-        if (
-          content.type === "link" &&
-          content.url &&
-          content.position?.start.offset === offset &&
-          end !== undefined &&
-          markdown[offset] !== "[" &&
-          markdown[offset] !== "<"
-        ) {
-          const label = markdown.slice(offset, end).replace(/[\\[\]`*_~]/g, "\\$&");
-          const href = content.url.replaceAll("&", "&amp;").replaceAll(">", "%3E");
-          edits.set(offset, { end, text: `${whitespace}[${label}](<${href}>)` });
-        } else {
-          edits.set(offset, { end: offset, text: whitespace });
-        }
+        const link = nativeLinkAt(markdown, offset, content);
+        edits.set(offset, { end: link?.end ?? offset, text: whitespace + (link?.text ?? "") });
       },
     },
     parse(markdown),

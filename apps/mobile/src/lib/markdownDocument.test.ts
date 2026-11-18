@@ -168,3 +168,18 @@ it.each([
   expect(original?.children?.[0]?.content).toBe(tex);
   expect(math(await parseMarkdown(markdown, flags))).toEqual(original);
 });
+
+it.each(["ftp://example.com/path", "https://example.com/a?b=1&c=2"])(
+  "preserves one native link with the original destination %s",
+  async (destination) => {
+    const flags = { ...MOBILE_FLAGS, hardSoftBreaks: true };
+    const markdown = markdownForNativeRendering(
+      `Plan\n ${destination}.`,
+      ENRICHED_INLINE_FILE_LINK_REGEX,
+      true,
+    );
+    expect(inline(await parseMarkdown(markdown, flags))).toBe(
+      `Plan <a ${destination}>${destination}</a>.`,
+    );
+  },
+);
