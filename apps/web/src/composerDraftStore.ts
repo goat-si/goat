@@ -2955,10 +2955,9 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return;
           }
           const instanceKey = options?.instanceId ?? defaultInstanceIdForDriver(normalizedProvider);
+          const shownModel = normalizeCustomModelSlug(options?.model);
           const fallbackModel =
-            normalizeCustomModelSlug(options?.model) ??
-            DEFAULT_MODEL_BY_PROVIDER[normalizedProvider] ??
-            DEFAULT_MODEL;
+            shownModel ?? DEFAULT_MODEL_BY_PROVIDER[normalizedProvider] ?? DEFAULT_MODEL;
           const providerOpts =
             nextProviderOptions && nextProviderOptions.length > 0 ? nextProviderOptions : undefined;
 
@@ -2970,7 +2969,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             const currentForProvider = nextMap[instanceKey];
             nextMap[instanceKey] = createModelSelection(
               instanceKey,
-              currentForProvider?.model ?? fallbackModel,
+              shownModel ?? currentForProvider?.model ?? fallbackModel,
               providerOpts,
             );
 
@@ -2983,32 +2982,27 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 nextStickyMap[instanceKey] ??
                 base.modelSelectionByProvider[instanceKey] ??
                 createModelSelection(instanceKey, fallbackModel);
-              const rememberedModel = normalizeCustomModelSlug(options?.model) ?? stickyBase.model;
-              if (providerOpts) {
+              const rememberedModel = shownModel ?? stickyBase.model;
+              if (
+                rememberedModel === stickyBase.model &&
+                (providerOpts || stickyBase.options?.length)
+              ) {
                 nextStickyMap[instanceKey] = createModelSelection(
                   instanceKey,
                   stickyBase.model,
                   providerOpts,
                 );
-                nextOptionsByModel = {
-                  ...state.stickyOptionsByModelByProvider,
-                  [instanceKey]: {
-                    ...state.stickyOptionsByModelByProvider[instanceKey],
-                    [rememberedModel]: providerOpts,
-                  },
-                };
-              } else if ((stickyBase.options?.length ?? 0) > 0) {
-                const { options: _, ...rest } = stickyBase;
-                nextStickyMap[instanceKey] = rest as ModelSelection;
-                const rememberedByModel = {
-                  ...state.stickyOptionsByModelByProvider[instanceKey],
-                };
-                delete rememberedByModel[rememberedModel];
-                nextOptionsByModel = {
-                  ...state.stickyOptionsByModelByProvider,
-                  [instanceKey]: rememberedByModel,
-                };
               }
+              const rememberedByModel = { ...state.stickyOptionsByModelByProvider[instanceKey] };
+              if (providerOpts) {
+                rememberedByModel[rememberedModel] = providerOpts;
+              } else {
+                delete rememberedByModel[rememberedModel];
+              }
+              nextOptionsByModel = {
+                ...state.stickyOptionsByModelByProvider,
+                [instanceKey]: rememberedByModel,
+              };
               nextStickyActiveProvider = options.instanceId
                 ? instanceKey
                 : (base.activeProvider ?? instanceKey);

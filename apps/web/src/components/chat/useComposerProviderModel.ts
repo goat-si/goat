@@ -1,3 +1,4 @@
+import { threadHasStarted } from "../../lib/chatThreadActions";
 import { type DraftId } from "../../composerDraftStore";
 import {
   deriveEffectiveComposerModelState,
@@ -33,6 +34,7 @@ export function useComposerProviderModel(
     readonly providerStatuses: ReadonlyArray<ServerProvider>;
     readonly settings: UnifiedSettings;
     readonly activeProjectId: ProjectId | null;
+    readonly thread: Parameters<typeof threadHasStarted>[0];
     readonly threadRef: ScopedThreadRef | DraftId;
     readonly threadModelSelection: ModelSelection | null | undefined;
     readonly projectModelSelection: ModelSelection | null | undefined;
@@ -44,6 +46,7 @@ export function useComposerProviderModel(
     settings,
     activeProjectId,
     threadRef,
+    threadStarted,
     threadModelSelection,
     projectModelSelection,
     promptInjectionState,
@@ -51,7 +54,7 @@ export function useComposerProviderModel(
     lockedProvider,
     lockedInstanceId,
   } = input;
-  const draftModelState = useComposerDraftModelState(threadRef);
+  const draftModelState = useComposerDraftModelState(threadRef, threadStarted);
   const providerInstanceEntries: ReadonlyArray<ProviderInstanceEntry> = sortProviderInstanceEntries(
     applyProviderInstanceSettings(
       deriveProviderInstanceEntries(providerStatuses),
@@ -61,7 +64,7 @@ export function useComposerProviderModel(
   );
   const selection = resolveComposerProviderSelection({
     entries: providerInstanceEntries,
-    candidateInstanceIds,
+    candidateInstanceIds: [draftModelState.activeProvider, ...candidateInstanceIds],
     lockedProvider,
     lockedInstanceId,
   });
@@ -71,6 +74,7 @@ export function useComposerProviderModel(
     selection.selectedProviderEntry?.driverKind ?? selection.requestedDriverKind;
   const modelState = deriveEffectiveComposerModelState({
     draft: draftModelState,
+    threadStarted,
     providers: providerStatuses,
     selectedProvider,
     selectedInstanceId,

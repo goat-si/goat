@@ -1,3 +1,4 @@
+import { draftModelSelectionApplies, threadHasStarted } from "~/lib/chatThreadActions";
 import { isAttachmentOnlyBootstrapPrompt } from "@goat/shared/composerContextReferences";
 import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
 import { type ModelSelection, repositoryGroupingKeyOf, type ServerProvider } from "@goat/contracts";
@@ -44,15 +45,18 @@ export function composerPromptLink(input: {
   readonly target: ComposerThreadTarget;
   readonly project: EnvironmentProject | undefined;
   readonly providers: ReadonlyArray<ServerProvider>;
-  readonly threadModelSelection: ModelSelection | null;
+  readonly thread:
+    | (NonNullable<Parameters<typeof threadHasStarted>[0]> & { modelSelection: ModelSelection })
+    | undefined;
   readonly withContext: boolean;
 }): string | null {
   const draft = useComposerDraftStore.getState().getComposerDraft(input.target);
   if (!draft) return null;
   if (!input.withContext) return promptLinkFor(draft.prompt);
   const selection =
-    (draft.activeProvider ? draft.modelSelectionByProvider[draft.activeProvider] : undefined) ??
-    input.threadModelSelection;
+    (draft.activeProvider && draftModelSelectionApplies(draft, threadHasStarted(input.thread))
+      ? draft.modelSelectionByProvider[draft.activeProvider]
+      : undefined) ?? input.thread?.modelSelection;
   const provider = selection
     ? (input.providers.find((candidate) => candidate.instanceId === selection.instanceId)?.driver ??
       null)
