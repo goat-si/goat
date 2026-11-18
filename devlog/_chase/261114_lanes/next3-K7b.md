@@ -359,3 +359,11 @@ The config and RPC schemas keep their existing fields and auth behavior. The mac
 The coordinator accepted one fix on `d2167acc0c`. A mounted refresh with no snapshot and an exhausted budget must restart when the installed CLI changes under an equal machine digest. One client key uses the digest and the installation fields already used by the cwd cache. The cache and mounted watch compare that key. Existing late-reply behavior, wire shapes, and refresh scopes stay compatible with older peers. Verify the mounted case failing first, then the whole changed tests and the lane gate.
 
 After the fix READY, the coordinator authorized starting K7b-1 on top as a separate range, in order `9557ab46c5`, `dc3fdc6a3e`, `2482b03a01`. The coordinator owns both merges.
+
+### K7b-2 fix round 3 READY
+
+Published `35d0b94501cf52ee11fa2c9487926ab57e11f42d` as one commit on `d2167acc0c`. The mounted regression exhausted three attempts, kept both digest and snapshot absence constant, changed only installedVersion, and failed because it never made the fourth request. The shared key now drives the cwd snapshot cache and mounted watch across digests and installation fields. The regression passes with a new bounded set of three attempts. The late-reply and older-server cases are unchanged.
+
+- `GOAT_TEST_TMP_GUARD=fail vp run check:changed origin/chase/t3-261114-next3` exited 0, checking 38 packages and passing 4,150 tests across 245 files.
+- Whole-file runs passed 69 server tests with the temp guard from apps/server and 82 workspace tests. The changed client-runtime tests passed 78 in a focused run.
+- NOT RUN: P1 mobile/live-client passes, GitHub CI, older binaries, and full builds/suites. K7b-1 starts on this exact published head as a separate range per the coordinator.
