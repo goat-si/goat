@@ -11,7 +11,12 @@ import {
   questionAttachmentDraftsAtom,
   schedulePersistComposerState,
 } from "./use-composer-drafts";
-import { returnUnsentAnswersToThreadDraft } from "./unsent-question-answers";
+import {
+  returnUnsentAnswersToThreadDraft,
+  setUserInputDraftCustomAnswer,
+  setUserInputDraftOption,
+  userInputDraftsByRequestKeyAtom,
+} from "./user-input-drafts";
 import {
   composerAttachmentUploadsAtom,
   composerAttachmentUploadBlockReason,
@@ -36,72 +41,18 @@ import {
   userInputDraftKey,
 } from "@goat/client-runtime/state/thread-requests";
 import { AuthOrchestrationOperateScope } from "@goat/contracts";
-import { Atom } from "effect/reactivity";
 
 import { environmentThreadDetails, threadEnvironment } from "../state/threads";
-import {
-  buildPendingUserInputAnswers,
-  setPendingUserInputCustomAnswer,
-  togglePendingUserInputOptionSelection,
-  type PendingUserInputDraftAnswer,
-} from "../lib/threadActivity";
+import { buildPendingUserInputAnswers } from "../lib/threadActivity";
 import { appAtomRegistry } from "./atom-registry";
 import { useSelectedThreadPendingRequests } from "./use-thread-detail";
 import { useThreadSelection } from "./use-thread-selection";
 import { useAtomCommand } from "./use-atom-command";
 import { readEnvironmentScope } from "./session";
+import { canStartSideChat, questionDraftHasContent, sideChatAnswer } from "./answer-side-chat";
+import { useSideChatCommand } from "../features/threads/useSideChatCommand";
 
 const EMPTY_PENDING_REQUESTS: PendingThreadRequests = { approvals: [], userInputs: [] };
-
-const userInputDraftsByRequestKeyAtom = Atom.make<
-  Record<string, Record<string, PendingUserInputDraftAnswer>>
->({}).pipe(Atom.keepAlive, Atom.withLabel("mobile:user-input-drafts"));
-
-// Writes start from the suggested answer the user was looking at.
-function seededDraft(
-  drafts: Record<string, PendingUserInputDraftAnswer> | undefined,
-  question: ThreadUserInputQuestion,
-): PendingUserInputDraftAnswer | undefined {
-  return seedUserInputDraftAnswers([question], drafts ?? {})[question.id];
-}
-
-function setUserInputDraftOption(
-  requestKey: string,
-  question: ThreadUserInputQuestion,
-  value: string,
-): void {
-  const current = appAtomRegistry.get(userInputDraftsByRequestKeyAtom);
-  appAtomRegistry.set(userInputDraftsByRequestKeyAtom, {
-    ...current,
-    [requestKey]: {
-      ...current[requestKey],
-      [question.id]: togglePendingUserInputOptionSelection(
-        question,
-        seededDraft(current[requestKey], question),
-        value,
-      ),
-    },
-  });
-}
-
-function setUserInputDraftCustomAnswer(
-  requestKey: string,
-  question: ThreadUserInputQuestion,
-  customAnswer: string,
-): void {
-  const current = appAtomRegistry.get(userInputDraftsByRequestKeyAtom);
-  appAtomRegistry.set(userInputDraftsByRequestKeyAtom, {
-    ...current,
-    [requestKey]: {
-      ...current[requestKey],
-      [question.id]: setPendingUserInputCustomAnswer(
-        question,
-        seededDraft(current[requestKey], question),
-        customAnswer,
-      ),
-    },
-  });
-}
 
 /** Drops a thread's answer and attachment drafts for every request outside `pendingRequestIds`. */
 function pruneResolvedRequestDrafts(
@@ -191,7 +142,8 @@ export function useSelectedThreadRequests() {
     threadEnvironment.dismissUserInput,
     "thread user input dismissal",
   );
-  const { selectedThread: selectedThreadShell } = useThreadSelection();
+  const { selectedThread: selectedThreadShell, selectedEnvironmentRuntime } = useThreadSelection();
+  const sideChatCommand = useSideChatCommand();
   const pendingRequests = useSelectedThreadPendingRequests();
   const userInputDraftsByRequestKey = useAtomValue(userInputDraftsByRequestKeyAtom);
   const userInputResponsesInFlight = useRef(new Set<string>());
@@ -366,6 +318,43 @@ export function useSelectedThreadRequests() {
       return;
     }
 
+    const questionKey = (questionId: string) =>
+      questionAttachmentDraftKey(
+        selectedThreadShell.environmentId,
+        selectedThreadShell.id,
+        activePendingUserInput.requestId,
+        questionId,
+      );
+    const sideChat = sideChatAnswer({
+      questions: activePendingUserInput.questions,
+      customAnswer: (question) => activePendingUserInputAnswerDrafts[question.id]?.customAnswer,
+      hasAttachmentsOrContext: (question) =>
+        questionDraftHasContent(appAtomRegistry.get(composerDraftsAtom)[questionKey(question.id)]),
+      sideChatAvailable: () => canStartSideChat(selectedThreadShell),
+    });
+    if (sideChat !== null) {
+      // As in the composer: the question stays pending, and the command leaves the answer once
+      // the side chat has started.
+      await sideChatCommand({
+        thread: selectedThreadShell,
+        threadKey: questionKey(sideChat.question.id),
+        text: `/side ${sideChat.prompt}`,
+        hasAttachmentsOrContext: false,
+        connected: selectedEnvironmentRuntime?.connectionState === "connected",
+        onStarted: () =>
+          setUserInputDraftCustomAnswer(
+            userInputDraftKey(
+              selectedThreadShell.environmentId,
+              selectedThreadShell.id,
+              activePendingUserInput.requestId,
+            ),
+            sideChat.question,
+            "",
+          ),
+      });
+      return;
+    }
+
     const responseKey = questionAttachmentDraftKey(
       selectedThreadShell.environmentId,
       selectedThreadShell.id,
@@ -436,8 +425,11 @@ export function useSelectedThreadRequests() {
   }, [
     activePendingUserInput,
     activePendingUserInputAnswers,
+    activePendingUserInputAnswerDrafts,
     respondToUserInput,
     selectedThreadShell,
+    selectedEnvironmentRuntime,
+    sideChatCommand,
   ]);
 
   const onDismissUserInput = useCallback(async () => {

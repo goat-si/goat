@@ -16,6 +16,9 @@ import {
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- the SDK's spawned CLI is a Node ChildProcess.
 import * as NodeChildProcess from "node:child_process";
 import { spawnClaudeProcessGroup, spawnClaudeWindowsProcess } from "./ClaudeProcessSpawn.ts";
+import { makeClaudeDescendantSampler, readClaudeProcessTable } from "./ClaudeDescendants.ts";
+import * as ProcessRunner from "../../processRunner.ts";
+import * as ProviderProcesses from "../../process/providerProcesses.ts";
 import { lastClaudeTranscriptModel } from "./ClaudeForkedSkillModel.ts";
 import { AgentScope, nodeChildAgentProcess } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -43,14 +46,29 @@ import {
 } from "../../provider/EventNdjsonLogger.ts";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import {
+  CLAUDE_ROOT_REFUSAL,
+  ClaudeAgentSdkQueryRunnerError,
+  ClaudeCodeRootRefusalError,
+  ClaudeMcpRegistrationTimeoutError,
+  isClaudeMcpRegistrationTimeoutError,
+  queryRunnerError,
+} from "./ClaudeQueryRunnerErrors.ts";
+export {
+  ClaudeAgentSdkQueryRunnerError,
+  ClaudeBackgroundWorkBlocksQueryReplacementError,
+  claudeProcessExitFailure,
+  queryRunnerError,
+} from "./ClaudeQueryRunnerErrors.ts";
 
 const CLAUDE_PROVIDER = ProviderDriverKind.make("claudeAgent");
 const CLAUDE_AGENT_SDK_QUERY_PROTOCOL = "claude-agent-sdk.query" as const;
 const CLAUDE_SCRIPT_EXTENSIONS = [".js", ".mjs", ".tsx", ".ts", ".jsx"];
 // The SDK has no control-request deadline; the CLI waits up to 30 s per MCP server.
 const CLAUDE_MCP_REGISTRATION_TIMEOUT = "90 seconds";
-const CLAUDE_ROOT_REFUSAL =
-  "--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons";
+const CLAUDE_BOOT_TIMEOUT = "5 minutes";
+// How often CLIs no agent scope holds have their process trees recorded, all from one table.
+const CLAUDE_DESCENDANT_POLL = "1 second";
 
 export const CLAUDE_CODE_PRESET_TOOLS = {
   type: "preset",
@@ -127,45 +145,6 @@ export interface ClaudeAgentSdkQuerySession {
 
 export type ClaudeQueryStreamExit = Exit.Exit<void, ClaudeAgentSdkQueryRunnerError>;
 
-export class ClaudeAgentSdkQueryRunnerError extends Schema.TaggedError<ClaudeAgentSdkQueryRunnerError>()(
-  "ClaudeAgentSdkQueryRunnerError",
-  {
-    method: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return "Claude Agent SDK query failed.";
-  }
-}
-
-class ClaudeCodeRootRefusalError extends Schema.TaggedError<ClaudeCodeRootRefusalError>()(
-  "ClaudeCodeRootRefusalError",
-  { cause: Schema.Defect() },
-) {
-  override get message(): string {
-    return `Claude Code exited before it started: ${CLAUDE_ROOT_REFUSAL}`;
-  }
-}
-
-class ClaudeMcpRegistrationTimeoutError extends Schema.TaggedError<ClaudeMcpRegistrationTimeoutError>()(
-  "ClaudeMcpRegistrationTimeoutError",
-  {},
-) {
-  override get message(): string {
-    return "Claude timed out while registering its MCP tools. Retry the turn; if it keeps failing, check Claude and the server logs.";
-  }
-}
-
-export class ClaudeBackgroundWorkBlocksQueryReplacementError extends Schema.TaggedError<ClaudeBackgroundWorkBlocksQueryReplacementError>()(
-  "ClaudeBackgroundWorkBlocksQueryReplacementError",
-  {},
-) {
-  override get message(): string {
-    return "Claude is still running background agents or commands, and this model or setting change would end them. Wait for them to finish, or press Stop, then send the message again.";
-  }
-}
-
 export interface ClaudeAgentSdkQueryRunnerShape {
   readonly allocateSessionId: Effect.Effect<string, ClaudeAgentSdkQueryRunnerError>;
   readonly open: (
@@ -208,40 +187,12 @@ export interface ClaudeAgentSdkSubagentLookupInput {
   readonly providerSessionId: OrchestrationV2ProviderSession["id"];
 }
 
-const isClaudeAgentSdkQueryRunnerError = Schema.is(ClaudeAgentSdkQueryRunnerError);
-const isClaudeMcpRegistrationTimeoutError = Schema.is(ClaudeMcpRegistrationTimeoutError);
 export const isProviderAdapterRuntimeRequestResponseError = Schema.is(
   ProviderAdapter.ProviderAdapterRuntimeRequestResponseError,
 );
 export const isProviderAdapterRollbackThreadError = Schema.is(
   ProviderAdapter.ProviderAdapterRollbackThreadError,
 );
-
-export function queryRunnerError(cause: unknown, method: string): ClaudeAgentSdkQueryRunnerError {
-  return isClaudeAgentSdkQueryRunnerError(cause)
-    ? cause
-    : new ClaudeAgentSdkQueryRunnerError({ cause, method });
-}
-
-const CLAUDE_PROCESS_EXIT_ERROR_CLASSES: ReadonlySet<unknown> = new Set([
-  "process_killed_by_signal",
-  "process_exited_nonzero",
-]);
-
-// The SDK's exit Error appends Claude's stderr tail to `message`; `telemetryMessage` omits it.
-export function claudeProcessExitFailure(
-  cause: Cause.Cause<ClaudeAgentSdkQueryRunnerError>,
-): { readonly message: string; readonly code: string } | undefined {
-  const error = Cause.squash(cause);
-  const sdkError = isClaudeAgentSdkQueryRunnerError(error) ? error.cause : error;
-  if (typeof sdkError !== "object" || sdkError === null) return undefined;
-  const { errorClass, telemetryMessage } = sdkError as Record<string, unknown>;
-  return typeof errorClass === "string" &&
-    CLAUDE_PROCESS_EXIT_ERROR_CLASSES.has(errorClass) &&
-    typeof telemetryMessage === "string"
-    ? { message: `${telemetryMessage}.`, code: errorClass }
-    : undefined;
-}
 
 function closeClaudeQuery(queryRuntime: ClaudeQuery) {
   return Effect.try({
@@ -530,8 +481,13 @@ export const layerQueryRunner: Layer.Layer<
     const path = yield* Path.Path;
     const { native: nativeEventLogger } = yield* ProviderEventLoggers.ProviderEventLoggers;
     const agentScope = yield* AgentScope;
+    const providerProcesses = yield* ProviderProcesses.ProviderProcesses;
     const platform = yield* HostProcess.Platform;
     const runFork = Effect.runForkWith(yield* Effect.context<never>());
+    const descendants = yield* makeClaudeDescendantSampler({
+      readTable: readClaudeProcessTable(yield* ProcessRunner.make()),
+      interval: CLAUDE_DESCENDANT_POLL,
+    });
 
     return ClaudeAgentSdkQueryRunner.of({
       allocateSessionId: random
@@ -586,13 +542,26 @@ export const layerQueryRunner: Layer.Layer<
           const appendStderr = (text: string) => {
             if (!answered) stderrTail = (stderrTail + text).slice(-2_048);
           };
+          let refreshDescendants: Effect.Effect<void> = Effect.void;
           const spawnProcess =
             options.spawnClaudeCodeProcess ??
             ((spawnOptions: ClaudeSpawnOptions) => {
               if (platform !== "win32") {
                 let stderrDone = () => {};
                 stderrClosed = new Promise((resolve) => (stderrDone = resolve));
-                return spawnClaudeProcessGroup(spawnOptions, stopScope, appendStderr, stderrDone);
+                const child = spawnClaudeProcessGroup(
+                  spawnOptions,
+                  stopScope,
+                  appendStderr,
+                  stderrDone,
+                  providerProcesses.register,
+                );
+                if (unit === undefined && child.pid !== undefined) {
+                  const tracker = descendants.track(child.pid);
+                  child.once("exit", () => runFork(tracker.stop));
+                  refreshDescendants = tracker.refresh;
+                }
+                return child;
               }
               return spawnClaudeWindowsProcess(spawnOptions, (chunk) => options.stderr?.(chunk));
             });
@@ -631,6 +600,31 @@ export const layerQueryRunner: Layer.Layer<
                 restore(
                   Effect.gen(function* () {
                     if (mcpServers !== undefined) {
+                      const timedOut = (phase: ClaudeMcpRegistrationTimeoutError["phase"]) => () =>
+                        Effect.logWarning("orchestration-v2.claude-mcp-registration-timeout", {
+                          threadId: input.threadId,
+                          providerSessionId: input.providerSessionId,
+                          phase,
+                        }).pipe(
+                          Effect.andThen(
+                            Effect.fail(
+                              queryRunnerError(
+                                new ClaudeMcpRegistrationTimeoutError({ phase }),
+                                phase,
+                              ),
+                            ),
+                          ),
+                        );
+                      // The SDK leaves query() boot unbounded, and it takes about a minute on a host
+                      // with CPUs 12x oversubscribed, so it gets its own, longer deadline.
+                      yield* Effect.promise(() =>
+                        queryRuntime.initializationResult().catch(() => undefined),
+                      ).pipe(
+                        Effect.timeoutOrElse({
+                          duration: CLAUDE_BOOT_TIMEOUT,
+                          orElse: timedOut("initialize"),
+                        }),
+                      );
                       // Errors and mcp_status can echo headers; log only server names.
                       const failed = yield* Effect.tryPromise(() =>
                         queryRuntime.setMcpServers(mcpServers),
@@ -639,20 +633,7 @@ export const layerQueryRunner: Layer.Layer<
                         Effect.orElseSucceed(() => Object.keys(mcpServers)),
                         Effect.timeoutOrElse({
                           duration: CLAUDE_MCP_REGISTRATION_TIMEOUT,
-                          orElse: () =>
-                            Effect.logWarning("orchestration-v2.claude-mcp-registration-timeout", {
-                              threadId: input.threadId,
-                              providerSessionId: input.providerSessionId,
-                            }).pipe(
-                              Effect.andThen(
-                                Effect.fail(
-                                  queryRunnerError(
-                                    new ClaudeMcpRegistrationTimeoutError(),
-                                    "setMcpServers",
-                                  ),
-                                ),
-                              ),
-                            ),
+                          orElse: timedOut("setMcpServers"),
                         }),
                       );
                       if (failed.length > 0) {
@@ -855,7 +836,9 @@ export const layerQueryRunner: Layer.Layer<
                 }),
               ),
             ),
-            close: Queue.shutdown(promptQueue).pipe(
+            // A job started since the last sample is recorded before the CLI is told to exit.
+            close: Effect.suspend(() => (processExited ? Effect.void : refreshDescendants)).pipe(
+              Effect.andThen(Queue.shutdown(promptQueue)),
               Effect.andThen(closeClaudeQuery(queryRuntime)),
               Effect.tap(() =>
                 logProtocolEvent({

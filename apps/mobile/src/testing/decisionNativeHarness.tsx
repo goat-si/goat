@@ -17,6 +17,10 @@ vi.mock("../features/goat-bot/MobileBotList", () => ({
 }));
 // Launcher family reads go through the live connection runtime.
 vi.mock("../features/threads/remoteLauncherReads", () => ({ useRemoteLauncherReads: () => {} }));
+// The Decisions screen's side chat opener loads the live thread runtime; screens here get none.
+vi.mock("../features/decisions/decisionInboxSideChat", () => ({
+  useDecisionInboxSideChat: () => undefined,
+}));
 vi.mock("react-native-reanimated", () => ({
   default: { View: Box },
   Easing: { out: (value: unknown) => value, cubic: "cubic" },

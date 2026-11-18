@@ -15,6 +15,7 @@ import {
   SettingsSection,
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
+import { ToolCallVisibilityRow } from "./ToolCallVisibilityRow";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 
 /** Features that are still settling in. Some are on by default; each can be turned off here. */
@@ -56,7 +57,7 @@ export function BetaSettingsPanel() {
             settings.sidebarWorkingShelfEnabled !==
             DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled ? (
               <SettingResetButton
-                label="working section"
+                label={m(workingShelf.title)}
                 onClick={() =>
                   updateSettings({
                     sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
@@ -75,6 +76,7 @@ export function BetaSettingsPanel() {
             />
           }
         />
+        <ToolCallVisibilityRow />
         {/* Clerk is only mounted when this build has GOAT Connect. */}
         {hasCloudPublicConfig() ? <GuestLinksRowWithSignIn /> : <GuestLinksRow />}
       </SettingsSection>

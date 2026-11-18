@@ -136,6 +136,8 @@ export function useSideChatCommand() {
     text: string;
     hasAttachmentsOrContext: boolean;
     connected: boolean;
+    /** Runs once the side chat has started, before it opens; not on a refusal. */
+    onStarted?: () => void;
   }): Promise<boolean> => {
     const command = parseSideChatCommand(input.text);
     if (command === null) return false;
@@ -249,6 +251,7 @@ export function useSideChatCommand() {
           return true;
         }
       }
+      input.onStarted?.();
       const current = getComposerDraftSnapshot(input.threadKey);
       if (
         current.text === input.text &&
