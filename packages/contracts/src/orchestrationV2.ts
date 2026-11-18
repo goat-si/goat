@@ -554,6 +554,18 @@ export const OrchestrationV2AppThread = Schema.Struct({
 });
 export type OrchestrationV2AppThread = typeof OrchestrationV2AppThread.Type;
 
+const OrchestrationV2ThreadVisit = Schema.Struct({
+  lastVisitedAt: OrchestrationV2AppThread.fields.lastVisitedAt,
+  opens: OrchestrationV2AppThread.fields.opens,
+});
+
+export function applyOrchestrationV2ThreadVisit<Thread extends OrchestrationV2AppThread>(
+  thread: Thread,
+  visit: typeof OrchestrationV2ThreadVisit.Type,
+): Thread {
+  return { ...thread, ...visit };
+}
+
 /** Provider-native children cannot receive messages; GOAT delegate_task children can. */
 export function isProviderNativeSubagentThread(
   thread: Pick<OrchestrationV2AppThread, "lineage" | "creationSource">,
@@ -1883,6 +1895,11 @@ export const OrchestrationV2DomainEvent = Schema.Union([
   }),
   Schema.Struct({
     ...OrchestrationV2EventBase.fields,
+    type: Schema.Literal("thread.visit-recorded"),
+    payload: OrchestrationV2ThreadVisit,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2EventBase.fields,
     type: Schema.Literal("run.created"),
     payload: OrchestrationV2Run,
   }),
@@ -2806,6 +2823,14 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
     ...OrchestrationV2JsonEventBaseFields,
     type: Schema.Literal("thread.pull-request-link-updated"),
     payload: ThreadPullRequestLink,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2JsonEventBaseFields,
+    type: Schema.Literal("thread.visit-recorded"),
+    payload: Schema.Struct({
+      lastVisitedAt: OrchestrationV2AppThreadJson.fields.lastVisitedAt,
+      opens: OrchestrationV2AppThreadJson.fields.opens,
+    }),
   }),
   Schema.Struct({
     ...OrchestrationV2JsonEventBaseFields,

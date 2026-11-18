@@ -8053,6 +8053,11 @@ it.layer(layerSharedApplicationDataPlaneTest)("visited projection", (it) => {
       const created = yield* orchestrator.getThreadProjection(threadId);
       assert.isNull(created.thread.lastVisitedAt);
       const createdUpdatedAt = created.thread.updatedAt;
+      const sql = yield* SqlClient.SqlClient;
+      const visitRows = (commandId: string) =>
+        sql<{ readonly event_type: string; readonly payload_json: string }>`
+          SELECT event_type, payload_json FROM orchestration_events WHERE command_id = ${commandId}
+        `;
 
       yield* TestClock.adjust("1 second");
       yield* orchestrator.dispatch({
@@ -8065,6 +8070,10 @@ it.layer(layerSharedApplicationDataPlaneTest)("visited projection", (it) => {
       assert.isNotNull(visited.thread.lastVisitedAt);
       assert.equal(DateTime.formatIso(visited.thread.lastVisitedAt!), visitedAt);
       assert.deepEqual(visited.thread.updatedAt, createdUpdatedAt);
+      const rows = yield* visitRows("runtime-layer-visited-thread-visit");
+      assert.lengthOf(rows, 1);
+      assert.equal(rows[0]?.event_type, "thread.visit-recorded");
+      assert.deepEqual(Object.keys(JSON.parse(rows[0]?.payload_json ?? "{}")), ["lastVisitedAt"]);
 
       yield* orchestrator.dispatch({
         type: "thread.visit",
@@ -8074,6 +8083,11 @@ it.layer(layerSharedApplicationDataPlaneTest)("visited projection", (it) => {
       });
       const afterStaleVisit = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(DateTime.formatIso(afterStaleVisit.thread.lastVisitedAt!), visitedAt);
+      assert.deepEqual(yield* visitRows("runtime-layer-visited-thread-visit-stale"), []);
+
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      assert.deepEqual((yield* orchestrator.getThreadProjection(threadId)).thread, visited.thread);
 
       const shell = yield* orchestrator.getShellSnapshot();
       const thread = shell.threads.find((candidate) => candidate.id === threadId);
@@ -8090,7 +8104,6 @@ it.layer(layerSharedApplicationDataPlaneTest)("visited projection", (it) => {
         .pipe(Effect.flip);
       assert.instanceOf(markUnread, Orchestrator.OrchestratorDispatchError);
 
-      const sql = yield* SqlClient.SqlClient;
       yield* sql`INSERT INTO orchestration_v2_projection_turn_items (
         turn_item_id, thread_id, ordinal, type, status, updated_at, payload_json
       ) VALUES (
@@ -8447,7 +8460,7 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("compact PR events", 
       const threadEvents = () => sql<{ event_type: string }>`
         SELECT event_type FROM orchestration_events
         WHERE stream_id = ${threadId}
-          AND event_type IN ('thread.metadata-updated', 'thread.visited')
+          AND event_type IN ('thread.metadata-updated', 'thread.visited', 'thread.visit-recorded')
         ORDER BY sequence
       `;
       yield* orchestrator.dispatch({
@@ -8456,15 +8469,23 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("compact PR events", 
         threadId,
         title: "Renamed before visit",
       });
-      for (const [commandId, visitedAt] of [
+      const eventSink = yield* EventSink.EventSinkV2;
+      const { thread: renamed } = yield* orchestrator.getThreadRecords(threadId, []);
+      for (const [eventId, visitedAt] of [
         ["compact-pr-visit", "2026-10-13T14:00:00.000Z"],
         ["compact-pr-visit-again", "2026-10-13T15:00:00.000Z"],
       ] as const) {
-        yield* orchestrator.dispatch({
-          type: "thread.visit",
-          commandId: CommandId.make(commandId),
-          threadId,
-          visitedAt,
+        const visitTime = DateTime.makeUnsafe(visitedAt);
+        yield* eventSink.write({
+          events: [
+            {
+              id: EventId.make(eventId),
+              type: "thread.visited",
+              threadId,
+              occurredAt: visitTime,
+              payload: { ...renamed, lastVisitedAt: visitTime },
+            },
+          ],
         });
       }
       yield* maintenance.compactEventStore();
@@ -8472,6 +8493,33 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("compact PR events", 
         (yield* threadEvents()).map((row) => row.event_type),
         ["thread.metadata-updated", "thread.visited"],
       );
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      const legacyVisit = (yield* orchestrator.getThreadRecords(threadId, [])).thread;
+      assert.equal(legacyVisit.title, "Renamed before visit");
+      assert.deepEqual(legacyVisit.lastVisitedAt, DateTime.makeUnsafe("2026-10-13T15:00:00.000Z"));
+
+      for (const [commandId, visitedAt, opened] of [
+        ["compact-pr-visit-new", "2026-10-13T16:00:00.000Z", true],
+        ["compact-pr-visit-new-again", "2026-10-13T17:00:00.000Z", false],
+      ] as const) {
+        yield* orchestrator.dispatch({
+          type: "thread.visit",
+          commandId: CommandId.make(commandId),
+          threadId,
+          visitedAt,
+          opened,
+        });
+      }
+      const beforeCompact = (yield* orchestrator.getThreadRecords(threadId, [])).thread;
+      yield* maintenance.compactEventStore();
+      assert.deepEqual(
+        (yield* threadEvents()).map((row) => row.event_type),
+        ["thread.metadata-updated", "thread.visit-recorded"],
+      );
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      const afterCompact = (yield* orchestrator.getThreadRecords(threadId, [])).thread;
+      assert.deepEqual(afterCompact.opens, beforeCompact.opens);
+      assert.deepEqual(afterCompact.lastVisitedAt, beforeCompact.lastVisitedAt);
       yield* orchestrator.dispatch({
         type: "thread.metadata.update",
         commandId: CommandId.make("compact-pr-rename-again"),

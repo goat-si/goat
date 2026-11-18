@@ -115,6 +115,7 @@ function shouldPublishAgentAwarenessEvent(
     case "thread.unpinned":
     case "thread.pin-reordered":
     case "thread.active-reordered":
+    case "thread.visit-recorded":
     case "thread.visited":
     case "thread.marked-unread":
     case "thread.runtime-mode-updated":

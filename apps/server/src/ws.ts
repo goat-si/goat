@@ -250,6 +250,7 @@ import {
   threadReplayEncodedBytes,
 } from "./orchestration-v2/ThreadStream.ts";
 import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
+import { withLegacyThreadVisits } from "./orchestration-v2/ThreadVisitWire.ts";
 import { withLiveWireTransforms } from "./orchestration-v2/ThreadLiveTextAppend.ts";
 import {
   projectDomainEventForWire,
@@ -614,6 +615,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
     readonly acceptDedupedBodies?: boolean;
     readonly acceptCompactIds?: boolean;
     readonly acceptTextAppends?: boolean;
+    readonly acceptCompactVisits?: boolean;
   }) {
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const dedupeBodies = input.acceptDedupedBodies === true;
@@ -640,6 +642,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
         })
         .pipe(
           Stream.map(threadStreamEventItem),
+          withLegacyThreadVisits(input, threadManagement),
           coalesceThreadLiveStream,
           Stream.mapError(
             (cause) =>
@@ -783,6 +786,11 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
       const replay = coalesceLiveUpdatedEvents(
         yield* loadReplayThrough(input.afterSequence, highWater),
       );
+      if (
+        input.acceptCompactVisits !== true &&
+        replay.some(({ event }) => event.type === "thread.visit-recorded")
+      )
+        return yield* snapshotThenLive();
       const plan = decideThreadResume({
         afterSequence: input.afterSequence,
         highWater,

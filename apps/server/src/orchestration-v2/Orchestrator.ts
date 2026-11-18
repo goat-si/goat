@@ -2570,27 +2570,25 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       DateTime.toEpochMillis(visitedAt.value) > DateTime.toEpochMillis(thread.lastVisitedAt);
     const occurredAt = yield* DateTime.now;
     // Opens are timed by the server clock so devices with skewed clocks agree.
+    if (!movesForward && !command.opened) return;
     const opens = command.opened
       ? recordThreadOpen(
           thread.opens ?? null,
           DateTime.toEpochMillis(occurredAt),
           command.searchQuery,
         )
-      : null;
-    // Viewing a thread changes read state only. Loading its transcript (or
-    // bumping updatedAt) makes a routine read receipt scale with its history.
+      : thread.opens;
     yield* emit(
       events,
       command,
     )({
-      type: "thread.visited",
+      type: "thread.visit-recorded",
       threadId: command.threadId,
       providerInstanceId: thread.providerInstanceId,
       occurredAt,
       payload: {
-        ...thread,
-        ...(movesForward ? { lastVisitedAt: visitedAt.value } : {}),
-        ...(opens ? { opens } : {}),
+        lastVisitedAt: movesForward ? visitedAt.value : thread.lastVisitedAt,
+        ...(opens === undefined ? {} : { opens }),
       },
     });
   });
@@ -12725,6 +12723,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.type === "delegated_task.remote.progress" ||
           command.type === "delegated_task.remote.result" ||
           command.type === "thread.background-work.settle" ||
+          command.type === "thread.visit" ||
           command.type === "thread.interrupt.unresponsive" ||
           command.type === "thread.stop" ||
           command.type === "subagent.stop" ||

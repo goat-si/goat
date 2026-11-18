@@ -60,7 +60,11 @@ import { makeServerActivityReads } from "./goat/ServerActivityReads.ts";
 import { gateThreadReads, ThreadArchiveGate } from "./ThreadArchiveGate.ts";
 import { MAX_CONTINUATION_CHAIN } from "./ContinuationChain.ts";
 import { LEGACY_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
-import { isProviderNativeSubagentThread, pendingGuestMessageCount } from "@goat/contracts";
+import {
+  applyOrchestrationV2ThreadVisit,
+  isProviderNativeSubagentThread,
+  pendingGuestMessageCount,
+} from "@goat/contracts";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
 import { projectTurnItemForWire } from "./WireProjection.ts";
 import { readOnReader } from "./readerOverloadFallback.ts";
@@ -1209,6 +1213,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               });
               break;
             }
+            case "thread.visit-recorded":
+              yield* apply({
+                ...event,
+                type: "thread.visited",
+                payload: applyOrchestrationV2ThreadVisit(
+                  yield* getThread(event.threadId),
+                  event.payload,
+                ),
+              });
+              break;
             case "thread.created":
             case "thread.archived":
             case "thread.unarchived":
@@ -2082,6 +2096,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             event.type !== "thread.unsnoozed" &&
             event.type !== "thread.auto-settle-set" &&
             event.type !== "thread.pinned" &&
+            event.type !== "thread.visit-recorded" &&
             event.type !== "thread.unpinned" &&
             event.type !== "thread.pin-reordered" &&
             event.type !== "thread.active-reordered" &&

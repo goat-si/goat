@@ -906,8 +906,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       Effect.fn("EnvironmentThreadState.makeSubscribeInput")(function* (session) {
         let current = yield* SubscriptionRef.get(state);
         // A prior definitive miss (or delete event) already cleared this thread.
-        // Park the subscription attempt without opening the socket so we do not
-        // retry forever against a known-missing id.
+        // Park retries for a known-missing thread without opening the socket.
         if (current.status === "deleted") {
           return yield* Effect.never;
         }
@@ -1010,6 +1009,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                 acceptCompactIds: true as const,
               }
             : {}),
+          acceptCompactVisits: true as const,
           acceptDedupedBodies: true as const,
         };
       }),
