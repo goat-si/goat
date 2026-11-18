@@ -436,6 +436,11 @@ function withoutSharedPenRecords(raw: string): string {
   });
 }
 
+const decodeStorageDocumentOption = Schema.decodeUnknownOption(ConnectionCatalogStorageJson);
+/** Whether stored text is a catalog this build reads, judged as decodeConnectionCatalogStorage does. */
+export const isConnectionCatalogStorage = (raw: string) =>
+  Option.isSome(decodeStorageDocumentOption(withoutSharedPenRecords(raw)));
+
 export const decodeConnectionCatalogStorage = (raw: string) =>
   decodeStorageDocument(withoutSharedPenRecords(raw)).pipe(
     Effect.map((stored) => {
