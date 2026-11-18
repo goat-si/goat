@@ -190,6 +190,7 @@ export const holdMaintenance = (worker: NodeWorkerThreads.Worker) => {
 
 export const captureWriterNotices = () => {
   const warnings: Array<unknown> = [];
+  const admissionWarnings: Array<unknown> = [];
   const recoveries: Array<unknown> = [];
   const admissionDegraded = Deferred.makeUnsafe<void>();
   const admissionRecovered = Deferred.makeUnsafe<void>();
@@ -198,8 +199,10 @@ export const captureWriterNotices = () => {
     if (logLevel === "Warn") warnings.push(message);
     if (logLevel === "Info") recoveries.push(message);
     const text = String(message);
-    if (logLevel === "Warn" && text.startsWith("SQLite writer WAL admission degraded;"))
+    if (logLevel === "Warn" && text.startsWith("SQLite writer WAL admission degraded;")) {
+      admissionWarnings.push(message);
       Deferred.doneUnsafe(admissionDegraded, Effect.void);
+    }
     if (logLevel === "Info" && text === "SQLite writer WAL admission recovered")
       Deferred.doneUnsafe(admissionRecovered, Effect.void);
     if (logLevel === "Warn" && text.startsWith("SQLite writer request stalled;"))
@@ -207,6 +210,7 @@ export const captureWriterNotices = () => {
   });
   return {
     warnings,
+    admissionWarnings,
     recoveries,
     admissionDegraded: Deferred.await(admissionDegraded),
     admissionRecovered: Deferred.await(admissionRecovered),
