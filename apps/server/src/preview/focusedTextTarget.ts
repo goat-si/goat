@@ -67,30 +67,81 @@ const awaitFocusRead = async <A>(pending: Promise<A>, timeoutMs: number, signal?
   }
 };
 
-// Both checks run in the main world of the pinned element.
-const focusedTargetReady = (node: unknown) => {
-  const element = node as {
+// Serialized into the page's main world for readiness, focus, and dispatch checks.
+export const focusedFieldState = (
+  node: unknown,
+  phase: "readiness" | "focus" | "clear" | "dispatch" | "range" | void,
+) => {
+  type Element = {
     readonly tagName: string;
+    readonly type?: string;
     readonly isConnected: boolean;
     readonly isContentEditable?: boolean;
     readonly readOnly?: boolean;
+    readonly disabled?: boolean;
+    readonly parentElement: Element | null;
+    readonly assignedSlot?: Element | null;
     matches(selector: string): boolean;
+    getAttribute(name: string): string | null;
+    getRootNode(): { readonly host?: Element; readonly activeElement?: Element | null };
     getBoundingClientRect(): { readonly width: number; readonly height: number };
+    contains(other: Element): boolean;
+    focus?: () => void;
   };
-  if (!element.isConnected) return true;
-  if (element.tagName !== "INPUT" && element.tagName !== "TEXTAREA" && !element.isContentEditable)
-    return true;
-  const { getComputedStyle } = globalThis as unknown as {
-    getComputedStyle(element: unknown): { readonly visibility: string };
+  const element = node as Element;
+  const disabledByAria = () => {
+    for (let ancestor: Element | null = element; ancestor;) {
+      const value = ancestor.getAttribute("aria-disabled")?.trim().toLowerCase();
+      if (value === "true" || value === "false") return value === "true";
+      ancestor =
+        ancestor.assignedSlot ?? ancestor.parentElement ?? ancestor.getRootNode().host ?? null;
+    }
+    return false;
   };
-  const { width, height } = element.getBoundingClientRect();
-  return (
-    width > 0 &&
-    height > 0 &&
-    getComputedStyle(element).visibility === "visible" &&
-    !element.readOnly &&
-    !element.matches(":disabled")
-  );
+  const blocked = () =>
+    element.disabled ||
+    element.readOnly ||
+    element.matches(":disabled") ||
+    disabledByAria() ||
+    element.getAttribute("aria-readonly")?.trim().toLowerCase() === "true";
+  const input = element.tagName === "INPUT";
+  const range = input && element.type === "range";
+  const text =
+    element.tagName === "TEXTAREA" ||
+    (input &&
+      ![
+        "button",
+        "checkbox",
+        "color",
+        "file",
+        "hidden",
+        "image",
+        "radio",
+        "range",
+        "reset",
+        "submit",
+      ].includes(element.type ?? "text"));
+  const editable = text || element.isContentEditable === true;
+  if (phase === undefined || phase === "readiness") {
+    if (!element.isConnected || !(editable || range)) return true;
+    const { getComputedStyle } = globalThis as unknown as {
+      getComputedStyle(element: unknown): { readonly visibility: string };
+    };
+    const { width, height } = element.getBoundingClientRect();
+    return (
+      width > 0 && height > 0 && getComputedStyle(element).visibility === "visible" && !blocked()
+    );
+  }
+  if (!element.isConnected || blocked()) return false;
+  if (range && (phase === "clear" || phase === "range")) return "range";
+  if (!editable) return false;
+  if (phase !== "dispatch") element.focus?.();
+  const active = element.getRootNode().activeElement;
+  return active != null && (active === element || element.contains(active))
+    ? text
+      ? "text"
+      : "editable"
+    : false;
 };
 
 export const waitUntilFocusedTargetWritable = async (
@@ -103,7 +154,7 @@ export const waitUntilFocusedTargetWritable = async (
   const timeoutMs = remaining(deadline);
   if (
     await awaitFocusRead(
-      actionCall(gate, () => handle.evaluate(focusedTargetReady)),
+      actionCall(gate, () => handle.evaluate(focusedFieldState, "readiness")),
       timeoutMs,
       gate.signal,
     )
@@ -111,7 +162,7 @@ export const waitUntilFocusedTargetWritable = async (
     return;
   readiness.onWaiting?.();
   const pending = actionCall(gate, () =>
-    page.waitForFunction(focusedTargetReady, handle, { timeout: remaining(deadline) }),
+    page.waitForFunction(focusedFieldState, handle, { timeout: remaining(deadline) }),
   );
   try {
     const result = await abortable(() => pending, gate.signal);

@@ -78,7 +78,11 @@ export const DIAGNOSTIC_BUFFER_LIMIT = 200;
 
 export { ServerBrowserOperationError } from "./browserOperationError.ts";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
-import { pinFocusedTarget, waitUntilFocusedTargetWritable } from "./focusedTextTarget.ts";
+import {
+  focusedFieldState,
+  pinFocusedTarget,
+  waitUntilFocusedTargetWritable,
+} from "./focusedTextTarget.ts";
 import { setRange } from "./rangeValue.ts";
 import { scrollPositionRead, settleScroll } from "./scrollPositions.ts";
 export const toOperationError = (
@@ -838,64 +842,30 @@ export const type = async (
       await gate();
     }
     gate.signal?.throwIfAborted();
-    const focused =
-      handle !== null &&
-      (await channel.call(() =>
-        handle.evaluate((element, clear) => {
-          // Like the desktop host: an enabled text control or contenteditable
-          // that actually takes focus. Anything else would swallow the text or
-          // send it to whichever field had focus before.
-          const control = element as unknown as {
-            readonly type?: string;
-            readonly isConnected: boolean;
-            matches(selector: string): boolean;
-            readonly disabled?: boolean;
-            readonly readOnly?: boolean;
-            readonly isContentEditable?: boolean;
-            readonly focus?: () => void;
-          };
-          const root = element.getRootNode() as { readonly activeElement?: typeof element | null };
-          if (!control.isConnected || control.matches(":disabled")) return false;
-          // A native range takes a value, not keystrokes; setRange sets it after the gate.
-          if (clear && element.tagName === "INPUT" && control.type === "range" && !control.disabled)
-            return "range";
-          const nonText = [
-            "button",
-            "checkbox",
-            "color",
-            "file",
-            "hidden",
-            "image",
-            "radio",
-            "range",
-            "reset",
-            "submit",
-          ];
-          const textControl =
-            element.tagName === "TEXTAREA" ||
-            (element.tagName === "INPUT" && !nonText.includes(control.type ?? "text"));
-          if (!(textControl || control.isContentEditable) || control.disabled || control.readOnly) {
-            return false;
-          }
-          control.focus?.();
-          const active = root.activeElement;
-          const owned = active != null && (active === element || element.contains(active));
-          // Selected here, the old text is replaced by the one input sent after the gate.
-          return owned ? (textControl ? "text" : "editable") : false;
-        }, input.clear === true),
-      ));
-    if (focused === "range" && handle) {
-      remaining(deadline);
-      await gate();
-      gate.signal?.throwIfAborted();
-      return await channel.call(() => setRange(handle, input.text));
-    }
-    if (focused !== "text" && focused !== "editable") {
-      throw new ServerBrowserOperationError(
+    const phase = input.clear === true ? "clear" : "focus";
+    const focused = handle && (await channel.call(() => handle.evaluate(focusedFieldState, phase)));
+    const notEditable = () =>
+      new ServerBrowserOperationError(
         "PreviewAutomationTargetNotEditableError",
         "The target is not an enabled text field, so no text was typed.",
       );
+    const checkDispatch = async (phase: "range" | "dispatch") => {
+      remaining(deadline);
+      await gate();
+      gate.signal?.throwIfAborted();
+      if (
+        !locator &&
+        handle &&
+        !(await channel.call(() => handle.evaluate(focusedFieldState, phase)))
+      )
+        throw notEditable();
+      remaining(deadline);
+    };
+    if (focused === "range" && handle) {
+      await checkDispatch("range");
+      return await channel.call(() => setRange(handle, input.text));
     }
+    if (focused !== "text" && focused !== "editable") throw notEditable();
     if (input.clear && handle) {
       await gate();
       gate.signal?.throwIfAborted();
@@ -914,9 +884,7 @@ export const type = async (
       );
     }
     await readiness.onHistoryFocus?.();
-    remaining(deadline);
-    await gate();
-    gate.signal?.throwIfAborted();
+    await checkDispatch("dispatch");
     // One input after the gate: a key press is held off by the input fence; inserted text is a
     // single call with nothing to wait for.
     if (input.text === "") {
