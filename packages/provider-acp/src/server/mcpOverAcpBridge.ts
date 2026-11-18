@@ -21,6 +21,7 @@ interface Connection {
   sessionId: string | null;
   protocolVersion: string | null;
   nextRequestId: number;
+  closing: boolean;
 }
 
 export class AcpMcpOverAcpError extends Error {
@@ -87,7 +88,7 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
   const connectionFor = (connectionId: string): Effect.Effect<Connection, AcpMcpOverAcpError> =>
     Effect.suspend(() => {
       const connection = connections.get(connectionId);
-      return connection === undefined
+      return connection === undefined || connection.closing
         ? Effect.fail(new AcpMcpOverAcpError(`Unknown MCP-over-ACP connection "${connectionId}".`))
         : Effect.succeed(connection);
     });
@@ -150,7 +151,20 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
     request: AcpSchema.DisconnectMcpRequest,
   ): Effect.fn.Return<AcpSchema.DisconnectMcpResponse, AcpMcpOverAcpError> {
     const connection = yield* connectionFor(request.connectionId);
-    connections.delete(request.connectionId);
+    connection.closing = true;
+    return yield* disconnectRemote(connection).pipe(
+      Effect.tap(() => Effect.sync(() => connections.delete(request.connectionId))),
+      Effect.ensuring(
+        Effect.sync(() => {
+          connection.closing = false;
+        }),
+      ),
+    );
+  });
+
+  const disconnectRemote = Effect.fn("mcpOverAcpBridge.disconnectRemote")(function* (
+    connection: Connection,
+  ) {
     const sessionId = connection.sessionId;
     if (sessionId !== null) {
       const response = yield* Effect.tryPromise({
@@ -168,6 +182,9 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
           }),
         catch: bridgeError,
       });
+      yield* Effect.promise(
+        () => response.body?.cancel().catch(() => undefined) ?? Promise.resolve(),
+      );
       if (!response.ok && response.status !== 404) {
         return yield* Effect.fail(
           new AcpMcpOverAcpError(
@@ -175,9 +192,6 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
           ),
         );
       }
-      yield* Effect.promise(
-        () => response.body?.cancel().catch(() => undefined) ?? Promise.resolve(),
-      );
     }
     return {};
   });
@@ -198,6 +212,7 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
         sessionId: null,
         protocolVersion: null,
         nextRequestId: 0,
+        closing: false,
       });
       return { connectionId };
     }),
@@ -236,7 +251,7 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
         [...connections.keys()],
         (connectionId) => disconnect({ connectionId }).pipe(Effect.ignore),
         { discard: true },
-      ),
+      ).pipe(Effect.ensuring(Effect.sync(() => connections.clear()))),
     ),
   };
 });
