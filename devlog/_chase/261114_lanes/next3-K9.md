@@ -110,3 +110,37 @@ NOT RUN: Reconciled current-integration gate, lane CI, integrated P1 real-client
 - Plain push exited 0. `git ls-remote` confirmed `chase/t3-261114-next3-k9` at `029c00acb6347a79a539c535917a3eb69441b612`. The newer integration tip `258239d88f0c5df1ef43d787957007d1775f823d` also passed a read-only `git merge-tree --write-tree` compatibility check (exit 0, tree `4983030383b080f5f01066ee0b4a54cf757b05a1`).
 
 Status **READY**. NOT RUN: gate on a combined tree with the newer integration tip, lane CI, integrated P1, and the stale-shell budget assertion deferred to the shell fallback.
+
+
+## Review fix round 1
+
+Base `029c00acb6347a79a539c535917a3eb69441b612`.
+
+- P1 reuses the scanner's 32 MiB transcript budget and its 200-message output ceiling as precedents. ACP replay rejects over-limit snapshots because writing a partial prefix and marking it imported would prevent repair. [Scanner budget](https://github.com/goat-si/goat/blob/029c00acb6347a79a539c535917a3eb69441b612/apps/server/src/project/AgentSessionScanner.ts#L104-L107) and [parser message ceiling](https://github.com/goat-si/goat/blob/029c00acb6347a79a539c535917a3eb69441b612/apps/server/src/project/AgentSessionTranscriptParser.ts#L17).
+- P2-1 scopes strict startup to snapshot opens. A continuation open still uses the existing ACP recovery flow. Snapshot opens require load capability and fail before creating a replacement when the existing session cannot be loaded.
+- P2-2 changes only the server-internal credential inspection and stream wake. Old and new clients use the same bearer and receive the same lease events in both directions. The negative case is rollback after inspection while a settings read is suspended. Native lease-expiry timestamps remain wall-clock deadlines.
+- P2-3 keeps the existing import result requirements. Older clients ignore optional history fields, and newer clients receiving an old result can still list the session to see pending history. The negative cases are a first read failure with the thread retained, an oversize history with a recovery message, and a successful repair that clears the action. No stored schema changes.
+
+### Fixes and failing-first receipts
+
+| Finding | Commit | Failing check and result after the fix |
+| --- | --- | --- |
+| P1 | `646ff3b1954` | ACP whole-file byte and message boundary probes exited 1 on the previous code, 2 failures. After the fix, exit 0 and 2 passed. The helper checks retained UTF-8 bytes and message count before joining or appending. It latches overflow and drops the buffered snapshot. The native history is never partially persisted. |
+| P2-1 | `afebcae5b2f` | The ACP history suite exited 1 with one failure. A failed load opened a second runtime without a native ID. After the fix it exited 0 with 3 passed. The strict path requires load capability and the existing session ID, returns the original load failure, and avoids replacement or reload. |
+| P2-2 | `de58b0e1e56` | The fenced stream suite exited 1 with one failure. The old stream stayed open when the monotonic clock reached the credential deadline after rollback. The three focused suites then exited 0 with 35 passed. Existing inspection expectations keep their wall times and add the paired monotonic fields. |
+| P2-3 | `14e7c22e6a7` | First-import failure in the service and the missing repair button in Chromium each failed before the fix (exit 1, 1 failure per suite). The importing client gets the optional pending hint and a bounded recovery message for oversize. It can retry on the current row. Successful repair clears the hint. |
+
+### Correction to the Codex compatibility record (P3)
+
+The 0.135.0 stdio smoke used `experimentalApi: true`. The tagged Rust `ThreadForkParams` in 0.135.0 already declares `exclude_turns` as experimental. The earlier schema dump omitted that property and was insufficient to establish absence. The live probe therefore exercised a version that contains the field. The pre-field case is **source-verified only** using the tagged 0.120.0 `ThreadForkParams`, whose Serde definition omits the field. No pre-field binary run completed. [0.135.0 source](https://github.com/openai/codex/blob/rust-v0.135.0/codex-rs/app-server-protocol/src/protocol/v2/thread.rs#L508-L516) and [0.120.0 source](https://github.com/openai/codex/blob/rust-v0.120.0/codex-rs/app-server-protocol/src/protocol/v2.rs#L2770-L2829).
+
+### Verification
+
+- Guarded run on Node 26.12.1 from `apps/server`, exit 0, 6 files and 56 passed. Whole suites: `AcpAdapterV2.history.test.ts` 3, `ComputerUseLeaseThreadStream.fenced.test.ts` 2, `ComputerUseLeaseProxy.crossProcess.test.ts` 1, `McpSessionRegistry.test.ts` 32, `AcpSessionService.test.ts` 9, and companion `AgentSessionImporter.test.ts` 9.
+- `vp env exec --node 26.12.1 -- vp test run --reporter=default apps/web/src/components/settings/AcpSessionManagementSection.browser.test.tsx` exited 0, whole Chromium file with 17 passed.
+- Integration preview against tip `258239d88f0c5df1ef43d787957007d1775f823d` exited 0. No integration merge for this round.
+- Final focused receipts on `14e7c22e6a7464a061dcfd077da3abe5ac27da92`: targeted typecheck exited 0 (4/4 packages), guarded server exit 0 (6 files, 56 passed), Chromium exit 0 (1 file, 17 passed). The legacy import-result decoder strips both optional extensions and the current decoder accepts both prior and pending results (codec smoke, exit 0).
+- Full `vp run check:changed origin/chase/t3-261114-next3` on `14e7c22e6a7464a061dcfd077da3abe5ac27da92` exited 0 (durable shell receipt). The command started with integration ref `258239d88f0c5df1ef43d787957007d1775f823d` and used merge base `061fd0fee904c2abaada9efb5cfdb9ea58b18919` as reported by the gate (abbreviated `061fd0fee904`). Format, lint, both knip passes, GraphQL, agent surface audit, context budget, and typecheck of 38 packages passed. 460 server files / 5,547 passed and 44 workspace files / 2,617 passed, 2 skipped. Total 504 files, 8,164 passed, 0 failed, 2 skipped.
+- Plain lane push exited 0 and `git ls-remote` confirmed the tested head. Final preview against fetched integration `9af811b8fc3d2fc0039efbafee606ca358d5a490` exited 0 (merge tree `39f12b2827d23ccd71a5db11ee21b0ae21046d83`).
+
+Status **READY**. NOT RUN: CI and integrated P1 real-client pass (coordinator), and a live pre-field Codex app-server smoke.
