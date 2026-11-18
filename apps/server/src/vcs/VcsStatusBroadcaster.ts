@@ -205,7 +205,8 @@ export const make = Effect.gen(function* () {
       const nextLocal = { fingerprint: fingerprintStatusPart(local), value: local };
       const [localChanged, remoteCleared] = yield* Ref.modify(cacheRef, (cache) => {
         const previous = cache.get(cwd) ?? { local: null, remote: null };
-        const remote = previous.remote?.branch === local.refName ? previous.remote : null;
+        const remote =
+          local.isRepo && previous.remote?.branch === local.refName ? previous.remote : null;
         return [
           [previous.local?.fingerprint !== nextLocal.fingerprint, previous.remote !== remote],
           new Map(cache).set(cwd, { local: nextLocal, remote }),
@@ -232,7 +233,8 @@ export const make = Effect.gen(function* () {
     function* (cwd: string, remote: CachedRemoteStatus | null, options?: { publish?: boolean }) {
       const [changed, value] = yield* Ref.modify(cacheRef, (cache) => {
         const previous = cache.get(cwd) ?? { local: null, remote: null };
-        const next = remote?.branch === previous.local?.value.refName ? remote : null;
+        const local = previous.local?.value;
+        const next = local?.isRepo && remote?.branch === local.refName ? remote : null;
         return [
           [previous.remote?.fingerprint !== next?.fingerprint, next?.value ?? null],
           new Map(cache).set(cwd, { ...previous, remote: next }),
@@ -261,10 +263,9 @@ export const make = Effect.gen(function* () {
     function* (cwd: string, revalidateHead: boolean) {
       const cached = yield* getCachedStatus(cwd);
       if (cached?.local) {
-        if (
-          !revalidateHead ||
-          (yield* workflow.currentBranch(cwd)) === cached.local.value.refName
-        ) {
+        if (!revalidateHead) return cached.local.value;
+        const { refName, isRepo } = yield* readHeadBranch(cwd);
+        if (refName === cached.local.value.refName && isRepo === cached.local.value.isRepo) {
           return cached.local.value;
         }
         localRefreshResults.delete(cwd);
@@ -781,7 +782,9 @@ export const make = Effect.gen(function* () {
         const cachedStatus = yield* getCachedStatus(cwd);
         const cachedRemote = cachedStatus?.remote;
         const initialRemote =
-          cachedRemote && cachedRemote.branch === initialLocal.refName ? cachedRemote.value : null;
+          initialLocal.isRepo && cachedRemote && cachedRemote.branch === initialLocal.refName
+            ? cachedRemote.value
+            : null;
         if (input.includeRemote !== false) {
           yield* retainRemotePoller(
             cwd,

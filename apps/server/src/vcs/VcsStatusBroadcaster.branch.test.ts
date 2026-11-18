@@ -18,8 +18,26 @@ import {
   remoteStatusWithPr,
 } from "./vcsStatusBroadcaster.testkit.ts";
 
-it.effect("a passive subscriber reopens on the new branch without the old pull request", () => {
-  const state = { ...newState(), currentRemoteStatus: remoteStatusWithPr };
+it.effect.each([
+  {
+    transition: "after switching branches",
+    initialLocal: baseLocalStatus,
+    reopenedLocal: { ...baseLocalStatus, refName: "terminal-switch" },
+    initialRemote: remoteStatusWithPr,
+  },
+  {
+    transition: "after removing a detached worktree",
+    initialLocal: { ...baseLocalStatus, refName: null },
+    reopenedLocal: { ...baseLocalStatus, refName: null, isRepo: false, hasPrimaryRemote: false },
+    initialRemote: { ...baseRemoteStatus, hasUpstream: false },
+  },
+])("a passive subscriber reopens without the old remote status $transition", (testCase) => {
+  const { initialLocal, reopenedLocal, initialRemote } = testCase;
+  const state = {
+    ...newState(),
+    currentLocalStatus: initialLocal,
+    currentRemoteStatus: initialRemote,
+  };
   return Effect.gen(function* () {
     const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
     const input = { cwd: "/repo", includeRemote: false };
@@ -29,17 +47,17 @@ it.effect("a passive subscriber reopens on the new branch without the old pull r
       initial,
       Option.some({
         _tag: "snapshot" as const,
-        local: baseLocalStatus,
-        remote: remoteStatusWithPr,
+        local: initialLocal,
+        remote: initialRemote,
       }),
     );
 
-    state.currentLocalStatus = { ...baseLocalStatus, refName: "terminal-switch" };
+    state.currentLocalStatus = reopenedLocal;
     assert.deepEqual(
       yield* Stream.runHead(broadcaster.streamStatus(input)),
       Option.some({
         _tag: "snapshot" as const,
-        local: state.currentLocalStatus,
+        local: reopenedLocal,
         remote: null,
       }),
     );
