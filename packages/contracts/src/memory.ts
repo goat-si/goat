@@ -1599,7 +1599,6 @@ export const MemoryListInput = struct({
   includeQuarantined: Schema.Boolean,
 });
 export type MemoryListInput = typeof MemoryListInput.Type;
-
 export const MemoryReadInput = struct({ ...space, ...includeMarks, memoryId: MemoryId });
 export type MemoryReadInput = typeof MemoryReadInput.Type;
 
@@ -1649,20 +1648,22 @@ const mutation = {
   expectedHeads: heads,
 };
 const detailedFailure = { includeFailureDetails: Schema.optionalKey(Schema.Literal(true)) };
-const upsertInput = <F extends Schema.Struct.Fields>(extra: F) =>
-  struct({
-    ...extra,
-    ...mutation,
-    scope: MemoryScope,
-    assertionKind: MemoryAssertionKind,
-    payload: MemoryPayload,
-    baseBoundary: Schema.NullOr(MemoryCausalBoundary),
-  }).check(Schema.makeFilter((v) => assertionValid(v.assertionKind, v.payload.evidence)));
-export const MemoryUpsertInput = upsertInput({});
+const upsertInput = {
+  ...mutation,
+  scope: MemoryScope,
+  assertionKind: MemoryAssertionKind,
+  payload: MemoryPayload,
+  baseBoundary: Schema.NullOr(MemoryCausalBoundary),
+};
+export const MemoryUpsertInput = struct(upsertInput).check(
+  Schema.makeFilter((v) => assertionValid(v.assertionKind, v.payload.evidence)),
+);
 export type MemoryUpsertInput = typeof MemoryUpsertInput.Type;
 export const MemoryForgetInput = struct(mutation);
 export type MemoryForgetInput = typeof MemoryForgetInput.Type;
-export const MemoryUpsertRpcInput = upsertInput(detailedFailure);
+export const MemoryUpsertRpcInput = struct({ ...upsertInput, ...detailedFailure }).check(
+  Schema.makeFilter((v) => assertionValid(v.assertionKind, v.payload.evidence)),
+);
 export const MemoryForgetRpcInput = struct({ ...mutation, ...detailedFailure });
 export const MemoryRevertResolutionInput = struct({
   ...space,
@@ -1939,7 +1940,6 @@ export type MemoryProjectBinding = typeof MemoryProjectBinding.Type;
 
 export const MemoryProjectBindingGetInput = struct({ ...space, project: ScopedProjectRef });
 export type MemoryProjectBindingGetInput = typeof MemoryProjectBindingGetInput.Type;
-
 export const MemoryProjectBindingUpdateInput = Schema.Union([
   struct({
     ...space,
