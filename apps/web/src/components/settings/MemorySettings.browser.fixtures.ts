@@ -100,9 +100,13 @@ export async function exerciseMemoryMove({
   container,
   batch,
   select,
+  invalidate,
+  settle,
 }: {
-  batch: boolean;
+  batch: boolean | "forget" | "expiry" | "hold";
+  invalidate: (kind: "forget" | "invalidate", id: string) => void;
   select: (button: HTMLInputElement) => Promise<void>;
+  settle: (complete: () => void) => PromiseLike<void>;
   container: HTMLElement;
   state: {
     threads: { id: string; title: string; environmentId: string }[];
@@ -145,6 +149,8 @@ export async function exerciseMemoryMove({
     : [activeItem];
   state.queries.set("list", Option.some({ items, projectionWatermark: 1, nextCursor: null }));
   const attempts = new Map<string, string[]>();
+  const pending = Promise.withResolvers<void>();
+  const entered = Promise.withResolvers<void>();
   state.executors.set("move", async (target) => {
     const { input } = target as { input: MemoryMoveInput };
     const ids = attempts.get(input.memoryId) ?? [];
@@ -167,6 +173,10 @@ export async function exerciseMemoryMove({
           }),
         ),
       };
+    if (typeof batch === "string" && input.memoryId === activeItem.memoryId && ids.length === 2) {
+      entered.resolve();
+      await pending.promise;
+    }
     if ((!batch && ids.length === 2) || (input.memoryId === id(211) && ids.length === 1))
       return { _tag: "Failure", cause: Cause.die(new Error("Synthetic lost acknowledgement")) };
     if (input.memoryId === (batch ? id(211) : activeItem.memoryId))
@@ -205,6 +215,33 @@ export async function exerciseMemoryMove({
   };
   await submit();
   const firstNotice = container.textContent ?? "";
+  if (typeof batch === "string") {
+    expect
+      .soft(
+        container.querySelector('[role="group"][aria-label="Move memories"] [role="status"]')
+          ?.textContent,
+      )
+      .not.toContain("Synthetic move item 211");
+    await submit();
+    await entered.promise;
+    if (batch !== "expiry") invalidate(batch === "forget" ? "forget" : "invalidate", id(211));
+    state.queries.set(
+      "list",
+      batch === "expiry"
+        ? Option.none()
+        : Option.some({
+            items: items.filter(({ memoryId }) => memoryId !== id(211)),
+            projectionWatermark: 2,
+            nextCursor: null,
+          }),
+    );
+    await render();
+    expect.soft(container.outerHTML).not.toContain("Synthetic move item 211");
+    await settle(() => pending.resolve());
+    expect.soft(attempts.get(id(211))).toHaveLength(1);
+    expect(container.outerHTML).not.toContain("Synthetic move item 211");
+    return;
+  }
   await submit();
   if (!batch) await submit();
   const capacity = attempts.get(activeItem.memoryId) ?? [];
