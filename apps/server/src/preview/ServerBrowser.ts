@@ -1,3 +1,4 @@
+import { makeSaveDownload } from "./saveBrowserDownload.ts";
 import { stopUnresponsiveScript } from "./stopUnresponsiveScript.ts";
 import { SnapshotTiming } from "./snapshotTiming.ts";
 import { makeRecordingFrames } from "./RecordingFrames.ts";
@@ -63,9 +64,8 @@ import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as NodeCrypto from "node:crypto";
-import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
-import type { CDPSession, Download, Page } from "playwright-core";
+import type { CDPSession, Page } from "playwright-core";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -79,7 +79,7 @@ import * as ServerBrowserReadiness from "./serverBrowserReadiness.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
-import type { Recording, ServerDownload, ServerTab, ViewerState } from "./ServerBrowserTab.ts";
+import type { Recording, ServerTab, ViewerState } from "./ServerBrowserTab.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import { settleInitialOpen } from "./unloadedOpen.ts";
 import * as AgentTabState from "./agentTabState.ts";
@@ -128,7 +128,7 @@ import { pageRead } from "./pageRead.ts";
 import { attachNetworkTracker } from "./networkTracker.ts";
 import { FENCED_ALLOWED_OPERATIONS, READ_OPERATIONS } from "./readOperations.ts";
 import { inPageFetch, resolveFetchUrl } from "./inPageFetch.ts";
-import { artifactFileName, publishArtifact, publishFetchedBody } from "./browserArtifacts.ts";
+import { publishFetchedBody } from "./browserArtifacts.ts";
 import { collectWhileScrolling } from "./scrollCollector.ts";
 import { initialTabChannel, secretBlockedGate, tabActionGate } from "./tabActionGate.ts";
 import { makeOpenRunSignals } from "./openRunSignals.ts";
@@ -918,65 +918,13 @@ const make = Effect.gen(function* () {
     });
   };
 
-  const saveDownload = async (tab: ServerTab, download: Download) => {
-    const id = NodeCrypto.randomUUID();
-    let path: string | undefined;
-    const navigation =
-      download.url() === tab.abortedNavigation?.url ? tab.abortedNavigation.generation : null;
-    if (navigation !== null) clearAbortedNavigation(tab);
-    let offered: { readonly id: string; readonly fileName: string } | undefined;
-    try {
-      if (await download.failure()) return;
-      // A saved download outlives its tab until storage cleanup, like a screenshot.
-      const suggestedName = download.suggestedFilename();
-      path = await publishArtifact(
-        config.browserArtifactsDir,
-        artifactFileName("download", download.url(), { suggestedName }),
-        (target) => download.saveAs(target),
-      );
-      const { size } = await NodeFSP.stat(path);
-      if (tab.closing || size > ServerBrowserLimits.DOWNLOAD_MAX_BYTES) {
-        await NodeFSP.rm(path, { force: true });
-        return;
-      }
-      const saved: ServerDownload = {
-        id,
-        fileName: suggestedName.slice(0, 255) || "download",
-        path,
-        sizeBytes: size,
-        url: ServerBrowserPage.withoutDataPayload(download.url()).slice(0, 2048),
-        completedAt: new Date().toISOString(),
-      };
-      tab.downloads.push(saved);
-      for (const evicted of tab.downloads.splice(
-        0,
-        tab.downloads.length - ServerBrowserLimits.DOWNLOAD_LIMIT,
-      )) {
-        await NodeFSP.rm(evicted.path, { force: true }).catch(constVoid);
-      }
-      offered = { id, fileName: saved.fileName };
-      const shownInTab =
-        navigation === tab.navigationGeneration && tab.page.url() === "about:blank";
-      if (shownInTab) return saved;
-      const controller = [...tab.viewers].find((viewer) => viewer.id === tab.control.controller);
-      controller?.push({
-        _tag: "download",
-        id,
-        fileName: saved.fileName,
-        sizeBytes: saved.sizeBytes,
-      });
-      return saved;
-    } catch (cause) {
-      if (path !== undefined) await NodeFSP.rm(path, { force: true }).catch(constVoid);
-      runFork(Effect.logWarning("server preview download failed", { cause }));
-    } finally {
-      if (navigation !== null && !tab.closing) {
-        settleAbortedNavigation(tab, navigation, download.url(), offered);
-      }
-      // saveAs copies the artifact; cached profile contexts otherwise retain the original.
-      await download.delete().catch(constVoid);
-    }
-  };
+  const saveDownload = makeSaveDownload({
+    directory: config.browserArtifactsDir,
+    clearAbortedNavigation,
+    settleAbortedNavigation,
+    reportFailure: (cause) =>
+      runFork(Effect.logWarning("server preview download failed", { cause })),
+  });
 
   const openDownload: ServerBrowser["Service"]["openDownload"] = (input) =>
     Effect.sync(() => {

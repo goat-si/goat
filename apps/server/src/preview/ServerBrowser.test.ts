@@ -58,6 +58,8 @@ import {
   fileChooserElement,
   makeFrame,
   makePageContext,
+  makeDesktopViewer,
+  viewerInput,
   mockCopy,
   refClickTarget,
   stallViewer,
@@ -215,28 +217,12 @@ const ready = Effect.gen(function* () {
   const tabId = PreviewTabId.make(opened.tabId!);
   return { browser, broker, tabId };
 });
-const viewerInput = (tabId: string, canOperate: boolean) => ({
-  threadId: scope.thread.threadId,
-  tabId,
-  canOperate,
-  maxWidth: 1280,
-  maxHeight: 800,
-  quality: 70,
-});
-const openDesktopViewer = Effect.gen(function* () {
-  const browser = yield* ServerBrowser.ServerBrowser;
-  const manager = yield* Manager.PreviewManager;
-  desktopRendersNext = true;
-  const { tabId } = yield* manager.open({ threadId: scope.thread.threadId, runtime: "server" });
-  const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
-  const context = desktopConnections[0]!.context;
-  const cdp = context.sessions[0]!;
-  const resize = (width: number, height: number) => {
-    Object.assign(context.cssViewport, { width, height });
-    return Effect.promise(() => cdp.emitAsync("Page.frameResized"));
-  };
-  return { tabId, viewer, context, cdp, resize };
-});
+const openDesktopViewer = makeDesktopViewer(
+  () => {
+    desktopRendersNext = true;
+  },
+  () => desktopConnections[0]!.context,
+);
 
 beforeEach(() => {
   contexts.length = 0;
