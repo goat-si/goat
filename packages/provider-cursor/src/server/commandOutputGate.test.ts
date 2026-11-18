@@ -94,3 +94,22 @@ it.effect("a waiting delta never reaches the reader after its turn's completion"
     assert.equal(gate.queued(), 0);
   }).pipe(Effect.scoped),
 );
+
+it.effect("a stalled reader bounds the number of tiny deltas independently of their size", () =>
+  Effect.gen(function* () {
+    const queue = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+    const gate = yield* makeCommandOutputGate();
+    const event = delta("x");
+    for (let index = 0; index < 1024; index++) {
+      yield* gate.offer(queue, event, "x", () => false);
+    }
+    const producer = yield* gate
+      .offer(queue, event, "x", () => false)
+      .pipe(Effect.forkScoped({ startImmediately: true }));
+    assert.equal(yield* Queue.size(queue), 1024);
+    assert.isUndefined(producer.pollUnsafe());
+    yield* gate.take(queue);
+    yield* Fiber.join(producer);
+    assert.equal(yield* Queue.size(queue), 1024);
+  }).pipe(Effect.scoped),
+);

@@ -5,6 +5,7 @@ import * as Queue from "effect/Queue";
 
 /** Characters of live command output one session's event queue may hold: at most 8 MiB. */
 const COMMAND_OUTPUT_QUEUE_CHARS = 4 * 1024 * 1024;
+const COMMAND_OUTPUT_QUEUE_EVENTS = 1024;
 
 /**
  * Bounds live command output waiting in an adapter's event queue. A delta past the bound waits
@@ -15,6 +16,7 @@ export const makeCommandOutputGate = Effect.fnUntraced(function* (
   capacity: number = COMMAND_OUTPUT_QUEUE_CHARS,
 ) {
   let queued = 0;
+  let queuedEvents = 0;
   let closed = false;
   let wake = yield* Deferred.make<void>();
   const wakeAll = Effect.gen(function* () {
@@ -34,8 +36,9 @@ export const makeCommandOutputGate = Effect.fnUntraced(function* (
     ) {
       while (true) {
         if (closed || stopped()) return false;
-        if (queued === 0 || queued + charge(chunk) <= capacity) {
+        if (queuedEvents < COMMAND_OUTPUT_QUEUE_EVENTS && queued + charge(chunk) <= capacity) {
           queued += charge(chunk);
+          queuedEvents++;
           yield* Queue.offer(queue, event);
           return true;
         }
@@ -49,6 +52,7 @@ export const makeCommandOutputGate = Effect.fnUntraced(function* (
           Effect.suspend(() => {
             if (event.type !== "command_output.delta") return Effect.void;
             queued -= charge(event.chunk);
+            queuedEvents--;
             return wakeAll;
           }),
         ),
