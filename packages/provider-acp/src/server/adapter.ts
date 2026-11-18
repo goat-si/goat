@@ -3655,6 +3655,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               stopProcessing: false,
             };
           }
+          if (flavor.requireForegroundWakeTransition === true && !rootForegroundAwakened) {
+            return { buffered: false, offerContinuation: false, stopProcessing: true };
+          }
           const update = notification.update;
           let alreadyHandledToolUpdate = false;
           if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {

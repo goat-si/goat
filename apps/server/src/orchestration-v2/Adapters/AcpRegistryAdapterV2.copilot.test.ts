@@ -63,6 +63,10 @@ describe("AcpRegistryAdapterV2 Copilot", () => {
           }),
           sessionEvent("assistant.idle"),
           update({ sessionUpdate: "session_info_update", title: "after foreground idle" }),
+          update({
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Late text from the original prompt." },
+          }),
           // The background agent finishes; Copilot reads it and starts a new root turn.
           sessionEvent("assistant.turn_start"),
           update({
@@ -103,6 +107,7 @@ describe("AcpRegistryAdapterV2 Copilot", () => {
       yield* session.runtime.startTurn(session.turnInput(2, { continuation: true }));
       const continuation = yield* session.until((event) => event.type === "turn.terminal");
       assert.include(JSON.stringify(continuation), "Agent 1 finished");
+      assert.notInclude(JSON.stringify(continuation), "Late text from the original prompt.");
       assert.include(JSON.stringify(continuation.at(-1)), '"status":"completed"');
     }).pipe(Effect.provide(layerTest)),
   );
