@@ -7,6 +7,12 @@ import * as Store from "../../../memory/MemoryStore.ts";
 import { makeMemoryMutationHandlers } from "../../../memory/MemoryMutationHandlers.ts";
 import { makeMemorySaveSuggestions } from "../../../memory/MemorySaveSuggestions.ts";
 import { memoryOperationDigest } from "../../../memory/MemoryDecider.ts";
+import {
+  decodeLegacyError,
+  decodeLegacyMutationReceipt,
+  decodeLegacyUpsert,
+} from "../../../memory/testkit/FrozenMemoryV1.ts";
+
 import * as Fixture from "./handlers.testkit.ts";
 
 const origin = {
@@ -233,4 +239,91 @@ it.effect("body-bearing suggestion requests require a person session even with m
       ]);
     }
   }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect.each([false, true])("WS mutation errors project for request opt-in %s", (optedIn) =>
+  Effect.gen(function* () {
+    const memory = yield* Service.MemoryService;
+    const handlers = makeMemoryMutationHandlers(
+      memory,
+      { principalKind: "person" },
+      Effect.void,
+      Effect.void,
+    );
+    const base = Fixture.upsert();
+    const option = optedIn ? { includeFailureDetails: true as const } : {};
+    const oversized = {
+      ...base,
+      ...option,
+      payload: {
+        ...base.payload,
+        evidence: [
+          {
+            origin: "thread" as const,
+            sourceThread: origin,
+            watermark: {
+              fromEventId: M.EventId.make("e".repeat(63000)),
+              toEventId: M.EventId.make("end"),
+              throughSequence: 1,
+            },
+            messageIds: [],
+          },
+        ],
+      },
+    };
+    const failure = yield* Effect.flip(
+      handlers[M.WS_METHODS.memoryUpsert](optedIn ? oversized : decodeLegacyUpsert(oversized)),
+    );
+    if (optedIn)
+      expect(failure).toMatchObject({
+        code: "capacity_exceeded",
+        capacity: { dimension: "payload_bytes" },
+      });
+    else expect(decodeLegacyError({ ...failure })).toMatchObject({ code: "payload_too_large" });
+
+    const wide = {
+      ...base,
+      ...option,
+      payload: {
+        ...base.payload,
+        derivedFromMemoryRevisions: Array.from({ length: 101 }, (_, n) =>
+          M.MemoryRevisionId.make(Fixture.id(1000 + n)),
+        ),
+      },
+    };
+    const upgrade = yield* Effect.flip(handlers[M.WS_METHODS.memoryUpsert](wide));
+    if (optedIn) expect(upgrade.code).toBe("hub_upgrade_required");
+    else expect(decodeLegacyError({ ...upgrade }).code).toBe("thread_lineage_incomplete");
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect(
+  "WS mutation receipts retain terminal failure for legacy requests and rich details on opt-in",
+  () =>
+    Effect.gen(function* () {
+      const memory = yield* Service.MemoryService;
+      const upsert = Fixture.upsert();
+      const input = { ...localRequest, operationId: upsert.operationId, expectedHeads: [] };
+      const receipt: M.MemoryMutationReceipt = {
+        operationId: input.operationId,
+        memoryId: input.memoryId,
+        outcome: "rejected",
+        failureCode: "hub_unavailable",
+        revisionId: null,
+        pendingSync: false,
+      };
+      const handlers = makeMemoryMutationHandlers(
+        { ...memory, forget: () => Effect.succeed({ operationDigest: "0".repeat(64), receipt }) },
+        { principalKind: "person" },
+        Effect.void,
+        Effect.void,
+      );
+      const legacy = yield* handlers[M.WS_METHODS.memoryForget](input);
+      expect(decodeLegacyMutationReceipt(legacy)).toMatchObject({
+        outcome: "rejected",
+        failureCode: "unavailable",
+      });
+      const optedIn = { ...input, includeFailureDetails: true as const };
+      expect(yield* handlers[M.WS_METHODS.memoryForget](optedIn)).toEqual(receipt);
+    }).pipe(Effect.provide(Fixture.layer)),
 );
