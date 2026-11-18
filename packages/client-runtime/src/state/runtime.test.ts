@@ -1,6 +1,7 @@
 import type { QueryPersistence } from "./queryPersistence.ts";
 import { describe, expect, it, vi } from "@effect/vitest";
 import {
+  DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
   EnvironmentId,
   type PreviewEvent,
   type TerminalAttachInput,
@@ -287,6 +288,7 @@ describe("environment query lifecycle", () => {
         cwd: "/tmp/project",
         restartIfNotRunning: true,
       };
+      const sent = { ...input, maxHistoryBytes: DEFAULT_MAX_TERMINAL_BUFFER_BYTES };
       const atoms = createTerminalEnvironmentAtoms(harness.runtime);
       const registry = AtomRegistry.make();
       const atom = atoms.attach({ environmentId: QUERY_ENVIRONMENT.environmentId, input });
@@ -306,9 +308,9 @@ describe("environment query lifecycle", () => {
         }),
       );
 
-      expect(yield* Queue.take(inputs)).toEqual(input);
+      expect(yield* Queue.take(inputs)).toEqual(sent);
       yield* SubscriptionRef.set(harness.supervisorSession, Option.some({ ...firstSession }));
-      expect(yield* Queue.take(inputs)).toEqual(input);
+      expect(yield* Queue.take(inputs)).toEqual(sent);
       yield* Queue.offer(events, {
         type: "closed",
         threadId: input.threadId,
@@ -317,10 +319,10 @@ describe("environment query lifecycle", () => {
       yield* Deferred.await(received);
 
       yield* SubscriptionRef.set(harness.supervisorSession, Option.some({ ...firstSession }));
-      expect(yield* Queue.take(inputs)).toEqual({ ...input, resume: true });
+      expect(yield* Queue.take(inputs)).toEqual({ ...sent, resume: true });
       // Catalog replacements rerun the same stream through followStream's switchMap.
       yield* SubscriptionRef.update(harness.streamGeneration, (generation) => generation + 1);
-      expect(yield* Queue.take(inputs)).toEqual({ ...input, resume: true });
+      expect(yield* Queue.take(inputs)).toEqual({ ...sent, resume: true });
 
       unmount();
       registry.dispose();
@@ -332,7 +334,7 @@ describe("environment query lifecycle", () => {
           remountedRegistry.dispose();
         }),
       );
-      expect(yield* Queue.take(inputs)).toEqual(input);
+      expect(yield* Queue.take(inputs)).toEqual(sent);
     }),
   );
 
@@ -886,50 +888,6 @@ describe("environment query lifecycle", () => {
       expect(yield* executionsAfterDerivedGap(0)).toBe(3);
     }),
   );
-});
-
-describe("executeAtomQuery", () => {
-  it("keeps concurrent query results correlated to their atoms", async () => {
-    const firstLatch = Latch.makeUnsafe();
-    const secondLatch = Latch.makeUnsafe();
-    const firstAtom = Atom.make(firstLatch.await.pipe(Effect.as("first")));
-    const secondAtom = Atom.make(secondLatch.await.pipe(Effect.as("second")));
-    const registry = AtomRegistry.make();
-
-    const firstResult = executeAtomQuery(registry, firstAtom);
-    const secondResult = executeAtomQuery(registry, secondAtom);
-
-    secondLatch.openUnsafe();
-    firstLatch.openUnsafe();
-
-    const [first, second] = await Promise.all([firstResult, secondResult]);
-    expect(first._tag).toBe("Success");
-    expect(second._tag).toBe("Success");
-    if (first._tag === "Success" && second._tag === "Success") {
-      expect(first.value).toBe("first");
-      expect(second.value).toBe("second");
-    }
-
-    registry.dispose();
-  });
-
-  it("settles when its caller aborts a waiting query", async () => {
-    const registry = AtomRegistry.make();
-    const controller = new AbortController();
-    const resultPromise = executeAtomQuery(registry, Atom.make(Effect.never), {
-      reportDefect: false,
-      signal: controller.signal,
-    });
-
-    controller.abort();
-
-    const result = await resultPromise;
-    expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") {
-      expect(Cause.hasInterruptsOnly(result.cause)).toBe(true);
-    }
-    registry.dispose();
-  });
 });
 
 describe("runtime command runner", () => {

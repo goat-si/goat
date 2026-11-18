@@ -89,6 +89,12 @@ import {
   type ProjectRepository,
   type StatTarget,
 } from "./projectRepositories.ts";
+import {
+  hasAuthoritativeMediaRepository,
+  listsRepository,
+  readProjectShells,
+  resolveProjectRepositories,
+} from "./projectRepositoryMembership.ts";
 
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -367,15 +373,6 @@ export interface SupportedProject {
   readonly upstream: boolean;
 }
 
-/** requireProject's own-repository match: `repository` on `host`, or on any host when undefined. */
-const listsRepository = (
-  candidate: SupportedProject,
-  repository: string,
-  host: string | undefined,
-) =>
-  candidate.repository.toLowerCase() === repository.toLowerCase() &&
-  (host === undefined || host === candidate.host);
-
 interface WorkspaceProjects {
   readonly supported: ReadonlyArray<SupportedProject>;
   readonly unimplemented: ReadonlyMap<
@@ -594,34 +591,13 @@ export const make = Effect.gen(function* () {
 
   const readWorkspaceProjects = (
     filter: Pick<PullRequestListInput, "projectId" | "projectIds" | "host">,
+    repositories = readProjectShells(projects, filter).pipe(
+      Effect.flatMap((shells) =>
+        resolveProjectRepositories(shells, repositoryIdentities, REPOSITORY_CONCURRENCY),
+      ),
+    ),
   ): Effect.Effect<WorkspaceProjects, PullRequestError> =>
-    (filter.projectId === undefined
-      ? projects.listShells(
-          filter.projectIds === undefined ? undefined : { projectIds: filter.projectIds },
-        )
-      : projects.getShell(filter.projectId).pipe(Effect.map(Option.toArray))
-    ).pipe(
-      Effect.mapError(
-        (error) =>
-          new PullRequestOperationError({
-            operation: "listProjects",
-            detail: "The project list could not be read.",
-            cause: error,
-          }),
-      ),
-      Effect.flatMap((projects) =>
-        Effect.forEach(
-          projects,
-          (project) =>
-            project.repositoryIdentity != null
-              ? Effect.succeed(project)
-              : repositoryIdentities
-                  .resolve(project.workspaceRoot)
-                  .pipe(Effect.map((repositoryIdentity) => ({ ...project, repositoryIdentity }))),
-          { concurrency: REPOSITORY_CONCURRENCY },
-        ),
-      ),
-      Effect.map(projectRepositories),
+    repositories.pipe(
       Effect.flatMap((repositories) =>
         resolveRemoteHosts(repositories, filter).pipe(
           Effect.map((remoteHosts) => ({ remoteHosts, repositories })),
@@ -690,14 +666,31 @@ export const make = Effect.gen(function* () {
     );
 
   // Every active project, unlike requireProject's one, since a client's read scope is the environment.
-  const hasProjectRepository: PullRequestService["Service"]["hasProjectRepository"] = (input) => {
+  const hasProjectRepository: PullRequestService["Service"]["hasProjectRepository"] = Effect.fn(
+    "PullRequestService.hasProjectRepository",
+  )(function* (input) {
     const host = input.host.trim().toLowerCase();
-    return listWorkspaceProjects({ host }).pipe(
-      Effect.map(({ supported }) =>
-        supported.some((candidate) => listsRepository(candidate, input.repository.trim(), host)),
-      ),
+    const repository = input.repository.trim().toLowerCase();
+    const shells = yield* readProjectShells(projects, {});
+    if (hasAuthoritativeMediaRepository(projectRepositories(shells), host, repository, registry))
+      return true;
+    const repositories = yield* resolveProjectRepositories(
+      shells,
+      repositoryIdentities,
+      REPOSITORY_CONCURRENCY,
     );
-  };
+    if (hasAuthoritativeMediaRepository(repositories, host, repository, registry)) return true;
+    if (
+      !repositories.some(
+        ({ identity }) =>
+          identity?.provider !== undefined &&
+          sourceControlDefinitions.repositorySelector(identity)?.toLowerCase() === repository,
+      )
+    )
+      return false;
+    const { supported } = yield* readWorkspaceProjects({ host }, Effect.succeed(repositories));
+    return supported.some((candidate) => listsRepository(candidate, repository, host));
+  });
 
   // Azure derives organization from the checkout; require the matching repository.
   const requireProject = (ref: PullRequestRef): Effect.Effect<SupportedProject, PullRequestError> =>
