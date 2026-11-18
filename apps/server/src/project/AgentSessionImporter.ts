@@ -1,4 +1,3 @@
-import { sameTranscriptIdentity } from "./AgentSessionTranscriptIdentity.ts";
 import {
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
@@ -34,12 +33,15 @@ import * as Stream from "effect/Stream";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
 import { decodeImportedTranscriptPayload } from "./AgentSessionImportedTranscripts.ts";
 import * as ProjectService from "./ProjectService.ts";
+
+const isThreadNotFound = Schema.is(ProjectionStore.ProjectionStoreThreadNotFoundError);
 
 const IMPORT_EVENT_PREFIX = "agent-session-import:v2";
 const CLAUDE_SESSION_ID_PATTERN =
@@ -83,6 +85,24 @@ function dateTime(value: string): DateTime.Utc {
   return DateTime.makeUnsafe(value);
 }
 
+function matchesImportedMessages(
+  threadId: ThreadId,
+  stored: ReadonlyArray<OrchestrationV2ConversationMessage>,
+  incoming: ReadonlyArray<AgentSessionScanner.AgentSessionThreadMessage>,
+): boolean {
+  if (stored.length !== incoming.length) return false;
+  // Message IDs carry the import ordinal even when native timestamps are out of order.
+  const byId = new Map(stored.map((message) => [message.id, message]));
+  return incoming.every(({ role, text }, index) => {
+    const message = byId.get(importMessageId(threadId, index));
+    return message?.role === role && message.text === text;
+  });
+}
+
+function importMessageId(threadId: ThreadId, index: number): MessageId {
+  return MessageId.make(`${threadId}:${String(index).padStart(6, "0")}`);
+}
+
 type HistoryMessage = Omit<AgentSessionScanner.AgentSessionThreadMessage, "role"> & {
   readonly role: AgentSessionScanner.AgentSessionThreadMessage["role"] | "reasoning";
 };
@@ -101,7 +121,7 @@ function messageEvents(input: {
 }): ReadonlyArray<OrchestrationV2DomainEvent> {
   const ordinal = input.index + 1;
   const suffix = String(input.index).padStart(6, "0");
-  const messageId = MessageId.make(`${input.threadId}:${suffix}`);
+  const messageId = importMessageId(input.threadId, input.index);
   const turnItemId = TurnItemId.make(
     `${IMPORT_EVENT_PREFIX}:turn-item:${input.threadId}:${suffix}`,
   );
@@ -215,18 +235,20 @@ const make = Effect.gen(function* () {
           (cause) => new AgentSessionScanError({ operation: "read-projects", cause }),
         ),
       );
-    const completedSources = runtimeRows.flatMap((runtime) => {
-      const payload = decodeImportedTranscriptPayload(runtime.runtimePayload);
-      if (
-        Option.isNone(payload) ||
-        payload.value.cwd === undefined ||
-        normalizeProjectPathForComparison(payload.value.cwd) !==
-          normalizeProjectPathForComparison(project.workspaceRoot)
-      ) {
-        return [];
-      }
-      return payload.value.importedTranscripts ?? [];
-    });
+    const completedSources = (yield* Effect.forEach(runtimeRows, (runtime) => {
+      const imported = decodeImportedTranscriptPayload(runtime.runtimePayload).pipe(
+        Option.flatMapNullishOr((payload) => payload.importedTranscripts),
+      );
+      if (Option.isNone(imported) || imported.value.length === 0) return Effect.succeed([]);
+      return orchestrator.getThreadRecords(runtime.threadId, []).pipe(
+        Effect.map(({ thread }) => (thread.projectId === input.projectId ? imported.value : [])),
+        Effect.catch((cause) =>
+          isThreadNotFound(cause.cause)
+            ? Effect.succeed([])
+            : Effect.fail(new AgentSessionScanError({ operation: "read-projects", cause })),
+        ),
+      );
+    })).flat();
     const outcomes = scanner.recentThreads(project.workspaceRoot, completedSources, input);
     const importedThreadIds = new Set<ThreadId>();
     let importedCount = 0;
@@ -244,12 +266,20 @@ const make = Effect.gen(function* () {
         );
         if (outcome._tag === "AlreadyImported") {
           importedThreadIds.add(threadId);
-          importedCount += 1;
           return;
         }
         if (outcome._tag === "Duplicate") {
           if (importedThreadIds.has(threadId)) {
-            yield* runtimes.recordImportedTranscript({ threadId, source }).pipe(Effect.ignore);
+            const existing = yield* Effect.option(
+              orchestrator.getThreadRecords(threadId, ["messages"]),
+            );
+            if (
+              Option.isSome(existing) &&
+              existing.value.thread.projectId === input.projectId &&
+              matchesImportedMessages(threadId, existing.value.messages, outcome.messages)
+            ) {
+              yield* runtimes.recordImportedTranscript({ threadId, source }).pipe(Effect.ignore);
+            }
           }
           return;
         }
@@ -286,7 +316,9 @@ const make = Effect.gen(function* () {
             },
             { onConflict: "ignore" },
           );
-          const existing = yield* Effect.option(orchestrator.getThreadRecords(threadId, []));
+          const existing = yield* Effect.option(
+            orchestrator.getThreadRecords(threadId, ["messages"]),
+          );
           if (Option.isSome(existing)) {
             if (existing.value.thread.projectId !== input.projectId) {
               return yield* new AgentSessionThreadProjectConflictError({
@@ -298,21 +330,13 @@ const make = Effect.gen(function* () {
             if (existing.value.thread.historyOrigin !== "v1_import") {
               return yield* new AgentSessionThreadModifiedError({ threadId });
             }
-            // Other recorded transcripts mean this one changed after the import, and the
-            // thread does not hold its new messages, so it must stay unrecorded.
-            const recorded = Option.flatMap(yield* runtimes.getByThreadId({ threadId }), (row) =>
-              decodeImportedTranscriptPayload(row.runtimePayload),
-            ).pipe(Option.flatMapNullishOr((payload) => payload.importedTranscripts));
-            if (
-              Option.isSome(recorded) &&
-              recorded.value.length > 0 &&
-              !recorded.value.some((imported) => sameTranscriptIdentity(imported, source))
-            ) {
+            if (!matchesImportedMessages(threadId, existing.value.messages, thread.messages)) {
               return false;
             }
             yield* persistRuntime;
             yield* runtimes.recordImportedTranscript({ threadId, source });
-            return true;
+            importedThreadIds.add(threadId);
+            return null;
           }
 
           const model = thread.model ?? DEFAULT_MODEL_BY_PROVIDER[driver] ?? DEFAULT_MODEL;

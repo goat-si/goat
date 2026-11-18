@@ -217,12 +217,12 @@ it.effect.each([
         includePi: true,
       }),
     );
-    expect(modern).toEqual({ importedCount: 102, skippedCount: 0 });
+    expect(modern).toEqual({ importedCount: 100, skippedCount: 0 });
     const imported = yield* runtimes.list();
     expect(imported.filter((row) => row.providerInstanceId === "pi")).toHaveLength(100);
     expect(imported).toHaveLength(102);
     expect(yield* importer.importRecentAgentThreads(legacyInput)).toEqual({
-      importedCount: 2,
+      importedCount: 0,
       skippedCount: 0,
     });
   }).pipe(Effect.scoped, Effect.provide(testLayer)),

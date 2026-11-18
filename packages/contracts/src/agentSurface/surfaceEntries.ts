@@ -40,7 +40,7 @@ const CORE_SIGNATURES = [
   "(pull_request.link :threadId? :url? ...)",
   "(pull_request.watch :threadId? :url? ...)",
   "(pull_request.unwatch :threadId? :url? ...)",
-  "(pull_request.list :threadId?)",
+  "(pull_request.list :threadId? :states?[] :cursor?)",
   "(review_findings.record :taskId :entries[] ...)",
   "(host.status :host? :placement?{...} ...)",
   "(provider.list :search?)",

@@ -25,18 +25,27 @@ export const pullRequestWakePrefix = (key: WatchedLink) =>
   `${PULL_REQUEST_WAKE_MESSAGE_PREFIX}${encodeURIComponent(threadPullRequestKeyOf(key))}:`;
 
 const CHECKS_ON = "checks@";
+const ENDED = "ended:";
 
-/** `checksOn` is the head a wake reports nothing but check results for. */
+/**
+ * `checksOn` is the head a wake reports nothing but check results for; `ended` marks the wake a
+ * watch ended on, which a new watch on the same pull request takes back.
+ */
 export const pullRequestWakeMessageId = (
   key: WatchedLink,
   unique: string,
   checksOn?: string | null,
+  ended?: boolean,
 ) =>
   MessageId.make(
     pullRequestWakePrefix(key) +
       (checksOn ? `${CHECKS_ON}${encodeURIComponent(checksOn)}:` : "") +
+      (ended === true ? ENDED : "") +
       unique,
   );
+
+export const isPullRequestEndingWake = (id: string, prefix: string) =>
+  id.startsWith(prefix) && id.slice(prefix.length).startsWith(ENDED);
 
 /** The notice id of a pull request's kept context inside a digest. */
 export const pullRequestHeldNoticeId = (key: WatchedLink) => `${pullRequestWakePrefix(key)}held`;

@@ -1,7 +1,10 @@
 import { useThreadContextHosts } from "~/lib/useThreadContextHosts";
 import { useProject } from "~/state/entities";
 import { scopeProjectRef } from "@goat/client-runtime/environment";
-import { matchComposerThreadItems } from "@goat/client-runtime/composerThreadItems";
+import {
+  composerThreadSearchEnvironments,
+  matchComposerThreadItems,
+} from "@goat/client-runtime/composerThreadItems";
 import {
   composerThreadMayRunUnattended,
   matchComposerAppItems,
@@ -161,8 +164,12 @@ export function useComposerMenuItems({
     isPathTrigger ? serverEnvironment.computerUseApps({ environmentId, input: {} }) : null,
   );
   const computerUseApps = computerUseAppsQuery.data?.apps ?? EMPTY_COMPUTER_USE_APPS;
-  // Mounts older settled threads matching the mention, which shells may leave out.
-  useThreadSearch(isPathTrigger ? [environmentId] : [], pathTriggerQuery, { titlesOnly: true });
+  // Older settled threads may be missing from the shells on any reachable host.
+  useThreadSearch(
+    composerThreadSearchEnvironments(isPathTrigger ? environmentId : null, sshHostsByEnvironment),
+    pathTriggerQuery,
+    { titlesOnly: true },
+  );
   const previewTabsQuery = useEnvironmentQuery(
     isPathTrigger && activeThreadId
       ? previewEnvironment.list({ environmentId, input: { threadId: activeThreadId } })
