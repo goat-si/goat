@@ -227,3 +227,57 @@ effectIt.effect(
       ).toEqual([]);
     }),
 );
+
+effectIt.effect.each(["accepted", "ambiguous", "unsent", undefined] as const)(
+  "recovers missed input on Send after two legacy Resumes with %s delivery on the second",
+  (inputDelivery) =>
+    Effect.sync(() => {
+      const {
+        runs: [original, firstResume],
+        attempts: [originalAttempt, firstAttempt],
+        messages,
+      } = makeLocalCommandHarness({
+        text: "Continue where you left off.",
+        manualResume: { accepted: false, supported: false },
+        previousTurn: { runStatus: "interrupted", turnStatus: "interrupted" },
+      }).projection();
+      const secondResume = {
+        ...firstResume!,
+        id: RunId.make("second-legacy-resume"),
+        activeAttemptId: RunAttemptId.make("second-legacy-resume-attempt"),
+        userMessageId: MessageId.make("second-legacy-resume-message"),
+        manualContinuationOfRunId: firstResume!.id,
+        ordinal: 3,
+        status: "interrupted" as const,
+      };
+      const { manualContinuationOfRunId: _manualSource, ...followUp } = secondResume;
+      const send = {
+        ...followUp,
+        id: RunId.make("follow-up-send"),
+        userMessageId: MessageId.make("follow-up-send-message"),
+        ordinal: 4,
+        status: "starting" as const,
+      };
+      const missed = missedTurnInputRuns(
+        {
+          runs: [original!, { ...firstResume!, status: "interrupted" }, secondResume],
+          attempts: [
+            originalAttempt!,
+            { ...firstAttempt!, status: "interrupted", inputDelivery: "unsent" },
+            {
+              ...firstAttempt!,
+              id: secondResume.activeAttemptId,
+              runId: secondResume.id,
+              status: "interrupted",
+              ...(inputDelivery === undefined ? {} : { inputDelivery }),
+            },
+          ],
+          messages,
+        },
+        send,
+      );
+      expect(missed.map((run) => run.userMessageId)).toEqual(
+        inputDelivery === "unsent" ? [original!.userMessageId] : [],
+      );
+    }),
+);

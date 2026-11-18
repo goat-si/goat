@@ -1,3 +1,4 @@
+import { MAX_CONTINUATION_CHAIN } from "./ContinuationChain.ts";
 import type { MessageId, OrchestrationV2ThreadProjection, RunId } from "@goat/contracts";
 
 type RunInputDelivery = NonNullable<
@@ -41,19 +42,24 @@ export function indexRunInputDelivery({
   const replayed = new Map<MessageId, Exclude<RunInputDelivery, "unsent">>();
   for (const attempt of attempts) {
     if (attempt.inputDelivery === "unsent" || attempt.status === "pending") continue;
-    const source = runsById.get(attempt.runId)?.manualContinuationOfRunId;
-    const sourceMessageId =
-      attempt.replayedInputMessageId ??
-      (source === undefined || attempt.reason === "steering_restart"
-        ? undefined
-        : runsById.get(source)?.userMessageId);
-    if (sourceMessageId !== undefined && replayed.get(sourceMessageId) !== "accepted")
-      replayed.set(
-        sourceMessageId,
-        attempt.replayedInputMessageId !== undefined && attempt.inputDelivery === "accepted"
-          ? "accepted"
-          : "ambiguous",
-      );
+    const sourceMessageId = attempt.replayedInputMessageId;
+    if (sourceMessageId !== undefined) {
+      if (replayed.get(sourceMessageId) !== "accepted")
+        replayed.set(
+          sourceMessageId,
+          attempt.inputDelivery === "accepted" ? "accepted" : "ambiguous",
+        );
+      continue;
+    }
+    if (attempt.reason === "steering_restart") continue;
+    let sourceId = runsById.get(attempt.runId)?.manualContinuationOfRunId;
+    // Older replays could skip unsent Resume turns and send an ancestor's input.
+    for (let depth = 0; sourceId !== undefined && depth <= MAX_CONTINUATION_CHAIN; depth++) {
+      const source = runsById.get(sourceId);
+      if (source === undefined) break;
+      if (!replayed.has(source.userMessageId)) replayed.set(source.userMessageId, "ambiguous");
+      sourceId = source.manualContinuationOfRunId;
+    }
   }
   for (const run of runs) {
     const own = evidence.get(run.id);
