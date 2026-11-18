@@ -36,7 +36,7 @@ it.effect("closing the Pen membership view closes a socket without revoking its 
     const sessions = yield* Sessions.SessionStore;
     const auth = yield* Auth.EnvironmentAuth;
     const node = "a".repeat(26);
-    yield* sessions.setPenMembersAdmitted(new Set([node]));
+    yield* sessions.followPenMembers(Effect.succeed(new Set([node])));
     const issued = yield* sessions.issue({ penMemberNode: node });
     const verified = yield* sessions.verify(issued.token, MAIN_LISTENER);
     const ticket = yield* auth.issueWebSocketTicket(verified, { use: "rpc" });
@@ -73,12 +73,12 @@ it.effect("closing the Pen membership view closes a socket without revoking its 
       (client) => Effect.sync(() => client.terminate()),
     );
     yield* Deferred.await(admitted);
-    yield* sessions.setPenMembersAdmitted("closed");
+    yield* sessions.followPenMembers(Effect.succeed("closed"));
     yield* Effect.promise(() => closed.promise);
     expect(yield* sessions.listPenMemberSessions).toEqual([
       { sessionId: issued.sessionId, penMemberNode: node },
     ]);
-    yield* sessions.setPenMembersAdmitted(new Set([node]));
+    yield* sessions.followPenMembers(Effect.succeed(new Set([node])));
     expect((yield* sessions.readActiveScopes(issued.sessionId)).length).toBeGreaterThan(0);
   }).pipe(Effect.scoped, Effect.provide(layer)),
 );

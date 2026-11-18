@@ -9,14 +9,25 @@ import { PenMembershipWatch } from "./PenMembershipWatch.ts";
 
 const RETRY = { schedule: Schedule.exponential("1 second"), times: 6 };
 
+const membersOf = (view: PenMembershipView) =>
+  view.kind === "ready"
+    ? new Set(view.snapshot.members.map((member) => member.nodeId))
+    : new Set<string>();
+
 /**
  * Keeps the sessions other Pen members hold on this server in step with this machine's Pen
- * membership. The fence in SessionStore is the enforcement and starts closed; this only tells it
- * who is a member now, and revokes for good what a departed member held. Pen being down closes
- * the fence and revokes nothing, so the same sessions work again when the member list returns.
+ * membership. The fence in SessionStore is the enforcement, starts closed and reads the watch's
+ * newest view at every check; this publishes what changed and revokes for good what a departed
+ * member held. Pen being down closes the fence and revokes nothing, so the same sessions work
+ * again when the member list returns.
  */
 export const make = Effect.fn("PenMemberSessions.make")(function* () {
   const sessions = yield* SessionStore;
+  const watch = yield* PenMembershipWatch;
+  const admission = watch.current.pipe(
+    Effect.map((view) => (view.kind === "ready" ? membersOf(view) : ("closed" as const))),
+  );
+  yield* sessions.followPenMembers(admission);
 
   const revokeUnless = Effect.fn("PenMemberSessions.revokeUnless")(function* (
     members: ReadonlySet<string>,
@@ -26,14 +37,10 @@ export const make = Effect.fn("PenMemberSessions.make")(function* () {
   });
 
   const apply = Effect.fn("PenMemberSessions.apply")(function* (view: PenMembershipView) {
-    if (view.kind === "unavailable") return yield* sessions.setPenMembersAdmitted("closed");
-    const members =
-      view.kind === "ready"
-        ? new Set(view.snapshot.members.map((member) => member.nodeId))
-        : new Set<string>();
     // The fence first: a failed or slow cleanup never leaves a departed member admitted.
-    yield* sessions.setPenMembersAdmitted(view.kind === "ready" ? members : "closed");
-    yield* revokeUnless(members).pipe(
+    yield* sessions.followPenMembers(admission);
+    if (view.kind === "unavailable") return;
+    yield* revokeUnless(membersOf(view)).pipe(
       // A list that could not be read arrives as a defect; it is retried like any failure.
       Effect.sandbox,
       Effect.retry(RETRY),
@@ -46,7 +53,7 @@ export const make = Effect.fn("PenMemberSessions.make")(function* () {
 const follow = Effect.gen(function* () {
   const { apply } = yield* make();
   const watch = yield* PenMembershipWatch;
-  // A newer view interrupts the cleanup of an older one; the fence is already set by then.
+  // A newer view interrupts the cleanup of an older one; the fence already reads the newest.
   yield* watch.changes.pipe(
     Stream.switchMap((view) => Stream.fromEffect(apply(view))),
     Stream.runDrain,

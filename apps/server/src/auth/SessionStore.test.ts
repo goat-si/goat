@@ -146,7 +146,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("SessionStore.lay
           (yield* sessions.verifyWebSocketToken(ticket.token, MAIN_LISTENER).pipe(Effect.result))
             ._tag,
         ).toBe("Failure");
-        yield* sessions.setPenMembersAdmitted(new Set([nodeId]));
+        yield* sessions.followPenMembers(Effect.succeed(new Set([nodeId])));
         expect(yield* sessions.readActiveScopes(issued.sessionId)).toEqual(["orchestration:read"]);
         const late = yield* sessions.issue({ penMemberNode: "b".repeat(26) });
         expect((yield* sessions.verify(late.token, MAIN_LISTENER).pipe(Effect.result))._tag).toBe(
@@ -167,7 +167,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("SessionStore.lay
         const invalidation = yield* sessions
           .awaitInvalidation(issued.sessionId)
           .pipe(Effect.forkScoped({ startImmediately: true }));
-        yield* sessions.setPenMembersAdmitted("closed");
+        yield* sessions.followPenMembers(Effect.succeed("closed"));
         yield* Fiber.join(invalidation);
         expect(
           (yield* sessions.listActive()).some((session) => session.sessionId === issued.sessionId),
@@ -175,7 +175,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("SessionStore.lay
         expect((yield* sessions.readActiveScopes(issued.sessionId).pipe(Effect.result))._tag).toBe(
           "Failure",
         );
-        yield* sessions.setPenMembersAdmitted(new Set([nodeId]));
+        yield* sessions.followPenMembers(Effect.succeed(new Set([nodeId])));
         expect(yield* sessions.readActiveScopes(issued.sessionId)).toEqual(["orchestration:read"]);
         expect(
           (yield* sessions.listActive()).some((session) => session.sessionId === issued.sessionId),

@@ -4,6 +4,7 @@ import { expect, it } from "@effect/vitest";
 import type { PenMembershipView } from "@goat/ssh/penMembershipWatch";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 
 import * as Auth from "../auth/EnvironmentAuth.ts";
 import { MAIN_LISTENER } from "../auth/connectionContext.testkit.ts";
@@ -13,6 +14,7 @@ import * as Config from "../config.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as PenMemberSessions from "./PenMemberSessions.ts";
+import { PenMembershipWatch } from "./PenMembershipWatch.ts";
 
 const layer = Auth.layer.pipe(
   Layer.provideMerge(Sqlite.layerMemory),
@@ -45,7 +47,19 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStore;
-      const { apply } = yield* PenMemberSessions.make();
+      let current: PenMembershipView = { kind: "unavailable", reason: "stale" };
+      const made = yield* PenMemberSessions.make().pipe(
+        Effect.provideService(PenMembershipWatch, {
+          current: Effect.sync(() => current),
+          changes: Stream.never,
+        }),
+      );
+      // The watch's current view moves first; its notification follows.
+      const apply = (view: PenMembershipView) =>
+        Effect.suspend(() => {
+          current = view;
+          return made.apply(view);
+        });
       const a = yield* sessions.issue({ penMemberNode: id("a") });
       const b = yield* sessions.issue({ penMemberNode: id("b") });
       const ordinary = yield* sessions.issue({ subject: "browser" });
@@ -84,4 +98,27 @@ it.effect(
       expect(yield* held).toEqual([]);
       expect(yield* works(ordinary.token)).toBe(true);
     }).pipe(Effect.provide(layer)),
+);
+
+it.effect("a member's session stops working as soon as Pen's newest list drops it", () =>
+  Effect.gen(function* () {
+    let current: PenMembershipView = ready("a");
+    const sessions = yield* SessionStore;
+    const { apply } = yield* PenMemberSessions.make().pipe(
+      Effect.provideService(PenMembershipWatch, {
+        current: Effect.sync(() => current),
+        changes: Stream.never,
+      }),
+    );
+    const a = yield* sessions.issue({ penMemberNode: id("a") });
+    const works = sessions.verify(a.token, MAIN_LISTENER).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    );
+    yield* apply(ready("a"));
+    expect(yield* works).toBe(true);
+    // The watch moved on; the notification that would apply it has not run yet.
+    current = { kind: "not-member" };
+    expect(yield* works).toBe(false);
+  }).pipe(Effect.provide(layer)),
 );

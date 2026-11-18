@@ -1,8 +1,10 @@
 import { expect, it } from "@effect/vitest";
 import { AuthSessionId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import * as Fence from "./PenMemberSessionFence.ts";
 
 it.effect("only admits an exact valid marker and suspends when the view closes", () =>
@@ -22,9 +24,9 @@ it.effect("only admits an exact valid marker and suspends when the view closes",
         }),
     );
     expect(yield* fence.denied(id)).toBe(true);
-    yield* fence.setAdmitted(new Set([node]));
+    yield* fence.follow(Effect.succeed(new Set([node])));
     expect(yield* fence.denied(id)).toBe(false);
-    yield* fence.setAdmitted("closed");
+    yield* fence.follow(Effect.succeed("closed"));
     expect(changes).toEqual(["resume:member", "suspend:member"]);
     yield* fence.observe({
       sessionId: AuthSessionId.make("forged"),
@@ -36,7 +38,7 @@ it.effect("only admits an exact valid marker and suspends when the view closes",
       subject: "browser",
       penMemberNode: null,
     });
-    yield* fence.setAdmitted(new Set([node]));
+    yield* fence.follow(Effect.succeed(new Set([node])));
     expect(yield* fence.denied(AuthSessionId.make("forged"))).toBe(true);
     expect(yield* fence.denied(AuthSessionId.make("ordinary"))).toBe(false);
     for (const row of [
@@ -70,11 +72,57 @@ it.effect("scope checks do not wait for an in-flight admission notification", ()
       () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
     );
     const update = yield* fence
-      .setAdmitted(new Set([node]))
+      .follow(Effect.succeed(new Set([node])))
       .pipe(Effect.forkScoped({ startImmediately: true }));
     yield* Deferred.await(entered);
     expect(yield* fence.denied(id)).toBe(false);
     yield* Deferred.succeed(release, undefined);
     yield* Fiber.join(update);
   }).pipe(Effect.scoped),
+);
+
+it.effect("checks read the newest member list, before any notification is published", () =>
+  Effect.gen(function* () {
+    const id = AuthSessionId.make("member");
+    const node = "a".repeat(26);
+    let members: Fence.PenAdmission = new Set([node]);
+    const fence = yield* Fence.make(
+      [{ sessionId: id, subject: `pen-member:${node}`, penMemberNode: node }],
+      () => Effect.void,
+      () => Effect.void,
+    );
+    yield* fence.follow(Effect.sync(() => members));
+    expect(yield* fence.denied(id)).toBe(false);
+    members = "closed";
+    expect(yield* fence.denied(id)).toBe(true);
+  }),
+);
+
+it.effect("drops expired member sessions, and refuses a new one past the limit", () =>
+  Effect.gen(function* () {
+    const node = "a".repeat(26);
+    const now = yield* DateTime.now;
+    const row = (name: string, minutes: number) => ({
+      sessionId: AuthSessionId.make(name),
+      subject: `pen-member:${node}`,
+      penMemberNode: node,
+      expiresAt: DateTime.add(now, { minutes }),
+    });
+    const fence = yield* Fence.make(
+      [row("soon", 1), row("later", 60)],
+      () => Effect.void,
+      () => Effect.void,
+      {
+        maxTracked: 2,
+      },
+    );
+    yield* fence.follow(Effect.succeed(new Set([node])));
+    // Untracked is never admitted: the third member session is refused while both are live.
+    expect(yield* Effect.exit(fence.guard(row("third", 60)))).toMatchObject({ _tag: "Failure" });
+    expect(fence.tracked()).toBe(2);
+    yield* TestClock.adjust("2 minutes");
+    yield* fence.guard(row("third", 60));
+    expect(fence.tracked()).toBe(2);
+    expect(yield* fence.denied(AuthSessionId.make("third"))).toBe(false);
+  }),
 );

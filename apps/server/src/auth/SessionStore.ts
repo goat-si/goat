@@ -11,7 +11,6 @@ import * as SessionEndLatches from "./SessionEndLatches.ts";
 import * as PenMemberSessionFence from "./PenMemberSessionFence.ts";
 import {
   AuthSessionId,
-  PenId,
   AuthStandardClientScopes,
   type AuthClientMetadata,
   type AuthClientSession,
@@ -160,10 +159,11 @@ export class SessionStore extends Context.Service<
       readonly principalKind?: SessionPrincipalKind;
       readonly penBinding?: AuthSessions.AuthSessionPenBinding;
     }) => Effect.Effect<IssuedSession, SessionCredentialInternalError>;
-    readonly setPenMembersAdmitted: (view: ReadonlySet<string> | "closed") => Effect.Effect<void>;
-    readonly listPenMemberSessions: Effect.Effect<
-      ReadonlyArray<{ readonly sessionId: AuthSessionId; readonly penMemberNode: string }>
-    >;
+    /** Every member-session check reads `read` from now on; publishes what that changed. */
+    readonly followPenMembers: (
+      read: Effect.Effect<PenMemberSessionFence.PenAdmission>,
+    ) => Effect.Effect<void>;
+    readonly listPenMemberSessions: ReturnType<typeof PenMemberSessionFence.listMemberSessions>;
     readonly setCloudWithdrawalPending: (pending: boolean) => Effect.Effect<void>;
     /**
      * Token-free live authority: a memory read with no SQL or lock, so it is safe inside a SQL
@@ -258,7 +258,6 @@ const DEFAULT_SESSION_TTL = Duration.days(30);
 const MARK_USED_INTERVAL_MS = 60_000;
 const DEFAULT_WEBSOCKET_TOKEN_TTL = Duration.minutes(5);
 
-const isPenId = Schema.is(PenId);
 export const make = Effect.gen(function* () {
   const random = yield* SecureRandom.SecureRandom;
   const serverConfig = yield* ServerConfig.ServerConfig;
@@ -353,20 +352,27 @@ export const make = Effect.gen(function* () {
   // Serialize auth mutations through publication: a delayed activity event must
   // never restore a removed grant, and a committed revoke must update the Ref.
   const authorityLock = yield* Semaphore.make(1);
-  let penSessionDenied: (sessionId: AuthSessionId) => Effect.Effect<boolean> = () =>
-    Effect.succeed(false);
-  const emitUpsert = (clientSession: AuthClientSession) =>
-    penSessionDenied(clientSession.sessionId).pipe(
-      Effect.flatMap((denied) =>
-        denied
-          ? Effect.void
-          : PubSub.publish(changesPubSub, { type: "clientUpserted", clientSession }).pipe(
-              Effect.asVoid,
-            ),
+  const penFence = yield* PenMemberSessionFence.make(
+    activeScopeRows,
+    (sessionId) =>
+      PubSub.publish(changesPubSub, { type: "clientRemoved", sessionId }).pipe(Effect.asVoid),
+    (sessionId): Effect.Effect<void> =>
+      loadActiveSession(sessionId).pipe(
+        Effect.flatMap((session) =>
+          Option.isSome(session) ? emitUpsert(session.value) : Effect.void,
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logError("Failed to publish Pen session admission", { cause }),
+        ),
       ),
-    );
+  );
+  const emitUpsert = (clientSession: AuthClientSession): Effect.Effect<void> =>
+    Effect.flatMap(penFence.denied(clientSession.sessionId), (denied) =>
+      denied
+        ? Effect.void
+        : PubSub.publish(changesPubSub, { type: "clientUpserted", clientSession }),
+    ).pipe(Effect.asVoid);
 
-  let forgetPenSession: (sessionId: AuthSessionId) => Effect.Effect<void> = () => Effect.void;
   const sessionEnds = SessionEndLatches.make();
 
   /**
@@ -395,7 +401,7 @@ export const make = Effect.gen(function* () {
         cutFences: neededFences(cutFences, current.verifying),
       };
     }).pipe(
-      Effect.andThen(Effect.forEach(sessionIds, (sessionId) => forgetPenSession(sessionId), { discard: true })),
+      Effect.andThen(Effect.forEach(sessionIds, penFence.forget, { discard: true })),
       Effect.andThen(reason === "removed" ? sessionEnds.cut(sessionIds) : Effect.void),
       Effect.andThen(
         PubSub.publishAll(
@@ -410,22 +416,6 @@ export const make = Effect.gen(function* () {
   const emitRemoved = (sessionId: AuthSessionId) => removeGrants([sessionId]);
 
   const cloudFence = yield* CloudSessionFence.make(activeScopeRows, emitRemoved);
-  const penFence = yield* PenMemberSessionFence.make(
-    activeScopeRows,
-    (sessionId) =>
-      PubSub.publish(changesPubSub, { type: "clientRemoved", sessionId }).pipe(Effect.asVoid),
-    (sessionId) =>
-      loadActiveSession(sessionId).pipe(
-        Effect.flatMap((session) =>
-          Option.isSome(session) ? emitUpsert(session.value) : Effect.void,
-        ),
-        Effect.catchCause((cause) =>
-          Effect.logError("Failed to publish Pen session admission", { cause }),
-        ),
-      ),
-  );
-  forgetPenSession = penFence.forget;
-  penSessionDenied = penFence.denied;
 
   /** Ends sessions whose rows are already revoked or gone. Callers hold authorityLock. */
   const settleEnded = (sessionIds: ReadonlyArray<AuthSessionId>) =>
@@ -667,18 +657,7 @@ export const make = Effect.gen(function* () {
       );
       const issuedAt = yield* DateTime.now;
       const purpose = input?.childSetupPurpose;
-      if (
-        input?.penMemberNode !== undefined &&
-        (!isPenId(input.penMemberNode) || input.subject !== undefined)
-      )
-        return yield* new SessionCredentialIssueError({
-          sessionId,
-          cause: "Invalid Pen member issuance",
-        });
-      const subject =
-        input?.penMemberNode === undefined
-          ? (input?.subject ?? "browser")
-          : `pen-member:${input.penMemberNode}`;
+      const subject = yield* penFence.issueSubject(input, sessionId);
       const principalKind = input?.principalKind ?? defaultPrincipalKind(subject);
       const shapeRefusal = issueShapeRefusal(subject, principalKind, input?.penBinding);
       if (shapeRefusal !== undefined)
@@ -780,6 +759,7 @@ export const make = Effect.gen(function* () {
         sessionId,
         subject,
         penMemberNode: input?.penMemberNode ?? null,
+        expiresAt,
       });
       yield* emitUpsert(
         toAuthClientSession({
@@ -924,14 +904,7 @@ export const make = Effect.gen(function* () {
       });
     }
 
-    // A member session is admitted by its stored marker, so its signed subject must be that row's.
-    if (
-      claims.sub !== row.value.subject &&
-      (row.value.penMemberNode !== null ||
-        claims.sub.startsWith("pen-member:") ||
-        row.value.subject.startsWith("pen-member:"))
-    )
-      return yield* new InvalidSessionTokenPayloadError({ cause: "Session subject mismatch" });
+    yield* penFence.checkSubject(claims.sub, row.value);
     yield* penFence.guard(row.value);
     yield* rememberVerified(
       claims.sid,
@@ -975,7 +948,6 @@ export const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const session = yield* verifyToken(token, startedAt);
           yield* cloudFence.guard(session);
-          yield* penFence.guard(session);
           yield* admitBinding(session, connection);
           // Recorded and bound to the request's scope in one step, so no exit can skip the release.
           const admitted = yield* Effect.acquireRelease(
@@ -1127,10 +1099,7 @@ export const make = Effect.gen(function* () {
         connectedSessionIds: Array.from(connectedSessions.keys()),
       });
       const visible = yield* Effect.filter(rows, (row) =>
-        penFence.observe(row).pipe(
-          Effect.andThen(penFence.denied(row.sessionId)),
-          Effect.map((denied) => !denied),
-        ),
+        Effect.map(penFence.deniedRow(row), (no) => !no),
       );
       return visible.map((row) =>
         toAuthClientSession({
@@ -1230,12 +1199,11 @@ export const make = Effect.gen(function* () {
               (cause) => new SessionCredentialVerificationError({ sessionId, cause }),
             ),
           );
-        if (Option.isSome(row)) yield* penFence.observe(row.value);
         if (
           Option.isNone(row) ||
           row.value.revokedAt !== null ||
           (yield* cloudFence.denied(sessionId)) ||
-          (yield* penFence.denied(sessionId))
+          (yield* penFence.deniedRow(row.value))
         )
           return;
         const now = yield* DateTime.now;
@@ -1256,15 +1224,9 @@ export const make = Effect.gen(function* () {
 
   return SessionStore.of({
     setCloudWithdrawalPending: cloudFence.setPending,
-    setPenMembersAdmitted: (view) => authorityLock.withPermit(penFence.setAdmitted(view)),
-    listPenMemberSessions: Effect.gen(function* () {
-      const rows = yield* authSessions.listActive({ now: yield* DateTime.now });
-      return rows.flatMap((row) =>
-        row.penMemberNode === null
-          ? []
-          : [{ sessionId: row.sessionId, penMemberNode: row.penMemberNode }],
-      );
-    }).pipe(Effect.orDie),
+    followPenMembers: (read) =>
+      penFence.follow(read, (publish) => authorityLock.withPermit(publish)),
+    listPenMemberSessions: PenMemberSessionFence.listMemberSessions(authSessions),
     readActiveScopes,
     cookieName,
     legacyCookieName,
@@ -1283,7 +1245,6 @@ export const make = Effect.gen(function* () {
     verify: (token, connection) =>
       verify(token).pipe(
         Effect.tap(cloudFence.guard),
-        Effect.tap(penFence.guard),
         Effect.tap((session) => admitBinding(session, connection)),
       ),
     verifyStartupDevCredential: () =>
@@ -1291,7 +1252,6 @@ export const make = Effect.gen(function* () {
         ? Effect.fail(new MalformedSessionTokenError({}))
         : verify(devAuth.credential).pipe(
             Effect.tap(cloudFence.guard),
-            Effect.tap(penFence.guard),
             Effect.tap((session) =>
               session.penBinding === undefined
                 ? Effect.void
