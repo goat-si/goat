@@ -37,12 +37,25 @@ const makeFinderCache = Effect.gen(function* () {
     idleTimeToLive: FINDER_IDLE_TTL,
   });
   const invalidated = new WeakSet<object>();
+  const retiring = new Set<Fiber.Fiber<void>>();
   const keyOf = (cwd: string, variant: WorkspaceSearchIndexVariant) => `${variant}\n${cwd}`;
   const busy = (cwd: string) =>
     new WorkspaceSearchIndexCreateFailed({
       cwd,
       reason: "Workspace search indexes are busy. Try again after a search finishes.",
     });
+  // Invalidate removes the key before it awaits teardown. Start it under admission
+  // so no other borrower can acquire the retiring entry.
+  const startRetirement = Effect.fn("WorkspaceSearchFinderCache.startRetirement")(function* (
+    key: string,
+  ) {
+    const fiber = yield* RcMap.invalidate(cache, key).pipe(
+      Effect.forkIn(cache.scope, { startImmediately: true }),
+    );
+    retiring.add(fiber);
+    fiber.addObserver(() => retiring.delete(fiber));
+    return fiber;
+  });
 
   const retain = Effect.fn("WorkspaceSearchFinderCache.retain")(function* (
     cwd: string,
@@ -50,36 +63,47 @@ const makeFinderCache = Effect.gen(function* () {
     cachedOnly: boolean,
   ) {
     const key = keyOf(cwd, variant);
-    const fiber = yield* admission.withPermits(1)(
-      Effect.gen(function* () {
-        if (cache.state._tag === "Closed") return yield* Effect.interrupt;
-        const entries = cache.state.map;
-        let existing = Option.getOrUndefined(MutableHashMap.get(entries, key));
-        if (existing && invalidated.has(existing)) {
-          if (existing.refCount > 0) return undefined;
-          yield* RcMap.invalidate(cache, key);
-          existing = undefined;
-        }
-        if (!existing && (cachedOnly || nativeCapacity === 0)) return undefined;
-        if (!existing && MutableHashMap.size(entries) >= nativeCapacity) {
-          let oldest: string | undefined;
-          let oldestExpiry = Number.POSITIVE_INFINITY;
-          for (const [candidate, entry] of entries) {
-            if (entry.refCount > 0 || entry.expiresAt >= oldestExpiry) continue;
-            oldest = candidate;
-            oldestExpiry = entry.expiresAt;
+    while (true) {
+      const claim = yield* admission.withPermit(
+        Effect.gen(function* () {
+          if (cache.state._tag === "Closed") return yield* Effect.interrupt;
+          const entries = cache.state.map;
+          const existing = Option.getOrUndefined(MutableHashMap.get(entries, key));
+          if (existing && invalidated.has(existing)) {
+            if (existing.refCount > 0) return undefined;
+            return { retirement: yield* startRetirement(key) };
           }
-          if (oldest === undefined) return undefined;
-          yield* RcMap.invalidate(cache, oldest);
-        }
-        // Register the borrower under the lock, then wait for initialization outside it.
-        return yield* Effect.forkChild(RcMap.get(cache, key), { startImmediately: true });
-      }),
-    );
-    if (fiber === undefined) return undefined;
-    return yield* Fiber.join(fiber).pipe(
-      Effect.catchTags({ ExceededCapacityError: () => Effect.fail(busy(cwd)) }),
-    );
+          if (!existing && (cachedOnly || nativeCapacity === 0)) return undefined;
+          if (!existing && MutableHashMap.size(entries) + retiring.size >= nativeCapacity) {
+            // A failed teardown quarantines its slot. Any cold waiter must see that result.
+            const retirement = retiring.values().next().value;
+            if (retirement) return { retirement };
+            let oldest: string | undefined;
+            let oldestExpiry = Number.POSITIVE_INFINITY;
+            for (const [candidate, entry] of entries) {
+              if (entry.refCount > 0 || entry.expiresAt >= oldestExpiry) continue;
+              oldest = candidate;
+              oldestExpiry = entry.expiresAt;
+            }
+            if (oldest === undefined) return undefined;
+            return { retirement: yield* startRetirement(oldest) };
+          }
+          // Register the borrower under the lock, then wait for initialization outside it.
+          const borrower = yield* Effect.forkChild(RcMap.get(cache, key), {
+            startImmediately: true,
+          });
+          return { borrower };
+        }),
+      );
+      if (claim === undefined) return undefined;
+      if (claim.retirement) {
+        yield* Fiber.join(claim.retirement);
+        continue;
+      }
+      return yield* Fiber.join(claim.borrower).pipe(
+        Effect.catchTags({ ExceededCapacityError: () => Effect.fail(busy(cwd)) }),
+      );
+    }
   });
 
   const get = Effect.fn("WorkspaceSearchFinderCache.get")(function* (
@@ -95,16 +119,17 @@ const makeFinderCache = Effect.gen(function* () {
     cwd: string,
     variant: WorkspaceSearchIndexVariant,
   ) {
-    yield* admission.withPermits(1)(
+    const retirement = yield* admission.withPermit(
       Effect.gen(function* () {
         if (cache.state._tag === "Closed") return;
         const key = keyOf(cwd, variant);
         const entry = Option.getOrUndefined(MutableHashMap.get(cache.state.map, key));
         if (!entry) return;
         if (entry.refCount > 0) invalidated.add(entry);
-        else yield* RcMap.invalidate(cache, key);
+        else return yield* startRetirement(key);
       }),
     );
+    if (retirement) yield* Fiber.join(retirement);
   });
 
   return { get, getExisting, invalidate };

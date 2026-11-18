@@ -15,6 +15,7 @@ import { vi } from "vite-plus/test";
 
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspaceSearchIndex from "./WorkspaceSearchIndex.ts";
+import { WorkspaceSearchFinderCache } from "./workspaceSearchFinderCache.ts";
 
 const testLayer = VcsProcess.layer.pipe(Layer.provideMerge(NodeServices.layer));
 
@@ -501,4 +502,83 @@ it.effect("holds the index scope open until native finder teardown completes", (
     expect(beforeCleanup).toBeUndefined();
     expect(teardown).toHaveBeenCalledTimes(1);
   }).pipe(Effect.scoped, Effect.provide(testLayer)),
+);
+
+it.effect.each(["completes", "fails"] as const)(
+  "serves a cached workspace while native teardown is pending and then %s",
+  (outcome) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cache = yield* WorkspaceSearchFinderCache;
+      const cwd = yield* fs.makeTempDirectoryScoped();
+      const started = yield* Deferred.make<string>();
+      const finish = Promise.withResolvers<void>();
+      const live = new Set<string>();
+      let peak = 0;
+      let firstTeardown = true;
+      vi.spyOn(FileFinder, "create").mockImplementation(({ basePath }) => {
+        live.add(basePath);
+        peak = Math.max(peak, live.size);
+        return {
+          ok: true,
+          value: {
+            destroyAsync: async () => {
+              if (firstTeardown) {
+                firstTeardown = false;
+                Deferred.doneUnsafe(started, Effect.succeed(basePath));
+                await finish.promise;
+              }
+              live.delete(basePath);
+            },
+            waitForIndexReady: async () => ({ ok: true, value: true }),
+          } as unknown as FileFinder,
+        };
+      });
+      const read = (root: string) => Effect.scoped(cache.get(root, "paths"));
+      const warmed = new Map<string, WorkspaceSearchIndex.WorkspaceSearchIndex["Service"]>();
+      for (let index = 0; index < 16; index += 1) {
+        const root = path.join(cwd, `repo-${index}`);
+        yield* fs.makeDirectory(root);
+        warmed.set(root, yield* read(root));
+      }
+      const firstCold = path.join(cwd, "cold-a");
+      const secondCold = path.join(cwd, "cold-b");
+      yield* fs.makeDirectory(firstCold);
+      yield* fs.makeDirectory(secondCold);
+      const eviction = yield* read(firstCold).pipe(Effect.forkChild({ startImmediately: true }));
+      try {
+        warmed.delete(yield* Deferred.await(started));
+        const entry = warmed.entries().next().value;
+        if (!entry) return yield* Effect.die("No unrelated cached workspace");
+        const [cachedRoot, cachedIndex] = entry;
+        const hit = yield* read(cachedRoot).pipe(Effect.forkChild({ startImmediately: true }));
+        const overflow = yield* read(secondCold).pipe(Effect.forkChild({ startImmediately: true }));
+        const hitBeforeCleanup = hit.pollUnsafe();
+        const overflowBeforeCleanup = overflow.pollUnsafe();
+        const createdWhileClosing = [live.has(firstCold), live.has(secondCold)];
+        if (outcome === "fails") finish.reject(new Error("native teardown failed"));
+        else finish.resolve();
+
+        expect(hitBeforeCleanup).toEqual(Exit.succeed(cachedIndex));
+        expect(overflowBeforeCleanup).toBeUndefined();
+        expect(createdWhileClosing).toEqual([false, false]);
+        if (outcome === "fails") {
+          expect(Exit.isFailure(yield* Fiber.await(eviction))).toBe(true);
+          yield* TestClock.adjust(0);
+          expect(overflow.pollUnsafe()).toMatchObject({ _tag: "Failure" });
+          // A retry can evict another idle finder even though the failed slot is quarantined.
+          yield* read(secondCold);
+        } else {
+          yield* Fiber.join(eviction);
+          yield* Fiber.join(overflow);
+        }
+        expect(peak).toBe(16);
+      } finally {
+        finish.resolve();
+      }
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(WorkspaceSearchFinderCache.layer.pipe(Layer.provideMerge(testLayer))),
+    ),
 );
