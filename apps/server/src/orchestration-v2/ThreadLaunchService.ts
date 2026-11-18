@@ -435,6 +435,7 @@ const make = Effect.gen(function* () {
           : null;
         const shouldFetch = remote !== null;
         let fetched = false;
+        let fallbackDetail: string | null = null;
         yield* setupTracker.stageStatus(threadId, "fetch", shouldFetch ? "running" : "skipped");
         if (remote !== null) {
           yield* note(`Fetching ${input.workspaceStrategy.baseRef} from its remote.`);
@@ -466,14 +467,19 @@ const make = Effect.gen(function* () {
           ).pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
           if (fallback !== null) {
             ({ startRef, baseRefName } = fallback);
-            yield* note(`Saved base ${requestedBaseRef} is missing. Using ${baseRefName}.`);
+            fallbackDetail = `Saved base ${requestedBaseRef} is missing. Using ${baseRefName}.`;
+            yield* note(fallbackDetail);
             yield* setupTracker.update(threadId, (snapshot) => ({
               ...snapshot,
               baseRef: baseRefName,
             }));
           }
         }
-        if (shouldFetch) yield* setupTracker.stageStatus(threadId, "fetch", "done");
+        if (fallbackDetail !== null) {
+          yield* setupTracker.stageStatus(threadId, "fetch", "warning", fallbackDetail);
+        } else if (shouldFetch) {
+          yield* setupTracker.stageStatus(threadId, "fetch", "done");
+        }
         if (branch !== null && (generatedTemporaryBranch || isTemporaryWorktreeBranch(branch))) {
           const parts = branch.split("/");
           for (let depth = 1; depth < parts.length; depth++) {

@@ -1,3 +1,5 @@
+import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
+import { preparationSettled } from "./testkit/preparationSettled.ts";
 import {
   encodeThreadProjection,
   adapter,
@@ -247,5 +249,35 @@ it.effect("retains automation and sender attribution while a message waits in th
     assert.equal(message?.scheduledTaskId, scheduledTaskId);
     assert.equal(message?.senderThreadId, senderThreadId);
     assert.equal(message?.text, "Run the audit");
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("publishes the missing base and its replacement in the scheduled fetch stage", () => {
+  const harness = makeHarness({ hasCommit: ({ refName }) => Effect.succeed(refName === "HEAD") });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+    const input = launchInput({
+      command: "launch:scheduled-missing-base",
+      thread: "thread:scheduled-missing-base",
+      message: "Start",
+      workspace: { type: "worktree", baseRef: "gone", startFromOrigin: false },
+    });
+    const launched = yield* launches.launch({
+      ...input,
+      initialMessage: {
+        text: "Start",
+        attachments: [],
+        scheduledTaskId: ScheduledTaskId.make("task:gone"),
+      },
+    });
+    yield* preparationSettled(launched.threadId);
+    const snapshot = yield* tracker.get(launched.threadId);
+    assert.deepInclude(
+      snapshot?.stages.find((stage) => stage.id === "fetch"),
+      {
+        detail: "Saved base gone is missing. Using HEAD.",
+      },
+    );
   }).pipe(Effect.provide(harness.layer));
 });
