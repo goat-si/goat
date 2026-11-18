@@ -111,8 +111,11 @@ function WorkspaceRootContent() {
   const settingsOpen = workspace.settingsOpen;
   const tab = state.tabs[settingsOpen ? "settings" : state.selectedTab];
   const bottomClearance =
-    layout.primarySidebarOverlaysContent && state.selectedTab === "usage"
-      ? workspaceDockBottomClearance({ bottomInset: insets.bottom, keyboardHeight })
+    sidebarPicker || (layout.primarySidebarOverlaysContent && state.selectedTab === "usage")
+      ? workspaceDockBottomClearance({
+          bottomInset: Math.max(insets.bottom, bottomBarInset ?? 0),
+          keyboardHeight,
+        })
       : Platform.OS === "ios" && isDuoDevice(deviceType)
         ? workspaceSearchBottomClearance({
             bottomInset: insets.bottom,
