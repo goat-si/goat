@@ -326,7 +326,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
     },
   );
 
-  return TextGenerationOperations.fromRunner(
+  const generation = TextGenerationOperations.fromRunner(
     "CursorTextGeneration",
     TextGenerationOperations.withoutInvestigation("Cursor", (request) =>
       runCursorSelected(request).pipe(Effect.map((selected) => selected.result)),
@@ -347,4 +347,5 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       },
     },
   );
+  return { ...generation, memoryRevocation: sdk.localSandboxRefusal };
 });

@@ -202,6 +202,7 @@ describe("CursorAgentSdkRunner", () => {
           load: loaders.loadCursorSdk,
           supportsLocalSandbox: Effect.succeed(false),
           markLocalSandboxUnsupported: Effect.void,
+          localSandboxRefusal: { isRevoked: () => false, changes: Stream.empty },
           loadSqlite: loaders.loadCursorSqlite,
         }),
       );
@@ -231,6 +232,7 @@ describe("CursorAgentSdkRunner", () => {
           load,
           supportsLocalSandbox: Effect.succeed(false),
           markLocalSandboxUnsupported: Effect.void,
+          localSandboxRefusal: { isRevoked: () => false, changes: Stream.empty },
           loadSqlite: () => {
             throw new Error("unused SQLite");
           },

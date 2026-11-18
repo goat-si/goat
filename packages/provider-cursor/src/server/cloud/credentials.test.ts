@@ -444,6 +444,7 @@ it.live("driver advice permits the production configuration and explains a custo
         load: () => sdk as unknown as ReturnType<typeof loadCursorSdk>,
         supportsLocalSandbox: Effect.succeed(false),
         markLocalSandboxUnsupported: Effect.void,
+        localSandboxRefusal: { isRevoked: () => false, changes: Stream.empty },
         loadSqlite: () => {
           throw new Error("unused");
         },
@@ -470,6 +471,7 @@ it.live("driver advice permits the production configuration and explains a custo
         load: () => sdk as unknown as ReturnType<typeof loadCursorSdk>,
         supportsLocalSandbox: Effect.succeed(false),
         markLocalSandboxUnsupported: Effect.void,
+        localSandboxRefusal: { isRevoked: () => false, changes: Stream.empty },
         loadSqlite: () => {
           throw new Error("unused");
         },

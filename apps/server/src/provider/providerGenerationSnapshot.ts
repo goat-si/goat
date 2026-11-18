@@ -1,6 +1,6 @@
-import type { ServerProvider } from "@goat/contracts";
+import type { ProviderInstanceId, ServerProvider } from "@goat/contracts";
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
-import type { MemoryGenerationCapabilities } from "@goat/shared/memoryGenerationCapabilities";
+import { NO_MEMORY_GENERATION } from "@goat/shared/memoryGenerationCapabilities";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 
@@ -9,37 +9,50 @@ export const markAwaitingFirstCheck = (snapshot: ServerProvider): ServerProvider
   awaitingFirstCheck: true,
 });
 
-const withGenerationState = (
-  memoryGeneration: MemoryGenerationCapabilities,
+export const applyProviderMemoryRevocation = (
   snapshot: ServerProvider,
-  awaiting: boolean,
-): ServerProvider => {
-  const annotated = { ...snapshot, memoryGeneration };
-  return awaiting ? markAwaitingFirstCheck(annotated) : annotated;
+  instance: ProviderInstance | undefined,
+): ServerProvider =>
+  instance?.driverKind === snapshot.driver &&
+  instance.textGeneration.memoryRevocation?.isRevoked() &&
+  (snapshot.memoryGeneration?.summary !== false || snapshot.memoryGeneration.conflict !== false)
+    ? { ...snapshot, memoryGeneration: NO_MEMORY_GENERATION }
+    : snapshot;
+
+export const applyProviderMemoryRevocations = (
+  snapshots: ReadonlyArray<ServerProvider>,
+  instances: ReadonlyMap<ProviderInstanceId, ProviderInstance>,
+): ReadonlyArray<ServerProvider> => {
+  let updated: Array<ServerProvider> | undefined;
+  snapshots.forEach((snapshot, index) => {
+    const current = applyProviderMemoryRevocation(snapshot, instances.get(snapshot.instanceId));
+    if (current === snapshot) return;
+    updated ??= snapshots.slice();
+    updated[index] = current;
+  });
+  return updated ?? snapshots;
 };
 
 export const readProviderGenerationSnapshot = Effect.fn("Provider.readGenerationSnapshot")(
-  function* (instance: ProviderInstance) {
+  function* (instance: ProviderInstance, emittedSnapshot?: ServerProvider) {
     const awaiting = yield* instance.snapshot.isAwaitingFirstCheck ?? Effect.succeed(false);
-    const snapshot = yield* instance.snapshot.getSnapshot;
-    return withGenerationState(
-      yield* instance.textGeneration.memoryCapabilities,
-      snapshot,
-      awaiting,
-    );
+    const snapshot = emittedSnapshot ?? (yield* instance.snapshot.getSnapshot);
+    const memoryGeneration = instance.textGeneration.memoryRevocation?.isRevoked()
+      ? NO_MEMORY_GENERATION
+      : yield* instance.textGeneration.memoryCapabilities;
+    const annotated = { ...snapshot, memoryGeneration };
+    return awaiting ? markAwaitingFirstCheck(annotated) : annotated;
   },
 );
 
-export const streamProviderGenerationSnapshots = (instance: ProviderInstance) =>
-  instance.snapshot.streamChanges.pipe(
-    Stream.mapEffect((snapshot) =>
-      Effect.gen(function* () {
-        const awaiting = yield* instance.snapshot.isAwaitingFirstCheck ?? Effect.succeed(false);
-        return withGenerationState(
-          yield* instance.textGeneration.memoryCapabilities,
-          snapshot,
-          awaiting,
-        );
-      }),
-    ),
+export const streamProviderGenerationSnapshots = (instance: ProviderInstance) => {
+  const { memoryRevocation } = instance.textGeneration;
+  if (memoryRevocation !== undefined) {
+    return Stream.merge(instance.snapshot.streamChanges, memoryRevocation.changes).pipe(
+      Stream.mapEffect(() => readProviderGenerationSnapshot(instance)),
+    );
+  }
+  return instance.snapshot.streamChanges.pipe(
+    Stream.mapEffect((snapshot) => readProviderGenerationSnapshot(instance, snapshot)),
   );
+};

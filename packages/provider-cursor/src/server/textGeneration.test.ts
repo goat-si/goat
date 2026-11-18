@@ -6,8 +6,10 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { createModelSelection } from "@goat/shared/model";
 import { beforeEach, vi } from "vite-plus/test";
 import { makeCursorTextGeneration } from "./textGeneration.ts";
@@ -230,6 +232,7 @@ describe("CursorTextGeneration", () => {
           loadSqlite: loadCursorSqlite,
           supportsLocalSandbox: Effect.succeed(true),
           markLocalSandboxUnsupported: Effect.void,
+          localSandboxRefusal: { isRevoked: () => false, changes: Stream.empty },
           agentTransportRefusal: () =>
             Effect.succeed(CursorSdk.CURSOR_AGENT_TRANSPORT_RESTART_MESSAGE),
         }).pipe(Layer.provideMerge(Layer.merge(layerFs, Path.layer))),
@@ -771,6 +774,9 @@ describe("CursorTextGeneration", () => {
         expect(error.detail).toContain("requires its isolated sandbox");
         expect(error.cause).toEqual(new MemoryGenerationRunnerError({ code: "unavailable" }));
         expect(yield* generation.memoryCapabilities).toEqual({ summary: false, conflict: false });
+        expect(Option.isSome(yield* Stream.runHead(generation.memoryRevocation.changes))).toBe(
+          true,
+        );
         expect(cursorSdkMock.create).toHaveBeenCalledOnce();
         expect(cursorSdkMock.create).toHaveBeenCalledWith(
           expect.objectContaining({

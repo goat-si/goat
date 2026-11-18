@@ -12,6 +12,7 @@ import type {
   TextGenerationError,
 } from "@goat/contracts";
 import type * as Effect from "effect/Effect";
+import type * as Stream from "effect/Stream";
 import type { MemoryGenerationCapabilities } from "@goat/shared/memoryGenerationCapabilities";
 
 import type { TextGenerationPolicy } from "./textGenerationPolicy.ts";
@@ -156,6 +157,11 @@ export interface TextGenerationOperations {
 
 export interface ProviderTextGeneration extends TextGenerationOperations {
   readonly memoryCapabilities: Effect.Effect<MemoryGenerationCapabilities>;
+  /** Permanent for the lifetime of the provider runtime. */
+  readonly memoryRevocation?: {
+    readonly isRevoked: () => boolean;
+    readonly changes: Stream.Stream<void>;
+  };
 }
 
 export type {

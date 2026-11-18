@@ -38,6 +38,8 @@ export { upsertProviderWorkspaceSnapshot } from "./ProviderWorkspaceSnapshots.ts
 import { makeModelCatalogRefresh } from "./ModelCatalogRefresh.ts";
 import { applyProviderCompatibility } from "./providerCompatibility.ts";
 import {
+  applyProviderMemoryRevocation,
+  applyProviderMemoryRevocations,
   readProviderGenerationSnapshot,
   streamProviderGenerationSnapshots,
 } from "./providerGenerationSnapshot.ts";
@@ -310,8 +312,11 @@ export const layer = Layer.effect(
           );
           const updatedKeys = new Set<ProviderInstanceId>();
 
-          for (const provider of nextProvidersWithUpdateState) {
-            const key = snapshotInstanceKey(provider);
+          const instances = Ref.getUnsafe(liveSubsRef);
+          for (const snapshot of nextProvidersWithUpdateState) {
+            const key = snapshotInstanceKey(snapshot);
+            // The capability may have been revoked while this snapshot was being published.
+            const provider = applyProviderMemoryRevocation(snapshot, instances.get(key));
             updatedKeys.add(key);
             mergedProviders.set(
               key,
@@ -949,7 +954,11 @@ export const layer = Layer.effect(
     });
 
     return {
-      getProviders: Ref.get(providersRef),
+      getProviders: Ref.get(providersRef).pipe(
+        Effect.map((providers) =>
+          applyProviderMemoryRevocations(providers, Ref.getUnsafe(liveSubsRef)),
+        ),
+      ),
       rescanGlobalSkills,
       refresh: (provider?: ProviderDriverKind) =>
         refresh(provider).pipe(Effect.catchCause(recoverRefreshFailure)),

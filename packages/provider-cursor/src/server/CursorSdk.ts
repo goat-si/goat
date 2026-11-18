@@ -5,8 +5,10 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import { loadCursorSdk, loadCursorSqlite } from "./sdk.ts";
 
@@ -91,6 +93,10 @@ export class CursorSdk extends Context.Service<
     readonly loadSqlite: typeof loadCursorSqlite;
     readonly supportsLocalSandbox: Effect.Effect<boolean>;
     readonly markLocalSandboxUnsupported: Effect.Effect<void>;
+    readonly localSandboxRefusal: {
+      readonly isRevoked: () => boolean;
+      readonly changes: Stream.Stream<void>;
+    };
     /** Why a session in this environment cannot use this process's transport, if it cannot. */
     readonly agentTransportRefusal?: (
       environment: NodeJS.ProcessEnv,
@@ -170,6 +176,10 @@ export const layer = Layer.effect(
     );
 
     const sandboxUnsupported = yield* Ref.make(false);
+    const sandboxRefusals = yield* Effect.acquireRelease(
+      PubSub.sliding<void>({ capacity: 1, replay: 1 }),
+      PubSub.shutdown,
+    );
     const supportsLocalSandbox = Effect.gen(function* () {
       if (yield* Ref.get(sandboxUnsupported)) return false;
       return (yield* sandboxProbe) && !(yield* Ref.get(sandboxUnsupported));
@@ -178,7 +188,18 @@ export const layer = Layer.effect(
     return CursorSdk.of({
       load,
       supportsLocalSandbox,
-      markLocalSandboxUnsupported: Ref.set(sandboxUnsupported, true),
+      markLocalSandboxUnsupported: Ref.getAndSet(sandboxUnsupported, true).pipe(
+        Effect.flatMap((alreadyUnsupported) =>
+          alreadyUnsupported
+            ? Effect.void
+            : Effect.asVoid(PubSub.publish(sandboxRefusals, undefined)),
+        ),
+        Effect.uninterruptible,
+      ),
+      localSandboxRefusal: {
+        isRevoked: () => Ref.getUnsafe(sandboxUnsupported),
+        changes: Stream.fromPubSub(sandboxRefusals),
+      },
       loadSqlite: loadCursorSqlite,
       agentTransportRefusal: Effect.fn("CursorSdk.agentTransportRefusal")(function* (
         environment: NodeJS.ProcessEnv,
