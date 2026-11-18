@@ -12,6 +12,7 @@ import { WorktreeSnapshotStore } from "../../worktreeSnapshots/WorktreeSnapshotS
 import { makeDiscardWorktree, makeRecreateMissingWorktree } from "./RecreateWorktree.ts";
 import { makeRestorePending, type RestorePendingState } from "./restorePending.ts";
 import { git, RestoreSnapshotError, verifyRestoredWorktree } from "./restoreSnapshot.ts";
+import { makeNoticeFolderReplaced } from "./noticeFolderReplaced.ts";
 import { makeSetAsideFolder } from "./setAsideFolder.ts";
 
 export { makeRestorePending } from "./restorePending.ts";
@@ -83,7 +84,11 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
   const setupScripts = yield* Effect.serviceOption(
     ProjectSetupScriptRunner.ProjectSetupScriptRunner,
   );
-  const restore = Effect.fn("ThreadWorkspace.restoreFolder")(function* (input: RestoreInput) {
+  const noticeFolderReplaced = yield* makeNoticeFolderReplaced;
+  const restore = Effect.fn("ThreadWorkspace.restoreFolder")(function* (
+    input: RestoreInput,
+    aside?: { path: string | null },
+  ) {
     const fail = (reason: ThreadWorkspaceRestoreFailure, detail: string) =>
       new ThreadWorkspaceRestoreError({ threadId: input.threadId, reason, detail });
     // A rollback that could not delete the folder keeps the marker, so this repeats until it passes.
@@ -133,6 +138,8 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
         });
     // A folder an earlier restore finished filling may hold work since; this attempt never removes it.
     const lenient = resumed && (state.snapshotSha === null || state.applied === true);
+    // Before setup, so only shells that predate the new folder are told.
+    yield* noticeFolderReplaced(input.worktreePath, aside?.path);
     const setup = yield* Effect.gen(function* () {
       const setup = Option.isNone(setupScripts)
         ? ({ status: "no-script" } as const)
@@ -198,8 +205,9 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
   ): Effect.fn.Return<RestoredThreadWorkspace, ThreadWorkspaceRestoreError> {
     // Git refuses a folder that is not empty; a failed restore moves the leftovers back.
     if (!(yield* setAside.leftover(input.worktreePath))) return yield* restore(input);
+    const aside: { path: string | null } = { path: null };
     const { result, setAsidePath } = yield* setAside
-      .around(input.worktreePath, restore(input))
+      .around(input.worktreePath, restore(input, aside), aside)
       .pipe(
         Effect.catchTags({
           PlatformError: (error) =>
