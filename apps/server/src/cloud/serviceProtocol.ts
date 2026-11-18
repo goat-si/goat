@@ -43,6 +43,8 @@ export interface ServiceLauncherContext {
   readonly protocol: typeof SERVICE_LAUNCHER_PROTOCOL;
   /** The supervising launcher's guarantees; absent from a protocol-3 launcher. */
   readonly launcherProtocol?: number;
+  /** The launcher handles exit 78 during this trial, including the ownership wait bound. */
+  readonly trialOwnerRefusal?: true;
   readonly childVersion: string;
   readonly update?: ServiceUpdateRecord;
   /** Set for a committed target the launcher restarts while its update is on probation, so the
@@ -287,6 +289,7 @@ export function decodeServiceLauncherContext(value: string): ServiceLauncherCont
     parsed.launcherProtocol > SERVICE_LAUNCHER_PROTOCOL
       ? { launcherProtocol: parsed.launcherProtocol }
       : {}),
+    ...(parsed.trialOwnerRefusal === true ? { trialOwnerRefusal: true as const } : {}),
     childVersion: parsed.childVersion,
     ...(update === undefined ? {} : { update }),
     ...(parsed.probation === true && update?.status === "committed"

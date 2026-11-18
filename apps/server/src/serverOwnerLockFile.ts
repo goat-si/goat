@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
 // The service launcher imports this, so it stays on Node built-ins.
+import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
 
@@ -28,6 +29,20 @@ interface ServerOwnerLock {
 const isBusy = (cause: unknown) =>
   cause instanceof Error &&
   (("errcode" in cause && cause.errcode === 5) || cause.message === "database is locked");
+
+/** Probe an existing generation lock without recording an owner. */
+export function serverOwnerLockHeld(stateDir: string): boolean {
+  const path = NodePath.join(stateDir, SERVER_OWNER_LOCK_FILE);
+  if (!NodeFS.existsSync(path)) return false;
+  using db = new NodeSqlite.DatabaseSync(path, { readOnly: true });
+  try {
+    db.prepare("SELECT name FROM sqlite_schema LIMIT 1").get();
+    return false;
+  } catch (cause) {
+    if (isBusy(cause)) return true;
+    throw cause;
+  }
+}
 
 /** Takes the lock without waiting, or returns undefined while another process holds it. */
 export function tryAcquireServerOwnerLock(

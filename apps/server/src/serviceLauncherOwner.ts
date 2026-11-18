@@ -9,6 +9,7 @@ import {
   legacyOwnerStartedBeforeRecord,
   legacyOwnerStartTimeCommand,
 } from "./legacyServerOwner.ts";
+import { serverOwnerLockHeld } from "./serverOwnerLockFile.ts";
 
 /** Hold the SQLite lock used by servers that predate the generation log. */
 export function tryAcquireLegacyServerOwnerLock(stateDir: string): (() => void) | undefined {
@@ -27,15 +28,22 @@ export function tryAcquireLegacyServerOwnerLock(stateDir: string): (() => void) 
   return () => db.close();
 }
 
-export async function stateDirOwned(stateDir: string): Promise<boolean> {
+export async function stateDirOwner(
+  stateDir: string,
+): Promise<"tracked" | "untracked" | undefined> {
+  try {
+    if (serverOwnerLockHeld(stateDir)) return "tracked";
+  } catch {
+    // Lock errors other than a competing holder are server startup's to report.
+  }
   try {
     const release = tryAcquireLegacyServerOwnerLock(stateDir);
-    if (release === undefined) return true;
+    if (release === undefined) return "untracked";
     release();
   } catch {
     // Lock errors other than a competing holder are server startup's to report.
   }
-  return livePreLockServerOwner(stateDir);
+  return (await livePreLockServerOwner(stateDir)) ? "untracked" : undefined;
 }
 
 export async function livePreLockServerOwner(stateDir: string): Promise<boolean> {

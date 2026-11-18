@@ -2,6 +2,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import { installProcessErrorNet } from "@goat/shared/processErrorNet";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -75,6 +76,10 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
   yield* ensureServerMachineNonce(yield* serverMachineNonceDirectory(config));
   // An invalid context fails later in ServiceLauncherClient; it must not make startup wait.
   const launcherContext = launcherContextFromEnvironment(environment[SERVICE_LAUNCHER_CONTEXT_ENV]);
+  const launcherHandlesTrialRefusal =
+    launcherContext?.trialOwnerRefusal === true &&
+    launcherContext.update?.status === "pending" &&
+    launcherContext.update.targetVersion === launcherContext.childVersion;
   const sshReplacementId = environment[SSH_REPLACEMENT_ID_ENV]?.trim() || undefined;
   return yield* Effect.scoped(
     Effect.gen(function* () {
@@ -109,7 +114,8 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
           sshReplacementId,
         }),
         serverRuntimeStatePath: config.serverRuntimeStatePath,
-        waitForOwner: launcherContext !== undefined,
+        waitForOwner: launcherContext !== undefined && !launcherHandlesTrialRefusal,
+        ...(launcherHandlesTrialRefusal ? { handoffGrace: Duration.zero } : {}),
       });
       // Other GOAT servers on this machine bind the same checkouts; removal must see their work.
       yield* holdWorkspaceLeaseRegistry();
@@ -143,8 +149,10 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
     }),
   ).pipe(
     Effect.catchTags({
-      ServerOwnerConflictError: (error) =>
-        Effect.fail(new CliError.UserError({ cause: error.message })),
+      ServerOwnerConflictError: (error): Effect.Effect<never, typeof error | CliError.UserError> =>
+        Effect.fail(
+          launcherHandlesTrialRefusal ? error : new CliError.UserError({ cause: error.message }),
+        ),
     }),
   );
 });

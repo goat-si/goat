@@ -41,13 +41,13 @@ const observeLauncher = Effect.acquireRelease(
 );
 
 /** Another server holding the home: an exclusive transaction on its ownership lock. */
-const holdHome = (root: string) => {
-  const db = new NodeSqlite.DatabaseSync(NodePath.join(root, "userdata", "server-owner.sqlite"));
+const holdHome = (root: string, lockFile: string) => {
+  const db = new NodeSqlite.DatabaseSync(NodePath.join(root, "userdata", lockFile));
   db.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
   return () => db[Symbol.dispose]();
 };
 
-const scenario = (input: { readonly trialStarted: boolean }) =>
+const scenario = (input: { readonly trialStarted: boolean; readonly lockFile?: string }) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -106,7 +106,7 @@ process.exit(1);
     );
     const clock = { now: 0 };
     const observed = yield* observeLauncher;
-    const release = holdHome(root);
+    const release = holdHome(root, input.lockFile ?? "server-owner.sqlite");
     yield* Effect.addFinalizer(() => Effect.sync(release));
     const launcher = new Launcher(root, yield* Effect.promise(() => readServiceState(statePath)), {
       now: () => clock.now,
@@ -198,6 +198,31 @@ it.layer(NodeServices.layer)("a pending update while another server owns the hom
       assert.equal(
         yield* s.fs.readFileString(NodePath.join(backup, "database")),
         "database before the update",
+      );
+    }),
+  );
+
+  it.effect("treats a generation lock without the legacy lock as an owned home at the bound", () =>
+    Effect.gen(function* () {
+      const s = yield* scenario({ trialStarted: false, lockFile: "server-owner.lock" });
+      s.clock.now = BOUND_MS;
+      const decision = yield* Effect.promise(() =>
+        Promise.race([
+          s.observed.line("the update failed (db-owner-busy)").then(() => "failed at the bound"),
+          s.running.then(() => "restarted while owned"),
+        ]),
+      );
+      assert.equal(decision, "failed at the bound");
+      assert.isFalse(yield* s.fs.exists(NodePath.join(s.markers, "previous-restarted")));
+      assert.isFalse(yield* s.fs.exists(NodePath.join(s.markers, "trial-ran")));
+      s.release();
+      assert.include(
+        String(yield* Effect.promise(() => s.running)),
+        "Active child exited unexpectedly (0)",
+      );
+      assert.equal(
+        yield* s.fs.readFileString(NodePath.join(s.markers, "previous-restarted")),
+        "failed",
       );
     }),
   );

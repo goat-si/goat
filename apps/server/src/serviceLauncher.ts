@@ -49,7 +49,7 @@ import {
   trialMayHaveStarted,
   type BackupSpaceProbe,
 } from "./serviceLauncherDatabase.ts";
-import { stateDirOwned } from "./serviceLauncherOwner.ts";
+import { stateDirOwner } from "./serviceLauncherOwner.ts";
 import { smokeProbe } from "./serviceLauncherSmokeProbe.ts";
 import { boundServiceLog, SERVICE_LOG_CHECK_INTERVAL_MS, serviceLogPath } from "./serviceLog.ts";
 import {
@@ -494,6 +494,7 @@ export class Launcher {
     const context: ServiceLauncherContext = {
       protocol: SERVICE_LAUNCHER_PROTOCOL,
       launcherProtocol: SERVICE_LAUNCHER_GUARANTEES,
+      ...(role === "trial" ? { trialOwnerRefusal: true as const } : {}),
       childVersion: version,
       ...(update === undefined ? {} : { update }),
       ...(role === "active" && update?.status === "committed" && this.#state.probation !== undefined
@@ -810,10 +811,8 @@ export class Launcher {
     await this.#resumeProbation();
     this.#stateDirFreeProbes = 0;
     // The interval also keeps Node alive: signal listeners alone do not.
-    this.#timer =
-      reason === "state-dir-owned"
-        ? setInterval(() => this.#enqueue(() => this.#reclaimStateDir()), this.#stateDirOwnerPollMs)
-        : setInterval(() => {}, 2_147_483_647);
+    if (reason === "state-dir-owned") this.#scheduleStateDirProbe();
+    else this.#timer = setInterval(() => {}, 2_147_483_647);
     process.stderr.write(
       reason === "database-ahead"
         ? "[service-launcher] This GOAT build is older than the data in this GOAT home. Update GOAT or install a newer service, then restart this service.\n"
@@ -821,22 +820,37 @@ export class Launcher {
     );
   }
 
+  #scheduleStateDirProbe(): void {
+    const timer = setTimeout(
+      () =>
+        this.#enqueue(async () => {
+          if (this.#timer !== timer) return;
+          await this.#reclaimStateDir();
+          if (this.#timer === timer) this.#scheduleStateDirProbe();
+        }),
+      this.#stateDirOwnerPollMs,
+    );
+    this.#timer = timer;
+  }
+
   async #reclaimStateDir(): Promise<void> {
     if (this.#stopRequested || this.#timer === undefined || this.#child !== null) return;
     const update = this.#state.update;
     const pending = update?.status === "pending" ? update : undefined;
-    const owned = await stateDirOwned(
+    const owner = await stateDirOwner(
       pending === undefined ? NodePath.join(this.#baseDir, "userdata") : ownerLockDir(pending),
     );
     // A stop during the probe clears the timer.
     if (this.#timer === undefined) return;
     // A relaunching desktop app frees the home for a few seconds; leave it that gap.
-    this.#stateDirFreeProbes = owned ? 0 : this.#stateDirFreeProbes + 1;
-    if (owned) {
+    this.#stateDirFreeProbes = owner === undefined ? this.#stateDirFreeProbes + 1 : 0;
+    if (owner !== undefined) {
       const since = this.#ownerBusySince;
       if (pending === undefined || since === undefined) return;
       const trialStarted = await trialMayHaveStarted(this.#baseDir, pending.id);
-      if (trialStarted) await markUntrackedDatabaseOwner(this.#baseDir, pending.id);
+      if (owner === "untracked") {
+        await markUntrackedDatabaseOwner(this.#baseDir, pending.id);
+      }
       if (this.#now() - since < STATE_DIR_OWNER_BOUND_MS) return;
       this.#ownerBusySince = undefined;
       const gaveUp =
@@ -869,7 +883,10 @@ export class Launcher {
       await this.#startChild(this.#state.activeVersion, "active", update);
       return;
     }
-    if (await trialMayHaveStarted(this.#baseDir, pending.id)) {
+    if (
+      (await trialMayHaveStarted(this.#baseDir, pending.id)) ||
+      (await databaseRestorePending(this.#baseDir, pending))
+    ) {
       await this.#returnToPrevious(pending, "failed", "state-dir-owned");
       return;
     }
