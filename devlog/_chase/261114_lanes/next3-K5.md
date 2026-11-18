@@ -700,3 +700,12 @@ Branch chase/t3-261114-next3-k5-nits from ac238fcce375e08d3c73c5cb5ce4de2c36c850
 - 170f10c7fc P3-3: the "will not be reaped" warning with its cause for an unlistable records folder and for each failed record removal.
 The gate waits for SF3's check:changed that was already running when the round reached its gate (ps at the gate); SF3 and N10 start nothing new until K5's gate ends.
 
+
+### K5 nits READY (pushed 01:55:56 UTC)
+
+chase/t3-261114-next3-k5-nits = 170f10c7fc82abda326a91a995d216df7baced15 on origin (git ls-remote), three commits on ac238fcce3: c2160a792d (P3-1), 6832638a8d (P3-2), 170f10c7fc (P3-3).
+Gate: vp run check:changed origin/chase/t3-261114-next3 on 170f10c7fc, exit 0 (captured): format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget, typecheck (2 packages), test (3 files) pass. Started after a ps showed no other job (SF3's check:changed had ended).
+Rule IV: from apps/server, GOAT_TEST_TMP_GUARD=fail vp test run ClaudeDescendants.test.ts providerProcesses.test.ts (the two apps/server test files changed): exit 0, 10 passed, 3 skipped (Linux). Slip: that ~1 s run went out in the same batch as its ps check, and the ps showed another lane's check:changed that had just started; it ran beside that job.
+Correction: the nits round took the token at 01:53:52 UTC (clock), not "~02:00" as written above. Token released with this push.
+NOT RUN: the Linux group case with its new cleanup (goat-ci lane=server); the P3-3 failure states.
+
