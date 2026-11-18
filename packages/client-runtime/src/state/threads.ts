@@ -526,6 +526,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     }
   });
 
+  const recovery = yield* makeThreadSubscriptionRecovery({
+    setStreamError,
+    logAttributes: { environmentId, threadId },
+  });
   const applyItemLocked = Effect.fn("EnvironmentThreadState.applyItemLocked")(function* (
     item: OrchestrationV2ResolvedThreadStreamItem,
   ) {
@@ -568,7 +572,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         source: "socket",
         reply: StreamDiagnostics.snapshotReply(projection),
       });
-      yield* noteStatus;
+      yield* Effect.andThen(noteStatus, recovery.snapshotApplied);
       return;
     }
 
@@ -870,10 +874,6 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     yield* noteStatus;
   });
 
-  const recovery = yield* makeThreadSubscriptionRecovery({
-    setStreamError,
-    logAttributes: { environmentId, threadId },
-  });
   yield* markSynchronizing;
   yield* Effect.forkScoped(
     subscribeThreadItems(
@@ -939,7 +939,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                     source: "http",
                     reply: StreamDiagnostics.snapshotReply(httpResult.snapshot.projection),
                   });
-                  yield* remember;
+                  yield* Effect.andThen(remember, recovery.snapshotApplied);
                 }),
               );
               current = yield* SubscriptionRef.get(state);
@@ -959,7 +959,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         }
 
         const sequence = yield* SubscriptionRef.get(lastSequence);
-        const canResume = Option.isSome(current.data) && !(yield* recovery.takeFreshSnapshot);
+        const canResume = Option.isSome(current.data) && !(yield* recovery.needsFreshSnapshot);
         const acceptBoundedSnapshot = yield* Ref.get(acceptsBoundedSocketSnapshots);
         StreamDiagnostics.noteThreadStreamSubscribed(environmentId, threadId, {
           afterSequence: canResume ? sequence : null,

@@ -22,7 +22,7 @@ export const makeThreadSubscriptionRecovery = Effect.fnUntraced(function* (input
   let httpMisses = 0;
   let defectRetries = 0;
   // The cursor moved before the batch that failed to apply, so resuming from it would skip it.
-  let freshSnapshotNext = false;
+  let needsFreshSnapshot = false;
   const resubscribe = Queue.offer(resubscribes, undefined);
   const backOffAfterDefect = Effect.suspend(() =>
     input
@@ -51,11 +51,9 @@ export const makeThreadSubscriptionRecovery = Effect.fnUntraced(function* (input
       Cause.hasDies(cause)
         ? backOffAfterDefect.pipe(Effect.andThen(resubscribe))
         : input.setStreamError(SYNC_ERROR),
-    /** True once after a defect while applying items: the next subscribe asks for a snapshot. */
-    takeFreshSnapshot: Effect.sync(() => {
-      const fresh = freshSnapshotNext;
-      freshSnapshotNext = false;
-      return fresh;
+    needsFreshSnapshot: Effect.sync(() => needsFreshSnapshot),
+    snapshotApplied: Effect.sync(() => {
+      needsFreshSnapshot = false;
     }),
     /** A defect while applying items ends the stream; follow again for a fresh snapshot. */
     restartAfterDefect: <E, R>(
@@ -71,7 +69,7 @@ export const makeThreadSubscriptionRecovery = Effect.fnUntraced(function* (input
               }).pipe(
                 Effect.andThen(
                   Effect.sync(() => {
-                    freshSnapshotNext = true;
+                    needsFreshSnapshot = true;
                   }),
                 ),
                 Effect.andThen(backOffAfterDefect),

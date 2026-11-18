@@ -66,6 +66,14 @@ describe("thread subscription after a defect while applying events", () => {
       );
 
       expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBeUndefined();
+
+      yield* harness.replaceSession;
+      yield* SubscriptionRef.changes(harness.subscriptionCount).pipe(
+        Stream.filter((count) => count >= 3),
+        Stream.runHead,
+      );
+      expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBeUndefined();
+
       fault.armed = false;
       yield* Queue.offer(
         harness.inputs,
@@ -79,6 +87,13 @@ describe("thread subscription after a defect while applying events", () => {
         (state) => Option.isSome(state.data) && state.data.value.thread.title === "Lost title",
       );
       expect(Option.getOrThrow(recovered.data).thread.title).toBe("Lost title");
+
+      yield* harness.replaceSession;
+      yield* SubscriptionRef.changes(harness.subscriptionCount).pipe(
+        Stream.filter((count) => count >= 4),
+        Stream.runHead,
+      );
+      expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE + 1);
     }),
   );
 });
