@@ -13,7 +13,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as Secrets from "../auth/ServerSecretStore.ts";
-import { memoryOperationDigest } from "./MemoryDecider.ts";
+import { matchesMemoryOperationDigest, memoryOperationDigest } from "./MemoryDecider.ts";
 import { sourceReadInput, sourceReadLocatorDigest } from "./MemoryOwnerSourceReader.ts";
 import * as Settings from "../serverSettings.ts";
 
@@ -241,7 +241,12 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const descriptor = yield* preflightOnce(connection);
           const advertised = descriptor.capabilities.memory?.derivedCap === 1000;
-          if ((!advertised || !floorEnabled) && needsFloor(input))
+          if (
+            ((!advertised || !floorEnabled) && needsFloor(input)) ||
+            ("originUpdates" in input &&
+              input.originUpdates !== undefined &&
+              descriptor.capabilities.memory?.originUpdates !== true)
+          )
             return yield* new M.MemoryHubError({ code: "hub_upgrade_required" });
           const credential = yield* secrets
             .get(connection.secretName)
@@ -298,10 +303,10 @@ const make = Effect.gen(function* () {
           return (
             operation !== undefined &&
             r.operationId === operation.operationId &&
-            r.operationDigest === memoryOperationDigest(operation)
+            matchesMemoryOperationDigest(operation, r.operationDigest)
           );
         }),
-      (input) => input.operations.some(M.requiresMemoryFloor2),
+      (input) => input.originUpdates !== undefined || input.operations.some(M.requiresMemoryFloor2),
     ),
     pull: call(
       M.MEMORY_HUB_PATHS.pull,

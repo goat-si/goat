@@ -1,6 +1,6 @@
 import { prepareJoinRetention } from "./MemoryJoinRetention.ts";
 import { projectPushReceipt } from "./MemoryTailAdmission.ts";
-import { MemoryHubSettingsSnapshot } from "./MemoryHubSettings.ts";
+import { MemoryHubSettingsSnapshot, readSettingsView } from "./MemoryHubSettings.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- server-owned checkpoint identifiers.
 import * as NodeCrypto from "node:crypto";
 import * as M from "@goat/contracts";
@@ -35,6 +35,7 @@ export class MemoryHubConfiguration extends Context.Service<
   }
 >()("goat/memory/MemoryHubService/MemoryHubConfiguration") {}
 
+export { readSettingsView } from "./MemoryHubSettings.ts";
 export { MemoryHubActivity, activityLayer } from "./MemoryHubActivity.ts";
 
 export class MemoryHubService extends Context.Service<
@@ -47,6 +48,7 @@ export class MemoryHubService extends Context.Service<
     readonly push: (
       input: M.MemoryHubPushInput,
       principal: M.MemoryHubPrincipal,
+      beforeAdmission?: Store.HubAuthority["beforeAdmission"],
     ) => Effect.Effect<M.MemoryHubPushResult, MemoryHubServiceError>;
     readonly pull: (
       input: M.MemoryHubPullInput,
@@ -177,20 +179,28 @@ export const make = Effect.gen(function* () {
     },
   );
   const push: MemoryHubService["Service"]["push"] = Effect.fn("MemoryHubService.push")(
-    function* (input, principal) {
+    function* (input, principal, beforeAdmission) {
       const request = yield* decode(M.MemoryHubPushInput, input);
-      yield* store.transact(authorize(principal, request.memorySpaceId, request.environmentId));
+      const authorized = authorize(principal, request.memorySpaceId, request.environmentId);
       if (!request.operations.length)
-        yield* store.transact(
-          Effect.andThen(
-            authorize(principal, request.memorySpaceId, request.environmentId),
-            negotiate(principal, request.features),
-          ),
+        return yield* store.transact(
+          Effect.gen(function* () {
+            yield* authorized;
+            const active = yield* negotiate(principal, request.features);
+            if (request.originUpdates) {
+              if (!active || !M.supportsMemoryFloor2(request.features))
+                return yield* new M.MemoryHubError({ code: "hub_upgrade_required" });
+              yield* service.applyOriginUpdatesTx(request, request.originUpdates);
+            }
+            return { receipts: [] };
+          }),
         );
+      yield* store.transact(authorized);
+      const admission = { ...authority(principal, request), beforeAdmission };
       const receipts = yield* Effect.forEach(request.operations, (operation) =>
         // This entry owns rollback and the separate null-sequence capacity-refusal read.
         service
-          .admitHubOperation({ authority: authority(principal, request), operation })
+          .admitHubOperation({ authority: admission, operation })
           .pipe(Effect.tap(() => activity.notify)),
       );
       return { receipts: receipts.map((receipt) => projectPushReceipt(receipt, request.features)) };
@@ -384,19 +394,6 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(MemoryHubService, make);
-
-/** Live roster is never persisted in settings receipts or returned by the disable tool. */
-export const readSettingsView = (
-  store: Store.MemoryStore["Service"],
-  snapshot: M.MemoryHubSettingsSnapshot,
-): Effect.Effect<M.MemoryHubSettingsView, Store.MemoryStorageError> =>
-  Effect.gen(function* () {
-    const members =
-      snapshot.settings.mode === "hub" && snapshot.settings.memorySpaceId !== null
-        ? yield* store.readHubMembers(snapshot.settings.memorySpaceId)
-        : [];
-    return { settings: snapshot.settings, version: snapshot.version, members };
-  });
 
 export type MemoryHubAdministrationError = MemoryHubServiceError | Secrets.SecretStoreError;
 type AdminPermit = Effect.Effect<void, M.MemoryHubForbiddenError>;

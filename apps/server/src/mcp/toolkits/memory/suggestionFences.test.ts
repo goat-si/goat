@@ -216,6 +216,78 @@ it.effect("keeps an accepting suggestion when the pending queue reaches capacity
   }).pipe(Effect.provide(Fixture.layer)),
 );
 
+it.effect("keeps the bound when all suggestion slots contain accepting writes", () =>
+  Effect.gen(function* () {
+    const service = yield* Service.MemoryService;
+    const sql = yield* SqlClient.SqlClient;
+    const store = yield* Store.MemoryStore;
+    const suggestions = makeMemorySaveSuggestions({
+      sql,
+      store,
+      requireSharing: () => Effect.void,
+      stableUuid: Service.memoryStableUuid,
+    });
+    const candidate = (n: number) => ({
+      input: { ...Fixture.upsert(n), memoryId: M.MemoryId.make(Fixture.id(n)) },
+      thread: origin,
+      knownRevisions: [],
+      lineageComplete: true,
+      forgetGeneration: 0,
+      reason: "hub_unavailable" as const,
+    });
+    yield* sql`INSERT INTO memory_space_features VALUES (${space},1000,0)`;
+    const pinned = Array.from({ length: M.MEMORY_SAVE_SUGGESTION_MAX_ITEMS }, (_, n) =>
+      candidate(600 + n),
+    );
+    for (const row of pinned) {
+      yield* suggestions.onRefusedSave(row, Effect.void);
+      expect(
+        yield* service.acceptSuggestion(
+          {
+            memorySpaceId: space,
+            suggestionId: row.input.memoryId,
+          },
+          Effect.void,
+        ),
+      ).toEqual({ status: "pending" });
+    }
+    const extra = candidate(700);
+    const staged = yield* service.acceptSuggestionWrite(
+      extra.input,
+      { origin, unverified: true },
+      Effect.void,
+    );
+    expect(staged.receipt).toMatchObject({ pendingSync: true, revisionId: null });
+    yield* suggestions.onRefusedSave(
+      { ...extra, stagedOperationId: extra.input.operationId },
+      Effect.void,
+    );
+    const rows = yield* sql<{
+      id: string;
+      state: string;
+    }>`SELECT id,state FROM memory_save_suggestions WHERE space=${space} ORDER BY id`;
+    expect(rows).toEqual(pinned.map(({ input }) => ({ id: input.memoryId, state: "accepting" })));
+    const workId = `sync:${space}:${extra.input.operationId}`;
+    yield* service.settleHubAcknowledgement({
+      memorySpaceId: space,
+      hubEnvironmentId: hub,
+      localEnvironmentId: origin.environmentId,
+      workId,
+      operation: { operationId: extra.input.operationId, operationDigest: staged.operationDigest },
+      receipt: {
+        operationId: extra.input.operationId,
+        operationDigest: staged.operationDigest,
+        memoryId: extra.input.memoryId,
+        outcome: "rejected",
+        hubSequence: null,
+        failureCode: "hub_upgrade_required",
+      },
+      reauthorize: Effect.void,
+    });
+    expect((yield* store.readWork(workId))?.status).toBe("failed");
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
 it.effect("body-bearing suggestion requests require a person session even with memory grants", () =>
   Effect.gen(function* () {
     const memory = yield* Service.MemoryService;

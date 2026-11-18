@@ -97,6 +97,12 @@ export const Metadata = Schema.Struct({
   expectedScopeVersion: Schema.optionalKey(Schema.Int),
   acceptanceGeneration: Schema.optionalKey(Schema.Int),
   summaryPrerequisite: Schema.optionalKey(M.MemoryRevisionId),
+  promotionBinding: Schema.optionalKey(
+    Schema.Struct({
+      project: M.ScopedProjectRef,
+      version: M.NonNegativeInt,
+    }),
+  ),
   revision: Schema.optionalKey(M.MemoryRevision),
   tombstone: Schema.optionalKey(M.MemoryTombstone),
   resolution: Schema.optionalKey(M.MemoryResolution),
@@ -387,6 +393,7 @@ export type HubMember = {
   joinedAt: number | null;
 };
 export type HubAuthority = {
+  beforeAdmission?: InTx<unknown, M.MemoryHubError> | undefined;
   negotiateFloor?: InTx<boolean, M.MemoryHubError | MemoryStorageError>;
   principal: M.MemoryHubPrincipal;
   now: InTx<number, MemoryStorageError>;

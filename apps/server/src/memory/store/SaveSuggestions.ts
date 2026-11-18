@@ -1,10 +1,14 @@
 import { validateSummaryDependencies } from "../MemoryDependencies.ts";
-import { promotionPrerequisiteReady } from "./FloorWrites.ts";
+import {
+  floorWriteId,
+  promotionBindingCurrent,
+  promotionPrerequisiteReady,
+} from "./FloorWrites.ts";
 import * as M from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
-import type { SyncWorkOwner } from "./StoreModel.ts";
+import type { MemoryWork, SyncWorkOwner } from "./StoreModel.ts";
 import { stored } from "./StoreCodecs.ts";
 
 export const suggestionForgetGeneration = Effect.fn("MemorySuggestions.forgetGeneration")(
@@ -20,6 +24,28 @@ export const suggestionForgetGeneration = Effect.fn("MemorySuggestions.forgetGen
   },
 );
 
+export const bindPendingSuggestion = Effect.fn("MemorySuggestions.bindPending")(function* (
+  sql: SqlClient.SqlClient,
+  { memorySpaceId: space, memoryId, operationId }: M.MemoryOperation,
+  origin: M.ScopedThreadRef,
+) {
+  const now = yield* Clock.currentTimeMillis;
+  const [bound] = yield* stored(
+    "suggestion-bind-remember",
+    sql<{ forget_generation: number }>`UPDATE memory_save_suggestions
+      SET state='accepting',accept_operation_id=${operationId}
+      WHERE space=${space} AND id=${memoryId} AND state='pending' AND expires_at>${now}
+        AND origin_environment_id=${origin.environmentId} AND origin_thread_id=${origin.threadId}
+      RETURNING forget_generation`,
+  );
+  if (bound)
+    yield* stored(
+      "suggestion-bind-generation",
+      sql`UPDATE memory_outbox SET metadata_json=json_set(metadata_json,'$.acceptanceGeneration',${bound.forget_generation})
+        WHERE id=${floorWriteId(space, operationId)}`,
+    );
+});
+
 export const acceptanceGenerationMatches = (sql: SqlClient.SqlClient) =>
   sql`(json_extract(memory_outbox.metadata_json,'$.acceptanceGeneration') IS NULL OR
     json_extract(memory_outbox.metadata_json,'$.acceptanceGeneration') =
@@ -30,10 +56,15 @@ export const checkAcceptanceDispatch = Effect.fn("MemorySuggestions.checkDispatc
   sql: SqlClient.SqlClient,
   owner: SyncWorkOwner,
   input: M.MemoryHubPushInput,
-  promotion: boolean,
+  metadata: MemoryWork["metadata"],
 ) {
+  const promotion = "summaryPrerequisite" in metadata;
+  const boundSuggestion = "acceptanceGeneration" in metadata;
   const operation = input.operations[0];
-  if (operation?.kind !== "upsert" || (!promotion && operation.forgetFence === undefined))
+  if (
+    operation?.kind !== "upsert" ||
+    (!promotion && !boundSuggestion && operation.forgetFence === undefined)
+  )
     return input;
   const now = yield* Clock.currentTimeMillis;
   const rows = yield* stored(
@@ -42,7 +73,7 @@ export const checkAcceptanceDispatch = Effect.fn("MemorySuggestions.checkDispatc
       AND claimed_by=${owner.owner} AND sync_version=${owner.version}
       AND operation_digest=${owner.operationDigest} AND claimed_until=${owner.ownedUntil}
       AND claimed_until>${now} AND ${acceptanceGenerationMatches(sql)}
-      AND ${promotionPrerequisiteReady(sql, "memory_outbox")}`,
+      AND ${promotionPrerequisiteReady(sql, "memory_outbox")} AND ${promotionBindingCurrent(sql)}`,
   ).pipe(Effect.mapError(() => new M.MemoryHubError({ code: "storage_failed" })));
   if (!rows.length) return yield* new M.MemoryHubError({ code: "source_invalidated" });
   if (promotion)

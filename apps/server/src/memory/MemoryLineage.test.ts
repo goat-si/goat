@@ -6,6 +6,8 @@ import { assert, describe, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -705,6 +707,46 @@ it.effect(
             ?.payload,
         );
 
+        const unknown = { ...thread, threadId: M.ThreadId.make("synthetic-unknown") };
+        const words = "Synthetic words from the person";
+        yield* sql`ALTER TABLE orchestration_v2_projection_messages ADD COLUMN thread_id TEXT`;
+        yield* sql`INSERT INTO orchestration_v2_projection_threads VALUES (${unknown.threadId},'synthetic-project',NULL,NULL,'2026-01-01')`;
+        yield* sql`INSERT INTO orchestration_v2_projection_runs VALUES
+          ('unknown-run',${unknown.threadId},1,'running','{"userMessageId":"person-root"}')`;
+        yield* sql`INSERT INTO orchestration_v2_projection_messages VALUES
+          ('person-root','user',${JSON.stringify({
+            threadId: unknown.threadId,
+            runId: "unknown-run",
+            id: "person-root",
+            role: "user",
+            nodeId: null,
+            text: words,
+            attachments: [],
+            streaming: false,
+            createdAt: newest.revision.createdAtUtc,
+            updatedAt: newest.revision.createdAtUtc,
+            createdBy: "user",
+            creationSource: "web",
+            ingress: "person",
+          })},${unknown.threadId})`;
+        yield* store.appendThreadLineage(unknown, space, [oldest.revision.revisionId]);
+        yield* sql`UPDATE memory_thread_lineages SET state='unknown' WHERE thread_id=${unknown.threadId}`;
+        const exact = yield* service.remember(
+          { memorySpaceId: space, scope: "user", text: words },
+          Effect.void,
+          unknown,
+        );
+        const exactOp = yield* store.readWorkOperation(
+          `sync:${space}:${exact.receipt.operationId}`,
+        );
+        if (!exactOp || exactOp.kind !== "upsert")
+          throw new Error("Expected a staged exact-word save");
+        assert.deepStrictEqual(exactOp.payload.derivedFromMemoryRevisions, [
+          oldest.revision.revisionId,
+        ]);
+        assert.propertyVal(yield* admit(exactOp), "outcome", "accepted");
+        assert.propertyVal(exactOp.revision.provenance, "unverified", true);
+
         const revisions = [oldest.revision.revisionId];
         for (let n = 700; n < 800; n++) {
           const source = input(n);
@@ -770,7 +812,7 @@ it.effect(
           },
           Effect.void,
         );
-        for (const op of [rememberOp, acceptOp])
+        for (const op of [rememberOp, acceptOp, exactOp])
           assert.propertyVal(
             (yield* store.loadAggregate(space, op.memoryId)).item,
             "status",
@@ -780,108 +822,134 @@ it.effect(
     ),
 );
 
-it.effect.each(["lost ACK", "unavailable before admission"] as const)(
-  "an uncertain remember waits for its original operation after %s",
-  (scenario) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        yield* TestClock.setTime(at);
-        const hub = yield* makeEnvironment(hubId);
-        yield* enroll(hub.sql);
-        const admit = (op: M.MemoryOperation) =>
-          hub.service.admitHubOperation({ authority: authority(), operation: op });
-        let submit: Effect.Effect<void, Service.MemoryServiceError> = Effect.void;
-        const e = yield* makeEnvironment(
-          memberId,
-          Service.layerWithSourceReadAuthority(
-            () => Effect.fail(new Service.MemoryAccessError({ code: "unavailable" })),
-            Effect.suspend(() => submit),
-          ),
+it.effect.each([
+  "lost ACK",
+  "unavailable before admission",
+  "an existing pending suggestion",
+] as const)("an uncertain remember waits for its original operation after %s", (scenario) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(at);
+      const hub = yield* makeEnvironment(hubId);
+      yield* enroll(hub.sql);
+      const admit = (op: M.MemoryOperation) =>
+        hub.service.admitHubOperation({ authority: authority(), operation: op });
+      let submit: Effect.Effect<void, Service.MemoryServiceError> = Effect.void;
+      const e = yield* makeEnvironment(
+        memberId,
+        Service.layerWithSourceReadAuthority(
+          () => Effect.fail(new Service.MemoryAccessError({ code: "unavailable" })),
+          Effect.suspend(() => submit),
+        ),
+      );
+      yield* e.sql`ALTER TABLE orchestration_events ADD COLUMN event_id TEXT`;
+      yield* e.sql`ALTER TABLE orchestration_events ADD COLUMN sequence INTEGER`;
+      const revisions: M.MemoryRevisionId[] = [];
+      for (let n = 10000; n < 10101; n++) {
+        const source = input(n);
+        yield* e.service.upsert(source, Effect.void);
+        const op = yield* operation(e.store, source);
+        assert.propertyVal(yield* admit(op), "outcome", "accepted");
+        revisions.push(op.revision.revisionId);
+      }
+      yield* e.store.appendThreadLineage(thread, space, revisions);
+      const request = {
+        memorySpaceId: space,
+        scope: "user" as const,
+        text: "synthetic uncertain save",
+      };
+      const existing = scenario === "an existing pending suggestion";
+      if (existing) {
+        const before = yield* e.service.remember(request, Effect.void, thread).pipe(Effect.flip);
+        assert.propertyVal(before, "code", "hub_upgrade_required");
+        assert.include(
+          (yield* e.service.listSuggestions({ memorySpaceId: space }, Effect.void))[0],
+          { state: "pending" },
         );
-        yield* e.sql`ALTER TABLE orchestration_events ADD COLUMN event_id TEXT`;
-        yield* e.sql`ALTER TABLE orchestration_events ADD COLUMN sequence INTEGER`;
-        const revisions: M.MemoryRevisionId[] = [];
-        for (let n = 10000; n < 10101; n++) {
-          const source = input(n);
-          yield* e.service.upsert(source, Effect.void);
-          const op = yield* operation(e.store, source);
-          assert.propertyVal(yield* admit(op), "outcome", "accepted");
-          revisions.push(op.revision.revisionId);
-        }
-        yield* e.store.transact(e.store.learnHubFloor(space, at));
-        yield* e.store.appendThreadLineage(thread, space, revisions);
-        const readOriginal = Effect.gen(function* () {
-          const [row] = yield* e.sql<{
-            id: string;
-          }>`SELECT id FROM memory_outbox WHERE json_extract(metadata_json,'$.authorityFirst') IS NOT NULL`;
-          if (!row) throw new Error("Expected the original staged operation");
-          const op = yield* e.store.readWorkOperation(row.id);
-          if (!op || op.kind !== "upsert") throw new Error("Expected a staged upsert");
-          return { workId: row.id, op };
-        });
-        if (scenario === "lost ACK") {
-          yield* hub.store.transact(hub.store.learnHubFloor(space, at));
-          submit = readOriginal.pipe(
-            Effect.flatMap(({ op }) => admit(op)),
-            Effect.orDie,
-            Effect.asVoid,
-          );
-        } else submit = Effect.fail(new Store.MemoryStoreConflict({ code: "hub_unavailable" }));
-        const failure = yield* Effect.flip(
-          e.service.remember(
-            { memorySpaceId: space, scope: "user", text: "synthetic uncertain save" },
-            Effect.void,
-            thread,
-          ),
+      }
+      yield* e.store.transact(e.store.learnHubFloor(space, at));
+      const readOriginal = Effect.gen(function* () {
+        const [row] = yield* e.sql<{
+          id: string;
+        }>`SELECT id FROM memory_outbox WHERE json_extract(metadata_json,'$.authorityFirst') IS NOT NULL`;
+        if (!row) throw new Error("Expected the original staged operation");
+        const op = yield* e.store.readWorkOperation(row.id);
+        if (!op || op.kind !== "upsert") throw new Error("Expected a staged upsert");
+        return { workId: row.id, op };
+      });
+      if (scenario === "lost ACK") {
+        yield* hub.store.transact(hub.store.learnHubFloor(space, at));
+        submit = readOriginal.pipe(
+          Effect.flatMap(({ op }) => admit(op)),
+          Effect.orDie,
+          Effect.asVoid,
         );
-        assert.propertyVal(failure, "code", "hub_unavailable");
-        const { workId, op } = yield* readOriginal;
+      } else submit = Effect.fail(new Store.MemoryStoreConflict({ code: "hub_unavailable" }));
+      const entered = yield* Deferred.make<void>();
+      const released = yield* Deferred.make<void>();
+      if (existing)
+        submit = Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(released)),
+          Effect.andThen(submit),
+        );
+      const attempt = e.service.remember(request, Effect.void, thread).pipe(Effect.flip);
+      if (existing) {
+        const inFlight = yield* Effect.forkScoped(attempt);
+        yield* Deferred.await(entered);
+        const { op } = yield* readOriginal;
         const address = { memorySpaceId: space, suggestionId: op.memoryId };
-        const waiting = yield* e.service.listSuggestions({ memorySpaceId: space }, Effect.void);
-        assert.lengthOf(waiting, 1);
-        assert.include(waiting[0], { suggestionId: op.memoryId, state: "accepting" });
         assert.deepStrictEqual(yield* e.service.acceptSuggestion(address, Effect.void), {
           status: "pending",
         });
+        const rows = yield* e.sql`SELECT id FROM memory_outbox WHERE memory_id=${op.memoryId}`;
+        yield* Deferred.succeed(released, undefined);
+        assert.propertyVal(yield* Fiber.join(inFlight), "code", "hub_unavailable");
+        assert.lengthOf(rows, 1);
+      } else assert.propertyVal(yield* attempt, "code", "hub_unavailable");
+      const { workId, op } = yield* readOriginal;
+      const address = { memorySpaceId: space, suggestionId: op.memoryId };
+      const waiting = yield* e.service.listSuggestions({ memorySpaceId: space }, Effect.void);
+      assert.lengthOf(waiting, 1);
+      assert.include(waiting[0], { suggestionId: op.memoryId, state: "accepting" });
+      assert.deepStrictEqual(yield* e.service.acceptSuggestion(address, Effect.void), {
+        status: "pending",
+      });
+      assert.lengthOf(yield* e.sql`SELECT id FROM memory_outbox WHERE memory_id=${op.memoryId}`, 1);
+      const receipt = yield* admit(op);
+      yield* e.service.settleHubAcknowledgement({
+        memorySpaceId: space,
+        hubEnvironmentId: hubId,
+        localEnvironmentId: memberId,
+        workId,
+        receipt,
+        operation: { operationId: op.operationId, operationDigest: receipt.operationDigest },
+        reauthorize: Effect.void,
+      });
+      const remaining = yield* e.service.listSuggestions({ memorySpaceId: space }, Effect.void);
+      if (scenario === "lost ACK") {
+        assert.propertyVal(receipt, "outcome", "accepted");
+        assert.isEmpty(remaining);
         assert.lengthOf(
-          yield* e.sql`SELECT id FROM memory_outbox WHERE memory_id=${op.memoryId}`,
+          yield* hub.sql`SELECT 1 FROM memory_hub_operations WHERE operation_id=${op.operationId}`,
           1,
         );
-        const receipt = yield* admit(op);
-        yield* e.service.settleHubAcknowledgement({
-          memorySpaceId: space,
-          hubEnvironmentId: hubId,
-          localEnvironmentId: memberId,
-          workId,
-          receipt,
-          operation: { operationId: op.operationId, operationDigest: receipt.operationDigest },
-          reauthorize: Effect.void,
+        return;
+      }
+      assert.include(receipt, { outcome: "rejected", failureCode: "hub_upgrade_required" });
+      assert.lengthOf(remaining, 1);
+      assert.include(remaining[0], { state: "pending", reason: "hub_upgrade_required" });
+      yield* hub.store.transact(hub.store.learnHubFloor(space, at));
+      for (let attempt = 0; attempt < 2; attempt++)
+        assert.deepStrictEqual(yield* e.service.acceptSuggestion(address, Effect.void), {
+          status: "pending",
         });
-        const remaining = yield* e.service.listSuggestions({ memorySpaceId: space }, Effect.void);
-        if (scenario === "lost ACK") {
-          assert.propertyVal(receipt, "outcome", "accepted");
-          assert.isEmpty(remaining);
-          assert.lengthOf(
-            yield* hub.sql`SELECT 1 FROM memory_hub_operations WHERE operation_id=${op.operationId}`,
-            1,
-          );
-          return;
-        }
-        assert.include(receipt, { outcome: "rejected", failureCode: "hub_upgrade_required" });
-        assert.lengthOf(remaining, 1);
-        assert.include(remaining[0], { state: "pending", reason: "hub_upgrade_required" });
-        yield* hub.store.transact(hub.store.learnHubFloor(space, at));
-        for (let attempt = 0; attempt < 2; attempt++)
-          assert.deepStrictEqual(yield* e.service.acceptSuggestion(address, Effect.void), {
-            status: "pending",
-          });
-        const attempts = yield* e.sql<{
-          id: string;
-        }>`SELECT id FROM memory_outbox WHERE memory_id=${op.memoryId} AND id!=${workId}`;
-        assert.lengthOf(attempts, 1);
-        const retry = yield* e.store.readWorkOperation(attempts[0]!.id);
-        if (!retry) throw new Error("Expected an acceptance retry");
-        assert.propertyVal(yield* admit(retry), "outcome", "accepted");
-      }),
-    ),
+      const attempts = yield* e.sql<{
+        id: string;
+      }>`SELECT id FROM memory_outbox WHERE memory_id=${op.memoryId} AND id!=${workId}`;
+      assert.lengthOf(attempts, 1);
+      const retry = yield* e.store.readWorkOperation(attempts[0]!.id);
+      if (!retry) throw new Error("Expected an acceptance retry");
+      assert.propertyVal(yield* admit(retry), "outcome", "accepted");
+    }),
+  ),
 );

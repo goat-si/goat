@@ -1,3 +1,4 @@
+import { publishMemoryOriginUpdatesTx } from "./MemoryOriginReplication.ts";
 import { makeMoveMemory } from "./MemoryMove.ts";
 import { makeHubAcknowledgement } from "./MemoryHubAcknowledgement.ts";
 import { makeMemoryForget, type ForgetRequest } from "./MemoryForget.ts";
@@ -28,6 +29,7 @@ import {
   requireClosureCapacity,
   validateSummaryDependencies,
 } from "./MemoryDependencies.ts";
+import type { PromotionPrerequisite } from "./store/FloorWrites.ts";
 import { Transaction as StoreTransaction } from "./store/StoreModel.ts";
 import * as Settings from "../serverSettings.ts";
 import {
@@ -42,7 +44,12 @@ import type {
 } from "./imports/MemoryImportTypes.ts";
 import * as Quota from "./MemoryQuotaService.ts";
 import { checkedHistoryPage, checkedPage } from "./memoryDiagnostics.ts";
-import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts";
+import {
+  decideMemoryOperation,
+  memoryOperationDigest,
+  matchesMemoryOperationDigest,
+  legacyClosedLineageDigest,
+} from "./MemoryDecider.ts";
 import { scanMemoryValue } from "./MemorySecretScanner.ts";
 import { makeCommitSummary, type SummaryCommit } from "./MemorySummaryCommit.ts";
 import { makeUpsert, type MemorySuggestionAcceptance } from "./MemoryUpsert.ts";
@@ -132,6 +139,10 @@ export class MemoryService extends Context.Service<
       input: { request: ValidatedSourceRequest; outcome: M.MemorySourceReadOutcome },
       permit: Permit,
     ) => Effect.Effect<M.MemorySourceReadOutcome, MemoryServiceError>;
+    readonly applyOriginUpdatesTx: (
+      input: Pick<M.MemoryHubPushInput, "memorySpaceId" | "environmentId">,
+      updates: readonly M.MemoryOriginUpdate[],
+    ) => Store.InTx<void, Store.MemoryStorageError>;
     readonly admitHubOperation: (input: {
       authority: Store.HubAuthority;
       operation: M.MemoryOperation;
@@ -606,9 +617,11 @@ const make = Effect.fnUntraced(function* (
     admission: Store.MemoryAdmissionContext,
     permit: Permit,
     approval?: M.MemoryHubReceipt,
-    summaryPrerequisite?: M.MemoryRevisionId,
+    promotion?: PromotionPrerequisite,
   ) {
-    const digest = yield* Effect.try({ try: () => memoryOperationDigest(op), catch: invalid });
+    const digest =
+      approval?.operationDigest ??
+      (yield* Effect.try({ try: () => memoryOperationDigest(op), catch: invalid }));
     return yield* store.transact(
       Effect.gen(function* () {
         yield* permit;
@@ -686,7 +699,7 @@ const make = Effect.fnUntraced(function* (
             return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
           return yield* quota.withAdmission(
             { operation: op, admission, environmentId, receipt: decision.receipt },
-            Effect.andThen(permit, store.stageFloorWrite(op, summaryPrerequisite)).pipe(
+            Effect.andThen(permit, store.stageFloorWrite(op, promotion)).pipe(
               Effect.as({
                 operationDigest: digest,
                 receipt: { ...decision.receipt, revisionId: null, pendingSync: true },
@@ -2020,10 +2033,20 @@ const make = Effect.fnUntraced(function* (
     const digest = memoryOperationDigest(op);
     const replay = yield* store.readHubReceiptTx(op.memorySpaceId, op.operationId);
     if (replay) {
-      if (replay.entry.receipt.operationDigest !== digest)
+      const retained = replay.entry.kind === "operation" ? replay.entry.operation : undefined;
+      if (
+        (retained?.kind === "upsert" &&
+          op.kind === "upsert" &&
+          retained.closedLineage !== op.closedLineage) ||
+        (replay.entry.receipt.operationDigest !== digest &&
+          (!retained ||
+            memoryOperationDigest(retained) !== digest ||
+            replay.entry.receipt.operationDigest !== legacyClosedLineageDigest(op)))
+      )
         return yield* new Store.MemoryStoreConflict({ code: "operation_id_reused" });
       return replay.entry.receipt;
     }
+    if (input.authority.beforeAdmission) yield* input.authority.beforeAdmission;
     if (M.requiresMemoryFloor2(op) && !active)
       return {
         operationId: op.operationId,
@@ -2334,7 +2357,7 @@ const make = Effect.fnUntraced(function* (
     if (
       entry.kind === "operation" &&
       (entry.operation.memorySpaceId !== input.memorySpaceId ||
-        memoryOperationDigest(entry.operation) !== entry.receipt.operationDigest)
+        !matchesMemoryOperationDigest(entry.operation, entry.receipt.operationDigest))
     )
       return yield* invalid();
     const old = yield* store.receipt(input.memorySpaceId, entry.receipt.operationId);
@@ -2457,6 +2480,7 @@ const make = Effect.fnUntraced(function* (
     readSource,
     prepareSourceRead,
     validateSourceOutcome,
+    applyOriginUpdatesTx: (input, updates) => publishMemoryOriginUpdatesTx(sql, input, updates),
     admitHubOperation,
     admitHubOperationTx,
     settleHubEntryTx,

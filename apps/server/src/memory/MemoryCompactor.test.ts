@@ -1,3 +1,4 @@
+import { runRememberOriginFixture } from "./testkit/RememberOriginFixture.ts";
 import { MemoryFloor2Enabled } from "./MemoryFloor.ts";
 import { scanReplicaMemory } from "./testkit/ScanReplicaMemory.ts";
 import * as RecallFixture from "./MemoryRecall.ts";
@@ -850,6 +851,23 @@ it.effect("negotiated conversation origins survive edits, compaction, and paged 
     const remember = (text: string) =>
       service.remember({ memorySpaceId: space, scope: "user", text }, Effect.void, origin);
     const narrow = yield* settle(yield* remember("Synthetic narrow origin"));
+    const update = {
+      protocolVersion: 1 as const,
+      memorySpaceId: space,
+      environmentId: hubEnv,
+      features,
+      operations: [],
+      originUpdates: [
+        {
+          memoryId: narrow.memoryId,
+          createOperationId: narrow.operationId,
+          threadId: origin.threadId,
+        },
+      ],
+    };
+    yield* hub.push({ ...update, environmentId: memberEnv }, principal(memberEnv));
+    assert.isUndefined((yield* store.loadAggregate(space, narrow.memoryId)).identity?.origin);
+    yield* hub.push(update, principal());
     const sources = Array.from({ length: 101 }, (_, n) => {
       const base = operation(22000 + n);
       const memoryId = M.MemoryId.make(id(32000 + n));
@@ -961,4 +979,14 @@ it.effect("negotiated conversation origins survive edits, compaction, and paged 
       );
     }).pipe(Effect.provide(Layer.fresh(core)));
   }).pipe(checkUsage, Effect.provide(live), Effect.provideService(MemoryFloor2Enabled, true)),
+);
+
+it.effect.each(["pre-activation", "offline floor-2"] as const)(
+  "replicates origins from %s narrow remembers through real sync and a fresh bootstrap",
+  (scenario) =>
+    runRememberOriginFixture(scenario).pipe(
+      checkUsage,
+      Effect.provide(live),
+      Effect.provideService(MemoryFloor2Enabled, true),
+    ),
 );

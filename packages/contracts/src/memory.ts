@@ -660,31 +660,25 @@ const validateOperation = Schema.decodeUnknownSync(MemoryOperation, { onExcessPr
 const operationJson = Schema.fromJsonString(MemoryOperation);
 const encodeOperationJson = Schema.encodeSync(operationJson, { onExcessProperty: "error" });
 const decodeOperationJson = Schema.decodeUnknownSync(operationJson, { onExcessProperty: "error" });
+const operationEnvelope = (operation: MemoryOperation) => ({
+  protocolVersion: operation.protocolVersion,
+  operationId: operation.operationId,
+  memorySpaceId: operation.memorySpaceId,
+  originEnvironmentId: operation.originEnvironmentId,
+  memoryId: operation.memoryId,
+  expectedHeads: operation.expectedHeads,
+});
 /** Refuse unknown nested fields and construct only the selected transport arm. */
 export function encodeMemoryOperation(operation: MemoryOperation): string {
   const value = validateOperation(operation);
-  const {
-    protocolVersion,
-    operationId,
-    memorySpaceId,
-    originEnvironmentId,
-    memoryId,
-    expectedHeads,
-    kind,
-  } = value;
-  const common = {
-    protocolVersion,
-    operationId,
-    memorySpaceId,
-    originEnvironmentId,
-    memoryId,
-    expectedHeads,
-  };
+  const { kind } = value;
+  const common = operationEnvelope(value);
   switch (kind) {
     case "upsert":
       return encodeOperationJson({
         ...common,
         kind,
+        ...(value.closedLineage ? { closedLineage: value.closedLineage } : {}),
         revision: value.revision,
         payload: value.payload,
         ...(value.forgetFence === undefined ? {} : { forgetFence: value.forgetFence }),
@@ -731,6 +725,7 @@ const eventSchema = Schema.Union([
     ...envelope,
     ...floorOperation,
     kind: Schema.Literal("upsert"),
+    closedLineage: Schema.optionalKey(Schema.Literal(true)),
     revision: MemoryRevision,
   }),
   struct({ ...envelope, kind: Schema.Literal("forget"), tombstone: MemoryTombstone }),
@@ -760,23 +755,9 @@ const decodeEventMetadata = Schema.decodeUnknownSync(eventSchema, { onExcessProp
 export function encodeMemoryEventMetadata(operation: MemoryOperation): string {
   validateOperation(operation);
   if (operation.kind === "move") return encodeMemoryOperation(operation);
-  const {
-    protocolVersion,
-    operationId,
-    memorySpaceId,
-    originEnvironmentId,
-    memoryId,
-    expectedHeads,
-    kind,
-  } = operation;
   const common = {
-    protocolVersion,
-    operationId,
-    memorySpaceId,
-    originEnvironmentId,
-    memoryId,
-    expectedHeads,
-    kind,
+    ...operationEnvelope(operation),
+    kind: operation.kind,
     ...(operation.kind !== "forget" && operation.forgetFence !== undefined
       ? { forgetFence: operation.forgetFence }
       : {}),
@@ -799,7 +780,11 @@ export function encodeMemoryEventMetadata(operation: MemoryOperation): string {
               revertsResolutionId: operation.revertsResolutionId,
               restoredRevisionId: operation.restoredRevisionId,
             }
-          : { ...common, revision: operation.revision };
+          : {
+              ...common,
+              ...(operation.closedLineage ? { closedLineage: operation.closedLineage } : {}),
+              revision: operation.revision,
+            };
   return encodeEventMetadata(decodeEventMetadata(value));
 }
 
@@ -2664,17 +2649,30 @@ export const MemoryHubJoinResult = struct({
 );
 export type MemoryHubJoinResult = typeof MemoryHubJoinResult.Type;
 
+export const MemoryOriginUpdate = struct({
+  memoryId: MemoryId,
+  createOperationId: MemoryOperationId,
+  threadId: ThreadId,
+});
+export type MemoryOriginUpdate = typeof MemoryOriginUpdate.Type;
+export const MEMORY_ORIGIN_UPDATE_MAX = 100;
+
 export const MemoryHubPushInput = bounded(
   struct({
     ...hub,
     ...hubFeatures,
     environmentId: EnvironmentId,
     operations: array(MemoryOperation),
+    originUpdates: Schema.optionalKey(array(MemoryOriginUpdate, MEMORY_ORIGIN_UPDATE_MAX)),
   }).check(
     Schema.makeFilter((v) =>
-      v.operations.every(
-        (o) => o.memorySpaceId === v.memorySpaceId && o.originEnvironmentId === v.environmentId,
-      ),
+      v.originUpdates === undefined
+        ? v.operations.every(
+            (o) => o.memorySpaceId === v.memorySpaceId && o.originEnvironmentId === v.environmentId,
+          )
+        : v.operations.length === 0 &&
+          v.originUpdates.length > 0 &&
+          unique(v.originUpdates.map((o) => o.memoryId)),
     ),
   ),
   1048576,
