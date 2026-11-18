@@ -461,3 +461,43 @@ READY for integration review on the server-only evidence below. `git push` exite
 NOT RUN: Unfiltered `vp run check:changed`, 335 browser-dependent files in the completed gate, and P1 real-client passes and captures. CI belongs to PR #3700.
 
 NOT RUN: Live GitHub and GitLab host reads, separate old and new binaries, and upstream’s missing agent context budget and eval harness hunks. Existing schema tests cover the compatibility cases available here.
+
+## Fix round 2, 2026-11-18 UTC (pen-lidge)
+
+Round 2 applies two GOAT-authored fixes on `e8aeeb1b42e4a15ecd5e7834eb95d3d335e02594`. Prior P2-1 and P2-2 stay closed. The branch still uses `f82d2df4b0960eb39bd36e4100b72b6f2758c7d2` as its merged integration parent. The newer integration head was checked out temporarily for the host comparison only.
+
+- **P2** `a577c84d2b0be25f7e291f8bfeeb8f67e6fb25e1` bounds each pass to 64 watch targets and four concurrent host group reads. A stable key cursor resumes at the next group. Oversized project/PR groups split into stable chunks, and the original projection roster still supplies feed candidates and cache cleanup. Held wakes and their proposed watch states live only in that pass. The same command still commits each batch's wakes and states together. Both grouping maps append in place. The appended `PullRequestWatchBatch.test.ts` case checks that the first pass reads 64 of 65, the deferred watch still has its initial baseline, two passes deliver exactly the 65 notices, and a subsequent sweep delivers no duplicates.
+- **P3** `a2ef20764c287c1612f916fa34d7b2af918e72b8` uses the existing check wait clock to keep baselining through placeholder-only fork reads. A read with the head and real checks completes the check baseline, while the failed approval lookup continues to suppress approval notices. The new `pullRequestWatch.baseline.test.ts` case shows repeated placeholder-only reads, then an already-failing check recorded silently, with no wake when approval data becomes available. The same-head regression still reports a check that was pending at baseline and later fails. The fork delta records the rule.
+- **Failing first** `GOAT_TEST_TMP_GUARD=fail vp test run src/orchestration-v2/PullRequestWatchBatch.test.ts src/orchestration-v2/pullRequestWatch.baseline.test.ts` from `apps/server` on `e8aeeb1b42` plus test edits only exited 1, 18 passed and 2 failed. The first sweep had 65 wakes where the assertion required 64. The first populated fork read returned `checks-failed` where the assertion required `[]`. The focused post-fix run of those files plus `PullRequestWatchHostEvents.test.ts`, `PullRequestWatchTerminal.test.ts` and `pullRequestWatch.test.ts` exited 0, 90 tests in five files.
+
+Rule 3, change to K1's own same-head case in `pullRequestWatch.baseline.test.ts`. Before:
+
+```ts
+// A head SHA with the approval read unavailable ends the check baseline; approvals keep waiting.
+const unavailable = { ...check("Workflow approval status", "pending"), placeholder: true };
+const first = evaluate(
+  watch({ awaitingBaseline: "all" }),
+  detail({ checks: [unavailable] }),
+  noRemarks,
+);
+```
+
+After:
+
+```ts
+const unavailable = { ...check("Workflow approval status", "pending"), placeholder: true };
+const first = evaluate(
+  watch({ awaitingBaseline: "all" }),
+  detail({ checks: [check("test", "pending"), unavailable] }),
+  noRemarks,
+);
+```
+
+A separate process check preceded each final gate. Node was 26.12.1 and Git was 2.43.0.
+
+- `vp run check:changed e8aeeb1b42e4a15ecd5e7834eb95d3d335e02594` exited 0 on the new head. Naming, format, lint with two existing warnings, both Knip checks, GraphQL, both agent-surface checks and 42-package typecheck passed. Its nine selected server files passed 289 tests with zero failures or skips. It selected zero browser files.
+- From `apps/server`, `GOAT_TEST_TMP_GUARD=fail vp test run` on all 11 server test files the lane added or changed relative to `f82d2df4b0` exited 0, 321 passed with zero failures or skips.
+- `vp test run --passWithNoTests --project='!*browser*' --project='!*renders*'` on the four known failing files exited 1 on both the lane and the fetched integration head `6def29ca359f546e50dcd731a6364e3f0d575545`. Each run reported 38 passed, 25 failed, zero skipped. Vitest JSON matched all 25 case names, assertion sites and diagnostics after normalizing the generated fixture paths and PIDs. The SSH fixture trust failures were 10 in `tunnel.protocol-forced.test.ts` and 13 in `tunnel.protocol-forced-followup.test.ts`. Grok's `driver.test.ts` expected `/new/bin` and got `undefined`. `storageCleanupShipping.test.ts:211` kept both worktrees and reported “Default branch is unavailable” where the assertion expected “Couldn't refresh origin/main.” The worktree returned to the lane after comparison.
+- READY at `a2ef20764c287c1612f916fa34d7b2af918e72b8`. `git diff --check e8aeeb1b42 HEAD` exited 0. The plain lane push exited 0 and `git ls-remote` confirmed the same head.
+
+NOT RUN: Browser tests, real-client passes and captures, live GitHub/GitLab reads, the full integration-wide changed-test selection, and CI. CI runs on PR #3700.
