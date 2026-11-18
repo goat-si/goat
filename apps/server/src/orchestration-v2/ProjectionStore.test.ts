@@ -1,3 +1,4 @@
+import { assertHistorySubagent } from "./ProjectionHistorySubagent.testkit.ts";
 import { threadWorktreePathsIncludeArchivedOnRequest } from "./ProjectionWorktreePaths.testkit.ts";
 import { PlanId } from "@goat/contracts";
 import * as NodeSqlite from "node:sqlite";
@@ -1621,6 +1622,8 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             '$.runId', 'run:bounded-sql-history:' || ordinal, '$.type', 'command_execution')
         WHERE thread_id = ${threadId} AND ordinal IN (500, 580)
       `;
+
+      yield* assertHistorySubagent({ sql, projectionStore, threadId, now, historyPage });
 
       // Older pages and timeline pages read the rows near the page, not the whole history. A
       // full index that another read left cached gives the same page.

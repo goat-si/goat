@@ -168,6 +168,7 @@ import { MCP_APP_OUTPUT_KEY } from "@goat/shared/mcpApp";
 import { threadHtmlRenderAttachmentIds } from "../attachmentStore.ts";
 import { JAVASCRIPT_TRIM_WHITESPACE } from "./deferredCommandMessage.ts";
 import { turnStartMessages } from "./turnStartMessages.ts";
+import { historyPageSubagents } from "./historySubagents.ts";
 import { readableSearchText } from "./messageSearchIndex.ts";
 import {
   isFoldableWorkItem,
@@ -6279,18 +6280,17 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                       bounded.items,
                     ),
                   );
-            const pageItems = [...requests, ...bounded.items].map((row, position) => ({
-              ...row,
-              position,
-            }));
-            return {
-              snapshotSequence,
-              items: conversationOnly
-                ? pageItems.filter((row) => isConversationHistoryItem(row.item))
-                : pageItems,
-              nextCursor: bounded.hasMoreHistory ? bounded.nextCursor : page.nextCursor,
-              hasMoreHistory: bounded.hasMoreHistory || page.hasMoreHistory,
-            };
+            return yield* historyPageSubagents(
+              sql,
+              threadId,
+              [...requests, ...bounded.items],
+              conversationOnly,
+              {
+                snapshotSequence,
+                nextCursor: bounded.hasMoreHistory ? bounded.nextCursor : page.nextCursor,
+                hasMoreHistory: bounded.hasMoreHistory || page.hasMoreHistory,
+              },
+            );
           }),
         )
         .pipe(Effect.mapError(controlReadError(threadId)));
