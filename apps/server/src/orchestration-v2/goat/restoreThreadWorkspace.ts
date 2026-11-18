@@ -168,7 +168,7 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
               Effect.mapError((error) =>
                 fail(
                   "git-failed",
-                  `Could not set aside the unfinished checkout at ${input.worktreePath}: ${error.detail}`,
+                  `Could not set aside the unfinished checkout at ${input.worktreePath}: ${error._tag === "RestoreSnapshotError" ? error.detail : error.message}`,
                 ),
               ),
             );

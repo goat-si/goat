@@ -3,7 +3,12 @@ import * as Schema from "effect/Schema";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
 import { parseRemoteNamesInGitOrder } from "../../git/remoteRefs.ts";
 import type { RestorePendingError } from "./restorePending.ts";
-import { applySnapshotToWorktree, git, verifyRestoredWorktree } from "./restoreSnapshot.ts";
+import {
+  applySnapshotToWorktree,
+  git,
+  verifyRestoredWorktree,
+  verifyWorktreeRegistration,
+} from "./restoreSnapshot.ts";
 
 class WorktreeRecreateError extends Schema.TaggedError<WorktreeRecreateError>()(
   "WorktreeRecreateError",
@@ -151,6 +156,8 @@ export const makeRecreateMissingWorktree = Effect.gen(function* () {
         ...(newRefName === undefined ? {} : { newRefName }),
         ...(baseRefName === undefined ? {} : { baseRefName }),
       });
+      yield* verifyWorktreeRegistration({ projectCwd: cwd, worktreePath });
+      yield* verifyRestoredWorktree({ cwd: worktreePath, branch, expectedHead: headSha });
       if (snapshot)
         yield* applySnapshotToWorktree({ cwd: worktreePath, snapshotSha: snapshot.snapshotSha });
       yield* verifyRestoredWorktree({
