@@ -152,7 +152,9 @@ describe("memory reliability ledger before migration 158 AuthSessionPenMember", 
 
         assert.deepStrictEqual(yield* runMigrations(), [
           [158, "AuthSessionPenMember"],
-          ...prePenMemberMemoryNames.slice(count).map((name, index) => [159 + count + index, name]),
+          ...prePenMemberMemoryNames
+            .slice(count)
+            .map((name, index) => [159 + count + index, name] as const),
         ]);
         assert.deepStrictEqual(yield* snapshot, yield* fresh);
         assert.deepStrictEqual(yield* userData, data);
@@ -650,7 +652,12 @@ describe("upgrading a nightly 256 ledger past upstream 068", () => {
         migrationManifest.filter(([id]) => id >= 158),
         [
           [158, "AuthSessionPenMember"],
-          ...prePenMemberMemoryNames.map((name, index) => [159 + index, name]),
+          [159, "MemoryThreadLineage"],
+          [160, "MemorySaveSuggestions"],
+          [161, "MemoryHubFloor"],
+          [162, "MemoryScopeVersion"],
+          [163, "MemoryCompactMoveReceipts"],
+          [164, "MemoryOriginCatchup"],
         ],
       );
       const sql = yield* SqlClient.SqlClient;
