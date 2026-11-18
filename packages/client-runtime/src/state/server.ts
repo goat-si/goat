@@ -67,6 +67,7 @@ import {
 import type { FetchedMachineCatalog } from "./serverProviderCatalog.ts";
 
 import {
+  type ServerUpdateTarget,
   SERVER_UPDATE_RESUME_TIMEOUT,
   ServerUpdateResumeTimeoutError,
   isLegacyUpdateHandoffLoss,
@@ -106,11 +107,6 @@ export type ServerUpdateState =
       readonly targetVersion: string;
       readonly message: string;
     };
-
-export interface ServerUpdateTarget {
-  readonly environmentId: EnvironmentId;
-  readonly input: EnvironmentRpcInput<typeof WS_METHODS.serverUpdateServer>;
-}
 
 export const IDLE_SERVER_UPDATE_STATE: ServerUpdateState = { status: "idle" };
 const EMPTY_SERVER_UPDATE_STATE_ATOM = Atom.make<ServerUpdateState>(IDLE_SERVER_UPDATE_STATE).pipe(
@@ -942,6 +938,10 @@ export function createServerEnvironmentAtoms<R, E>(
       idleTtlMs: 0,
       staleTimeMs: 15_000,
       refreshTrigger: ({ environmentId }) => computerUseRefreshAtom(environmentId),
+    }),
+    stageServerUpdate: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:stage-update",
+      tag: WS_METHODS.serverUpdateServer,
     }),
     updateStateAtom,
     settingsValueAtom,

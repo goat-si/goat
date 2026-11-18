@@ -860,6 +860,7 @@ export class ServerProviderUpdateError extends Schema.TaggedError<ServerProvider
 export const ServerSelfUpdateInput = Schema.Struct({
   /** Exact GOAT release version, never a channel, so server and client agree on the request. */
   targetVersion: TrimmedNonEmptyString,
+  stageOnly: Schema.optionalKey(Schema.Boolean),
   continueRunningThreads: Schema.optionalKey(Schema.Boolean),
   /** Omission preserves desktop app updates; boot-service activation requires idle.
       Continuation records recovery intent, not consent to interrupt running work. */
