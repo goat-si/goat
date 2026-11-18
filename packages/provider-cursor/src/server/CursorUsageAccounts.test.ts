@@ -7,11 +7,62 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as CursorAccountReader from "./CursorAccountReader.ts";
 import * as CursorUsageAccounts from "./CursorUsageAccounts.ts";
 
 describe("CursorUsageAccounts", () => {
+  it.effect("widens account coverage after sharing a narrower refresh", () => {
+    const entered = Deferred.makeUnsafe<void>();
+    const release = Deferred.makeUnsafe<void>();
+    const since: number[] = [];
+    const reader = Layer.succeed(CursorAccountReader.CursorAccountReader, {
+      read: (_credential, sinceMs) =>
+        Effect.gen(function* () {
+          since.push(sinceMs);
+          yield* Deferred.succeed(entered, undefined);
+          yield* Deferred.await(release);
+          return { accountKey: "account", records: [], missing: false, error: null };
+        }),
+    });
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(10_000);
+      const accounts = yield* CursorUsageAccounts.CursorUsageAccounts;
+      const input = {
+        instances: [
+          {
+            instanceId: ProviderInstanceId.make("cursor"),
+            config: {},
+            environment: [{ name: "CURSOR_API_KEY", value: "test-key", sensitive: true }],
+          },
+        ],
+        keychainUsageEnabled: false,
+        windowStartMs: 0,
+        retentionCutoffMs: 1_000,
+        awaitRefresh: false,
+      };
+      assert.isTrue((yield* accounts.scan(input))[0]?.refreshing);
+      yield* Deferred.await(entered);
+      const wider = yield* accounts
+        .scan({ ...input, retentionCutoffMs: 0, awaitRefresh: true })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.succeed(release, undefined);
+      assert.equal((yield* Fiber.join(wider))[0]?.status, "ok");
+      assert.deepEqual(since, [1_000, 0]);
+    }).pipe(
+      Effect.provide(
+        Layer.provideMerge(
+          CursorUsageAccounts.layer.pipe(Layer.provide(reader)),
+          Layer.provideMerge(
+            TestProviderHost.layer(),
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
+        ),
+      ),
+    );
+  });
+
   it.effect("runs at most two account refreshes at once and settles all of them", () => {
     let inFlight = 0;
     let mostInFlight = 0;

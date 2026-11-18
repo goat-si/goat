@@ -763,6 +763,7 @@ export class ServerSettingsService extends Context.Service<
 
     readonly withSettingsSnapshot: <A, E, R>(
       use: (settings: ServerSettings) => Effect.Effect<A, E, R>,
+      options?: { readonly refreshFromDisk: true },
     ) => Effect.Effect<A, E | ServerSettingsError, R>;
 
     readonly withStoredSettingsSnapshot?: <A, E, R>(
@@ -1471,8 +1472,12 @@ const make = Effect.gen(function* () {
       if (decoded._tag === "Failure" || legacySettings._tag === "Failure") {
         settingsFileTrusted = false;
         const failure = decoded._tag === "Failure" ? decoded : legacySettings;
-        // The file may hold an opt-out we can no longer read; never resume threads on a guess.
-        settings = { ...DEFAULT_SERVER_SETTINGS, continueThreadsAfterServerUpdate: false };
+        // Unreadable settings cannot authorize resuming threads or pruning history.
+        settings = {
+          ...DEFAULT_SERVER_SETTINGS,
+          continueThreadsAfterServerUpdate: false,
+          usageHistoryRetentionDays: "unlimited",
+        };
         if (failure._tag === "Failure") {
           parseFailure = Option.some(Cause.squash(failure.cause));
           yield* Effect.logWarning("failed to parse settings.json, using defaults", {
@@ -2028,9 +2033,15 @@ const make = Effect.gen(function* () {
       };
     });
 
-  const withSettingsSnapshot: ServerSettingsService["Service"]["withSettingsSnapshot"] = (use) =>
+  const withSettingsSnapshot: ServerSettingsService["Service"]["withSettingsSnapshot"] = (
+    use,
+    options,
+  ) =>
     writeSemaphore.withPermits(1)(
-      cachedLocked.pipe(
+      (options?.refreshFromDisk
+        ? reloadLocked.pipe(Effect.map((loaded) => loaded.settings))
+        : cachedLocked
+      ).pipe(
         Effect.flatMap(materializeSettingsSecrets),
         Effect.map(resolveTextGenerationProvider),
         Effect.flatMap(use),

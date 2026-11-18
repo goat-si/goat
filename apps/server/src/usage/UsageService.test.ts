@@ -1,3 +1,4 @@
+import { registerUsageRetentionTests } from "./usageRetention.testkit.ts";
 import { registerRateAliasTests } from "./usageRateAliases.testkit.ts";
 import { seedCodexHistory } from "./codexUsageHistory.testkit.ts";
 import { cursorSource, cursorSources, totalOutputTokens } from "./UsageAssertions.testkit.ts";
@@ -369,6 +370,7 @@ describe("UsageService", () => {
   );
 
   registerCompressedRolloutTest(setup, layerService);
+  registerUsageRetentionTests(setup, layerService, claudeLine);
   registerRateAliasTests(setup, layerService);
 
   it.effect("keeps the first host identity across recreation and explicit override removal", () =>

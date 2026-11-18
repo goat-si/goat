@@ -93,8 +93,6 @@ const RATES_REFRESH_FLOOR_MS = 60 * 1000;
 const MTIME_SLACK_MS = 36 * 60 * 60 * 1000;
 const MAX_HOURLY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-const CACHE_RETENTION_DAYS = 92;
-
 const TRANSCRIPT_READ_CONCURRENCY = 4;
 
 export class UsageService extends Context.Service<
@@ -568,7 +566,9 @@ export const make = Effect.gen(function* () {
     const windowStartMs =
       (hourlyWindow?.sinceTimeMs ?? DateTime.toEpochMillis(windowStart.value)) - MTIME_SLACK_MS;
 
-    const retentionCutoffMs = startedAtMs - CACHE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    const retention = settings.usageHistoryRetentionDays;
+    const retentionCutoffMs =
+      retention === "unlimited" ? 0 : Math.max(0, startedAtMs - retention * 86400000);
 
     const awaitRefresh = input.awaitRefresh === true;
     const collect = Effect.gen(function* () {
@@ -855,13 +855,25 @@ export const make = Effect.gen(function* () {
       });
     }
 
-    const pruned = pruneScanCache(fileCache, retentionCutoffMs);
-    if (pruned > 0) {
-      cacheDirty = true;
-      // Pruned files are no longer saved, so nothing before the cutoff stays covered.
-      for (const [key, since] of coveredSince) {
-        if (since < retentionCutoffMs) coveredSince.set(key, retentionCutoffMs);
-      }
+    if (fileCache.values().some((entry) => entry.mtimeMs < retentionCutoffMs)) {
+      yield* settingsService
+        .withSettingsSnapshot(
+          (current) =>
+            Effect.sync(() => {
+              if (current.usageHistoryRetentionDays !== retention) return;
+              if (pruneScanCache(fileCache, retentionCutoffMs) === 0) return;
+              cacheDirty = true;
+              for (const [key, since] of coveredSince) {
+                if (since < retentionCutoffMs) coveredSince.set(key, retentionCutoffMs);
+              }
+            }),
+          { refreshFromDisk: true },
+        )
+        .pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Could not read settings before pruning usage history.", { cause }),
+          ),
+        );
     }
 
     const aggregated = aggregator.finish();

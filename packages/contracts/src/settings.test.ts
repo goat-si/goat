@@ -184,6 +184,23 @@ describe("storage cleanup settings", () => {
   });
 });
 
+describe("usage history retention", () => {
+  it("keeps the legacy default and round-trips configured retention", () => {
+    expect(decodeServerSettings({}).usageHistoryRetentionDays).toBe(92);
+    for (const days of [30, "unlimited"] as const) {
+      const patch = decodeServerSettingsPatch({ usageHistoryRetentionDays: days });
+      expect(patch.usageHistoryRetentionDays).toBe(days);
+      const encoded = encodeServerSettings(decodeServerSettings(patch));
+      expect(decodeServerSettings(encoded).usageHistoryRetentionDays).toBe(days);
+    }
+  });
+
+  it.each([0, -1, 1.5, null, "forever"])("rejects invalid retention %s", (days) => {
+    expect(() => decodeServerSettings({ usageHistoryRetentionDays: days })).toThrow();
+    expect(() => decodeServerSettingsPatch({ usageHistoryRetentionDays: days })).toThrow();
+  });
+});
+
 describe("custom model settings", () => {
   const capabilities = {
     optionDescriptors: [
