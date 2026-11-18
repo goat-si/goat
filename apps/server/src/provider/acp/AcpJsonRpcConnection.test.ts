@@ -963,6 +963,55 @@ describe("AcpSessionRuntime", () => {
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("requires replay before same-session metadata can extend load readiness", () =>
+    Effect.gen(function* () {
+      const metadataReceived = yield* Deferred.make<void>();
+      const runtime = yield* AcpSessionRuntime.make({
+        ...mockRuntimeOptions,
+        spawn: { ...mockRuntimeOptions.spawn, env: { GOAT_ACP_WAIT_FOR_LOAD_RELEASE: "1" } },
+        resumeSessionId: "mock-session-1",
+        sessionLoadReplayIdleReadiness: true,
+        sessionLoadReplayIdleGap: "100 millis",
+        transformSessionUpdate: (event) =>
+          event.update.sessionUpdate === "user_message_chunk"
+            ? {
+                sessionId: event.sessionId,
+                update: { sessionUpdate: "config_option_update", configOptions: [] },
+              }
+            : event,
+      });
+      yield* runtime.handleSessionUpdate((event) =>
+        event.update.sessionUpdate === "config_option_update"
+          ? Deferred.succeed(metadataReceived, undefined)
+          : Effect.void,
+      );
+      const start = yield* runtime.start().pipe(Effect.forkChild);
+      yield* Deferred.await(metadataReceived);
+      yield* runtime.request("_test/environment", {});
+      yield* TestClock.adjust("150 millis");
+      expect(start.pollUnsafe()).toBeUndefined();
+      yield* runtime.request("_test/emit-update", {
+        sessionId: "mock-session-1",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "replayed answer" },
+        },
+      });
+      yield* TestClock.adjust("75 millis");
+      yield* runtime.request("_test/emit-update", {
+        sessionId: "mock-session-1",
+        update: { sessionUpdate: "config_option_update", configOptions: [] },
+      });
+      yield* TestClock.adjust("75 millis");
+      expect(start.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust("50 millis");
+      expect((yield* Fiber.join(start)).sessionSetupResult._meta).toMatchObject({
+        goatSessionLoadReady: "replay_idle",
+      });
+      yield* runtime.request("_test/release-load", {});
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("ignores session/update replay notifications during session/load", () =>
     Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;

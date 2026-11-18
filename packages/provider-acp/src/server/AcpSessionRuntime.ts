@@ -1350,7 +1350,11 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           notification.sessionId === gate.value.sessionId;
         if (
           loadingThisSession &&
-          sessionUpdateCountsAsLoadReplayActivity(notification, gate.value.sessionId)
+          sessionUpdateCountsAsLoadReplayActivity(
+            notification,
+            gate.value.sessionId,
+            gate.value.lastActivityAtMillis !== undefined,
+          )
         ) {
           const lastActivityAtMillis = yield* Clock.currentTimeMillis;
           yield* Ref.set(
