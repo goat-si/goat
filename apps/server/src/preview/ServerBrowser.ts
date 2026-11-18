@@ -4,7 +4,12 @@ import { stopUnresponsiveScript } from "./stopUnresponsiveScript.ts";
 import { SnapshotTiming } from "./snapshotTiming.ts";
 import { makeRecordingFrames } from "./RecordingFrames.ts";
 import { withinStatusDeadline } from "./statusDeadline.ts";
-import { acceptClosingDialog, closeServerPage, unloadDesktopTab } from "./ServerBrowserClose.ts";
+import {
+  acceptClosingDialog,
+  closeServerPage,
+  makeBeforePreviewClose,
+  unloadDesktopTab,
+} from "./ServerBrowserClose.ts";
 import { connectDesktopPage, withTabSetupCleanup } from "./TabSetupCleanup.ts";
 import { desktopReattachment } from "./DesktopReattachment.ts";
 import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
@@ -492,6 +497,7 @@ const make = Effect.gen(function* () {
   const dropTab = (tab: ServerTab, closeSession: boolean, replacingRenderer = false) => {
     const key = tabKey(tab.threadId, tab.tabId);
     if (tabs.get(key) !== tab) return;
+    const wasClosing = tab.closing;
     tab.closing = true;
     viewerArrived(tab);
     if (!replacingRenderer) blockedTabs.drop(tab.threadId, tab.tabId);
@@ -504,7 +510,7 @@ const make = Effect.gen(function* () {
     clearAbortedNavigation(tab);
     // A desktop page outlives the connection unless its session closed with it.
     const end =
-      (tab.desktop || replacingRenderer) && !closeSession && sessionOpen(tab)
+      (tab.desktop || replacingRenderer) && !closeSession && !wasClosing && sessionOpen(tab)
         ? "reconnect"
         : "gone";
     for (const viewer of tab.viewers) viewer.push({ _tag: end });
@@ -861,10 +867,11 @@ const make = Effect.gen(function* () {
       openSignal?.throwIfAborted();
       setupSignal = undefined;
       const key = tabKey(tab.threadId, tab.tabId);
-      if (closedPendingTabs.delete(key)) {
+      if (closedPendingTabs.has(key)) {
+        if (desktop && tab.dialog === null) await unloadDesktopTab(tab);
         throw new ServerBrowserTabNotFoundError({ threadId: tab.threadId, tabId: tab.tabId });
       }
-      page.on("close", () => dropTab(tab, true));
+      page.on("close", () => dropTab(tab, !tab.closing));
       page.on("crash", () => recoverRenderer(tab));
       tabs.set(key, tab);
       if (replaced) screen.watchHandoffs(tab);
@@ -1016,7 +1023,7 @@ const make = Effect.gen(function* () {
     const opening = createTab(snapshot)
       .catch(async (cause: unknown) => {
         adopted?.release();
-        if (adopted?.signal?.aborted) {
+        if (adopted?.signal?.aborted && !closedPendingTabs.has(key)) {
           adoptedPages.delete(key);
           await adopted.close().catch(popupCloseFailure(adopted.page));
           await runPromise(
@@ -1057,7 +1064,11 @@ const make = Effect.gen(function* () {
     pending: pendingTabs,
     isShown: (tab) => desktopChannel.isShown?.(tab) ?? true,
     isActive: activity.active,
-    drop: (tab) => dropTab(tab, true),
+    drop: (tab) =>
+      manager.close({ threadId: tab.threadId, tabId: tab.tabId }).pipe(
+        Effect.tap(() => Effect.sync(() => dropTab(tab, false))),
+        Effect.catch((cause) => Effect.logWarning("Idle preview tab could not close", { cause })),
+      ),
     now: () => Date.now(),
   });
   const assertTabCapacity = (agentSessionId: string) => {
@@ -1711,8 +1722,6 @@ const make = Effect.gen(function* () {
         );
       tab.control.assertNoHumanControl();
       ServerBrowserScreen.refusePrivateClose(tab);
-      void tab.control.close().catch(constVoid);
-      if (tab.desktop && tab.dialog === null) await unloadDesktopTab(tab);
       await runPromise(manager.close({ threadId: tab.threadId, tabId: tab.tabId }));
       dropTab(tab, false);
       return {};
@@ -2488,6 +2497,7 @@ const make = Effect.gen(function* () {
     } satisfies ServerBrowserViewer;
   });
 
+  yield* manager.registerBeforeClose(makeBeforePreviewClose(tabs, pendingTabs, closedPendingTabs));
   yield* manager.events.pipe(Stream.runForEach(mirrorManagerEvent), Effect.forkScoped);
   if (
     !PreviewBrowserHost.sandboxDisabled(yield* HostProcess.Environment) &&

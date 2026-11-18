@@ -1,3 +1,4 @@
+import * as previewRuntime from "~/browser/previewRuntime";
 import type { PreviewCloseInput, PreviewSessionSnapshot, ScopedThreadRef } from "@goat/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -64,5 +65,26 @@ describe("closePreviewSession", () => {
       { kind: "browser", threadRef, snapshot },
     ]);
     expect(closePreview).toHaveBeenCalledWith({ threadId: "thread-1", tabId: "tab-1" });
+  });
+  it("keeps a tab this desktop renders mounted until the server closes it", async () => {
+    using _native = vi.spyOn(previewRuntime, "rendersServerTabNatively").mockReturnValue(true);
+    const desktopSnapshot = { ...snapshot, runtime: "server" as const };
+    const closingRpc = Promise.withResolvers<ReturnType<typeof AsyncResult.success<void>>>();
+    applyPreviewServerSnapshot(threadRef, desktopSnapshot);
+
+    const closing = closePreviewSession({
+      closePreview: () => closingRpc.promise,
+      snapshot: desktopSnapshot,
+      tabId: desktopSnapshot.tabId,
+      threadRef,
+    });
+
+    expect(readThreadPreviewState(threadRef).sessions[desktopSnapshot.tabId]).toEqual(
+      desktopSnapshot,
+    );
+    closingRpc.resolve(AsyncResult.success(undefined));
+    await closing;
+    applyPreviewServerSnapshot(threadRef, desktopSnapshot);
+    expect(readThreadPreviewState(threadRef).sessions).toEqual({});
   });
 });
