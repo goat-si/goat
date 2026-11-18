@@ -155,6 +155,13 @@ it.live("retries a failed selection restart session open before completing", () 
 
       assert.lengthOf(projection.runs, 1);
       assert.lengthOf(projection.attempts, 2);
+      assert.isNotNull(projection.attempts[0]?.startedAt);
+      assert.deepEqual(projection.runs[0]?.startedAt, projection.attempts[0]?.startedAt);
+      assert.isNotNull(projection.attempts[1]?.startedAt);
+      assert.deepEqual(
+        projection.nodes.find((node) => node.id === projection.runs[0]?.rootNodeId)?.startedAt,
+        projection.attempts[1]?.startedAt,
+      );
       assert.deepEqual(
         projection.attempts.map((attempt) => attempt.status),
         ["superseded", "completed"],

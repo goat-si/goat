@@ -1154,7 +1154,7 @@ export const layer: Layer.Layer<
       const runningRun: OrchestrationV2Run = {
         ...run,
         status: "running",
-        startedAt: input.reattach === true ? run.startedAt : now,
+        startedAt: run.startedAt ?? (input.reattach === true ? null : now),
       };
       const runningAttempt: OrchestrationV2RunAttempt = {
         ...attempt,
