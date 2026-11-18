@@ -1,3 +1,5 @@
+import { enrichProjectShells } from "./project/enrichProjectShells.ts";
+import { vcsStatusHandlers } from "./vcs/vcsStatusHandlers.ts";
 import { makeGlobalSkillsRpcLayer } from "./skills/GlobalSkillsRpcHandlers.ts";
 import * as AccessRpc from "./auth/AccessRpc.ts";
 import { makeOmittableShellReaders } from "./orchestration-v2/ThreadFamilyLookup.ts";
@@ -96,7 +98,6 @@ import {
   type GitManagerServiceError,
   type MessageId,
   type OrchestrationClientOrigin,
-  type OrchestrationProjectShell,
   type OrchestrationV2Command,
   type OrchestrationV2ShellSnapshot,
   type ApplicationStoredEvent,
@@ -204,6 +205,7 @@ import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
 import { bufferLiveStream } from "./orchestration-v2/LiveStreamBudget.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import { ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION } from "./orchestration-v2/ProjectionStore.ts";
+import * as ThreadFind from "./orchestration-v2/ThreadFind.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as DocumentText from "./provider/DocumentText.ts";
@@ -250,6 +252,7 @@ import {
   threadReplayEncodedBytes,
 } from "./orchestration-v2/ThreadStream.ts";
 import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
+import { withLegacyThreadVisits } from "./orchestration-v2/ThreadVisitWire.ts";
 import { withLiveWireTransforms } from "./orchestration-v2/ThreadLiveTextAppend.ts";
 import {
   projectDomainEventForWire,
@@ -603,33 +606,6 @@ const canReplayPersistedRange = Effect.fnUntraced(function* (
   return true;
 });
 
-const enrichProjectShells = Effect.fn("ws.orchestrationV2.enrichProjectShells")(
-  (projects: ReadonlyArray<OrchestrationProjectShell>) =>
-    Effect.flatMap(ProjectEnrichmentService.ProjectEnrichmentService, (projectEnrichment) =>
-      Effect.forEach(
-        projects,
-        (project) =>
-          projectEnrichment.getAvailable(project.workspaceRoot).pipe(
-            Effect.map((enrichment) => ({
-              project: {
-                ...project,
-                repositoryIdentity: enrichment.repositoryIdentity,
-              },
-              repositoryIdentityResolved: enrichment.repositoryIdentityResolved,
-            })),
-          ),
-        { concurrency: 16 },
-      ).pipe(
-        Effect.map((enriched) => ({
-          projects: enriched.map((entry) => entry.project),
-          resolvedRepositoryIdentityRoots: enriched
-            .filter((entry) => entry.repositoryIdentityResolved)
-            .map((entry) => entry.project.workspaceRoot),
-        })),
-      ),
-    ),
-);
-
 export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subscribeThread")(
   function* (input: {
     readonly threadId: ThreadId;
@@ -641,6 +617,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
     readonly acceptDedupedBodies?: boolean;
     readonly acceptCompactIds?: boolean;
     readonly acceptTextAppends?: boolean;
+    readonly acceptCompactVisits?: boolean;
   }) {
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const dedupeBodies = input.acceptDedupedBodies === true;
@@ -659,24 +636,6 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
           }),
       ),
     );
-    const eventStreamFrom = (afterSequence: number) =>
-      threadManagement
-        .streamStoredEventsFrom({
-          threadId: input.threadId,
-          afterSequence,
-        })
-        .pipe(
-          Stream.map(threadStreamEventItem),
-          coalesceThreadLiveStream,
-          Stream.mapError(
-            (cause) =>
-              new OrchestrationV2GetThreadProjectionError({
-                threadId: input.threadId,
-                message: `Failed while streaming orchestration V2 thread ${input.threadId}`,
-                cause,
-              }),
-          ),
-        );
     const loadReplayThrough = (afterSequence: number, throughSequence: number) =>
       applicationEvents
         .readAgentEvents({
@@ -710,7 +669,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
         ? Stream.make({ kind: "synchronized" as const })
         : Stream.empty;
 
-    const snapshotThenLive = Effect.fn("ws.orchestrationV2.threadSnapshotThenLive")(function* () {
+    const loadSnapshot = Effect.fn("ws.orchestrationV2.loadThreadSnapshot")(function* () {
       const useBoundedSnapshot = shouldUseBoundedThreadSnapshot(input);
       const snapshot = yield* (
         useBoundedSnapshot
@@ -731,7 +690,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
         ),
       );
       const { snapshotSequence } = snapshot;
-      const snapshotItem = useBoundedSnapshot
+      return useBoundedSnapshot
         ? buildBoundedThreadStreamSnapshot({
             ...snapshot,
             compactTurnItems: input.acceptCompactTurnItems === true,
@@ -746,10 +705,33 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
               projection: dedupeBodies ? dedupeSnapshotBodies(projection) : projection,
             };
           })();
+    });
+
+    const eventStreamFrom = (afterSequence: number) =>
+      threadManagement
+        .streamStoredEventsFrom({
+          threadId: input.threadId,
+          afterSequence,
+        })
+        .pipe(
+          Stream.map(threadStreamEventItem),
+          coalesceThreadLiveStream,
+          Stream.mapError(
+            (cause) =>
+              new OrchestrationV2GetThreadProjectionError({
+                threadId: input.threadId,
+                message: `Failed while streaming orchestration V2 thread ${input.threadId}`,
+                cause,
+              }),
+          ),
+          withLegacyThreadVisits(input, loadSnapshot),
+        );
+    const snapshotThenLive = Effect.fn("ws.orchestrationV2.threadSnapshotThenLive")(function* () {
+      const snapshotItem = yield* loadSnapshot();
       return withLiveDedupe(
         Stream.concat(
           Stream.concat(rpcInitialItems([snapshotItem]), completionMarker),
-          eventStreamFrom(snapshotSequence),
+          eventStreamFrom(snapshotItem.snapshotSequence),
         ),
       );
     });
@@ -810,6 +792,11 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
       const replay = coalesceLiveUpdatedEvents(
         yield* loadReplayThrough(input.afterSequence, highWater),
       );
+      if (
+        input.acceptCompactVisits !== true &&
+        replay.some(({ event }) => event.type === "thread.visit-recorded")
+      )
+        return yield* snapshotThenLive();
       const plan = decideThreadResume({
         afterSequence: input.afterSequence,
         highWater,
@@ -1656,8 +1643,7 @@ export const layerWsRpc = (
           shellOlderSettled: true,
           threadResumeCompletionMarker: true,
           threadSnapshotPagination: true,
-          threadFind: true,
-          threadFindProgressive: true,
+          ...ThreadFind.serverCapabilities,
           secretProviderSettings: true,
           secretReferences: true,
           secretRequestReferences: true,
@@ -3042,14 +3028,12 @@ export const layerWsRpc = (
           }),
         [WS_METHODS.assetsPersistChatAttachments]: (input) =>
           persistChatAttachments(input).pipe(Effect.map((attachments) => ({ attachments }))),
-        [WS_METHODS.subscribeVcsStatus]: (input) => vcsStatusBroadcaster.streamStatus(input),
+        ...vcsStatusHandlers(vcsStatusBroadcaster),
         [WS_METHODS.subscribeWorktreeSetup]: (input) => worktreeSetupTracker.stream(input.threadId),
         [WS_METHODS.worktreeSetupCancel]: (input) =>
           worktreeSetupTracker
             .cancel(input.threadId)
             .pipe(Effect.map((cancelled) => ({ cancelled }))),
-        [WS_METHODS.vcsRefreshStatus]: (input) =>
-          vcsStatusBroadcaster.refreshStatus(input.cwd, { localOnly: input.localOnly ?? false }),
         [WS_METHODS.vcsPull]: (input) =>
           gitWorkflow.pullCurrentBranch(input.cwd).pipe(
             Effect.matchCauseEffect({

@@ -8,6 +8,7 @@ import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
+import { signalProcessGroup } from "@goat/provider-core/server/processGroup";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -142,7 +143,7 @@ describe.runIf(HostProcess.Platform.defaultValue() === "linux")("ProviderProcess
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
           try {
-            process.kill(-(leader.pid ?? 0), "SIGKILL");
+            signalProcessGroup(leader.pid ?? 0, "SIGKILL");
           } catch {}
         }),
       );

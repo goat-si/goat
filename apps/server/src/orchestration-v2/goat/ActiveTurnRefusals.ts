@@ -34,13 +34,12 @@ export function activeTurnRefusal(input: {
 }
 
 /**
- * A refusal means "not now": it commits no rejected receipt, so a retry with the same command id
- * (the phone's outbox sends one per message) is decided again once the turn has ended.
+ * A retryable refusal leaves no rejected receipt, so the same command id is decided again.
  */
-export const isActiveTurnRefusal = (error: {
+export const isRetryableRefusal = (error: {
   readonly _tag: string;
-  readonly refusal?: "active_turn" | undefined;
-}): boolean => error._tag === "OrchestratorDispatchError" && error.refusal === "active_turn";
+  readonly refusal?: string | undefined;
+}): boolean => error._tag === "OrchestratorDispatchError" && error.refusal !== undefined;
 
 /** Whether the refused change ends a blocking run: a mode change matches by the run's instance. */
 export function endsTurn(

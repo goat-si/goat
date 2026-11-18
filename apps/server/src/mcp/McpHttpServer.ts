@@ -1,13 +1,5 @@
 import { guardedToolRegistration } from "./McpSessionCut.ts";
-import {
-  boundSnapshotMetadata,
-  cutText,
-  MAX_SNAPSHOT_IDENTIFIER_CHARS,
-  recordSnapshotDelivery,
-  snapshotDeliveryKey,
-  type SnapshotMetadata,
-  withDeliveredBaseline,
-} from "./toolkits/preview/snapshotTransport.ts";
+import { snapshotResult } from "./toolkits/preview/snapshotResult.ts";
 import { listingChanges } from "./toolListing.ts";
 import * as Settings from "../serverSettings.ts";
 import { forwardedContentRegistration } from "./toolkits/agentSurface/forwardedContent.ts";
@@ -38,12 +30,7 @@ import {
 import { DecisionToolkit } from "./toolkits/decision/tools.ts";
 import * as DecisionHandlers from "./toolkits/decision/handlers.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
-import {
-  OrchestratorMcpFailure,
-  type PreviewAutomationSnapshot,
-  type RunId,
-  ThreadId,
-} from "@goat/contracts";
+import { OrchestratorMcpFailure, type RunId, ThreadId } from "@goat/contracts";
 import { llmsTxtCaller, llmsTxtResponse } from "./llmsTxtResponse.ts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -163,6 +150,8 @@ import * as DocsHandlers from "./toolkits/docs/handlers.ts";
 import { DocsToolkit } from "./toolkits/docs/tools.ts";
 import * as UserDocs from "../userDocs/UserDocs.ts";
 import * as HtmlHandlers from "./toolkits/html/handlers.ts";
+import * as MessageHandlers from "./toolkits/message/handlers.ts";
+import { MessageToolkit } from "./toolkits/message/tools.ts";
 import { HtmlPreviewTool, HtmlPreviewToolkit, HtmlRenderToolkit } from "./toolkits/html/tools.ts";
 import * as OrchestratorHandlers from "./toolkits/orchestrator/handlers.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
@@ -198,7 +187,6 @@ import * as ThreadHandlers from "./toolkits/thread/handlers.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import * as WorktreeHandlers from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
-import { saveScreenshot } from "./previewScreenshotFile.ts";
 import {
   hidePlacementArgument,
   PlacementAdmissionEnabled,
@@ -231,7 +219,6 @@ export const layerLlmsTxtRoute = Layer.unwrap(
 );
 
 export { MAX_SNAPSHOT_TEXT_BYTES } from "./toolkits/preview/snapshotTransport.ts";
-const encodeJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot")(function* () {
   const server = yield* McpServer.McpServer;
@@ -277,83 +264,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
             (output) => !output.isFailure,
             (output) => output.result,
           ),
-          Effect.flatMap(({ encodedResult }) =>
-            Effect.gen(function* () {
-              const snapshot = encodedResult as SnapshotMetadata & {
-                readonly url: string;
-                readonly screenshot: PreviewAutomationSnapshot["screenshot"];
-                readonly fullScreenshot?: { readonly data: string };
-              };
-              const { screenshot, fullScreenshot, ...page } = snapshot;
-              const { data = "", ...screenshotMetadata } = screenshot ?? {};
-              const png = new Uint8Array(Buffer.from(data, "base64"));
-              const saving = payload?.save === true && screenshot !== undefined;
-              const screenshotPath = saving
-                ? yield* saveScreenshot(
-                    snapshot.url,
-                    fullScreenshot === undefined
-                      ? png
-                      : new Uint8Array(Buffer.from(fullScreenshot.data, "base64")),
-                  )
-                : undefined;
-              const deliveryKey = snapshotDeliveryKey(invocation, snapshot.tabId);
-              // Images stay out of tool history unless asked for: providers replay them on every
-              // later request, and some reject inline images outright.
-              const includeImage = payload?.includeImage === true;
-              if (screenshotPath !== undefined && !includeImage) {
-                recordSnapshotDelivery(deliveryKey, true);
-                const saved = {
-                  url: cutText(snapshot.url, MAX_SNAPSHOT_IDENTIFIER_CHARS),
-                  screenshotPath,
-                  ...(screenshot?.fullPage ? { screenshot: screenshotMetadata } : {}),
-                };
-                return new McpSchema.CallToolResult({
-                  isError: false,
-                  structuredContent: saved,
-                  content: [{ type: "text", text: encodeJsonText(saved) }],
-                });
-              }
-              const metadata = withDeliveredBaseline(deliveryKey, {
-                ...page,
-                ...(screenshot ? { screenshot: screenshotMetadata } : {}),
-                ...(screenshotPath === undefined ? {} : { screenshotPath }),
-              });
-              const bounded = boundSnapshotMetadata(metadata);
-              recordSnapshotDelivery(deliveryKey, bounded.treeCut);
-              return new McpSchema.CallToolResult({
-                isError: false,
-                // Codex would send the model this JSON in place of the image (see imageToolSuccess).
-                ...(includeImage
-                  ? {}
-                  : {
-                      structuredContent: bounded.value,
-                    }),
-                content: [
-                  {
-                    type: "text",
-                    text: encodeJsonText({
-                      url: cutText(snapshot.url, MAX_SNAPSHOT_IDENTIFIER_CHARS),
-                    }),
-                  },
-                  { type: "text", text: bounded.text },
-                  ...(bounded.logNote === undefined
-                    ? []
-                    : [{ type: "text" as const, text: bounded.logNote }]),
-                  ...(bounded.omitted.length === 0
-                    ? []
-                    : [
-                        {
-                          type: "text" as const,
-                          text: `Snapshot text was bounded. Omitted: ${bounded.omitted.join("; ")}.`,
-                        },
-                      ]),
-                  ...(includeImage && screenshot
-                    ? [{ type: "image" as const, data: png, mimeType: screenshot.mimeType }]
-                    : []),
-                ],
-              });
-            }),
-          ),
+          Effect.flatMap(({ encodedResult }) => snapshotResult(encodedResult, payload, invocation)),
           Effect.provide(saveServices),
           Effect.matchCauseEffect({
             onFailure: previewSnapshotFailure,
@@ -809,6 +720,7 @@ export const catalogRegistrations = {
   ),
   decision: toolkitRegistration(DecisionToolkit, DecisionHandlers.layer),
   htmlRender: toolkitRegistration(HtmlRenderToolkit, HtmlHandlers.layerRender),
+  message: toolkitRegistration(MessageToolkit, MessageHandlers.layer),
   htmlPreview: imageToolRegistration(registerHtmlPreview(), HtmlHandlers.layerPreview),
   browserClaims: toolkitRegistration(BrowserClaimToolkit, BrowserClaimHandlers.layer),
   previewStandard: toolkitRegistration(PreviewStandardToolkit, PreviewHandlers.layerStandard),
@@ -1097,6 +1009,7 @@ const layerRegistrations = Layer.mergeAll(
   layerPullRequestsToolkit,
   layerDeviceToolkit,
   layerHtmlToolkit,
+  catalogRegistrations.message,
   layerSshToolkitRegistration,
   layerConnectionToolkit,
   layerRemoteReportRegistration,

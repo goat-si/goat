@@ -9,7 +9,8 @@ import type { ModelOption } from "../../lib/modelOptions";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { modelOptionMemoryAtom } from "../../state/use-composer-drafts";
 import { canSelectModel, popoverSheetHeight } from "./thread-settings-sheet-state";
-import { ThreadComposer, type ThreadComposerProps } from "./ThreadComposer";
+import { ThreadComposer } from "./ThreadComposer";
+import type { ThreadComposerProps } from "./thread-composer-props";
 
 vi.hoisted(() =>
   Object.assign(globalThis, {
@@ -143,7 +144,7 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({ themeVariables: { "--color-composer-panel": "#ffffff" } }),
 }));
 vi.mock("../settings/appearance/useScaledTextRole", () => ({
-  useScaledTextRole: () => ({ fontSize: 14, lineHeight: 20 }),
+  useComposerTextRole: () => ({ fontSize: 14, lineHeight: 20 }),
 }));
 vi.mock("../../lib/useUniwindTheme", () => ({ useUniwindTheme: () => ({}) }));
 vi.mock("../../lib/composerImages", () => ({ composerStripAttachments: () => [] }));

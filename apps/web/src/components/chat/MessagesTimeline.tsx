@@ -416,7 +416,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const disclosureAnchorKeyRef = useRef<string | null>(null);
   const disclosureSettleFrameRef = useRef<number | null>(null);
   const disclosureSettleSecondFrameRef = useRef<number | null>(null);
-  const normalizedFindQuery = findQuery.trim();
   const findActive = findExpanded;
 
   const disclosureCollapsedRef = useRef(false);
@@ -1225,7 +1224,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     historyControls,
     entries: timelineEntries,
     container: timelineViewportElement,
-    query: normalizedFindQuery,
+    query: findQuery,
     match: activeFindMatch,
     navigationId: findNavigationId,
     rowIndex: activeFindMatch ? rows.findIndex((row) => row.id === activeFindMatch.entryId) : -1,
@@ -1403,6 +1402,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
 });
 
 const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: TimelineRow }) {
+  const isAssistantMessage = row.kind === "message" && row.message.role === "assistant";
   const isExpandedToolGroup = row.kind === "work" && row.isExpandedToolGroup;
   const isSubagentGroup = row.kind === "event" && row.projectedItem.item.type === "subagent";
   const isWorkLogRow =
@@ -1421,23 +1421,19 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
           ? undefined
           : row.kind === "turn-fold" || row.kind === "working"
             ? "pb-1.5"
-            : (row.kind === "message" &&
-                  row.message.role === "assistant" &&
-                  !row.showAssistantMeta) ||
+            : (isAssistantMessage && !row.showAssistantMeta) ||
                 row.kind === "worktree-setup" ||
                 row.kind === "cloud-run" ||
                 row.kind === "event" ||
                 row.kind === "thread-cards" ||
                 row.kind === "attempt-fold" ||
+                row.kind === "sent-message" ||
                 row.kind === "html-render" ||
                 row.kind === "mcp-app" ||
                 row.kind === "viewed-images"
               ? "pb-2"
               : "pb-4",
-        (row.kind === "message" && row.message.role === "assistant") ||
-          row.kind === "assistant-meta"
-          ? "group/assistant"
-          : null,
+        isAssistantMessage || row.kind === "assistant-meta" ? "group/assistant" : null,
       )}
       data-timeline-row-id={row.id}
       data-timeline-row-kind={row.kind}
@@ -1474,7 +1470,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "attempt-fold" ? <AttemptFoldTimelineRow row={row} /> : null}
       {row.kind === "context-compaction" ? <ContextCompactionTimelineRow row={row} /> : null}
       {row.kind === "message" && row.message.role === "user" ? <UserMessageRow row={row} /> : null}
-      {row.kind === "message" && row.message.role === "assistant" ? (
+      {isAssistantMessage || row.kind === "sent-message" ? (
         <AssistantTimelineRow row={row} />
       ) : null}
       {row.kind === "assistant-meta" ? <AssistantMetaTimelineRow row={row} /> : null}

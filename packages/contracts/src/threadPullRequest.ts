@@ -107,6 +107,11 @@ export const ThreadPullRequestWatch = Schema.Struct({
   /** Consecutive comment-only wakes; limited to prevent bot loops. */
   wakes: NonNegativeInt,
   /**
+   * What is already on the pull request is recorded, not reported: conflicts on the first read, and
+   * checks on the first read that can be trusted to show them (one with a head and a full check read).
+   */
+  awaitingBaseline: Schema.optional(Schema.Literals(["all", "checks"])),
+  /**
    * GOAT armed this watch itself when the thread created or linked the pull request. It wakes
    * the agent like any watch but does not keep the thread working. Calling watch_pull_request
    * clears it.
@@ -122,6 +127,11 @@ export const ThreadPullRequestWatch = Schema.Struct({
    * none did. Null once either happened; absent on watches saved before it existed.
    */
   checksAwaitedSince: Schema.optional(Schema.NullOr(IsoDateTime)),
+  /**
+   * Whether the host was still running checks on the head at the last read. Only then does an
+   * explicit watch keep its thread waiting; absent on watches not read since it existed.
+   */
+  checksPending: Schema.optional(Schema.Boolean),
 });
 export type ThreadPullRequestWatch = typeof ThreadPullRequestWatch.Type;
 

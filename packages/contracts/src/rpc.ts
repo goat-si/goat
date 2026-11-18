@@ -1,3 +1,4 @@
+import { VCS_STATUS_WS_METHODS, VcsStatusRpcs } from "./vcsStatusRpc.ts";
 import { PULL_REQUEST_WS_METHODS } from "./pullRequestMethods.ts";
 import {
   SOURCE_CONTROL_STAR_METHODS,
@@ -207,10 +208,6 @@ import {
   VcsRemoveWorktreeInput,
   GitResolvePullRequestResult,
   GitRunStackedActionInput,
-  VcsStatusInput,
-  VcsStatusSubscriptionInput,
-  VcsStatusResult,
-  VcsStatusStreamEvent,
 } from "./git.ts";
 import {
   ReviewDiffFileContentsInput,
@@ -589,7 +586,6 @@ export const WS_METHODS = {
   providerHostSyncCancel: "provider.hostSync.cancel",
 
   vcsPull: "vcs.pull",
-  vcsRefreshStatus: "vcs.refreshStatus",
   vcsListRefs: "vcs.listRefs",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
@@ -758,7 +754,7 @@ export const WS_METHODS = {
   projectCloneRetry: "projectClone.retry",
   subscribeProjectClones: "subscribeProjectClones",
 
-  subscribeVcsStatus: "subscribeVcsStatus",
+  ...VCS_STATUS_WS_METHODS,
   subscribeWorktreeSetup: "subscribeWorktreeSetup",
   worktreeSetupCancel: "worktreeSetup.cancel",
   subscribeTerminalEvents: "subscribeTerminalEvents",
@@ -1694,26 +1690,10 @@ const WsProviderUploadFeedbackRpc = Rpc.make(WS_METHODS.providerUploadFeedback, 
   error: Schema.Union([ProviderUploadFeedbackError, EnvironmentAuthorizationError]),
 });
 
-const WsSubscribeVcsStatusRpc = Rpc.make(WS_METHODS.subscribeVcsStatus, {
-  payload: VcsStatusSubscriptionInput,
-  success: VcsStatusStreamEvent,
-  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
-  stream: true,
-});
-
 const WsVcsPullRpc = Rpc.make(WS_METHODS.vcsPull, {
   payload: VcsPullInput,
   success: VcsPullResult,
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
-});
-
-const WsVcsRefreshStatusRpc = Rpc.make(WS_METHODS.vcsRefreshStatus, {
-  payload: Schema.Struct({
-    ...VcsStatusInput.fields,
-    localOnly: Schema.optional(Schema.Boolean),
-  }),
-  success: VcsStatusResult,
-  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
 });
 
 const WsSubscribeWorktreeSetupRpc = Rpc.make(WS_METHODS.subscribeWorktreeSetup, {
@@ -2638,11 +2618,10 @@ export const WsCoreWorkspaceRpcGroup = RpcGroup.make(
   WsMcpAppsReadResourceRpc,
   WsMcpAppsUpdateModelContextRpc,
   WsProviderUploadFeedbackRpc,
-  WsSubscribeVcsStatusRpc,
+  ...VcsStatusRpcs,
   WsSubscribeWorktreeSetupRpc,
   WsWorktreeSetupCancelRpc,
   WsVcsPullRpc,
-  WsVcsRefreshStatusRpc,
   WsGitRunStackedActionRpc,
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,

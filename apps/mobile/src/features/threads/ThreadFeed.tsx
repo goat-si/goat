@@ -1,10 +1,6 @@
 import { HumanHandoffCard } from "./HumanHandoffCard";
-import {
-  AssistantMarkdownBlocks,
-  type MarkdownLinkHandlers,
-  type MarkdownStyleSet,
-} from "./AssistantMarkdownBlocks";
-import { Button } from "../../components/ui/Button";
+import type { MarkdownLinkHandlers, MarkdownStyleSet } from "./AssistantMarkdownBlocks";
+import { AssistantMarkdownContent } from "./AssistantMarkdownContent";
 import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { useWorkspaceSettledContentWidth } from "../layout/workspace-content-width";
@@ -161,6 +157,7 @@ import {
 } from "../../native/SelectableMarkdownText";
 
 import { AppText as Text } from "../../components/ui/AppText";
+import { ThreadFeedLoadEarlierControl } from "./ThreadFeedLoadEarlierControl";
 import { ThreadFeedPlaceholder } from "./ThreadFeedPlaceholder";
 import { ThreadFeedReplyProbe } from "./ThreadFeedReplyProbe";
 import { VideoPreviewModal, type VideoPreviewSource } from "../../components/VideoPreviewModal";
@@ -705,37 +702,6 @@ interface MarkdownStyleSets {
   readonly assistant: MarkdownStyleSet;
 }
 
-const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
-  readonly markdown: string;
-  readonly environmentId: EnvironmentId;
-  readonly markdownStyles: MarkdownStyleSet;
-  readonly linkHandlers: MarkdownLinkHandlers;
-  readonly onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
-  readonly renderImage: MarkdownImageRenderer;
-  readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
-}) {
-  const iconSubtleColor = useUniwindTheme()["--color-icon-subtle"];
-  const liveMarkdown = useLiveThreadLinkLabels(props.markdown, props.environmentId);
-  const threadIcons = useContextChipIcons(props.environmentId, liveMarkdown);
-  const linkHandlers: MarkdownLinkHandlers = {
-    ...props.linkHandlers,
-    linkCustomization: (href) =>
-      withChipIcon(props.linkHandlers.linkCustomization?.(href), threadIcons.get(href)),
-  };
-
-  return (
-    <AssistantMarkdownBlocks
-      markdown={liveMarkdown}
-      iconSubtleColor={iconSubtleColor}
-      markdownStyles={props.markdownStyles}
-      linkHandlers={linkHandlers}
-      onUseArtifactTemplate={props.onUseArtifactTemplate}
-      renderImage={props.renderImage}
-      skills={props.skills}
-    />
-  );
-});
-
 function useMarkdownStyles(): MarkdownStyleSets {
   const { appearance } = useAppearancePreferences();
   const nativeMarkdownTypography = useMemo(
@@ -1151,6 +1117,24 @@ function renderFeedEntry(
         frameWidth={props.contentWidth}
         iconColor={iconSubtleColor}
       />
+    );
+  }
+
+  if (entry.type === "sent-message") {
+    return (
+      <View className="mb-1 px-1">
+        <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>
+          <AssistantMarkdownContent
+            markdown={entry.text}
+            environmentId={props.environmentId}
+            markdownStyles={markdownStyles.assistant}
+            linkHandlers={props.markdownLinkHandlers}
+            onUseArtifactTemplate={props.onUseArtifactTemplate}
+            renderImage={props.renderMarkdownImage}
+            skills={props.skills}
+          />
+        </MarkdownImageAvailableWidthContext>
+      </View>
     );
   }
 
@@ -1609,6 +1593,7 @@ function renderFeedEntry(
           <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>
             <AssistantMarkdownContent
               markdown={renderedText}
+              streaming={message.streaming}
               environmentId={props.environmentId}
               markdownStyles={styles}
               linkHandlers={props.markdownLinkHandlers}
@@ -1835,7 +1820,7 @@ function UserMessageMarkdownContent(props: UserMessageContentProps) {
         contextClipboardFragment={contextClipboardFragment}
         skills={props.skills}
         textStyle={props.markdownStyles.nativeTextStyle}
-        preserveSoftBreaks
+        preserveLeadingWhitespace
         {...props.linkHandlers}
         renderImage={props.renderImage}
       />
@@ -1867,7 +1852,7 @@ function UserMessageMarkdownContent(props: UserMessageContentProps) {
             contextClipboardFragment={contextClipboardFragment}
             skills={props.skills}
             textStyle={props.markdownStyles.nativeTextStyle}
-            preserveSoftBreaks
+            preserveLeadingWhitespace
             {...props.linkHandlers}
             renderImage={props.renderImage}
           />
@@ -3129,6 +3114,7 @@ export const ThreadFeed = memo(function ThreadFeed({
         bottomInset={bottomContentInset}
         keyboardLift={props.placeholderKeyboardLift}
         horizontalPadding={horizontalPadding}
+        contentSideInsets={props.contentSideInsets}
       />
     );
   }
@@ -3300,39 +3286,3 @@ export const ThreadFeed = memo(function ThreadFeed({
     </PresentationSource>
   );
 });
-
-function ThreadFeedLoadEarlierControl(props: ThreadFeedHistoryControls) {
-  const theme = useUniwindTheme();
-  const mutedColor = theme["--color-icon-subtle"];
-  if (!props.hasMoreHistory && props.error === null) {
-    return null;
-  }
-  return (
-    <View className="mb-3 items-center px-2">
-      {props.hasMoreHistory ? (
-        <View className="self-center">
-          <Button
-            label={props.loading ? "Loading earlier activity…" : "Load earlier activity"}
-            tone="secondary"
-            accessibilityLabel="Load earlier activity"
-            disabled={props.loading}
-            onPress={props.onLoadEarlier}
-            icon="chevron.up"
-            loading={props.loading}
-          />
-        </View>
-      ) : null}
-      {/* Mounted with the control so TalkBack announces an error line when it appears. */}
-      <View collapsable={false} accessibilityLiveRegion="polite">
-        {props.error !== null ? (
-          <Text
-            className={props.hasMoreHistory ? "mt-1.5 text-center text-xs" : "text-center text-xs"}
-            style={{ color: mutedColor }}
-          >
-            {props.error}
-          </Text>
-        ) : null}
-      </View>
-    </View>
-  );
-}

@@ -1,3 +1,4 @@
+import { applyOrchestrationV2ThreadVisit } from "@goat/contracts";
 import * as LatestAnswer from "./ProjectionLatestAnswer.ts";
 import * as RunNotification from "./ProjectionRunNotification.ts";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
@@ -196,6 +197,11 @@ function applyToProjectionEvent(
         ...base,
         thread: event.payload,
         updatedAt: event.payload.updatedAt,
+      };
+    case "thread.visit-recorded":
+      return {
+        ...projection,
+        thread: applyOrchestrationV2ThreadVisit(projection.thread, event.payload),
       };
     case "thread.visited":
     case "thread.marked-unread":

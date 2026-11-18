@@ -228,7 +228,9 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
   }
   const mediaFile = asset.file;
   const mediaInfo = mediaFile ? yield* statMediaFile(asset.path, mediaFile) : undefined;
-  const contentType = headers["Content-Type"] ?? "";
+  const contentType =
+    headers["Content-Type"] ??
+    (mediaFile ? Option.getOrElse(Mime.getType(asset.path), () => "application/octet-stream") : "");
   const isMedia = /^(?:audio|video)\//i.test(contentType);
   let status = 200;
   let offset = 0n;
@@ -592,7 +594,11 @@ export const layerAssetRoute = HttpRouter.add(
       );
     }
     return yield* assetFileResponse(
-      { ...asset, expiresAt: verified.expiresAt },
+      {
+        ...asset,
+        ...(verified.file ? { file: verified.file } : {}),
+        expiresAt: verified.expiresAt,
+      },
       request.method === "GET" ? request.headers.range : undefined,
       request.headers["if-range"],
       request.method === "HEAD" ? "HEAD" : "GET",

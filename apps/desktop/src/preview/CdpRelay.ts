@@ -111,8 +111,9 @@ export function createCdpRelayConnection(
   /** Relay-created page sessions share one real debugger; child frame sessions retain their own ids. */
   const sessions = new Map<string, "browser" | "page">([[PAGE_SESSION_ID, "page"]]);
   let sessionSequence = 0;
-  const screencast = createSharedScreencast((method, params) =>
-    target.send(method, params, undefined),
+  const screencast = createSharedScreencast(
+    (method, params) => target.send(method, params, undefined),
+    (sessionId, params) => send({ method: "Page.screencastFrame", params, sessionId }),
   );
   const newSession = (kind: "browser" | "page") => {
     const sessionId = `goat-preview-${kind}-${++sessionSequence}`;
@@ -279,7 +280,7 @@ export function createCdpRelayConnection(
       );
     },
     event: (method, params, sessionId) => {
-      if (!attached) return;
+      if (closed || !attached) return;
       if (method.startsWith("Page.download")) method = method.replace("Page.", "Browser.");
       // Download events are the browser's; Playwright listens on its root session.
       if (method.startsWith("Browser.download")) {
@@ -293,13 +294,16 @@ export function createCdpRelayConnection(
       }
       // Playwright acks any frame its page session receives, which Chromium would count.
       if (method === "Page.screencastFrame") {
-        for (const id of screencast.frame(params as { sessionId?: unknown }))
-          send({ method, params, sessionId: id });
+        if (typeof params === "object" && params !== null)
+          screencast.frame(params as Record<string, unknown>);
         return;
       }
       for (const [id, kind] of sessions)
         if (kind === "page") send({ method, params, sessionId: id });
     },
-    close: screencast.close,
+    close: () => {
+      closed = true;
+      screencast.close();
+    },
   };
 }

@@ -100,6 +100,13 @@ import {
   sanitizeCommitMessage,
   sanitizeProgressText,
 } from "./commitMessage.ts";
+import {
+  matchesBranchHeadContext,
+  parseRepositoryOwnerLogin,
+  resolveHeadRepositoryNameWithOwner,
+} from "./pullRequestHeadIdentity.ts";
+export { matchesBranchHeadContext } from "./pullRequestHeadIdentity.ts";
+import { makeRefreshNewPullRequestWorktree } from "./pullRequestWorktreeRefresh.ts";
 
 export interface GitActionProgressReporter {
   readonly publish: (event: GitActionProgressEvent) => Effect.Effect<void, never>;
@@ -144,10 +151,18 @@ export class GitManager extends Context.Service<
       input: VcsStatusInput,
       options?: GitRemoteStatusOptions,
     ) => Effect.Effect<VcsStatusRemoteResult | null, GitManagerServiceError>;
-    /** refresh queries the host; freshGitState rereads only git state and is required before persisting. */
+    /**
+     * refresh queries the host; freshGitState rereads only git state and is required before persisting.
+     * A merged or closed answer is confirmed against git state unless confirmTerminal is false;
+     * callers that opt out confirm before acting on it.
+     */
     readonly branchPullRequest: (
       input: { readonly cwd: string; readonly branch: string },
-      options?: { readonly refresh?: boolean; readonly freshGitState?: boolean },
+      options?: {
+        readonly refresh?: boolean;
+        readonly freshGitState?: boolean;
+        readonly confirmTerminal?: boolean;
+      },
     ) => Effect.Effect<GitBranchPullRequest | null, GitManagerServiceError>;
     readonly checkedOutPullRequest: (input: {
       cwd: string;
@@ -212,7 +227,7 @@ interface OpenPrInfo {
   headRefName: string;
 }
 
-interface PullRequestInfo extends OpenPrInfo, PullRequestHeadRemoteInfo {
+export interface PullRequestInfo extends OpenPrInfo, PullRequestHeadRemoteInfo {
   state: "open" | "closed" | "merged";
   isDraft?: boolean;
   closedAt?: string | null;
@@ -235,13 +250,13 @@ interface ResolvedPullRequest {
   state: "open" | "closed" | "merged";
 }
 
-interface PullRequestHeadRemoteInfo {
+export interface PullRequestHeadRemoteInfo {
   isCrossRepository?: boolean | undefined;
   headRepositoryNameWithOwner?: string | null | undefined;
   headRepositoryOwnerLogin?: string | null | undefined;
 }
 
-interface BranchHeadContext {
+export interface BranchHeadContext {
   localBranch: string;
   headBranch: string;
   headSelectors: ReadonlyArray<string>;
@@ -261,11 +276,6 @@ export function pullRequestRepositoryKey(value: string): string | null {
     : sourceControlDefinitions.repositoryKeyFromRemote(repositoryUrl);
 }
 
-/** Null when the host did not name the repository the head lives in. */
-function resolveHeadRepositoryNameWithOwner(pullRequest: PullRequestHeadRemoteInfo): string | null {
-  return normalizeOptionalString(pullRequest.headRepositoryNameWithOwner);
-}
-
 export function parseRepositoryNameWithOwnerFromRemoteUrl(
   url: string | null,
   provider?: Pick<
@@ -279,123 +289,6 @@ export function parseRepositoryNameWithOwnerFromRemoteUrl(
     provider?.repositoryNameFromRemoteUrl?.(trimmed) ??
     SourceControlProvider.repositoryPathFromRemoteUrl(trimmed)
   );
-}
-
-function parseRepositoryOwnerLogin(nameWithOwner: string | null): string | null {
-  const trimmed = nameWithOwner?.trim() ?? "";
-  if (trimmed.length === 0) {
-    return null;
-  }
-  // The first segment only: a nested path's owner is its top-level group. The full path
-  // distinguishes subgroups.
-  const [ownerLogin] = trimmed.split("/");
-  const normalizedOwnerLogin = ownerLogin?.trim() ?? "";
-  return normalizedOwnerLogin.length > 0 ? normalizedOwnerLogin : null;
-}
-
-function normalizeOptionalString(value: string | null | undefined): string | null {
-  const trimmed = value?.trim() ?? "";
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-function normalizeOptionalRepositoryNameWithOwner(value: string | null | undefined): string | null {
-  const normalized = normalizeOptionalString(value);
-  return normalized ? normalized.toLowerCase() : null;
-}
-
-function normalizeOptionalOwnerLogin(value: string | null | undefined): string | null {
-  const normalized = normalizeOptionalString(value);
-  return normalized ? normalized.toLowerCase() : null;
-}
-
-interface PullRequestHeadIdentity {
-  readonly repositoryNameWithOwner: string | null;
-  readonly ownerLogin: string | null;
-}
-
-function resolveExpectedHeadIdentity(
-  headContext: Pick<BranchHeadContext, "headRepositoryNameWithOwner" | "headRepositoryOwnerLogin">,
-): PullRequestHeadIdentity {
-  const repositoryNameWithOwner = normalizeOptionalRepositoryNameWithOwner(
-    headContext.headRepositoryNameWithOwner,
-  );
-  return {
-    repositoryNameWithOwner,
-    ownerLogin:
-      normalizeOptionalOwnerLogin(headContext.headRepositoryOwnerLogin) ??
-      parseRepositoryOwnerLogin(repositoryNameWithOwner),
-  };
-}
-
-function resolvePullRequestHeadIdentity(pr: PullRequestInfo): PullRequestHeadIdentity {
-  const repositoryNameWithOwner = normalizeOptionalRepositoryNameWithOwner(
-    resolveHeadRepositoryNameWithOwner(pr),
-  );
-  return {
-    repositoryNameWithOwner,
-    ownerLogin:
-      normalizeOptionalOwnerLogin(pr.headRepositoryOwnerLogin) ??
-      parseRepositoryOwnerLogin(repositoryNameWithOwner),
-  };
-}
-
-export function matchesBranchHeadContext(
-  pr: PullRequestInfo,
-  headContext: Pick<
-    BranchHeadContext,
-    "headBranch" | "headRepositoryNameWithOwner" | "headRepositoryOwnerLogin" | "isCrossRepository"
-  >,
-): boolean {
-  if (pr.headRefName !== headContext.headBranch) {
-    return false;
-  }
-
-  const expectedHead = resolveExpectedHeadIdentity(headContext);
-  const pullRequestHead = resolvePullRequestHeadIdentity(pr);
-
-  if (expectedHead.repositoryNameWithOwner) {
-    if (pullRequestHead.repositoryNameWithOwner) {
-      if (expectedHead.repositoryNameWithOwner !== pullRequestHead.repositoryNameWithOwner) {
-        return false;
-      }
-    }
-    if (expectedHead.ownerLogin && pullRequestHead.ownerLogin) {
-      if (expectedHead.ownerLogin !== pullRequestHead.ownerLogin) {
-        return false;
-      }
-    }
-  }
-
-  if (expectedHead.ownerLogin && pullRequestHead.ownerLogin) {
-    if (expectedHead.ownerLogin !== pullRequestHead.ownerLogin) {
-      return false;
-    }
-  }
-
-  if (headContext.isCrossRepository) {
-    if (pr.isCrossRepository === false) {
-      return false;
-    }
-    if (
-      (expectedHead.repositoryNameWithOwner || expectedHead.ownerLogin) &&
-      !pullRequestHead.repositoryNameWithOwner &&
-      !pullRequestHead.ownerLogin
-    ) {
-      return false;
-    }
-    return true;
-  }
-
-  if (pr.isCrossRepository === true) {
-    if (
-      (!expectedHead.repositoryNameWithOwner && !expectedHead.ownerLogin) ||
-      (!pullRequestHead.repositoryNameWithOwner && !pullRequestHead.ownerLogin)
-    ) {
-      return false;
-    }
-  }
-
-  return true;
 }
 
 function toPullRequestInfo(summary: ChangeRequest): PullRequestInfo {
@@ -2521,7 +2414,14 @@ export const make = Effect.gen(function* () {
       refresh,
       freshGitState,
     });
-    if (pullRequest === null || pullRequest.state === "open" || freshGitState) return pullRequest;
+    if (
+      pullRequest === null ||
+      pullRequest.state === "open" ||
+      freshGitState ||
+      options?.confirmTerminal === false
+    ) {
+      return pullRequest;
+    }
     const recheck = { refresh: false, freshGitState: true };
     const verify = lookupBranchPullRequest(cacheCwd, branch, recheck);
     return yield* verifyTerminalPrLookup(cacheCwd, branch, pullRequest, verify);
@@ -2666,14 +2566,6 @@ export const make = Effect.gen(function* () {
           };
         }
 
-        // Capture upstream before its forced fetch so rewritten heads remain distinguishable from local commits.
-        const upstreamCommitBeforeFetch = yield* gitCore
-          .resolveCommit({ cwd: worktreePath, revision: "@{upstream}" })
-          .pipe(
-            Effect.map((resolved) => resolved.commitSha),
-            Effect.orElseSucceed(() => null),
-          );
-
         yield* ensureExistingWorktreeUpstream(worktreePath);
 
         // The pull request's own ref, because it is the only thing that certainly names its
@@ -2708,7 +2600,6 @@ export const make = Effect.gen(function* () {
             gitCore.refreshCheckedOutBranch({
               cwd: worktreePath,
               targetCommit: target.commitSha,
-              resetWhenHeadCommit: upstreamCommitBeforeFetch,
             }),
           ),
           Effect.catch((error) =>
@@ -2792,6 +2683,53 @@ export const make = Effect.gen(function* () {
         });
       }
 
+      const createPullRequestWorktree = Effect.fn("createPullRequestWorktree")(function* (
+        onWorktreeClaimed?: (path: string) => Effect.Effect<void>,
+      ) {
+        return yield* gitCore.createWorktree(
+          { cwd: input.cwd, refName: localPullRequestBranch, path: null },
+          {
+            ...(onWorktreeClaimed ? { progress: { onWorktreeClaimed } } : {}),
+            worktreesDirectory: yield* readWorktreesDirectory,
+            skipSetupHook: input.threadId !== undefined,
+            submodules: yield* projectSettingsFor(input).pipe(
+              Effect.map(({ settings }) => settings.worktreeSubmodules),
+              Effect.orElseSucceed(() => null),
+            ),
+          },
+        );
+      });
+      // Materializing would force this branch onto the head; its own commits would leave it.
+      if (existingBranchBeforeFetch !== null) {
+        const refresh = makeRefreshNewPullRequestWorktree({
+          gitCore,
+          configureUpstream: (cwd) =>
+            configurePullRequestHeadUpstream(
+              cwd,
+              pullRequestWithRemoteInfo,
+              localPullRequestBranch,
+            ),
+          changeRequestHeadRef: (cwd) => changeRequestHeadRef(cwd, pullRequest.number),
+          headSha: pullRequestSummary.headSha,
+          localBranch: localPullRequestBranch,
+        });
+        let isOnPullRequestHead = false;
+        const worktree = yield* createPullRequestWorktree((cwd) =>
+          refresh(cwd).pipe(
+            Effect.map((onTarget) => {
+              isOnPullRequestHead = onTarget;
+            }),
+          ),
+        );
+        yield* runPullRequestSetup(input, worktree.worktree.path);
+        return {
+          pullRequest,
+          branch: worktree.worktree.refName,
+          worktreePath: worktree.worktree.path,
+          isOnPullRequestHead,
+        };
+      }
+
       yield* materializePullRequestHeadBranch(
         input.cwd,
         pullRequestWithRemoteInfo,
@@ -2820,21 +2758,7 @@ export const make = Effect.gen(function* () {
         });
       }
 
-      const worktree = yield* gitCore.createWorktree(
-        {
-          cwd: input.cwd,
-          refName: localPullRequestBranch,
-          path: null,
-        },
-        {
-          worktreesDirectory: yield* readWorktreesDirectory,
-          skipSetupHook: input.threadId !== undefined,
-          submodules: yield* projectSettingsFor(input).pipe(
-            Effect.map(({ settings }) => settings.worktreeSubmodules),
-            Effect.orElseSucceed(() => null),
-          ),
-        },
-      );
+      const worktree = yield* createPullRequestWorktree();
       yield* ensureExistingWorktreeUpstream(worktree.worktree.path);
       yield* runPullRequestSetup(input, worktree.worktree.path);
 

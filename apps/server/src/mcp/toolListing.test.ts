@@ -64,6 +64,7 @@ const listed = (filter: (entry: (typeof entries)[number]) => boolean) =>
     .filter(
       (entry) =>
         entry.path !== "surface.screen_run" &&
+        !("listing" in entry && entry.listing === "prompt") &&
         entry.resource !== "workspace" &&
         entry.resource !== "terminal" &&
         filter(entry),

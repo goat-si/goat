@@ -11,6 +11,8 @@ import {
   verifyCuaDriver,
 } from "./methods/cua.ts";
 import * as DesktopIpc from "./DesktopIpc.ts";
+import { startFileDrag } from "./methods/fileDrag.ts";
+import { toLocalBackendPath } from "./methods/folderPaths.ts";
 import { installNotificationBadge } from "./methods/notificationBadge.ts";
 import { installDesktopTray } from "../tray/DesktopTray.ts";
 import { getClientSettings, setClientSettings } from "./methods/clientSettings.ts";
@@ -45,6 +47,7 @@ import {
   resolveSshPasswordPrompt,
   updateSshRuntime,
 } from "./methods/sshEnvironment.ts";
+import { getPenMembers, issuePenMemberSession } from "./methods/penMembers.ts";
 import {
   checkForUpdate,
   downloadUpdate,
@@ -149,6 +152,8 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(clearConnectionCatalog);
 
   yield* ipc.handle(discoverSshHosts);
+  yield* ipc.handle(getPenMembers);
+  yield* ipc.handle(issuePenMemberSession);
   yield* ipc.handle(resolveSshHost);
   yield* ipc.handle(ensureSshEnvironment);
   yield* ipc.handle(getSshHostStatus);
@@ -171,6 +176,8 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(setWslOnly);
 
   yield* ipc.handle(pickFolder);
+  yield* ipc.handle(toLocalBackendPath);
+  yield* ipc.handle(startFileDrag);
   yield* ipc.handle(pickProjectFavicon);
   yield* ipc.handle(pickThemeFiles);
   yield* ipc.handle(setTheme);

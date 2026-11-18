@@ -74,6 +74,7 @@ const listedTools = (
     if (entry === undefined) return [tool];
     if (!availability(entry, scope, true, profile, listing.host ?? {}).now) return [];
     const tier = "listing" in entry ? entry.listing : undefined;
+    if (tier === "prompt") return [];
     const visible =
       listing.listed === "full" ||
       tier === "core" ||

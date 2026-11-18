@@ -20,8 +20,8 @@ import {
   type LinkTrafficView,
   type LinkTrafficWindow,
 } from "./linkTrafficBook.ts";
-import { readPenConfig } from "./penConfigFile.ts";
-import { penConfigHosts } from "./penSshRoute.ts";
+import { readPenConfig } from "@goat/ssh/penConfigFile";
+import { penConfigHosts } from "@goat/ssh/penRoute";
 
 type Link = OpenCodexInventorySnapshot["link"]["links"][number];
 type Base = Omit<Link, "traffic" | "route" | "transport">;

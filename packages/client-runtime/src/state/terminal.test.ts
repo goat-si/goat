@@ -1,8 +1,22 @@
-import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { it as effectIt } from "@effect/vitest";
+import {
+  EnvironmentId,
+  TerminalCwdNotFoundError,
+  TerminalError,
+  TerminalRequestError,
+  ThreadId,
+  WS_METHODS,
+  type TerminalAttachInput,
+} from "@goat/contracts";
+import * as Cause from "effect/Cause";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { expect, it } from "vite-plus/test";
 
 import {
+  createTerminalEnvironmentAtoms,
   createTerminalSession,
   INITIAL_TERMINAL_LIFECYCLE,
   transitionTerminalLifecycle,
@@ -10,6 +24,47 @@ import {
   type TerminalSessionMode,
 } from "./terminal.ts";
 import { EMPTY_TERMINAL_BUFFER_STATE, type TerminalBufferState } from "./terminalSession.ts";
+import {
+  makeEnvironmentQueryHarness,
+  QUERY_ENVIRONMENT,
+  QUERY_RPC_SESSION,
+} from "./runtimeTestSupport.ts";
+
+const encodeAttachError = Schema.encodeSync(TerminalError);
+const decodeAttachError = Schema.decodeUnknownSync(TerminalError);
+
+effectIt.effect("an opted-in attachment delivers the current server's error message", () =>
+  Effect.gen(function* () {
+    const message = "This thread moved to another worktree. Open the terminal again.";
+    const wireError = encodeAttachError(new TerminalRequestError({ message }));
+    const client = {
+      [WS_METHODS.terminalAttach]: (input: TerminalAttachInput) =>
+        input.terminalErrorMessage === true
+          ? Stream.fail(decodeAttachError(wireError))
+          : Stream.fail(new TerminalCwdNotFoundError({ cwd: "/repo" })),
+    } as unknown as typeof QUERY_RPC_SESSION.client;
+    const harness = yield* makeEnvironmentQueryHarness(Effect.void, {
+      rpcSession: { ...QUERY_RPC_SESSION, client },
+    });
+    const registry = AtomRegistry.make();
+    yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
+    const attach = createTerminalEnvironmentAtoms(harness.runtime).attach({
+      environmentId: QUERY_ENVIRONMENT.environmentId,
+      input: { threadId: "thread-1", terminalId: "term-1", cwd: "/repo" },
+    });
+    yield* AtomRegistry.toStream(registry, attach).pipe(
+      Stream.filter(AsyncResult.isFailure),
+      Stream.take(1),
+      Stream.runForEach(({ cause }) =>
+        Effect.sync(() => {
+          const error = Cause.squash(cause);
+          expect(error).toBeInstanceOf(TerminalRequestError);
+          expect(error).toHaveProperty("message", message);
+        }),
+      ),
+    );
+  }).pipe(Effect.scoped),
+);
 
 function run(events: ReadonlyArray<TerminalLifecycleEvent>) {
   let state = INITIAL_TERMINAL_LIFECYCLE;
