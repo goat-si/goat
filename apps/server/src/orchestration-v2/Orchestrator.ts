@@ -1,3 +1,4 @@
+import { threadCreateMessage } from "./threadCreateMessage.ts";
 import { contextHandoffTurnItem } from "./ContextHandoffTurnItem.ts";
 import { retainedUserItemFailures } from "./goat/RetainedQueuedInput.ts";
 import { commandThreadId } from "./commandThreadId.ts";
@@ -5360,6 +5361,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ? projectionStore
           .getThreadRecords(command.threadId, ["messages"], { messageRoles: ["user"] })
           .pipe(
+            Effect.catchTags({
+              ProjectionStoreThreadNotFoundError: () => Effect.succeed({ messages: [] }),
+            }),
             Effect.map(({ messages }) => [...messages, ...userMessages]),
             Effect.map((all) => all.length > 0 && all.every(isNativeMaintenanceCommand)),
             mapDispatchError(command),
@@ -12247,6 +12251,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     switch (command.type) {
       case "thread.create":
         yield* dispatchThreadCreate(command, events);
+        if (command.initialMessage !== undefined)
+          cancelUnsettledEffects = yield* dispatchMessage(
+            threadCreateMessage(command, command.initialMessage),
+            events,
+            effects,
+          );
         break;
       case "thread.promote":
         yield* dispatchThreadPromote(command, events);

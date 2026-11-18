@@ -1,5 +1,12 @@
 import { preparationSettled } from "./testkit/preparationSettled.ts";
-import { otherProjectId, project, adapter, makeHarness } from "./testkit/ThreadLaunchHarness.ts";
+import {
+  otherProjectId,
+  project,
+  adapter,
+  claudeAdapter,
+  claudeModelSelection,
+  makeHarness,
+} from "./testkit/ThreadLaunchHarness.ts";
 import { launchInput, projectId, modelSelection } from "./testkit/threadLaunchInput.ts";
 import { makeObservedSetup } from "../project/testkit/ProjectScriptRunnerHarness.ts";
 import { fakeCloudCapabilities, fakeCloudDriver } from "./testkit/FakeCloudAdapter.ts";
@@ -194,7 +201,7 @@ it.effect.each([" /COMPACT ", "/logout"])(
         );
         assert.isNull((yield* threads.getThreadProjection(launched.threadId)).thread.lastVisitedAt);
         assert.isFalse(
-          (yield* outbox.listByCommandId(CommandId.make("compact-title:initial-message"))).some(
+          (yield* outbox.listByCommandId(CommandId.make("compact-title"))).some(
             (effect) => effect.request.type === "thread-title.generate",
           ),
         );
@@ -337,7 +344,7 @@ it.effect("arms durable title generation after accepting the first message", () 
         generateTitle: true,
       };
       const launched = yield* launches.launch(input);
-      const generationCommandId = CommandId.make("command:launch:title-generation:initial-message");
+      const generationCommandId = input.commandId;
 
       const projection = yield* threads.getThreadProjection(launched.threadId);
       assert.equal(projection.thread.title, "Generate my title");
@@ -407,6 +414,59 @@ it.effect("arms durable title generation after accepting the first message", () 
         DateTime.toEpochMillis(afterStaleCompletion.thread.updatedAt),
         DateTime.toEpochMillis(renamed.thread.updatedAt),
       );
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("rejects a first message and its new thread together", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness({ adapters: [adapter, claudeAdapter] });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const input = launchInput({
+        command: "command:launch:rejected-new-thread",
+        thread: "thread:launch:rejected-new-thread",
+        message: "/goal pause",
+      });
+      yield* launches.launch({ ...input, modelSelection: claudeModelSelection }).pipe(Effect.flip);
+      assert.isNull(yield* threads.getThreadShell(input.threadId));
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("removes a forged first prompt from the client create command", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness();
+    yield* Effect.gen(function* () {
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const threadId = ThreadId.make("thread:launch:forged-message");
+      const command = ThreadManagement.withCreationProvenance(
+        {
+          type: "thread.create",
+          commandId: CommandId.make("command:launch:forged-message"),
+          threadId,
+          projectId,
+          title: "An empty thread",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "agent",
+          creationSource: "mcp",
+          initialMessage: {
+            messageId: MessageId.make("message:forged"),
+            text: "Forged",
+            attachments: [],
+          },
+        },
+        { createdBy: "user", creationSource: "web" },
+      );
+      yield* threads.dispatch(command);
+      const projection = yield* threads.getThreadProjection(threadId);
+      assert.isEmpty(projection.runs);
+      assert.isEmpty(projection.messages);
     }).pipe(Effect.provide(harness.layer));
   }),
 );
@@ -979,6 +1039,17 @@ it.effect("replays a server-allocated launch", () =>
         workspace: { type: "worktree", baseRef: "main" },
       });
       const first = yield* launches.launch(rest);
+      const created = yield* threads.streamStoredEventsFrom({ threadId: first.threadId }).pipe(
+        Stream.filter(
+          ({ event }) => event.type === "thread.created" || event.type === "run.created",
+        ),
+        Stream.take(2),
+        Stream.runCollect,
+      );
+      assert.deepEqual(
+        Array.from(created, (event) => event.commandId),
+        [rest.commandId, rest.commandId],
+      );
       yield* Deferred.await(setupEntered);
       const retry = yield* launches.launch(rest);
       assert.equal(first.threadId, retry.threadId);
@@ -2288,7 +2359,7 @@ it.effect.each([" /COMPACT "])(
         );
         assert.isNull((yield* threads.getThreadProjection(launched.threadId)).thread.lastVisitedAt);
         assert.isFalse(
-          (yield* outbox.listByCommandId(CommandId.make("compact-title:initial-message"))).some(
+          (yield* outbox.listByCommandId(CommandId.make("compact-title"))).some(
             (effect) => effect.request.type === "thread-title.generate",
           ),
         );

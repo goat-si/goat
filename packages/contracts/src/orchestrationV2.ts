@@ -1,4 +1,7 @@
-import { OrchestrationV2ThreadLaunchWorkspaceStrategy } from "./orchestrationV2Launch.ts";
+import {
+  OrchestrationV2ThreadCreateInitialMessage,
+  OrchestrationV2ThreadLaunchWorkspaceStrategy,
+} from "./orchestrationV2Launch.ts";
 export { OrchestrationV2ThreadLaunchWorkspaceStrategy } from "./orchestrationV2Launch.ts";
 export { isOrchestrationV2WorkActive } from "./orchestrationV2WorkActive.ts";
 import { PiExtensionStatuses } from "./piExtensionStatus.ts";
@@ -2919,6 +2922,7 @@ export const OrchestrationV2Command = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("thread.create"),
+    initialMessage: Schema.optional(OrchestrationV2ThreadCreateInitialMessage),
     memoryGrantCeiling: MemoryTaskGrantCeilingField,
     ...OrchestrationV2CreationFields,
     commandId: CommandId,

@@ -1195,6 +1195,30 @@ const make = Effect.gen(function* () {
         ).pipe(Effect.mapError(mapError(input, "resolve-project")));
         const initialWorktreePath =
           workspaceStrategy.type === "existing_worktree" ? workspaceStrategy.worktreePath : null;
+        const firstMessage = Effect.fn("ThreadLaunchService.firstMessage")(function* (
+          threadId: ThreadId,
+          initial: NonNullable<ThreadLaunchInput["initialMessage"]>,
+        ) {
+          return {
+            ...initial,
+            messageId:
+              initial.messageId ??
+              (yield* ids.allocate
+                .message({ threadId, ordinal: 1 })
+                .pipe(Effect.mapError(mapError(input, "dispatch-message", threadId)))),
+            memoryGrantCeiling: initial.memoryGrantCeiling ?? "none",
+            ...(input.generateTitle === true ? { titleSeed: input.title } : {}),
+          };
+        });
+        // A revocable launcher authorizes creation and starting work separately.
+        const atomicMessage =
+          input.initialMessage === undefined ||
+          input.reuseExistingThread ||
+          input.confirm ||
+          cloud ||
+          replay
+            ? undefined
+            : yield* firstMessage(candidateThreadId, input.initialMessage);
         const claimDispatch =
           input.reuseExistingThread === true
             ? threads.dispatch({
@@ -1214,6 +1238,9 @@ const make = Effect.gen(function* () {
                 interactionMode: input.interactionMode,
                 branch: initialBranch,
                 worktreePath: initialWorktreePath,
+                ...(atomicMessage === undefined
+                  ? {}
+                  : { initialMessage: { ...atomicMessage, workspaceStrategy } }),
                 ...(input.importedNativeThread === undefined
                   ? {}
                   : { importedNativeThread: input.importedNativeThread }),
@@ -1248,38 +1275,25 @@ const make = Effect.gen(function* () {
         let messageSequence: number | undefined;
         let messageWasAlreadyAccepted = false;
         if (input.initialMessage !== undefined) {
-          const messageCommandId = CommandId.make(`${input.commandId}:initial-message`);
-          const messageReceipt = yield* readReceipt(input, messageCommandId);
-          messageWasAlreadyAccepted = Option.isSome(messageReceipt);
-          const messageId =
-            input.initialMessage.messageId ??
-            (yield* ids.allocate
-              .message({ threadId, ordinal: 1 })
-              .pipe(Effect.mapError(mapError(input, "dispatch-message", threadId))));
-          yield* confirmLaunchStep(input.confirm, mapError(input, "dispatch-message", threadId));
-          const dispatched = yield* threads
-            .dispatch({
-              type: "message.dispatch",
-              commandId: messageCommandId,
-              threadId,
-              messageId,
-              text: input.initialMessage.text,
-              memoryGrantCeiling: input.initialMessage.memoryGrantCeiling ?? "none",
-              ...(input.initialMessage.scheduledTaskId === undefined
-                ? {}
-                : { scheduledTaskId: input.initialMessage.scheduledTaskId }),
-              ...(input.initialMessage.senderThreadId === undefined
-                ? {}
-                : { senderThreadId: input.initialMessage.senderThreadId }),
-              attachments: input.initialMessage.attachments,
-              ...(input.initialMessage.context ? { context: input.initialMessage.context } : {}),
-              ...(input.generateTitle === true ? { titleSeed: input.title } : {}),
-              modelSelection: input.modelSelection,
-              dispatchMode: { type: "defer_start", workspaceStrategy },
-              createdBy: input.createdBy,
-              creationSource: input.creationSource,
-            })
-            .pipe(Effect.mapError(mapError(input, "dispatch-message", threadId)));
+          let dispatched = claimed;
+          if (!claimed.storedEvents.some(({ event }) => event.type === "run.created")) {
+            const messageCommandId = CommandId.make(`${input.commandId}:initial-message`);
+            messageWasAlreadyAccepted = Option.isSome(yield* readReceipt(input, messageCommandId));
+            const message = yield* firstMessage(threadId, input.initialMessage);
+            yield* confirmLaunchStep(input.confirm, mapError(input, "dispatch-message", threadId));
+            dispatched = yield* threads
+              .dispatch({
+                ...message,
+                type: "message.dispatch",
+                commandId: messageCommandId,
+                threadId,
+                modelSelection: input.modelSelection,
+                dispatchMode: { type: "defer_start", workspaceStrategy },
+                createdBy: input.createdBy,
+                creationSource: input.creationSource,
+              })
+              .pipe(Effect.mapError(mapError(input, "dispatch-message", threadId)));
+          }
           // A concurrent retry can read no receipt and still replay the dispatch.
           messageWasAlreadyAccepted ||= dispatched.replayed === true;
           messageSequence = dispatched.sequence;

@@ -1,3 +1,4 @@
+import { stampThreadCreate } from "./threadCreateMessage.ts";
 import * as Semaphore from "effect/Semaphore";
 import { deliveryForDispatch, readRestartReceipt } from "./restartedDelivery.ts";
 import * as ThreadSettlementAfterRun from "./ThreadSettlementAfterRun.ts";
@@ -132,11 +133,8 @@ export function withCreationProvenance(
       return provenance.createdBy === "user"
         ? { ...command, respondedBy: { type: "user" } }
         : command;
-    case "thread.create": {
-      if (provenance.createdBy !== "user") return { ...command, ...provenance };
-      const { launchedBy: _launcher, ...userCommand } = command;
-      return { ...userCommand, memoryGrantCeiling: "none", ...provenance };
-    }
+    case "thread.create":
+      return stampThreadCreate(command, provenance);
     case "message.dispatch":
     case "delegated_task.request":
       return provenance.createdBy === "user"
