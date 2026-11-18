@@ -74,7 +74,7 @@ it.each(["@legendapp/list/react", "@legendapp/list/react-native"])(
 );
 
 it.each(["@legendapp/list/react", "@legendapp/list/react-native"])(
-  "keeps the %s row's layout height after a deferred shrink under scale",
+  "keeps the %s row's fractional layout height after a deferred shrink under scale",
   async (entry) => {
     // Both browser bundles expose the web implementation; native types add global declarations.
     const { LegendList: List } =
@@ -110,7 +110,7 @@ it.each(["@legendapp/list/react", "@legendapp/list/react-native"])(
     if (!(row instanceof HTMLElement)) throw new Error("Expected a project row");
     expect(row.getBoundingClientRect().height).toBe(64);
     onItemSizeChanged.mockClear();
-    row.style.height = "40px";
-    await vi.waitFor(() => expect(projectSizes()).toEqual([40]));
+    row.style.height = "40.625px";
+    await vi.waitFor(() => expect(projectSizes()).toEqual([40.625]));
   },
 );

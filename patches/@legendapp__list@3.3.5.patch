@@ -1591,7 +1591,7 @@ index 40e87cda8c9bc79a889e5542f29af429a24b24d4..d48d7d1bd76822f3ffdb0e8919f20625
        recycleItems,
        refreshControl: refreshControlElement ? stylePaddingTopState > 0 ? React2.cloneElement(refreshControlElement, {
 diff --git a/react-native.web.js b/react-native.web.js
-index 914d2dafaafa001c9ab6791a0a0581659295e333..cdb97fa58c01e725be6a2cc81ca45c6747e689b8 100644
+index 914d2dafaafa001c9ab6791a0a0581659295e333..da4ed73ad26854c1144018ee62f1e5141fff0cce 100644
 --- a/react-native.web.js
 +++ b/react-native.web.js
 @@ -2869,7 +2869,9 @@ function abortBootstrapInitialScroll(ctx) {
@@ -1614,7 +1614,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..cdb97fa58c01e725be6a2cc81ca45c67
        setContainerLayoutBaseline(element, rect);
        measurements.push({
          containerId,
-@@ -5413,12 +5415,11 @@ function processContainerLayout({ containerId, ctx, rectangle, ref, state }) {
+@@ -5413,12 +5415,10 @@ function processContainerLayout({ containerId, ctx, rectangle, ref, state }) {
    const shouldDeferWebShrinkLayoutUpdate = !isInMVCPActiveMode(listState) && previousSize !== void 0 && size + 1 < previousSize;
    if (shouldDeferWebShrinkLayoutUpdate) {
      scheduleWebShrinkMeasurement(state, () => {
@@ -1625,12 +1625,29 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..cdb97fa58c01e725be6a2cc81ca45c67
 -        if (rect) {
 -          layout = { height: rect.height, width: rect.width };
 +        if (element) {
-+          // Match ResizeObserver's layout box even when an ancestor is transformed.
-+          layout = { height: element.offsetHeight, width: element.offsetWidth };
++          layout = measureContainerLayoutSize(element);
          }
          applyLayout();
        }
-@@ -5651,6 +5652,18 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+@@ -5432,6 +5432,17 @@ function processContainerLayout({ containerId, ctx, rectangle, ref, state }) {
+     }
+   }
+ }
++// Measure the layout box when a transform changes the rendered rectangle.
++function measureContainerLayoutSize(element) {
++  const rect = element.getBoundingClientRect();
++  if (Math.abs(rect.width - element.offsetWidth) < 1 && Math.abs(rect.height - element.offsetHeight) < 1) {
++    return { height: rect.height, width: rect.width };
++  }
++  const style = getComputedStyle(element);
++  const height = Number.parseFloat(style.height);
++  const width = Number.parseFloat(style.width);
++  return Number.isFinite(height) && Number.isFinite(width) ? { height, width } : { height: rect.height, width: rect.width };
++}
+ function useContainerMeasurement({
+   containerId,
+   ctx,
+@@ -5651,6 +5662,18 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  });
  
  // src/utils/reordering.ts
@@ -1649,7 +1666,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..cdb97fa58c01e725be6a2cc81ca45c67
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
-@@ -5690,9 +5703,9 @@ function sortDOMElements(container, indexByElement) {
+@@ -5690,9 +5713,9 @@ function sortDOMElements(container, indexByElement) {
          }
        }
        if (nextStableElement) {
@@ -1662,7 +1679,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..cdb97fa58c01e725be6a2cc81ca45c67
      }
    }
 diff --git a/react-native.web.mjs b/react-native.web.mjs
-index 95465f2ab89ce41a10553f58af83618f7310e83c..e0f193cda3de7ee2fe42e19de406f8b69d0af353 100644
+index 95465f2ab89ce41a10553f58af83618f7310e83c..433778b2c34cae315a225e0330e6ddd56b547cff 100644
 --- a/react-native.web.mjs
 +++ b/react-native.web.mjs
 @@ -2848,7 +2848,9 @@ function abortBootstrapInitialScroll(ctx) {
@@ -1685,7 +1702,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..e0f193cda3de7ee2fe42e19de406f8b6
        setContainerLayoutBaseline(element, rect);
        measurements.push({
          containerId,
-@@ -5392,12 +5394,11 @@ function processContainerLayout({ containerId, ctx, rectangle, ref, state }) {
+@@ -5392,12 +5394,10 @@ function processContainerLayout({ containerId, ctx, rectangle, ref, state }) {
    const shouldDeferWebShrinkLayoutUpdate = !isInMVCPActiveMode(listState) && previousSize !== void 0 && size + 1 < previousSize;
    if (shouldDeferWebShrinkLayoutUpdate) {
      scheduleWebShrinkMeasurement(state, () => {
@@ -1696,12 +1713,29 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..e0f193cda3de7ee2fe42e19de406f8b6
 -        if (rect) {
 -          layout = { height: rect.height, width: rect.width };
 +        if (element) {
-+          // Match ResizeObserver's layout box even when an ancestor is transformed.
-+          layout = { height: element.offsetHeight, width: element.offsetWidth };
++          layout = measureContainerLayoutSize(element);
          }
          applyLayout();
        }
-@@ -5630,6 +5631,18 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+@@ -5411,6 +5411,17 @@ function processContainerLayout({ containerId, ctx, rectangle, ref, state }) {
+     }
+   }
+ }
++// Measure the layout box when a transform changes the rendered rectangle.
++function measureContainerLayoutSize(element) {
++  const rect = element.getBoundingClientRect();
++  if (Math.abs(rect.width - element.offsetWidth) < 1 && Math.abs(rect.height - element.offsetHeight) < 1) {
++    return { height: rect.height, width: rect.width };
++  }
++  const style = getComputedStyle(element);
++  const height = Number.parseFloat(style.height);
++  const width = Number.parseFloat(style.width);
++  return Number.isFinite(height) && Number.isFinite(width) ? { height, width } : { height: rect.height, width: rect.width };
++}
+ function useContainerMeasurement({
+   containerId,
+   ctx,
+@@ -5630,6 +5641,18 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  });
  
  // src/utils/reordering.ts
@@ -1720,7 +1754,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..e0f193cda3de7ee2fe42e19de406f8b6
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
-@@ -5669,9 +5682,9 @@ function sortDOMElements(container, indexByElement) {
+@@ -5669,9 +5692,9 @@ function sortDOMElements(container, indexByElement) {
          }
        }
        if (nextStableElement) {
@@ -1733,7 +1767,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..e0f193cda3de7ee2fe42e19de406f8b6
      }
    }
 diff --git a/react.js b/react.js
-index 914d2dafaafa001c9ab6791a0a0581659295e333..81fdadeed0dedb1d57dfe979c9c40b7cb1a09a7b 100644
+index 914d2dafaafa001c9ab6791a0a0581659295e333..8dea08ed928482b5a716f816ac65a98f14a48468 100644
 --- a/react.js
 +++ b/react.js
 @@ -1908,6 +1908,10 @@ function updateScroll(ctx, newScroll, forceUpdate, options) {
@@ -1905,7 +1939,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..81fdadeed0dedb1d57dfe979c9c40b7c
      }
    }, [ctx, containerLayoutEpoch]);
    return children;
-@@ -5413,12 +5457,11 @@ function processContainerLayout({ containerId, ctx, rectangle, ref, state }) {
+@@ -5413,12 +5457,10 @@ function processContainerLayout({ containerId, ctx, rectangle, ref, state }) {
    const shouldDeferWebShrinkLayoutUpdate = !isInMVCPActiveMode(listState) && previousSize !== void 0 && size + 1 < previousSize;
    if (shouldDeferWebShrinkLayoutUpdate) {
      scheduleWebShrinkMeasurement(state, () => {
@@ -1916,12 +1950,29 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..81fdadeed0dedb1d57dfe979c9c40b7c
 -        if (rect) {
 -          layout = { height: rect.height, width: rect.width };
 +        if (element) {
-+          // Match ResizeObserver's layout box even when an ancestor is transformed.
-+          layout = { height: element.offsetHeight, width: element.offsetWidth };
++          layout = measureContainerLayoutSize(element);
          }
          applyLayout();
        }
-@@ -5651,6 +5694,18 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+@@ -5432,6 +5474,17 @@ function processContainerLayout({ containerId, ctx, rectangle, ref, state }) {
+     }
+   }
+ }
++// Measure the layout box when a transform changes the rendered rectangle.
++function measureContainerLayoutSize(element) {
++  const rect = element.getBoundingClientRect();
++  if (Math.abs(rect.width - element.offsetWidth) < 1 && Math.abs(rect.height - element.offsetHeight) < 1) {
++    return { height: rect.height, width: rect.width };
++  }
++  const style = getComputedStyle(element);
++  const height = Number.parseFloat(style.height);
++  const width = Number.parseFloat(style.width);
++  return Number.isFinite(height) && Number.isFinite(width) ? { height, width } : { height: rect.height, width: rect.width };
++}
+ function useContainerMeasurement({
+   containerId,
+   ctx,
+@@ -5651,6 +5704,18 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  });
  
  // src/utils/reordering.ts
@@ -1940,7 +1991,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..81fdadeed0dedb1d57dfe979c9c40b7c
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
-@@ -5690,9 +5745,9 @@ function sortDOMElements(container, indexByElement) {
+@@ -5690,9 +5755,9 @@ function sortDOMElements(container, indexByElement) {
          }
        }
        if (nextStableElement) {
@@ -1952,7 +2003,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..81fdadeed0dedb1d57dfe979c9c40b7c
        }
      }
    }
-@@ -5734,37 +5789,55 @@ function findLIS(arr) {
+@@ -5734,37 +5799,55 @@ function findLIS(arr) {
  }
  
  // src/hooks/useDOMOrder.ts
@@ -2034,7 +2085,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..81fdadeed0dedb1d57dfe979c9c40b7c
  }
  function useFreshDataTransitionVisibility(readyToRender, transitionEpoch) {
    const [completedTransitionEpoch, setCompletedTransitionEpoch] = React3.useState(transitionEpoch);
-@@ -6446,8 +6519,8 @@ function ScrollAdjust() {
+@@ -6446,8 +6529,8 @@ function ScrollAdjust() {
                window.getComputedStyle(contentNode)[axis.paddingEndProp]
              );
              const temporaryPaddingEnd = `${(currentPaddingEnd || 0) + pad}px`;
@@ -2045,7 +2096,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..81fdadeed0dedb1d57dfe979c9c40b7c
              scrollBy();
              if (resetPaddingRafRef.current !== void 0) {
 diff --git a/react.mjs b/react.mjs
-index 95465f2ab89ce41a10553f58af83618f7310e83c..d3e9ea553987c7165b01e06d9e78bb8465198e33 100644
+index 95465f2ab89ce41a10553f58af83618f7310e83c..c05afeae6f3d325edcefcc579850a31f96f61c94 100644
 --- a/react.mjs
 +++ b/react.mjs
 @@ -1887,6 +1887,10 @@ function updateScroll(ctx, newScroll, forceUpdate, options) {
@@ -2217,7 +2268,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..d3e9ea553987c7165b01e06d9e78bb84
      }
    }, [ctx, containerLayoutEpoch]);
    return children;
-@@ -5392,12 +5436,11 @@ function processContainerLayout({ containerId, ctx, rectangle, ref, state }) {
+@@ -5392,12 +5436,10 @@ function processContainerLayout({ containerId, ctx, rectangle, ref, state }) {
    const shouldDeferWebShrinkLayoutUpdate = !isInMVCPActiveMode(listState) && previousSize !== void 0 && size + 1 < previousSize;
    if (shouldDeferWebShrinkLayoutUpdate) {
      scheduleWebShrinkMeasurement(state, () => {
@@ -2228,12 +2279,29 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..d3e9ea553987c7165b01e06d9e78bb84
 -        if (rect) {
 -          layout = { height: rect.height, width: rect.width };
 +        if (element) {
-+          // Match ResizeObserver's layout box even when an ancestor is transformed.
-+          layout = { height: element.offsetHeight, width: element.offsetWidth };
++          layout = measureContainerLayoutSize(element);
          }
          applyLayout();
        }
-@@ -5630,6 +5673,18 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+@@ -5411,6 +5453,17 @@ function processContainerLayout({ containerId, ctx, rectangle, ref, state }) {
+     }
+   }
+ }
++// Measure the layout box when a transform changes the rendered rectangle.
++function measureContainerLayoutSize(element) {
++  const rect = element.getBoundingClientRect();
++  if (Math.abs(rect.width - element.offsetWidth) < 1 && Math.abs(rect.height - element.offsetHeight) < 1) {
++    return { height: rect.height, width: rect.width };
++  }
++  const style = getComputedStyle(element);
++  const height = Number.parseFloat(style.height);
++  const width = Number.parseFloat(style.width);
++  return Number.isFinite(height) && Number.isFinite(width) ? { height, width } : { height: rect.height, width: rect.width };
++}
+ function useContainerMeasurement({
+   containerId,
+   ctx,
+@@ -5630,6 +5683,18 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  });
  
  // src/utils/reordering.ts
@@ -2252,7 +2320,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..d3e9ea553987c7165b01e06d9e78bb84
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
-@@ -5669,9 +5724,9 @@ function sortDOMElements(container, indexByElement) {
+@@ -5669,9 +5734,9 @@ function sortDOMElements(container, indexByElement) {
          }
        }
        if (nextStableElement) {
@@ -2264,7 +2332,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..d3e9ea553987c7165b01e06d9e78bb84
        }
      }
    }
-@@ -5713,37 +5768,55 @@ function findLIS(arr) {
+@@ -5713,37 +5778,55 @@ function findLIS(arr) {
  }
  
  // src/hooks/useDOMOrder.ts
@@ -2346,7 +2414,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..d3e9ea553987c7165b01e06d9e78bb84
  }
  function useFreshDataTransitionVisibility(readyToRender, transitionEpoch) {
    const [completedTransitionEpoch, setCompletedTransitionEpoch] = useState(transitionEpoch);
-@@ -6425,8 +6498,8 @@ function ScrollAdjust() {
+@@ -6425,8 +6508,8 @@ function ScrollAdjust() {
                window.getComputedStyle(contentNode)[axis.paddingEndProp]
              );
              const temporaryPaddingEnd = `${(currentPaddingEnd || 0) + pad}px`;
