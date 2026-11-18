@@ -46,12 +46,12 @@ private enum ComposerEnterBehavior: String {
 }
 
 private final class ComposerTextAttachment: NSTextAttachment {
-  let source: String
-  let label: String
+  let token: ComposerTokenPayload
+  var source: String { token.source }
+  var label: String { token.label }
 
-  init(source: String, label: String, image: UIImage, size: CGSize, baselineOffset: CGFloat) {
-    self.source = source
-    self.label = label
+  init(token: ComposerTokenPayload, image: UIImage, size: CGSize, baselineOffset: CGFloat) {
+    self.token = token
     super.init(data: nil, ofType: nil)
     self.image = image
     bounds = CGRect(x: 0, y: baselineOffset, width: size.width, height: size.height)
@@ -88,7 +88,6 @@ private final class ComposerTextView: UITextView {
   var onPasteContext: (([String: String]) -> Void)?
   var onPasteText: ((String, NSRange) -> Void)?
   var clipboardFragment = ""
-  var onAttributedMutation: (() -> Void)?
   var onSubmit: ((Bool) -> Void)?
   var isReadOnly = false
   var textPasteThresholdBytes = 0
@@ -338,9 +337,7 @@ private final class ComposerTextView: UITextView {
       return super.cut(sender)
     }
     copy(sender)
-    textStorage.replaceCharacters(in: selectedRange, with: "")
-    selectedRange = NSRange(location: selectedRange.location, length: 0)
-    onAttributedMutation?()
+    replaceDisplayRange(selectedRange)
   }
 
   func serializedText() -> String {
@@ -467,7 +464,6 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
   private var lastContentSize = CGSize.zero
   private var iconImages: [String: UIImage] = [:]
   private var pendingIconUris = Set<String>()
-  private var tokensNeedRebuild = false
   private var chipsNeedMeasuredWidth = false
   private var hasDeferredChipRedraw = false
   private var hasDeferredForcedRebuild = false
@@ -523,9 +519,6 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
         "text": text,
         "selection": ["start": selection.start, "end": selection.end],
       ])
-    }
-    textView.onAttributedMutation = { [weak self] in
-      self?.emitTextChange()
     }
     textView.onSubmit = { [weak self] alternate in
       self?.onComposerSubmit(["alternate": alternate])
@@ -680,15 +673,8 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       return
     }
     if tokensJson != document.tokensJson {
-      let nextTokens = decode([ComposerTokenPayload].self, from: document.tokensJson) ?? []
-      // Typing before a chip only shifts its offsets, and UIKit already moved the attachment.
-      // Rebuilding for that would reset the keyboard on every keystroke; a chip that was
-      // inserted or removed still rebuilds through documentMatchesExpectedTokens.
-      if !nextTokens.elementsEqual(tokens, by: { $0.rendersLike($1) }) {
-        tokensNeedRebuild = true
-      }
       tokensJson = document.tokensJson
-      tokens = nextTokens
+      tokens = decode([ComposerTokenPayload].self, from: document.tokensJson) ?? []
     }
     let previousSelection = sourceSelection()
     value = document.value
@@ -697,12 +683,9 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       requestedSelection = selection
       requestedSelectionValue = document.value
     }
-    applyControlledDocument(force: tokensNeedRebuild)
+    applyControlledDocument()
     applyRequestedSelection()
     cancelFocusingTapRestoreIfSelectionMoved(from: previousSelection)
-    if tokensMatchCurrentValue() {
-      tokensNeedRebuild = false
-    }
   }
 
   func setThemeJson(_ themeJson: String) {
@@ -1010,8 +993,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       style: ChipStyle(color: color, font: chipFont)
     )
     let attachment = ComposerTextAttachment(
-      source: token.source,
-      label: token.label,
+      token: token,
       image: image,
       size: image.size,
       baselineOffset: chipFont.ascender - image.size.height
@@ -1334,30 +1316,31 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     return try? JSONDecoder().decode(type, from: data)
   }
 
-  private func tokensMatchCurrentValue() -> Bool {
-    let source = value as NSString
-    return tokens.allSatisfy {
-      $0.start >= 0 &&
-        $0.end > $0.start &&
-        $0.end <= source.length &&
-        source.substring(with: NSRange(location: $0.start, length: $0.end - $0.start)) == $0.source
-    }
-  }
-
   private func documentMatchesExpectedTokens() -> Bool {
-    // Offsets matter too: a token can move between identical strings while the rendered
-    // attachment stays where it was.
-    let expectedChips = renderedTokens().map { "\($0.start):\($0.source)" }
-    var renderedChips: [String] = []
-    textView.attributedText.enumerateAttribute(
+    let expected = renderedTokens()
+    var chipIndex = 0
+    var sourceOffset = 0
+    var matches = true
+    // Undo restores attachments directly. Comparing the displayed chips keeps UIKit's redo stack.
+    textView.textStorage.enumerateAttribute(
       .attachment,
-      in: NSRange(location: 0, length: textView.attributedText.length)
-    ) { value, range, _ in
-      if let attachment = value as? ComposerTextAttachment {
-        renderedChips.append("\(textView.sourceOffset(forDisplayOffset: range.location)):\(attachment.source)")
+      in: NSRange(location: 0, length: textView.textStorage.length)
+    ) { value, range, stop in
+      guard let attachment = value as? ComposerTextAttachment else {
+        sourceOffset += range.length
+        return
       }
+      guard chipIndex < expected.count,
+            expected[chipIndex].start == sourceOffset,
+            expected[chipIndex].rendersLike(attachment.token) else {
+        matches = false
+        stop.pointee = true
+        return
+      }
+      chipIndex += 1
+      sourceOffset += attachment.source.utf16.count
     }
-    return renderedChips == expectedChips
+    return matches && chipIndex == expected.count
   }
 }
 

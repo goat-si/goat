@@ -74,6 +74,33 @@ do {
   print("Message field accessibility label passed")
 }
 
+do {
+  let original = "hi @README.md ok"
+  let chips = mention("Readme", at: 3)
+  let view = makeEditor(original, tokensJson: chips)
+  view.editor.selectedRange = NSRange(location: 3, length: 2)
+  view.editor.cut(nil)
+  check(view.text == "hi ok", "Cut did not remove the selection")
+  check(view.editor.selectedRange == NSRange(location: 3, length: 0), "Cut did not collapse the selection")
+  check(view.onComposerChange.payloads.last?["value"] as? String == "hi ok", "Cut did not emit an edit")
+  view.apply("hi ok", tokensJson: "[]", echo: true)
+
+  view.editor.undoManager?.undo()
+  check(view.text == original, "Undo did not restore cut text and chip")
+  let restored = view.chip(at: 3)
+  let selection = view.editor.selectedRange
+  check(restored?.label == "Readme", "Undo discarded chip metadata")
+  check(view.onComposerChange.payloads.last?["value"] as? String == original, "Undo did not emit an edit")
+  view.apply(original, tokensJson: chips, echo: true)
+  check(view.chip(at: 3) === restored, "The Undo echo replaced the restored chip")
+  check(view.editor.selectedRange == selection, "The Undo echo moved the selection")
+
+  view.editor.undoManager?.redo()
+  check(view.text == "hi ok", "Redo did not cut again")
+  check(view.onComposerChange.payloads.last?["value"] as? String == "hi ok", "Redo did not emit an edit")
+  print("Cut, Undo and Redo with controlled echoes passed")
+}
+
 // Two frames: compare original data so a still image cannot satisfy this check.
 private let gifBytes = Data(base64Encoded: "R0lGODlhAQABAIEAAP8AAAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQACgAAACwAAAAAAQABAAAIBAABBAQAIfkEAAoAAAAsAAAAAAEAAQCBAP8AAAAAAAAAAAAACAQAAQQEADs=")!
 private let gifProvider = NSItemProvider()
