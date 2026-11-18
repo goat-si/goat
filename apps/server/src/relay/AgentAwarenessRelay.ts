@@ -17,6 +17,7 @@ import {
 import {
   projectThreadAwarenessV2,
   type SubagentRequestAwareness,
+  turnItemCanChangeUserWait,
 } from "@goat/shared/agentAwareness";
 import { turnItemUpdateCanEndBackgroundWork } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import { makeDrainableWorker } from "@goat/shared/DrainableWorker";
@@ -129,7 +130,11 @@ function shouldPublishAgentAwarenessEvent(
     case "provider-session.detached":
     case "provider-turn.updated":
     case "turn-item.updated":
-      return isTurnItemPayload(event.payload) && turnItemUpdateCanEndBackgroundWork(event.payload);
+      return (
+        isTurnItemPayload(event.payload) &&
+        (turnItemUpdateCanEndBackgroundWork(event.payload) ||
+          turnItemCanChangeUserWait(event.payload))
+      );
     case "message.updated":
     case "plan.updated":
     case "checkpoint-scope.created":

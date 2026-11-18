@@ -83,6 +83,33 @@ describe("mobile model options", () => {
     },
   );
 
+  it.each(["pi", "acpRegistry"])(
+    "keeps a saved %s model and traits during a catalog gap",
+    (kind) => {
+      const driver = ProviderDriverKind.make(kind);
+      const instanceId = ProviderInstanceId.make(`${kind}_team`);
+      const config = {
+        providers: [
+          {
+            instanceId,
+            driver,
+            enabled: true,
+            installed: true,
+            auth: { status: "authenticated" },
+            models: [],
+          },
+        ],
+      } as unknown as ServerConfig;
+      const selection: ModelSelection = {
+        instanceId,
+        model: "vendor/chosen-model",
+        options: [{ id: "effort", value: "high" }],
+      };
+      expect(buildModelOptions(config, selection, instanceId, null)).toMatchObject([{ selection }]);
+      expect(resolveSelectableModelSelection(config, selection, null)).toEqual(selection);
+    },
+  );
+
   it("keeps full labels and routing while deriving compact model labels", () => {
     const config = {
       providers: [

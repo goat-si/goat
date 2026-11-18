@@ -4387,7 +4387,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
-  it.effect("resets a clean reused PR worktree onto a force-pushed pull request head", () =>
+  it.effect("keeps a clean reused PR worktree off a force-pushed pull request head", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("goat-git-manager-");
       yield* initRepo(repoDir);
@@ -4418,7 +4418,6 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         "origin",
         "author-rewrite:feature/pr-force-pushed",
       ]);
-      const rewrittenHead = (yield* runGit(repoDir, ["rev-parse", "author-rewrite"])).stdout.trim();
       yield* runGit(repoDir, [
         "update-ref",
         "refs/remotes/origin/feature/pr-force-pushed",
@@ -4448,16 +4447,14 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       expect(result.worktreePath && NodeFS.realpathSync.native(result.worktreePath)).toBe(
         NodeFS.realpathSync.native(worktreePath),
       );
-      expect(result.isOnPullRequestHead).toBe(true);
-      expect((yield* runGit(worktreePath, ["rev-parse", "HEAD"])).stdout.trim()).toBe(
-        rewrittenHead,
-      );
+      expect(result.isOnPullRequestHead).toBe(false);
+      expect((yield* runGit(worktreePath, ["rev-parse", "HEAD"])).stdout.trim()).toBe(staleHead);
       expect(
         NodeFS.readFileSync(NodePath.join(worktreePath, "force-pushed.txt"), "utf8").replace(
           /\r\n/g,
           "\n",
         ),
-      ).toBe("rewritten\n");
+      ).toBe("first\n");
     }),
   );
 

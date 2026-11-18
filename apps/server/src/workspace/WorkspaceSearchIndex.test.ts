@@ -265,7 +265,10 @@ it.effect.each([
         const result = yield* index.search("report", 50, "file");
         expect(result.entries).toEqual([{ kind: "file", path: visible }]);
       }),
-    ).pipe(Effect.provideService(HostProcess.Platform, platform)),
+    ).pipe(
+      Effect.provideService(HostProcess.Platform, platform),
+      Effect.provide(NodeServices.layer),
+    ),
 );
 
 it.effect("searches a plain directory when Git is unavailable", () =>

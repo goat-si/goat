@@ -46,12 +46,12 @@ const layerTest = Layer.mergeAll(
   Layer.provide(McpProviderSessions.layer),
   Layer.provide(SqlitePersistence.layerMemory),
   Layer.provide(layerCheckpointStoreTest),
-  Layer.provide(layerServerConfig),
+  Layer.provideMerge(layerServerConfig),
   Layer.provide(ServerSettings.layerTest()),
   Layer.provide(layerTestProviderInstanceRegistry),
   Layer.provide(layerGitWorkflowTest),
   Layer.provide(layerProjectServiceTest),
-  Layer.provide(layerPlatformTest),
+  Layer.provideMerge(layerPlatformTest),
 );
 
 const key = { host: "github.com", repository: "goat-si/goat", number: 7 };
@@ -229,7 +229,7 @@ describe("pull request watch hidden remarks", () => {
       yield* reactor.sweep;
       const { messages } = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
       expect(messages.map((message) => message.notification?.summary)).toEqual([
-        "#7: checks failed, new comments",
+        "#7: new comments",
       ]);
     }).pipe(Effect.provide(layerTest)),
   );

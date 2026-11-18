@@ -6,7 +6,7 @@ type DisplayBounds = DesktopWindowBounds.DisplayBounds;
 export const MIN_MAIN_WINDOW_WIDTH = DesktopAppSettings.MIN_MAIN_WINDOW_SIZE.width;
 export const MIN_MAIN_WINDOW_HEIGHT = DesktopAppSettings.MIN_MAIN_WINDOW_SIZE.height;
 
-export function getOverlapArea(left: DisplayBounds, right: DisplayBounds): number {
+function getOverlapArea(left: DisplayBounds, right: DisplayBounds): number {
   const overlapWidth = Math.max(
     0,
     Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x),
@@ -33,7 +33,7 @@ function getAxisGap(
   return 0;
 }
 
-export function getDisplayDistanceSquared(
+function getDisplayDistanceSquared(
   windowBounds: DesktopAppSettings.DesktopWindowBounds,
   displayBounds: DisplayBounds,
 ): number {
@@ -53,7 +53,7 @@ function clampCoordinate(value: number, start: number, available: number, size: 
   return Math.min(Math.max(Math.round(value), minimum), maximum);
 }
 
-export function clampWindowBoundsToDisplay(
+function clampWindowBoundsToDisplay(
   windowBounds: DesktopAppSettings.DesktopWindowBounds,
   displayBounds: DisplayBounds,
 ): DesktopAppSettings.DesktopWindowBounds {
@@ -115,4 +115,47 @@ export function normalBoundsOnWindowDisplay(
     width,
     height,
   };
+}
+
+function selectRecoveryDisplay(
+  windowBounds: DesktopAppSettings.DesktopWindowBounds,
+  first: DisplayBounds,
+  rest: readonly DisplayBounds[],
+): DisplayBounds {
+  let selected = first;
+  let bestOverlapArea = getOverlapArea(windowBounds, selected);
+  let bestDistanceSquared = getDisplayDistanceSquared(windowBounds, selected);
+
+  for (const candidate of rest) {
+    const overlapArea = getOverlapArea(windowBounds, candidate);
+    const distanceSquared = getDisplayDistanceSquared(windowBounds, candidate);
+    if (
+      overlapArea > bestOverlapArea ||
+      (overlapArea === bestOverlapArea && distanceSquared < bestDistanceSquared)
+    ) {
+      selected = candidate;
+      bestOverlapArea = overlapArea;
+      bestDistanceSquared = distanceSquared;
+    }
+  }
+
+  return selected;
+}
+
+export function resolveInitialMainWindowBounds(
+  persistedBounds: DesktopAppSettings.DesktopWindowBounds | null,
+  displays: readonly DisplayBounds[],
+): DesktopAppSettings.DesktopWindowBounds | typeof DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE {
+  const validDisplays = displays.filter((display) => display.width > 0 && display.height > 0);
+  const [first, ...rest] = validDisplays;
+  if (persistedBounds === null || first === undefined) {
+    return DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE;
+  }
+  if (DesktopWindowBounds.fitsWithinDisplays(persistedBounds, validDisplays)) {
+    return persistedBounds;
+  }
+  return clampWindowBoundsToDisplay(
+    persistedBounds,
+    selectRecoveryDisplay(persistedBounds, first, rest),
+  );
 }
