@@ -29,7 +29,7 @@ describe("SSH verbose diagnostics", () => {
       "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\n",
       "Only remove the existing key if you expected it to change",
     ],
-  ])("gives recovery guidance for a failed host key check (%s)", ([warning, guidance]) => {
+  ] as const)("gives recovery guidance for a failed host key check (%s)", ([warning, guidance]) => {
     const stderr = warning + "Host key verification failed.\n";
     const spawner = ChildProcessSpawner.make(() =>
       Effect.succeed({

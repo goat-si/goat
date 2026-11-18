@@ -38,7 +38,7 @@ export const makeEnsureFlightFixture = Effect.gen(function* () {
     launchFails: false,
     holdPairing: false,
     holdUpload: true,
-    configuredPort: uploadTarget.port,
+    configuredPort: uploadTarget.port as number,
   };
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.gen(function* () {
