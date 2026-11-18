@@ -24,12 +24,12 @@ const buildWslRuntimeParentScript = (safeRuntimeId: string) => [
 ];
 
 export const buildWslRuntimeInstallScript = (
-  linuxArchivePath: string,
+  linuxArchivePath: string | null,
   runtimeId: string,
   archiveSha256: string,
 ): string => {
   const safeRuntimeId = sanitizeWslRuntimeId(runtimeId);
-  return [
+  const readyCheck = [
     "set -eu",
     ...buildWslRuntimeParentScript(safeRuntimeId),
     `runtime_root="$runtime_parent/${safeRuntimeId}"`,
@@ -69,6 +69,16 @@ export const buildWslRuntimeInstallScript = (
     `  printf 'runtimeRoot:%s\\n' "$runtime_root"`,
     "  exit 0",
     "fi",
+  ];
+  if (linuxArchivePath === null) {
+    return [
+      ...readyCheck,
+      `archive_stage=$(mktemp -d "$runtime_parent/.${safeRuntimeId}.tmp.XXXXXX")`,
+      `printf 'archiveStage:%s\\n' "$archive_stage"`,
+    ].join("\n");
+  }
+  return [
+    ...readyCheck,
     `ready_marker="$runtime_root/${WSL_RUNTIME_READY_MARKER}"`,
     `archive_sha=$(sha256sum ${shellQuote(linuxArchivePath)} | cut -d ' ' -f 1)`,
     `if [ "$archive_sha" != ${shellQuote(archiveSha256)} ]; then`,
@@ -190,10 +200,13 @@ export const buildWslRuntimeInvalidateScript = (runtimeId: string): string => {
   ].join("\n");
 };
 
-export const parseWslRuntimeRoot = (stdout: string): string | null => {
-  const prefix = "runtimeRoot:";
+export const parseAbsolutePathField = (stdout: string, field: string): string | null => {
+  const prefix = `${field}:`;
   const line = stdout.split("\n").find((candidate) => candidate.startsWith(prefix));
   if (line === undefined) return null;
-  const runtimeRoot = line.slice(prefix.length).replace(/\r$/, "");
-  return runtimeRoot.startsWith("/") ? runtimeRoot : null;
+  const value = line.slice(prefix.length).replace(/\r$/, "");
+  return value.startsWith("/") ? value : null;
 };
+
+export const parseWslRuntimeRoot = (stdout: string): string | null =>
+  parseAbsolutePathField(stdout, "runtimeRoot");

@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - the executed suite runs the generated install script through a real POSIX shell.
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it } from "@effect/vitest";
 import { afterAll, expect } from "vite-plus/test";
 import * as NodeChildProcess from "node:child_process";
@@ -12,7 +13,18 @@ import {
   LEGACY_WSL_RUNTIME_SELECTED_MARKER,
 } from "@goat/contracts/legacyT3Names";
 
-import { buildWslRuntimeProbeScript, parseResolvedPath } from "./DesktopWslEnvironment.ts";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import {
+  DesktopWslEnvironment,
+  layer as layerWsl,
+  buildWslRuntimeProbeScript,
+  parseResolvedPath,
+} from "./DesktopWslEnvironment.ts";
 import {
   buildWslRuntimeInstallScript,
   buildWslRuntimeInvalidateScript,
@@ -563,3 +575,83 @@ describe("parseResolvedPath", () => {
     );
   });
 });
+
+it.live("streams the archive into the selected distro when wslpath cannot translate it", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-wsl-archive-" });
+    const archive = path.join(root, "host.tar.gz");
+    const stage = path.join(root, "stage");
+    const linuxStage = "/home/goat/archive-stage";
+    const linuxCache = "/home/goat/cache";
+    const payload = Uint8Array.of(0, 1, 127, 128, 255);
+    yield* fs.writeFile(archive, payload);
+    const fakeWsl = Layer.effect(
+      ChildProcessSpawner.ChildProcessSpawner,
+      Effect.map(ChildProcessSpawner.ChildProcessSpawner, (local) =>
+        ChildProcessSpawner.make((command) => {
+          if (!ChildProcess.isStandardCommand(command)) return local.spawn(command);
+          const [flag, distro, , utility, ...args] = command.args;
+          expect([command.command, flag, distro]).toEqual(["wsl.exe", "-d", "Ubuntu"]);
+          if (utility === "wslpath") {
+            return local.spawn(ChildProcess.make(process.execPath, ["-e", "process.exit(1)"]));
+          }
+          if (utility === "dd") expect(args[0]).toBe(`of=${linuxStage}/runtime.tar.gz`);
+          return local.spawn(
+            ChildProcess.make(
+              process.execPath,
+              [
+                "-e",
+                `
+                const fs = require("node:fs");
+                const path = require("node:path");
+                const [utility, stage, archive, linuxStage, linuxCache] = process.argv.slice(1);
+                const input = fs.readFileSync(0);
+                const stagedArchive = path.join(stage, "runtime.tar.gz");
+                if (utility === "dd") fs.writeFileSync(stagedArchive, input);
+                else if (input.includes("archiveStage:")) {
+                  fs.mkdirSync(stage);
+                  console.log("archiveStage:" + linuxStage);
+                } else if (input.includes("archive_sha")) {
+                  if (!input.includes("a".repeat(64)) ||
+                      !fs.readFileSync(stagedArchive).equals(fs.readFileSync(archive))) process.exit(1);
+                  console.log("runtimeRoot:" + linuxCache);
+                } else if (input.toString().startsWith("rm -rf ")) {
+                  fs.rmSync(stage, { recursive: true });
+                } else process.exit(1);
+              `,
+                String(utility),
+                stage,
+                archive,
+                linuxStage,
+                linuxCache,
+              ],
+              command.options,
+            ),
+          );
+        }),
+      ),
+    );
+    const result = yield* Effect.flatMap(DesktopWslEnvironment, (wsl) =>
+      wsl.prepareRuntime("Ubuntu", {
+        windowsPath: archive,
+        runtimeId: "goat-test",
+        sha256: "a".repeat(64),
+      }),
+    ).pipe(
+      Effect.provide(
+        layerWsl.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              fakeWsl,
+              Layer.mock(DesktopEnvironment.DesktopEnvironment, { platform: "win32", path }),
+            ),
+          ),
+        ),
+      ),
+    );
+    expect(result).toEqual({ ok: true, linuxAppRoot: linuxCache });
+    expect(yield* fs.exists(stage)).toBe(false);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
