@@ -22,7 +22,6 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Context from "effect/Context";
 import * as Stream from "effect/Stream";
-import * as Tracer from "effect/Tracer";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as Client from "effect/sql/SqlClient";
 import type { Borrower, Connection } from "effect/sql/SqlConnection";
@@ -30,7 +29,14 @@ import { SqlError } from "effect/sql/SqlError";
 import * as Statement from "effect/sql/Statement";
 import { satisfiesSemverRange } from "./semver.ts";
 import { makeReaderPool, type ReaderSlot } from "./nodeSqliteReaderPool.ts";
-import { connectionOwner, measureWriterSql, recordReaderSql } from "./slowSqlOperations.ts";
+import {
+  annotateAcquired,
+  connectionOwner,
+  measureWriterSql,
+  recordReaderSql,
+  type Acquired,
+  type ConnectionOwner,
+} from "./slowSqlOperations.ts";
 export { recentSlowSql } from "./slowSqlOperations.ts";
 
 import { readerWorkerSource } from "./sqliteWorkerSources.ts";
@@ -78,34 +84,6 @@ import { admissionSqlError, makeClientReaderAdmission } from "./readerAdmission.
 export { backgroundReads, failFastReaderAdmission } from "./readerAdmission.ts";
 export { onWriter, readOnly } from "./sqliteReadRouting.ts";
 import { ReadOnly } from "./sqliteReadRouting.ts";
-
-interface Acquired {
-  readonly connection: "writer" | "reader";
-  readonly lockWaitMs: number;
-}
-
-type ConnectionOwner = ReturnType<typeof connectionOwner>;
-
-const annotateAcquired = (
-  fiber: Fiber.Fiber<unknown, unknown>,
-  acquired: Acquired | undefined,
-  ownerAtWaitStart?: ConnectionOwner,
-) => {
-  const span = Context.getOrUndefined(fiber.context, Tracer.ParentSpan);
-  if (span?._tag !== "Span" || acquired === undefined) return;
-  span.attribute("db.connection", acquired.connection);
-  span.attribute("db.lock_wait_ms", acquired.lockWaitMs);
-  if (ownerAtWaitStart !== undefined) {
-    span.attribute("db.lock_owner_at_start.fiber_id", ownerAtWaitStart.fiberId);
-    span.attribute("db.lock_owner_at_start.name", ownerAtWaitStart.name);
-    if (ownerAtWaitStart.traceId !== undefined) {
-      span.attribute("db.lock_owner_at_start.trace_id", ownerAtWaitStart.traceId);
-    }
-    if (ownerAtWaitStart.spanId !== undefined) {
-      span.attribute("db.lock_owner_at_start.span_id", ownerAtWaitStart.spanId);
-    }
-  }
-};
 
 const TransactionAcquire = Context.Reference<
   | {
