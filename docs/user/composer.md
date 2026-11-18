@@ -200,7 +200,8 @@ the conversation to before that message. Choose **Revert and keep changes** to
 leave workspace files as they are, or **Revert files too** to put the workspace back
 to its checkpoint from before that message. That also undoes edits you made yourself.
 Files you hid from Git with `git update-index --skip-worktree` or `--assume-unchanged` are
-restored too.
+restored too. Afterward, such a file shows as modified again if its restored content differs
+from your last commit.
 File restore is only offered for threads running in a worktree, and it is
 refused when another thread or agent session also uses that directory, a folder
 inside it, or a folder that contains it, since
