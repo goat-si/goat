@@ -378,8 +378,14 @@ function PullRequestCodeTab({
   );
   const firstPage = loadedSlices[0]?.source ?? currentFirstPage;
   const revision = firstPage?.revision;
+  const staleRevision = revision !== undefined && revision.headSha !== detail.headSha;
   const withheldReadable =
-    firstPage?.withheldFilesReadable === true && (commit !== null || revision !== undefined);
+    firstPage?.withheldFilesReadable === true &&
+    (commit !== null || (revision !== undefined && !staleRevision));
+  if (staleRevision && (draft !== null || selectedLines !== null)) {
+    setDraft(null);
+    setSelectedLines(null);
+  }
   const withheld = useWithheldPullRequestFiles(
     { environmentId, input: { ...reference, ...(commit === null ? { revision } : { commit }) } },
     withheldReadable,
@@ -391,8 +397,7 @@ function PullRequestCodeTab({
     if (appliedRefreshToken.current === refreshToken) return;
     appliedRefreshToken.current = refreshToken;
     setSliceState({ key: scopeKey, cursor: null, slices: NO_SLICES });
-    // An equal refetch keeps the answer's identity, so the emptied slices refill only if the
-    // applied page is forgotten too.
+    // An equal refetch keeps its identity, so clear the applied page with the slices.
     setAppliedPage(null);
     refreshFirstDiffPage();
     refreshFilesViewed();
@@ -425,11 +430,11 @@ function PullRequestCodeTab({
     reply: hostReview.reply && detail.viewerPermissions.comment,
     resolve: hostReview.resolve && detail.viewerPermissions.resolve,
   };
-  const canCommentOnLines = review.inlineComment && commit === null;
+  const canReviewCurrentDiff = commit === null && !staleRevision;
+  const canCommentOnLines = review.inlineComment && canReviewCurrentDiff;
   const rangeComments = hostReview.rangeComment === true;
-  // Agent context is local, so it does not require host comment permission.
   const canSelectLines =
-    commit === null && (review.inlineComment || onAddToAgentSelection !== undefined);
+    canReviewCurrentDiff && (review.inlineComment || onAddToAgentSelection !== undefined);
   const testFileCount = loadedFiles.filter((file) =>
     isTestChangedFile(resolveFileDiffPath(file)),
   ).length;

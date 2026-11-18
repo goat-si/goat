@@ -414,7 +414,10 @@ it("keeps a cached withheld page readable after a rollback without offering a fi
   mocks.freshWithheldAdvertisement = false;
   const container = document.createElement("div");
   container.className = "flex h-[700px] w-[900px]";
-  await using screen = await render(tab(0), { container });
+  await using screen = await render(
+    tab(0, null, null, { ...detail, headSha: mocks.withheldHeadSha }),
+    { container },
+  );
   await userEvent.click(screen.getByRole("button", { name: "Expand diff" }));
   await expect.element(screen.getByText("This file’s diff is too large to display.")).toBeVisible();
   await expect
@@ -428,13 +431,67 @@ it("retains a loaded immutable patch when the Code tab refreshes the same revisi
   mocks.withheldHeadSha = "d".repeat(40);
   const container = document.createElement("div");
   container.className = "flex h-[700px] w-[900px]";
-  await using screen = await render(tab(0), { container });
+  await using screen = await render(
+    tab(0, null, null, { ...detail, headSha: mocks.withheldHeadSha }),
+    { container },
+  );
   await userEvent.click(screen.getByRole("button", { name: "Expand diff" }));
   await userEvent.click(screen.getByRole("button", { name: "Load file diff" }));
   await expect.element(screen.getByText("beforePush()", { exact: true })).toBeVisible();
   const reads = mocks.withheldFileReads;
 
-  await screen.rerender(tab(1));
+  await screen.rerender(tab(1, null, null, { ...detail, headSha: mocks.withheldHeadSha }));
   await expect.element(screen.getByText("beforePush()", { exact: true })).toBeVisible();
   expect(mocks.withheldFileReads).toBe(reads);
+});
+
+it("stops review of withheld lines when detail advances before the diff page", async () => {
+  setup();
+  mocks.withheld = true;
+  const original = {
+    ...detail,
+    headSha: mocks.withheldHeadSha,
+    capabilities: {
+      ...detail.capabilities,
+      review: { ...detail.capabilities.review, inlineComment: true },
+    },
+    viewerPermissions: { ...detail.viewerPermissions, comment: true },
+  };
+  const pushed = { ...original, headSha: "b".repeat(40) };
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(tab(0, null, null, original), { container });
+  const load = screen.getByRole("button", { name: "Load file diff" });
+  const draft = screen.getByRole("textbox");
+  const oldLine = screen.getByText("beforePush()", { exact: true });
+  const renderedLineControl = (selector: string) =>
+    vi.waitFor(() => {
+      const control = container
+        .querySelector("diffs-container")
+        ?.shadowRoot?.querySelector<HTMLElement>(selector);
+      if (!control) throw new Error(`Missing diff control: ${selector}`);
+      return control;
+    });
+  const openDraft = async () => {
+    await userEvent.hover(
+      await renderedLineControl("[data-column-number][data-line-type='change-addition']"),
+    );
+    await userEvent.click(await renderedLineControl("[data-utility-button]"));
+    await expect.element(draft).toBeVisible();
+  };
+  await userEvent.click(screen.getByRole("button", { name: "Expand diff" }));
+  await userEvent.click(load);
+  await expect.element(oldLine).toBeVisible();
+  await openDraft();
+
+  await screen.rerender(tab(0, null, null, pushed));
+  await expect.element(oldLine).not.toBeInTheDocument();
+  await expect.element(draft).not.toBeInTheDocument();
+  await expect.element(load).not.toBeInTheDocument();
+
+  mocks.withheldHeadSha = pushed.headSha;
+  await screen.rerender(tab(1, null, null, pushed));
+  await userEvent.click(load);
+  await expect.element(screen.getByText("afterPush()", { exact: true })).toBeVisible();
+  await openDraft();
 });
