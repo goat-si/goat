@@ -499,6 +499,53 @@ describe("Codex GOAT authority reload (#1569)", () => {
       ).pipe(Effect.provide(layerAdapterTest)),
   );
 
+  // regression: a turn's reload resumed before the thread it unsubscribed finished closing
+  it.effect(
+    "waits for a reloaded thread to finish closing, then resumes it and starts the turn",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const f = fixture("authority-reload-closing");
+          const rotated = {
+            ...f.config,
+            providerSessionId: "credential-rotated",
+            authorizationHeader: "Bearer rotated",
+          };
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set(f.config);
+          f.start();
+          yield* f.turnStart(3, 1, false);
+          f.turnCompleted(1);
+          const params = f.threadParams(undefined, rotated);
+          const retry = f.reload(4, undefined, {
+            params,
+            terminals: true,
+            error: {
+              code: -32600,
+              message: `thread ${f.nativeThreadId} is closing; retry thread/resume after the thread is closed`,
+            },
+          });
+          f.entries.push({
+            type: "emit_inbound",
+            frame: { method: "thread/closed", params: { threadId: f.nativeThreadId } },
+          });
+          f.resume(retry, params);
+          yield* f.turnStart(retry + 1, 2, false);
+          f.turnCompleted(2);
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          yield* replay.terminal;
+          yield* sessions.set(rotated);
+          yield* replay.startTurn(2);
+          yield* replay.terminal;
+          assert.deepEqual(
+            replay.threadConfigs.map((config) => goatServer(config).http_headers.Authorization),
+            ["Bearer fixture-cua", "Bearer rotated", "Bearer rotated"],
+          );
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
   it.effect("records what a rollback load applies to a thread a failed reload dropped", () =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -1,3 +1,4 @@
+import { HUB_PROXY_VCS_BRANCH_HEADER } from "@goat/contracts";
 import { vi } from "vite-plus/test";
 import { HubProxyConnectionTarget } from "./model.ts";
 import { HubProxyConnectionProfile } from "./catalog.ts";
@@ -29,7 +30,12 @@ import {
   EMPTY_CONNECTION_CATALOG_DOCUMENT,
   putConnectionCredentialInCatalog,
 } from "../platform/storageDocument.ts";
-import { ConnectionTransientError, PrimaryConnectionTarget, SshConnectionTarget } from "./model.ts";
+import {
+  ConnectionBlockedError,
+  ConnectionTransientError,
+  PrimaryConnectionTarget,
+  SshConnectionTarget,
+} from "./model.ts";
 import {
   PullRequestRoutingPermissions,
   pullRequestRoutingConnectionKey,
@@ -45,6 +51,59 @@ import {
 } from "./resolver.testkit.ts";
 
 describe("ConnectionResolver", () => {
+  it.effect.each(["managed", "refused", "ordinary"] as const)(
+    "checks Pen admission before SSH preparation: %s",
+    (scenario) =>
+      Effect.gen(function* () {
+        const events: string[] = [];
+        const managed = scenario !== "ordinary";
+        const meshId = "a".repeat(26);
+        const nodeId = "b".repeat(26);
+        const connectionId = managed ? `ssh:pen:${meshId}:${nodeId}` : "ssh:ordinary";
+        const target = new SshConnectionTarget({
+          environmentId: ENVIRONMENT_ID,
+          label: "SSH",
+          connectionId,
+        });
+        const profile = new SshConnectionProfile({
+          connectionId,
+          environmentId: ENVIRONMENT_ID,
+          label: "SSH",
+          target: SSH_TARGET,
+        });
+        const layer = yield* makeDependencies({
+          admit: (owner) =>
+            Effect.gen(function* () {
+              events.push(`admit:${owner.meshId}:${owner.nodeId}`);
+              if (scenario === "refused")
+                return yield* new ConnectionBlockedError({
+                  reason: "configuration",
+                  detail: "refused",
+                });
+            }),
+          prepareSsh: (input) =>
+            Effect.sync(() => {
+              events.push("prepare");
+              expect(input.installation).toBe(managed ? "existing-only" : undefined);
+              expect(input.penNodeId).toBe(managed ? nodeId : undefined);
+              return {
+                bootstrap: { target: SSH_TARGET, ...ENDPOINT, pairingToken: null },
+                bearerToken: "token",
+              };
+            }),
+        });
+        const resolver = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layer));
+        const result = resolver.prepare(catalogEntry(target, Option.some(profile)));
+        if (scenario === "refused") {
+          expect(yield* Effect.flip(result)).toMatchObject({ detail: "refused" });
+          expect(events).toEqual([`admit:${meshId}:${nodeId}`]);
+        } else {
+          yield* result;
+          expect(events).toEqual(managed ? [`admit:${meshId}:${nodeId}`, "prepare"] : ["prepare"]);
+        }
+      }),
+  );
+
   it.effect.each(["compatible", "older-runtime", "restarted"] as const)(
     "uses verified SSH discovery for the protocol gate (%s)",
     (scenario) =>
@@ -525,6 +584,31 @@ describe("hub proxy preparation", () => {
     orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
     capabilities: {},
   };
+
+  it.effect.each([false, true])(
+    "keeps node and relay branch support separate (%s)",
+    (relaySupported) =>
+      Effect.gen(function* () {
+        const layer = yield* makeDependencies({
+          hubAuth: {
+            resolve: () =>
+              Effect.succeed({ httpBaseUrl: "https://hub.test/", authorization: null }),
+          },
+          fetch: ((url) =>
+            Promise.resolve(
+              String(url).includes("websocket-ticket")
+                ? Response.json({ ticket: "hub-ticket", expiresAt: "2026-10-20T00:00:00.000Z" })
+                : Response.json(
+                    { ...descriptor, capabilities: { vcsBranchStatus: true } },
+                    { headers: relaySupported ? { [HUB_PROXY_VCS_BRANCH_HEADER]: "1" } : {} },
+                  ),
+            )) satisfies typeof fetch,
+        });
+        const resolver = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layer));
+        const prepared = yield* resolver.prepare(catalogEntry(target, Option.some(profile)));
+        expect(prepared.hubVcsBranchSupported).toBe(relaySupported);
+      }),
+  );
 
   it.effect.each([null, { _tag: "Bearer" as const, token: "hub-token" }])(
     "authenticates the descriptor and ticket exactly once, reuses the descriptor and preserves the node prefix (%j)",

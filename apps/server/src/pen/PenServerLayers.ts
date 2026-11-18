@@ -1,6 +1,7 @@
 import * as Layer from "effect/Layer";
 
 import * as PenEnablement from "./PenEnablement.ts";
+import * as PenMembership from "./PenMembershipLayers.ts";
 import { layerPenRouteGate, layerPenSessionRoute } from "./PenHttp.ts";
 import * as PenRegistrar from "./PenRegistrar.ts";
 import * as PenRuntime from "./PenRuntime.ts";
@@ -17,3 +18,6 @@ export const layer = Layer.mergeAll(layerPenRouteGate, layerPenSessionRoute, Pen
 );
 
 export { layerMainHttpServer, MainHttpServer } from "./PenRuntime.ts";
+
+/** What Pen adds to a server: the target above, and the membership followers beside it. */
+export const layerWithMembership = Layer.merge(layer, PenMembership.layer);

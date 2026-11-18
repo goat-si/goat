@@ -1,5 +1,6 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import type * as CodexClient from "effect-codex-app-server/client";
 
 const MAX_CLOSINGS = 256;
 
@@ -29,5 +30,15 @@ export function makeCodexThreadClosings() {
     yield* Deferred.await(closing).pipe(Effect.timeoutOption("10 seconds"));
     if (pending.get(threadId) === closing) pending.delete(threadId);
   });
-  return { begin, close, wait };
+  // Codex refuses thread/resume while an unsubscribed thread is closing; a resume waits for it.
+  const unsubscribe = Effect.fn("CodexThreadClosings.unsubscribe")(function* (
+    client: CodexClient.CodexAppServerClient["Service"],
+    threadId: string,
+  ) {
+    yield* begin(threadId);
+    yield* client
+      .request("thread/unsubscribe", { threadId })
+      .pipe(Effect.onError(() => close(threadId)));
+  });
+  return { begin, close, wait, unsubscribe };
 }

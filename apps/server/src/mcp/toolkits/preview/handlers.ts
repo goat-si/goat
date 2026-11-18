@@ -79,6 +79,7 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   input: unknown,
   timeoutMs?: number,
   tabId?: PreviewTabId,
+  measureSnapshotFrame = false,
 ): Effect.fn.Return<
   { result: A; safety?: ActionOutcomeSafety; toolIcon?: ToolActivityIcon },
   import("@goat/contracts").PreviewAutomationError | OrchestratorMcpFailure,
@@ -110,6 +111,7 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
       runId,
       operation,
       input,
+      ...(measureSnapshotFrame ? { measureSnapshotFrame } : {}),
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
       ...(tabId === undefined ? {} : { tabId }),
     })
@@ -241,9 +243,10 @@ const invokeTargeted = <A extends object>(
     readonly [key: string]: unknown;
   },
   timeoutMs?: number,
+  measureSnapshotFrame = false,
 ) => {
   const { tabId, ...operationInput } = input;
-  return invoke<A>(operation, operationInput, timeoutMs, tabId).pipe(
+  return invoke<A>(operation, operationInput, timeoutMs, tabId, measureSnapshotFrame).pipe(
     Effect.flatMap(({ result, toolIcon, safety }) =>
       browserGuide(operation, result).pipe(
         Effect.map((guide) => ({
@@ -429,14 +432,14 @@ const handlers = {
   ),
   preview_snapshot: McpToolAccess.readsAsCaller((input) => {
     const { includeImage, save, ...operationInput } = input ?? {};
-    // Nothing shows or saves the image, so the browser skips the capture (L4).
     const captureImage = includeImage === true || save === true;
     // A saved file is for people, so it keeps the resolution the agent's image is capped below.
-    return invokeTargeted<PreviewAutomationSnapshot>("snapshot", {
-      ...operationInput,
-      captureImage,
-      ...(save === true ? { fullScreenshot: true } : {}),
-    });
+    return invokeTargeted<PreviewAutomationSnapshot>(
+      "snapshot",
+      { ...operationInput, captureImage, ...(save === true ? { fullScreenshot: true } : {}) },
+      undefined,
+      !captureImage,
+    );
   }),
   preview_logs: McpToolAccess.readsAsCaller((input) =>
     invokeTargeted<PreviewAutomationLogs>("logs", input),

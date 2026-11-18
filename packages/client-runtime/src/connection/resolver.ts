@@ -1,5 +1,9 @@
+import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { openHubProxySocket } from "./hubProxySocket.ts";
-import { ExecutionEnvironmentDescriptor as DescriptorSchema } from "@goat/contracts";
+import {
+  ExecutionEnvironmentDescriptor as DescriptorSchema,
+  HUB_PROXY_VCS_BRANCH_HEADER,
+} from "@goat/contracts";
 import { HubProxyAuthSource } from "./hubProxyAuthSource.ts";
 import { requestHubProxyJson } from "./hubProxyHttp.ts";
 import type {
@@ -54,7 +58,8 @@ import {
   appendOrchestrationProtocol,
   orchestrationProtocolCompatibilityError,
 } from "./compatibility.ts";
-import { credentialConnectionId } from "./routes.ts";
+import { credentialConnectionId, penRouteOwner } from "./routes.ts";
+import { PenMembership } from "./penMembership.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 import { withSshConnectionTiming } from "./sshTiming.ts";
 
@@ -228,6 +233,7 @@ const makeRelayBroker = Effect.fn("clientRuntime.connection.broker.makeRelay")(f
 const makeSshBroker = Effect.fn("clientRuntime.connection.broker.makeSsh")(function* () {
   const profiles = yield* ConnectionProfileStore.ConnectionProfileStore;
   const credentials = yield* ConnectionCredentialStore.ConnectionCredentialStore;
+  const penMembership = yield* PenMembership;
   const ssh = yield* ClientCapabilities.SshEnvironmentGateway;
   const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
 
@@ -274,8 +280,13 @@ const makeSshBroker = Effect.fn("clientRuntime.connection.broker.makeSsh")(funct
             : { verifiedSshEndpoint: prepared.verifiedEndpoint }),
         })
         .pipe(withSshConnectionTiming("authorization"));
+    const owner = penRouteOwner(target.connectionId);
+    if (owner !== null) yield* penMembership.admit(owner);
     const prepared = yield* ssh.prepare({
       connectionId: target.connectionId,
+      ...(owner === null
+        ? {}
+        : { installation: "existing-only" as const, penNodeId: owner.nodeId }),
       expectedEnvironmentId: target.environmentId,
       target: profile.target,
       ...(savedToken === undefined ? {} : { bearerToken: savedToken }),
@@ -354,11 +365,17 @@ export const make = Effect.gen(function* () {
         detail: "Hub proxy authorization is unavailable on this client.",
       });
     const auth = yield* hubAuth.value.resolve(profile);
+    const descriptorPath = "/.well-known/goat/environment";
+    let relaySupportUrl: string | undefined;
     const descriptor = yield* requestHubProxyJson(
       auth,
       profile.nodeId,
-      "/.well-known/goat/environment",
+      descriptorPath,
       decodeHubDescriptor,
+      "GET",
+      (headers, url) => {
+        if (headers[HUB_PROXY_VCS_BRANCH_HEADER] === "1") relaySupportUrl = url;
+      },
     );
     if (descriptor.environmentId !== entry.target.environmentId)
       return yield* environmentMismatchError({
@@ -372,6 +389,8 @@ export const make = Effect.gen(function* () {
         environmentId: entry.target.environmentId,
         label: entry.target.label,
         target: entry.target,
+        hubVcsBranchSupported:
+          relaySupportUrl === environmentEndpointUrl(socket.httpBaseUrl, descriptorPath),
         ...socket,
       } satisfies PreparedConnection,
     };

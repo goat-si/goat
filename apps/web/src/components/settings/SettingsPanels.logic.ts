@@ -106,6 +106,17 @@ type TypographySettings = Pick<
   | "fontSizeTerminal"
 >;
 
+/** The labels, in the given order, of the settings that differ from their defaults. */
+export function getChangedSettingLabels<K extends keyof UnifiedSettings>(
+  settings: Pick<UnifiedSettings, NoInfer<K>>,
+  labels: Record<K, string>,
+): string[] {
+  const keys = Object.keys(labels) as K[];
+  return keys
+    .filter((key) => !Equal.equals(settings[key], DEFAULT_UNIFIED_SETTINGS[key]))
+    .map((key) => labels[key]);
+}
+
 export function getChangedTypographySettingLabels(settings: TypographySettings): string[] {
   return [
     ...(settings.fontFamilySans !== DEFAULT_UNIFIED_SETTINGS.fontFamilySans ||

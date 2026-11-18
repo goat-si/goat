@@ -12,6 +12,7 @@ import {
   DesktopPreviewScreenshotArtifactSchema,
   DesktopPreviewSetAudioMutedInputSchema,
   DesktopPreviewSetShownInputSchema,
+  DesktopPreviewSetCaptureDrawnInputSchema,
   DesktopPreviewSetColorSchemeInputSchema,
   DesktopPreviewSetZoomFactorInputSchema,
   BrowserImportResult,
@@ -116,9 +117,13 @@ const registerWebview = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_REGISTER_WEBVIEW_CHANNEL,
   payload: DesktopPreviewRegisterWebviewInputSchema,
   result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.preview.registerWebview")(function* ({ tabId, webContentsId }) {
+  handler: Effect.fn("desktop.ipc.preview.registerWebview")(function* ({
+    tabId,
+    webContentsId,
+    reportCaptureDraw,
+  }) {
     const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.registerWebview(tabId, webContentsId);
+    yield* manager.registerWebview(tabId, webContentsId, reportCaptureDraw);
   }),
 });
 
@@ -224,6 +229,15 @@ const setShown = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.preview.setShown")(function* ({ tabId, shown }) {
     const manager = yield* PreviewManager.PreviewManager;
     yield* manager.setShown(tabId, shown);
+  }),
+});
+const setCaptureDrawn = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_SET_CAPTURE_DRAWN_CHANNEL,
+  payload: DesktopPreviewSetCaptureDrawnInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.setCaptureDrawn")(function* (input) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.setCaptureDrawn(input);
   }),
 });
 const openDevTools = tabMethod(
@@ -504,6 +518,7 @@ export const methods = [
   setZoomFactor,
   setAudioMuted,
   setShown,
+  setCaptureDrawn,
   openDevTools,
   clearCookies,
   clearCache,

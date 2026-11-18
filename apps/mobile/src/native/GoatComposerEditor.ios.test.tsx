@@ -12,6 +12,7 @@ interface NativeEvent {
   readonly value: string;
   readonly selection: Selection;
   readonly eventCount: number;
+  readonly trailingInlineSource?: string | null;
 }
 interface Document {
   readonly value: string;
@@ -115,7 +116,7 @@ vi.mock("../lib/nativeComposerTheme", () => ({
 }));
 vi.mock("../lib/contextChipIconSource", () => ({ contextChipIconUri: () => null }));
 vi.mock("../features/settings/appearance/useScaledTextRole", () => ({
-  useScaledTextRole: () => ({ fontSize: 16, lineHeight: 22 }),
+  useComposerTextRole: () => ({ fontSize: 16, lineHeight: 22 }),
 }));
 
 import { ComposerEditor } from "./GoatComposerEditor.ios";
@@ -213,6 +214,66 @@ it("sends a model mention to the native editor as a chip with its exact source",
     await act(async () => root.unmount());
   }
 });
+
+it.each([{ batched: false }, { batched: true }])(
+  "keeps the Undo chip and leaves raw text plain after Redo (batched: $batched)",
+  async ({ batched }) => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const prefix = "👋 ";
+    const source = "@README.md";
+    const text = prefix + source;
+    const initial = text + " ";
+    native.value = "";
+    native.selection = { start: 0, end: 0 };
+    native.eventCount = 0;
+    native.tokensJson = "[]";
+    draft.text = initial;
+    const root = createRoot(document.createElement("div"));
+    const edit = (value: string, nativeTokens: string, trailingInlineSource?: string | null) => {
+      native.tokensJson = nativeTokens;
+      native.onChange?.({
+        nativeEvent: {
+          ...nativeEdit(value, value.length),
+          ...(trailingInlineSource === undefined ? {} : { trailingInlineSource }),
+        },
+      });
+    };
+
+    try {
+      await act(async () => root.render(<Host initial={initial} />));
+      const confirmed = native.tokensJson;
+      expect(JSON.parse(confirmed)).toEqual([
+        expect.objectContaining({ source, start: prefix.length, end: text.length }),
+      ]);
+      // Older native builds omit the field when Backspace removes the confirming space.
+      await act(async () => edit(text, confirmed));
+      expect(native.tokensJson).toBe(confirmed);
+      await act(async () => edit(prefix, "[]")); // Cut the trailing chip.
+      native.writes = [];
+      // UIKit restores the attachment before the callback.
+      await act(async () => edit(text, confirmed, source));
+      expect(native.tokensJson).toBe(confirmed);
+      expect(native.writes).toEqual([]);
+      expect(native.selection).toEqual({ start: text.length, end: text.length });
+
+      native.writes = [];
+      if (batched) {
+        await act(async () => {
+          edit(prefix, "[]", null); // Redo.
+          edit(text, "[]", null); // Raw input before React commits the intermediate draft.
+        });
+      } else {
+        await act(async () => edit(prefix, "[]"));
+        await act(async () => edit(text, "[]"));
+      }
+      expect(native.tokensJson).toBe("[]");
+      expect(native.writes).toEqual([]);
+      expect(native.selection).toEqual({ start: text.length, end: text.length });
+    } finally {
+      await act(async () => root.unmount());
+    }
+  },
+);
 
 async function typeKorean(
   prefix: string,

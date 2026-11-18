@@ -21,6 +21,7 @@ import { isContextMenuOpen } from "../../contextMenuFallback";
 import {
   SnapShotAccessibilityData,
   SnapShotContentsButton,
+  SnapShotCopyButton,
   snapShotAccessibilityDetails,
 } from "./SnapShotAttachmentDetails";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -328,6 +329,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
               ) : item.source ? (
                 <SnapShotContentsButton source={item.source} side="top" />
               ) : null}
+              {item.onCopySnapshot && <SnapShotCopyButton onCopy={item.onCopySnapshot} overlay />}
             </div>
           </div>
         </MediaActions>

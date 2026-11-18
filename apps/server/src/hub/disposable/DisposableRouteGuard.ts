@@ -6,7 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import * as SshHostKeys from "../../sshRemote/SshHostKeys.ts";
-import { readPenConfig } from "../penConfigFile.ts";
+import { readPenConfig } from "@goat/ssh/penConfigFile";
 import * as DisposableMachineStore from "./DisposableMachineStore.ts";
 import {
   claimedBy,
