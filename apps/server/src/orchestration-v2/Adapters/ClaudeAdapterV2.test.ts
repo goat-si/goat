@@ -1,3 +1,4 @@
+import { monitorFrames } from "./ClaudeMonitorFrames.testkit.ts";
 import type * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import { makeWakeHarnessWithOptions } from "./ClaudeWakeHarness.testkit.ts";
 import {
@@ -6877,78 +6878,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         const now = yield* DateTime.now;
         let frameNumber = 0;
         const nextUuid = () => `00000000-0000-4000-8000-${String(++frameNumber).padStart(12, "0")}`;
-        const monitorFrames = (index: number) => {
-          const taskId = `monitor-task-${index}`;
-          const toolUseId = `toolu_monitor_${index}`;
-          const description = `Monitor ${index}`;
-          return {
-            taskId,
-            start: [
-              claudeSdkFrame({
-                type: "assistant",
-                message: {
-                  model: "claude-sonnet-4-6",
-                  id: `msg_monitor_${index}`,
-                  type: "message",
-                  role: "assistant",
-                  content: [
-                    {
-                      type: "tool_use",
-                      id: toolUseId,
-                      name: "Monitor",
-                      input: { description, command: "sleep 8 && echo MONITOR_DONE" },
-                    },
-                  ],
-                  stop_reason: null,
-                  stop_sequence: null,
-                  usage: { input_tokens: 1, output_tokens: 1 },
-                },
-                parent_tool_use_id: null,
-                uuid: nextUuid(),
-                session_id: WAKE_NATIVE_SESSION,
-              }),
-              claudeSdkFrame({
-                type: "system",
-                subtype: "task_started",
-                task_id: taskId,
-                tool_use_id: toolUseId,
-                description,
-                is_backgrounded: true,
-                task_type: "local_bash",
-                uuid: nextUuid(),
-                session_id: WAKE_NATIVE_SESSION,
-              }),
-              claudeSdkFrame({
-                type: "user",
-                message: {
-                  role: "user",
-                  content: [
-                    {
-                      type: "tool_result",
-                      tool_use_id: toolUseId,
-                      content: `Monitor started (task ${taskId}).`,
-                    },
-                  ],
-                },
-                parent_tool_use_id: null,
-                uuid: nextUuid(),
-                session_id: WAKE_NATIVE_SESSION,
-                tool_use_result: { taskId, persistent: false },
-              }),
-            ],
-            end: claudeSdkFrame({
-              type: "system",
-              subtype: "task_notification",
-              task_id: taskId,
-              tool_use_id: toolUseId,
-              status: "completed",
-              output_file: `/tmp/claude-replay/tasks/${taskId}.output`,
-              summary: `Monitor "${description}" stream ended`,
-              uuid: nextUuid(),
-              session_id: WAKE_NATIVE_SESSION,
-            }),
-          };
-        };
 
         yield* harness.runtime.startTurn(
           makeClaudeTestTurnInput({
@@ -6960,12 +6889,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             attachments: [],
           }),
         );
-        const longRunning = monitorFrames(0);
+        const longRunning = monitorFrames(0, nextUuid);
         for (const frame of longRunning.start) {
           yield* Queue.offer(harness.sdkMessages, frame);
         }
         for (let index = 1; index <= 65; index++) {
-          const monitor = monitorFrames(index);
+          const monitor = monitorFrames(index, nextUuid);
           for (const frame of monitor.start) {
             yield* Queue.offer(harness.sdkMessages, frame);
           }
