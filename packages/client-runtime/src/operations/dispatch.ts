@@ -8,7 +8,14 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
-import { EnvironmentRpcUnavailableError, isRpcClientError, request } from "../rpc/client.ts";
+import {
+  currentSession,
+  EnvironmentRpcUnavailableError,
+  isRpcClientError,
+  request,
+  requestInSession,
+} from "../rpc/client.ts";
+import type { RpcSession } from "../rpc/session.ts";
 
 export const dispatch = (command: OrchestrationV2Command) =>
   request(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, command);
@@ -30,7 +37,17 @@ export const dispatchMessage = Effect.fn("EnvironmentCommands.dispatchMessage")(
   command: Extract<OrchestrationV2Command, { type: "message.dispatch" }>,
 ) {
   const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
-  const attempt = dispatch(command).pipe(
+  // Pinned: the session the frame went out on is the one a replacement is compared with.
+  let attemptSession = Option.none<RpcSession>();
+  const attempt = currentSession().pipe(
+    Effect.tap((session) =>
+      Effect.sync(() => {
+        attemptSession = Option.some(session);
+      }),
+    ),
+    Effect.flatMap((session) =>
+      requestInSession(session, ORCHESTRATION_V2_WS_METHODS.dispatchCommand, command),
+    ),
     Effect.timeoutOrElse({
       duration: "60 seconds",
       orElse: () =>
@@ -45,7 +62,7 @@ export const dispatchMessage = Effect.fn("EnvironmentCommands.dispatchMessage")(
   if (!resendAfterSocketLoss) return yield* attempt;
   let deadline: number | undefined;
   for (let resends = 0; ; resends += 1) {
-    const attemptSession = yield* SubscriptionRef.get(supervisor.session);
+    attemptSession = Option.none();
     const exit = yield* Effect.exit(attempt);
     if (Exit.isSuccess(exit)) return exit.value;
     // Closing the session interrupts the request, which can beat the protocol error.
