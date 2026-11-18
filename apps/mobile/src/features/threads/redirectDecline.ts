@@ -38,6 +38,9 @@ export function redirectDecline(
         }
         return (
           (await saveMode()) &&
+          // The save is a round trip: the thread may have been left or the draft edited meanwhile.
+          !scope.aborted &&
+          stillSendable?.() !== false &&
           (await declinePendingApprovals(approvalsToDecline, props.onRespondToApproval)) &&
           !scope.aborted &&
           // A draft edited or pasted into during the decline isn't what the user sent.
