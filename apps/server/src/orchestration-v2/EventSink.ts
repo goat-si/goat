@@ -1,3 +1,4 @@
+import { makeEventSinkComparePayloadWrites } from "./EventSinkComparePayload.ts";
 import { makeDelegatedCompletionUpdater } from "./goat/DelegatedCompletionMerge.ts";
 import { makeScheduledTaskAppender as makeTaskAppender } from "./ScheduledTaskCompletionBatch.ts";
 import * as ScheduledTaskRuns from "../scheduledTasks/ScheduledTaskRuns.ts";
@@ -549,45 +550,10 @@ const layerBase: Layer.Layer<
             : Effect.void,
       );
 
-    const writeIfProviderThreadUnchangedEffect = Effect.fn(
-      "orchestrationV2.EventSink.writeIfProviderThreadUnchanged",
-    )(function* (input: Parameters<EventSinkV2Shape["writeIfProviderThreadUnchanged"]>[0]) {
-      yield* Effect.annotateCurrentSpan({
-        "orchestration_v2.event_count": input.events.length,
-        "orchestration_v2.provider_thread_id": input.expected.id,
-      });
-      const expectedJson = yield* ProjectionStore.encodeProviderThreadPayload(input.expected);
-      return yield* writeIfStoredPayloadMatches(
-        sql<{ readonly payload_json: string }>`
-          SELECT payload_json
-          FROM orchestration_v2_projection_provider_threads
-          WHERE provider_thread_id = ${input.expected.id}
-          LIMIT 1
-        `,
-        expectedJson,
-        input.events,
-      );
-    });
-
-    const writeIfTurnItemUnchangedEffect = Effect.fn(
-      "orchestrationV2.EventSink.writeIfTurnItemUnchanged",
-    )(function* (input: Parameters<EventSinkV2Shape["writeIfTurnItemUnchanged"]>[0]) {
-      yield* Effect.annotateCurrentSpan({
-        "orchestration_v2.event_count": input.events.length,
-        "orchestration_v2.turn_item_id": input.expected.id,
-      });
-      const expectedJson = yield* ProjectionStore.encodeTurnItemPayload(input.expected);
-      return yield* writeIfStoredPayloadMatches(
-        sql<{ readonly payload_json: string }>`
-          SELECT payload_json
-          FROM orchestration_v2_projection_turn_items
-          WHERE turn_item_id = ${input.expected.id}
-          LIMIT 1
-        `,
-        expectedJson,
-        input.events,
-      );
-    });
+    const comparePayloadWrites = makeEventSinkComparePayloadWrites(
+      sql,
+      writeIfStoredPayloadMatches,
+    );
 
     const existingCommandResult =
       /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
@@ -907,18 +873,7 @@ const layerBase: Layer.Layer<
               }),
           ),
         ),
-      writeIfProviderThreadUnchanged: (input) =>
-        writeIfProviderThreadUnchangedEffect(input).pipe(
-          Effect.mapError(
-            (cause) => new EventSinkWriteError({ eventCount: input.events.length, cause }),
-          ),
-        ),
-      writeIfTurnItemUnchanged: (input) =>
-        writeIfTurnItemUnchangedEffect(input).pipe(
-          Effect.mapError(
-            (cause) => new EventSinkWriteError({ eventCount: input.events.length, cause }),
-          ),
-        ),
+      ...comparePayloadWrites,
       commitCommand: (input) =>
         commitCommandEffect(input).pipe(
           Effect.mapError(
