@@ -28,14 +28,19 @@ export function useDecisionInboxSideChat(): DecisionInboxSideChat {
     open: async (ref, prompt) => {
       const thread = shell(ref);
       if (thread === null) return false;
-      return sideChatCommand({
+      let started = false;
+      await sideChatCommand({
         thread,
         // No composer draft holds the command, so nothing is cleared.
         threadKey: `decisions:${ref.environmentId}:${ref.threadId}`,
         text: `/side ${prompt}`,
         hasAttachmentsOrContext: false,
         connected: isEnvironmentConnected(ref.environmentId),
+        onStarted: () => {
+          started = true;
+        },
       });
+      return started;
     },
   };
 }

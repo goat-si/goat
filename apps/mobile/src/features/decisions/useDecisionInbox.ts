@@ -41,7 +41,8 @@ export interface DecisionInboxSideChat {
     requestId: RuntimeRequestId,
     questionId: string,
   ) => boolean;
-  readonly open: (ref: ScopedThreadRef, prompt: string) => Promise<unknown>;
+  /** Resolves true once the side chat has started; false when it was refused. */
+  readonly open: (ref: ScopedThreadRef, prompt: string) => Promise<boolean>;
 }
 
 const sameRef = (a: DecisionItem["ref"], b: DecisionItem["ref"]) =>
@@ -274,9 +275,10 @@ export function useDecisionInbox(
             sideChatAvailable: () => sideChat.available(item.ref),
           });
     if (sideChat !== undefined && command !== null) {
-      // As in the composer: the question stays pending and the command leaves the answer.
-      onChangeCustomAnswer(item.request.requestId, command.question.id, "");
-      await sideChat.open(item.ref, command.prompt);
+      // As in the composer: the question stays pending, and the command leaves the answer once
+      // the side chat has started.
+      if (await sideChat.open(item.ref, command.prompt))
+        onChangeCustomAnswer(item.request.requestId, command.question.id, "");
       return;
     }
     const submittedAnswers = buildPendingUserInputAnswers(item.request.questions, draft);

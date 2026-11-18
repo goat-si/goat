@@ -333,22 +333,24 @@ export function useSelectedThreadRequests() {
       sideChatAvailable: () => canStartSideChat(selectedThreadShell),
     });
     if (sideChat !== null) {
-      // As in the composer: the question stays pending and the command leaves the answer.
-      setUserInputDraftCustomAnswer(
-        userInputDraftKey(
-          selectedThreadShell.environmentId,
-          selectedThreadShell.id,
-          activePendingUserInput.requestId,
-        ),
-        sideChat.question,
-        "",
-      );
+      // As in the composer: the question stays pending, and the command leaves the answer once
+      // the side chat has started.
       await sideChatCommand({
         thread: selectedThreadShell,
         threadKey: questionKey(sideChat.question.id),
         text: `/side ${sideChat.prompt}`,
         hasAttachmentsOrContext: false,
         connected: selectedEnvironmentRuntime?.connectionState === "connected",
+        onStarted: () =>
+          setUserInputDraftCustomAnswer(
+            userInputDraftKey(
+              selectedThreadShell.environmentId,
+              selectedThreadShell.id,
+              activePendingUserInput.requestId,
+            ),
+            sideChat.question,
+            "",
+          ),
       });
       return;
     }
