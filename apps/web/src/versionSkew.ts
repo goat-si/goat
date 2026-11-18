@@ -105,6 +105,11 @@ export function manualServerUpdateInstructions(
   targetVersion: string,
   installation?: ServerInstallation,
 ): string {
+  if (installation?.kind === "goat-launcher") {
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    // An inherited GOAT_HOME would otherwise send the update to a home the launcher is not in.
+    return `${quote(installation.launcher)} update --base-dir ${quote(installation.baseDir)} ${targetVersion}`;
+  }
   return installation
     ? `Install GOAT ${targetVersion} from https://github.com/goat-si/goat-releases/releases, then restart GOAT with your usual options.`
     : `goat update ${targetVersion}`;

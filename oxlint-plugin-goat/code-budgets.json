@@ -427,7 +427,7 @@
   "apps/server/src/scheduledTasks/ScheduledTaskService.webhook.test.ts": { "lines": 1893 },
   "apps/server/src/scheduledTasks/webhookDedupe.ts": { "nonNull": 2 },
   "apps/server/src/scheduledTasks/webhookTemplate.ts": { "nonNull": 1 },
-  "apps/server/src/server.ts": { "lines": 1249 },
+  "apps/server/src/server.ts": { "lines": 1254 },
   "apps/server/src/serverSettings.test.ts": { "lines": 3135 },
   "apps/server/src/serverSettings.ts": { "lines": 2248 },
   "apps/server/src/serviceLauncher.test.ts": { "lines": 1568 },

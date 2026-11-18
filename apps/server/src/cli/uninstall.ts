@@ -26,7 +26,8 @@ import {
 } from "../cloud/serviceProtocol.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import * as CliService from "./service.ts";
-import { findWindowsShim, resolveLauncherPath } from "./update.ts";
+import { findWindowsShim } from "./update.ts";
+import { resolveLauncherPath } from "../cloud/pinnedRuntime.ts";
 import { hostShellWord } from "./invocation.ts";
 
 export class CliUninstallError extends Schema.TaggedError<CliUninstallError>()(

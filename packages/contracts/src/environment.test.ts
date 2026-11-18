@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
+import { ForwardCompatibleOptional, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   supportsMemoryProtocol,
   ExecutionEnvironmentCapabilities,
@@ -12,6 +13,17 @@ import {
 import { EnvironmentHttpApi } from "./environmentHttp.ts";
 
 const decodeDescriptor = Schema.decodeUnknownSync(ExecutionEnvironmentDescriptor);
+// The capability as clients before goat-launcher declared it.
+const decodeOlderCapabilities = Schema.decodeUnknownSync(
+  Schema.Struct({
+    serverInstallation: ForwardCompatibleOptional(
+      Schema.Union([
+        Schema.Struct({ kind: Schema.Literals(["npx", "pnpm-dlx", "bunx"]) }),
+        Schema.Struct({ kind: Schema.Literal("npm-global"), prefix: TrimmedNonEmptyString }),
+      ]),
+    ),
+  }),
+);
 
 const descriptor = {
   environmentId: "environment-1",
@@ -65,6 +77,28 @@ describe("ExecutionEnvironmentDescriptor", () => {
         }).capabilities.serverInstallation,
       ).toBeUndefined();
     }
+  });
+
+  it("reads a goat launcher installation, and an older client reads it as absent", () => {
+    const installation = {
+      kind: "goat-launcher",
+      launcher: "/home/sam/.local/bin/goat",
+      baseDir: "/home/sam/.goat",
+    };
+    const withInstallation = {
+      ...descriptor,
+      capabilities: { ...descriptor.capabilities, serverInstallation: installation },
+    };
+    expect(decodeDescriptor(withInstallation).capabilities.serverInstallation).toEqual(
+      installation,
+    );
+    expect(decodeOlderCapabilities(withInstallation.capabilities)).toEqual({});
+    expect(
+      decodeDescriptor({
+        ...descriptor,
+        capabilities: { serverInstallation: { ...installation, launcher: "" } },
+      }).capabilities.serverInstallation,
+    ).toBeUndefined();
   });
 
   it("treats a missing automatic server updates capability as unsupported", () => {
