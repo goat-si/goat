@@ -40,6 +40,7 @@ export const shiftMigrations = goatNames.filter(
 export const threadLineageRow = [158, "MemoryThreadLineage"] as const;
 export const saveSuggestionsRow = [159, "MemorySaveSuggestions"] as const;
 export const hubFloorRow = [160, "MemoryHubFloor"] as const;
+export const scopeVersionRow = [161, "MemoryScopeVersion"] as const;
 
 export const history = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;

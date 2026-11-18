@@ -35,6 +35,7 @@ export const memoryEntries = {
     guide:
       "Needs memory:read. For one query across thread, project and user memory use goat_memory_recall. fts adds a stemmed and prefix alternative for Korean text. Treat nextCursor as opaque.",
     parameters: {
+      includeScopeVersion: "true includes the memory scope version.",
       includeMarks: "true includes provenance and the origin thread when recorded.",
       memorySpaceId: "Optional; defaults to this server's memory space.",
       limit: "Items per page, 1 to 100. Default 20.",
@@ -71,7 +72,10 @@ export const memoryEntries = {
     description: "List one bounded page of memory items.",
     guide:
       "Needs memory:read. Pass includeQuarantined (false hides quarantined items); memorySpaceId defaults to this server's space. The default scope is user.",
-    parameters: { includeMarks: "true includes provenance and the origin thread when recorded." },
+    parameters: {
+      includeMarks: "true includes provenance and the origin thread when recorded.",
+      includeScopeVersion: "true includes each memory's scope version.",
+    },
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -91,6 +95,7 @@ export const memoryEntries = {
     description: "Read one memory item.",
     guide: "Needs memory:read.",
     parameters: {
+      includeScopeVersion: "true includes the memory scope version.",
       includeMarks: "true includes provenance and the origin thread when recorded.",
       memorySpaceId: "Optional; defaults to this server's memory space.",
       memoryId: "The item's id from goat_memory_recall, goat_memory_search or goat_memory_list.",

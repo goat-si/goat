@@ -833,6 +833,7 @@ function ScopedMemoryRecords({
           environmentId={environmentId}
           memorySpaceId={memorySpaceId}
           memoryEnabled={memoryEnabled}
+          scopeMoves={capabilities?.scopeMoves === true}
           onMoved={page.refresh}
           onForgotten={(message) => {
             setNotice(message);
@@ -851,12 +852,14 @@ export function MemoryDetails({
   onForgotten,
   onMoved,
   memoryEnabled,
+  scopeMoves = false,
 }: {
   target: MemorySettingsSearch;
   environmentId: EnvironmentId;
   memorySpaceId: MemorySpaceId;
   onForgotten: (message: string) => void;
   onMoved?: () => void;
+  scopeMoves?: boolean;
   memoryEnabled: boolean;
 }) {
   const { environments } = useEnvironments();
@@ -865,8 +868,6 @@ export function MemoryDetails({
   const memoryId = target.memoryId!;
   const writePermission = useAtomValue(memoryEnvironment.upsert.permissionAtom(environmentId));
   const canWrite = writePermission && memoryEnabled;
-  const scopeMoves =
-    useEnvironment(environmentId)?.serverConfig?.environment.capabilities.memory?.scopeMoves;
   const read = useEnvironmentQuery(
     memoryEnvironment.read({
       environmentId,
