@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import { NativeHeadWatch, watchHeadDirectory } from "./headWatchSignals.ts";
 import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
@@ -32,6 +33,7 @@ export const makeHeadWatchers = Effect.fn("VcsStatusBroadcaster.makeHeadWatchers
   reconcileCheckedOutRef: (cwd: string) => Effect.Effect<void, GitManagerServiceError>,
 ) {
   const fs = yield* FileSystem.FileSystem;
+  const startWatch = yield* NativeHeadWatch;
   const path = yield* Path.Path;
   const locks = yield* KeyedLock.make<string>();
   const activeWatchers = new Map<string, ActiveHeadWatcher>();
@@ -55,26 +57,16 @@ export const makeHeadWatchers = Effect.fn("VcsStatusBroadcaster.makeHeadWatchers
     if (headPath === null) return;
     const headDirectory = path.dirname(headPath);
     // Git replaces HEAD by renaming HEAD.lock, which a watch on the file itself would lose.
-    yield* fs
-      .watch(headDirectory, {
-        onReady: () => Deferred.doneUnsafe(ready, Exit.void),
-      })
-      .pipe(
-        // Windows can keep reporting removals after the watched directory is gone.
-        Stream.mapEffect((event) =>
-          Effect.gen(function* () {
-            const removed = event._tag === "Remove" && !(yield* fs.exists(headDirectory));
-            return { event, removed };
-          }),
-        ),
-        Stream.takeUntil(({ removed }) => removed),
-        Stream.filter(({ event, removed }) => removed || path.basename(event.path) === "HEAD"),
-        // A rebase moves HEAD many times; refresh once for whatever arrived during a refresh.
-        Stream.buffer({ capacity: 1, strategy: "sliding" }),
-        Stream.mapEffect(() => retryCheckoutRefresh(cwd, publishCheckedOutRef(cwd))),
-        Stream.buffer({ capacity: 1, strategy: "sliding" }),
-        Stream.runForEach(() => retryCheckoutRefresh(cwd, reconcileCheckedOutRef(cwd))),
-      );
+    yield* watchHeadDirectory(startWatch, headDirectory, () =>
+      Deferred.doneUnsafe(ready, Exit.void),
+    ).pipe(
+      // A rebase moves HEAD many times; refresh once for whatever arrived during a refresh.
+      Stream.buffer({ capacity: 1, strategy: "sliding" }),
+      Stream.mapEffect(() => retryCheckoutRefresh(cwd, publishCheckedOutRef(cwd))),
+      Stream.buffer({ capacity: 1, strategy: "sliding" }),
+      Stream.runForEach(() => retryCheckoutRefresh(cwd, reconcileCheckedOutRef(cwd))),
+      Effect.provideService(FileSystem.FileSystem, fs),
+    );
   });
 
   const retainHeadWatcher = Effect.fn("VcsStatusBroadcaster.retainHeadWatcher")(function* (

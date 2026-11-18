@@ -1,3 +1,4 @@
+import * as NodeEvents from "node:events";
 import { assert, it, describe } from "@effect/vitest";
 import type { VcsStatusRemoteResult, VcsStatusResult } from "@goat/contracts";
 import { applyGitStatusStreamEvent } from "@goat/shared/git";
@@ -8,9 +9,9 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import { NativeHeadWatch } from "./headWatchSignals.ts";
 import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
 import {
   baseLocalStatus,
@@ -18,6 +19,29 @@ import {
   layerTestFor,
   remoteStatusWithPr,
 } from "./vcsStatusBroadcaster.testkit.ts";
+
+function fakeNativeWatch(onClose = () => {}) {
+  let onEvent: ((event: string, filename: string | null) => void) | undefined;
+  const watcher = Object.assign(new NodeEvents.EventEmitter(), {
+    close: onClose,
+    ref: () => watcher,
+    unref: () => watcher,
+  });
+  return {
+    startWatch: (
+      _path: string,
+      notify: NonNullable<typeof onEvent>,
+      onError: (error: Error) => void,
+    ) => {
+      onEvent = notify;
+      return watcher.on("error", onError);
+    },
+    notify(event: "rename" | "change", filename: string | null) {
+      if (onEvent === undefined) throw new Error("The Git directory is not watched");
+      onEvent(event, filename);
+    },
+  };
+}
 
 describe("VCS HEAD watchers", () => {
   it.effect("a terminal checkout publishes the new branch without waiting for a poll", () =>
@@ -314,8 +338,8 @@ describe("VCS HEAD watchers", () => {
   it.effect("a HEAD watch ends when its git directory is removed", () =>
     Effect.gen(function* () {
       const gitDir = "/repo/.git/worktrees/feature";
-      const events = yield* Queue.unbounded<FileSystem.WatchEvent>();
       const closed = yield* Deferred.make<void>();
+      const native = fakeNativeWatch(() => Deferred.doneUnsafe(closed, Effect.void));
       let gitDirExists = true;
       const state: Parameters<typeof layerTestFor>[0] = {
         currentLocalStatus: { ...baseLocalStatus, refName: "main" },
@@ -328,11 +352,6 @@ describe("VCS HEAD watchers", () => {
         fileSystem: FileSystem.makeNoop({
           realPath: (target) => Effect.succeed(target),
           exists: (target) => Effect.succeed(target !== gitDir || gitDirExists),
-          watch: (_target, options) =>
-            Stream.fromQueue(events).pipe(
-              Stream.onStart(Effect.sync(() => options?.onReady?.())),
-              Stream.ensuring(Deferred.succeed(closed, undefined)),
-            ),
         }),
       };
 
@@ -343,19 +362,66 @@ describe("VCS HEAD watchers", () => {
 
         // Every checkout removes HEAD.lock, which leaves the watch running.
         state.currentLocalStatus = { ...baseLocalStatus, refName: "other" };
-        yield* Queue.offer(events, { _tag: "Remove", path: "HEAD.lock" });
-        yield* Queue.offer(events, { _tag: "Update", path: "HEAD" });
+        native.notify("rename", "HEAD.lock");
+        native.notify("change", "HEAD");
         assert.deepEqual(yield* branches, [{ refName: "other", isRepo: true }]);
 
         // `git worktree remove` deletes the watched directory; Windows keeps reporting it.
         gitDirExists = false;
         state.currentLocalStatus = { ...baseLocalStatus, isRepo: false, refName: null };
-        yield* Queue.offer(events, { _tag: "Remove", path: gitDir });
+        native.notify("rename", gitDir);
         assert.deepEqual(yield* branches, [{ refName: null, isRepo: false }]);
         yield* Deferred.await(closed);
         assert.strictEqual(state.localStatusCalls, 0);
         assert.strictEqual(state.remoteStatusCalls, 0);
-      }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);
+      }).pipe(
+        Effect.provide(layerTestFor(state)),
+        Effect.provideService(NativeHeadWatch, native.startWatch),
+        Effect.scoped,
+      );
+    }),
+  );
+  it.effect("coalesces native rename churn before probing the Git directory", () =>
+    Effect.gen(function* () {
+      const gitDir = "/repo/.git";
+      const native = fakeNativeWatch();
+      let probes = 0;
+      const state: Parameters<typeof layerTestFor>[0] = {
+        currentLocalStatus: { ...baseLocalStatus, refName: "main" },
+        currentRemoteStatus: null,
+        localStatusCalls: 0,
+        remoteStatusCalls: 0,
+        localInvalidationCalls: 0,
+        remoteInvalidationCalls: 0,
+        headPath: gitDir + "/HEAD",
+        fileSystem: FileSystem.makeNoop({
+          realPath: (target) => Effect.succeed(target),
+          exists: () =>
+            Effect.sync(() => {
+              probes++;
+              return true;
+            }),
+        }),
+      };
+      yield* Effect.gen(function* () {
+        const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+        const branches = yield* Stream.toPull(broadcaster.streamBranchStatus({ cwd: "/repo" }));
+        assert.deepEqual(yield* branches, [{ refName: "main", isRepo: true }]);
+        state.currentLocalStatus = { ...baseLocalStatus, refName: "topic" };
+        yield* Effect.sync(() => {
+          for (let index = 0; index < 64; index++) {
+            native.notify("rename", "HEAD.lock");
+          }
+          native.notify("change", "HEAD");
+        });
+        assert.deepEqual(yield* branches, [{ refName: "topic", isRepo: true }]);
+        assert.strictEqual(probes, 1);
+        assert.strictEqual(state.localStatusCalls, 0);
+      }).pipe(
+        Effect.provide(layerTestFor(state)),
+        Effect.provideService(NativeHeadWatch, native.startWatch),
+        Effect.scoped,
+      );
     }),
   );
 });
