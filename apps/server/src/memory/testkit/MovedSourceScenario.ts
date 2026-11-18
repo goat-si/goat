@@ -76,4 +76,24 @@ export const movedSourceScenario = Effect.fn("TestMemory.movedSourceScenario")(f
     "preparation must authorize the current memory scope",
   );
   assert.strictEqual(allowed.request.scopeVersion, 1);
+
+  yield* c.owner.commitSourcePolicy({
+    allowedRequesterEnvironmentIds: [c.a.identity, c.owner.identity],
+    ownerPolicyEpoch: 2,
+    removals: [],
+    enrollments: [c.a.identity, c.owner.identity].map((requesterEnvironmentId) => ({
+      memorySpaceId: c.space,
+      ownerEnvironmentId: c.owner.identity,
+      requesterEnvironmentId,
+      ownerPolicyEpoch: 2,
+      state: "active" as const,
+    })),
+  });
+  const outcome = yield* c.owner.sync.readSource(allowed, Effect.void);
+  assert.strictEqual(outcome.kind, "available");
+  if (outcome.kind === "available")
+    assert.deepStrictEqual(outcome.page.messages, [
+      { messageId: c.messageId, text: "synthetic original from owner" },
+      { messageId: c.assistantId, text: "synthetic completed answer" },
+    ]);
 });
