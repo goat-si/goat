@@ -129,7 +129,8 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 import { withThreadMcpEnvironment } from "@goat/provider-core/server/mcpSession";
 import { ThreadId } from "@goat/contracts";
 import { terminalOutputStream } from "./OutputProtocol.ts";
-import { enqueueProcessEvent, folderReplacedNotice, isInsideFolder } from "./processEventQueue.ts";
+import { makeFolderReplacedNotifier } from "./folderReplacedTerminals.ts";
+import { enqueueProcessEvent } from "./processEventQueue.ts";
 
 export {
   TerminalCwdError,
@@ -276,7 +277,10 @@ export class TerminalManager extends Context.Service<
       readonly terminalId?: string;
     }) => Effect.Effect<void>;
     /** Tells each live terminal inside a folder GOAT just restored or set aside (goat#3690). */
-    readonly noticeFolderReplaced: (folder: string) => Effect.Effect<void>;
+    readonly noticeFolderReplaced: (
+      folder: string,
+      setAsidePath?: string | null,
+    ) => Effect.Effect<void>;
 
     readonly subscribe: (
       listener: (event: TerminalEvent) => Effect.Effect<void>,
@@ -3086,14 +3090,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     closeOnSettle,
     subscribe,
     subscribeMetadata,
-    noticeFolderReplaced: Effect.fn("terminal.noticeFolderReplaced")(function* (folder) {
-      for (const session of (yield* readManagerState).sessions.values()) {
-        const event = { type: "output" as const, data: folderReplacedNotice(folder) };
-        if (session.pid === null || !isInsideFolder(folder, session.cwd)) continue;
-        if (enqueueProcessEvent(session, session.pid, event))
-          runFork(drainProcessEvents(session, session.pid));
-      }
-    }),
+    noticeFolderReplaced: yield* makeFolderReplacedNotifier(readManagerState, (session, pid) =>
+      runFork(drainProcessEvents(session, pid)),
+    ),
   });
   registerTerminalProbe(
     service,

@@ -9,6 +9,8 @@ import * as TerminalManager from "../../terminal/Manager.ts";
  */
 export const makeNoticeFolderReplaced = Effect.map(
   Effect.serviceOption(TerminalManager.TerminalManager),
-  (terminals) => (folder: string) =>
-    Option.isSome(terminals) ? terminals.value.noticeFolderReplaced(folder) : Effect.void,
+  (terminals) => (folder: string, setAsidePath?: string | null) =>
+    Option.isSome(terminals)
+      ? terminals.value.noticeFolderReplaced(folder, setAsidePath)
+      : Effect.void,
 );

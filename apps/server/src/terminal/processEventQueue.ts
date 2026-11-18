@@ -7,12 +7,6 @@ import type { PendingProcessEvent, TerminalSessionState } from "./Manager.ts";
 export const folderReplacedNotice = (folder: string) =>
   `\r\n[GOAT] ${folder} was restored or set aside, and this shell still works in the old folder. Run cd "${folder}" or open a new terminal.\r\n`;
 
-/** Whether cwd is folder or inside it, by either separator. */
-export const isInsideFolder = (folder: string, cwd: string) => {
-  const root = folder.replace(/[\\/]+$/u, "");
-  return cwd === root || cwd.startsWith(`${root}/`) || cwd.startsWith(`${root}\\`);
-};
-
 export function enqueueProcessEvent(
   session: TerminalSessionState,
   expectedPid: number,

@@ -278,7 +278,7 @@ export const layer: Layer.Layer<
             } else {
               yield* recreate;
             }
-            yield* noticeFolderReplaced(worktreePath);
+            yield* noticeFolderReplaced(worktreePath, setAsidePath);
           }
         }
       }
