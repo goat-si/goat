@@ -3,18 +3,13 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 import {
-  isModelTextGenerationCapable,
-  isProviderTextGenerationCapable,
   type ModelSelection,
   type ProjectId,
   type ServerProvider,
   type ServerSettings,
 } from "@goat/contracts";
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
-import {
-  resolveTextGenerationFallback,
-  textGenerationDefaultModel,
-} from "@goat/shared/serverSettings";
+import { resolveTextGenerationRoute } from "@goat/shared/serverSettings";
 
 import type * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 
@@ -60,48 +55,32 @@ export const makeTextGenerationCapableSelection = Effect.fn("TextGeneration.make
       settings: ServerSettings,
       selection: ModelSelection,
     ) {
-      if (Object.hasOwn(settings.textGenerators, selection.instanceId)) return selection;
       const instance = yield* registry.getInstance(selection.instanceId);
-      const snapshot = instance === undefined ? undefined : yield* checkedSnapshot(instance);
-      if (snapshot === undefined) return selection;
-      const ownDefault = {
-        instanceId: selection.instanceId,
-        model: textGenerationDefaultModel(snapshot),
-      };
-      if (isProviderTextGenerationCapable(snapshot)) {
-        if (isModelTextGenerationCapable(snapshot, selection.model)) {
-          yield* Ref.set(lastLogged, null);
-          return selection;
+      if (
+        instance?.snapshot.isAwaitingFirstCheck !== undefined &&
+        (yield* instance.snapshot.isAwaitingFirstCheck)
+      ) {
+        return selection;
+      }
+      const providers: Array<ServerProvider> = [];
+      if (instance !== undefined) providers.push(yield* instance.snapshot.getSnapshot);
+      const projectId = yield* TextGenerationProject;
+      const now = DateTime.toEpochMillis(yield* DateTime.now);
+      let route = resolveTextGenerationRoute(settings, selection, providers, projectId, now);
+      if (route.reason === "no_fallback") {
+        for (const other of yield* registry.listInstances) {
+          if (other.instanceId === selection.instanceId) continue;
+          const snapshot = yield* checkedSnapshot(other);
+          if (snapshot !== undefined) providers.push(snapshot);
         }
-        yield* logFallback(selection, ownDefault, "model_unsupported");
-        return ownDefault;
+        route = resolveTextGenerationRoute(settings, selection, providers, projectId, now);
       }
-      const others: Array<ServerProvider> = [];
-      for (const other of yield* registry.listInstances) {
-        if (other.instanceId === selection.instanceId) continue;
-        const otherSnapshot = yield* checkedSnapshot(other);
-        if (otherSnapshot !== undefined) others.push(otherSnapshot);
+      if (route.reason === "saved") {
+        yield* Ref.set(lastLogged, null);
+      } else if (route.selection !== selection) {
+        yield* logFallback(selection, route.selection, route.reason);
       }
-      // The web picker takes the fallback instance's default model, never the thread's custom default.
-      const fallback = resolveTextGenerationFallback(settings, others, {
-        projectId: yield* TextGenerationProject,
-        excludeInstanceId: selection.instanceId,
-        now: DateTime.toEpochMillis(yield* DateTime.now),
-      });
-      const fallbackSnapshot = others.find((other) => other.instanceId === fallback?.instanceId);
-      const chosen =
-        fallbackSnapshot === undefined
-          ? ownDefault
-          : {
-              instanceId: fallbackSnapshot.instanceId,
-              model: textGenerationDefaultModel(fallbackSnapshot),
-            };
-      yield* logFallback(
-        selection,
-        chosen,
-        fallbackSnapshot === undefined ? "no_fallback" : "provider_unsupported",
-      );
-      return chosen;
+      return route.selection;
     });
   },
 );

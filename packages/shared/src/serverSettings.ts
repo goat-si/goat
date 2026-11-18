@@ -2,26 +2,13 @@ import { mergeSourceControlHostSettings } from "./sourceControlHostSettings.ts";
 import type { ModelPreferences } from "@goat/contracts/settings";
 import {
   goatBotHomeClaimSupersedes,
-  DEFAULT_MODEL_BY_PROVIDER,
-  DEFAULT_TEXT_GENERATION_MODEL,
-  DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
-  defaultInstanceIdForDriver,
   globalIdleCompaction,
   type IdleCompactionMode,
-  isProviderAvailable,
-  isUnconfiguredDefaultInstanceEnabled,
-  resolveProjectProviderInstanceEnabled,
-  resolveProviderInstanceEnabled,
-  isProviderTextGenerationCapable,
-  isModelTextGenerationCapable,
   type ModelSelection,
   patchDisposableMachines,
   type ProjectId,
   type ProjectScopedServerSettingKey,
   type ProjectSettingsOverrides,
-  ProviderDriverKind,
-  ProviderInstanceId,
-  type ServerProvider,
   ServerSettings,
   type ServerSettingsPatch,
   UsageLimitSourceId,
@@ -31,14 +18,24 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { deepMerge } from "./Struct.ts";
 import { fromLenientJson } from "./schemaJson.ts";
-import { createModelSelection, readCustomModelEntries } from "./model.ts";
-import { isTextGenerationFallbackCandidate } from "./textGenerationFallback.ts";
+import { createModelSelection } from "./model.ts";
 import {
   getBackgroundActivityBaseProfile,
   normalizeBackgroundActivitySettings,
   normalizeServerBackgroundActivitySettings,
   resolveBackgroundActivitySettings,
 } from "./backgroundActivitySettings.ts";
+
+export {
+  fallbackTextGenerationModelSelection,
+  isModelSelectionProviderEnabled,
+  resolveMemoryModelSelection,
+  resolveReviewGuideModelSelection,
+  resolveSourceControlWriterModelSelection,
+  resolveTextGenerationFallback,
+  resolveTextGenerationRoute,
+  textGenerationDefaultModel,
+} from "./serverSettingsTextGeneration.ts";
 
 // Only observability: a value the server migrates on load elsewhere in the file must not drop it.
 const ServerObservabilitySettingsJson = fromLenientJson(
@@ -74,226 +71,6 @@ export function resolveProjectAutoPull(
     settings.projectSettingsOverrides[projectId]?.defaultAutoPull ??
     settings.projectAutoPullOverrides[projectId] ??
     (legacyAutoPull === true || settings.defaultAutoPull)
-  );
-}
-
-// Settings from an older server, or partial test settings, may lack textGenerators.
-function textGenerator(settings: ServerSettings, instanceId: ModelSelection["instanceId"]) {
-  const generators = settings.textGenerators ?? {};
-  return Object.hasOwn(generators, instanceId) ? generators[instanceId] : undefined;
-}
-
-export function isModelSelectionProviderEnabled(
-  settings: ServerSettings,
-  selection: ModelSelection,
-): boolean {
-  const generator = textGenerator(settings, selection.instanceId);
-  if (generator !== undefined) return generator.enabled;
-  const instanceConfig = Object.hasOwn(settings.providerInstances, selection.instanceId)
-    ? settings.providerInstances[selection.instanceId]
-    : undefined;
-  if (instanceConfig !== undefined) {
-    return resolveProviderInstanceEnabled(instanceConfig);
-  }
-
-  return isUnconfiguredDefaultInstanceEnabled(selection.instanceId);
-}
-
-const TEXT_GENERATION_FALLBACK_DRIVERS = [
-  "codex",
-  "claudeAgent",
-  "cursor",
-  "grok",
-  "muse",
-  "pi",
-  "omo",
-  "opencode",
-  "antigravity",
-].map((driver) => ProviderDriverKind.make(driver));
-
-/** Configured instances come after every default instance, so they only win when no default qualifies. */
-export function fallbackTextGenerationModelSelection(
-  providerInstances: ServerSettings["providerInstances"],
-  isEnabled: (instanceId: ProviderInstanceId, driver: ProviderDriverKind) => boolean,
-  options?: { readonly defaultModelSelection?: ModelSelection | null },
-): ModelSelection | null {
-  const candidates = [
-    ...TEXT_GENERATION_FALLBACK_DRIVERS.map(
-      (driver) => [defaultInstanceIdForDriver(driver), driver] as const,
-    ),
-    ...Object.entries(providerInstances).flatMap(([instanceId, instance]) =>
-      TEXT_GENERATION_FALLBACK_DRIVERS.includes(instance.driver)
-        ? [[ProviderInstanceId.make(instanceId), instance.driver] as const]
-        : [],
-    ),
-  ];
-  const match = candidates.find(([instanceId, driver]) => isEnabled(instanceId, driver));
-  if (match === undefined) return null;
-  const [instanceId, driver] = match;
-  const threadDefault = options?.defaultModelSelection;
-  const config = providerInstances[instanceId]?.config as { customModels?: unknown } | undefined;
-  if (
-    threadDefault?.instanceId === instanceId &&
-    readCustomModelEntries(config?.customModels).some((entry) => entry.slug === threadDefault.model)
-  ) {
-    return threadDefault;
-  }
-  return {
-    instanceId,
-    model:
-      DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[driver] ??
-      DEFAULT_MODEL_BY_PROVIDER[driver] ??
-      DEFAULT_TEXT_GENERATION_MODEL,
-  };
-}
-
-/**
- * The model text generation runs on an instance when its saved model cannot be used, as the
- * Settings picker resolves it: the driver's text generation default, else the status's default
- * or first model that can generate text (Pi and OmO list "default" first).
- */
-export function textGenerationDefaultModel(snapshot: ServerProvider): string {
-  const capable = snapshot.models.filter((model) => model.supportsTextGeneration !== false);
-  return (
-    DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[snapshot.driver] ??
-    (capable.find((model) => model.isDefault === true) ?? capable[0])?.slug ??
-    DEFAULT_MODEL_BY_PROVIDER[snapshot.driver] ??
-    DEFAULT_TEXT_GENERATION_MODEL
-  );
-}
-
-export function resolveSourceControlWriterModelSelection(
-  settings: ServerSettings,
-  providers: ReadonlyArray<ServerProvider> | undefined,
-  projectId: ProjectId | null,
-): ModelSelection {
-  const selection = settings.sourceControlWriterModelSelection;
-  const generator = selection ? textGenerator(settings, selection.instanceId) : undefined;
-  if (generator !== undefined)
-    return generator.enabled
-      ? (selection ?? settings.textGenerationModelSelection)
-      : settings.textGenerationModelSelection;
-  if (
-    !selection ||
-    !resolveProjectProviderInstanceEnabled(settings, projectId, selection.instanceId)
-  ) {
-    return settings.textGenerationModelSelection;
-  }
-  if (providers === undefined) {
-    return selection;
-  }
-
-  const provider = providers.find((candidate) => candidate.instanceId === selection.instanceId);
-  return provider?.enabled === true &&
-    isProviderAvailable(provider) &&
-    isProviderTextGenerationCapable(provider) &&
-    isModelTextGenerationCapable(provider, selection.model)
-    ? selection
-    : settings.textGenerationModelSelection;
-}
-
-/**
- * The model memory generation runs on. Without a usable dedicated choice it follows the
- * text generation model, which the server already moves to a ready provider.
- */
-export function resolveMemoryModelSelection(
-  settings: ServerSettings,
-  providers: ReadonlyArray<ServerProvider> | undefined,
-  now?: number,
-): ModelSelection {
-  const selection = resolveSourceControlWriterModelSelection(
-    { ...settings, sourceControlWriterModelSelection: settings.memoryModelSelection },
-    providers,
-    null,
-  );
-  return agentOnlySelection(settings, providers, null, selection, false, now);
-}
-
-/**
- * The provider text generation falls back to, in the fallback driver order. Settings and the
- * server both resolve through it, so Settings names the provider the server runs.
- */
-export function resolveTextGenerationFallback(
-  settings: Pick<ServerSettings, "providerInstances" | "projectSettingsOverrides">,
-  providers: ReadonlyArray<ServerProvider> | undefined,
-  options: {
-    readonly projectId: ProjectId | null;
-    readonly excludeInstanceId: ProviderInstanceId;
-    readonly now?: number | undefined;
-    readonly accept?: (instanceId: ProviderInstanceId, driver: ProviderDriverKind) => boolean;
-  },
-): ModelSelection | null {
-  return fallbackTextGenerationModelSelection(settings.providerInstances, (id, driver) => {
-    if (id === options.excludeInstanceId || options.accept?.(id, driver) === false) return false;
-    if (providers === undefined) {
-      return resolveProjectProviderInstanceEnabled(settings, options.projectId, id);
-    }
-    const provider = providers.find((candidate) => candidate.instanceId === id);
-    return (
-      provider !== undefined &&
-      isTextGenerationFallbackCandidate(provider, textGenerationDefaultModel(provider), {
-        settings,
-        projectId: options.projectId,
-        now: options.now,
-      })
-    );
-  });
-}
-
-function agentOnlySelection(
-  settings: ServerSettings,
-  providers: ReadonlyArray<ServerProvider> | undefined,
-  projectId: ProjectId | null,
-  selection: ModelSelection,
-  investigate: boolean,
-  now: number | undefined,
-): ModelSelection {
-  const instanceId = selection?.instanceId;
-  if (instanceId === undefined || textGenerator(settings, instanceId) === undefined)
-    return selection;
-  return (
-    resolveTextGenerationFallback(settings, providers, {
-      projectId,
-      excludeInstanceId: instanceId,
-      now,
-      // Review guides investigate the checkout read-only; the other drivers reject that request.
-      accept: (id, driver) =>
-        textGenerator(settings, id) === undefined &&
-        (!investigate || driver === "codex" || driver === "claudeAgent"),
-    }) ?? selection
-  );
-}
-
-export function resolveReviewGuideModelSelection(
-  settings: ServerSettings,
-  providers: ReadonlyArray<ServerProvider> | undefined,
-  projectId: ProjectId | null,
-  now?: number,
-): ModelSelection {
-  const selection = settings.reviewGuideModelSelection;
-  if (
-    selection &&
-    textGenerator(settings, selection.instanceId) === undefined &&
-    resolveProjectProviderInstanceEnabled(settings, projectId, selection.instanceId)
-  ) {
-    const provider = providers?.find((candidate) => candidate.instanceId === selection.instanceId);
-    if (
-      providers === undefined ||
-      (provider?.enabled === true &&
-        isProviderAvailable(provider) &&
-        isProviderTextGenerationCapable(provider) &&
-        isModelTextGenerationCapable(provider, selection.model))
-    ) {
-      return selection;
-    }
-  }
-  return agentOnlySelection(
-    settings,
-    providers,
-    projectId,
-    resolveSourceControlWriterModelSelection(settings, providers, projectId),
-    true,
-    now,
   );
 }
 

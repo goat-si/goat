@@ -20,10 +20,7 @@ import {
 } from "@goat/shared/model";
 import { getComposerProviderState } from "./components/chat/composerProviderState";
 import { type ClientSettings, UnifiedSettings } from "@goat/contracts/settings";
-import {
-  resolveModelPreferences,
-  resolveTextGenerationFallback,
-} from "@goat/shared/serverSettings";
+import { resolveModelPreferences, resolveTextGenerationRoute } from "@goat/shared/serverSettings";
 import * as Arr from "effect/Array";
 import * as Equal from "effect/Equal";
 import * as Result from "effect/Result";
@@ -436,38 +433,25 @@ export function resolveAppModelSelectionState(
     settings.textGenerators[selection.instanceId]?.enabled === true
   )
     return selection;
-  const supportedProviders = providers.filter(
-    (provider) => provider.supportsTextGeneration !== false,
+  const route = resolveTextGenerationRoute(settings, selection, providers, null, Date.now());
+  if (route.reason === "no_fallback") return NO_PROVIDER_MODEL_SELECTION;
+  const entry = deriveProviderInstanceEntries(providers).find(
+    (candidate) => candidate.instanceId === route.selection.instanceId,
   );
-  const entries = deriveProviderInstanceEntries(supportedProviders);
-  const selectedEntry = entries.find(
-    (entry) => entry.instanceId === selection.instanceId && entry.enabled && entry.isAvailable,
-  );
-  // Settings has no project; the server also skips providers the thread's project turned off.
-  const fallback = selectedEntry
-    ? null
-    : resolveTextGenerationFallback(settings, supportedProviders, {
-        projectId: null,
-        excludeInstanceId: selection.instanceId,
-        now: Date.now(),
-      });
-  const entry =
-    selectedEntry ?? entries.find((candidate) => candidate.instanceId === fallback?.instanceId);
   if (entry) {
-    const selectedModel = selectedEntry ? selection.model : null;
-    // Use the cheap generation default; the catalog default is the expensive chat flagship.
     const options = getTextGenerationModelOptionsForInstance(settings, entry);
     const model =
-      resolveSelectableModel(entry.driverKind, selectedModel, options) ??
-      resolveSelectableModel(
-        entry.driverKind,
-        DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[entry.driverKind],
-        options,
-      ) ??
-      options.find((option) => option.isDefault)?.slug ??
-      options[0]?.slug ??
-      entry.models.find((model) => model.supportsTextGeneration !== false)?.slug ??
-      DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[entry.driverKind];
+      route.reason === "saved"
+        ? (resolveSelectableModel(entry.driverKind, selection.model, options) ??
+          resolveSelectableModel(
+            entry.driverKind,
+            DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[entry.driverKind],
+            options,
+          ) ??
+          options.find((option) => option.isDefault)?.slug ??
+          options[0]?.slug ??
+          route.selection.model)
+        : route.selection.model;
     if (!model) {
       return createModelSelection(entry.instanceId, "", []);
     }
@@ -476,7 +460,7 @@ export function resolveAppModelSelectionState(
       provider,
       model,
       models: entry.models,
-      modelOptions: selectedEntry ? selection.options : undefined,
+      modelOptions: route.reason === "saved" ? selection.options : undefined,
       planModeEnabled: settings.planModeEnabled || selectsPlanAgent(selection.options),
     });
 

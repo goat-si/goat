@@ -51,4 +51,26 @@ describe("Settings names the text generation fallback the server runs", () => {
     );
     expect(serverFallback(providers)).toBe(ProviderInstanceId.make("codex"));
   });
+  it("shows the resolved fallback model even when it is hidden from the picker", () => {
+    const missing = ProviderInstanceId.make("missing-instance");
+    const selected = {
+      ...settings,
+      textGenerationModelSelection: createModelSelection(missing, "missing-model"),
+      providerModelPreferences: {
+        [codex.instanceId]: { hiddenModels: ["gpt-6-luna"], modelOrder: [] },
+      },
+    };
+    const providers = [
+      {
+        ...codex,
+        models: [
+          ...codex.models,
+          ...provider({ instanceId: "codex", models: ["gpt-6-astra"] }).models,
+        ],
+      },
+    ];
+    expect(resolveAppModelSelectionState(selected, providers)).toEqual(
+      createModelSelection(codex.instanceId, "gpt-6-luna"),
+    );
+  });
 });

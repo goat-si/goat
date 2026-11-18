@@ -597,8 +597,7 @@ export function GeneralSettingsPanel() {
   const textGenInstanceEntry = textGenerationModelInstanceEntries.find(
     (entry) => entry.instanceId === textGenInstanceId,
   );
-  const textGenProvider: ProviderDriverKind =
-    textGenInstanceEntry?.driverKind ?? DEFAULT_DRIVER_KIND;
+  const textGenProvider = textGenInstanceEntry?.driverKind ?? DEFAULT_DRIVER_KIND;
   const textGenerationModelOptionsByInstance = getTextGenerationModelOptionsByInstance(
     settings,
     textGenerationProviders,
@@ -1325,6 +1324,7 @@ export function GeneralSettingsPanel() {
                   environmentId={environmentId}
                   activeInstanceId={textGenInstanceId}
                   model={textGenModel}
+                  preserveSelectedModel
                   lockedProvider={null}
                   instanceEntries={textGenerationModelInstanceEntries}
                   modelOptionsByInstance={textGenerationModelOptionsByInstance}

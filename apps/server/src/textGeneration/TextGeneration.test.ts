@@ -545,6 +545,24 @@ describe("TextGeneration fallback provider", () => {
     }),
   );
 
+  it.effect("runs a ready fallback when the saved provider is unregistered", () =>
+    Effect.gen(function* () {
+      const fallbackModel = "gpt-5.6-sol";
+      const { ran, generation } = capableSelectionHarness([
+        textProvider(CODEX, "codex", [{ slug: fallbackModel }]),
+      ]);
+      const saved = createModelSelection(
+        ProviderInstanceId.make("missing-instance"),
+        "missing-model",
+      );
+      yield* generateBranch(
+        yield* generation.pipe(Effect.provide(ServerSettings.layerTest())),
+        saved,
+      );
+      expect(ran).toEqual([createModelSelection(CODEX, fallbackModel)]);
+    }),
+  );
+
   it.effect("skips a provider the caller's project turned off, and only for that project", () =>
     Effect.gen(function* () {
       const { ran, generation } = capableSelectionHarness([

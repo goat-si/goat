@@ -362,6 +362,7 @@ export function SourceControlWritingSettingsSection() {
                   environmentId={environmentId}
                   activeInstanceId={activeSelection.instanceId}
                   model={activeSelection.model}
+                  preserveSelectedModel
                   lockedProvider={null}
                   instanceEntries={instanceEntries}
                   modelOptionsByInstance={modelOptionsByInstance}
@@ -490,6 +491,7 @@ export function SourceControlWritingSettingsSection() {
                       environmentId={environmentId}
                       activeInstanceId={reviewGuideSelection.instanceId}
                       model={reviewGuideSelection.model}
+                      preserveSelectedModel
                       lockedProvider={null}
                       instanceEntries={instanceEntries}
                       modelOptionsByInstance={reviewGuideModelOptionsByInstance}

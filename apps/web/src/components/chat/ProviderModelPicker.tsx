@@ -97,6 +97,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   workspaceCwd?: string | null;
   activeInstanceId: ProviderInstanceId;
   model: string;
+  preserveSelectedModel?: boolean;
   selectedModels?: ReadonlyArray<{ instanceId: ProviderInstanceId; model: string }>;
   onToggleModel?: (instanceId: ProviderInstanceId, model: string) => void;
   lockedProvider: ProviderDriverKind | null;
@@ -160,16 +161,18 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
 
   const activeInstanceId = props.activeInstanceId;
   const selectedInstanceOptions = props.modelOptionsByInstance.get(activeInstanceId) ?? [];
-  const selectedModel =
+  const selectedModel: ModelEsque | undefined =
     resolveModelPickerSelectedModel({
       driverKind: activeEntry?.driverKind,
       model: props.model,
       options: selectedInstanceOptions,
     }) ??
     retainedModelWhileProviderLocked(activeEntry, props.model) ??
-    (activeEntry?.driverKind === "opencode" || activeEntry?.driverKind === "antigravity"
-      ? undefined
-      : selectedInstanceOptions[0]);
+    (props.preserveSelectedModel
+      ? activeEntry?.models.find((candidate) => candidate.slug === props.model)
+      : activeEntry?.driverKind === "opencode" || activeEntry?.driverKind === "antigravity"
+        ? undefined
+        : selectedInstanceOptions[0]);
   const triggerTitle = selectedModel
     ? getTriggerDisplayModelName(selectedModel, activeEntry?.driverKind)
     : props.model === ANTIGRAVITY_DEFAULT_MODEL
