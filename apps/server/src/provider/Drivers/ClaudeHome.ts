@@ -138,7 +138,7 @@ export const claudeSignedOutMessage = (input: {
 const mainCheckoutRoot = Effect.fn("ClaudeHome.mainCheckoutRoot")(function* (checkout: string) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  return fileSystem.readFileString(path.join(checkout, ".git")).pipe(
+  return yield* fileSystem.readFileString(path.join(checkout, ".git")).pipe(
     Effect.flatMap((pointer) => {
       const gitDir = /^gitdir:\s*(.+)$/m.exec(pointer)?.[1]?.trim();
       if (gitDir === undefined) return Effect.succeed(checkout);
