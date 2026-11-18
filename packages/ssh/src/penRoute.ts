@@ -212,7 +212,8 @@ export const penExactAliasRoute = (settings: ReadonlyMap<string, string>) => {
     settings.get("stricthostkeychecking") === "true" &&
     unset(settings.get("knownhostscommand")) &&
     settings.get("controlmaster") === "false" &&
-    settings.get("controlpath") === "none" &&
+    // OpenSSH 10.3 omits controlpath from ssh -G output when it is none.
+    unset(settings.get("controlpath")) &&
     file !== undefined &&
     /^\/\S+$/u.test(file)
     ? { nodeId: match[1], noisePub: match[2], knownHostsFile: file }

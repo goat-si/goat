@@ -46,6 +46,11 @@ describe("exact Pen route", () => {
     );
     expect(penExactAliasRoute(f.settings)).toBeDefined();
   });
+  it("accepts the ssh -G output of OpenSSH 10.3, which omits controlpath none", () => {
+    const f = facts();
+    f.settings.delete("controlpath");
+    expect(penExactAliasRoute(f.settings)).toMatchObject({ nodeId: node });
+  });
   it.each([
     ["proxycommand", "'/bin/pen' pipe %n 22"],
     ["proxycommand", `"C:\\pen.exe" pipe --node ${node} --noise ${noise} 22`],
