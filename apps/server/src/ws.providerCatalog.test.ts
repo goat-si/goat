@@ -1,7 +1,15 @@
 import { assert, it } from "@effect/vitest";
-import { ProviderDriverKind, ProviderInstanceId, WS_METHODS } from "@goat/contracts";
+import {
+  ProviderDriverKind,
+  ProviderInstanceId,
+  WS_METHODS,
+  type ServerConfigStreamEvent,
+} from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { makeProviderCatalogRpc } from "./wsProviderCatalog.testkit.ts";
 import { makeWorkspaceProviderFixture } from "./wsProviderFixture.testkit.ts";
 
@@ -172,4 +180,65 @@ it.effect("an omitted provider reply requires the same authorization as a full r
     assert.equal(denied._tag, "EnvironmentAuthorizationError");
     assert.equal(refreshes, 0);
   }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "the initial config, live provider update and cwd reply agree after quota projection",
+  () =>
+    Effect.gen(function* () {
+      const { local } = makeCatalogFixture();
+      const observedUpdate = yield* Deferred.make<void>();
+      const events = yield* Queue.unbounded<ServerConfigStreamEvent>();
+      const live = { ...local, status: "warning" as const };
+      const client = yield* makeProviderCatalogRpc({
+        providers: [local],
+        cwdProviders: new Set([local.instanceId]),
+        providerChanges: Stream.make([live]).pipe(
+          Stream.tap(() => Deferred.succeed(observedUpdate, undefined)),
+          (updates) => Stream.concat(updates, Stream.never),
+        ),
+        projectProviders: (providers) =>
+          Effect.succeed(
+            providers.map((provider) => ({
+              ...provider,
+              usageLimits: { checkedAt: local.checkedAt, windows: [] },
+            })),
+          ),
+      });
+      yield* client[WS_METHODS.subscribeServerConfig]({
+        workspaceSnapshotsOnDemand: true,
+        providerCatalogsOnDemand: true,
+        providerCatalogDigests: true,
+        usageLimitsCommand: true,
+      }).pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "snapshot" ||
+            (event.type === "providerStatuses" && event.payload.providers[0]?.status === "warning"),
+        ),
+        Stream.runForEach((event) => Queue.offer(events, event)),
+        Effect.forkScoped,
+      );
+      const initial = yield* Queue.take(events);
+      if (initial.type !== "snapshot") return yield* Effect.die("Missing initial config");
+      yield* Deferred.await(observedUpdate);
+      yield* TestClock.adjust("1 second");
+      const updated = yield* Queue.take(events);
+      if (updated.type !== "providerStatuses") return yield* Effect.die("Missing provider update");
+
+      const reply = yield* client[WS_METHODS.serverRefreshProviders]({
+        instanceId: local.instanceId,
+        cwd: "/a",
+        workspaceSnapshotsOnDemand: true,
+        providerCatalogsOnDemand: true,
+        machineCatalog: true,
+        usageLimitsCommand: true,
+      });
+      assert.include(
+        reply.providers[0]?.slashCommands.map((command) => command.name) ?? [],
+        "usage-limits",
+      );
+      assert.equal(initial.config.providers[0]?.catalogDigest, reply.providers[0]?.catalogDigest);
+      assert.equal(updated.payload.providers[0]?.catalogDigest, reply.providers[0]?.catalogDigest);
+    }).pipe(Effect.scoped),
 );

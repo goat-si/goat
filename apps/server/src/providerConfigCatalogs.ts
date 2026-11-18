@@ -1,10 +1,16 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- The digest is part of a synchronous projection.
 import * as NodeCrypto from "node:crypto";
-import type { ProviderInstanceId, ServerProvider } from "@goat/contracts";
+import type {
+  ProviderInstanceId,
+  ServerProvider,
+  UsageLimitSourceSnapshots,
+} from "@goat/contracts";
+import { withUsageLimitsCommands } from "@goat/shared/usageLimits";
 import * as Effect from "effect/Effect";
 import type { ProviderInstanceRegistry } from "./provider/ProviderInstanceRegistry.ts";
+import type { UsageLimitSources } from "./usage/UsageLimitSources.ts";
 
-export function withoutWorkspaceSnapshots(providers: ReadonlyArray<ServerProvider>) {
+function withoutWorkspaceSnapshots(providers: ReadonlyArray<ServerProvider>) {
   return providers.map(({ workspaceSnapshots: _workspaceSnapshots, ...provider }) => provider);
 }
 
@@ -25,6 +31,59 @@ function machineCatalogDigest(provider: ServerProvider) {
 export type ProviderConfigProjection = (
   providers: ReadonlyArray<ServerProvider>,
 ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
+
+export function makeProviderReplyProjection(
+  quotaProjection: UsageLimitSources["Service"]["projectProviders"],
+) {
+  return (
+    catalogProjection: ProviderConfigProjection = Effect.succeed,
+    sources?: Effect.Effect<UsageLimitSourceSnapshots>,
+  ): ProviderConfigProjection =>
+    (providers) =>
+      quotaProjection(providers).pipe(
+        Effect.flatMap((projected) =>
+          sources === undefined
+            ? catalogProjection(projected)
+            : sources.pipe(
+                Effect.flatMap((current) =>
+                  catalogProjection(withUsageLimitsCommands(projected, current)),
+                ),
+              ),
+        ),
+      );
+}
+
+export function makeProviderRefreshProjection(
+  input: {
+    readonly instanceId?: ProviderInstanceId | undefined;
+    readonly cwd?: string | undefined;
+    readonly workspaceSnapshotsOnDemand?: boolean | undefined;
+    readonly providerCatalogsOnDemand?: boolean | undefined;
+    readonly machineCatalog?: boolean | undefined;
+  },
+  getInstance: ProviderInstanceRegistry["Service"]["getInstance"],
+): ProviderConfigProjection {
+  if (!input.workspaceSnapshotsOnDemand) return Effect.succeed;
+  const { instanceId, cwd } = input;
+  if (instanceId === undefined || cwd === undefined) {
+    return (providers) => Effect.succeed(withoutWorkspaceSnapshots(providers));
+  }
+  const catalogOnDemand = input.providerCatalogsOnDemand
+    ? getInstance(instanceId).pipe(Effect.map((instance) => instance?.snapshotForCwd !== undefined))
+    : Effect.succeed(false);
+  return (providers) =>
+    catalogOnDemand.pipe(
+      Effect.map((scanCatalog) =>
+        workspaceProviderReply(
+          providers,
+          instanceId,
+          cwd,
+          scanCatalog,
+          input.machineCatalog === true,
+        ),
+      ),
+    );
+}
 
 export function makeProviderConfigProjection(
   input: {
@@ -59,7 +118,7 @@ export function makeProviderConfigProjection(
     });
 }
 
-export function workspaceProviderReply(
+function workspaceProviderReply(
   providers: ReadonlyArray<ServerProvider>,
   instanceId: ProviderInstanceId,
   cwd: string,

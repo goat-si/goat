@@ -135,7 +135,6 @@ import { withWebSocketIdleTimeout } from "./wsIdleTimeout.ts";
 import * as AcpRegistryRuntimeCoordinator from "@goat/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
 import * as RelayClient from "@goat/shared/relayClient";
-import { withUsageLimitsCommands } from "@goat/shared/usageLimits";
 import * as SqlClient from "effect/sql/SqlClient";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import { issueNoteFileUrl } from "./assets/noteFileAsset.ts";
@@ -338,9 +337,9 @@ import {
 import { requestUrl } from "./requestUrl.ts";
 import {
   makeProviderConfigProjection,
+  makeProviderRefreshProjection,
+  makeProviderReplyProjection,
   type ProviderConfigProjection,
-  withoutWorkspaceSnapshots,
-  workspaceProviderReply,
 } from "./providerConfigCatalogs.ts";
 import { isNetworkPath } from "@goat/shared/path";
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
@@ -1545,21 +1544,15 @@ export const layerWsRpc = (
         yield* providerRegistry.refreshInstance(input.instanceId);
         return { disabled: true } as const;
       });
+      const projectProviderReply = makeProviderReplyProjection(usageLimitSources.projectProviders);
       const loadServerConfig = Effect.fn("ws.loadServerConfig")(function* (options: {
-        readonly usageLimitsCommand: boolean;
-        readonly projectProviderConfig?: ProviderConfigProjection;
+        readonly projectProviders?: ProviderConfigProjection;
         readonly deferDirectEndpoints?: boolean;
       }) {
         const keybindingsConfig = yield* keybindings.loadConfigState;
-        const currentProviders = yield* providerRegistry.getProviders.pipe(
-          Effect.flatMap(usageLimitSources.projectProviders),
+        const providers = yield* providerRegistry.getProviders.pipe(
+          Effect.flatMap(options.projectProviders ?? projectProviderReply()),
         );
-        const commandProviders = options.usageLimitsCommand
-          ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
-          : currentProviders;
-        const providers = options.projectProviderConfig
-          ? yield* options.projectProviderConfig(commandProviders)
-          : commandProviders;
         const settings = ServerSettings.redactServerSettingsForClient(
           yield* serverSettings.getSettings,
         );
@@ -2148,7 +2141,7 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
         ...(yield* PreviewSessions.makePreviewSessionRpcHandlers(currentSessionId)),
-        [WS_METHODS.serverGetConfig]: (_input) => loadServerConfig({ usageLimitsCommand: false }),
+        [WS_METHODS.serverGetConfig]: (_input) => loadServerConfig({}),
         [WS_METHODS.serverSearchAcpRegistry]: (input) =>
           acpRegistryCatalog
             .search(input)
@@ -2311,27 +2304,13 @@ export const layerWsRpc = (
             ) {
               return { providers: [] };
             }
-            const projected = yield* usageLimitSources.projectProviders(providers);
-            if (input.workspaceSnapshotsOnDemand !== true) return { providers: projected };
-            const commandProviders =
-              input.usageLimitsCommand === true
-                ? withUsageLimitsCommands(projected, yield* usageLimitSources.current)
-                : projected;
-            const { instanceId, cwd } = input;
-            if (instanceId === undefined || cwd === undefined) {
-              return { providers: withoutWorkspaceSnapshots(commandProviders) };
-            }
-            const catalogOnDemand =
-              input.providerCatalogsOnDemand === true &&
-              (yield* providerInstances.getInstance(instanceId))?.snapshotForCwd !== undefined;
             return {
-              providers: workspaceProviderReply(
-                commandProviders,
-                instanceId,
-                cwd,
-                catalogOnDemand,
-                input.machineCatalog === true,
-              ),
+              providers: yield* projectProviderReply(
+                makeProviderRefreshProjection(input, providerInstances.getInstance),
+                input.workspaceSnapshotsOnDemand && input.usageLimitsCommand
+                  ? usageLimitSources.current
+                  : undefined,
+              )(providers),
             };
           }),
         [WS_METHODS.mcpAppsCallTool]: (input) => mcpAppRequests.callTool(input),
@@ -3202,8 +3181,10 @@ export const layerWsRpc = (
                 { startImmediately: true },
               );
               const config = yield* loadServerConfig({
-                usageLimitsCommand,
-                projectProviderConfig,
+                projectProviders: projectProviderReply(
+                  projectProviderConfig,
+                  usageLimitsCommand ? usageLimitSources.current : undefined,
+                ),
                 deferDirectEndpoints: true,
               });
               const keybindingsUpdates = keybindingsChanges.pipe(
@@ -3223,11 +3204,14 @@ export const layerWsRpc = (
                   providerRegistry.streamChanges,
                 ),
                 usageLimitSources.streamChanges,
-                (providers, sources) =>
-                  usageLimitsCommand ? withUsageLimitsCommands(providers, sources) : providers,
+                (providers, sources) => [providers, sources] as const,
               ).pipe(
-                Stream.mapEffect(projectProviderConfig),
-                Stream.mapEffect(usageLimitSources.projectProviders),
+                Stream.mapEffect(([providers, sources]) =>
+                  projectProviderReply(
+                    projectProviderConfig,
+                    usageLimitsCommand ? Effect.succeed(sources) : undefined,
+                  )(providers),
+                ),
                 // Compare initial paired values with the snapshot; blindly dropping them loses changes between snapshot and subscription.
                 (updates) => Stream.concat(rpcInitialItems([config.providers]), updates),
                 Stream.changesWith(

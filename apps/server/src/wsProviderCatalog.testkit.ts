@@ -37,6 +37,8 @@ export function makeProviderCatalogRpc(options: {
   readonly cwdProviders: ReadonlySet<string>;
   readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
   readonly recordRefresh?: () => void;
+  readonly providerChanges?: Stream.Stream<ReadonlyArray<ServerProvider>>;
+  readonly projectProviders?: UsageLimitSources.UsageLimitSources["Service"]["projectProviders"];
 }) {
   const scopes = options.scopes ?? [AuthOrchestrationReadScope];
   const providers = Effect.succeed(options.providers);
@@ -91,7 +93,7 @@ export function makeProviderCatalogRpc(options: {
               }),
               Layer.mock(ProviderRegistry.ProviderRegistry)({
                 getProviders: providers,
-                streamChanges: Stream.never,
+                streamChanges: options.providerChanges ?? Stream.never,
                 refresh: () =>
                   Effect.sync(() => {
                     options.recordRefresh?.();
@@ -111,7 +113,7 @@ export function makeProviderCatalogRpc(options: {
                 current: Effect.succeed([]),
                 refresh: Effect.void,
                 streamChanges: Stream.make([]),
-                projectProviders: Effect.succeed,
+                projectProviders: options.projectProviders ?? Effect.succeed,
               }),
               Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({
                 resolveTargets: () => Effect.succeed([]),
