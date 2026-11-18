@@ -1591,7 +1591,9 @@ export const make = Effect.gen(function* () {
                 repository: project.repository,
                 host: project.host,
                 number: input.number,
-                ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+                ...(input.cursor === undefined || input.path !== undefined
+                  ? {}
+                  : { cursor: input.cursor }),
                 ...(input.path === undefined ? {} : { path: input.path }),
                 ...(input.revision === undefined ? {} : { revision: input.revision }),
                 ...(input.commit === undefined ? {} : { commit: input.commit }),
@@ -3107,11 +3109,10 @@ export const make = Effect.gen(function* () {
 
   const diffCache = yield* Cache.makeWith(
     (key: string) => {
-      const [reference, cursor, commit, , path, revision] = decodeDiffCacheKey(key);
+      const [reference, cursor, commit, , path] = decodeDiffCacheKey(key);
       return diffUncached({
         ...refOfCacheKey(reference),
         ...(path === null ? {} : { path }),
-        ...(revision === null ? {} : { revision }),
         ...(cursor === null ? {} : { cursor }),
         ...(commit === null ? {} : { commit }),
       } as PullRequestDiffInput).pipe(
@@ -3167,7 +3168,6 @@ export const make = Effect.gen(function* () {
         ? (lastGoodSummary.peek(refCacheKey(input))?.updatedAt ?? null)
         : null,
       input.path ?? null,
-      input.path === undefined ? null : (input.revision ?? null),
     ]);
     const evictDiffs = Cache.entries(diffCache).pipe(
       Effect.flatMap((entries) =>
@@ -3185,6 +3185,8 @@ export const make = Effect.gen(function* () {
     return { key, read };
   };
   const diff: PullRequestService["Service"]["diff"] = (input) => {
+    // The host must revalidate both live PR refs before every aggregate file read.
+    if (input.path !== undefined && input.commit === undefined) return diffUncached(input);
     const { key, read } = readDiff(input);
     const result = read.pipe(Effect.map((observation) => observation.value));
     return input.path === undefined ? staleDiff.serve(key, result) : result;

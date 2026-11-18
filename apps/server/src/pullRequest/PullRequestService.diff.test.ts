@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import { SourceControlProviderKind, type ProjectId } from "@goat/contracts";
+import { PullRequestProviderError } from "@goat/source-control-core/server/PullRequestProvider";
 import { fakePullRequestProvider } from "@goat/source-control-testing/fakeSourceControlDriver";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -115,5 +116,43 @@ it.effect("isolates withheld reads by path and revision, and refuses them on oth
     const error = yield* Effect.flip(unsupported.diff(path));
     assert.strictEqual(error._tag, "PullRequestOperationError");
     assert.lengthOf(answers, 4);
+  }),
+);
+
+it.effect("rejects a previously read aggregate file when only the base moves", () =>
+  Effect.gen(function* () {
+    const ref = { projectId: "p1" as ProjectId, repository: "acme/web", number: 10 };
+    const providerKind = SourceControlProviderKind.make("github");
+    const revision = { baseSha: "a".repeat(40), headSha: "b".repeat(40) };
+    let baseSha = revision.baseSha;
+    const provider = fakePullRequestProvider(providerKind, {
+      getDiff: (input) =>
+        input.revision?.baseSha !== baseSha
+          ? Effect.fail(
+              new PullRequestProviderError({
+                provider: providerKind,
+                operation: "getDiff",
+                reason: "failed",
+                detail: "The pull request revision changed before the file could be loaded.",
+              }),
+            )
+          : Effect.succeed({ patch: baseSha, truncated: false, nextCursor: null }),
+    });
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        { ...provider, capabilities: { ...provider.capabilities, withheldFileDiff: true } },
+      ],
+    });
+    const request = { ...ref, path: "large.js", revision };
+    assert.strictEqual((yield* service.diff(request)).patch, revision.baseSha);
+    baseSha = "c".repeat(40);
+    const error = yield* Effect.flip(service.diff(request));
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    assert.include(error.message, "revision changed");
+    assert.strictEqual(
+      (yield* service.diff({ ...request, revision: { ...revision, baseSha } })).patch,
+      baseSha,
+    );
   }),
 );
