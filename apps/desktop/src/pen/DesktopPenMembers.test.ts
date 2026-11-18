@@ -176,6 +176,18 @@ describe("DesktopPenMembers", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("a member Pen writes to ssh config only after the second look is still listed", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      h.watches[0]?.onSnapshot(snapshot(1, "a"));
+      yield* TestClock.adjust("3 seconds");
+      assert.deepEqual(routes(h.last()), [["box-a", "not-in-pen-config"]]);
+      h.trust("a");
+      yield* TestClock.adjust("10 minutes");
+      assert.deepEqual(routes(h.last()), [["box-a", "trusted"]]);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("the watch is retried on a backoff that doubles and resets after a snapshot", () =>
     Effect.gen(function* () {
       const h = yield* harness();

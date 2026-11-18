@@ -28,7 +28,8 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import { PEN_MEMBERS_CHANGED_CHANNEL } from "../ipc/channels.ts";
 
-const REINSPECT_AFTER = "2 seconds";
+// Pen writes its ssh config after it publishes a snapshot; looked at again until it settles.
+const REINSPECT_AFTER = ["2 seconds", "30 seconds", "2 minutes", "10 minutes"] as const;
 
 type PenAliasInspection = Effect.Success<ReturnType<typeof inspectPenExactAlias>>;
 type PublishedState = DesktopPenMembersState extends infer State
@@ -128,21 +129,22 @@ export const make = Effect.fn("DesktopPenMembers.make")(function* (deps: Desktop
         selfNodeId: snapshot.self,
         members,
       });
-      const members = yield* inspectAll;
-      if (!turn.isCurrent()) return;
-      yield* set(ready(members));
-      // Pen rewrites its ssh config after it publishes a snapshot, so a new member settles late.
-      if (
-        !members.some((member) => member.route.kind === "refused" && settles(member.route.reason))
-      )
-        return;
-      const superseded = yield* Effect.race(
-        Effect.as(Effect.sleep(REINSPECT_AFTER), false),
-        Effect.as(turn.superseded, true),
-      );
-      if (superseded) return;
-      const settled = yield* inspectAll;
-      if (turn.isCurrent()) yield* set(ready(settled));
+      let members = yield* inspectAll;
+      // A newer snapshot supersedes this turn and ends its looking.
+      for (let round = 0; turn.isCurrent(); round++) {
+        yield* set(ready(members));
+        if (
+          !members.some((member) => member.route.kind === "refused" && settles(member.route.reason))
+        )
+          return;
+        const delay = REINSPECT_AFTER[Math.min(round, REINSPECT_AFTER.length - 1)] ?? "10 minutes";
+        const superseded = yield* Effect.race(
+          Effect.as(Effect.sleep(delay), false),
+          Effect.as(turn.superseded, true),
+        );
+        if (superseded) return;
+        members = yield* inspectAll;
+      }
     }),
   ).pipe(Effect.forkScoped);
 
