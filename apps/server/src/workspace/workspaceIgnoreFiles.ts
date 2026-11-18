@@ -31,7 +31,7 @@ async function readIgnoreFile(path: string) {
   }
 }
 
-export function makeIgnoreFileDecider(cwd: string) {
+export function makeIgnoreFileDecider(cwd: string, filename: ".ignore" | ".gitignore" = ".ignore") {
   const cache = new Map<string, IgnoreFile | "unavailable" | undefined>();
   let remainingBytes = MAX_IGNORE_BYTES;
   // Both helpers share the search span and run per candidate path.
@@ -39,7 +39,7 @@ export function makeIgnoreFileDecider(cwd: string) {
     if (cache.has(directory)) return cache.get(directory);
     if (cache.size >= MAX_IGNORE_DIRECTORIES) return "unavailable" as const;
     const contents = yield* Effect.tryPromise(() =>
-      readIgnoreFile(NodePath.join(cwd, directory, ".ignore")),
+      readIgnoreFile(NodePath.join(cwd, directory, filename)),
     ).pipe(Effect.orElseSucceed(() => undefined));
     const file =
       contents === undefined || contents === "unavailable"

@@ -1,5 +1,6 @@
 import type { ProjectSearchContentsInput, ProjectSearchContentsResult } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 import type * as VcsProcess from "../vcs/VcsProcess.ts";
 import { isWholeWordRange, mapContentMatchRanges } from "./workspaceContentMatchRanges.ts";
@@ -7,12 +8,16 @@ import { makeIgnoreFileDecider } from "./workspaceIgnoreFiles.ts";
 
 const MAX_GREP_OUTPUT_BYTES = 4 * 1024 * 1024;
 const GIT_GREP_TIMEOUT_MS = 30_000;
+const MAX_REINCLUDED_PATHS = 128;
+const MAX_REINCLUDED_PATH_BYTES = 16 * 1024;
 const MAX_MATCHES_PER_FILE = 100;
 // FFF shows at most 512 characters of a matching line.
 const CONTENT_LINE_MAX_LENGTH = 512;
 
 type SearchInput = Omit<ProjectSearchContentsInput, "cwd">;
+type ContentMatch = ProjectSearchContentsResult["matches"][number];
 type RegexLineMatches = { readonly column: number; readonly texts: string[] };
+const matchKey = (path: string, line: number | string) => `${path}\0${line}`;
 
 // Git grep -z puts NUL between fields and a newline after the text. A path can contain a newline.
 function* grepRecords(stdout: string, fieldCount: number) {
@@ -57,6 +62,7 @@ const runGitGrep = Effect.fn("WorkspaceSearchIndex.gitGrep")(function* (
   cwd: string,
   input: SearchInput,
   regexMode: boolean,
+  paths: readonly string[],
   onlyMatching = false,
 ) {
   return yield* vcsProcess
@@ -66,8 +72,10 @@ const runGitGrep = Effect.fn("WorkspaceSearchIndex.gitGrep")(function* (
       args: [
         "-c",
         "core.fsmonitor=false",
+        "--literal-pathspecs",
         "grep",
         "--untracked",
+        ...(paths.length > 0 ? ["--no-exclude-standard"] : []),
         "--no-color",
         "--no-textconv",
         "--threads=2",
@@ -82,6 +90,7 @@ const runGitGrep = Effect.fn("WorkspaceSearchIndex.gitGrep")(function* (
         "-e",
         input.query,
         "--",
+        ...paths,
       ],
       cwd,
       allowNonZeroExit: true,
@@ -93,107 +102,148 @@ const runGitGrep = Effect.fn("WorkspaceSearchIndex.gitGrep")(function* (
     .pipe(Effect.orElseSucceed(() => undefined));
 });
 
+const searchGitPaths = Effect.fn("WorkspaceSearchIndex.searchGitPaths")(function* (
+  vcsProcess: VcsProcess.VcsProcess["Service"],
+  cwd: string,
+  input: SearchInput,
+  paths: readonly string[],
+  seen: ReadonlySet<string>,
+): Effect.fn.Return<ProjectSearchContentsResult | undefined> {
+  let regexMode = input.useRegex;
+  let regexFallbackError: string | undefined;
+  let result = yield* runGitGrep(vcsProcess, cwd, input, regexMode, paths);
+  if (
+    regexMode &&
+    result?.exitCode === 128 &&
+    /^fatal: (?:-e option,|command line,|PCRE2 compilation failed)/i.test(result.stderr)
+  ) {
+    regexFallbackError = result.stderr.trim().split("\n")[0];
+    regexMode = false;
+    result = yield* runGitGrep(vcsProcess, cwd, input, regexMode, paths);
+  }
+  if (!result || result.exitCode > 1 || result.stdoutInvalidUtf8) return undefined;
+
+  const regexMatches = new Map<string, RegexLineMatches>();
+  let rangesTruncated = false;
+  if (regexMode && result.exitCode === 0) {
+    // Do not evaluate a user-supplied regex in JS to get highlight ranges.
+    const ranges = yield* runGitGrep(vcsProcess, cwd, input, true, paths, true);
+    if (!ranges || ranges.exitCode > 1 || ranges.stdoutInvalidUtf8) return undefined;
+    rangesTruncated = ranges.stdoutTruncated;
+    for (const [relativePath, lineNumber, column, text] of grepRecords(ranges.stdout, 4)) {
+      const start = Number(column);
+      if (
+        !relativePath ||
+        !lineNumber ||
+        text === undefined ||
+        !Number.isSafeInteger(start) ||
+        start < 1
+      )
+        continue;
+      const key = matchKey(relativePath, lineNumber);
+      const existing = regexMatches.get(key);
+      if (existing) existing.texts.push(text);
+      else regexMatches.set(key, { column: start, texts: [text] });
+    }
+  }
+  const literal = regexMode
+    ? undefined
+    : new RegExp(
+        input.query.replace(/[\\^$.*+?()[\]{}|/]/g, "\\$&"),
+        input.caseSensitive ? "gu" : "giu",
+      );
+  const decide = makeIgnoreFileDecider(cwd);
+  const decideGit = makeIgnoreFileDecider(cwd, ".gitignore");
+  const matches: ContentMatch[] = [];
+  let currentPath: string | undefined;
+  let excluded = false;
+  let rangesCutOff = false;
+  for (const [relativePath, lineNumber, rawLine] of grepRecords(result.stdout, 3)) {
+    const line = Number(lineNumber);
+    if (!relativePath || rawLine === undefined || !Number.isSafeInteger(line) || line < 1) continue;
+    const key = matchKey(relativePath, line);
+    if (seen.has(key)) continue;
+    if (relativePath !== currentPath) {
+      currentPath = relativePath;
+      excluded = false;
+      const segments = relativePath.split("/");
+      let path = "";
+      for (const [index, segment] of segments.entries()) {
+        path = index === 0 ? segment : `${path}/${segment}`;
+        const folder = index < segments.length - 1;
+        const decision = (yield* decide(path, folder)) ?? (yield* decideGit(path, folder));
+        if (decision === "unavailable") return undefined;
+        if (decision === "ignored") {
+          excluded = true;
+          break;
+        }
+      }
+    }
+    if (excluded) continue;
+    const regexLine = regexMatches.get(key);
+    if (rangesTruncated && !regexLine) {
+      rangesCutOff = true;
+      break;
+    }
+    const lineContent = (rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine).slice(
+      0,
+      CONTENT_LINE_MAX_LENGTH,
+    );
+    const matchRanges = (
+      literal
+        ? Array.from(lineContent.matchAll(literal), (match) => ({
+            start: match.index,
+            end: match.index + match[0].length,
+          }))
+        : mapContentMatchRanges(lineContent, locateRegexMatches(lineContent, regexLine))
+    ).filter((range) => !input.wholeWord || isWholeWordRange(lineContent, range));
+    if (input.wholeWord && matchRanges.length === 0) continue;
+    matches.push({ path: relativePath, lineNumber: line, lineContent, matchRanges });
+    if (matches.length > input.limit) break;
+  }
+  return {
+    matches: matches.slice(0, input.limit),
+    truncated:
+      matches.length > input.limit || result.stdoutTruncated || rangesTruncated || rangesCutOff,
+    ...(regexFallbackError !== undefined ? { regexFallbackError } : {}),
+  };
+});
+
 export const searchContentsWithGit = Effect.fn("WorkspaceSearchIndex.searchContentsWithGit")(
   function* (
     vcsProcess: VcsProcess.VcsProcess["Service"],
     cwd: string,
     input: SearchInput,
-  ): Effect.fn.Return<ProjectSearchContentsResult | undefined> {
-    if (input.query.includes("\n") || input.query.includes("\0")) return undefined;
-    let regexMode = input.useRegex;
-    let regexFallbackError: string | undefined;
-    let result = yield* runGitGrep(vcsProcess, cwd, input, regexMode);
+    reincludedPaths: readonly string[],
+  ) {
     if (
-      regexMode &&
-      result?.exitCode === 128 &&
-      /^fatal: (?:-e option,|command line,|PCRE2 compilation failed)/i.test(result.stderr)
+      input.query.includes("\n") ||
+      input.query.includes("\0") ||
+      reincludedPaths.length > MAX_REINCLUDED_PATHS ||
+      reincludedPaths.reduce((bytes, path) => bytes + Buffer.byteLength(path) + 1, 0) >
+        MAX_REINCLUDED_PATH_BYTES
     ) {
-      regexFallbackError = result.stderr.trim().split("\n")[0];
-      regexMode = false;
-      result = yield* runGitGrep(vcsProcess, cwd, input, regexMode);
+      return undefined;
     }
-    if (!result || result.exitCode > 1 || result.stdoutInvalidUtf8) return undefined;
+    const normal = yield* searchGitPaths(vcsProcess, cwd, input, [], new Set());
+    if (!normal || normal.truncated || reincludedPaths.length === 0) return normal;
 
-    const regexMatches = new Map<string, RegexLineMatches>();
-    let rangesTruncated = false;
-    if (regexMode && result.exitCode === 0) {
-      // Do not evaluate a user-supplied regex in JS to get highlight ranges.
-      const ranges = yield* runGitGrep(vcsProcess, cwd, input, true, true);
-      if (!ranges || ranges.exitCode > 1 || ranges.stdoutInvalidUtf8) return undefined;
-      rangesTruncated = ranges.stdoutTruncated;
-      for (const [relativePath, lineNumber, column, text] of grepRecords(ranges.stdout, 4)) {
-        const start = Number(column);
-        if (
-          !relativePath ||
-          !lineNumber ||
-          text === undefined ||
-          !Number.isSafeInteger(start) ||
-          start < 1
-        )
-          continue;
-        const key = `${relativePath}\0${lineNumber}`;
-        const existing = regexMatches.get(key);
-        if (existing) existing.texts.push(text);
-        else regexMatches.set(key, { column: start, texts: [text] });
-      }
-    }
-    const literal = regexMode
-      ? undefined
-      : new RegExp(
-          input.query.replace(/[\\^$.*+?()[\]{}|/]/g, "\\$&"),
-          input.caseSensitive ? "gu" : "giu",
-        );
-    const decide = makeIgnoreFileDecider(cwd);
-    const matches: Array<ProjectSearchContentsResult["matches"][number]> = [];
-    let currentPath: string | undefined;
-    let excluded = false;
-    let rangesCutOff = false;
-    for (const [relativePath, lineNumber, rawLine] of grepRecords(result.stdout, 3)) {
-      const line = Number(lineNumber);
-      if (!relativePath || rawLine === undefined || !Number.isSafeInteger(line) || line < 1)
-        continue;
-      if (relativePath !== currentPath) {
-        currentPath = relativePath;
-        excluded = false;
-        const segments = relativePath.split("/");
-        let path = "";
-        for (const [index, segment] of segments.entries()) {
-          path = index === 0 ? segment : `${path}/${segment}`;
-          const decision = yield* decide(path, index < segments.length - 1);
-          if (decision === "unavailable") return undefined;
-          if (decision === "ignored") {
-            excluded = true;
-            break;
-          }
-        }
-      }
-      if (excluded) continue;
-      const regexLine = regexMatches.get(`${relativePath}\0${lineNumber}`);
-      if (rangesTruncated && !regexLine) {
-        rangesCutOff = true;
-        break;
-      }
-      const lineContent = (rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine).slice(
-        0,
-        CONTENT_LINE_MAX_LENGTH,
-      );
-      const matchRanges = (
-        literal
-          ? Array.from(lineContent.matchAll(literal), (match) => ({
-              start: match.index,
-              end: match.index + match[0].length,
-            }))
-          : mapContentMatchRanges(lineContent, locateRegexMatches(lineContent, regexLine))
-      ).filter((range) => !input.wholeWord || isWholeWordRange(lineContent, range));
-      if (input.wholeWord && matchRanges.length === 0) continue;
-      matches.push({ path: relativePath, lineNumber: line, lineContent, matchRanges });
-      if (matches.length > input.limit) break;
-    }
+    // Only widen Git's walk beneath paths explicitly re-included by .ignore.
+    const seen = new Set(normal.matches.map((match) => matchKey(match.path, match.lineNumber)));
+    const extra = yield* searchGitPaths(
+      vcsProcess,
+      cwd,
+      { ...input, limit: input.limit - normal.matches.length },
+      reincludedPaths,
+      seen,
+    );
+    if (!extra) return undefined;
     return {
-      matches: matches.slice(0, input.limit),
-      truncated:
-        matches.length > input.limit || result.stdoutTruncated || rangesTruncated || rangesCutOff,
-      ...(regexFallbackError !== undefined ? { regexFallbackError } : {}),
+      ...normal,
+      matches: [...normal.matches, ...extra.matches],
+      truncated: extra.truncated,
     };
   },
+  Effect.timeoutOption(GIT_GREP_TIMEOUT_MS),
+  Effect.map(Option.getOrUndefined),
 );

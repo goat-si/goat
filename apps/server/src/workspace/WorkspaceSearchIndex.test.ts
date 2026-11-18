@@ -578,3 +578,66 @@ it.live("answers content searches with git grep while a slow content index build
     expect(finder.destroy).not.toHaveBeenCalled();
   }).pipe(Effect.scoped, Effect.provide(testLayer)),
 );
+
+it.live("finds Git-ignored files re-included by .ignore during and after content warmup", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const vcsProcess = yield* VcsProcess.VcsProcess;
+    const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "goat-search-reinclude-" });
+    yield* vcsProcess.run({ operation: "test.gitInit", command: "git", args: ["init"], cwd });
+    yield* fs.writeFileString(path.join(cwd, ".gitignore"), "notes/\nsecret.txt\n");
+    yield* fs.writeFileString(path.join(cwd, ".ignore"), "!notes/\nnotes/**/*\n!notes/**/\n");
+    yield* fs.makeDirectory(path.join(cwd, "notes", "daily"), { recursive: true });
+    yield* fs.writeFileString(path.join(cwd, "notes", ".gitignore"), "*.txt\n");
+    yield* fs.writeFileString(path.join(cwd, "notes", "daily", ".ignore"), "!standup.md\n");
+    yield* fs.writeFileString(path.join(cwd, "notes", "daily", "standup.md"), "needle\n");
+    yield* fs.writeFileString(path.join(cwd, "notes", "daily", "standup.txt"), "needle\n");
+    yield* fs.writeFileString(path.join(cwd, "secret.txt"), "needle\n");
+    yield* fs.writeFileString(path.join(cwd, "regular.txt"), "needle\n");
+
+    let scanning = true;
+    let settle = () => Promise.resolve();
+    const create = FileFinder.create.bind(FileFinder);
+    vi.spyOn(FileFinder, "create").mockImplementation((options) => {
+      const result = create(options);
+      if (result.ok && !options.disableContentIndexing) {
+        const finder = result.value;
+        settle = async () => {
+          const ready = await finder.waitForIndexReady(15_000);
+          expect(ready).toEqual({ ok: true, value: true });
+        };
+        const progress = finder.getScanProgressAsync.bind(finder);
+        finder.getScanProgressAsync = async () => {
+          const result = await progress();
+          return scanning && result.ok
+            ? { ok: true, value: { ...result.value, isScanning: true, isWarmupComplete: false } }
+            : result;
+        };
+      }
+      return result;
+    });
+    const paths = yield* WorkspaceSearchIndex.make(cwd);
+    const content = yield* WorkspaceSearchIndex.make(cwd, "content");
+    const search = content.searchContents({
+      query: "needle",
+      limit: 20,
+      caseSensitive: true,
+      wholeWord: false,
+      useRegex: false,
+    });
+    const file = "notes/daily/standup.md";
+    const fallback = yield* search;
+    scanning = false;
+    yield* Effect.promise(settle);
+    const native = yield* search;
+
+    expect((yield* paths.search("standup", 20, "file")).entries).toEqual([
+      { kind: "file", path: file },
+    ]);
+    for (const result of [fallback, native]) {
+      expect(result.matches.map((match) => match.path).toSorted()).toEqual([file, "regular.txt"]);
+      expect(result.truncated).toBe(false);
+    }
+  }).pipe(Effect.scoped, Effect.provide(testLayer)),
+);

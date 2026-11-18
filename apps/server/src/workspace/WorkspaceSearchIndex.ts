@@ -31,6 +31,7 @@ import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { isNonRepositoryGitStderr } from "../vcs/gitNonRepository.ts";
 import { isWholeWordRange, mapContentMatchRanges } from "./workspaceContentMatchRanges.ts";
 import { searchContentsWithGit } from "./workspaceGitContentSearch.ts";
+import { makeIgnoreFileDecider } from "./workspaceIgnoreFiles.ts";
 import { makeSymlinkScan, mergeSymlinkMatches } from "./workspaceSymlinkScan.ts";
 
 // fff-node's native library stays external; single-executables require disk packages instead of importing them.
@@ -253,12 +254,15 @@ function withDirectoryAncestors(entries: ReadonlyArray<ProjectEntry>): ProjectEn
   return [...entryByPath.values()];
 }
 
-// fff applies .gitignore files only; Git also ignores paths from .git/info/exclude and the global excludes file.
-const listGitIgnoredPaths = Effect.fn("WorkspaceSearchIndex.listGitIgnoredPaths")(function* (
+// Git also lists exclusions from .git/info/exclude and the global excludes file.
+const loadGitIgnoredPaths = Effect.fn("WorkspaceSearchIndex.listGitIgnoredPaths")(function* (
   vcsProcess: VcsProcess.VcsProcess["Service"],
   cwd: string,
   hostIsWindows: boolean,
 ) {
+  const ignored = new Set<string>();
+  const reincluded: string[] = [];
+  const paths = { ignored, reincluded };
   const result = yield* vcsProcess
     .run({
       operation: "WorkspaceSearchIndex.listGitIgnoredPaths",
@@ -288,7 +292,7 @@ const listGitIgnoredPaths = Effect.fn("WorkspaceSearchIndex.listGitIgnoredPaths"
         ).pipe(Effect.as(null)),
       ),
     );
-  if (result === null) return new Set<string>();
+  if (result === null) return paths;
   if (result.exitCode !== 0 || result.stdoutTruncated || result.stderrTruncated) {
     if (result.exitCode === 0 || !isNonRepositoryGitStderr(result.stderr)) {
       yield* Effect.logWarning("Could not list Git ignored paths; continuing without them.", {
@@ -296,14 +300,17 @@ const listGitIgnoredPaths = Effect.fn("WorkspaceSearchIndex.listGitIgnoredPaths"
         exitCode: result.exitCode,
       });
     }
-    return new Set<string>();
+    return paths;
   }
-  return new Set(
-    result.stdout
-      .split("\0")
-      .filter((entry) => entry.length > 0)
-      .map((entry) => trimDirectorySeparator(toPosixPath(entry, hostIsWindows))),
-  );
+  const decide = makeIgnoreFileDecider(cwd);
+  for (const entry of result.stdout.split("\0")) {
+    if (entry === "") continue;
+    const relative = toPosixPath(entry, hostIsWindows);
+    const path = trimDirectorySeparator(relative);
+    if ((yield* decide(path, relative.endsWith("/"))) === "included") reincluded.push(path);
+    else ignored.add(path);
+  }
+  return paths;
 });
 
 function mixedItemPath(item: MixedItem): string {
@@ -400,7 +407,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
   );
   let initialScanTimedOut = false;
   const vcsProcess = yield* VcsProcess.VcsProcess;
-  let ignoredPaths = yield* listGitIgnoredPaths(vcsProcess, cwd, hostIsWindows);
+  let gitIgnore = yield* loadGitIgnoredPaths(vcsProcess, cwd, hostIsWindows);
   if (variant === "paths") {
     yield* waitForIndexReady(
       cwd,
@@ -467,7 +474,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
     cwd,
     isScanning,
     toPosix: (relativePath) => toPosixPath(relativePath, hostIsWindows),
-    isIgnored: (relativePath) => isIgnoredPath(ignoredPaths, relativePath, hostIsWindows),
+    isIgnored: (relativePath) => isIgnoredPath(gitIgnore.ignored, relativePath, hostIsWindows),
   });
 
   // Grows the first page until hidden entries can no longer crowd visible ones out of it.
@@ -482,6 +489,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
     while (true) {
       const fetchSize = size;
       const result = yield* runSearch(query, fetchSize, operation, () => execute(fetchSize));
+      const ignoredPaths = gitIgnore.ignored;
       if (ignoredPaths.size === 0) return result;
       const items = result.items.filter(
         (item) => !isIgnoredPath(ignoredPaths, pathOf(item), hostIsWindows),
@@ -531,7 +539,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
           cause,
         }),
     ).pipe(Effect.catchTags({ WorkspaceSearchIndexScanTimedOut: () => Effect.void }));
-    ignoredPaths = yield* listGitIgnoredPaths(vcsProcess, cwd, hostIsWindows);
+    gitIgnore = yield* loadGitIgnoredPaths(vcsProcess, cwd, hostIsWindows);
     invalidateSymlinkScan();
   });
 
@@ -631,7 +639,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
         Effect.orElseSucceed(() => undefined),
       );
       if (!progress?.ok || progress.value.isScanning || !progress.value.isWarmupComplete) {
-        const fallback = yield* searchContentsWithGit(vcsProcess, cwd, input);
+        const fallback = yield* searchContentsWithGit(vcsProcess, cwd, input, gitIgnore.reincluded);
         if (fallback !== undefined) return fallback;
         yield* waitForIndexReady(
           cwd,
@@ -680,7 +688,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
       }
 
       for (const match of result.items) {
-        if (isIgnoredPath(ignoredPaths, match.relativePath, hostIsWindows)) continue;
+        if (isIgnoredPath(gitIgnore.ignored, match.relativePath, hostIsWindows)) continue;
         const matchRanges = mapContentMatchRanges(match.lineContent, match.matchRanges).filter(
           (range) => !input.wholeWord || isWholeWordRange(match.lineContent, range),
         );
