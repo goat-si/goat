@@ -1,8 +1,9 @@
 import { assert, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import * as TestClock from "effect/testing/TestClock";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { git, initRepoWithCommit, layerTest, makeTmpDir } from "./testing/gitFixture.ts";
 
@@ -68,10 +69,21 @@ it.layer(layerTest)("remote branch switch", (it) => {
       const lockPath = (yield* Path.Path).join(cwd, ".git", "config.lock");
       yield* fileSystem.writeFileString(lockPath, "");
       const driver = yield* GitVcsDriver.GitVcsDriver;
-      // The config-lock retry waits on the real clock before giving up.
-      yield* TestClock.withLive(driver.switchRef({ cwd, refName: "upstream/feature" })).pipe(
-        Effect.flip,
-      );
+      const clock = yield* Clock.Clock;
+      // The config-lock retry's short pauses end at once; git's 30 s timeouts stay on the test clock.
+      const pausesEndAtOnce: Clock.Clock = {
+        currentTimeMillisUnsafe: () => clock.currentTimeMillisUnsafe(),
+        currentTimeMillis: clock.currentTimeMillis,
+        monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
+        monotonicTimeNanos: clock.monotonicTimeNanos,
+        currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe(),
+        currentTimeNanos: clock.currentTimeNanos,
+        sleep: (duration) =>
+          Duration.isLessThan(duration, Duration.seconds(1)) ? Effect.void : clock.sleep(duration),
+      };
+      yield* driver
+        .switchRef({ cwd, refName: "upstream/feature" })
+        .pipe(Effect.provideService(Clock.Clock, pausesEndAtOnce), Effect.flip);
       assert.equal(yield* git(cwd, ["branch", "--show-current"]), initialBranch);
       assert.equal(yield* git(cwd, ["branch", "--list", "feature"]), "");
       yield* fileSystem.remove(lockPath);
