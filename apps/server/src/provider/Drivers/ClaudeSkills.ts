@@ -182,6 +182,8 @@ function parseSkillOverride(value: typeof SkillOverrideValue.Type): SkillOverrid
   }
 }
 
+const MAX_SETTINGS_BYTES = 1024 * 1024;
+
 const readSkillSettings = Effect.fn("readSkillSettings")(function* (
   configDirPath: string,
   cwd: string | undefined,
@@ -207,9 +209,7 @@ const readSkillSettings = Effect.fn("readSkillSettings")(function* (
     environment,
     repositoryRoot,
   )) {
-    const contents = yield* fileSystem
-      .readFileString(settingsPath)
-      .pipe(Effect.orElseSucceed(() => undefined));
+    const contents = yield* readClaudeSkillScanText(fileSystem, settingsPath, MAX_SETTINGS_BYTES);
     if (contents === undefined) {
       continue;
     }
@@ -661,9 +661,7 @@ export const readClaudeSettingsEnv = Effect.fn("readClaudeSettingsEnv")(function
     platform,
     environment,
   )) {
-    const contents = yield* fileSystem
-      .readFileString(settingsPath)
-      .pipe(Effect.orElseSucceed(() => undefined));
+    const contents = yield* readClaudeSkillScanText(fileSystem, settingsPath, MAX_SETTINGS_BYTES);
     if (contents === undefined) continue;
     const parsed = yield* decodeSettingsEnv(contents).pipe(Effect.orElseSucceed(() => undefined));
     Object.assign(settingsEnv, parsed?.env);

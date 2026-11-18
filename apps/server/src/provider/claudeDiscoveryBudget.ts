@@ -34,9 +34,9 @@ export const readClaudeSkillScanText = Effect.fn("ClaudeDiscovery.readSkillScanT
   fileSystem: FileSystem.FileSystem,
   path: string,
   limit: number,
-  budget: ClaudeSkillScanBudget,
+  budget?: ClaudeSkillScanBudget,
 ) {
-  const maxBytes = Math.min(limit, budget.remainingBytes);
+  const maxBytes = Math.min(limit, budget?.remainingBytes ?? limit);
   if (maxBytes <= 0) return undefined;
   const info = yield* fileSystem.stat(path).pipe(Effect.orElseSucceed(() => undefined));
   if (info?.type !== "File") return undefined;
@@ -45,7 +45,7 @@ export const readClaudeSkillScanText = Effect.fn("ClaudeDiscovery.readSkillScanT
     fileSystem.stream(path, { bytesToRead: maxBytes + 1, chunkSize: 64 * 1024 }).pipe(
       Stream.tap((chunk) =>
         Effect.sync(() => {
-          budget.remainingBytes -= chunk.byteLength;
+          if (budget !== undefined) budget.remainingBytes -= chunk.byteLength;
         }),
       ),
     ),

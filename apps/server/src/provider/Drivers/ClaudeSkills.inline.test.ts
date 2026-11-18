@@ -165,3 +165,37 @@ it.layer(NodeServices.layer)("Claude inline plugin skills", (it) => {
     }).pipe(Effect.provideService(HostProcess.Platform, "win32")),
   );
 });
+
+it.layer(NodeServices.layer)("Claude discovery settings limits", (it) => {
+  it.effect("ignores oversized settings for both skill overrides and environment routing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const home = path.join(root, "home");
+      const inherited = path.join(root, "inherited");
+      const configured = path.join(root, "configured");
+      yield* writeSkill(path.join(home, "skills"), "personal", "# Personal");
+      yield* writeSkill(path.join(inherited, "skills"), "chosen", "# Chosen");
+      yield* writeSkill(path.join(configured, "skills"), "wrong", "# Wrong");
+      yield* fs.writeFileString(
+        path.join(home, "settings.json"),
+        JSON.stringify({
+          skillOverrides: { personal: "off" },
+          env: { CLAUDE_CODE_PLUGIN_DIRS: configured },
+          padding: "x".repeat(2 * 1024 * 1024),
+        }),
+      );
+      const skills = yield* discoverClaudeSkills({ homePath: home }, root, {
+        CLAUDE_CODE_PLUGIN_DIRS: inherited,
+      });
+      assert.deepEqual(
+        skills.map(({ name, enabled }) => [name, enabled]),
+        [
+          ["inherited:chosen", true],
+          ["personal", true],
+        ],
+      );
+    }).pipe(Effect.provideService(HostProcess.Platform, "win32")),
+  );
+});
