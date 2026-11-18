@@ -394,7 +394,8 @@ async function usableDatabase(file: string): Promise<boolean> {
       uri.searchParams.set("immutable", "1");
     }
     using db = new NodeSqlite.DatabaseSync(uri.href, { readOnly: true });
-    return db.prepare("PRAGMA quick_check(1)").get()?.quick_check === "ok";
+    // Full index verification can be slow on large databases and runs only before a trial or rollback.
+    return db.prepare("PRAGMA integrity_check(1)").get()?.integrity_check === "ok";
   } catch {
     return false;
   } finally {

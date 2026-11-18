@@ -238,6 +238,52 @@ process.exit(1);
     }),
   );
 
+  it.effect.each(["a fresh trial", "acknowledged recovery"] as const)(
+    "blocks a stale index page during %s even though quick_check passes",
+    (stage) =>
+      Effect.gen(function* () {
+        const f = yield* fixture(
+          'writeFileSync(join(stateDir, "trial-started"), ""); process.exit(1);',
+        );
+        let pageOffset: number;
+        let pageSize: number;
+        let older: Uint8Array;
+        {
+          using db = new NodeSqlite.DatabaseSync(f.dbPath);
+          db.exec("CREATE INDEX message_body ON messages (body)");
+          pageSize = Number(db.prepare("PRAGMA page_size").get()?.page_size);
+          const page = Number(
+            db.prepare("SELECT rootpage FROM sqlite_schema WHERE name = 'message_body'").get()
+              ?.rootpage,
+          );
+          pageOffset = (page - 1) * pageSize;
+          older = yield* f.fs.readFile(f.dbPath);
+          db.exec("UPDATE messages SET body = 'newer message'");
+        }
+        const mixed = yield* f.fs.readFile(f.dbPath);
+        mixed.set(older.subarray(pageOffset, pageOffset + pageSize), pageOffset);
+        yield* f.fs.writeFile(f.dbPath, mixed);
+        {
+          using db = new NodeSqlite.DatabaseSync(f.dbPath, { readOnly: true });
+          assert.equal(db.prepare("PRAGMA quick_check(1)").get()?.quick_check, "ok");
+          assert.match(
+            String(db.prepare("PRAGMA integrity_check(1)").get()?.integrity_check),
+            /row \d+ missing from index message_body/,
+          );
+        }
+        if (stage === "acknowledged recovery") {
+          yield* f.fs.writeFileString(
+            f.path.join(f.runtime, "db-update-recovery.phase"),
+            "keep-live\n",
+          );
+        }
+        assert.include(yield* expectBlocked(f), "The live SQLite file set is unusable");
+        assert.isFalse(yield* f.fs.exists(f.path.join(f.path.dirname(f.dbPath), "trial-started")));
+        assert.isFalse(yield* f.fs.exists(f.backupDir));
+        assert.deepEqual(yield* f.fs.readFile(f.dbPath), mixed);
+      }),
+  );
+
   it.effect("keeps a verified database when the target is missing before any trial", () =>
     Effect.gen(function* () {
       const f = yield* fixture("process.exit(1);");
