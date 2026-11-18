@@ -60,26 +60,26 @@ function inhibitorCommand(
 }
 
 /**
- * Runs `hold` while `wanted` is true and for `grace` after it turns false; a true inside the
- * grace keeps the same hold. `hold` runs until interrupted.
+ * Grace applies only to a confirmed idle snapshot. Disable and unknown activity release immediately.
  */
 export const holdWhileWanted = <E, R>(
-  wanted: Stream.Stream<boolean, E, R>,
+  wanted: Stream.Stream<boolean | "unknown" | "disabled", E, R>,
   hold: Effect.Effect<void>,
   grace: Duration.Input = RELEASE_GRACE,
 ) =>
   wanted.pipe(
     Stream.changes,
     Stream.switchMap((on) =>
-      on ? Stream.succeed(true) : Stream.fromEffect(Effect.as(Effect.sleep(grace), false)),
+      on === false
+        ? Stream.fromEffect(Effect.as(Effect.sleep(grace), false))
+        : Stream.succeed(on === true),
     ),
     Stream.changes,
     Stream.switchMap((on) => (on ? Stream.fromEffect(hold) : Stream.empty)),
     Stream.runDrain,
   );
 
-// Reads, the event subscription and the inhibitor retry until they succeed; the cap keeps a
-// host without an inhibitor (e.g. no logind) from retrying and warning constantly.
+// Cap retries for a host without an inhibitor, such as Linux without logind.
 const backoff = Schedule.exponential("5 seconds").pipe(
   Schedule.modifyDelay(({ duration }) =>
     Effect.succeed(Duration.min(duration, Duration.minutes(10))),
@@ -114,12 +114,12 @@ export const layer = Layer.effectDiscard(
       ) AS active
     `.pipe(
       Effect.map((rows) => rows[0]?.active === 1),
-      retryWithBackoff("keep-awake could not read active runs"),
+      Effect.timeout("5 seconds"),
     );
     // Read the cursor before the snapshot so a run changing in between is replayed, not missed.
     const active = Stream.unwrap(
       events.latestApplicationSequence.pipe(
-        retryWithBackoff("keep-awake could not read the event cursor"),
+        Effect.timeout("5 seconds"),
         Effect.map((afterSequence) =>
           Stream.concat(
             Stream.succeed(undefined),
@@ -138,17 +138,23 @@ export const layer = Layer.effectDiscard(
     ).pipe(
       Stream.mapEffect(() => hasActiveRun),
       // A failed subscription resubscribes, which re-reads the cursor and the snapshot.
-      Stream.tapCause((cause) =>
-        Effect.logWarning("keep-awake run event stream failed", { cause }),
+      Stream.tapError((cause) =>
+        Effect.logWarning("keep-awake could not read run activity", { cause }),
       ),
-      Stream.retry(backoff),
+      Stream.catch((cause) =>
+        Stream.concat(Stream.succeed("unknown" as const), Stream.fail(cause)),
+      ),
+      Stream.retry(Schedule.spaced("5 seconds")),
     );
     const enabled = Stream.unwrap(
       Effect.gen(function* () {
         const changes = yield* settings.subscribeChanges;
         const current = yield* settings.getSettings.pipe(
           Effect.map((value) => value.keepAwakeWhileAgentsWork),
-          Effect.orElseSucceed(() => true),
+          Effect.tapError((cause) =>
+            Effect.logWarning("keep-awake could not read settings", { cause }),
+          ),
+          Effect.orElseSucceed(() => false),
         );
         return Stream.concat(
           Stream.succeed(current),
@@ -161,6 +167,7 @@ export const layer = Layer.effectDiscard(
       .spawn(
         ChildProcess.make(command.command, command.args, {
           detached: false,
+          forceKillAfter: "2 seconds",
           shell: false,
           stdin: "ignore",
           stdout: "ignore",
@@ -187,7 +194,7 @@ export const layer = Layer.effectDiscard(
 
     yield* forkParked(
       holdWhileWanted(
-        Stream.zipLatestWith(enabled, active, (on, busy) => on && busy),
+        Stream.zipLatestWith(enabled, active, (on, busy) => (on ? busy : ("disabled" as const))),
         hold,
       ).pipe(Effect.catchCause((cause) => Effect.logWarning("keep-awake stopped", { cause }))),
     );

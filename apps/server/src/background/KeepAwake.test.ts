@@ -1,3 +1,14 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { DEFAULT_SERVER_SETTINGS, type OrchestrationV2StoredEvent } from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
+import * as Deferred from "effect/Deferred";
+import * as Layer from "effect/Layer";
+import * as Sink from "effect/Sink";
+import * as SqlClient from "effect/sql/SqlClient";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
+import * as Settings from "../serverSettings.ts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
@@ -57,3 +68,124 @@ describe("KeepAwake.holdWhileWanted", () => {
     }),
   );
 });
+
+const runChanged = {
+  sequence: 1,
+  commandId: null,
+  event: { type: "run.updated" },
+} as OrchestrationV2StoredEvent;
+
+const setupWatcher = Effect.fn("test.setupKeepAwake")(function* (
+  enabled = true,
+  spawnerOverride?: ChildProcessSpawner.ChildProcessSpawner["Service"],
+) {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`CREATE TABLE orchestration_v2_projection_runs(status TEXT, thread_id TEXT)`;
+  yield* sql`INSERT INTO orchestration_v2_projection_runs VALUES ('running', 'fixture')`;
+  const settings = yield* Queue.unbounded<typeof DEFAULT_SERVER_SETTINGS>();
+  const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
+  const transitions = yield* Queue.unbounded<"held" | "released">();
+  const fakeSpawner = ChildProcessSpawner.make(() =>
+    Effect.acquireRelease(Queue.offer(transitions, "held"), () =>
+      Queue.offer(transitions, "released"),
+    ).pipe(
+      Effect.as(
+        ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(1),
+          stdout: Stream.empty,
+          stderr: Stream.empty,
+          all: Stream.empty,
+          exitCode: Effect.never,
+          isRunning: Effect.succeed(true),
+          kill: () => Effect.void,
+          stdin: Sink.drain,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+          unref: Effect.succeed(Effect.void),
+        }),
+      ),
+    ),
+  );
+  yield* Layer.build(
+    KeepAwake.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawnerOverride ?? fakeSpawner),
+          Layer.succeed(SqlClient.SqlClient, sql),
+          Layer.succeed(HostProcess.Platform, "darwin"),
+          Layer.mock(OrchestrationEventStore.OrchestrationEventStore)({
+            latestApplicationSequence: Effect.succeed(0),
+            streamApplicationEvents: () => Stream.fromQueue(events),
+          }),
+          Layer.mock(Settings.ServerSettingsService)({
+            getSettings: Effect.succeed({
+              ...DEFAULT_SERVER_SETTINGS,
+              keepAwakeWhileAgentsWork: enabled,
+            }),
+            subscribeChanges: Effect.succeed(Stream.fromQueue(settings)),
+          }),
+        ),
+      ),
+    ),
+  );
+  return { sql, transitions, settings, events };
+});
+
+const sqlite = NodeSqliteClient.layer({ filename: ":memory:" });
+
+it.effect.each(["disable", "failed read"] as const)(
+  "releases a running inhibitor immediately on %s",
+  (reason) =>
+    Effect.gen(function* () {
+      const h = yield* setupWatcher();
+      expect(yield* Queue.take(h.transitions)).toBe("held");
+      if (reason === "disable") {
+        yield* Queue.offer(h.settings, {
+          ...DEFAULT_SERVER_SETTINGS,
+          keepAwakeWhileAgentsWork: false,
+        });
+      } else {
+        yield* h.sql`DROP TABLE orchestration_v2_projection_runs`;
+        yield* Queue.offer(h.events, runChanged);
+      }
+      expect(yield* Queue.take(h.transitions)).toBe("released");
+    }).pipe(Effect.provide(sqlite)),
+);
+
+it.live.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "reaps an inhibitor that ignores TERM",
+  () =>
+    Effect.gen(function* () {
+      const realSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const spawned = yield* Deferred.make<ChildProcessSpawner.ChildProcessHandle>();
+      const options = yield* Deferred.make<ChildProcess.Command>();
+      const spawner = ChildProcessSpawner.make((command) =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(options, command);
+          if (command._tag !== "StandardCommand" || command.options.forceKillAfter === undefined)
+            return yield* Effect.die("inhibitor has no termination bound");
+          const child = yield* realSpawner.spawn(
+            ChildProcess.make(
+              process.execPath,
+              ["-e", "process.on('SIGTERM',()=>{});console.log('ready');setInterval(()=>{},1000)"],
+              { ...command.options, stdout: "pipe" },
+            ),
+          );
+          yield* child.stdout.pipe(Stream.decodeText(), Stream.splitLines, Stream.runHead);
+          yield* Deferred.succeed(spawned, child);
+          return child;
+        }),
+      );
+      const child = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* setupWatcher(true, spawner);
+          const command = yield* Deferred.await(options);
+          expect(
+            command._tag === "StandardCommand" && command.options.forceKillAfter,
+          ).toBeDefined();
+          return yield* Deferred.await(spawned);
+        }),
+      );
+      expect(yield* child.isRunning).toBe(false);
+    }).pipe(Effect.provide(Layer.mergeAll(sqlite, NodeServices.layer))),
+);
