@@ -193,7 +193,12 @@ export const makeOutbox = (
             result,
             work.metadata.revision?.revisionId ?? null,
           );
-        if (result.outcome === "rejected" && work.metadata.authorityFirst && work.metadata.revision)
+        if (
+          result.outcome === "rejected" &&
+          "authorityFirst" in work.metadata &&
+          work.metadata.authorityFirst &&
+          work.metadata.revision
+        )
           yield* discardFloorPromotions(sql, work.space, work.metadata.revision.revisionId);
         yield* finishWork(id, result.outcome === "rejected" ? "failed" : "completed", result);
         if (
