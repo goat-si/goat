@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { MEMORY_WS_METHODS } from "@goat/contracts";
+import { WS_METHODS } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
@@ -12,7 +12,7 @@ import { makeWsRpcSocketProtocol, WsRpcGroup } from "./protocol.ts";
 
 it("installs exactly the declared memory routes for every client", () => {
   const methods = [...WsRpcGroup.requests.keys()].filter((tag) => tag.startsWith("memory."));
-  const declared = Object.values(MEMORY_WS_METHODS).filter((tag) => tag.startsWith("memory."));
+  const declared = Object.values(WS_METHODS).filter((tag) => tag.startsWith("memory."));
   expect(methods.sort()).toEqual(declared.sort());
 });
 

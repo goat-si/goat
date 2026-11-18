@@ -262,6 +262,28 @@ describe("negotiated memory scope moves", () => {
               )).items,
               [],
             );
+            const optimistic = yield* replica.upsert(
+              {
+                memorySpaceId: space,
+                memoryId: first.memoryId,
+                operationId: M.MemoryOperationId.make(id(511)),
+                expectedHeads: moved.heads,
+                scope,
+                assertionKind: "inference",
+                baseBoundary: null,
+                payload: { ...first.payload, text: "synthetic edit in the new scope" },
+              },
+              Effect.void,
+            );
+            assert.include(optimistic.receipt, { outcome: "accepted", pendingSync: true });
+            const updated = yield* local.loadAggregate(space, first.memoryId);
+            assert.include(updated.item, { status: "active", scope });
+            assert.deepStrictEqual(updated.identity?.origin, origin);
+            const queued = yield* local.readWorkOperation(
+              `sync:${space}:${optimistic.receipt.operationId}`,
+            );
+            if (!queued) throw new Error("Expected the optimistic edit in the outbox");
+            assert.isFalse(M.requiresMemoryFloor2(queued));
           }).pipe(Effect.provide(Layer.fresh(core)));
         }
         const moveBack = decodeOperation({

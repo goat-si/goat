@@ -125,6 +125,7 @@ it("encodes moves without a body and only at the negotiated floor", () => {
   expect(JSON.parse(M.encodeMemoryOperation(move))).toEqual(value);
   expect(JSON.parse(M.encodeMemoryEventMetadata(move))).toEqual(value);
   expect(M.requiresMemoryFloor2(move)).toBe(true);
+  expect(() => strict({ ...value, closedLineage: true })).toThrow();
   expect(() => strict({ ...value, payload: { text: "Synthetic" } })).toThrow();
   expect(() => strict({ ...value, toScope: value.fromScope })).toThrow();
   expect(() => strict({ ...value, expectedScopeVersion: -1 })).toThrow();

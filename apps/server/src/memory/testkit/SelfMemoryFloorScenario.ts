@@ -1,3 +1,4 @@
+import { legacyClosedLineageDigest } from "../MemoryDecider.ts";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -101,6 +102,13 @@ export const runSelfWideSave = Effect.fn("test.runSelfWideSave")(function* (
   const staged = yield* service.upsert(input, Effect.void);
   assert.include(staged.receipt, { pendingSync: true, revisionId: null });
   assert.isUndefined((yield* store.loadAggregate(space, input.memoryId)).item);
+  const sql = yield* SqlClient.SqlClient;
+  const workId = `sync:${space}:${input.operationId}`;
+  const work = yield* store.readWorkOperation(workId);
+  const legacyDigest = work && legacyClosedLineageDigest(work);
+  if (!legacyDigest) throw new Error("Expected an old digest for the staged closed-lineage upsert");
+  yield* sql`UPDATE memory_outbox SET operation_digest=${legacyDigest},
+    metadata_json=json_set(metadata_json,'$.authorityFirst',${legacyDigest}) WHERE id=${workId}`;
   yield* sync.syncOnce;
   const accepted = yield* store.receipt(space, input.operationId);
   if (!accepted || !("hubSequence" in accepted.receipt))
@@ -153,7 +161,6 @@ export const runSelfWideSave = Effect.fn("test.runSelfWideSave")(function* (
   ]);
   yield* sync.shutdown;
 
-  const sql = yield* SqlClient.SqlClient;
   const draft = {
     ...input,
     operationId: M.MemoryOperationId.make(id(9020)),
@@ -208,7 +215,7 @@ export const runSelfWideSave = Effect.fn("test.runSelfWideSave")(function* (
   });
   const restartedWithBarrier = yield* Layer.build(
     Layer.fresh(Sync.layer).pipe(Layer.provide(Layer.succeed(Hub.MemoryHubService, held))),
-  ).pipe(Effect.provideService(MemoryFloor2Enabled, true));
+  );
   const heldSync = Context.get(restartedWithBarrier, Sync.MemorySyncService);
   const inFlight = yield* Effect.forkScoped(heldSync.syncOnce);
   yield* Deferred.await(entered);
