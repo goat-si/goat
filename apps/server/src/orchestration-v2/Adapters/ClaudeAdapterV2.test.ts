@@ -11472,6 +11472,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           type: "system",
           subtype: "task_started",
           task_id: SUBAGENT_TASK_ID,
+          run_id: "run-1",
           tool_use_id: SUBAGENT_TOOL_USE_ID,
           description: "Sleep then echo done token",
           subagent_type: "general-purpose",
@@ -11495,6 +11496,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           type: "system",
           subtype: "task_started",
           task_id: SUBAGENT_TASK_ID,
+          run_id: "run-2",
           tool_use_id: RESUME_TOOL_USE_ID,
           description: "Sleep then echo done token",
           is_backgrounded: true,
@@ -11513,7 +11515,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           uuid: "00000000-0000-4000-8000-000000000506",
           session_id: WAKE_NATIVE_SESSION,
         });
-
         const harness = yield* makeWakeHarness;
         const now = yield* DateTime.now;
         const subagentEvents = () =>
@@ -11525,7 +11526,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               { type: "subagent.updated" }
             > => event.type === "subagent.updated",
           );
-
         yield* harness.runtime.startTurn(
           makeClaudeTestTurnInput({
             threadId: harness.threadId,
@@ -11549,7 +11549,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           () => harness.terminalEvents().length === 1,
           "first turn terminal",
         );
-
         yield* Queue.offer(harness.sdkMessages, firstNotification);
         yield* harness.awaitUntil(
           () => harness.continuationRequests.length === 1,
@@ -11582,7 +11581,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.equal(subagentEvents().at(-1)?.subagent.status, "completed");
         assert.equal(subagentEvents().at(-1)?.subagent.result, FIRST_SUMMARY);
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
-
         yield* Queue.offer(
           harness.sdkMessages,
           claudeSdkFrame({
@@ -11710,6 +11708,15 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         const finalSubagent = subagentEvents().at(-1)?.subagent;
         assert.equal(finalSubagent?.status, "completed");
         assert.equal(finalSubagent?.result, SECOND_SUMMARY);
+        const results = new Map(
+          harness.events.flatMap((event) =>
+            event.type === "message.updated" &&
+            [FIRST_SUMMARY, SECOND_SUMMARY].includes(event.message.text)
+              ? [[event.message.id, event.message.text] as const]
+              : [],
+          ),
+        );
+        assert.deepEqual([...results.values()], [FIRST_SUMMARY, SECOND_SUMMARY]);
         assert.equal(finalSubagent?.runId, "run-attempt-claude-wake-9c");
         const reopenIndex = harness.events.findIndex(
           (event) =>
