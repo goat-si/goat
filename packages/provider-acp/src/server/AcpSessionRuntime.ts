@@ -1,3 +1,8 @@
+import {
+  ensureActiveAssistantSegment,
+  closeActiveAssistantSegment,
+  type AcpAssistantSegmentState,
+} from "./assistantSegments.ts";
 export {
   parseUnifiedCgroupPath,
   isSafeCgroupPath,
@@ -873,16 +878,6 @@ type AcpInitializeState =
       >;
     }
   | { readonly _tag: "Started"; readonly result: EffectAcpSchema.InitializeResponse };
-
-interface AcpAssistantSegmentState {
-  readonly nextSegmentIndex: number;
-  readonly activeItemId?: string;
-}
-
-interface EnsureActiveAssistantSegmentResult {
-  readonly itemId: string;
-  readonly startedEvent?: Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemStarted" }>;
-}
 
 interface AcpActivePrompt {
   readonly fiber: Fiber.Fiber<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError>;
@@ -2504,68 +2499,3 @@ function updateModeState(modeState: AcpSessionModeState, nextModeId: string): Ac
       }
     : modeState;
 }
-
-const assistantItemId = (sessionId: string, runtimeId: string, segmentIndex: number) =>
-  `assistant:${sessionId}:runtime:${runtimeId}:segment:${segmentIndex}`;
-
-const ensureActiveAssistantSegment = ({
-  queue,
-  assistantSegmentRef,
-  sessionId,
-  assistantItemRuntimeId,
-}: {
-  readonly queue: Queue.Queue<AcpSessionRuntimeEvent>;
-  readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
-  readonly sessionId: string;
-  readonly assistantItemRuntimeId: string;
-}) =>
-  Ref.modify<AcpAssistantSegmentState, EnsureActiveAssistantSegmentResult>(
-    assistantSegmentRef,
-    (current) => {
-      if (current.activeItemId) {
-        return [{ itemId: current.activeItemId }, current] as const;
-      }
-      const itemId = assistantItemId(sessionId, assistantItemRuntimeId, current.nextSegmentIndex);
-      return [
-        {
-          itemId,
-          startedEvent: {
-            _tag: "AssistantItemStarted",
-            itemId,
-          } satisfies Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemStarted" }>,
-        },
-        {
-          nextSegmentIndex: current.nextSegmentIndex + 1,
-          activeItemId: itemId,
-        } satisfies AcpAssistantSegmentState,
-      ] as const;
-    },
-  ).pipe(
-    Effect.flatMap((result) =>
-      result.startedEvent
-        ? Queue.offer(queue, result.startedEvent).pipe(Effect.as(result.itemId))
-        : Effect.succeed(result.itemId),
-    ),
-  );
-
-const closeActiveAssistantSegment = ({
-  queue,
-  assistantSegmentRef,
-}: {
-  readonly queue: Queue.Queue<AcpSessionRuntimeEvent>;
-  readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
-}) =>
-  Ref.modify(assistantSegmentRef, (current) => {
-    if (!current.activeItemId) {
-      return [undefined, current] as const;
-    }
-    return [
-      {
-        _tag: "AssistantItemCompleted",
-        itemId: current.activeItemId,
-      } satisfies AcpParsedSessionEvent,
-      {
-        nextSegmentIndex: current.nextSegmentIndex,
-      } satisfies AcpAssistantSegmentState,
-    ] as const;
-  }).pipe(Effect.flatMap((event) => (event ? Queue.offer(queue, event) : Effect.void)));
