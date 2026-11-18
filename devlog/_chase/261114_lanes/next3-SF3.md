@@ -192,3 +192,96 @@ Row 3b gate, by condition:
 3. Case (pinned finding): the reader is stalled and the gate is full; Stop ends the turn (the interrupt's finalizeTurn emits a domain event, which never waits), and the suspended producer is released.
 4. Order: the gate keys waiting deltas by item. Completing a command item (adapter.ts:631, the completed turn_item.updated) first drops the deltas still waiting for that item and releases their count, then emits the completion, so no waiting delta reaches the reader after its item's completed event. A delta already offered before the completion precedes it in the queue and stays in order. Case: a delta waits at the cap, the item completes, the reader then sees the completion and no later delta for that item.
 5. Ceiling: per session at most 4 Mi characters of queued deltas (8 MiB at 2 bytes per character), plus the SDK hook's coalesced buffer of 256 Ki characters (512 KiB), plus the adapter's kept tail of up to 2 x 256 Ki characters (1 MiB) for each running shell: about 9.5 MiB for one session with one running shell. The kept tail is per running shell; Cursor runs a turn's shell commands one at a time in what we have seen, and each further shell running at the same time adds up to 1 MiB. Worst case for 20 Cursor sessions at once, one running shell each: 20 x 9.5 MiB = 190 MiB. The 8 MiB queue cap is per session, so the total grows with the number of sessions. Today the same 20 sessions have no ceiling at all.
+
+## Code phase (head 680ef3f461 on chase/t3-261114-next3-sf3-providers)
+
+### Standing rules quoted (relayed verbatim by the lane coordinator)
+
+> IV extension, coordinator 2026-11-18 00:35:17 UTC: "Standing rule from now, so this needs no round trip again: a type-only import added to an existing test file, and a layer provided to an existing case because the code under test gained a dependency, need no word from me when the commit changes no title, body, setup value or expectation of that case; the lane quotes the before and after in its record and the fresh review lists them. A provide that replaces or fakes a service the case's assertions read still comes to me."
+
+> Coordinator 2026-11-18 00:45:31 UTC: "From now on for every lane: READY means the gate exited 0 on the pushed head, or the report names each failure with the same failure shown at the integration head."
+
+> Coordinator 2026-11-18 01:14:39 UTC, IV: "before READY, every apps/server test file the lane added or changed is run once from apps/server with GOAT_TEST_TMP_GUARD=fail (CI sets it, check:changed does not), and the READY report says so."
+
+> Coordinator 2026-11-18 01:17:54 UTC, II: "a VALUE import added to an existing import line of an existing test file needs no word from me when only appended cases or appended helpers use the new names and no existing title, body, setup value or expectation changes. The lane quotes the line before and after in its record; the fresh review lists it." Extended 01:20:03 UTC to a NEW import statement on the same terms (real module, no load-time effect, no existing case changed).
+
+> Lane coordinator, no-stash rule (sent between 00:55 and 01:16 UTC; the real send time came from the thread log): do not use git stash; all worktrees share refs/stash.
+
+Coordinator ruling on rule 3 for this lane (2026-11-18 00:00:37 UTC) is quoted in the commit 7355fe5649 message and applied as authorised (below).
+
+### Commits
+
+| commit | row | what |
+| --- | --- | --- |
+| cf94072fd8 | M1 | adapter.ts:3391-3410 piSubagentOutput -> subagentOutput.ts, 3464 -> 3444 |
+| f1d3630737 | M2 | adapter.ts:222-241 -> modelRejection.ts, 2394 -> 2374 |
+| ba3af4d5e9 | M3 | GitManager.ts :426-437 (limitContext, limitCommandOutput), :187 const, :43 type import -> promptContextLimits.ts, 3124 -> 3111 |
+| 7973922c60 | M4 | ThreadLaunchService.ts :193-214 -> threadLaunchWorkspaceMissing.ts (re-exported), 1461 -> 1441 |
+| 7355fe5649 | 1 | goat#3608 + #3648 |
+| 9cf9d06388 | 2 | goat#3588 |
+| cf0cd39c34 | 3a | port of upstream 6be1bd6472 (taken early by SF3) |
+| 94bed1303f | 3b | goat#3589 bound |
+| 680ef3f461 | merge | git merge origin/chase/t3-261114-next3 (ac238fcce3): "Merge made by the 'ort' strategy", no conflict; earlier the same merge against 259883c788 reported "Already up to date." Integration head moved to f82d2df4b0 afterwards; not merged (one merge per the brief). |
+
+Budget entries at real length (countLines): GitManager.ts 3119 (dev entry 3124), ThreadLaunchService.ts 1442 (1461), provider-pi adapter.ts 3458 (3464), provider-cursor adapter.ts 2390 (2394). New modules all under 100 lines; commandOutputGate.ts 63.
+
+Commits were made with --no-verify, because the pre-commit hook's lint-staged keeps its backup in the shared stash list and these commits stage part of the tree; format and lint ran in check:changed (pass, below).
+
+### Rule 3 and imports
+
+Authorised hunk (TextGeneration.test.ts, "runs OmO's own default for %s"):
+before: 'yield* generation.pipe(Effect.provide(ServerSettings.layerTest())),'
+after: 'yield* generation.pipe(Effect.provide(ServerSettings.layerTest({ providerInstances: { [OMO]: { driver: M.ProviderDriverKind.make("omo"), enabled: true } } }))),' (formatter wraps it over 9 lines). Comment above the case: before "// OmO has no text generation default in the model tables; Settings shows its first listed model." after "// OmO's text generation default is \"default\", the model OmO itself is configured with." New case: "skips an OmO that is off at machine level and runs Pi's own default".
+New import statements (01:17/01:20 rules), used only by appended cases or helpers: TextGeneration.test.ts 'import * as Logger from "effect/Logger";' and 'import { TextGenerationProject } from "./textGenerationCapability.ts";'; test/promptAckChecks.ts 'import * as TestClock from "effect/testing/TestClock";' and 'import { PROMPT_ACKNOWLEDGMENT_TIMEOUT_DETAIL } from "../promptAcknowledgment.ts";' (every existing case there is it.effect / it.effect.each). No other existing test file changed; new cases sit in new files (textGenerationFallback.test.ts, modelSelection.fallback.test.ts, PiHeldStartTimeout.integration.test.ts, adapter.outputGate.test.ts, commandOutputGate.test.ts) or appended (CursorAgentSdk.test.ts, no import change).
+
+### Fail first (before each fix)
+
+- Row 1: `vp test run packages/shared/src/textGenerationFallback.test.ts apps/server/src/textGeneration/TextGeneration.test.ts apps/web/src/modelSelection.fallback.test.ts` on the move-out head with the tests only: Test Files 3 failed (3), Tests 10 failed | 13 passed. shared: "expected 'codex' to be 'muse'" (signed-out codex taken), review guide "expected 'codex' to be 'claudeAgent'", OmO settings normalization got gpt-6-luna; web: "expected 'codex' to be 'claudeAgent'" and "expected 'claudeAgent' to be 'codex'" (list order); server: ran codex not claudeAgent/claude-haiku-5-5, TextGenerationProject missing, no log line, OmO normalization "gpt-6-luna". The memory-on-OmO case's first fixture lacked OmO enabled (OmO is off when unconfigured) and was fixed before the code fix.
+- Row 2: with the adapter's bounded wait reverted: "× fails a start held 2 minutes for an earlier prompt's acknowledgment, with the reason" AssertionError: expected false to be true (the start was still pending after TestClock.adjust 2 minutes). The dialog case passed (it pins waiting). The integration test first failed on the code as planned: the thread's error item read "Provider turn failed." (generic); that led to PiPromptAcknowledgmentTimeoutError on provider-core's curated list (failure.ts, one line), after which it passes.
+- Row 3b: with CursorAgentSdk.ts reverted: AssertionError: expected [ 'first\n', …(3000) ] to deeply equal [ 'first\n', …(1) ]. The Stop-while-full case and the gate unit cases are pins (Stop already worked with an unbounded queue).
+- Row 3a: performance only; the upstream case passes before and after (it guards the cap); proof is the measurement.
+
+### Runs on the final code (each preceded by ps in its own step)
+
+- vp run typecheck for goat, @goat/web, @goat/shared, @goat/contracts, @goat/provider-pi, @goat/provider-cursor: "6/6 successful", exit 0 (before the fixup; the fixup is re-covered by check:changed's typecheck below).
+- Row 1 whole: shared textGenerationFallback, serverSettings, serverSettingsTextGeneration, textGeneratorFallback; server TextGeneration.test.ts; web modelSelection.test.ts and modelSelection.fallback.test.ts: 7 files, 122 tests passed, exit 0.
+- apps/server with GOAT_TEST_TMP_GUARD=fail: TextGeneration.test.ts, PiHeldStartTimeout.integration.test.ts (after its fix, alone: 1 passed), ThreadTitleRegenerationService.test.ts, PullRequestReviewGuideService.test.ts, serverSettings.test.ts, ThreadLaunchService.test.ts, GitManager.test.ts: 307 passed with the one integration failure described above, then the integration file alone passed.
+- Pi subsystem whole: packages/provider-pi/src/server (all), provider-core failure.test.ts, PiReplayFixtures.integration.test.ts: 24 files passed, 1 skipped (omo.live.test.ts, describe.skipIf no OmO binary), 299 tests passed.
+- Cursor whole: packages/provider-cursor/src/server: 43 files, 374 tests passed.
+- Gate: vp run check:changed origin/chase/t3-261114-next3 on 680ef3f461 (integration ac238fcce3): format, lint, graphql, agent context budget, agent surface audit, knip 1/2 and 2/2, typecheck (39 packages) pass; vp test (257 files) FAIL: 16 cases in apps/server/src/textGeneration/GrokTextGeneration.test.ts, all "AcpProcessExitedError: ACP process exited with code 127 ... bin/grok: line 2: exec: node: not found" (the test's fake grok script cannot find node on the spawned PATH). 255 files passed, 1 skipped; 5892 tests passed. SF3 does not touch Grok, provider-acp or that file. The same file at the integration head is the next heavy job SF3 runs (waiting for its turn).
+- The first gate run (before the fixup) failed lint (react purity: Date.now() during render in MemoryGenerationSettings.tsx and SourceControlWritingSettings.tsx) and knip (unused export COMMAND_OUTPUT_QUEUE_CHARS); both fixed by fixups squashed into rows 1 and 3b (useNowMinute; export dropped).
+
+### Row 3 measurements (uncommitted scratch test, kept at /tmp/sf3-states/zzSf3Flood.scratch.test.ts, removed from the tree)
+
+Harness: the Cursor adapter with a fake SDK runner whose run emits shell-output-delta updates on its own fiber; each 4 KiB chunk is created as it is emitted; nothing reads the events for the first 300 ms, then everything is read. Per state, one vitest process with NODE_OPTIONS=--expose-gc, three rounds each of 8 MiB (2048 chunks) and 64 MiB (16384 chunks). "held" = heapUsed after a forced GC at the end of the 300 ms pause, minus the baseline; "peak" = largest heapUsed seen while reading (includes uncollected garbage).
+
+| state | 8 MiB held (MiB) | 8 MiB peak | 8 MiB CPU user (ms) | 64 MiB held (MiB) | 64 MiB peak | 64 MiB CPU user / sys (ms) |
+| --- | --- | --- | --- | --- | --- | --- |
+| before (259883c788 adapter and runner) | 2.6 / 1.9 / 1.9 | 4.7 / 4.0 / 3.7 | 98 / 85 / 75 | 9.3 / 9.5 / 8.9 | 105.4 / 106.1 / 105.1 | 340/221, 273/237, 278/257 |
+| after 3a | 2.7 / 2.0 / 2.1 | 4.9 / 4.1 / 4.0 | 83 / 68 / 70 | 12.4 / 12.5 / 12.5 | 25.9 / 25.4 / 25.3 | 183/6, 153/3, 136/3 |
+| after 3b | 2.1 / 1.4 / 1.4 | 20.4 / 19.5 / 19.1 | 87 / 72 / 66 | 1.4 / 1.6 / 1.4 | 58.8 / 63.0 / 63.0 | 233/7, 169/6, 170/3 |
+
+Reading: 3a removes the per-chunk tail copy: on 64 MiB, user CPU drops from about 280-340 ms to 136-183 ms, system CPU from about 240 ms to under 10 ms, and the read-phase heap peak from about 105 MiB to about 25 MiB. 3b holds what a paused reader leaves queued at about 1.5 MiB against 9-12.5 MiB without the gate. Within 300 ms the fake producer only gets part of the flood out, so without the gate the held figure keeps growing with a longer stall, while with it it stays under the cap. 3b costs some CPU (gate waits and wake-ups: 64 MiB user 169-233 ms versus 136-183 after 3a) and a higher transient peak while reading (19-20 MiB versus 4-5 MiB on 8 MiB; 59-63 versus 25 on 64 MiB), which is uncollected garbage from the interleaved producer and reader, not retained memory. Earlier attempts reused one chunk string or built every chunk up front; those readings measured nothing useful and are discarded.
+
+### Limits
+
+- D1: Settings has no project and passes null; a project that disables the provider Settings names makes the server skip it for that project's text.
+- D2: memory and channel reception have no project in scope; their fallback checks machine-level enablement only. Issue draft below.
+- Settings judges usage windows with a one-minute clock (useNowMinute) in the memory and review guide pickers; resolveAppModelSelectionState reads Date.now() when it computes the fallback.
+- Row 2: mobile has no "Restart agent session" action; the message names no control. A held start that times out leaves Pi running and the earlier prompt still owed; the next send waits again (up to 2 minutes).
+- Row 3b: the hook keeps the last 256 Ki characters when output arrives faster than one dispatch; the live stream and the fallback tail (used only when Cursor's result has no output) can skip middle output under such a flood. The bound applies to Cursor only; the other eight adapters' queues are the issue draft below.
+- Server resolution: a fallback provider still in its first status check is not considered (as before).
+
+### Issue drafts (to file when the lane merges)
+
+1. "Text generation without a project in scope can fall back to a provider a project turned off": memory generation (apps/server/src/memory/MemoryWorker.ts:618) and channel reception (apps/server/src/channels/ChannelReceptionService.ts:355) resolve the text generation fallback with no project; since lane SF3 every caller with a project passes it (titles, branch names, commit messages, PR content, review guides). Proposal: pass the project where one exists, or refuse a fallback any project would refuse.
+2. "Provider adapters hold their event queues without a bound" (text as in the plan section above, eight adapters with paths).
+
+### NOT RUN
+
+- Live Pi with an input handler that never finishes; live Cursor loud command; live OmO memory summary and review guide (person-or-account rows).
+- packages/provider-pi/src/server/omo.live.test.ts (skipped: no OmO binary).
+- Settings in a real client (P1 is the integrated pass; lanes start no dev server).
+- GrokTextGeneration.test.ts at the integration head: queued behind K10's round and N10's turn.
+- apps/web/src/components/settings/SourceControlWritingSettings.browser.test.tsx outside check:changed (check:changed's test step ran 257 files; whether it included this browser file is not shown in its summary).
+- Repo-wide suites (CI owns them).
