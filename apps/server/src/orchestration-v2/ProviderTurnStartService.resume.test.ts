@@ -1,9 +1,9 @@
 import { it as effectIt } from "@effect/vitest";
-import { RunId, ProviderDriverKind } from "@goat/contracts";
+import { RunId, ProviderDriverKind, MessageId, RunAttemptId, TurnItemId } from "@goat/contracts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Effect from "effect/Effect";
 import { expect } from "vite-plus/test";
-import { missedTurnInputRuns } from "./goat/MissedTurnInput.ts";
+import { missedTurnImages, missedTurnInputRuns } from "./goat/MissedTurnInput.ts";
 import { makeLocalCommandHarness } from "./ProviderTurnStartService.localCommand.testkit.ts";
 
 effectIt.effect.each([
@@ -139,5 +139,91 @@ effectIt.effect.each(["accepted", "ambiguous", "unsent"] as const)(
       expect(missed.map((run) => run.userMessageId)).toEqual(
         inputDelivery === "unsent" ? ["resume-source-message"] : [],
       );
+    }),
+);
+
+effectIt.effect(
+  "does not reattach an older missed image after a manual replay may have sent it",
+  () =>
+    Effect.gen(function* () {
+      const harness = makeLocalCommandHarness({
+        text: "Continue where you left off.",
+        manualResume: { accepted: false, supported: false },
+        previousTurn: { runStatus: "interrupted", turnStatus: "interrupted" },
+      });
+      yield* harness.start;
+      const replay = harness.startRootRun.mock.calls.at(-1)![0];
+      const projection = harness.projection();
+      const older = {
+        ...projection.runs[0]!,
+        id: RunId.make("older-unsent-run"),
+        userMessageId: MessageId.make("older-unsent-message"),
+        ordinal: 1,
+        status: "failed" as const,
+      };
+      const image = {
+        type: "image" as const,
+        id: "older-unsent-image",
+        name: "older.png",
+        mimeType: "image/png",
+        sizeBytes: 100,
+      };
+      const historyItem = {
+        type: "user_message" as const,
+        inputIntent: "turn_start" as const,
+        id: TurnItemId.make("older-unsent-item"),
+        messageId: older.userMessageId,
+        runId: older.id,
+        threadId: older.threadId,
+        providerThreadId: older.providerThreadId,
+        providerTurnId: null,
+        nodeId: null,
+        parentItemId: null,
+        nativeItemRef: null,
+        ordinal: 0,
+        status: "completed" as const,
+        title: null,
+        startedAt: older.startedAt,
+        completedAt: older.completedAt,
+        updatedAt: older.requestedAt,
+        text: "Earlier request",
+        attachments: [image],
+        createdBy: "user" as const,
+        creationSource: "web" as const,
+      };
+      const followUp = {
+        ...replay.run,
+        ordinal: replay.run.ordinal + 2,
+        id: RunId.make("follow-up"),
+      };
+      const prior = {
+        ...projection,
+        runs: [older, ...projection.runs.map((run) => ({ ...run, ordinal: run.ordinal + 1 }))],
+        attempts: [
+          {
+            ...replay.attempt,
+            id: RunAttemptId.make("older-attempt"),
+            runId: older.id,
+            inputDelivery: "unsent" as const,
+          },
+          ...projection.attempts.map((attempt) =>
+            attempt.id === replay.attempt.id
+              ? { ...attempt, inputDelivery: "ambiguous" as const }
+              : attempt,
+          ),
+        ],
+      };
+      const missedRuns = missedTurnInputRuns(prior, followUp);
+      expect(missedRuns.map((run) => run.id)).toEqual([older.id]);
+      expect(
+        missedTurnImages({
+          projection: prior,
+          history: [historyItem],
+          missedRuns,
+          run: followUp,
+          attachments: [],
+          goalDriver: false,
+        }),
+      ).toEqual([]);
     }),
 );

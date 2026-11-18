@@ -1010,7 +1010,7 @@ it.effect("continues again after a continuation fails before its prompt", () =>
     assert.deepEqual(yield* continuationDispatches(projection, failedStart.id), []);
     const attempts = [
       { id: failedStart.activeAttemptId, inputDelivery: "unsent" },
-    ] as typeof cut.attempts;
+    ] as unknown as typeof cut.attempts;
     const dispatches = yield* continuationDispatches({ ...projection, attempts }, failedStart.id);
     assert.deepEqual(
       dispatches.map((command) => command.restartContinuationOfRunId),

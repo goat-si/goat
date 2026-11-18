@@ -1,6 +1,5 @@
 import * as Effect from "effect/Effect";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
-import type { deliverContextHandoffs } from "../ContextHandoffDelivery.ts";
 import { refusedBeforePrompt } from "../PromptRefusal.ts";
 
 export const makeDeliverySession = (
@@ -40,10 +39,13 @@ export const makeDeliverySession = (
 
 export const submitWithContextHandoff = Effect.fn(
   "ProviderTurnStartService.submitWithContextHandoff",
-)(function* (
+)(function* <PersistError>(
   start: ProviderAdapter.ProviderAdapterV2SessionRuntime["startTurn"],
   input: ProviderAdapter.ProviderAdapterV2TurnInput,
-  delivery: Pick<Effect.Success<ReturnType<typeof deliverContextHandoffs>>, "delivered" | "unsent">,
+  delivery: {
+    readonly delivered: Effect.Effect<void, PersistError>;
+    readonly unsent: Effect.Effect<void, PersistError>;
+  },
   context: string,
 ) {
   const text = input.message.text;

@@ -1,5 +1,4 @@
 import { indexRunInputDelivery } from "../inputDeliveryEvidence.ts";
-import { unsentManualContinuationSource } from "../manualContinuation.ts";
 import {
   getProviderAttachmentLimitError,
   isCompactionCommandMessage,
@@ -61,12 +60,7 @@ export function missedTurnImages(input: {
         (input.goalDriver && parseGoalCommand(message) !== null))
     )
       continue;
-    if (
-      run.manualContinuationOfRunId !== undefined &&
-      attempt.reason !== "steering_restart" &&
-      unsentManualContinuationSource(run, input.projection) === undefined
-    )
-      continue;
+    // A replay may have carried older missed images alongside its identified source.
     lastPossibleDelivery = Math.max(lastPossibleDelivery, run.ordinal);
   }
 
