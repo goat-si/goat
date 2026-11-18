@@ -161,10 +161,13 @@ const UPLOAD_LIMITS = Multipart.limitsServices({
   fieldMimeTypes: [],
 });
 
+const isMultipartSubmission = (request: HttpServerRequest.HttpServerRequest) =>
+  request.headers["content-type"]?.startsWith("multipart/form-data") ?? false;
+
 /** A message as JSON (text only), or as multipart form data with `file` parts. */
 export const readSubmission = Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
-  if (!request.headers["content-type"]?.startsWith("multipart/form-data")) {
+  if (!isMultipartSubmission(request)) {
     const body = yield* readJson.pipe(Effect.flatMap(decodeSubmit), Effect.option);
     return body._tag === "None" ? null : { fields: body.value, uploads: [] };
   }
@@ -208,15 +211,14 @@ const submitRoute = HttpRouter.add(
     const shareId = requestedShareId(request);
     const session = sessionFor(request, shareId);
     yield* guestShares.check(session);
-    const submission = yield* readSubmission;
-    if (submission === null || submission.fields.shareId !== shareId) return yield* badRequest;
-    yield* guestShares.submit(session, submission.fields, submission.uploads);
-    return HttpServerResponse.empty({ status: 204, headers: NO_STORE });
-  }).pipe(
-    Effect.catchTags({ GuestShareAccessError: errorResponse }),
-    // The parser's temporary files are removed once the response is ready.
-    Effect.scoped,
-  ),
+    const submit = Effect.gen(function* () {
+      const submission = yield* readSubmission;
+      if (submission === null || submission.fields.shareId !== shareId) return yield* badRequest;
+      yield* guestShares.submit(session, submission.fields, submission.uploads);
+      return HttpServerResponse.empty({ status: 204, headers: NO_STORE });
+    }).pipe(Effect.scoped);
+    return yield* isMultipartSubmission(request) ? guestShares.withUploadSlot(submit) : submit;
+  }).pipe(Effect.catchTags({ GuestShareAccessError: errorResponse })),
 );
 
 const streamRoute = HttpRouter.add(

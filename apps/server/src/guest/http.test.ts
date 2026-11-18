@@ -1,9 +1,27 @@
+import * as ServerConfig from "../config.ts";
+import { NodeHttpPlatform } from "@effect/platform-node";
+import { guestSessionCookieName } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import * as DocumentText from "../provider/DocumentText.ts";
+import * as GuestShareService from "./GuestShareService.ts";
+import { joinedGuest, makeLayerTest } from "./GuestShareService.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { HttpServerRequest } from "effect/http";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
-import { readSubmission } from "./http.ts";
+import { layer, readSubmission } from "./http.ts";
+
+const decodeFailure = Schema.decodeUnknownEffect(Schema.Struct({ reason: Schema.String }));
+const failureReason = (response: Response) =>
+  Effect.promise(() => response.json()).pipe(
+    Effect.flatMap(decodeFailure),
+    Effect.map(({ reason }) => reason),
+  );
 
 it.effect("keeps a JSON file a guest attaches as a file, not a form field", () =>
   Effect.gen(function* () {
@@ -25,4 +43,93 @@ it.effect("keeps a JSON file a guest attaches as a file, not a form field", () =
       [["data.json", "application/json"]],
     );
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("refuses overlapping guest uploads before staging the second multipart body", () =>
+  Effect.gen(function* () {
+    const extracting = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let extractions = 0;
+    let staged = 0;
+    const layerTest = makeLayerTest(
+      GuestShareService.layer.pipe(
+        Layer.provide(
+          Layer.succeed(DocumentText.DocumentText, {
+            ensure: () =>
+              Effect.gen(function* () {
+                if (++extractions !== 1) return undefined;
+                yield* Deferred.succeed(extracting, undefined);
+                yield* Deferred.await(release);
+                return undefined;
+              }),
+          }),
+        ),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const { session, shareId } = yield* joinedGuest;
+      const fs = yield* FileSystem.FileSystem;
+      const handler = yield* HttpRouter.toHttpEffect(layer);
+      const submit = (text: string, upload: boolean) =>
+        Effect.suspend(() => {
+          const form = new FormData();
+          form.append("shareId", shareId);
+          form.append("text", text);
+          form.append("file", new File(["Notes"], "notes.rtf", { type: "application/rtf" }));
+          const request = new Request(`http://localhost/api/guest/messages?share=${shareId}`, {
+            method: "POST",
+            body: upload ? form : JSON.stringify({ shareId, text }),
+            headers: {
+              cookie: `${guestSessionCookieName(shareId)}=${session}`,
+              ...(upload ? {} : { "content-type": "application/json" }),
+            },
+          });
+          return handler.pipe(
+            Effect.provideService(
+              HttpServerRequest.HttpServerRequest,
+              HttpServerRequest.fromWeb(request),
+            ),
+            Effect.map(HttpServerResponse.toWeb),
+          );
+        }).pipe(
+          Effect.provideService(FileSystem.FileSystem, {
+            ...fs,
+            makeTempDirectoryScoped: (options) =>
+              Effect.sync(() => {
+                staged += 1;
+              }).pipe(Effect.andThen(fs.makeTempDirectoryScoped(options))),
+          }),
+        );
+
+      const first = yield* submit("First", true).pipe(Effect.forkChild);
+      yield* Effect.raceFirst(
+        Deferred.await(extracting),
+        Fiber.join(first).pipe(
+          Effect.flatMap((response) =>
+            Effect.die(new Error(`Upload returned ${response.status} before extraction`)),
+          ),
+        ),
+      );
+      const second = yield* submit("Second", true);
+      assert.equal(second.status, 409);
+      assert.equal(yield* failureReason(second), "files_busy");
+      assert.equal(staged, 1);
+
+      for (const text of ["One", "Two", "Three"]) {
+        assert.equal((yield* submit(text, false)).status, 204);
+      }
+      yield* Deferred.succeed(release, undefined);
+      const firstResponse = yield* Fiber.join(first);
+      assert.equal(firstResponse.status, 409);
+      assert.equal(yield* failureReason(firstResponse), "busy");
+      const attachmentsDir = (yield* ServerConfig.ServerConfig).attachmentsDir;
+      assert.deepEqual(yield* fs.readDirectory(attachmentsDir), []);
+
+      const retry = yield* submit("Retry", true);
+      assert.equal(retry.status, 409);
+      assert.equal(yield* failureReason(retry), "busy");
+      assert.equal(staged, 2);
+      assert.equal(extractions, 1);
+    }).pipe(Effect.provide(Layer.merge(layerTest, NodeHttpPlatform.layer)));
+  }).pipe(Effect.scoped),
 );
