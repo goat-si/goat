@@ -204,7 +204,7 @@ export function composerCommandKeyHandler(input: {
       keybindings,
       isSoftwareKeyboardOpen,
       isDraftThread: routeKind === "draft",
-      isRunning: phase === "running" || phase === "connecting",
+      isRunning: phase === "running",
       sendShortcut,
       prompt: promptRef.current,
     });
@@ -246,7 +246,7 @@ export function composerCommandKeyHandler(input: {
       submitComposer(
         undefined,
         resolveComposerDispatchMode({
-          running: phase === "running" || phase === "connecting",
+          running: phase === "running",
           alternateModifier: submissionIntent === "alternate",
           activeTurnDefault: followUpBehavior,
           canSteer,

@@ -354,7 +354,7 @@ describe("thread workflows", () => {
         ],
       } as never);
 
-      expect(state.canPromoteToSteer).toBe(status !== "waiting");
+      expect(state.canPromoteToSteer).toBe(false);
     },
   );
 

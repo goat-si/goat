@@ -3,20 +3,6 @@ import * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 import { runResumableReactor } from "../backgroundSupervision.ts";
 
-export function relevantRunUpdate({ event, commandId }: OrchestrationV2StoredEvent): boolean {
-  if (event.type !== "run.updated") return true;
-  const { delegatedTaskId, status } = event.payload;
-  return (
-    !String(commandId).startsWith("command:runtime-reconcile:") &&
-    ((delegatedTaskId !== undefined && (status === "queued" || status === "starting")) ||
-      status === "completed" ||
-      status === "interrupted" ||
-      status === "failed" ||
-      status === "cancelled" ||
-      status === "rolled_back")
-  );
-}
-
 type EventType = "run.updated" | "provider-thread.updated" | "subagent.updated";
 
 export const runUpdateReactors = Effect.fn("Orchestrator.runUpdateReactors")(function* <

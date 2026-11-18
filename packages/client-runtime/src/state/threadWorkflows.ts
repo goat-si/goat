@@ -180,10 +180,6 @@ export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQu
       projection.thread.deletedAt == null,
     canPromoteToSteer:
       promoteSkipsCompaction ||
-      ((activeRun?.status === "preparing" || activeRun?.status === "starting") &&
-        (capabilities === undefined ||
-          capabilities.supportsActiveSteering ||
-          (capabilities.supportsInterrupt && capabilities.supportsSteeringByInterruptRestart))) ||
       (hasSteerableProviderTurn &&
         (capabilities?.supportsActiveSteering === true ||
           capabilities?.supportsSteeringByInterruptRestart === true)),

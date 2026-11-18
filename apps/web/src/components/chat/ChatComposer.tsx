@@ -2083,7 +2083,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           sendEvent,
           dispatchMode ??
             resolveComposerDispatchMode({
-              running: phase === "running" || phase === "connecting",
+              running: phase === "running",
               alternateModifier: false,
               activeTurnDefault: followUpBehavior,
               canSteer,
@@ -2110,7 +2110,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     submitComposer(
       event,
       resolveComposerDispatchMode({
-        running: phase === "running" || phase === "connecting",
+        running: phase === "running",
         alternateModifier: event.metaKey || event.ctrlKey,
         activeTurnDefault: followUpBehavior,
         canSteer,
@@ -2122,7 +2122,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     return submitComposer(
       undefined,
       resolveComposerDispatchMode({
-        running: phase === "running" || phase === "connecting",
+        running: phase === "running",
         alternateModifier: false,
         activeTurnDefault: followUpBehavior,
         canSteer,
@@ -3793,7 +3793,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     compact={isComposerResting || isComposerPrimaryActionsCompact}
                     canOperateThread={canOperateThread}
                     pendingAction={pendingPrimaryAction}
-                    isRunning={phase === "running" || phase === "connecting"}
+                    isRunning={phase === "running"}
                     canInterrupt={canInterrupt}
                     runId={activeThread?.runtime?.activeRunId ?? null}
                     followUpBehavior={followUpBehavior}
