@@ -449,10 +449,12 @@ it.effect("a closed viewer gate keeps a member's stored route and the environmen
       members: [member],
     };
     const latest = yield* SubscriptionRef.make<Option.Option<PenMembersInput>>(Option.some(ready));
+    // Pen machines turned off, or a client without Pen membership, says nothing about who left.
+    const states: ReadonlyArray<PenMembersInput> = [ready, { kind: "disabled" }];
     for (const gateway of [Option.none(), Option.some({ open: unused, close: () => Effect.void })])
       yield* Effect.gen(function* () {
         const discovery = yield* makePenNativeDiscovery();
-        yield* discovery.pass(ready);
+        for (const state of states) yield* discovery.pass(state);
         expect(removed).toEqual([]);
       }).pipe(
         Effect.provideService(EnvironmentRegistry, registry),
