@@ -1,3 +1,4 @@
+import { makeMemoryMutationHandlers } from "./memory/MemoryMutationHandlers.ts";
 import { makeGlobalSkillsRpcLayer } from "./skills/GlobalSkillsRpcHandlers.ts";
 import * as AccessRpc from "./auth/AccessRpc.ts";
 import { makeOmittableShellReaders } from "./orchestration-v2/ThreadFamilyLookup.ts";
@@ -55,7 +56,6 @@ import {
   EnvironmentAuthorizationError,
   FilesystemBrowseError,
   MemoryImportRpcError,
-  MemoryMutationReceipt,
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetTurnDiffError,
@@ -442,7 +442,6 @@ export const makeMemoryImportHandlers = <E>(
     });
   });
 
-const decodeMemoryMutationReceipt = Schema.decodeUnknownEffect(MemoryMutationReceipt);
 const ServerWsRpcGroup = RpcAuthorization.AuthorizedWsRpcGroup.middleware(RpcInstrumentation);
 // Validate the full handler map, but register smaller groups to bound layer inference.
 const ServerWsCoreRpcGroup = WsCoreRpcGroup.middleware(RpcInstrumentation);
@@ -1348,16 +1347,7 @@ export const layerWsRpc = (
           memorySync.hubDiagnostics(input, memoryRead).pipe(Effect.mapError(memoryError)),
         [WS_METHODS.memorySyncStatus]: (input) =>
           memorySync.syncStatus(input, memoryRead).pipe(Effect.mapError(memoryError)),
-        [WS_METHODS.memoryUpsert]: (input) =>
-          memory.upsert(input, memoryWrite).pipe(
-            Effect.flatMap((stored) => decodeMemoryMutationReceipt(stored.receipt)),
-            Effect.mapError(memoryError),
-          ),
-        [WS_METHODS.memoryForget]: (input) =>
-          memory.forget(input, memoryWrite).pipe(
-            Effect.flatMap((stored) => decodeMemoryMutationReceipt(stored.receipt)),
-            Effect.mapError(memoryError),
-          ),
+        ...makeMemoryMutationHandlers(memory, currentSession, memoryRead, memoryWrite),
         [WS_METHODS.memoryRevertResolution]: (input) =>
           memory.revertResolution(input, memoryWrite).pipe(Effect.mapError(memoryError)),
         [WS_METHODS.memoryReadSource]: (input) =>

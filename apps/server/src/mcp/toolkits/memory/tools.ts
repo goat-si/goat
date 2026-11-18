@@ -179,7 +179,7 @@ const UpsertTool = Tool.dynamic(agentSurfaceRegistry["memory.upsert"].name, {
 
 const ForgetTool = Tool.dynamic(agentSurfaceRegistry["memory.forget"].name, {
   description: agentSurfaceRegistry["memory.forget"].description,
-  parameters: memoryInputSchema(M.MemoryForgetInput),
+  parameters: memoryInputSchema(M.McpMemoryForgetInput),
   success: M.MemoryMutationReceipt,
   failure,
   failureMode: "return",
@@ -216,6 +216,18 @@ const ReadSourceTool = Tool.dynamic(agentSurfaceRegistry["memory.source_read"].n
   .addDependency(ThreadManagementService.ThreadManagementService)
   .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["memory.source_read"]));
 
+const SuggestionsTool = Tool.dynamic(agentSurfaceRegistry["memory.suggestions"].name, {
+  description: agentSurfaceRegistry["memory.suggestions"].description,
+  parameters: spaceOptional(memoryInputSchema(M.MemorySuggestionsInput)),
+  success: M.MemorySuggestionMetadataList,
+  failure,
+  failureMode: "return",
+})
+  .addDependency(McpInvocationContext.McpInvocationContext)
+  .addDependency(MemoryService.MemoryService)
+  .addDependency(MemorySyncService.MemorySyncService)
+  .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["memory.suggestions"]));
+
 export const MemoryToolkit = Toolkit.make(
   SearchTool,
   RecallTool,
@@ -226,6 +238,7 @@ export const MemoryToolkit = Toolkit.make(
   RememberTool,
   UpsertTool,
   ForgetTool,
+  SuggestionsTool,
   RevertResolutionTool,
   ReadSourceTool,
 );

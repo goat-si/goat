@@ -1,3 +1,14 @@
+import {
+  id,
+  item,
+  decodeRevert,
+  revision,
+  activeItem,
+  resolution,
+  entry,
+  retained,
+  payload,
+} from "./MemorySettings.browser.fixtures";
 import { memoryImportTestLocks } from "../../test/memoryImportLocks";
 import { MemoryHubDiagnosticsSettings } from "./MemoryHubDiagnosticsSettings";
 import { MemoryRunAccessLabel } from "./MemoryRunAccessLabel";
@@ -9,11 +20,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import {
   EnvironmentId,
   MemoryItem,
-  MemoryRevision,
-  MemoryResolution,
-  MemoryResolutionPayload,
   type MemoryHistoryPage,
-  MemoryRevertResult,
   MemoryUpsertInput,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
@@ -151,6 +158,8 @@ vi.mock("../../state/memory", async () => {
           "hubReconcile",
           "upsert",
           "forget",
+          "acceptSuggestion",
+          "dismissSuggestion",
           "revertResolution",
           "hubSettingsGet",
           "hubSettingsUpdate",
@@ -159,7 +168,7 @@ vi.mock("../../state/memory", async () => {
         ].map((label) => [label, { label, permissionAtom: () => ({ label }) }]),
       ),
       ...Object.fromEntries(
-        ["list", "search", "history", "readSource"].map((label) => [
+        ["list", "search", "history", "readSource", "suggestions"].map((label) => [
           label,
           (request: { input?: { resolutionInputsFor?: string } }) => {
             state.requests.push({ label, input: request.input });
@@ -395,21 +404,6 @@ import {
 } from "./MemorySettings";
 import { validateMemorySettingsSearch } from "./MemorySettings.logic";
 import { settingsContentScopeKey } from "./settingsScopeNavigation";
-const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const item = Schema.decodeUnknownSync(MemoryItem)({
-  memorySpaceId: id(1),
-  memoryId: id(2),
-  status: "blocked",
-  scope: { kind: "user" },
-  failureCode: "secret_detected",
-  pendingSync: false,
-  localAvailability: {
-    exposure: "held",
-    reasons: ["secret_detected"],
-    deferred: [],
-    cleanupPending: false,
-  },
-});
 let root: Root;
 let container: HTMLDivElement;
 beforeEach(() => {
@@ -456,67 +450,6 @@ beforeEach(() => {
   state.deviceConnections.clear();
 });
 
-const decodeRevision = Schema.decodeUnknownSync(MemoryRevision);
-const decodeRevert = Schema.decodeUnknownSync(MemoryRevertResult);
-const revision = (n: number) =>
-  decodeRevision({
-    memorySpaceId: id(1),
-    memoryId: id(2),
-    revisionId: id(n),
-    operationId: id(10 + n),
-    parents: [],
-    scope: { kind: "user" },
-    payloadRef: id(n),
-    assertionKind: "fact",
-    provenance: { environmentId: "remote-owner" },
-    createdAtUtc: "2026-09-01T00:00:00.000Z",
-  });
-const payload = {
-  text: "Synthetic original",
-  evidence: [{ origin: "user" as const, messageIds: [] }],
-  derivedFromMemoryRevisions: [],
-};
-const activeItem = Schema.decodeUnknownSync(MemoryItem)({
-  memorySpaceId: item.memorySpaceId,
-  memoryId: item.memoryId,
-  scope: { kind: "user" },
-  pendingSync: false,
-  status: "active",
-  revision: revision(5),
-  payload,
-  localAvailability: { exposure: "visible", reasons: [], deferred: [], cleanupPending: false },
-});
-const resolution = Schema.decodeUnknownSync(MemoryResolution)({
-  resolutionId: id(6),
-  memorySpaceId: id(1),
-  memoryId: id(2),
-  inputRevisionIds: [id(3), id(4)],
-  inputPayloadRefs: [id(3), id(4)],
-  judgmentRef: id(6),
-  requestedModelSelection: { instanceId: "codex", model: "synthetic", options: [] },
-  effectiveProvider: "codex",
-  effectiveModel: "synthetic",
-  resolvingEnvironmentId: "remote-owner",
-  fencingToken: 1,
-  resultRevisionId: id(5),
-  appliedAtUtc: "2026-09-01T00:00:00.000Z",
-  revertDeadlineUtc: "2026-10-01T00:00:00.000Z",
-});
-const entry = {
-  resolution,
-  payload: MemoryResolutionPayload.make({
-    resolutionId: resolution.resolutionId,
-    judgment: "Synthetic judgment",
-  }),
-};
-const retained = {
-  revisions: [
-    { revision: revision(3), payload },
-    { revision: revision(4), payload: null },
-  ],
-  revertResults: [],
-  nextCursor: null,
-} satisfies Pick<MemoryHistoryPage, "revisions" | "revertResults" | "nextCursor">;
 const settled = vi.fn();
 async function renderRevert(
   history:
@@ -900,7 +833,7 @@ const ownerView = (version: number, requester: string) => ({
     removals: [],
   },
 });
-async function supportedScreen(withDetails = true, followNavigation = false) {
+async function supportedScreen(withDetails = true, followNavigation = false, originFilter = false) {
   const { AtomRegistry } = await import("effect/reactivity");
   const registry = AtomRegistry.make();
   const get = registry.get.bind(registry);
@@ -914,7 +847,9 @@ async function supportedScreen(withDetails = true, followNavigation = false) {
   });
   state.environment = {
     serverConfig: {
-      environment: { capabilities: { memory: { protocolVersion: 1, resolutionInputs: true } } },
+      environment: {
+        capabilities: { memory: { protocolVersion: 1, resolutionInputs: true, originFilter } },
+      },
     },
   };
   state.queries.set("read", Option.some(activeItem));
@@ -2813,4 +2748,55 @@ it("shows automatically initialized memory as on and usable without an enable ac
   expect(container.textContent).not.toContain("Turn on memory to");
   await click("Remember something");
   expect(container.querySelector('[aria-label="Memory text"]')).not.toBeNull();
+});
+
+it("confirms a memory selection once and reports each result while the conversation filter remains active", async () => {
+  state.threads = [
+    { id: "synthetic-thread", environmentId: "remote-owner", title: "Synthetic conversation" },
+  ];
+  const items = [2, 21, 22].map((n) => ({ ...item, memoryId: id(n) }));
+  state.queries.set(
+    "list",
+    Option.some({ items, projectionWatermark: 1, nextCursor: "origin-next" }),
+  );
+  state.executors.set("forget", async (target) => {
+    state.calls(target);
+    const { input } = target as { input: { memoryId: string } };
+    return success(
+      input.memoryId === id(21)
+        ? { outcome: "rejected", failureCode: "unavailable" }
+        : { outcome: "deleted", pendingSync: false },
+    );
+  });
+  await supportedScreen(false, false, true);
+  const picker = container.querySelector<HTMLSelectElement>(
+    'select[aria-label="Saved from conversation"]',
+  );
+  if (!picker) throw new Error("Expected conversation filter");
+  await act(async () => {
+    picker.value = "synthetic-thread";
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await click("Next page");
+  expect(state.requests.filter(({ label }) => label === "list").at(-1)).toMatchObject({
+    input: {
+      cursor: "origin-next",
+      origin: { environmentId: "remote-owner", threadId: "synthetic-thread" },
+    },
+  });
+  await click("Select memories");
+  for (const input of container.querySelectorAll<HTMLInputElement>(
+    'input[aria-label^="Select memory"]',
+  ))
+    await act(async () => input.click());
+  await click("Forget 3");
+  expect(state.calls.mock.calls.filter(([req]) => req?.input?.operationId)).toHaveLength(0);
+  const confirm = [...document.querySelectorAll("button")].find(
+    (button) => button.textContent === "Confirm forget",
+  );
+  if (!confirm) throw new Error("Expected the batch confirmation");
+  await act(async () => confirm.click());
+  expect(container.textContent?.match(/· Forgotten/g)).toHaveLength(2);
+  expect(container.textContent).toContain("· Failed · unavailable");
+  expect(container.querySelectorAll('input[aria-label^="Select memory"]:checked')).toHaveLength(1);
 });

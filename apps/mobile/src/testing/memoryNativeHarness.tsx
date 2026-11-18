@@ -220,6 +220,7 @@ vi.mock("@goat/client-runtime/state/session", () => ({
 }));
 vi.mock("../state/entities", () => ({
   useThreadShell: () => null,
+  useThreadShells: () => [],
   useProject: () => null,
   useProjects: () => {
     React.useSyncExternalStore(
@@ -490,7 +491,9 @@ const scopes = (values: readonly AuthEnvironmentScope[]): AuthSessionState => ({
 });
 
 export type NativeMemoryHarness = ReturnType<typeof createNativeMemoryHarness>;
-export function createNativeMemoryHarness() {
+export function createNativeMemoryHarness(
+  extraCapabilities?: NonNullable<ServerConfig["environment"]["capabilities"]["memory"]>,
+) {
   bridge.projects = [];
   const registry = AtomRegistry.make();
   const configs = Atom.family((_id: EnvironmentId | null) => Atom.make<ServerConfig | null>(null));
@@ -511,6 +514,7 @@ export function createNativeMemoryHarness() {
           importProvider: true,
           resolutionInputs: true,
           retainedLocalSpace: true,
+          ...extraCapabilities,
         },
       },
     },

@@ -645,6 +645,7 @@ export type MemoryQuotaCharge = {
 export type MemoryReadFilter = {
   readonly memorySpaceId: M.MemorySpaceId;
   readonly scope: M.MemoryScope;
+  readonly origin?: M.ScopedThreadRef;
   readonly afterMemoryId?: M.MemoryId;
   readonly limit: number;
 };

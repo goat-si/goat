@@ -1,3 +1,4 @@
+import { purgeSpaceSuggestions } from "./SaveSuggestions.ts";
 import * as M from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -124,6 +125,7 @@ export const makeItemWrites = (
     id: M.MemoryId,
     watermark: number,
   ) {
+    yield* purgeSpaceSuggestions(sql, space);
     const ids = [id];
     const seen = new Set<string>();
     while (ids.length) {
