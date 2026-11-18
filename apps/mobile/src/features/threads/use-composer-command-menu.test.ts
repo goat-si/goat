@@ -1,4 +1,6 @@
 import { detectComposerTrigger } from "@goat/shared/composerTrigger";
+import { act, createElement, useLayoutEffect, useState } from "react";
+import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@goat/contracts";
 import type { ModelOption } from "../../lib/modelOptions";
@@ -35,6 +37,7 @@ vi.mock("expo-modules-core", () => ({
 vi.mock("@react-navigation/native", () => ({ useNavigation: vi.fn() }));
 
 vi.mock("../../state/queries", () => ({
+  useThreadSearch: vi.fn(),
   useComposerPathSearch: () => ({ entries: [], isPending: false }),
   useComposerPullRequestSearch: () => ({ entries: [], isPending: false, error: null }),
 }));
@@ -52,11 +55,18 @@ vi.mock("../../state/server", () => ({
   environmentServerConfigsAtom: {},
 }));
 
+vi.mock("../../lib/useThreadContextHosts", () => ({ useThreadContextHosts: () => new Map() }));
+vi.mock("../../state/query", () => ({ useEnvironmentQuery: () => ({ data: null, error: null }) }));
+vi.mock("./useComposerCapabilityContext", () => ({
+  useComposerCapabilityContext: () => ({ computerUse: null }),
+}));
+
 import {
   buildComposerSlashCommandItems,
   resolveComposerCommandSelection,
   resolveComposerMenuSelection,
   resolveComposerSendIntercept,
+  useComposerCommandMenu,
 } from "./use-composer-command-menu";
 
 it("keeps the built-in model picker selectable after typing the complete command", () => {
@@ -280,4 +290,45 @@ describe("mobile /fork command", () => {
     expect(ids(true)).toEqual([]);
     expect(ids(false)).toEqual(["pcmd:fork"]);
   });
+});
+
+it("opens thread settings and removes only the selected /model token", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const openModelPicker = vi.fn();
+  const observed: { menu?: ReturnType<typeof useComposerCommandMenu> } = {};
+  function Probe() {
+    const [draft, setDraft] = useState("fix /mod this");
+    const options = {
+      draftMessage: draft,
+      ownerKey: "draft",
+      environmentId: null,
+      projectCwd: null,
+      selectedProviderStatus: null,
+      hasThread: true,
+      hasCompactableConversation: false,
+      onChangeDraftMessage: setDraft,
+      onOpenModelPicker: openModelPicker,
+    };
+    const menu = useComposerCommandMenu(options);
+    useLayoutEffect(() => {
+      observed.menu = menu;
+    });
+    return createElement("output", null, draft);
+  }
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(Probe)));
+    await act(async () => observed.menu?.onSelectionChange({ start: 8, end: 8 }));
+    const model = observed.menu?.items.find((item) => item.id === "cmd:model");
+    if (!model) throw new Error("Expected the /model suggestion");
+    await act(async () => observed.menu?.onSelect(model));
+
+    expect(container.textContent).toBe("fix  this");
+    expect(observed.menu?.selection).toEqual({ start: 4, end: 4 });
+    expect(openModelPicker).toHaveBeenCalledOnce();
+  } finally {
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
+  }
 });
