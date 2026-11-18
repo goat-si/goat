@@ -414,3 +414,31 @@ Started from pushed `cbd0a4a2d2db5fea776bcc27278a34f9dae2460a` on pen-mac-studio
 - Final gates are blocked by the one-gate-at-a-time rule on pen-mac-studio. Other lane verification jobs have occupied the host continuously for over 30 minutes after the final package typecheck. The origin received the request to reserve the next idle slot. The lane's remote head remains `cbd0a4a2d2db5fea776bcc27278a34f9dae2460a`.
 
 NOT RUN: the exact-head guarded server suite and `vp run check:changed origin/chase/t3-261114-next3`, PR #3700 CI, repo-wide suites, real paired client updates, native systemd or launchd installs, and released mixed-version rollouts.
+
+### Exact-head rerun and delivery
+
+The maintainer clarified that lanes on pen-mac-studio run in parallel. N10 checked its own worktree processes before each gate and ran the gates one at a time on Node 26.12.1.
+
+- On `64f72c91e4f8a7d5271e9a71ba828db0ba121df3`, `GOAT_TEST_TMP_GUARD=fail vp test run <all 14 changed server test files>` exited 0. All 179 tests passed with no skips.
+- `vp run check:changed origin/chase/t3-261114-next3` exited 0. All gates passed. Vitest reported 96 files, 2,964 passed, and 5 platform skips.
+- The plain lane push advanced `cbd0a4a2d2` to `64f72c91e4`. `git ls-remote` confirmed the remote SHA.
+
+## 2026-11-18 UTC — N10-2 review fix round 2
+
+The independent review of `e68a3102cb..914960c17a` returned BLOCK on three findings. Each reproduction failed before its fix.
+
+| Finding | Fix commit and source | Failing-first evidence |
+| --- | --- | --- |
+| P2-1 | `ea73386ed7c3a2fd15d0221f86e767be690f9e22`. `apps/desktop/src/electron/ElectronUpdater.ts:27` forwards the old `APPIMAGE` only in the updater child environment. `apps/desktop/src/app/DesktopPreReadyPlatform.ts:79` uses it for the relative link when the update changes a versioned name to a version-free one. | The pre-ready regression attempted to link nightly's old path during a stable update. The test now links the exact stable path even with a stale nightly desktop entry. A Node probe with electron-updater 6.8.9 moved a staged executable and relaunched it. The child received an empty previous path before the fix and the exact deleted path after it. The focused desktop run had 26 passes and 5 platform skips. |
+| P2-2 | `6e25101cae47896f198abccac548ac203544e786`. `apps/web/src/versionSkew.ts:110` appends `/.` inside the quoted home argument when it ends in whitespace. | Two copy-command assertions failed, and `/bin/sh` followed by the CLI's `resolveBaseDir` returned `/tmp/goat install home` for `/tmp/goat install home ` before the fix. The same path probe passed for trailing space and trailing tab after it, including an apostrophe in the tab case. Both focused web files passed with 34 tests. |
+| P2-3 | `9f3db70f583e72b5ea26c722b540cc350a8b0738`. `scripts/build-desktop-artifact.appImage.test.ts:26` uses the configured AppImage name or the global pattern and validates both channels and architectures against the release verifier. | With `VERSION_FREE_APPIMAGES = false`, the original run exited 1 with three failures. Two dereferenced a missing `appImage` override and one expected rejection of a valid versioned asset. The updated build and release verifier tests exited 0 with 31 passes each under `true` and `false`. The committed configuration is `true`. |
+
+A versioned bridge with the path handoff must be installed before the version-free transition if that transition must preserve the active launch path. Clients that skip the bridge still lack the handoff. The first hop from already-shipped code to the bridge can still rename the original versioned file. No releases were cut.
+
+### Final verification and delivery
+
+- On `9f3db70f583e72b5ea26c722b540cc350a8b0738`, `GOAT_TEST_TMP_GUARD=fail vp test run <all 14 changed server test files>` exited 0. All 179 tests passed with no skips.
+- `vp run check:changed origin/chase/t3-261114-next3` exited 0. All gates passed. Vitest reported 101 files (100 passed, 1 platform-skipped), 3,042 tests passed, and 2 platform skips. The patch check was skipped in both rounds because no dependency files changed.
+- The plain lane push advanced `64f72c91e4` to `9f3db70f58`. `git ls-remote` confirmed the remote SHA. The integration tip was already an ancestor at `6def29ca35`.
+
+NOT RUN: PR #3700 CI, full repository suites, real paired-client service updates, native systemd or launchd installs, release builds or publication, and a packaged Linux AppImage transition.
