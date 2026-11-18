@@ -85,6 +85,7 @@ export interface ActiveTurn {
 
 export interface SubagentCall {
   readonly toolId: string;
+  readonly assistantMessageId: string;
   readonly nativeId: string;
   readonly state: ThreadState;
   readonly turn: ActiveTurn;
@@ -96,6 +97,7 @@ export interface SubagentCall {
   model: string | null;
   background: boolean;
   run: number | undefined;
+  unboundExecutionsLeft?: number;
   child: ThreadState | undefined;
   status: OrchestrationV2Subagent["status"];
   result: string | null;

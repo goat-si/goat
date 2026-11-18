@@ -795,9 +795,10 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       usedSubagents: false,
     });
 
-    const emitSubagent = Effect.fnUntraced(function* (call: SubagentCall) {
+    const emitSubagent = Effect.fnUntraced(function* (call: SubagentCall, sessionScoped = false) {
       const updatedAt = yield* DateTime.now;
       const { turn, state } = call;
+      const scope = sessionScoped ? { sessionScoped: true } : {};
       const nodeId = idAllocator.derive.nodeFromProviderItem({
         driver,
         nativeItemId: call.nativeId,
@@ -809,6 +810,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const childThreadId = call.child?.subagent?.appThread.id ?? null;
       yield* emit({
         type: "node.updated",
+        ...scope,
         driver,
         node: {
           id: nodeId,
@@ -830,6 +832,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       });
       yield* emit({
         type: "subagent.updated",
+        ...scope,
         driver,
         subagent: {
           id: nodeId,
@@ -855,6 +858,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       });
       yield* emit({
         type: "turn_item.updated",
+        ...scope,
         driver,
         turnItem: {
           id: idAllocator.derive.turnItemFromProviderItem({ driver, nativeItemId: call.nativeId }),
@@ -1079,14 +1083,15 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       status: OrchestrationV2Subagent["status"],
       result?: string,
     ) => Effect.Effect<void> = Effect.fnUntraced(function* (call, status, result) {
-      if (!isOrchestrationV2WorkActive(call.status)) return;
+      const recovering = subagentReports.isRecoverable(call);
+      if (!recovering && !isOrchestrationV2WorkActive(call.status)) return;
       call.status = status;
       call.completedAt = yield* DateTime.now;
       if (result !== undefined) call.result = subagentResultPreview(result);
       subagentReports.forget(call);
-      call.state.calls.delete(call.toolId);
+      if (!recovering) call.state.calls.delete(call.toolId);
       const child = call.child;
-      if (child?.subagent?.call === call) {
+      if (!recovering && child?.subagent?.call === call) {
         for (const nested of Array.from(child.calls.values())) {
           if (nested.background && status !== "failed") continue;
           yield* settleCall(nested, status === "completed" ? "interrupted" : status);
@@ -1102,16 +1107,14 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         };
         yield* emitProviderThread(child);
       }
-      yield* emitSubagent(call);
+      yield* emitSubagent(call, recovering);
     });
 
     const startChildTurn = Effect.fnUntraced(function* (child: ThreadState) {
       const subagent = child.subagent;
       if (subagent === undefined || child.active !== undefined) return;
       subagent.turns += 1;
-      const unbound = callsAttachedTo(child).filter((call) => call.run === undefined);
-      const caller = unbound.length === 1 ? unbound[0] : undefined;
-      if (caller !== undefined) caller.run = subagent.turns;
+      subagentReports.bindStart(callsAttachedTo(child), subagent.turns);
       const startedAt = yield* DateTime.now;
       const nativeTurnId = `${child.sessionId}:turn:${subagent.turns}`;
       const rootNodeId = idAllocator.derive.nodeFromProviderItem({
@@ -1300,31 +1303,15 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               },
             }),
       });
-      // Subagent turns are runless; their calls own settlement.
       if (state.subagent !== undefined) {
-        const { call, turns } = state.subagent;
-        if (terminal.status !== "failed") {
-          for (const attached of callsAttachedTo(state)) {
-            if (attached.run !== turns || !isOrchestrationV2WorkActive(attached.status)) continue;
-            const evicted = subagentReports.remember(turn, {
-              call: attached,
-              answer: turn.answer,
-              status: terminal.status,
-            });
-            if (evicted) yield* settleCall(evicted.call, evicted.status, evicted.answer?.preview);
-          }
-        }
-        turn.answer = undefined;
-        if (!call.background && terminal.status !== "completed") {
-          yield* settleCall(call, terminal.status);
-        }
-        if (terminal.status === "failed") {
-          for (const attached of callsAttachedTo(state)) {
-            if (attached.run === turns)
-              yield* settleCall(attached, terminal.status, terminal.failure.message);
-          }
-        }
-        return;
+        return yield* subagentReports.finishChild(
+          turn,
+          terminal,
+          state.subagent,
+          callsAttachedTo(state),
+          settleCall,
+          emitSubagent,
+        );
       }
       state.providerThread = {
         ...state.providerThread,
@@ -1673,11 +1660,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     const startCall = Effect.fnUntraced(function* (
       state: ThreadState,
       turn: ActiveTurn,
-      toolId: string,
+      { id: toolId, assistantMessageID }: EventOf<"session.tool.input.started">["data"],
     ) {
       const nativeId = `${turn.scope}${toolId}`;
       const call: SubagentCall = {
         toolId,
+        assistantMessageId: assistantMessageID,
         nativeId,
         state,
         turn,
@@ -1704,6 +1692,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       turn: ActiveTurn,
       event: OpenCode2Client.OpenCode2StreamEvent,
     ) {
+      if (state.subagent !== undefined && executionEnd(event.type))
+        subagentReports.recordNativeEnd(turn);
       // OpenCode sends nothing when a retry goes through; the provider's first output marks it.
       if (
         turn.retry !== undefined &&
@@ -1730,7 +1720,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         case "session.tool.input.started":
           turn.closingText = undefined;
           if (event.data.name === "question") return;
-          if (event.data.name === "subagent") return yield* startCall(state, turn, event.data.id);
+          if (event.data.name === "subagent") return yield* startCall(state, turn, event.data);
           turn.tools.set(event.data.id, { name: event.data.name, input: {} });
           turn.startedAt.set(event.data.id, yield* DateTime.now);
           return yield* emitTool(state, turn, event.data.id, "running");
@@ -2161,6 +2151,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         const state = threads.get(event.sessionID);
         const turn = state?.active;
         if (state === undefined || turn === undefined || turn.awaitingStart) return;
+        if (state.subagent !== undefined) subagentReports.recordNativeEnd(turn);
         return yield* endExecution(
           state,
           turn,
@@ -2198,6 +2189,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       if (sessionId === undefined) return;
       const state = threads.get(sessionId);
       if (state === undefined) return;
+      const recovered = subagentReports.recover(state, event);
+      if (recovered !== undefined)
+        return yield* settleCall(recovered.call, recovered.status, recovered.result);
       if (event.type === "rpc.opencode.goal.changed") {
         if (!supportsNativeGoals()) return;
         const goal = yield* decodeGoal(event.data["goal"]).pipe(Effect.result);

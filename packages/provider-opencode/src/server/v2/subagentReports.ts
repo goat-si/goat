@@ -1,8 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off -- hash native answer text without retaining it.
 import * as NodeCrypto from "node:crypto";
-import { subagentResultPreview } from "../subagentResult.ts";
-import { stringField, subagentOutput } from "./adapterUtilities.ts";
-import type { ActiveTurn, SubagentCall, TurnTerminal } from "./adapterState.ts";
+import { isOrchestrationV2WorkActive } from "@goat/contracts";
+import * as Effect from "effect/Effect";
+import { subagentResultPreview, TRACKING_LOST } from "../subagentResult.ts";
+import { stringField, subagentOutput, textOf } from "./adapterUtilities.ts";
+import type { OpenCode2StreamEvent } from "./OpenCode2Client.ts";
+import type { ActiveTurn, SubagentCall, ThreadState, TurnTerminal } from "./adapterState.ts";
 
 const MAX_UNREPORTED_CALLS = 128;
 
@@ -23,17 +26,119 @@ interface UnreportedCall {
 
 export function makeSubagentReports() {
   const waiting = new Map<SubagentCall, UnreportedCall>();
+  const recoverable = new Set<SubagentCall>();
   const reportWhileRunning = new WeakSet<ActiveTurn>();
+  const nativeEnds = new WeakSet<ActiveTurn>();
+
+  const remember = (turn: ActiveTurn, entry: UnreportedCall): UnreportedCall | undefined => {
+    if (reportWhileRunning.has(turn)) return entry;
+    waiting.set(entry.call, entry);
+    if (waiting.size <= MAX_UNREPORTED_CALLS) return;
+    const oldest = waiting.values().next();
+    if (oldest.done) return;
+    waiting.delete(oldest.value.call);
+    return oldest.value;
+  };
+
+  const loseTracking = (call: SubagentCall) => {
+    call.state.calls.delete(call.toolId);
+    call.status = "idle";
+    call.result = TRACKING_LOST;
+    call.prompt = subagentResultPreview(call.prompt);
+    if (recoverable.size >= MAX_UNREPORTED_CALLS) {
+      const oldest = recoverable.values().next();
+      if (!oldest.done) recoverable.delete(oldest.value);
+    }
+    recoverable.add(call);
+  };
+
   return {
-    forget: (call: SubagentCall) => waiting.delete(call),
-    remember(turn: ActiveTurn, entry: UnreportedCall): UnreportedCall | undefined {
-      if (reportWhileRunning.has(turn)) return entry;
-      waiting.set(entry.call, entry);
-      if (waiting.size <= MAX_UNREPORTED_CALLS) return;
-      const oldest = waiting.values().next();
-      if (oldest.done) return;
-      waiting.delete(oldest.value.call);
-      return oldest.value;
+    isRecoverable: (call: SubagentCall) => recoverable.has(call),
+    forget(call: SubagentCall) {
+      waiting.delete(call);
+      recoverable.delete(call);
+    },
+    bindStart(calls: ReadonlyArray<SubagentCall>, ordinal: number) {
+      const unbound = calls.filter((call) => call.run === undefined);
+      const sole = unbound.length === 1 ? unbound[0] : undefined;
+      if (sole !== undefined && sole.unboundExecutionsLeft === undefined) {
+        sole.run = ordinal;
+      } else if (unbound.length > 1) {
+        for (const call of unbound) call.unboundExecutionsLeft ??= unbound.length;
+      }
+    },
+    recordNativeEnd: (turn: ActiveTurn) => nativeEnds.add(turn),
+    finishChild: Effect.fnUntraced(function* (
+      turn: ActiveTurn,
+      terminal: TurnTerminal,
+      { call, turns }: NonNullable<ThreadState["subagent"]>,
+      attached: ReadonlyArray<SubagentCall>,
+      settle: (
+        call: SubagentCall,
+        status: SubagentCall["status"],
+        result?: string,
+      ) => Effect.Effect<void>,
+      publish: (call: SubagentCall) => Effect.Effect<void>,
+    ) {
+      if (nativeEnds.delete(turn)) {
+        for (const candidate of attached) {
+          if (candidate.unboundExecutionsLeft === undefined || candidate.run !== undefined)
+            continue;
+          if (--candidate.unboundExecutionsLeft !== 0) continue;
+          loseTracking(candidate);
+          yield* publish(candidate);
+        }
+      }
+      if (terminal.status !== "failed") {
+        for (const candidate of attached) {
+          if (candidate.run !== turns || !isOrchestrationV2WorkActive(candidate.status)) continue;
+          const evicted = remember(turn, {
+            call: candidate,
+            answer: turn.answer,
+            status: terminal.status,
+          });
+          if (evicted) yield* settle(evicted.call, evicted.status, evicted.answer?.preview);
+        }
+      }
+      turn.answer = undefined;
+      if (!call.background && terminal.status !== "completed" && !recoverable.has(call))
+        yield* settle(call, terminal.status);
+      if (terminal.status === "failed") {
+        for (const candidate of attached) {
+          if (candidate.run === turns)
+            yield* settle(candidate, terminal.status, terminal.failure.message);
+        }
+      }
+    }),
+    recover(state: ThreadState, event: OpenCode2StreamEvent) {
+      if (
+        recoverable.size === 0 ||
+        (event.type !== "session.tool.success" && event.type !== "session.tool.failed")
+      )
+        return;
+      const call = [...recoverable].find(
+        (candidate) =>
+          candidate.state === state &&
+          candidate.toolId === event.data.id &&
+          candidate.assistantMessageId === event.data.assistantMessageID,
+      );
+      if (call === undefined) return;
+      if (event.type === "session.tool.failed") {
+        const { type, message } = event.data.error;
+        return {
+          call,
+          status: type === "aborted" ? ("interrupted" as const) : ("failed" as const),
+          result: message,
+        };
+      }
+      if (event.data.metadata?.["status"] === "running") return;
+      const reportedChild = stringField(event.data.metadata, "sessionID");
+      if (reportedChild !== undefined && reportedChild !== call.child?.sessionId) return;
+      return {
+        call,
+        status: "completed" as const,
+        result: subagentOutput(textOf(event.data.content)),
+      };
     },
     reconcile(
       candidates: Iterable<SubagentCall>,

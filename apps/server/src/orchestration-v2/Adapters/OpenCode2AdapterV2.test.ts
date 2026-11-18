@@ -1058,6 +1058,70 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       }).pipe(Effect.scoped),
   );
 
+  it.effect("clears work for ended unbound executions and accepts a later exact tool result", () =>
+    Effect.gen(function* () {
+      const gate = makeProviderReplayGate(["second_execution", "exact_tool_result"]);
+      const { runtime, thread } = yield* resumed(
+        [
+          ...backgroundLaunch(CHILD),
+          ...callAgain({ background: true }),
+          event("session.execution.started", { sessionID: CHILD }),
+          childAnswer("First native answer", 1),
+          event("session.execution.succeeded", { sessionID: CHILD }),
+          event("session.execution.started", { sessionID: CHILD }, "second_execution"),
+          childAnswer("Second native answer", 2),
+          event("session.execution.succeeded", { sessionID: CHILD }),
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          event(
+            "session.tool.success",
+            {
+              sessionID: SESSION,
+              assistantMessageID: "msg_unrelated_assistant",
+              id: "call-background",
+              content: [{ type: "text", text: "Result for a different assistant message" }],
+              metadata: { sessionID: CHILD, status: "completed" },
+              executed: true,
+            },
+            undefined,
+            2,
+          ),
+          event(
+            "session.tool.success",
+            {
+              sessionID: SESSION,
+              assistantMessageID: "msg_assistant",
+              id: "call-background",
+              content: [{ type: "text", text: "Confirmed first result" }],
+              metadata: { sessionID: CHILD, status: "completed" },
+              executed: true,
+            },
+            "exact_tool_result",
+            2,
+          ),
+        ],
+        { replayGate: gate },
+      );
+      const watch = yield* watchCalls(runtime, thread);
+      yield* runtime.startTurn(withLineage(thread));
+      yield* watch.until(() => watch.childTurns.get(`${CHILD}:turn:1`) === "completed");
+      assert.lengthOf(watch.state.roster ?? [], 2);
+      gate.release("second_execution");
+      yield* watch.until(() => watch.state.terminal === true);
+      const unknown = { status: "idle", result: "Tracking lost. Outcome unknown." };
+      assert.deepEqual(Object.fromEntries(watch.calls), { Sleep: unknown, Again: unknown });
+      assert.deepEqual(watch.state.roster, []);
+      assert.isFalse(yield* runtime.hasPendingBackgroundWorkForThread!(thread));
+      gate.release("exact_tool_result");
+      yield* watch.until(() => watch.calls.get("Sleep")?.status === "completed");
+      assert.deepEqual(watch.calls.get("Sleep"), {
+        status: "completed",
+        result: "Confirmed first result",
+      });
+      assert.deepEqual(watch.calls.get("Again"), unknown);
+      assert.deepEqual(watch.state.roster, []);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("settles every call that joined a running subagent with its one report", () =>
     Effect.gen(function* () {
       const { runtime, thread } = yield* resumed([

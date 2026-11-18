@@ -111,11 +111,13 @@ export const ProviderAdapterV2Event = Schema.Union([
     type: Schema.Literal("node.updated"),
     driver: ProviderDriverKind,
     node: OrchestrationV2ExecutionNode,
+    sessionScoped: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("subagent.updated"),
     driver: ProviderDriverKind,
     subagent: OrchestrationV2Subagent,
+    sessionScoped: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("message.updated"),
