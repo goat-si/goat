@@ -1642,27 +1642,28 @@ export const MemorySyncStatusInput = Schema.Union([
   }),
 ]);
 export type MemorySyncStatusInput = typeof MemorySyncStatusInput.Type;
-
-export const MemoryUpsertInput = struct({
+const mutation = {
   ...space,
   operationId: MemoryOperationId,
   memoryId: MemoryId,
   expectedHeads: heads,
-  scope: MemoryScope,
-  assertionKind: MemoryAssertionKind,
-  payload: MemoryPayload,
-  baseBoundary: Schema.NullOr(MemoryCausalBoundary),
-}).check(Schema.makeFilter((v) => assertionValid(v.assertionKind, v.payload.evidence)));
+};
+const detailedFailure = { includeFailureDetails: Schema.optionalKey(Schema.Literal(true)) };
+const upsertInput = <F extends Schema.Struct.Fields>(extra: F) =>
+  struct({
+    ...extra,
+    ...mutation,
+    scope: MemoryScope,
+    assertionKind: MemoryAssertionKind,
+    payload: MemoryPayload,
+    baseBoundary: Schema.NullOr(MemoryCausalBoundary),
+  }).check(Schema.makeFilter((v) => assertionValid(v.assertionKind, v.payload.evidence)));
+export const MemoryUpsertInput = upsertInput({});
 export type MemoryUpsertInput = typeof MemoryUpsertInput.Type;
-
-export const MemoryForgetInput = struct({
-  ...space,
-  operationId: MemoryOperationId,
-  memoryId: MemoryId,
-  expectedHeads: heads,
-});
+export const MemoryForgetInput = struct(mutation);
 export type MemoryForgetInput = typeof MemoryForgetInput.Type;
-
+export const MemoryUpsertRpcInput = upsertInput(detailedFailure);
+export const MemoryForgetRpcInput = struct({ ...mutation, ...detailedFailure });
 export const MemoryRevertResolutionInput = struct({
   ...space,
   operationId: MemoryOperationId,
@@ -1672,7 +1673,6 @@ export const MemoryRevertResolutionInput = struct({
   expectedHeads: heads.check(Schema.makeFilter((vs) => vs.length === 1)),
 });
 export type MemoryRevertResolutionInput = typeof MemoryRevertResolutionInput.Type;
-
 export const MemoryReadSourceInput = struct({
   ...space,
   ...paging,
