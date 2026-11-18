@@ -6,7 +6,6 @@ import {
   boundAttachmentIds,
   formatOutgoingPrompt,
   optimisticMessageAttachments,
-  planComposerTurn,
   sendTitleFallbackLabels,
   snapshotComposerSend,
   withMessageContext,
@@ -129,6 +128,7 @@ import {
   selectPlanModeEnabled,
   showMultipleModelsNeedGitThread,
 } from "./useComposerSend.helpers";
+import { planComposerTurn } from "../composerTurnPlan";
 import { keepFailedSendInStash } from "./stashFailedSend";
 
 const sshWorkspaceLaunchCommand = vcsEnvironment.sshWorkspaceLaunch;
