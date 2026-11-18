@@ -1,3 +1,5 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- FileSystem.readDirectory buffers the whole listing.
+import * as NodeFSP from "node:fs/promises";
 import {
   TERMINAL_SEQUENCE_GROUND,
   terminalSequenceEnd,
@@ -10,32 +12,61 @@ import type * as Path from "effect/Path";
 const COMPACTION_TEMP_PREFIX = ".goat-terminal-history-";
 const COMPACTION_TEMP_NAME = "history";
 
-const removeAbandonedHistoryCompactions = Effect.fn("terminal.removeAbandonedHistoryCompactions")(
-  function* (fs: FileSystem.FileSystem, path: Path.Path, logsDir: string) {
-    // The server holds exclusive ownership of its userdata before starting the terminal manager.
-    for (const name of yield* fs.readDirectory(logsDir)) {
-      if (
-        !name.startsWith(COMPACTION_TEMP_PREFIX) ||
-        !/^[a-z0-9]{6}$/i.test(name.slice(COMPACTION_TEMP_PREFIX.length))
-      )
-        continue;
-      const dir = path.join(logsDir, name);
-      yield* Effect.gen(function* () {
-        if ((yield* fs.lstat(dir)).type !== "Directory") return;
-        const entries = yield* fs.readDirectory(dir);
-        if (entries.length > 1) return;
-        const [entry] = entries;
-        if (entry !== undefined) {
-          if (entry !== COMPACTION_TEMP_NAME) return;
-          if ((yield* fs.lstat(path.join(dir, entry))).type !== "File") return;
-        }
-        yield* fs.remove(dir, { recursive: true, force: true });
-      }).pipe(
+type Directory = Awaited<ReturnType<typeof NodeFSP.opendir>>;
+
+const withDirectory = <A, E, R>(
+  path: string,
+  bufferSize: number,
+  read: (directory: Directory) => Effect.Effect<A, E, R>,
+) =>
+  Effect.acquireUseRelease(
+    Effect.tryPromise(() => NodeFSP.opendir(path, { bufferSize })),
+    read,
+    (directory) =>
+      Effect.tryPromise(() => directory.close()).pipe(
         Effect.catch((error) =>
-          Effect.logWarning("failed to remove abandoned terminal history", { error }),
+          Effect.logWarning("failed to close terminal history directory", { error }),
         ),
-      );
-    }
+      ),
+  );
+
+const readEntry = (directory: Directory) =>
+  Effect.tryPromise(() => directory.read()).pipe(Effect.uninterruptible);
+
+const removeAbandonedHistoryCompactions = Effect.fn("terminal.removeAbandonedHistoryCompactions")(
+  function (fs: FileSystem.FileSystem, path: Path.Path, logsDir: string) {
+    // The server holds exclusive ownership of its userdata before starting the terminal manager.
+    return withDirectory(logsDir, 32, (parent) =>
+      Effect.gen(function* () {
+        for (;;) {
+          const candidate = yield* readEntry(parent);
+          if (candidate === null) return;
+          const { name } = candidate;
+          if (
+            !candidate.isDirectory() ||
+            !name.startsWith(COMPACTION_TEMP_PREFIX) ||
+            !/^[a-z0-9]{6}$/i.test(name.slice(COMPACTION_TEMP_PREFIX.length))
+          )
+            continue;
+          const dir = path.join(logsDir, name);
+          yield* Effect.gen(function* () {
+            const canRemove = yield* withDirectory(dir, 2, (opened) =>
+              Effect.gen(function* () {
+                const first = yield* readEntry(opened);
+                if (first === null) return true;
+                const second = yield* readEntry(opened);
+                return second === null && first.name === COMPACTION_TEMP_NAME && first.isFile();
+              }),
+            );
+            if (canRemove) yield* fs.remove(dir, { recursive: true, force: true });
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("failed to remove abandoned terminal history", { error }),
+            ),
+          );
+        }
+      }),
+    );
   },
   Effect.catch((error) =>
     Effect.logWarning("failed to list abandoned terminal history", { error }),
