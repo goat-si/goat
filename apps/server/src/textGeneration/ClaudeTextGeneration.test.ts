@@ -91,6 +91,47 @@ const memoryOutput = { text: "Synthetic result", assertionKind: "inference", evi
 const memoryOperations = ["resolveMemoryConflict", "generateMemorySummary"] as const;
 
 it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
+  it.effect.each(["inline", "relative file", "missing file"] as const)(
+    "handles %s instance settings for isolated title generation",
+    (source) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const cwd = yield* fs.makeTempDirectoryScoped();
+        const custom = '{"disableAllHooks":false,"env":{"ANTHROPIC_VERTEX_PROJECT_ID":"fixture"}}';
+        if (source === "relative file") yield* fs.writeFileString(`${cwd}/settings.json`, custom);
+        const result = yield* withFakeClaudeEnv(
+          {
+            output: JSON.stringify({ structured_output: { title: "Fixture title" } }),
+            argsMustContain: '"ANTHROPIC_VERTEX_PROJECT_ID":"fixture"',
+            argsMustNotContain: '"disableAllHooks":false',
+            expectSpawnCount: source === "missing file" ? 0 : 1,
+            claudeConfig: {
+              launchArgs:
+                source === "inline" ? `--settings '${custom}'` : "--settings settings.json",
+            },
+          },
+          (generation) =>
+            generation
+              .generateThreadTitle({
+                cwd,
+                message: "Synthetic request",
+                modelSelection: createModelSelection(
+                  ProviderInstanceId.make("claudeCode"),
+                  SYNTHETIC_CLAUDE_STANDARD_MODEL,
+                ),
+              })
+              .pipe(Effect.result),
+        );
+        if (source === "missing file") {
+          expect(result._tag).toBe("Failure");
+          if (result._tag === "Failure")
+            expect(result.failure.detail).toContain("--settings launch argument");
+        } else {
+          expect(result._tag).toBe("Success");
+        }
+      }),
+  );
+
   it.effect.each(["stdout", "stderr"] as const)(
     "rejects oversized finite %s before accepting generation",
     (outputStream) =>
@@ -151,6 +192,7 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
                 : { summary: memoryOutput },
           }),
           memoryRunnerContext: memoryContext,
+          claudeConfig: { launchArgs: "--settings missing-settings.json" },
           argsMustContain: `--model ${SYNTHETIC_CLAUDE_CAPABLE_MODEL}[expanded] --effort high`,
         },
         (generation) =>

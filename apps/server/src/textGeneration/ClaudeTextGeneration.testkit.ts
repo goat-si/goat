@@ -181,7 +181,9 @@ export function withFakeClaudeEnv<A, E, R>(
       Effect.provideService(HostProcess.Platform, input.platform ?? "linux"),
     );
     const result = yield* effectFn(textGeneration);
-    if (input.expectSpawnCount !== undefined) {
+    if (input.expectSpawnCount === 0) {
+      expect(yield* fs.exists(`${tempDir}/attempts`)).toBe(false);
+    } else if (input.expectSpawnCount !== undefined) {
       const attempts = yield* fs.readFileString(`${tempDir}/attempts`);
       expect(attempts.trim().split("\n")).toHaveLength(input.expectSpawnCount);
     }

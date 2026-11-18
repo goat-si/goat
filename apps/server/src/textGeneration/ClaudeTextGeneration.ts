@@ -42,7 +42,9 @@ import {
   hasClaudeManagedMcpConfig,
   makeClaudeEnvironment,
 } from "../provider/Drivers/ClaudeHome.ts";
-import { claudeHomeFlagSettings } from "../provider/ClaudeHomeSettings.ts";
+import { pinClaudeHomeSettings } from "../provider/ClaudeHomeSettings.ts";
+
+import { readClaudeLaunchArgSettings } from "../orchestration-v2/Adapters/ClaudeLaunchArgs.ts";
 
 const CLAUDE_TIMEOUT_MS = 180_000;
 /** `--tools` takes bare names; patterns go in the allow list. */
@@ -264,13 +266,30 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
         : undefined;
     const fastMode =
       fastModeDescriptor?.type === "boolean" ? fastModeDescriptor.currentValue : undefined;
-    const settings = {
-      disableAllHooks: true,
-      ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
-      ...(fastMode ? { fastMode: true } : {}),
-      ...(typeof ultracode === "boolean" ? { ultracode } : {}),
-      ...claudeHomeFlagSettings(claudeEnvironment),
-    };
+    const operationIsMemory = TextGenerationOperations.isMemoryOperation(operation);
+    const launchSettings = operationIsMemory
+      ? undefined
+      : yield* readClaudeLaunchArgSettings({
+          settings: claudeSettings,
+          cwd,
+          fileSystem,
+          path,
+        }).pipe(
+          Effect.mapError(
+            (cause) => new TextGenerationError({ operation, detail: cause.message, cause }),
+          ),
+          Effect.provideService(HostProcess.HomeDirectory, home),
+        );
+    const { settings } = pinClaudeHomeSettings({
+      env: claudeEnvironment,
+      settings: {
+        ...launchSettings,
+        disableAllHooks: true,
+        ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
+        ...(fastMode ? { fastMode: true } : {}),
+        ...(typeof ultracode === "boolean" ? { ultracode } : {}),
+      },
+    });
     const settingsJson = yield* encodeJsonForOperation(
       operation,
       settings,
