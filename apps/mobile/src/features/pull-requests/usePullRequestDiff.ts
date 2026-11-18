@@ -111,16 +111,11 @@ export function usePullRequestDiff(
       input: { ...target.input, ...(cursor ? { cursor } : {}) },
     }),
   );
-  const pages = useMemo(() => {
-    const loaded = state.key === key ? state.pages : NO_PAGES;
-    return query.data ? retainPullRequestDiffPage(loaded, cursor, query.data) : loaded;
-  }, [cursor, key, query.data, state.key, state.pages]);
+  const loaded = state.key === key ? state.pages : NO_PAGES;
+  const pages = query.data ? retainPullRequestDiffPage(loaded, cursor, query.data) : loaded;
   if (state.key !== key || state.pages !== pages) setState({ key, cursor, pages });
 
-  const paged = useMemo(
-    () => getCachedPullRequestDiffPages(pages, key, terminology),
-    [key, pages, terminology],
-  );
+  const paged = getCachedPullRequestDiffPages(pages, key, terminology);
   const fileTarget =
     params.commit || !observedHead
       ? target

@@ -44,6 +44,9 @@ import {
   isPullRequestSyncUnsettled as isUnsettled,
 } from "./pullRequestSyncFinal.ts";
 
+const isPullRequestUnavailable = Schema.is(PullRequestUnavailableError);
+const isPullRequestOperationError = Schema.is(PullRequestOperationError);
+
 const FAILED_READ_BACKOFF_MS = 60_000;
 const SLOW_SYNC_INTERVAL_MS = 15 * 60 * 1_000;
 // Every server polls every open linked pull request, and most of them sit untouched for days.
@@ -367,8 +370,8 @@ export const make = Effect.gen(function* () {
 
   const recordReadFailure = (key: string, error: unknown, nowMs: number) => {
     if (
-      error instanceof PullRequestUnavailableError ||
-      (error instanceof PullRequestOperationError && error.reason === "not-found")
+      isPullRequestUnavailable(error) ||
+      (isPullRequestOperationError(error) && error.reason === "not-found")
     ) {
       missing.add(key);
       lastSyncedAt.set(key, nowMs);
