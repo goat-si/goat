@@ -58,9 +58,10 @@ export const normalizeMemoryDependencies = Effect.fn("MemoryService.normalizeMem
     allowPruned = false,
     resolutionHeads: ReadonlyArray<M.MemoryRevisionId> = [],
     resolvingMemoryId?: M.MemoryId,
+    capacityOverride?: number,
   ) {
     const sql = yield* SqlClient.SqlClient;
-    const limit = yield* closureCap(space);
+    const limit = capacityOverride ?? (yield* closureCap(space));
     const revisions = new Set(payload.derivedFromMemoryRevisions);
     yield* requireClosureCapacity(revisions.size, limit);
     const allowedHeads = encodeHeads(resolutionHeads);
@@ -102,6 +103,7 @@ export const validateSummaryDependencies = Effect.fn("MemoryService.validateSumm
       readonly memoryId: M.MemoryId;
       readonly revisions: ReadonlyArray<M.MemoryRevisionId>;
     },
+    capacityOverride?: number,
   ) {
     const normalized = yield* normalizeMemoryDependencies(
       space,
@@ -109,6 +111,7 @@ export const validateSummaryDependencies = Effect.fn("MemoryService.validateSumm
       true,
       resolution?.revisions ?? [],
       resolution?.memoryId,
+      capacityOverride,
     );
     if (
       normalized.derivedFromMemoryRevisions.length !==

@@ -3,6 +3,7 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import { validateSummaryDependencies } from "./MemoryDependencies.ts";
 import type { MemoryRefusedSaveHook } from "./MemoryRemember.ts";
 import { redactMemoryText, scanMemoryValue } from "./MemorySecretScanner.ts";
 import type { MemoryAccessError } from "./MemoryService.ts";
@@ -77,6 +78,20 @@ export const makeMemorySaveSuggestions = ({
         if ((yield* readGeneration(space)) !== forgetGeneration) return;
         const current = yield* store.loadAggregate(space, id, {}, {});
         if (current.identity || current.tombstone) return;
+        const validOwners = yield* validateSummaryDependencies(
+          space,
+          { ...input.payload, derivedFromMemoryRevisions: knownRevisions },
+          undefined,
+          M.MEMORY_DERIVED_REVISIONS_MAX,
+        ).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.as(true),
+          Effect.catchTags({
+            MemoryStoreConflict: (error) =>
+              error.code === "source_invalidated" ? Effect.succeed(false) : Effect.fail(error),
+          }),
+        );
+        if (!validOwners) return;
         const now = yield* Clock.currentTimeMillis;
         yield* stored(
           "suggestion-expire-space",
