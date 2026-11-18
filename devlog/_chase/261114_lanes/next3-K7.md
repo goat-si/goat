@@ -1559,3 +1559,12 @@ Already under IV or the move rulings, so not repeated here: runtime.test.ts (mir
 
 The three new import statements import real modules and replace no service any existing case reads. They are analogous to II but are not "added to an existing import line", so they go to the coordinator to confirm (needs_input of 01:2x UTC).
 
+
+## Coordinator, 2026-11-18 01:20:03 UTC, rule 3 (new import statements under II), verbatim
+
+RULE 3, the 01:17 rule II covers a NEW import statement on the same terms as a name added to an existing line: only appended cases or appended helpers use what it imports, it imports a real module (no fake, no mock, no replacement of something an existing case reads), the import has no effect at load time that an existing case could see (no vi.mock beside it, no module that registers or patches something when loaded), and no existing title, body, setup value or expectation changes. The lane quotes the added statements in its record; the fresh review lists them. Whether the name sits on an existing line or a new one makes no difference, so K5 does NOT move its import.
+CONFIRMED under it, on your account and the lanes' records (NOT READ by me; the two running fix-delta reviews check their own delta's test files against 259883c788, and I will read these lines when I make each merge): K7's Fiber and TestClock statements and the TextGenerationError name in ThreadTitleRegenerationService.test.ts, and resolveMediaSource in assets.test.ts; K5's claudeProcessExitFailure in ClaudeAgentSdkQueryRunner.test.ts. Both heads stay put.
+One point for K7's record: effect/testing/TestClock in a file whose existing cases run on it.effect changes nothing for them; if any existing case in ThreadTitleRegenerationService.test.ts is it.live, say so in the same section.
+
+K7's answer (read at 3f390d3028): ThreadTitleRegenerationService.test.ts has no it.live case (`rg -c 'it\.live'` finds none). Its existing cases are all it.effect, except one plain synchronous `it(` ("pins the first user message ahead of the retained tail once content stops …"), which uses no clock. Only the appended deadline case reads TestClock. Neither file has a vi.mock (`rg 'vi\.mock'` finds none in ThreadTitleRegenerationService.test.ts or assets.test.ts). effect/Fiber, effect/testing/TestClock and ../mediaSource.ts register or patch nothing when loaded.
+
