@@ -93,7 +93,7 @@ const create = (
   creationSource: "web" as const,
   ...(launcher === undefined ? {} : { launchedBy: launcher }),
 });
-export const setup = (suffix: string, launcher = true) =>
+export const setup = (suffix: string, launcher = true, coordinator = ids(suffix).launcherId) =>
   runOrchestratorV2Scenario({
     name: "question-escalation/setup",
     commands: [
@@ -105,7 +105,7 @@ export const setup = (suffix: string, launcher = true) =>
               kind: "launch" as const,
               environmentLabel: null,
               threadTitle: null,
-              threadId: ThreadId.make(`launcher:${suffix}`),
+              threadId: coordinator,
               environmentId: null,
               via: "thread_launch",
             }

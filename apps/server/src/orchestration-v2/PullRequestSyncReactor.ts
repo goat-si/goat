@@ -1,3 +1,4 @@
+import * as KeyedLock from "@goat/shared/KeyedLock";
 import {
   CommandId,
   isOrchestrationV2WorkActive,
@@ -766,6 +767,18 @@ export const make = Effect.gen(function* () {
     "PullRequestSyncReactor.start",
   )(function* () {
     const events = engine.streamDomainEvents;
+    const reactions = yield* KeyedLock.makeRunner<ThreadId>();
+    const inThreadOrder = <E>(threadId: ThreadId, reaction: Effect.Effect<void, E>) =>
+      reactions.run(
+        threadId,
+        reaction.pipe(
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.interrupt
+              : Effect.logWarning("pull request sync reaction failed", { threadId, cause }),
+          ),
+        ),
+      );
     const stateChanges = Stream.merge(
       yield* pullRequests.subscribeStateChanges,
       yield* git.subscribePullRequestStateChanges,
@@ -779,11 +792,17 @@ export const make = Effect.gen(function* () {
       Stream.runForEach(events, (event) => {
         switch (event.type) {
           case "thread.pull-request-link-updated":
-            return requestUnsyncedLinks(event.threadId, [event.payload]);
-          case "thread.pull-request-synced":
-            return requestUnsyncedLinks(
+            return inThreadOrder(
               event.threadId,
-              visibleThreadPullRequests(event.payload.pullRequests ?? []),
+              requestUnsyncedLinks(event.threadId, [event.payload]),
+            );
+          case "thread.pull-request-synced":
+            return inThreadOrder(
+              event.threadId,
+              requestUnsyncedLinks(
+                event.threadId,
+                visibleThreadPullRequests(event.payload.pullRequests ?? []),
+              ),
             );
           // An agent can merge or close its pull request from a shell with its host's CLI, which
           // sends no merge notification. Read the thread's unmerged links fresh once that command
@@ -791,21 +810,26 @@ export const make = Effect.gen(function* () {
           // ends. Read again when the run ends, since `merge --auto` returns before it merges.
           case "turn-item.updated": {
             const item = event.payload;
-            if (item.type !== "command_execution") return Effect.void;
+            if (item.type !== "command_execution" || isOrchestrationV2WorkActive(item.status))
+              return Effect.void;
             const linked = linkCreatedChangeRequests(event.threadId, item);
-            if (!isChangeRequestCloseCommand(item.input)) return linked;
+            if (!isChangeRequestCloseCommand(item.input))
+              return inThreadOrder(event.threadId, linked);
             const ended = closeCommands.get(event.threadId) ?? new Set<string>();
             closeCommands.set(event.threadId, ended);
-            if (isOrchestrationV2WorkActive(item.status) || ended.has(item.id)) return linked;
+            if (ended.has(item.id)) return inThreadOrder(event.threadId, linked);
             ended.add(item.id);
-            return Effect.andThen(linked, refreshUnmergedLinks(event.threadId));
+            return inThreadOrder(
+              event.threadId,
+              Effect.andThen(linked, refreshUnmergedLinks(event.threadId)),
+            );
           }
           // Settled threads are not swept, so read their links once to settle with fresh status.
           case "thread.settled":
-            return refreshUnmergedLinks(event.threadId);
+            return inThreadOrder(event.threadId, refreshUnmergedLinks(event.threadId));
           case "run.updated":
             return isTerminalRunStatus(event.payload.status) && closeCommands.delete(event.threadId)
-              ? refreshUnmergedLinks(event.threadId)
+              ? inThreadOrder(event.threadId, refreshUnmergedLinks(event.threadId))
               : Effect.void;
           default:
             return Effect.void;
