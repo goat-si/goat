@@ -250,6 +250,14 @@ export const layer: Layer.Layer<
           runId,
           cause: "The unaccepted Resume message is missing.",
         });
+      const replayedInput =
+        replaySource === undefined
+          ? undefined
+          : {
+              itemId: idAllocator.derive.userTurnItem({ messageId: replaySource.userMessageId }),
+              threadId: replaySource.threadId,
+              runOrdinal: replaySource.ordinal,
+            };
       const nativeResume = manualResume && replaySource === undefined;
       const settleRunBeforeStart = makeSettleRunBeforeStart({
         eventSink,
@@ -751,6 +759,7 @@ export const layer: Layer.Layer<
           carriesImages:
             !nativeResume && !cloud && !goalCommand && !isCompactionCommandMessage(providerMessage),
           ...(replaySource === undefined ? {} : { replayedRunId: replaySource.id }),
+          replayedInput,
         });
       let recoveryTurnItem: OrchestrationV2TurnItem | undefined;
       let resumedRetryHandoff: Effect.Success<ReturnType<typeof prepareRetryHandoff>> | undefined;
@@ -881,6 +890,7 @@ export const layer: Layer.Layer<
           resumedRetryHandoff = yield* prepareRetryHandoff(context);
           resumedHandoffContext = context;
           const fits = yield* deliverContextHandoffs({
+            replayedInput,
             handoffs: [...handoffs, ...resumedRetryHandoff.handoffs],
             providerThread: { ...resumed.success, id: providerThread.id },
             budget: context.budget,
@@ -896,6 +906,7 @@ export const layer: Layer.Layer<
           const freshContext = handoffContextForThread(freshThread);
           const { handoff } = yield* recoveryHandoff;
           const fitsFresh = yield* deliverContextHandoffs({
+            replayedInput,
             handoffs: withRecoveryHandoff(handoff, effectiveHandoffs),
             providerThread: freshThread,
             budget: freshContext.budget,
@@ -1253,6 +1264,7 @@ export const layer: Layer.Layer<
       const startWithHandoffs = Effect.fn("ProviderTurnStartService.startWithHandoffs")(
         function* (turnInput: Parameters<typeof session.startTurn>[0], compact = false) {
           const delivery = yield* deliverContextHandoffs({
+            replayedInput,
             handoffs: [...effectiveHandoffs, ...retryHandoff.handoffs],
             deferInline: compact || goalCommand,
             providerThread: runningProviderThread,

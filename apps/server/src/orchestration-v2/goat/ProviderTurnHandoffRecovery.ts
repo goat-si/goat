@@ -1,3 +1,4 @@
+import type { ReplayedHandoffInput } from "../ContextHandoffDelivery.ts";
 import type {
   OrchestrationV2ContextHandoff,
   OrchestrationV2ProviderThread,
@@ -40,6 +41,7 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
     restartNote,
     attachments,
     replayedRunId,
+    replayedInput,
     goalDriver,
     carriesImages,
   }: {
@@ -55,6 +57,7 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
     readonly userText: string;
     readonly restartNote: string;
     readonly replayedRunId?: RunId;
+    readonly replayedInput?: ReplayedHandoffInput | undefined;
     readonly goalDriver: boolean;
     readonly carriesImages: boolean;
     readonly attachments: OrchestrationV2ThreadProjection["messages"][number]["attachments"];
@@ -285,10 +288,11 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
           runs: projection.runs,
           items: (yield* projectionStore.getTurnStartHistory(threadId)).filter(
             (item) =>
-              item.runId === null ||
-              projection.runs.some(
-                (source) => source.id === item.runId && source.ordinal < run.ordinal,
-              ),
+              item.id !== replayedInput?.itemId &&
+              (item.runId === null ||
+                projection.runs.some(
+                  (source) => source.id === item.runId && source.ordinal < run.ordinal,
+                )),
           ),
           createdAt,
         });

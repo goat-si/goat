@@ -1,7 +1,10 @@
+import type { IdAllocatorV2 } from "@goat/provider-core/server/IdAllocator";
+import { unsentManualContinuationSource } from "./manualContinuation.ts";
 import type {
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
   RunId,
+  OrchestrationV2Run,
   ThreadId,
 } from "@goat/contracts";
 import { createOrchestrationV2TurnItemVisibility } from "@goat/shared/orchestrationV2Timeline";
@@ -64,14 +67,23 @@ export function makeReadSwitchItems<E>(
     runIds: ReadonlyArray<RunId>,
   ) => Effect.Effect<ReadonlyArray<OrchestrationV2TurnItem>, E>,
   mapError: (threadId: ThreadId, cause: unknown) => E,
+  userTurnItem: IdAllocatorV2["Service"]["derive"]["userTurnItem"],
 ) {
   const { readInheritedItems } = makeForkHistoryReader(store);
   return Effect.fn("Orchestrator.readProviderSwitchItems")(function* (
-    thread: OrchestrationV2ThreadProjection["thread"],
+    projection: Pick<
+      OrchestrationV2ThreadProjection,
+      "thread" | "runs" | "attempts" | "providerTurns"
+    >,
     coveredRuns: ReadonlyArray<{ readonly id: RunId }>,
     includeInherited: boolean,
     legacyItems: ReadonlyArray<OrchestrationV2TurnItem>,
+    continuation: Pick<OrchestrationV2Run, "manualContinuationOfRunId">,
   ) {
+    const { thread } = projection;
+    const replay = unsentManualContinuationSource(continuation, projection);
+    const excluded =
+      replay === undefined ? undefined : userTurnItem({ messageId: replay.userMessageId });
     const inherited = includeInherited
       ? yield* readInheritedItems(thread).pipe(
           Effect.mapError((cause) => mapError(thread.id, cause)),
@@ -84,7 +96,7 @@ export function makeReadSwitchItems<E>(
         thread.id,
         coveredRuns.map((run) => run.id),
       )),
-    ];
+    ].filter((item) => item.id !== excluded);
   });
 }
 
