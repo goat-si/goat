@@ -584,8 +584,10 @@ export function makeManager(input?: {
     if (input?.seed !== undefined) {
       yield* input.seed.pipe(Effect.provideContext(stores), Effect.orDie);
     }
+    // The manager keeps using these services, so they live as long as the test's scope.
+    const services = yield* Layer.build(layerManager);
     const manager = yield* GitManager.make.pipe(
-      Effect.provide(layerManager),
+      Effect.provideContext(services),
       Effect.provideContext(stores),
     );
     return { manager, providerCalls };
