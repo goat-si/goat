@@ -326,3 +326,50 @@ it("lets a Pi model select an advertised service tier", async () => {
   await userEvent.click(page.getByRole("button", { name: "Fast", exact: true }));
   expect(change).toHaveBeenCalledWith([{ id: "serviceTier", value: "priority" }]);
 });
+
+it.each([true, false])(
+  "focuses the model search appropriately when coarse pointer is %s",
+  async (coarse) => {
+    const codex = providerEntry("codex", "codex");
+    const claude = providerEntry("claudeAgent", "claudeAgent");
+    const matchMedia = window.matchMedia.bind(window);
+    using _pointer = vi.spyOn(window, "matchMedia").mockImplementation((query) => {
+      const result = matchMedia(query);
+      if (query === "(pointer: coarse)")
+        Object.defineProperty(result, "matches", { value: coarse });
+      return result;
+    });
+
+    await using screen = await render(
+      <ProviderModelPicker
+        environmentId={null}
+        activeInstanceId={codex.instanceId}
+        model="codex"
+        lockedProvider={null}
+        instanceEntries={[codex, claude]}
+        modelOptionsByInstance={
+          new Map([
+            [codex.instanceId, [{ slug: "codex", name: "Codex model" }]],
+            [claude.instanceId, [{ slug: "opus", name: "Claude model" }]],
+          ])
+        }
+        triggerAriaLabel="Choose model"
+        onInstanceModelChange={() => {}}
+      />,
+    );
+    await screen.getByRole("button", { name: "Choose model" }).click();
+    const search = page.getByPlaceholder("Search models...");
+    await expect.element(search).toBeVisible();
+    const popup = search.element().closest('[data-slot="popover-popup"]');
+    expect(popup).not.toBeNull();
+    await vi.waitFor(() => expect(document.activeElement).toBe(coarse ? popup : search.element()));
+
+    await page.getByRole("button", { name: /^Claude/ }).click();
+    await expect.element(page.getByRole("option", { name: /Claude model/ })).toBeVisible();
+    if (coarse) {
+      await expect.element(search).not.toHaveFocus();
+      await search.click();
+    }
+    await expect.element(search).toHaveFocus();
+  },
+);

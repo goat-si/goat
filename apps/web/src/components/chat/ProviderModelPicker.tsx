@@ -20,6 +20,7 @@ import {
 import { Badge } from "../ui/badge";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { cn } from "~/lib/utils";
 import { ModelPickerContent } from "./ModelPickerContent";
 import {
@@ -147,6 +148,16 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     if (isMenuOpen) refreshCatalog();
   }, [isMenuOpen]);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
+  const isCoarsePointer = useMediaQuery({ pointer: "coarse" });
+  const bindPopup = (popup: HTMLDivElement | null) => {
+    popupRef.current = popup;
+    const unlock = lockBackgroundScroll(popup);
+    return () => {
+      popupRef.current = null;
+      unlock?.();
+    };
+  };
   const size = props.size ?? "sm";
   // Only the composer's picker offers "Add provider"; settings pickers already sit next to provider settings.
   const addProviderEnvironmentId = props.isComposerOwned ? props.environmentId : null;
@@ -346,8 +357,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       </PopoverTrigger>
       <PopoverPopup
         {...(props.isComposerOwned ? composerFloatingLayerProps : {})}
-        ref={lockBackgroundScroll}
-        initialFocus={searchInputRef}
+        ref={bindPopup}
+        initialFocus={isCoarsePointer ? popupRef : searchInputRef}
         align={props.popupAlign ?? "start"}
         className="before:hidden"
         padding="none"
