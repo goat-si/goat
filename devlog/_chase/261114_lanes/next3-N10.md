@@ -463,3 +463,38 @@ Limits — Older targets ignore `trialOwnerRefusal` and can still hit the generi
 - The plain push advanced `chase/t3-261114-next3-n10-service-release` from `9f3db70f58` to `f0676b0c15`. `git ls-remote` confirmed the exact head.
 
 NOT RUN: PR CI, repo-wide suites, live systemd or launchd recovery, paired-client updates, release builds or publication, and a packaged Linux AppImage transition. The changed-files gate skipped the dependency patch check because no dependency files changed.
+
+## 2026-11-18 UTC — N10 review fix round 4
+
+| Finding | Fix commit and source | Failing-first evidence |
+| --- | --- | --- |
+| P1 | `468e734d5924d9a936313f9f23e1d1323df975f7`. `apps/server/src/serviceLauncherDatabase.ts:254` checks the snapshot's owner history under both locks for new and resumed restores. Foreign or unverifiable history during a resumed restore persists the manual recovery block. A missing main snapshot also blocks recovery, including a missing backup directory during probation rollback. | The guarded `serviceLauncher.ownerPoll.test.ts -t 'recovers safely with'` run exited 1 with six failures and three passes among the new cases. The previous runtime started for an intact live DB with a desktop-committed row, for a truncated live DB with foreign or lost history, and in all three missing-snapshot cases. The green cases preserve the row and snapshot across restarts and allow recovery by removing only the restore marker once the live files are verified. |
+| P2 | `e86ebf93c6c10e2310e022dbf2c32a42e009b7b6`. `apps/server/src/cloud/bootService.ts:720` reads the selected version during restart readiness and requires the fresh managed runtime descriptor and HTTP response to agree with it. | The guarded `bootService.selection.test.ts -t 'runtime selected by rollback'` run exited 1 with two failures. Both manager fixtures recorded zero readiness requests, two activation commands, and `BootServiceCommandError`. Both now record one request and one activation. A response naming the wrong version still fails. |
+
+The initial whole-file gate had one failure in `serviceLauncher.selection.test.ts:113`. Its committed-probation fixture used `/nonexistent/state.sqlite` and omitted the snapshot. It now creates the backup with the launcher's backup function, simulates trial writes, and verifies the previous runtime sees the restored DB. It asserts rollback to 1.0.0, the previous runtime's start, and protocol-3 selection.
+
+### Recovery states
+
+The table applies when rollback is requested. R is `.restore-pending` and U is `.untracked-owner`. Any covers both intact and truncated live files wherever those states take the same branch.
+
+| R | U | Owner history | Snapshot | Live DB | Outcome and test |
+| --- | --- | --- | --- | --- | --- |
+| 0 | 0 | Any | No backup directory before trial | Any | Keep live files and start the previous runtime. Owner-poll matrix, no backup directory before a trial. |
+| 0 | 0 | Any | No backup directory during probation rollback | Any | Create the marker directory, set R and U, and require manual recovery. Owner-poll matrix, missing backup directory during probation rollback. |
+| 0 or 1 | Any except R=0/U=1 | Any | Directory exists, main snapshot missing | Any | Set R and U, keep live files and any remaining snapshot files, and require manual recovery. Owner-poll matrix, missing snapshot before restore and during a resumed restore. |
+| 0 | 1 | Any | Present or missing | Any | Keep live files and any snapshot, then start the previous runtime once ownership is free. `at the bound waits for a legacy owner and preserves its writes and the backup` and manual acknowledgement in the tracked-desktop and legacy-owner cases. |
+| 1 | 1 | Any | Present | Any | Require manual recovery and keep both copies. `requires explicit recovery after a legacy owner interrupted rollback recovery` and the tracked-desktop case's second launcher run. |
+| 1 | 0 | Foreign or unverifiable | Present | Any | Set U and block with both copies preserved. Owner-poll matrix, desktop write, truncated with foreign history, and lost generation log. |
+| 1 | 0 | Same update only | Present | Any | Complete the interrupted copy, select the previous runtime, and remove the snapshot. Owner-poll matrix, both same-update cases. |
+| 0 | 0 | Same update only | Present | Any | Restore and select the previous runtime. `keeps a rollback pending until the owner lock frees up` and the protocol-3 probation test. |
+| 0 | 0 | Foreign or unverifiable | Present | Any | Keep live files, select the previous runtime, and remove the ordinary snapshot. `keeps a database another server wrote between the backup and the rollback` and `recovers a finished restore without copying over a later server's writes` cover the keep path. |
+
+For rows that reach the ownership checks, a held generation lock defers rollback. A held legacy lock or a detected pre-lock owner also sets U before retry. See the owner-lock and legacy-owner cases above. A launcher-interrupted copy leaves R set. A user clearing R follows the guide's step to verify the complete live SQLite file set first.
+
+### Final verification and delivery
+
+- On `e86ebf93c6c10e2310e022dbf2c32a42e009b7b6`, `GOAT_TEST_TMP_GUARD=fail vp test run --reporter=default <all 14 changed server test files>` from `apps/server` exited 0. All 194 tests passed with zero skips.
+- `vp run check:changed origin/chase/t3-261114-next3` exited 0 against `6def29ca359f546e50dcd731a6364e3f0d575545`. The server stage passed 701 tests with one skip across 67 files. The remaining stage passed 2,356 tests with one skip and one platform-skipped file. Format, lint, Knip, GraphQL, agent audits, and typecheck all passed.
+- The plain push advanced `chase/t3-261114-next3-n10-service-release` from `f0676b0c15` to `e86ebf93c6`. `git ls-remote` confirmed the exact head and the worktree was clean.
+
+NOT RUN: PR CI, repo-wide suites, real systemd or launchd recovery, paired-client update, release builds or publication, and a packaged Linux AppImage transition. The changed-files gate skipped the dependency patch check because no dependency files changed.
