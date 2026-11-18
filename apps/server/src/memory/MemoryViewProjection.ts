@@ -33,6 +33,7 @@ export const makeMemoryViewProjection = (sql: SqlClient.SqlClient) => {
   const item = Effect.fn("MemoryService.projectItem")(function* (
     item: M.MemoryItem,
     includeMarks?: true,
+    includeScopeVersion?: true,
   ) {
     const projected =
       item.status === "active"
@@ -42,13 +43,23 @@ export const makeMemoryViewProjection = (sql: SqlClient.SqlClient) => {
             payload: includeMarks ? item.payload : legacyPayload(item.payload),
           }
         : item;
-    if (!includeMarks) return projected;
+    const [identity] = includeScopeVersion
+      ? yield* stored(
+          "memory-project-scope-version",
+          sql<{ scope_version: number }>`SELECT scope_version FROM memory_identity_ledger
+        WHERE space=${item.memorySpaceId} AND memory_id=${item.memoryId}`,
+        )
+      : [];
+    const versioned = includeScopeVersion
+      ? { ...projected, scopeVersion: identity?.scope_version ?? 0 }
+      : projected;
+    if (!includeMarks) return versioned;
     const marks = yield* marksFor(
       item.memorySpaceId,
       item.memoryId,
       item.status === "active" ? item.revision.revisionId : undefined,
     );
-    return { ...projected, marks };
+    return { ...versioned, marks };
   });
   const revision = Effect.fn("MemoryService.projectHistoryRevision")(function* (
     pair: { revision: M.MemoryRevision; payload: M.MemoryPayload | null },

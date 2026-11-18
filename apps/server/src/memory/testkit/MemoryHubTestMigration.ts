@@ -4,8 +4,11 @@ import threadLineageMigration from "../../persistence/Migrations/158_MemoryThrea
 import suggestionsMigration from "../../persistence/Migrations/159_MemorySaveSuggestions.ts";
 import floorMigration from "../../persistence/Migrations/160_MemoryHubFloor.ts";
 
+import moveMigration from "../../persistence/Migrations/161_MemoryScopeVersion.ts";
+
 export default hubMigration.pipe(
   Effect.andThen(threadLineageMigration),
   Effect.andThen(suggestionsMigration),
   Effect.andThen(floorMigration),
+  Effect.andThen(moveMigration),
 );

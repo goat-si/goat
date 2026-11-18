@@ -305,6 +305,11 @@ export interface SyncStoreShape {
     frozenHeads: readonly M.MemoryRevisionId[];
     nextAttemptAt: number;
   }) => InTx<boolean>;
+  readonly resetExpiredTailTx: (input: {
+    memorySpaceId: M.MemorySpaceId;
+    hubEnvironmentId: M.EnvironmentId;
+    expectedSequence: number;
+  }) => InTx<void>;
   readonly advanceBootstrapTx: (input: {
     memorySpaceId: M.MemorySpaceId;
     hubEnvironmentId: M.EnvironmentId;

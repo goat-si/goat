@@ -1,3 +1,4 @@
+import { rewriteMemoryScope } from "./ScopeMoves.ts";
 import { persistRevisionMarks, recordMemoryOrigin } from "../MemoryRevisionMarks.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as M from "@goat/contracts";
@@ -184,7 +185,10 @@ export const makeCheckpoints = (
           return yield* new MemoryStoreConflict({ code: "bootstrap_required" });
         const last = pages.at(-1)!;
         const checkpointWatermark = yield* nextWatermark(input.memorySpaceId);
-        for (const page of pages) {
+        const scopes = new Map<M.MemoryId, M.MemoryScope>();
+        const moved = new Set<M.MemoryId>();
+        const stale = new Set<M.MemoryId>();
+        for (const page of pages)
           for (const identity of page.identities) {
             if (identity.origin)
               yield* recordMemoryOrigin(
@@ -192,11 +196,30 @@ export const makeCheckpoints = (
                 identity.memoryId,
                 identity.origin,
               ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+            const [previous] = yield* stored(
+              "checkpoint-scope-version",
+              sql<{ scope_version: number; identity_json: string }>`
+              SELECT scope_version,identity_json FROM memory_identity_ledger
+              WHERE space=${input.memorySpaceId} AND memory_id=${identity.memoryId}`,
+            );
+            const localVersion = previous?.scope_version ?? 0;
+            const incomingVersion = identity.scopeVersion ?? 0;
+            if (localVersion > incomingVersion) stale.add(identity.memoryId);
+            if (previous && localVersion < incomingVersion) {
+              yield* rewriteMemoryScope({ sql, readItem, putItem }, identity, checkpointWatermark);
+              moved.add(identity.memoryId);
+            }
+            const canonical =
+              previous && localVersion >= incomingVersion
+                ? yield* identityCodec.decode(previous.identity_json, strict)
+                : identity;
+            scopes.set(identity.memoryId, canonical.scope);
             yield* stored(
               "checkpoint-identity",
-              sql`INSERT INTO memory_identity_ledger (space,memory_id,identity_json,fence_json,reserve_bytes) VALUES (${input.memorySpaceId},${identity.memoryId},${yield* identityCodec.encode(identity)},${yield* fenceCodec.encode(page.fences.find((f) => f.memoryId === identity.memoryId) ?? { memorySpaceId: input.memorySpaceId, memoryId: identity.memoryId, highestFencingToken: 0, activeLease: null })},${M.MEMORY_IDENTITY_CORE_MAX_BYTES}) ON CONFLICT(space,memory_id) DO NOTHING`,
+              sql`INSERT INTO memory_identity_ledger (space,memory_id,identity_json,scope_version,fence_json,reserve_bytes) VALUES (${input.memorySpaceId},${identity.memoryId},${yield* identityCodec.encode(identity)},${incomingVersion},${yield* fenceCodec.encode(page.fences.find((f) => f.memoryId === identity.memoryId) ?? { memorySpaceId: input.memorySpaceId, memoryId: identity.memoryId, highestFencingToken: 0, activeLease: null })},${M.MEMORY_IDENTITY_CORE_MAX_BYTES}) ON CONFLICT(space,memory_id) DO NOTHING`,
             );
           }
+        for (const page of pages) {
           for (const fence of page.fences)
             yield* stored(
               "checkpoint-fence",
@@ -223,9 +246,10 @@ export const makeCheckpoints = (
           }
           for (const pair of page.revisions) {
             const r = pair.revision;
+            const scope = scopes.get(r.memoryId) ?? r.scope;
             yield* stored(
               "checkpoint-revision",
-              sql`INSERT INTO memory_revisions (space,revision_id,memory_id,operation_id,parents_json,scope_json,assertion_kind,provenance_json,payload_ref,created_at) VALUES (${input.memorySpaceId},${r.revisionId},${r.memoryId},${r.operationId},${yield* headsCodec.encode(r.parents)},${yield* scopeCodec.encode(r.scope)},${r.assertionKind},${yield* provenanceCodec.encode(r.provenance)},${r.payloadRef},${Date.parse(r.createdAtUtc)}) ON CONFLICT(space,revision_id) DO NOTHING`,
+              sql`INSERT INTO memory_revisions (space,revision_id,memory_id,operation_id,parents_json,scope_json,assertion_kind,provenance_json,payload_ref,created_at) VALUES (${input.memorySpaceId},${r.revisionId},${r.memoryId},${r.operationId},${yield* headsCodec.encode(r.parents)},${yield* scopeCodec.encode(scope)},${r.assertionKind},${yield* provenanceCodec.encode(r.provenance)},${r.payloadRef},${Date.parse(r.createdAtUtc)}) ON CONFLICT(space,revision_id) DO UPDATE SET scope_move_held=0 WHERE scope_move_held=1 AND memory_id=excluded.memory_id AND operation_id=excluded.operation_id`,
             );
             yield* persistRevisionMarks(r).pipe(Effect.provideService(SqlClient.SqlClient, sql));
           }
@@ -257,8 +281,20 @@ export const makeCheckpoints = (
             );
           }
           for (const item of page.items) {
+            if (stale.has(item.memoryId) && item.status !== "forgotten") continue;
             const old = yield* readItem(input.memorySpaceId, item.memoryId);
-            if (old?.item.status === "forgotten" || old?.item.pendingSync) continue;
+            if (
+              old?.item.status === "forgotten" ||
+              (old?.item.pendingSync && !moved.has(item.memoryId))
+            )
+              continue;
+            const canonicalScope = scopes.get(item.memoryId);
+            if (
+              item.status !== "forgotten" &&
+              canonicalScope &&
+              (yield* scopeCodec.encode(canonicalScope)) !== (yield* scopeCodec.encode(item.scope))
+            )
+              continue;
             const forgotten = yield* stored(
               "checkpoint-forgotten",
               sql`SELECT 1 FROM memory_tombstones WHERE space=${input.memorySpaceId} AND memory_id=${item.memoryId}`,

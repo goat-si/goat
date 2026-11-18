@@ -175,6 +175,7 @@ describe("V2 preview upgrade", () => {
         [158, "MemoryThreadLineage"],
         [159, "MemorySaveSuggestions"],
         [160, "MemoryHubFloor"],
+        [161, "MemoryScopeVersion"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -360,6 +361,7 @@ describe("V2 preview upgrade", () => {
         [158, "MemoryThreadLineage"],
         [159, "MemorySaveSuggestions"],
         [160, "MemoryHubFloor"],
+        [161, "MemoryScopeVersion"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

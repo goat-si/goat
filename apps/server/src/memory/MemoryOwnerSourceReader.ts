@@ -47,6 +47,7 @@ export const sourceReadInput = (
   requestId: request.requestId,
   sourceThread: request.sourceThread,
   sourceWatermark: request.sourceWatermark,
+  ...(request.scopeVersion === undefined ? {} : { scopeVersion: request.scopeVersion }),
   messageIds: request.messageIds,
   limit: request.limit,
   ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
@@ -173,8 +174,9 @@ const make = Effect.gen(function* () {
         };
         const before = yield* service.prepareSourceRead(input, fence);
         if (
+          before.request.scopeVersion !== request.scopeVersion ||
           encodeWatermark(before.request.sourceWatermark) !==
-          encodeWatermark(request.sourceWatermark)
+            encodeWatermark(request.sourceWatermark)
         )
           return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
         const thread = yield* query(

@@ -598,6 +598,19 @@ export const makeHubAdmin = (
     );
     return changed.length === 1;
   });
+  const resetExpiredTailTx: MemoryStoreShape["resetExpiredTailTx"] = Effect.fn(
+    "MemoryStore.resetExpiredTailTx",
+  )(function* (input) {
+    yield* Transaction;
+    yield* stored(
+      "bootstrap-reset-expired-tail",
+      sql`UPDATE memory_sync_cursors
+        SET bootstrap_state='unbound',checkpoint_id=NULL,snapshot_token=NULL,checkpoint_sequence=NULL,
+          checkpoint_cursor=NULL,checkpoint_page_count=0,after_sequence=0
+        WHERE space=${input.memorySpaceId} AND hub_environment_id=${input.hubEnvironmentId}
+          AND bootstrap_state='ready' AND after_sequence=${input.expectedSequence}`,
+    );
+  });
   const advanceBootstrapTx: MemoryStoreShape["advanceBootstrapTx"] = Effect.fn(
     "MemoryStore.advanceBootstrapTx",
   )(function* (input) {
@@ -632,6 +645,7 @@ export const makeHubAdmin = (
     readLocalProcessingStatus,
     readBootstrap,
     discardBootstrapTx,
+    resetExpiredTailTx,
     retireFrozenClaimTx,
     advanceBootstrapTx,
   };

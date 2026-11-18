@@ -41,6 +41,24 @@ export const makePullMemoryTail = <R extends TailRoute>(deps: {
         limit: Math.min(100, 1000 - budget.entries),
         ...(highWatermark === undefined ? {} : { highWatermark }),
       }).pipe(
+        Effect.catchTags({
+          MemoryHubError: (error) =>
+            error.code !== "cursor_expired"
+              ? Effect.fail(error)
+              : store
+                  .transact(
+                    ensureEpoch(r.settings.memoryHubVersion).pipe(
+                      Effect.andThen(
+                        store.resetExpiredTailTx({
+                          memorySpaceId: space,
+                          hubEnvironmentId: r.hubId,
+                          expectedSequence: after,
+                        }),
+                      ),
+                    ),
+                  )
+                  .pipe(Effect.andThen(Effect.fail(error))),
+        }),
         Effect.flatMap(decodePull),
         Effect.mapError((e) =>
           e._tag === "SchemaError" ? new M.MemoryHubError({ code: "invalid_output" }) : e,

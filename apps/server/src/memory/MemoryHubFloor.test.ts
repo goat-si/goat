@@ -355,7 +355,8 @@ describe("memory hub floor", () => {
         );
         const workId = `sync:${space}:${wide.operationId}`;
         const queued = yield* store.readWorkOperation(workId);
-        if (!queued || queued.kind === "forget") throw new Error("expected a staged suggestion");
+        if (!queued || !M.isMemoryRevisionOperation(queued))
+          throw new Error("expected a staged suggestion");
         assert.strictEqual(queued.forgetFence, first.throughSequence);
         assert.isUndefined((yield* store.loadAggregate(space, wide.memoryId)).item);
         const push = { ...pushInput(queued), features };

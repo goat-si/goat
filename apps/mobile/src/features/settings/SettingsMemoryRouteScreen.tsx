@@ -1,3 +1,4 @@
+import { MobileMemoryMoveControl } from "./MemoryMoveControl";
 import { MemoryGeneration, MemoryAgentAccess, useMemoryLifetime } from "./MemoryGenerationSettings";
 import {
   MobileMemoryOriginPicker,
@@ -48,6 +49,7 @@ import {
 import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
 import {
   memoryBrowseInput,
+  memoryMoveCandidate,
   memorySearchInput,
   memoryProjectScope,
   memoryPreview,
@@ -686,6 +688,7 @@ function ScopedMemoryBrowser({
     limit: PAGE_SIZE,
     scope,
     ...(capabilities?.originFilter && origin ? { origin } : {}),
+    ...(capabilities?.scopeMoves ? { includeScopeVersion: true } : {}),
     ...(cursor ? { cursor } : {}),
   });
   const atom = search
@@ -699,7 +702,9 @@ function ScopedMemoryBrowser({
       });
   const batch = useMobileMemoryBatch(
     params.environmentId,
-    capabilities?.originFilter === true,
+    capabilities?.originFilter === true || capabilities?.scopeMoves === true,
+    memoryEnabled && capabilities?.scopeMoves === true,
+    memorySpaceId,
     JSON.stringify([scope, search, origin, cursor, quarantine]),
     () => registry.refresh(atom),
   );
@@ -714,6 +719,11 @@ function ScopedMemoryBrowser({
         memoryId={selected}
         memoryEnabled={memoryEnabled}
         onClose={() => setSelected(undefined)}
+        scopeMoves={capabilities?.scopeMoves === true}
+        onMoved={() => {
+          setSelected(undefined);
+          registry.refresh(atom);
+        }}
         onForget={forgetMemory}
       />
     );
@@ -976,6 +986,8 @@ function MemoryDetails({
   memorySpaceId,
   memoryId,
   memoryEnabled,
+  scopeMoves,
+  onMoved,
   onForget,
   onClose,
 }: {
@@ -983,6 +995,8 @@ function MemoryDetails({
   readonly memorySpaceId: MemorySpaceId;
   readonly memoryId: MemoryId;
   readonly memoryEnabled: boolean;
+  readonly scopeMoves: boolean;
+  readonly onMoved: () => void;
   readonly onForget: (
     input: MemoryForgetInput,
     imported: boolean,
@@ -994,9 +1008,13 @@ function MemoryDetails({
   const deviceName = (id: EnvironmentId) =>
     savedConnectionsById[id]?.environmentLabel ?? "Unknown device";
   const target = { environmentId: params.environmentId, input: { memorySpaceId, memoryId } };
-  const readAtom = memory.read(target);
+  const readAtom = memory.read({
+    ...target,
+    input: { ...target.input, ...(scopeMoves ? { includeScopeVersion: true } : {}) },
+  });
   const result = useAtomValue(readAtom);
   const item = AsyncResult.isSuccess(result) ? Option.getOrNull(result.value) : null;
+  const move = memoryEnabled && scopeMoves && item ? memoryMoveCandidate(item) : null;
   const [cursor, setCursor] = useState<string | undefined>();
   const historyAtom = memory.history({
     ...target,
@@ -1154,6 +1172,14 @@ function MemoryDetails({
                 ) : null,
               )}
             </>
+          ) : null}
+          {move && !session.start ? (
+            <MobileMemoryMoveControl
+              environmentId={params.environmentId}
+              memorySpaceId={memorySpaceId}
+              candidates={[move]}
+              onMoved={onMoved}
+            />
           ) : null}
           {!retry ? (
             <Action

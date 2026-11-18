@@ -332,6 +332,7 @@ const make = Effect.gen(function* () {
     readLocalProcessingStatus,
     readBootstrap,
     discardBootstrapTx,
+    resetExpiredTailTx,
     retireFrozenClaimTx,
     advanceBootstrapTx,
   } = hubAdmin;
@@ -412,6 +413,7 @@ const make = Effect.gen(function* () {
     readLocalProcessingStatus,
     readBootstrap,
     discardBootstrapTx,
+    resetExpiredTailTx,
     retireFrozenClaimTx,
     advanceBootstrapTx,
     ...makeHubFloor(kernel),

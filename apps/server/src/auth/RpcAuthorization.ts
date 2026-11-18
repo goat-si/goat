@@ -324,6 +324,7 @@ export const MEMORY_RPC_REQUIRED_SCOPES = {
   [WS_METHODS.memorySyncStatus]: "memory:read",
   [WS_METHODS.memoryUpsert]: "memory:write",
   [WS_METHODS.memoryForget]: "memory:write",
+  [WS_METHODS.memoryMove]: "memory:write",
   [WS_METHODS.memorySuggestionsList]: "memory:read",
   [WS_METHODS.memorySuggestionsAccept]: "memory:write",
   [WS_METHODS.memorySuggestionsDismiss]: "memory:write",

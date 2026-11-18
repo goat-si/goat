@@ -885,6 +885,40 @@ it.effect("remember saves text and a scope as a fact this conversation backs, on
   }).pipe(Effect.provide(Fixture.layer)),
 );
 
+it.effect("remember refuses scope moves before the hub floor and keeps the original memory", () =>
+  Effect.gen(function* () {
+    const service = yield* MemoryService.MemoryService;
+    const store = yield* Store.MemoryStore;
+    yield* service.upsert(Fixture.upsert(), Effect.void);
+    const before = yield* store.loadAggregate(Fixture.space, Fixture.memoryId);
+    const caller = {
+      ...Fixture.scope(),
+      client: undefined,
+      thread: {
+        threadId: M.ThreadId.make("move-caller"),
+        providerSessionId: "synthetic",
+        providerInstanceId: M.ProviderInstanceId.make("codex"),
+      },
+    };
+    const call = yield* Fixture.call(
+      "goat_memory_remember",
+      { memoryId: Fixture.memoryId, scope: "thread" },
+      caller,
+    );
+    expect(call.result.isError).toBe(true);
+    expect(call.body).toMatchObject({ code: "hub_upgrade_required" });
+    expect(yield* store.loadAggregate(Fixture.space, Fixture.memoryId)).toEqual(before);
+
+    const mixed = yield* Fixture.call(
+      "goat_memory_remember",
+      { memoryId: Fixture.memoryId, scope: "thread", text: "replacement must be explicit" },
+      caller,
+    );
+    expect(mixed.result.isError).toBe(true);
+    expect((yield* decodeRefusal(mixed.body)).message).toContain("without text");
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
 it.effect("forgets by ID from a callerless session and keeps the original receipt on retry", () =>
   Effect.gen(function* () {
     const service = yield* MemoryService.MemoryService;

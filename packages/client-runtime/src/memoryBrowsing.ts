@@ -78,3 +78,43 @@ export function memoryForgetRequest(
           : [],
   };
 }
+
+export type MemoryMoveCandidate = Omit<
+  import("@goat/contracts").MemoryMoveInput,
+  "operationId" | "toScope"
+>;
+
+export function memoryMoveCandidate(
+  item: import("@goat/contracts").MemoryItem,
+): MemoryMoveCandidate | null {
+  if (
+    item.status !== "active" ||
+    item.pendingSync ||
+    (item.scope.kind === "thread" && !item.scopeVersion && item.revision.provenance.sourceThread) ||
+    item.localAvailability.exposure !== "visible"
+  )
+    return null;
+  return {
+    memoryId: item.memoryId,
+    memorySpaceId: item.memorySpaceId,
+    expectedHeads: [item.revision.revisionId],
+    expectedScopeVersion: item.scopeVersion ?? 0,
+    fromScope: item.scope,
+  };
+}
+
+export function sameMemoryScope(left: MemoryScope, right: MemoryScope): boolean {
+  if (left.kind === "user") return right.kind === "user";
+  if (left.kind === "thread")
+    return (
+      right.kind === "thread" &&
+      left.thread.environmentId === right.thread.environmentId &&
+      left.thread.threadId === right.thread.threadId
+    );
+  if (right.kind !== "project") return false;
+  const a = left.projectKey;
+  const b = right.projectKey;
+  return a.kind === "explicit"
+    ? b.kind === "explicit" && a.sharedProjectId === b.sharedProjectId
+    : b.kind === "repository" && a.groupingKey === b.groupingKey;
+}

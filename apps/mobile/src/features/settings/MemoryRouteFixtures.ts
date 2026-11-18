@@ -1,6 +1,12 @@
+import { expect } from "vite-plus/test";
 import { act } from "react";
 import { suggestionScenario } from "../../../../web/src/test/memorySuggestionsFixture";
-import { MemoryHistoryPage, WS_METHODS } from "@goat/contracts";
+import {
+  MemoryHistoryPage,
+  MemoryMutationReceipt,
+  WS_METHODS,
+  type MemoryForgetInput,
+} from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import {
   nativeSpace,
@@ -9,6 +15,7 @@ import {
   nativeItem,
   nativeSyncStatus,
   type NativeMemoryHarness,
+  type renderNative,
 } from "../../testing/memoryNativeHarness";
 
 export {
@@ -157,5 +164,64 @@ export async function replaySuggestionChange(
       memoryId: memory.memoryId,
       projectionWatermark: page.projectionWatermark,
     });
+  });
+}
+
+const decodeReceipt = Schema.decodeUnknownSync(MemoryMutationReceipt);
+export function receipt(input: unknown, rejected = false) {
+  return decodeReceipt({
+    operationId: (input as MemoryForgetInput).operationId,
+    memoryId: nativeId,
+    revisionId: null,
+    outcome: rejected ? "rejected" : "deleted",
+    pendingSync: !rejected,
+    ...(rejected ? { failureCode: "revision_changed" } : {}),
+  });
+}
+
+export async function exerciseMemoryMove(
+  mount: (
+    scopes: undefined,
+    setup: (harness: NativeMemoryHarness) => void,
+    capabilities: { protocolVersion: 1; scopeMoves: true },
+  ) => Promise<void>,
+  mounted: () => { h: NativeMemoryHarness; view: ReturnType<typeof renderNative> },
+) {
+  await mount(
+    undefined,
+    (harness) => {
+      harness.projects.push({
+        id: "move-project",
+        title: "Move project",
+        environmentId: nativeEnv,
+        repositoryIdentity: null,
+      });
+      harness.responses.set(WS_METHODS.memoryProjectBindingGet, () => ({
+        memorySpaceId: nativeSpace,
+        project: { environmentId: nativeEnv, projectId: "move-project" },
+        projectKey: { kind: "explicit", sharedProjectId: "move-key" },
+        repositoryKey: null,
+        version: 1,
+      }));
+      harness.responses.set(WS_METHODS.memoryMove, (input) => {
+        harness.responses.set(WS_METHODS.memoryList, () => ({
+          items: [],
+          nextCursor: null,
+          projectionWatermark: 2,
+        }));
+        return { ...receipt(input), outcome: "accepted", pendingSync: false };
+      });
+    },
+    { protocolVersion: 1, scopeMoves: true },
+  );
+  const { h, view } = mounted();
+  await view.click("Open memory: Synthetic memory body");
+  await view.click("Move to…");
+  await view.click("Move project");
+  await view.click("Move memory");
+  expect(view.container.textContent).not.toContain("Synthetic memory body");
+  expect(h.calls.find((call) => call.method === WS_METHODS.memoryMove)?.input).toMatchObject({
+    fromScope: { kind: "user" },
+    toScope: { kind: "project", projectKey: { kind: "explicit", sharedProjectId: "move-key" } },
   });
 }

@@ -73,7 +73,7 @@ export function decideMemoryOperation(
       operationId: operation.operationId,
       memoryId: operation.memoryId,
       outcome: operation.kind === "forget" ? "deleted" : "accepted",
-      revisionId: operation.kind === "forget" ? null : operation.revision.revisionId,
+      revisionId: M.isMemoryRevisionOperation(operation) ? operation.revision.revisionId : null,
       pendingSync: admission.kind === "localIntent",
     },
   };
@@ -81,6 +81,35 @@ export function decideMemoryOperation(
   if (operation.kind !== "forget" && current.tombstone) {
     if (!replica) fail("forgotten");
     return base;
+  }
+  if (operation.kind === "move") {
+    const identity = current.identity;
+    const item = current.item;
+    const version = identity?.scopeVersion ?? 0;
+    if (replica && version > operation.expectedScopeVersion) return base;
+    if (!identity || !item || item.status === "forgotten") fail("not_found");
+    if (
+      version !== operation.expectedScopeVersion ||
+      JSON.stringify(identity.scope) !== JSON.stringify(operation.fromScope) ||
+      (!replica && !sameSet(current.heads, operation.expectedHeads))
+    )
+      fail("revision_changed");
+    if (!replica) {
+      if (current.pendingForget) fail("forget_pending");
+      if (item.status !== "active" || item.localAvailability.exposure !== "visible")
+        fail("unavailable");
+      if (
+        item.scope.kind === "thread" &&
+        ((version === 0 && item.revision.provenance.sourceThread) ||
+          item.memoryId ===
+            uuid(`${item.scope.thread.environmentId}:${item.scope.thread.threadId}:summary`))
+      )
+        fail("unsupported_operation");
+    }
+    return {
+      ...base,
+      movedIdentity: { ...identity, scope: operation.toScope, scopeVersion: version + 1 },
+    };
   }
   if (!replica && operation.kind !== "forget" && scan?.kind !== "allowed") fail("secret_detected");
   const identity = current.identity
@@ -97,7 +126,10 @@ export function decideMemoryOperation(
             : operation.revision.createdAtUtc,
       };
   if (operation.kind === "forget") return { ...base, ...(identity ? { identity } : {}) };
-  const r = operation.revision;
+  const r =
+    replica && current.identity?.scopeVersion
+      ? { ...operation.revision, scope: current.identity.scope }
+      : operation.revision;
   if (operation.kind === "revert" && admission.kind === "localIntent")
     fail("unsupported_operation");
   if (operation.kind === "upsert" && current.heads.length > 1 && sameSet(current.heads, r.parents))

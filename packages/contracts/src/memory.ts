@@ -41,6 +41,8 @@ import {
   unique,
   utf8,
 } from "./memoryCodec.ts";
+import { validateCheckpointRecordsStructure } from "./memoryCheckpointValidation.ts";
+export { memoryImportLineageRecordKey } from "./memoryCodec.ts";
 import { MemoryFloor2Feature } from "./memoryFloor.ts";
 export * from "./memoryLimits.ts";
 export * from "./memoryFloor.ts";
@@ -490,6 +492,13 @@ const envelope = {
   memoryId: MemoryId,
   expectedHeads: heads,
 };
+
+const moveFields = {
+  fromScope: MemoryScope,
+  toScope: MemoryScope,
+  expectedScopeVersion: NonNegativeInt,
+};
+
 const floorOperation = { forgetFence: Schema.optionalKey(NonNegativeInt) };
 
 export const MemoryOperation = bounded(
@@ -503,6 +512,7 @@ export const MemoryOperation = bounded(
       payload: MemoryPayload,
     }),
     struct({ ...envelope, kind: Schema.Literal("forget"), tombstone: MemoryTombstone }),
+    struct({ ...envelope, kind: Schema.Literal("move"), ...moveFields }),
     struct({
       ...envelope,
       ...floorOperation,
@@ -527,6 +537,12 @@ export const MemoryOperation = bounded(
     Schema.makeFilter((v) => {
       if (v.kind === "forget")
         return v.tombstone.memorySpaceId === v.memorySpaceId && v.tombstone.memoryId === v.memoryId;
+      if (v.kind === "move")
+        return (
+          v.expectedHeads.length === 1 &&
+          !same(v.fromScope, v.toScope) &&
+          v.expectedScopeVersion < Number.MAX_SAFE_INTEGER
+        );
       const r = v.revision;
       if (
         r.memorySpaceId !== v.memorySpaceId ||
@@ -559,13 +575,31 @@ export const MemoryOperation = bounded(
   256 * 1024,
 );
 export type MemoryOperation = typeof MemoryOperation.Type;
+export type MemoryMoveOperation = Extract<MemoryOperation, { kind: "move" }>;
+export type MemoryRevisionOperation = Exclude<MemoryOperation, { kind: "forget" | "move" }>;
+export const isMemoryRevisionOperation = (
+  operation: MemoryOperation,
+): operation is MemoryRevisionOperation => operation.kind !== "forget" && operation.kind !== "move";
+
+export const MemoryMoveInput = struct({
+  memorySpaceId: MemorySpaceId,
+  memoryId: MemoryId,
+  operationId: MemoryOperationId,
+  expectedHeads: heads,
+  expectedScopeVersion: NonNegativeInt,
+  fromScope: MemoryScope,
+  toScope: MemoryScope,
+});
+export type MemoryMoveInput = typeof MemoryMoveInput.Type;
 export const MemoryRevisionMarks = struct({
   provenance: Schema.optionalKey(Schema.Literal("unverified")),
   originThreadId: Schema.optionalKey(ThreadId),
 });
 export type MemoryRevisionMarks = typeof MemoryRevisionMarks.Type;
 const includeMarks = { includeMarks: Schema.optionalKey(Schema.Literal(true)) };
+const includeScopeVersion = { includeScopeVersion: Schema.optionalKey(Schema.Literal(true)) };
 const itemFields = {
+  scopeVersion: Schema.optionalKey(NonNegativeInt),
   marks: Schema.optionalKey(MemoryRevisionMarks),
   memorySpaceId: MemorySpaceId,
   memoryId: MemoryId,
@@ -649,6 +683,14 @@ export function encodeMemoryOperation(operation: MemoryOperation): string {
         payload: value.payload,
         ...(value.forgetFence === undefined ? {} : { forgetFence: value.forgetFence }),
       });
+    case "move":
+      return encodeOperationJson({
+        ...common,
+        kind,
+        fromScope: value.fromScope,
+        toScope: value.toScope,
+        expectedScopeVersion: value.expectedScopeVersion,
+      });
     case "forget":
       return encodeOperationJson({ ...common, kind, tombstone: value.tombstone });
     case "resolve":
@@ -687,6 +729,7 @@ const eventSchema = Schema.Union([
     revision: MemoryRevision,
   }),
   struct({ ...envelope, kind: Schema.Literal("forget"), tombstone: MemoryTombstone }),
+  struct({ ...envelope, kind: Schema.Literal("move"), ...moveFields }),
   struct({
     ...envelope,
     ...floorOperation,
@@ -711,6 +754,7 @@ const encodeEventMetadata = Schema.encodeSync(Schema.fromJsonString(eventSchema)
 const decodeEventMetadata = Schema.decodeUnknownSync(eventSchema, { onExcessProperty: "error" });
 export function encodeMemoryEventMetadata(operation: MemoryOperation): string {
   validateOperation(operation);
+  if (operation.kind === "move") return encodeMemoryOperation(operation);
   const common = {
     ...operationEnvelope(operation),
     kind: operation.kind,
@@ -1213,6 +1257,7 @@ export const MemoryContextSnapshot = struct({
       memoryId: MemoryId,
       revisionId: MemoryRevisionId,
       scope: MemoryScope,
+      scopeVersion: Schema.optionalKey(PositiveInt),
       provenance: MemoryProvenance,
       assertionKind: MemoryAssertionKind,
       text,
@@ -1551,7 +1596,11 @@ export type MemorySearchPage = {
   readonly exhausted: boolean;
 };
 
-const browseOptions = { ...includeMarks, origin: Schema.optionalKey(ScopedThreadRef) };
+const browseOptions = {
+  ...includeMarks,
+  ...includeScopeVersion,
+  origin: Schema.optionalKey(ScopedThreadRef),
+};
 export const MemorySearchInput = struct({
   ...browseOptions,
   ...space,
@@ -1583,7 +1632,13 @@ export const MemoryListInput = struct({
   includeQuarantined: Schema.Boolean,
 });
 export type MemoryListInput = typeof MemoryListInput.Type;
-export const MemoryReadInput = struct({ ...space, ...includeMarks, memoryId: MemoryId });
+
+export const MemoryReadInput = struct({
+  ...space,
+  ...includeMarks,
+  ...includeScopeVersion,
+  memoryId: MemoryId,
+});
 export type MemoryReadInput = typeof MemoryReadInput.Type;
 
 export const MemoryResetReportAttemptsInput = struct({
@@ -2292,7 +2347,7 @@ export type MemoryResolutionApproval = typeof MemoryResolutionApproval.Type;
 
 /** Approval validation works equally on operation bodies and purged metadata. */
 export function validateMemoryResolutionApproval(
-  kind: "upsert" | "forget" | "resolve" | "revert",
+  kind: MemoryOperation["kind"],
   resolutionId: MemoryResolutionId | null | undefined,
   receipt: MemoryHubReceipt,
 ): boolean {
@@ -2341,7 +2396,7 @@ export const MemoryCompactReceipt = struct({
   upsertRequestDigest: Schema.optionalKey(digest),
   memorySpaceId: MemorySpaceId,
   originEnvironmentId: EnvironmentId,
-  operationKind: Schema.Literals(["upsert", "forget", "resolve", "revert"]),
+  operationKind: Schema.Literals(["upsert", "forget", "resolve", "revert", "move"]),
   receipt: MemoryHubReceipt,
   revisionId: Schema.NullOr(MemoryRevisionId),
   resolutionId: Schema.NullOr(MemoryResolutionId),
@@ -2357,7 +2412,11 @@ export const MemoryCompactReceipt = struct({
       !validateMemoryResolutionApproval(v.operationKind, v.resolutionId, v.receipt)
     )
       return false;
-    if (v.operationKind === "forget" || v.receipt.outcome === "rejected") {
+    if (
+      v.operationKind === "forget" ||
+      v.operationKind === "move" ||
+      v.receipt.outcome === "rejected"
+    ) {
       if (v.revisionId !== null) return false;
     } else if (v.revisionId === null) return false;
     if (v.operationKind === "resolve") {
@@ -2400,7 +2459,7 @@ export const MemoryHubEntry = Schema.Union([
   }),
   struct({
     kind: Schema.Literal("metadata"),
-    operationKind: Schema.Literals(["upsert", "forget", "resolve", "revert"]),
+    operationKind: Schema.Literals(["upsert", "forget", "resolve", "revert", "move"]),
     resolutionId: Schema.optionalKey(MemoryResolutionId),
     hubSequence: PositiveInt,
     receipt: MemoryHubReceipt,
@@ -2444,6 +2503,7 @@ export const MemoryIdentityRecord = struct({
   memorySpaceId: MemorySpaceId,
   memoryId: MemoryId,
   scope: MemoryScope,
+  scopeVersion: Schema.optionalKey(PositiveInt),
   creatingEnvironmentId: EnvironmentId,
   createOperationId: MemoryOperationId,
   createdAtUtc: MemoryUtcTimestamp,
@@ -2511,30 +2571,6 @@ export const MemoryImportLineageRecord = Schema.Union([
 ]);
 export type MemoryImportLineageRecord = typeof MemoryImportLineageRecord.Type;
 
-// Explicit tuples make duplicate identity independent of JSON property insertion order.
-const importProjectKey = (v: MemoryProjectKey) =>
-  v.kind === "repository" ? [v.kind, v.groupingKey] : [v.kind, v.sharedProjectId];
-const importScopeKey = (v: MemoryScope) =>
-  v.kind === "user"
-    ? [v.kind]
-    : v.kind === "project"
-      ? [v.kind, importProjectKey(v.projectKey)]
-      : [
-          v.kind,
-          v.thread.environmentId,
-          v.thread.threadId,
-          v.projectKey === undefined ? null : importProjectKey(v.projectKey),
-        ];
-/** Shared canonical key for ledger union, duplicate validation and checkpoint pagination. */
-export const memoryImportLineageRecordKey = (v: MemoryImportLineageRecord): string =>
-  JSON.stringify([
-    v.memorySpaceId,
-    v.memoryId,
-    v.kind,
-    v.kind === "sourceKey"
-      ? [v.sourceKey.environmentId, v.sourceKey.sourceId, v.sourceKey.sourceItemKey]
-      : [importScopeKey(v.content.scope), v.content.assertionKind, v.content.contentFingerprint],
-  ]);
 export const MemoryHubCheckpointPage = bounded(
   struct({
     memorySpaceId: MemorySpaceId,
@@ -2728,6 +2764,7 @@ const sourceRequestFields = {
   memoryId: MemoryId,
   sourceThread: ScopedThreadRef,
   sourceWatermark: MemorySourceWatermark,
+  scopeVersion: Schema.optionalKey(PositiveInt),
   messageIds: distinct(MessageId, 100, 1),
   ...paging,
   authorizedScopes: Schema.Tuple([
@@ -2865,232 +2902,13 @@ export const MEMORY_HUB_PATHS = {
 const checkpointDecode = Schema.decodeUnknownSync(MemoryHubCheckpointPage, {
   onExcessProperty: "error",
 });
-/**
- * Validate structural ledger links without stateful admission or quotas.
- * The server must separately verify report-key digests before installing the snapshot.
- */
-export function validateMemoryCheckpointRecords(
-  pages: readonly MemoryHubCheckpointPage[],
-): boolean {
-  if (pages.length === 0) return false;
-  const first = pages[0]!;
+export function validateMemoryCheckpointRecords(pages: readonly MemoryHubCheckpointPage[]) {
   try {
-    pages.forEach((p) => checkpointDecode(p));
+    pages.forEach((page) => checkpointDecode(page));
   } catch {
     return false;
   }
-  if (
-    !pages.every(
-      (p, i) =>
-        p.pageOrdinal === i &&
-        p.memorySpaceId === first.memorySpaceId &&
-        p.checkpointSequence === first.checkpointSequence &&
-        p.retentionFloor === first.retentionFloor &&
-        same(p.causalBoundary, first.causalBoundary) &&
-        p.bootstrapComplete === (i === pages.length - 1),
-    )
-  )
-    return false;
-  const identities = pages.flatMap((p) => p.identities),
-    fences = pages.flatMap((p) => p.fences),
-    receipts = pages.flatMap((p) => p.compactReceipts),
-    revisions = pages.flatMap((p) => p.revisions),
-    resolutions = pages.flatMap((p) => p.resolutions),
-    tombstones = pages.flatMap((p) => p.tombstones),
-    suppressions = pages.flatMap((p) => p.suppressions),
-    importLineage = pages.flatMap((p) => p.importLineage),
-    conflicts = pages.flatMap((p) => p.conflicts),
-    items = pages.flatMap((p) => p.items);
-  const identitiesById = uniqueIndex(identities, (v) => v.memoryId);
-  const fencesById = uniqueIndex(fences, (v) => v.memoryId);
-  const receiptsByOperation = uniqueIndex(receipts, (v) => v.receipt.operationId);
-  const revisionsById = uniqueIndex(revisions, (v) => v.revision.revisionId);
-  const resolutionsById = uniqueIndex(resolutions, (v) => v.resolution.resolutionId);
-  const tombstonesById = uniqueIndex(tombstones, (v) => v.memoryId);
-  const conflictsById = uniqueIndex(conflicts, (v) => v.conflictId);
-  const itemsById = uniqueIndex(items, (v) => v.memoryId);
-  const lineageRows = uniqueIndex(importLineage, memoryImportLineageRecordKey);
-  const suppressionRows = uniqueIndex(suppressions, (v) => JSON.stringify(v));
-  // Rejected attempts may share a resolution id; only committed results own that key.
-  const resolveReceiptsById = uniqueIndex(
-    receipts.filter(
-      (v) =>
-        v.operationKind === "resolve" &&
-        (v.receipt.outcome === "accepted" || v.receipt.outcome === "conflicted"),
-    ),
-    (v) => v.resolutionId,
-  );
-  if (
-    !identitiesById ||
-    !fencesById ||
-    !receiptsByOperation ||
-    !revisionsById ||
-    !resolutionsById ||
-    !tombstonesById ||
-    !conflictsById ||
-    !itemsById ||
-    !suppressionRows ||
-    !lineageRows ||
-    !resolveReceiptsById
-  )
-    return false;
-  const identity = (id: MemoryId) => identitiesById.get(id);
-  const fence = (id: MemoryId) => fencesById.get(id);
-  const receipt = (id: MemoryOperationId) => receiptsByOperation.get(id);
-  const metadata = [
-    ...identities,
-    ...fences,
-    ...receipts
-      .filter((r) => r.receipt.outcome !== "rejected")
-      .map((r) => ({ ...r, memoryId: r.receipt.memoryId })),
-    ...revisions.map((r) => r.revision),
-    ...resolutions.map((r) => r.resolution),
-    ...tombstones,
-    ...suppressions,
-    ...importLineage,
-    ...conflicts,
-    ...items,
-  ];
-  if (
-    !metadata.every(
-      (v) =>
-        v.memorySpaceId === first.memorySpaceId &&
-        identity(v.memoryId) !== undefined &&
-        fence(v.memoryId) !== undefined,
-    )
-  )
-    return false;
-  if (
-    !importLineage.every(
-      (v) =>
-        v.kind !== "content" ||
-        same(importScopeKey(v.content.scope), importScopeKey(identity(v.memoryId)!.scope)),
-    )
-  )
-    return false;
-  // Digest shape is enforced by the codec. WP2's server verifies report-key hashes
-  // with Node crypto before WP3 installs a snapshot; contracts do not compute hashes.
-  if (
-    !receipts.every(
-      (r) =>
-        r.receipt.outcome === "rejected" ||
-        r.operationKind !== "resolve" ||
-        (fence(r.receipt.memoryId)?.highestFencingToken ?? -1) >= (r.fencingToken ?? 0),
-    )
-  )
-    return false;
-  if (
-    !receipts.every(
-      (r) =>
-        r.memorySpaceId === first.memorySpaceId &&
-        r.receipt.hubSequence !== null &&
-        r.receipt.hubSequence <= first.checkpointSequence,
-    )
-  )
-    return false;
-  if (
-    !identities.every((i) => {
-      const r = receipt(i.createOperationId);
-      return (
-        r !== undefined &&
-        r.receipt.memoryId === i.memoryId &&
-        r.originEnvironmentId === i.creatingEnvironmentId &&
-        (((r.receipt.outcome === "accepted" || r.receipt.outcome === "conflicted") &&
-          r.operationKind === "upsert") ||
-          (r.receipt.outcome === "deleted" &&
-            r.operationKind === "forget" &&
-            tombstonesById.get(i.memoryId)?.deleteOperationId === i.createOperationId))
-      );
-    })
-  )
-    return false;
-  if (
-    !revisions.every(({ revision: r }) => {
-      const rec = receipt(r.operationId);
-      return (
-        same(r.scope, identity(r.memoryId)?.scope) &&
-        rec !== undefined &&
-        rec.receipt.memoryId === r.memoryId &&
-        rec.revisionId === r.revisionId
-      );
-    })
-  )
-    return false;
-  if (
-    !items.every((i) =>
-      i.status === "forgotten"
-        ? same(tombstonesById.get(i.memoryId), i.tombstone)
-        : same(i.scope, identity(i.memoryId)?.scope),
-    )
-  )
-    return false;
-  if (
-    !tombstones.every((t) => {
-      const r = receipt(t.deleteOperationId);
-      return (
-        r?.receipt.outcome === "deleted" &&
-        r.receipt.memoryId === t.memoryId &&
-        r.originEnvironmentId === t.deletingEnvironmentId &&
-        fence(t.memoryId)?.activeLease === null
-      );
-    })
-  )
-    return false;
-  if (
-    !suppressions.every(
-      (s) => tombstonesById.get(s.memoryId)?.deleteOperationId === s.deleteOperationId,
-    )
-  )
-    return false;
-  if (
-    !resolutions.every(({ resolution: r }) => {
-      const rec = resolveReceiptsById.get(r.resolutionId);
-      const result = revisionsById.get(r.resultRevisionId)?.revision;
-      return (
-        rec !== undefined &&
-        (rec.receipt.outcome === "accepted" || rec.receipt.outcome === "conflicted") &&
-        rec.receipt.memoryId === r.memoryId &&
-        rec.originEnvironmentId === r.resolvingEnvironmentId &&
-        rec.reportGuard?.resolvingEnvironmentId === r.resolvingEnvironmentId &&
-        rec.revisionId === r.resultRevisionId &&
-        rec.fencingToken === r.fencingToken &&
-        rec.receipt.resolutionApproval?.appliedAtUtc === r.appliedAtUtc &&
-        rec.receipt.resolutionApproval?.revertDeadlineUtc === r.revertDeadlineUtc &&
-        result !== undefined &&
-        result.memoryId === r.memoryId &&
-        result.operationId === rec.receipt.operationId &&
-        result.provenance.environmentId === r.resolvingEnvironmentId &&
-        sameSet(result.parents, r.inputRevisionIds) &&
-        r.inputRevisionIds.every((id, i) => {
-          const input = revisionsById.get(id)?.revision;
-          return input?.memoryId === r.memoryId && input.payloadRef === r.inputPayloadRefs[i];
-        }) &&
-        (fence(r.memoryId)?.highestFencingToken ?? -1) >= r.fencingToken
-      );
-    })
-  )
-    return false;
-  return fences.every((f) => {
-    if (f.activeLease === null) return true;
-    const conflict = conflictsById.get(f.activeLease.conflictId);
-    return (
-      conflict !== undefined &&
-      conflict.memoryId === f.memoryId &&
-      conflict.status !== "resolved" &&
-      same(conflict.heads, f.activeLease.conflictHeadSet)
-    );
-  });
-}
-
-/** Index one ledger collection without silently overwriting duplicate keys. */
-function uniqueIndex<T, K>(values: readonly T[], keyOf: (value: T) => K): Map<K, T> | undefined {
-  const index = new Map<K, T>();
-  for (const value of values) {
-    const key = keyOf(value);
-    if (index.has(key)) return undefined;
-    index.set(key, value);
-  }
-  return index;
+  return validateCheckpointRecordsStructure(pages);
 }
 
 /** Source admission still belongs to the owner; this only checks returned locators. */

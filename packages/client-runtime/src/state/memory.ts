@@ -380,6 +380,8 @@ export function createMemoryEnvironmentAtoms<R, E>(
             tag !== WS_METHODS.siteNotesDelete &&
             tag !== WS_METHODS.siteNotesRestoreSeed) ||
             config.environment.capabilities.memory?.siteNotes === true) &&
+          (tag !== WS_METHODS.memoryMove ||
+            config.environment.capabilities.memory?.scopeMoves === true) &&
           (!tag.startsWith("memory.suggestions.") ||
             config.environment.capabilities.memory?.saveSuggestions === true) &&
           (tag !== WS_METHODS.memoryImportProvider ||
@@ -657,6 +659,7 @@ export function createMemoryEnvironmentAtoms<R, E>(
     readSource: bodyQuery(WS_METHODS.memoryReadSource),
     upsert: command(WS_METHODS.memoryUpsert),
     forget: command(WS_METHODS.memoryForget),
+    move: command(WS_METHODS.memoryMove),
     suggestions: bodyQuery(WS_METHODS.memorySuggestionsList),
     acceptSuggestion: command(WS_METHODS.memorySuggestionsAccept),
     dismissSuggestion: command(WS_METHODS.memorySuggestionsDismiss),

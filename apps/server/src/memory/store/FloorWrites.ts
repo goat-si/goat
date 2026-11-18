@@ -26,7 +26,7 @@ export type PromotionPrerequisite = {
 
 export interface FloorWriteStore {
   readonly stageFloorWrite: (
-    operation: Extract<M.MemoryOperation, { kind: "upsert" }>,
+    operation: Extract<M.MemoryOperation, { kind: "upsert" | "move" }>,
     promotion?: PromotionPrerequisite,
   ) => InTx<void, MemoryCapacityError | MemoryStorageError>;
 }
@@ -39,8 +39,8 @@ export const makeFloorWrites = (
     "MemoryStore.stageFloorWrite",
   )(function* (operation, promotion) {
     yield* Transaction;
-    const { memorySpaceId: space, memoryId, revision, operationId } = operation;
-    const body = yield* payloadCodec.encode(operation.payload);
+    const { memorySpaceId: space, memoryId, operationId } = operation;
+    const body = operation.kind === "upsert" ? yield* payloadCodec.encode(operation.payload) : "";
     const metadata = {
       ...metadataOf(operation),
       authorityFirst: memoryOperationDigest(operation),
@@ -48,11 +48,17 @@ export const makeFloorWrites = (
     };
     const [usage] = yield* stored(
       "floor-stage-budget",
-      sql<{ bytes: number }>`
-      SELECT coalesce(sum(length(CAST(p.body_json AS BLOB)) + length(CAST(o.metadata_json AS BLOB))),0) AS bytes
-      FROM memory_outbox o JOIN memory_payloads p ON p.space=o.space AND p.payload_ref=o.payload_ref
+      sql<{ bytes: number; items: number }>`
+      SELECT count(*) AS items, coalesce(sum(coalesce(length(CAST(p.body_json AS BLOB)),0) + length(CAST(o.metadata_json AS BLOB))),0) AS bytes
+      FROM memory_outbox o LEFT JOIN memory_payloads p ON p.space=o.space AND p.payload_ref=o.payload_ref
       WHERE o.space=${space} AND o.status IN ('pending','retry','running')`,
     );
+    if ((usage?.items ?? 0) >= M.MEMORY_WORK_MAX_PENDING_ITEMS)
+      return yield* new MemoryCapacityError({
+        dimension: "work_items",
+        limit: M.MEMORY_WORK_MAX_PENDING_ITEMS,
+        current: usage?.items ?? 0,
+      });
     const current =
       (usage?.bytes ?? 0) +
       new TextEncoder().encode(body + (yield* workMetadataCodec.encode(metadata))).length;
@@ -62,12 +68,15 @@ export const makeFloorWrites = (
         limit: M.MEMORY_WORK_MAX_PAYLOAD_BYTES,
         current,
       });
-    if (revision.payloadRef === revision.revisionId)
+    if (
+      operation.kind === "upsert" &&
+      operation.revision.payloadRef === operation.revision.revisionId
+    )
       yield* stored(
         "floor-stage-body",
         sql`
       INSERT INTO memory_payloads (space,payload_ref,memory_id,body_json,dependencies_json)
-      VALUES (${space},${revision.payloadRef},${memoryId},${body},${yield* headsCodec.encode(operation.payload.derivedFromMemoryRevisions)})`,
+      VALUES (${space},${operation.revision.payloadRef},${memoryId},${body},${yield* headsCodec.encode(operation.payload.derivedFromMemoryRevisions)})`,
       );
     yield* enqueueWork({
       id: floorWriteId(space, operationId),
@@ -76,7 +85,7 @@ export const makeFloorWrites = (
       kind: "sync",
       status: "pending",
       metadata,
-      payloadRef: revision.payloadRef,
+      payloadRef: operation.kind === "upsert" ? operation.revision.payloadRef : null,
       attempt: 0,
       nextAttemptAt: 0,
       claimedBy: null,

@@ -645,7 +645,7 @@ export const makeCoreReads = (kernel: Pick<StoreKernel, "sql" | "transact">) => 
     return yield* operationFromMetadata(yield* metadataCodec.decode(rows[0].metadata_json, strict));
   });
   const operationFromMetadata = Effect.fnUntraced(function* (metadata: typeof Metadata.Type) {
-    if (metadata.kind === "forget")
+    if (metadata.kind === "forget" || metadata.kind === "move")
       return yield* stored("operation-codec", decodeOperation(metadata, strict));
     if (!metadata.revision) return undefined;
     const rows = yield* stored(

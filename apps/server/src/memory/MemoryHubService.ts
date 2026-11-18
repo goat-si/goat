@@ -1,3 +1,4 @@
+import { prepareJoinRetention } from "./MemoryJoinRetention.ts";
 import { projectPushReceipt } from "./MemoryTailAdmission.ts";
 import { MemoryHubSettingsSnapshot, readSettingsView } from "./MemoryHubSettings.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- server-owned checkpoint identifiers.
@@ -18,13 +19,11 @@ import { MemoryFloor2Enabled } from "./MemoryFloor.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Service from "./MemoryService.ts";
 import * as Quota from "./MemoryQuotaService.ts";
-
 export type MemoryHubServiceError =
   | Service.MemoryServiceError
   | M.MemoryHubError
   | M.MemoryHubUnauthorizedError
   | M.MemoryHubForbiddenError;
-
 /** The settings owner supplies a live read; it is repeated after the SQL lock. */
 export class MemoryHubConfiguration extends Context.Service<
   MemoryHubConfiguration,
@@ -157,7 +156,7 @@ export const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const hub = yield* authorize(principal, request.memorySpaceId, request.environmentId);
           yield* negotiate(principal, request.features);
-          const retention = yield* store.readHubRetentionTx(principal.memorySpaceId);
+          const retention = yield* prepareJoinRetention(store, principal, hub.hubEnvironmentId);
           if (!retention.checkpointId || !retention.causalBoundary)
             return yield* new M.MemoryHubError({ code: "bootstrap_required" });
           const handle = yield* store.prepareHubCheckpointTx({
