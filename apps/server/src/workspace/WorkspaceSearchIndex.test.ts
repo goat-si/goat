@@ -586,9 +586,15 @@ it.live("finds Git-ignored files re-included by .ignore during and after content
     const vcsProcess = yield* VcsProcess.VcsProcess;
     const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "goat-search-reinclude-" });
     yield* vcsProcess.run({ operation: "test.gitInit", command: "git", args: ["init"], cwd });
-    yield* fs.writeFileString(path.join(cwd, ".gitignore"), "notes/\nsecret.txt\n");
-    yield* fs.writeFileString(path.join(cwd, ".ignore"), "!notes/\nnotes/**/*\n!notes/**/\n");
+    yield* fs.writeFileString(path.join(cwd, ".gitignore"), "notes/\ngenerated/\nsecret.txt\n");
+    yield* fs.writeFileString(
+      path.join(cwd, ".ignore"),
+      "!notes/\nnotes/**/*\n!notes/**/\n!generated/\n",
+    );
     yield* fs.makeDirectory(path.join(cwd, "notes", "daily"), { recursive: true });
+    yield* fs.makeDirectory(path.join(cwd, "generated"));
+    yield* fs.writeFileString(path.join(cwd, "generated", ".gitignore"), "[[:digit:]].txt\n");
+    yield* fs.writeFileString(path.join(cwd, "generated", "1.txt"), "needle\n");
     yield* fs.writeFileString(path.join(cwd, "notes", ".gitignore"), "*.txt\n");
     yield* fs.writeFileString(path.join(cwd, "notes", "daily", ".ignore"), "!standup.md\n");
     yield* fs.writeFileString(path.join(cwd, "notes", "daily", "standup.md"), "needle\n");
@@ -603,8 +609,13 @@ it.live("finds Git-ignored files re-included by .ignore during and after content
       const result = create(options);
       if (result.ok && !options.disableContentIndexing) {
         const finder = result.value;
+        const wait = finder.waitForIndexReady.bind(finder);
+        finder.waitForIndexReady = (timeout) => {
+          scanning = false;
+          return wait(timeout);
+        };
         settle = async () => {
-          const ready = await finder.waitForIndexReady(15_000);
+          const ready = await wait(15_000);
           expect(ready).toEqual({ ok: true, value: true });
         };
         const progress = finder.getScanProgressAsync.bind(finder);

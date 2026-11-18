@@ -220,6 +220,8 @@ export const searchContentsWithGit = Effect.fn("WorkspaceSearchIndex.searchConte
       input.query.includes("\n") ||
       input.query.includes("\0") ||
       reincludedPaths.length > MAX_REINCLUDED_PATHS ||
+      // Widening beneath a directory bypasses nested Git ignore rules.
+      reincludedPaths.some((path) => path.endsWith("/")) ||
       reincludedPaths.reduce((bytes, path) => bytes + Buffer.byteLength(path) + 1, 0) >
         MAX_REINCLUDED_PATH_BYTES
     ) {
@@ -228,7 +230,7 @@ export const searchContentsWithGit = Effect.fn("WorkspaceSearchIndex.searchConte
     const normal = yield* searchGitPaths(vcsProcess, cwd, input, [], new Set());
     if (!normal || normal.truncated || reincludedPaths.length === 0) return normal;
 
-    // Only widen Git's walk beneath paths explicitly re-included by .ignore.
+    // Only widen Git's walk to individual files explicitly re-included by .ignore.
     const seen = new Set(normal.matches.map((match) => matchKey(match.path, match.lineNumber)));
     const extra = yield* searchGitPaths(
       vcsProcess,

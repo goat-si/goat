@@ -307,7 +307,7 @@ const loadGitIgnoredPaths = Effect.fn("WorkspaceSearchIndex.listGitIgnoredPaths"
     if (entry === "") continue;
     const relative = toPosixPath(entry, hostIsWindows);
     const path = trimDirectorySeparator(relative);
-    if ((yield* decide(path, relative.endsWith("/"))) === "included") reincluded.push(path);
+    if ((yield* decide(path, relative.endsWith("/"))) === "included") reincluded.push(relative);
     else ignored.add(path);
   }
   return paths;
