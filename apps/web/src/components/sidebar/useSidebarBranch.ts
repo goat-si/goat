@@ -1,8 +1,16 @@
 import { useAtomMount } from "@effect/atom-react";
+import { createVcsStatusRevalidationAtomFamily } from "@goat/client-runtime/state/vcs";
 import type { EnvironmentId } from "@goat/contracts";
 import { useEnvironmentQuery } from "../../state/query";
-import { vcsBranchRevalidation, vcsEnvironment } from "../../state/vcs";
+import { subscribeDocumentReturn } from "../../lib/documentActivity";
+import { vcsEnvironment } from "../../state/vcs";
 import { useRetainedValue } from "../Sidebar.logic";
+
+const vcsBranchRevalidation = createVcsStatusRevalidationAtomFamily({
+  refreshStatus: vcsEnvironment.refreshBranch,
+  subscribeWake: subscribeDocumentReturn,
+  wakeDebounceMs: 250,
+});
 
 export function useSidebarBranch(
   thread: {

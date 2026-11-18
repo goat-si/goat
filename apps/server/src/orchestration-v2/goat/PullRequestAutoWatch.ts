@@ -43,6 +43,12 @@ export function newPullRequestWatch(
     ...(ended?.checksAwaitedSince !== undefined && {
       checksAwaitedSince: ended.checksAwaitedSince,
     }),
+    // A finished-checks answer may be an older head's; a fresh read decides.
+    ...(ended?.checksPending === true && { checksPending: true }),
+    // A first watch records what is already there; watching again resumes the ended one's state.
+    ...(ended === undefined
+      ? { awaitingBaseline: "all" as const }
+      : ended.awaitingBaseline !== undefined && { awaitingBaseline: ended.awaitingBaseline }),
     remarksThrough: startedAt,
     remarkIds: [],
     wakes: 0,
@@ -50,9 +56,15 @@ export function newPullRequestWatch(
   };
 }
 
-/** The same watch, now asked for: it keeps the thread working from here on. */
+/** The same watch, now asked for: from here on it keeps the thread working while checks run. */
 export function explicitPullRequestWatch(watch: ThreadPullRequestWatch): ThreadPullRequestWatch {
   const { automatic: _automatic, ...rest } = watch;
+  return rest;
+}
+
+/** A watch that no longer knows whether its checks are running, as after a push. */
+export function withoutChecksAnswer(watch: ThreadPullRequestWatch): ThreadPullRequestWatch {
+  const { checksPending: _checksPending, ...rest } = watch;
   return rest;
 }
 
@@ -65,8 +77,14 @@ export function explicitPullRequestWatch(watch: ThreadPullRequestWatch): ThreadP
 export function syncedPullRequestWatch(
   current: ThreadPullRequestWatch,
   observed: ThreadPullRequestWatch,
+  checksPendingBefore?: boolean,
 ): ThreadPullRequestWatch {
-  const { heldContext: kept, ...progress } = explicitPullRequestWatch(observed);
+  const { heldContext: kept, ...read } = explicitPullRequestWatch(observed);
+  // A push cleared the answer while this read was in flight, so its answer is the old head's.
+  const progress =
+    checksPendingBefore !== undefined && current.checksPending === undefined
+      ? withoutChecksAnswer(read)
+      : read;
   const heldContext = keptAfterPass(current.heldContext, kept, {
     ...progress,
     headMoved: progress.headSha !== current.headSha,

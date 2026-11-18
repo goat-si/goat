@@ -1,16 +1,21 @@
+// @effect-diagnostics nodeBuiltinImport:off -- observe native directory reads during compaction cleanup.
+import * as NodeFSP from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
-import { expect } from "vite-plus/test";
+import { expect, vi } from "vite-plus/test";
 import * as ProcessRunner from "../processRunner.ts";
 import { createManager, historyLogPath, openInput } from "./Manager.testkit.ts";
 import { TERMINAL_HISTORY_COMPACTION_NOTICE } from "./terminalHistoryFile.ts";
+
+vi.mock("node:fs/promises", { spy: true });
 
 it.layer(
   Layer.mergeAll(
@@ -20,6 +25,128 @@ it.layer(
   ),
   { excludeTestServices: true },
 )("TerminalManager history file", (it) => {
+  it.effect(
+    "removes only GOAT compaction directories on startup and preserves ambiguous legacy names",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { basename, join } = yield* Path.Path;
+        const { manager, logsDir } = yield* createManager().pipe(
+          Effect.provideService(FileSystem.FileSystem, {
+            ...fs,
+            makeDirectory: (path, options) =>
+              fs.makeDirectory(path, options).pipe(
+                Effect.andThen(
+                  Effect.gen(function* () {
+                    if (basename(path) !== "terminals") return;
+                    yield* fs.makeDirectory(join(path, ".history-aBcD01"));
+                    yield* fs.writeFileString(
+                      join(path, ".history-aBcD01", "fedcba123456"),
+                      "old data",
+                    );
+                    yield* fs.writeFileString(join(path, ".history-aBcD02"), "keep");
+                    yield* fs.makeDirectory(join(path, ".history-aBcD03"));
+                    yield* fs.makeDirectory(join(path, ".goat-terminal-history-Abcd04"));
+                    yield* fs.writeFileString(
+                      join(path, ".goat-terminal-history-Abcd04", "history"),
+                      "partial",
+                    );
+                    yield* fs.makeDirectory(join(path, ".goat-terminal-history-Abcd05"));
+                    yield* fs.writeFileString(
+                      join(path, ".goat-terminal-history-Abcd05", "unrelated"),
+                      "keep",
+                    );
+                    yield* fs.makeDirectory(join(path, ".history-user-backup"));
+                  }),
+                ),
+              ),
+          }),
+        );
+        expect((yield* fs.readDirectory(logsDir)).toSorted()).toEqual([
+          ".goat-terminal-history-Abcd05",
+          ".history-aBcD01",
+          ".history-aBcD02",
+          ".history-aBcD03",
+          ".history-user-backup",
+        ]);
+        expect((yield* manager.open(openInput())).history).toBe("");
+      }),
+  );
+
+  it.effect(
+    "streams the startup sweep and stops reading a compaction directory at its second entry",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { basename, join } = yield* Path.Path;
+        const candidate = ".goat-terminal-history-Abcd06";
+        const { opendir } = yield* Effect.promise(() =>
+          vi.importActual<typeof NodeFSP>("node:fs/promises"),
+        );
+        let candidateReads: (() => number) | undefined;
+        const opens = yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            vi.spyOn(NodeFSP, "opendir").mockImplementation(async (path, options) => {
+              const dir = await opendir(path, options);
+              if (basename(String(path)) === candidate) {
+                const read = vi.spyOn(dir, "read");
+                candidateReads = () => read.mock.calls.length;
+              }
+              return dir;
+            }),
+          ),
+          (spy) => Effect.sync(() => spy.mockRestore()),
+        );
+        const { logsDir } = yield* createManager().pipe(
+          Effect.provideService(FileSystem.FileSystem, {
+            ...fs,
+            makeDirectory: (path, options) =>
+              fs.makeDirectory(path, options).pipe(
+                Effect.andThen(
+                  Effect.gen(function* () {
+                    if (basename(path) !== "terminals") return;
+                    const dir = join(path, candidate);
+                    yield* fs.makeDirectory(dir);
+                    for (const name of ["history", "first-extra", "second-extra"]) {
+                      yield* fs.writeFileString(join(dir, name), "keep");
+                    }
+                    yield* fs.makeDirectory(join(path, ".goat-terminal-history-Abcd07"));
+                  }),
+                ),
+              ),
+          }),
+        );
+        expect(opens.mock.calls).toContainEqual([logsDir, { bufferSize: 32 }]);
+        expect(opens.mock.calls).toContainEqual([join(logsDir, candidate), { bufferSize: 2 }]);
+        expect(candidateReads?.()).toBe(2);
+        expect(yield* fs.readDirectory(logsDir)).toEqual([candidate]);
+      }),
+  );
+
+  it.effect("opens with the compaction notice when both the rename and temp cleanup fail", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const denied = (method: "rename" | "remove") =>
+        PlatformError.systemError({ _tag: "PermissionDenied", module: "FileSystem", method });
+      const { manager, logsDir } = yield* createManager(5, { historyByteLimit: 256 }).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          rename: () => Effect.fail(denied("rename")),
+          remove: () => Effect.fail(denied("remove")),
+          makeTempFileScoped: (options) =>
+            Effect.acquireRelease(fs.makeTempFile(options), () => Effect.die(denied("remove"))),
+        }),
+      );
+      const path = yield* historyLogPath(logsDir);
+      const persisted = "x".repeat(512);
+      yield* fs.writeFileString(path, persisted);
+      expect((yield* manager.open(openInput())).history).toContain(
+        TERMINAL_HISTORY_COMPACTION_NOTICE,
+      );
+      expect(yield* fs.readFileString(path)).toBe(persisted);
+    }),
+  );
+
   it.effect("restores a log tail that starts inside a control sequence without its remainder", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

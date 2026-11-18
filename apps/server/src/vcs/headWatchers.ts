@@ -10,7 +10,7 @@ import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import * as SynchronizedRef from "effect/SynchronizedRef";
+import * as KeyedLock from "@goat/shared/KeyedLock";
 
 // A held index.lock fails the read, and its removal moves no HEAD to trigger another.
 const CHECKOUT_REFRESH_RETRY = Schedule.exponential(Duration.seconds(1)).pipe(
@@ -33,7 +33,8 @@ export const makeHeadWatchers = Effect.fn("VcsStatusBroadcaster.makeHeadWatchers
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const headWatchersRef = yield* SynchronizedRef.make(new Map<string, ActiveHeadWatcher>());
+  const locks = yield* KeyedLock.make<string>();
+  const activeWatchers = new Map<string, ActiveHeadWatcher>();
   const retryCheckoutRefresh = (
     cwd: string,
     refresh: Effect.Effect<void, GitManagerServiceError>,
@@ -61,9 +62,10 @@ export const makeHeadWatchers = Effect.fn("VcsStatusBroadcaster.makeHeadWatchers
       .pipe(
         // Windows can keep reporting removals after the watched directory is gone.
         Stream.mapEffect((event) =>
-          event._tag === "Remove"
-            ? fs.exists(headDirectory).pipe(Effect.map((exists) => ({ event, removed: !exists })))
-            : Effect.succeed({ event, removed: false }),
+          Effect.gen(function* () {
+            const removed = event._tag === "Remove" && !(yield* fs.exists(headDirectory));
+            return { event, removed };
+          }),
         ),
         Stream.takeUntil(({ removed }) => removed),
         Stream.filter(({ event, removed }) => removed || path.basename(event.path) === "HEAD"),
@@ -78,17 +80,15 @@ export const makeHeadWatchers = Effect.fn("VcsStatusBroadcaster.makeHeadWatchers
   const retainHeadWatcher = Effect.fn("VcsStatusBroadcaster.retainHeadWatcher")(function* (
     cwd: string,
   ) {
-    const ready = yield* SynchronizedRef.modifyEffect(headWatchersRef, (activeWatchers) => {
-      const existing = activeWatchers.get(cwd);
-      if (existing && existing.fiber.pollUnsafe() === undefined) {
-        const nextWatchers = new Map(activeWatchers).set(cwd, {
-          ...existing,
-          subscriberCount: existing.subscriberCount + 1,
-        });
-        return Effect.succeed([existing.ready, nextWatchers] as const);
-      }
-      // A watch that ended, say before the repository existed, restarts for everyone holding it.
-      return Effect.gen(function* () {
+    const ready = yield* locks.withLock(
+      cwd,
+      Effect.gen(function* () {
+        const existing = activeWatchers.get(cwd);
+        if (existing && existing.fiber.pollUnsafe() === undefined) {
+          activeWatchers.set(cwd, { ...existing, subscriberCount: existing.subscriberCount + 1 });
+          return existing.ready;
+        }
+        // An ended watch restarts for every remaining subscriber.
         const ready = yield* Deferred.make<void>();
         const fiber = yield* watchHead(cwd, ready).pipe(
           Effect.catchCause((cause) =>
@@ -97,39 +97,35 @@ export const makeHeadWatchers = Effect.fn("VcsStatusBroadcaster.makeHeadWatchers
               ...remoteRefreshFailureDiagnostics(cause),
             }),
           ),
-          // Subscribers wait for the watch, so one that cannot start must not hold them.
           Effect.ensuring(Deferred.succeed(ready, undefined)),
           Effect.forkIn(broadcasterScope),
         );
-        const nextWatchers = new Map(activeWatchers).set(cwd, {
+        activeWatchers.set(cwd, {
           fiber,
           ready,
           subscriberCount: (existing?.subscriberCount ?? 0) + 1,
         });
-        return [ready, nextWatchers] as const;
-      });
-    });
+        return ready;
+      }),
+    );
     yield* Deferred.await(ready);
   });
 
-  const releaseHeadWatcher = Effect.fn("VcsStatusBroadcaster.releaseHeadWatcher")(function* (
-    cwd: string,
-  ) {
-    const watcherToInterrupt = yield* SynchronizedRef.modify(headWatchersRef, (activeWatchers) => {
-      const existing = activeWatchers.get(cwd);
-      if (!existing) return [null, activeWatchers] as const;
-      const nextWatchers = new Map(activeWatchers);
-      if (existing.subscriberCount > 1) {
-        nextWatchers.set(cwd, { ...existing, subscriberCount: existing.subscriberCount - 1 });
-        return [null, nextWatchers] as const;
-      }
-      nextWatchers.delete(cwd);
-      return [existing.fiber, nextWatchers] as const;
-    });
-    if (watcherToInterrupt) {
-      yield* Fiber.interrupt(watcherToInterrupt).pipe(Effect.ignore);
-    }
-  });
+  const releaseHeadWatcher = Effect.fn("VcsStatusBroadcaster.releaseHeadWatcher")((cwd: string) =>
+    locks.withLock(
+      cwd,
+      Effect.gen(function* () {
+        const existing = activeWatchers.get(cwd);
+        if (!existing) return;
+        if (existing.subscriberCount > 1) {
+          activeWatchers.set(cwd, { ...existing, subscriberCount: existing.subscriberCount - 1 });
+          return;
+        }
+        yield* Fiber.interrupt(existing.fiber);
+        activeWatchers.delete(cwd);
+      }),
+    ),
+  );
 
   return (cwd: string) =>
     Effect.acquireRelease(retainHeadWatcher(cwd), () => releaseHeadWatcher(cwd));

@@ -1,4 +1,5 @@
 import { assert, it, describe } from "@effect/vitest";
+import type { VcsBranchStatus } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -379,7 +380,7 @@ it.effect("does not replay older queued branches after a new subscriber snapshot
     const b = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
     const entered = yield* Deferred.make<void>();
     const resume = yield* Deferred.make<void>();
-    const values = yield* Queue.unbounded<{ readonly refName: string | null }>();
+    const values = yield* Queue.unbounded<VcsBranchStatus>();
     let reads = 0;
     state.branchRead = () =>
       ++reads === 1

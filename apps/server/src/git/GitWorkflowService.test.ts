@@ -73,8 +73,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
       }
       const primaryHead = path.join(cwd, ".git", "HEAD");
       const linkedHead = path.join(cwd, ".git", "worktrees", "linked", "HEAD");
-      assert.strictEqual(yield* workflow.headPath(cwd), primaryHead);
-      assert.strictEqual(yield* workflow.headPath(linked), linkedHead);
+      assert.strictEqual(path.normalize((yield* workflow.headPath(cwd)) ?? ""), primaryHead);
+      assert.strictEqual(path.normalize((yield* workflow.headPath(linked)) ?? ""), linkedHead);
       assert.strictEqual((yield* fs.readFileString(linkedHead)).trim(), "ref: refs/heads/topic");
     }).pipe(Effect.scoped, Effect.provide(workflowLayer)),
   );
