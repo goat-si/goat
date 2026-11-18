@@ -152,6 +152,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/web/src/components`
 - 정책: upstream 우선, GOAT 동작만 다시 얹는다.
 
+### `message-resend-bound` 소켓을 잃은 메시지의 재전송 끝
+
+- 커밋: #3700 (사이클 261114 next3, K7 수정 라운드)
+- 경로: `packages/client-runtime/src/operations/dispatch.ts`
+- 정책: upstream 962eeefa03은 소켓을 잃은 메시지를 같은 commandId로 다시 보내되, 새 세션이 오거나 연결이 끝날 때까지 기한 없이 기다린다. GOAT는 두 가지를 더한다. 세션이 그대로이고 연결이 살아 있는 채로 5초가 지나면 같은 세션으로 다시 보낸다. 클라이언트가 읽지 못한 프레임은 대기 중 요청만 실패시키고 소켓은 열어 두므로, 그대로 두면 끝나지 않는다. 그리고 기다림 전체에 10분 상한을 둔다. 넘으면 보내기를 포기하고, 메시지가 가지 않았을 수 있다는 오류와 함께 초안을 되돌린다. 다시 보내는 횟수는 upstream과 같이 두 번까지다. upstream이 이 루프를 바꾸면 받고 두 갈래를 다시 얹는다.
+
 ### `mcp-auth-middleware` /mcp 인증 middleware는 GOAT 파일에
 
 - 커밋: #3519 (사이클 261114 다음 PR, lane N3)

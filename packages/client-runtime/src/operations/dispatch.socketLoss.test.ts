@@ -233,6 +233,133 @@ describe("message dispatch after socket loss", () => {
     }).pipe(Effect.provide(layerTestRandom)),
   );
 
+  it.effect(
+    "resends a lost message on the same session when it is still connected after the grace",
+    () =>
+      Effect.gen(function* () {
+        const commands: OrchestrationV2Command[] = [];
+        const landed = new Set<string>();
+        const supervisor = yield* makeSupervisor(commands);
+        const healthySession = Option.getOrThrow(yield* SubscriptionRef.get(supervisor.session));
+        const firstAttemptLost = yield* Deferred.make<void>();
+        // A frame the client cannot parse fails the pending request; the socket stays open.
+        const lossyClient = {
+          ...healthySession.client,
+          [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
+            Effect.gen(function* () {
+              commands.push(command);
+              landed.add(command.commandId);
+              if (commands.length > 1) return { sequence: commands.length };
+              yield* Deferred.succeed(firstAttemptLost, undefined);
+              return yield* socketClosed();
+            }),
+        } as unknown as WsRpcProtocolClient;
+        yield* SubscriptionRef.set(
+          supervisor.session,
+          Option.some({ ...healthySession, client: lossyClient }),
+        );
+
+        const sendFiber = yield* startThreadTurn(message("reply-lost")).pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.forkChild,
+        );
+        yield* Deferred.await(firstAttemptLost);
+        yield* TestClock.adjust("5 seconds");
+
+        expect(commands.map((command) => command.commandId)).toEqual([
+          "command-reply-lost",
+          "command-reply-lost",
+        ]);
+        expect(landed.size).toBe(1);
+        expect(Exit.isSuccess(yield* Fiber.await(sendFiber))).toBe(true);
+      }).pipe(Effect.provide(layerTestRandom)),
+  );
+
+  it.effect("does not resend on a session the supervisor cleared inside the grace", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor(commands);
+      const healthySession = Option.getOrThrow(yield* SubscriptionRef.get(supervisor.session));
+      const firstAttemptLost = yield* Deferred.make<void>();
+      const dyingClient = {
+        ...healthySession.client,
+        [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
+          Effect.gen(function* () {
+            commands.push(command);
+            yield* SubscriptionRef.set(supervisor.session, Option.none());
+            yield* Deferred.succeed(firstAttemptLost, undefined);
+            return yield* socketClosed();
+          }),
+      } as unknown as WsRpcProtocolClient;
+      yield* SubscriptionRef.set(
+        supervisor.session,
+        Option.some({ ...healthySession, client: dyingClient }),
+      );
+
+      const sendFiber = yield* startThreadTurn(message("session-cleared")).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(firstAttemptLost);
+      yield* TestClock.adjust("1 minute");
+      expect(commands).toHaveLength(1);
+      expect(sendFiber.pollUnsafe()).toBeUndefined();
+
+      const replacement = { ...healthySession };
+      yield* SubscriptionRef.set(supervisor.session, Option.some(replacement));
+      expect(Exit.isSuccess(yield* Fiber.await(sendFiber))).toBe(true);
+      expect(commands.map((command) => command.commandId)).toEqual([
+        "command-session-cleared",
+        "command-session-cleared",
+      ]);
+    }).pipe(Effect.provide(layerTestRandom)),
+  );
+
+  it.effect(
+    "gives up after ten minutes without a session and says the message may not have been sent",
+    () =>
+      Effect.gen(function* () {
+        const commands: OrchestrationV2Command[] = [];
+        const supervisor = yield* makeSupervisor(commands);
+        const healthySession = Option.getOrThrow(yield* SubscriptionRef.get(supervisor.session));
+        const firstAttemptLost = yield* Deferred.make<void>();
+        const dyingClient = {
+          ...healthySession.client,
+          [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
+            Effect.gen(function* () {
+              commands.push(command);
+              yield* SubscriptionRef.set(supervisor.session, Option.none());
+              yield* SubscriptionRef.set(supervisor.state, {
+                ...CONNECTED_STATE,
+                phase: "backoff" as const,
+              });
+              yield* Deferred.succeed(firstAttemptLost, undefined);
+              return yield* socketClosed();
+            }),
+        } as unknown as WsRpcProtocolClient;
+        yield* SubscriptionRef.set(
+          supervisor.session,
+          Option.some({ ...healthySession, client: dyingClient }),
+        );
+
+        const sendFiber = yield* startThreadTurn(message("asleep")).pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.flip,
+          Effect.forkChild,
+        );
+        yield* Deferred.await(firstAttemptLost);
+        yield* TestClock.adjust("9 minutes");
+        expect(sendFiber.pollUnsafe()).toBeUndefined();
+        yield* TestClock.adjust("1 minute");
+
+        expect(sendFiber.pollUnsafe()).toBeDefined();
+        const error = yield* Fiber.join(sendFiber);
+        expect(error._tag).toBe("EnvironmentRpcUnavailableError");
+        expect(error.message).toContain("may not have been sent");
+        expect(commands).toHaveLength(1);
+      }).pipe(Effect.provide(layerTestRandom)),
+  );
+
   it.effect("gives up on a lost message when the connection is blocked", () =>
     Effect.gen(function* () {
       const commands: OrchestrationV2Command[] = [];
