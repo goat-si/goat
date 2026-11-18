@@ -28,11 +28,26 @@ interface ActiveHeadWatcher {
 export const makeHeadWatchers = Effect.fn("VcsStatusBroadcaster.makeHeadWatchers")(function* (
   broadcasterScope: Scope.Scope,
   headPathFor: (cwd: string) => Effect.Effect<string | null>,
-  refreshCheckedOutRef: (cwd: string) => Effect.Effect<void, GitManagerServiceError>,
+  publishCheckedOutRef: (cwd: string) => Effect.Effect<void, GitManagerServiceError>,
+  reconcileCheckedOutRef: (cwd: string) => Effect.Effect<void, GitManagerServiceError>,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const headWatchersRef = yield* SynchronizedRef.make(new Map<string, ActiveHeadWatcher>());
+  const retryCheckoutRefresh = (
+    cwd: string,
+    refresh: Effect.Effect<void, GitManagerServiceError>,
+  ) =>
+    refresh.pipe(
+      Effect.retry(CHECKOUT_REFRESH_RETRY),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("VCS checked-out ref refresh failed", {
+          cwdLength: cwd.length,
+          ...remoteRefreshFailureDiagnostics(cause),
+        }),
+      ),
+    );
+
   // Runs for the subscription lifetime, so tracing would leave a span open indefinitely.
   const watchHead = Effect.fnUntraced(function* (cwd: string, ready: Deferred.Deferred<void>) {
     const headPath = yield* headPathFor(cwd);
@@ -54,17 +69,9 @@ export const makeHeadWatchers = Effect.fn("VcsStatusBroadcaster.makeHeadWatchers
         Stream.filter(({ event, removed }) => removed || path.basename(event.path) === "HEAD"),
         // A rebase moves HEAD many times; refresh once for whatever arrived during a refresh.
         Stream.buffer({ capacity: 1, strategy: "sliding" }),
-        Stream.runForEach(() =>
-          refreshCheckedOutRef(cwd).pipe(
-            Effect.retry(CHECKOUT_REFRESH_RETRY),
-            Effect.catchCause((cause) =>
-              Effect.logWarning("VCS checked-out ref refresh failed", {
-                cwdLength: cwd.length,
-                ...remoteRefreshFailureDiagnostics(cause),
-              }),
-            ),
-          ),
-        ),
+        Stream.mapEffect(() => retryCheckoutRefresh(cwd, publishCheckedOutRef(cwd))),
+        Stream.buffer({ capacity: 1, strategy: "sliding" }),
+        Stream.runForEach(() => retryCheckoutRefresh(cwd, reconcileCheckedOutRef(cwd))),
       );
   });
 
