@@ -137,7 +137,7 @@ export const make = Effect.fn("PenMemberSessionFence.make")(function* (
      * first: a member session there is no room for is refused before it exists, and a failed
      * write gives its place back.
      */
-    issuing: <A, E, R>(
+    issuing: Effect.fn("PenMemberSessionFence.issuing")(function* <A, E, R>(
       issued: {
         readonly sessionId: AuthSessionId;
         readonly subject: string;
@@ -145,16 +145,15 @@ export const make = Effect.fn("PenMemberSessionFence.make")(function* (
       },
       input: { readonly penMemberNode?: string } | undefined,
       write: Effect.Effect<A, E, R>,
-    ): Effect.Effect<A, E | SessionCredentialIssueError, R> =>
-      Effect.gen(function* () {
-        const tracked = yield* observe({ ...issued, penMemberNode: input?.penMemberNode ?? null });
-        if (tracked === false)
-          return yield* new SessionCredentialIssueError({
-            sessionId: issued.sessionId,
-            cause: "Too many Pen member sessions",
-          });
-        return yield* write.pipe(Effect.tapError(() => forget(issued.sessionId)));
-      }),
+    ): Effect.fn.Return<A, E | SessionCredentialIssueError, R> {
+      const tracked = yield* observe({ ...issued, penMemberNode: input?.penMemberNode ?? null });
+      if (tracked === false)
+        return yield* new SessionCredentialIssueError({
+          sessionId: issued.sessionId,
+          cause: "Too many Pen member sessions",
+        });
+      return yield* write.pipe(Effect.tapError(() => forget(issued.sessionId)));
+    }),
     /** The subject a session is issued under, refusing a malformed or untrackable member one. */
     issueSubject: Effect.fn("PenMemberSessionFence.issueSubject")(function* (
       input: { readonly subject?: string; readonly penMemberNode?: string } | undefined,

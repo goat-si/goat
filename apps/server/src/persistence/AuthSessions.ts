@@ -295,13 +295,15 @@ function toAuthSessionRecord(row: typeof AuthSessionDbRow.Type): AuthSessionReco
   };
 }
 
+const isPersistenceSqlError = Schema.is(PersistenceSqlError);
+
 function toPersistenceSqlOrDecodeError(
   sqlOperation: string,
   decodeOperation: string,
   correlation?: PersistenceErrorCorrelation,
 ) {
   return (cause: unknown): AuthSessionRepositoryError =>
-    Schema.is(PersistenceSqlError)(cause)
+    isPersistenceSqlError(cause)
       ? cause
       : Schema.isSchemaError(cause)
         ? PersistenceDecodeError.fromSchemaError(decodeOperation, cause, correlation)

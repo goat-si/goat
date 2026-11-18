@@ -24,25 +24,24 @@ export const guardPenManaged = (
   manager: SshEnvironmentManagerShape,
   routes: PenManagedRoutesShape,
 ): SshEnvironmentManagerShape => {
-  const whenManaged = <A, E, R, A2, E2, R2>(
+  const whenManaged = Effect.fn("guardPenManaged.whenManaged")(function* <A, E, R, A2, E2, R2>(
     alias: string,
     managed: Effect.Effect<A, E, R>,
     plain: Effect.Effect<A2, E2, R2>,
-  ): Effect.Effect<A | A2, E | E2 | SshInvalidTargetError, R | R2> =>
-    Effect.gen(function* () {
-      const expected = yield* ExpectedPenRoute;
-      if (expected === undefined) return yield* routes.isManaged(alias) ? managed : plain;
-      const held = routes.isManaged(alias) ? routes.binding(alias) : undefined;
-      if (
-        held?.meshId !== expected.meshId ||
-        held.nodeId !== expected.nodeId ||
-        held.noisePub !== expected.noisePub
-      )
-        return yield* new SshInvalidTargetError({
-          message: `${alias} is no longer the Pen machine it was listed as.`,
-        });
-      return yield* managed;
-    });
+  ): Effect.fn.Return<A | A2, E | E2 | SshInvalidTargetError, R | R2> {
+    const expected = yield* ExpectedPenRoute;
+    if (expected === undefined) return yield* routes.isManaged(alias) ? managed : plain;
+    const held = routes.isManaged(alias) ? routes.binding(alias) : undefined;
+    if (
+      held?.meshId !== expected.meshId ||
+      held.nodeId !== expected.nodeId ||
+      held.noisePub !== expected.noisePub
+    )
+      return yield* new SshInvalidTargetError({
+        message: `${alias} is no longer the Pen machine it was listed as.`,
+      });
+    return yield* managed;
+  });
   const admitted = <A, E, R>(alias: string, use: Effect.Effect<A, E, R>) =>
     whenManaged(alias, routes.admit(alias).pipe(Effect.andThen(use)), use);
   const {
