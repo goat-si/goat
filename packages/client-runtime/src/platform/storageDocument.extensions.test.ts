@@ -122,6 +122,17 @@ it.effect(
             }
           }
         }
+        // A broken Pen record in place of a shared record: that record is gone, the rest stay.
+        for (const [field, lost] of [
+          ["targets", lostTargets],
+          ["profiles", lostProfiles],
+        ] as const) {
+          const shared: Array<{ connectionId: string }> = stored[field];
+          if (shared.length === 0 || random() > 0.2) continue;
+          const at = Math.floor(random() * shared.length);
+          lost.add(shared[at]!.connectionId);
+          shared[at] = { _tag: "PenConnectionTarget", connectionId: 7 } as never;
+        }
         const raw = JSON.stringify(stored);
         const decoded = yield* decodeConnectionCatalogStorage(raw);
         // A Pen route is one target and one profile: losing either loses both.

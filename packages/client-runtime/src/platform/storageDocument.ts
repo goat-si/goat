@@ -424,44 +424,65 @@ const isPenRecord = (item: unknown) =>
   item._tag.startsWith("PenConnection");
 
 // This build stores Pen records only in their own fields. One in the shared lists, from a broken
-// or newer writer, is dropped there: the strict lists would otherwise fail the whole catalog.
-function withoutSharedPenRecords(raw: string): string {
+// or newer writer, is dropped there: the strict lists would otherwise fail the whole catalog. Where
+// it stood is kept, so the hub and Pen records placed after it keep their slots.
+function withoutSharedPenRecords(raw: string): {
+  readonly raw: string;
+  readonly dropped: {
+    readonly targets: ReadonlyArray<number>;
+    readonly profiles: ReadonlyArray<number>;
+  };
+} {
+  const none = { raw, dropped: { targets: [], profiles: [] } };
   let value: unknown;
   try {
     value = JSON.parse(raw);
   } catch {
-    return raw;
+    return none;
   }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return raw;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return none;
   const lists = value as { targets?: unknown; profiles?: unknown };
+  const positions = (field: unknown) =>
+    Array.isArray(field) ? field.flatMap((item, index) => (isPenRecord(item) ? [index] : [])) : [];
   const strip = (field: unknown) =>
     Array.isArray(field) ? field.filter((item) => !isPenRecord(item)) : field;
-  return JSON.stringify({
-    ...lists,
-    targets: strip(lists.targets),
-    profiles: strip(lists.profiles),
-  });
+  return {
+    raw: JSON.stringify({
+      ...lists,
+      targets: strip(lists.targets),
+      profiles: strip(lists.profiles),
+    }),
+    dropped: { targets: positions(lists.targets), profiles: positions(lists.profiles) },
+  };
 }
+
+/** The shared list with an empty slot back where each dropped record stood. */
+const withSlots = <A>(values: ReadonlyArray<A>, dropped: ReadonlyArray<number>) => {
+  const result: Array<A | undefined> = [...values];
+  for (const index of dropped) result.splice(index, 0, undefined);
+  return result;
+};
 
 const decodeStorageDocumentOption = Schema.decodeUnknownOption(ConnectionCatalogStorageJson);
 /** Whether stored text is a catalog this build reads, judged as decodeConnectionCatalogStorage does. */
 export const isConnectionCatalogStorage = (raw: string) =>
-  Option.isSome(decodeStorageDocumentOption(withoutSharedPenRecords(raw)));
+  Option.isSome(decodeStorageDocumentOption(withoutSharedPenRecords(raw).raw));
 
-export const decodeConnectionCatalogStorage = (raw: string) =>
-  decodeStorageDocument(withoutSharedPenRecords(raw)).pipe(
+export const decodeConnectionCatalogStorage = (raw: string) => {
+  const shared = withoutSharedPenRecords(raw);
+  return decodeStorageDocument(shared.raw).pipe(
     Effect.map((stored) => {
       const { hubProxyTargets, hubProxyProfiles, penTargets, penProfiles, ...document } = stored;
       // Hub records are placed among what an older client reads, then Pen records among all.
       const hubTargets = extensionRecords(decodeHubTarget, hubProxyTargets);
       const hubProfiles = extensionRecords(decodeHubProfile, hubProxyProfiles);
       const baseTargets = mergeExtensions(
-        document.targets,
+        withSlots(document.targets, shared.dropped.targets),
         hubTargets,
         extensionSlots(hubProxyTargets) - hubTargets.length,
       );
       const baseProfiles = mergeExtensions(
-        document.profiles,
+        withSlots(document.profiles, shared.dropped.profiles),
         hubProfiles,
         extensionSlots(hubProxyProfiles) - hubProfiles.length,
       );
@@ -490,6 +511,7 @@ export const decodeConnectionCatalogStorage = (raw: string) =>
       } satisfies ConnectionCatalogDocument);
     }),
   );
+};
 
 export const encodeConnectionCatalogStorage = (document: ConnectionCatalogDocument) => {
   const withoutPen = {

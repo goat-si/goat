@@ -891,4 +891,33 @@ describe("Pen storage compatibility", () => {
         expect(reloaded).toEqual(decoded);
       }),
   );
+  it.effect(
+    "a Pen record dropped from the shared list keeps its slot for the records placed after it",
+    () =>
+      Effect.gen(function* () {
+        const broken = {
+          _tag: "PenConnectionTarget",
+          environmentId: "e",
+          label: "x",
+          connectionId: 7,
+        };
+        const stored = {
+          ...legacy,
+          targets: [broken, BEARER_TARGET],
+          hubProxyTargets: [{ index: 2, value: hubTarget }],
+          penTargets: [{ index: 3, value: penTarget }],
+          penProfiles: [{ index: 1, value: penProfile }],
+        };
+        const decoded = yield* decodeConnectionCatalogStorage(JSON.stringify(stored));
+        const reloaded = yield* decodeConnectionCatalogStorage(
+          yield* encodeConnectionCatalogStorage(decoded),
+        );
+        for (const document of [decoded, reloaded])
+          expect(document.targets.map((value) => value._tag)).toEqual([
+            "BearerConnectionTarget",
+            "HubProxyConnectionTarget",
+            "PenConnectionTarget",
+          ]);
+      }),
+  );
 });
