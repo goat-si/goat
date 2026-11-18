@@ -106,6 +106,7 @@ describe("seeded draft model on a started thread", () => {
       models: ["gpt-5.4", "gpt-5.3-codex"].map((slug) => ({
         slug,
         name: slug,
+        ...(slug === "gpt-5.4" ? { aliases: ["catalog-gpt"] } : {}),
         isCustom: false,
         capabilities: {},
       })),
@@ -116,14 +117,14 @@ describe("seeded draft model on a started thread", () => {
   const threadSelection = modelSelection("gpt-5.3-codex", {
     reasoningEffort: "low",
   });
-  const effective = (threadStarted: boolean) => {
+  const effective = (threadStarted: boolean, baseSelection = threadSelection) => {
     const state = deriveEffectiveComposerModelState({
       draft: useComposerDraftStore.getState().getComposerDraft(threadRef),
       threadStarted,
       providers,
       selectedProvider: CODEX_DRIVER,
       selectedInstanceId: CODEX_INSTANCE,
-      threadModelSelection: threadSelection,
+      threadModelSelection: baseSelection,
       projectModelSelection: null,
       settings: DEFAULT_UNIFIED_SETTINGS,
     });
@@ -152,6 +153,28 @@ describe("seeded draft model on a started thread", () => {
     expect(effective(true)).toEqual({
       model: "gpt-5.4",
       options: toSelections({ reasoningEffort: "high" }),
+    });
+  });
+
+  it.each([false, true])(
+    "an explicit optionless pick overrides another model's traits when started=%s",
+    (threadStarted) => {
+      useComposerDraftStore.getState().setModelSelection(threadRef, modelSelection("gpt-5.4"), {
+        explicit: true,
+        replaceOptions: true,
+      });
+      expect(effective(threadStarted)).toEqual({ model: "gpt-5.4", options: [] });
+    },
+  );
+
+  it.each(["5.4", "catalog-gpt"])("keeps traits on the same model through alias %s", (alias) => {
+    useComposerDraftStore.getState().setModelSelection(threadRef, modelSelection("gpt-5.4"), {
+      explicit: true,
+      replaceOptions: true,
+    });
+    expect(effective(true, modelSelection(alias, { reasoningEffort: "low" }))).toEqual({
+      model: "gpt-5.4",
+      options: toSelections({ reasoningEffort: "low" }),
     });
   });
 
