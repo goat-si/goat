@@ -58,7 +58,16 @@ export const inspectPenExactAlias = Effect.fn("ssh/penAlias.inspectPenExactAlias
           () => error(`${cmd} printed more than GOAT reads`),
         ),
       );
-    const resolved = yield* run(input.sshCommand ?? "ssh", [
+    // The name every ssh connection on this platform starts, so the check reads the ssh that connects.
+    const sshCommand = input.sshCommand ?? (platform === "win32" ? "ssh.exe" : "ssh");
+    if (platform === "win32") {
+      // Pen's quoting holds where Win32-OpenSSH starts ProxyCommand with CreateProcess. Another ssh,
+      // such as Git for Windows' POSIX build, hands the command to a shell that reads it otherwise.
+      const version = yield* run(sshCommand, ["-V"]);
+      if (!/^OpenSSH_for_Windows_/mu.test(`${version.stderr}\n${version.stdout}`))
+        return { refused: "ssh-not-win32" as const };
+    }
+    const resolved = yield* run(sshCommand, [
       ...(input.sshConfigFile === undefined ? [] : ["-F", input.sshConfigFile]),
       "-G",
       alias,

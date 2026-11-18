@@ -180,6 +180,8 @@ on your `PATH` (the installer puts it there; restart GOAT after installing Pen) 
 enough to know `pen ls --watch --snapshot`. With an older Pen, GOAT says Pen is not running
 here; run the install line again to update it. A Windows account whose home folder path contains
 a space is not supported: GOAT lists the machines but does not open them.
+GOAT opens Pen machines only with Windows' own OpenSSH client. When another `ssh`, such as the
+one Git for Windows installs, comes first on your `PATH`, the machines are listed but not opened.
 
 Every GOAT server that is a Pen member, including the one inside the desktop app and a
 `goat serve` without a screen, lists the other members under

@@ -317,7 +317,8 @@ export type PenRouteRefusal =
   | "known-hosts-not-pen"
   | "global-known-hosts"
   | "no-recorded-key"
-  | "marker-lines";
+  | "marker-lines"
+  | "ssh-not-win32";
 export interface PenAliasFacts {
   readonly alias: string;
   readonly platform?: NodeJS.Platform;

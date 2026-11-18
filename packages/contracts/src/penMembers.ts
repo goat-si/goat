@@ -16,6 +16,7 @@ export const PenRouteRefusal = Schema.Literals([
   "no-recorded-key",
   "marker-lines",
   "key-mismatch",
+  "ssh-not-win32",
   "unreadable",
 ]);
 export type PenRouteRefusal = typeof PenRouteRefusal.Type;
