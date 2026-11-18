@@ -268,6 +268,7 @@ export const make = Effect.gen(function* () {
         provenanceProjection: true,
         derivedCap: 1000,
         originFilter: true,
+        originUpdates: true,
         saveSuggestions: true,
         mutationFailureDetails: true,
         generationHold: true,

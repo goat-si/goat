@@ -8,7 +8,7 @@ import * as M from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
-import type { SyncWorkOwner } from "./StoreModel.ts";
+import type { MemoryWork, SyncWorkOwner } from "./StoreModel.ts";
 import { stored } from "./StoreCodecs.ts";
 
 export const suggestionForgetGeneration = Effect.fn("MemorySuggestions.forgetGeneration")(
@@ -56,9 +56,10 @@ export const checkAcceptanceDispatch = Effect.fn("MemorySuggestions.checkDispatc
   sql: SqlClient.SqlClient,
   owner: SyncWorkOwner,
   input: M.MemoryHubPushInput,
-  promotion: boolean,
-  boundSuggestion: boolean,
+  metadata: MemoryWork["metadata"],
 ) {
+  const promotion = "summaryPrerequisite" in metadata;
+  const boundSuggestion = "acceptanceGeneration" in metadata;
   const operation = input.operations[0];
   if (
     operation?.kind !== "upsert" ||

@@ -1,3 +1,4 @@
+import { makeMemoryOriginReplication } from "./MemoryOriginReplication.ts";
 import { checkAcceptanceDispatch } from "./store/SaveSuggestions.ts";
 import { makePullMemoryTail } from "./MemoryPullTail.ts";
 import { MemoryFloor2Enabled, memoryFloorAdvertisement } from "./MemoryFloor.ts";
@@ -32,7 +33,7 @@ import * as Service from "./MemoryService.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Hold from "./MemoryGenerationHold.ts";
 import * as Quota from "./MemoryQuotaService.ts";
-import { legacyClosedLineageDigest, memoryOperationDigest } from "./MemoryDecider.ts";
+import { matchesMemoryOperationDigest, memoryOperationDigest } from "./MemoryDecider.ts";
 import { redacted, scanMemoryValue } from "./MemorySecretScanner.ts";
 import { failureCode, holdClass, transient } from "./MemorySyncErrors.ts";
 import * as OwnerSource from "./MemoryOwnerSourceReader.ts";
@@ -1627,6 +1628,13 @@ const make = Effect.gen(function* () {
           TimeoutError: () => Effect.void,
         }),
       );
+  const replicateOrigins = makeMemoryOriginReplication(sql, {
+    store,
+    local,
+    hub,
+    client,
+    ensureEpoch,
+  });
   const push = Effect.fnUntraced(function* (r: Route) {
     const now = yield* Clock.currentTimeMillis;
     const candidates = yield* store.readEligibleOutbox(r.space!, now, 100);
@@ -1661,13 +1669,7 @@ const make = Effect.gen(function* () {
       const result = yield* Effect.result(
         Effect.gen(function* () {
           yield* ensureEpoch(r.settings.memoryHubVersion);
-          const prepare = checkAcceptanceDispatch(
-            sql,
-            acquired,
-            input,
-            "summaryPrerequisite" in candidate.work.metadata,
-            "acceptanceGeneration" in candidate.work.metadata,
-          );
+          const prepare = checkAcceptanceDispatch(sql, acquired, input, candidate.work.metadata);
           const ack = yield* (
             r.connection
               ? client.push(r.connection, input, prepare)
@@ -1698,8 +1700,7 @@ const make = Effect.gen(function* () {
             ack.receipts.length !== 1 ||
             !receipt ||
             receipt.operationId !== acquired.operationId ||
-            (receipt.operationDigest !== acquired.operationDigest &&
-              receipt.operationDigest !== legacyClosedLineageDigest(operation))
+            !matchesMemoryOperationDigest(operation, receipt.operationDigest)
           )
             return yield* new M.MemoryHubError({ code: "invalid_output" });
           yield* service.settleHubAcknowledgement({
@@ -1877,7 +1878,7 @@ const make = Effect.gen(function* () {
             : Effect.fail(new Service.MemoryAccessError({ code: "fenced" })),
         });
       }
-      yield* push(r);
+      yield* Effect.andThen(push(r), replicateOrigins(r));
       yield* synchronizePull(r, budget);
       yield* sweep;
       yield* ensureEpoch(r.settings.memoryHubVersion);

@@ -1,3 +1,4 @@
+import { applyMemoryOriginUpdatesTx } from "./MemoryOriginReplication.ts";
 import { makeHubAcknowledgement } from "./MemoryHubAcknowledgement.ts";
 import { makeMemoryForget, type ForgetRequest } from "./MemoryForget.ts";
 import {
@@ -136,6 +137,10 @@ export class MemoryService extends Context.Service<
       input: { request: ValidatedSourceRequest; outcome: M.MemorySourceReadOutcome },
       permit: Permit,
     ) => Effect.Effect<M.MemorySourceReadOutcome, MemoryServiceError>;
+    readonly applyOriginUpdatesTx: (
+      input: Pick<M.MemoryHubPushInput, "memorySpaceId" | "environmentId">,
+      updates: readonly M.MemoryOriginUpdate[],
+    ) => Store.InTx<void, Store.MemoryStorageError>;
     readonly admitHubOperation: (input: {
       authority: Store.HubAuthority;
       operation: M.MemoryOperation;
@@ -2435,6 +2440,7 @@ const make = Effect.fnUntraced(function* (
     readSource,
     prepareSourceRead,
     validateSourceOutcome,
+    applyOriginUpdatesTx: (input, updates) => applyMemoryOriginUpdatesTx(sql, input, updates),
     admitHubOperation,
     admitHubOperationTx,
     settleHubEntryTx,

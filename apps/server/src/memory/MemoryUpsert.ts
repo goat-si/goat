@@ -16,11 +16,7 @@ import {
   requireClosureCapacity,
   validateSummaryDependencies,
 } from "./MemoryDependencies.ts";
-import {
-  areAutomaticallyUsable,
-  readMemoryOrigin,
-  recordMemoryOrigin,
-} from "./MemoryRevisionMarks.ts";
+import { areAutomaticallyUsable, recordMemoryOrigin } from "./MemoryRevisionMarks.ts";
 import { matchesActivePersonWords } from "./MemoryPersonWords.ts";
 import { redactMemoryText } from "./MemorySecretScanner.ts";
 import type { MemoryAccessError, MemoryServiceError } from "./MemoryService.ts";
@@ -286,13 +282,10 @@ export const makeUpsert = (deps: {
         if ((marked || acceptance) && limit === M.MEMORY_DERIVED_REVISIONS_MAX_V1)
           return yield* requireUpgrade(space);
         const origin = current?.identity
-          ? limit === M.MEMORY_DERIVED_REVISIONS_MAX &&
-            current.identity.creatingEnvironmentId === environmentId &&
-            !current.identity.origin
-            ? yield* readMemoryOrigin(space, value.memoryId)
-            : undefined
+          ? undefined
           : (acceptance?.origin ?? (remember ? sourceThread : undefined));
         const wide = payload.derivedFromMemoryRevisions.length > M.MEMORY_DERIVED_REVISIONS_MAX_V1;
+        const authorityFirst = wide || marked || acceptance !== undefined;
         const forgetFence =
           marked || acceptance
             ? yield* store.readCursor(space, yield* readBoundMemoryHubId(space))
@@ -301,7 +294,7 @@ export const makeUpsert = (deps: {
           protocolVersion: 1,
           kind: "upsert",
           ...(forgetFence === undefined ? {} : { forgetFence }),
-          ...(wide || marked || acceptance ? { closedLineage: true as const } : {}),
+          ...(authorityFirst ? { closedLineage: true as const } : {}),
           memorySpaceId: value.memorySpaceId,
           memoryId: value.memoryId,
           operationId: value.operationId,
@@ -321,9 +314,7 @@ export const makeUpsert = (deps: {
               environmentId,
               upsertRequestDigest: requestDigest,
               ...(marked ? { unverified: true as const } : {}),
-              ...(origin && limit === M.MEMORY_DERIVED_REVISIONS_MAX
-                ? { originThreadId: origin.threadId }
-                : {}),
+              ...(origin && authorityFirst ? { originThreadId: origin.threadId } : {}),
             },
             createdAtUtc: M.MemoryUtcTimestamp.make(
               DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),

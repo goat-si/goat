@@ -46,23 +46,30 @@ export const recordMemoryOrigin = Effect.fn("MemoryService.recordMemoryOrigin")(
   );
 });
 
-export const readMemoryOrigin = Effect.fn("MemoryService.readMemoryOrigin")(function* (
-  space: M.MemorySpaceId,
-  memoryId: M.MemoryId,
-) {
-  const sql = yield* SqlClient.SqlClient;
-  const [row] = yield* stored(
-    "memory-origin-read",
-    sql<{ environment_id: string; thread_id: string }>`
-      SELECT environment_id,thread_id FROM memory_origins WHERE space=${space} AND memory_id=${memoryId}`,
-  );
-  return row
-    ? {
-        environmentId: M.EnvironmentId.make(row.environment_id),
-        threadId: M.ThreadId.make(row.thread_id),
-      }
-    : undefined;
-});
+export const recordCanonicalMemoryOrigin = Effect.fn("MemoryStore.recordCanonicalOrigin")(
+  function* (
+    space: M.MemorySpaceId,
+    memoryId: M.MemoryId,
+    origin: M.ScopedThreadRef,
+    createOperationId?: M.MemoryOperationId,
+  ) {
+    const sql = yield* SqlClient.SqlClient;
+    const [changed] = yield* stored(
+      "memory-checkpoint-origin",
+      sql`UPDATE memory_identity_ledger
+      SET identity_json=json_set(identity_json,'$.origin',json_object(
+        'environmentId',${origin.environmentId},'threadId',${origin.threadId}))
+      WHERE space=${space} AND memory_id=${memoryId}
+      AND json_extract(identity_json,'$.creatingEnvironmentId')=${origin.environmentId}
+      AND (${createOperationId ?? null} IS NULL OR
+        json_extract(identity_json,'$.createOperationId')=${createOperationId ?? null})
+      AND json_type(identity_json,'$.origin') IS NULL
+      AND NOT EXISTS (SELECT 1 FROM memory_tombstones t WHERE t.space=${space} AND t.memory_id=${memoryId})
+      RETURNING memory_id`,
+    );
+    if (changed) yield* recordMemoryOrigin(space, memoryId, origin);
+  },
+);
 
 export const persistRevisionMarks = Effect.fn("MemoryStore.persistRevisionMarks")(function* (
   revision: M.MemoryRevision,
@@ -71,16 +78,6 @@ export const persistRevisionMarks = Effect.fn("MemoryStore.persistRevisionMarks"
   if (provenance.unverified) yield* markUnverified(memorySpaceId, revisionId);
   if (provenance.originThreadId) {
     const origin = { environmentId: provenance.environmentId, threadId: provenance.originThreadId };
-    yield* recordMemoryOrigin(memorySpaceId, memoryId, origin);
-    const sql = yield* SqlClient.SqlClient;
-    yield* stored(
-      "memory-checkpoint-origin",
-      sql`UPDATE memory_identity_ledger
-      SET identity_json=json_set(identity_json,'$.origin',json_object(
-        'environmentId',${origin.environmentId},'threadId',${origin.threadId}))
-      WHERE space=${memorySpaceId} AND memory_id=${memoryId}
-      AND json_extract(identity_json,'$.creatingEnvironmentId')=${origin.environmentId}
-      AND json_type(identity_json,'$.origin') IS NULL`,
-    );
+    yield* recordCanonicalMemoryOrigin(memorySpaceId, memoryId, origin);
   }
 });

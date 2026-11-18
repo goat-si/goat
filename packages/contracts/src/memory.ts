@@ -2613,17 +2613,30 @@ export const MemoryHubJoinResult = struct({
 );
 export type MemoryHubJoinResult = typeof MemoryHubJoinResult.Type;
 
+export const MemoryOriginUpdate = struct({
+  memoryId: MemoryId,
+  createOperationId: MemoryOperationId,
+  threadId: ThreadId,
+});
+export type MemoryOriginUpdate = typeof MemoryOriginUpdate.Type;
+export const MEMORY_ORIGIN_UPDATE_MAX = 100;
+
 export const MemoryHubPushInput = bounded(
   struct({
     ...hub,
     ...hubFeatures,
     environmentId: EnvironmentId,
     operations: array(MemoryOperation),
+    originUpdates: Schema.optionalKey(array(MemoryOriginUpdate, MEMORY_ORIGIN_UPDATE_MAX)),
   }).check(
     Schema.makeFilter((v) =>
-      v.operations.every(
-        (o) => o.memorySpaceId === v.memorySpaceId && o.originEnvironmentId === v.environmentId,
-      ),
+      v.originUpdates === undefined
+        ? v.operations.every(
+            (o) => o.memorySpaceId === v.memorySpaceId && o.originEnvironmentId === v.environmentId,
+          )
+        : v.operations.length === 0 &&
+          v.originUpdates.length > 0 &&
+          unique(v.originUpdates.map((o) => o.memoryId)),
     ),
   ),
   1048576,

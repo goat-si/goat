@@ -182,24 +182,26 @@ export const make = Effect.gen(function* () {
   const push: MemoryHubService["Service"]["push"] = Effect.fn("MemoryHubService.push")(
     function* (input, principal, beforeAdmission) {
       const request = yield* decode(M.MemoryHubPushInput, input);
-      yield* store.transact(authorize(principal, request.memorySpaceId, request.environmentId));
+      const authorized = authorize(principal, request.memorySpaceId, request.environmentId);
       if (!request.operations.length)
-        yield* store.transact(
-          Effect.andThen(
-            authorize(principal, request.memorySpaceId, request.environmentId),
-            negotiate(principal, request.features),
-          ),
+        return yield* store.transact(
+          Effect.gen(function* () {
+            yield* authorized;
+            const active = yield* negotiate(principal, request.features);
+            if (request.originUpdates) {
+              if (!active || !M.supportsMemoryFloor2(request.features))
+                return yield* new M.MemoryHubError({ code: "hub_upgrade_required" });
+              yield* service.applyOriginUpdatesTx(request, request.originUpdates);
+            }
+            return { receipts: [] };
+          }),
         );
+      yield* store.transact(authorized);
+      const admission = { ...authority(principal, request), beforeAdmission };
       const receipts = yield* Effect.forEach(request.operations, (operation) =>
         // This entry owns rollback and the separate null-sequence capacity-refusal read.
         service
-          .admitHubOperation({
-            authority: {
-              ...authority(principal, request),
-              ...(beforeAdmission ? { beforeAdmission } : {}),
-            },
-            operation,
-          })
+          .admitHubOperation({ authority: admission, operation })
           .pipe(Effect.tap(() => activity.notify)),
       );
       return { receipts: receipts.map((receipt) => projectPushReceipt(receipt, request.features)) };

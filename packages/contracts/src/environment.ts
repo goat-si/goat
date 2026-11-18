@@ -99,6 +99,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       provenanceProjection: Schema.optionalKey(Schema.Boolean),
       mutationFailureDetails: Schema.optionalKey(Schema.Boolean),
       saveSuggestions: Schema.optionalKey(Schema.Boolean),
+      originUpdates: Schema.optionalKey(Schema.Boolean),
       originFilter: Schema.optionalKey(Schema.Boolean),
       hub: Schema.optionalKey(Schema.Boolean),
       importProvider: Schema.optionalKey(Schema.Boolean),

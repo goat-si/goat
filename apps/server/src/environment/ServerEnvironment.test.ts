@@ -233,6 +233,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
         provenanceProjection: true,
         derivedCap: 1000,
         originFilter: true,
+        originUpdates: true,
         saveSuggestions: true,
         mutationFailureDetails: true,
         generationHold: true,

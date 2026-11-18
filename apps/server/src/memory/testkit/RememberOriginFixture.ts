@@ -123,6 +123,7 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
     );
     assert.isTrue(seeded.receipts.every(({ outcome }) => outcome === "accepted"));
     yield* sync.syncOnce;
+    for (const source of sources) yield* scanReplicaMemory(source.memoryId);
     offline = true;
     const zero = yield* remember("Synthetic offline save with no dependencies");
     yield* store.appendThreadLineage(

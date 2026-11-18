@@ -851,6 +851,23 @@ it.effect("negotiated conversation origins survive edits, compaction, and paged 
     const remember = (text: string) =>
       service.remember({ memorySpaceId: space, scope: "user", text }, Effect.void, origin);
     const narrow = yield* settle(yield* remember("Synthetic narrow origin"));
+    yield* hub.push(
+      {
+        protocolVersion: 1,
+        memorySpaceId: space,
+        environmentId: hubEnv,
+        features,
+        operations: [],
+        originUpdates: [
+          {
+            memoryId: narrow.memoryId,
+            createOperationId: narrow.operationId,
+            threadId: origin.threadId,
+          },
+        ],
+      },
+      principal(),
+    );
     const sources = Array.from({ length: 101 }, (_, n) => {
       const base = operation(22000 + n);
       const memoryId = M.MemoryId.make(id(32000 + n));
