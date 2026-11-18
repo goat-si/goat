@@ -10,12 +10,14 @@ import {
 import { memoryScopeLabel } from "@goat/client-runtime/memory-browsing";
 import {
   memoryBodyGap,
+  memoryRereadOfRevision,
   memorySaveNeedsReview,
   memorySaveStatus,
   memorySaveMessage,
   type MemoryExposure,
   type MemorySaveStatus,
 } from "@goat/client-runtime/state/memory";
+import * as Option from "effect/Option";
 import { useContext, useEffect, useEffectEvent, useRef, useState } from "react";
 import { randomUUID } from "../../lib/utils";
 import { memoryEnvironment } from "../../state/memory";
@@ -63,8 +65,6 @@ export function useMemoryEditSession({
   const reply = useAtomValue(
     memoryEnvironment.read.reply({ environmentId, input: { memorySpaceId, memoryId } }),
   );
-  const found = item || seen === null ? null : memoryBodyGap(seen, exposure, memoryId);
-  const gap = found === "unchanged" && reply === null ? null : found;
   const [start, setStart] = useState<MemoryEditStart | null>(null);
   const [edited, setEdited] = useState<"no" | "differs" | "kept">("no");
   // The shared draft decides whether a change keeps the edit; the editor closes when it is gone.
@@ -78,21 +78,45 @@ export function useMemoryEditSession({
   const [seeded, setSeeded] = useState(false);
   if (start && !seeded && draftText !== null) setSeeded(true);
   const draftLost = start !== null && seeded && draftText === null;
-  // The person's own save, or a read this view asked for, until the next body arrives.
-  const [own, setOwn] = useState<"save" | "pending" | null>(null);
+  const [own, setOwn] = useState<"save" | "save-refresh" | "pending" | "unavailable" | null>(null);
+  const refreshSettled = own === "pending" && reply !== null;
+  const refreshUnavailable =
+    (refreshSettled || own === "unavailable") && reply !== null && Option.isNone(reply);
+  const found = item || seen === null ? null : memoryBodyGap(seen, exposure, memoryId);
+  const gap =
+    found !== "unchanged"
+      ? found
+      : refreshUnavailable
+        ? "unavailable"
+        : reply === null
+          ? null
+          : found;
+  if (refreshSettled) setOwn(refreshUnavailable ? "unavailable" : null);
+  if (
+    (own === "unavailable" && item) ||
+    (own === "save-refresh" && reply !== null) ||
+    (!start && own === "save")
+  )
+    setOwn(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<MemorySaveStatus | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const needsReview = memorySaveNeedsReview(saveStatus);
-  if ((reply !== null && own === "pending") || (!start && own === "save")) setOwn(null);
   const changedRevision =
     start !== null && item?.status === "active" && item.revision.revisionId !== start.revisionId;
+  const refreshHeld =
+    refreshSettled &&
+    start !== null &&
+    item !== null &&
+    item.status !== "active" &&
+    (edited === "no" || memoryRereadOfRevision(item, start.revisionId) !== "rescanning");
   if (
     start &&
     (!canWrite ||
       (own !== "save" &&
         (draftLost ||
           changedRevision ||
+          refreshHeld ||
           gap === "forgotten" ||
           gap === "unavailable" ||
           (gap === "unchanged" && edited === "no"))))
@@ -127,7 +151,7 @@ export function useMemoryEditSession({
       refresh();
     },
     seenBody: seen !== null,
-    ownRequest: own,
+    ownRequest: own === "save-refresh" ? "pending" : own === "unavailable" ? null : own,
     begin(visible: ActiveMemoryItem) {
       if (start || needsReview || (reviewing && own === "pending")) return;
       setReviewing(false);
@@ -165,7 +189,7 @@ export function useMemoryEditSession({
       onSaveStart: () => setOwn("save"),
       onSaveSettled: (status: MemorySaveStatus) => {
         setSaveStatus(status);
-        setOwn(status === "accepted" || status === "pending" ? "pending" : null);
+        setOwn(status === "accepted" || status === "pending" ? "save-refresh" : null);
       },
     },
   };

@@ -167,7 +167,7 @@ export function memoryBodyGap(
  * ("same"), held only while this device re-scans that revision ("rescanning", how the hub's
  * confirmation of this device's own save lands), or anything else ("other").
  */
-function rereadOfRevision(
+export function memoryRereadOfRevision(
   value: MemoryItem,
   revisionId: MemoryRevisionId,
 ): "same" | "rescanning" | "other" {
@@ -579,7 +579,7 @@ export function createMemoryEnvironmentAtoms<R, E>(
           const reply = get(read.reply({ environmentId, input: { ...input, memoryId } }));
           if (reply === null) return draft.text;
           const seen = Option.isSome(reply)
-            ? rereadOfRevision(reply.value, draft.start.revisionId)
+            ? memoryRereadOfRevision(reply.value, draft.start.revisionId)
             : "other";
           if (seen === "same") {
             get.set(stored, { ...draft, exposure: current });
