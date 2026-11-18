@@ -97,7 +97,11 @@ import { goatOrchestrationSystemPrompt } from "@goat/provider-core/server/orches
 import { buildSessionRuntimeInstructions } from "./screenInstructions.ts";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import { dateTimeFromEpoch, toolCompletedAt, toolInput, toolStartedAt } from "./toolPartTimes.ts";
-import { resolveOpenCodeVariant, type OpenCodeVariantCache } from "./openCodeVariant.ts";
+import {
+  readOpenCodeCatalogModel,
+  resolveOpenCodeVariant,
+  type OpenCodeVariantCache,
+} from "./openCodeVariant.ts";
 import { readableProviderErrorMessage } from "./providerErrorMessage.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
@@ -126,6 +130,7 @@ import { goatRemoteMcpConfig } from "./goatMcpConfig.ts";
 import {
   accumulateOpenCodeStepUsage,
   makeOpenCodeTurnTokenUsageAccumulator,
+  openCodeContextUsage,
   type OpenCodeStepUsage,
 } from "./turnUsage.ts";
 
@@ -723,6 +728,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           turn: ActiveOpenCodeTurn,
           status: OrchestrationV2ProviderTurn["status"],
           completedAt: DateTime.Utc | null,
+          contextWindow?: number,
         ) => {
           const providerTurn: OrchestrationV2ProviderTurn = {
             ...turn.providerTurn,
@@ -735,6 +741,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             ...(completedAt === null
               ? {}
               : {
+                  ...openCodeContextUsage(turn.usage.lastStep, contextWindow, completedAt),
                   turnTokenUsage:
                     turn.usage.partIds.size === 0
                       ? {
@@ -1668,7 +1675,12 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               yield* resolveRuntimeRequest(pending.nativeRequestId, "cancelled");
             }
           }
-          yield* emitProviderTurn(state, turn, status, completedAt);
+          const parsedModel = OpenCodeRuntime.parseOpenCodeModelSlug(turn.modelSelection.model);
+          const catalogModel =
+            status === "completed" && turn.usage.lastStep !== null && parsedModel !== null
+              ? yield* readOpenCodeCatalogModel(client, parsedModel, undefined, variantCache)
+              : variantCache.get(turn.modelSelection.model.trim());
+          yield* emitProviderTurn(state, turn, status, completedAt, catalogModel?.contextWindow);
           const threadDisposition = terminal?.threadDisposition ?? "reusable";
           yield* updateProviderThread(state, {
             status: turn.isRoot ? "active" : threadDisposition === "broken" ? "error" : "idle",
