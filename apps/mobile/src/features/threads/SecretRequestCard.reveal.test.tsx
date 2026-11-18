@@ -7,6 +7,7 @@ import { expect, it, vi } from "vite-plus/test";
 const state = vi.hoisted(() => ({
   answer: vi.fn(),
   appState: [] as Array<(next: string) => void>,
+  blur: [] as Array<() => void>,
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: (atom: unknown) => atom }));
 vi.mock("react-native", () => ({
@@ -22,9 +23,10 @@ vi.mock("react-native", () => ({
     </button>
   ),
   AppState: {
-    addEventListener: (_event: string, listener: (next: string) => void) => {
-      state.appState.push(listener);
-      return { remove: () => state.appState.splice(state.appState.indexOf(listener), 1) };
+    addEventListener: (event: string, listener: (next: string) => void) => {
+      const list = event === "blur" ? state.blur : state.appState;
+      list.push(listener as never);
+      return { remove: () => list.splice(list.indexOf(listener as never), 1) };
     },
   },
 }));
@@ -82,6 +84,7 @@ const item = {
 async function renderRevealed() {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   state.appState.length = 0;
+  state.blur.length = 0;
   const container = document.createElement("div");
   const root = createRoot(container);
   await act(() =>
@@ -143,6 +146,17 @@ it("masks a revealed secret when the app leaves the foreground", async () => {
   const { root, field } = await renderRevealed();
   try {
     await act(() => state.appState.forEach((listener) => listener("inactive")));
+    expect(field().type).toBe("password");
+  } finally {
+    act(() => root.unmount());
+  }
+});
+
+it("masks a revealed secret when the window loses focus to the app switcher", async () => {
+  // Android keeps the app resumed while its recents view shows it, so only blur arrives.
+  const { root, field } = await renderRevealed();
+  try {
+    await act(() => state.blur.forEach((listener) => listener()));
     expect(field().type).toBe("password");
   } finally {
     act(() => root.unmount());
