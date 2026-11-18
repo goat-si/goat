@@ -248,6 +248,8 @@ function WorkspaceColumns(
   const workspaceTabs = useWorkspaceTabs();
   const tabActivity = use(NativeWorkspaceTabActivityContext);
   const isTabActive = tabActivity?.isActive;
+  const ownsInspector = tabActivity?.active ?? true;
+  const inspectorVisible = ownsInspector && inspector.visible;
   const selectedTab = workspaceTabs?.state.selectedTab;
   const settingsOpen = workspaceTabs?.settingsOpen ?? false;
   const openNewTask = startNewTask;
@@ -381,10 +383,14 @@ function WorkspaceColumns(
       }}
       displayModeButtonVisibility="never"
       presentsWithGesture
-      showInspector={inspector.visible}
-      onInspectorHide={() => {
-        if (inspector.visible) toggleAuxiliaryPane();
-      }}
+      showInspector={inspectorVisible}
+      onInspectorHide={
+        inspectorVisible
+          ? () => {
+              if (isTabActive?.() !== false) toggleAuxiliaryPane();
+            }
+          : undefined
+      }
       columnMetrics={{
         minimumPrimaryColumnWidth: layout.primarySidebarOverlaysContent ? primaryColumnWidth : 280,
         maximumPrimaryColumnWidth: layout.primarySidebarOverlaysContent
@@ -464,48 +470,50 @@ function WorkspaceColumns(
         <Split.HeaderConfig hidden />
         {/* Inspector panes host their own native stacks, which UIKit insets for the Duo's
             vertical bar wherever they sit, so each pane insets its own content instead. */}
-        <ColumnContent insetHorizontally={false}>
-          <View className="flex-1 bg-screen">
-            {inspector.render?.()}
-            {inspector.visible ? (
-              <GestureHandlerRootView
-                style={[StyleSheet.absoluteFill, { zIndex: 100 }]}
-                pointerEvents="box-none"
-                collapsable={false}
-              >
-                <SafeAreaView
-                  style={{ flex: 1 }}
-                  edges={["left", "right"]}
+        {ownsInspector ? (
+          <ColumnContent insetHorizontally={false}>
+            <View className="flex-1 bg-screen">
+              {inspector.render?.()}
+              {inspectorVisible ? (
+                <GestureHandlerRootView
+                  style={[StyleSheet.absoluteFill, { zIndex: 100 }]}
                   pointerEvents="box-none"
+                  collapsable={false}
                 >
-                  <View className="flex-1" pointerEvents="box-none">
-                    <View
-                      className="absolute inset-y-0 left-0 w-[22px] flex-row"
-                      pointerEvents="box-none"
-                    >
-                      <WorkspacePaneDivider
-                        accessibilityLabel="Resize inspector"
-                        currentWidth={inspectorWidth}
-                        resizeDirection={-1}
-                        onResizeStart={() => {
-                          resizeStartWidth.current = inspectorWidth;
-                        }}
-                        onResizeBy={(delta) => {
-                          const width = nativeInspectorColumnWidth({
-                            viewportWidth,
-                            horizontalSafeArea,
-                            fraction: (resizeStartWidth.current + delta) / viewportWidth,
-                          });
-                          inspector.setWidthFraction(width / viewportWidth);
-                        }}
-                      />
+                  <SafeAreaView
+                    style={{ flex: 1 }}
+                    edges={["left", "right"]}
+                    pointerEvents="box-none"
+                  >
+                    <View className="flex-1" pointerEvents="box-none">
+                      <View
+                        className="absolute inset-y-0 left-0 w-[22px] flex-row"
+                        pointerEvents="box-none"
+                      >
+                        <WorkspacePaneDivider
+                          accessibilityLabel="Resize inspector"
+                          currentWidth={inspectorWidth}
+                          resizeDirection={-1}
+                          onResizeStart={() => {
+                            resizeStartWidth.current = inspectorWidth;
+                          }}
+                          onResizeBy={(delta) => {
+                            const width = nativeInspectorColumnWidth({
+                              viewportWidth,
+                              horizontalSafeArea,
+                              fraction: (resizeStartWidth.current + delta) / viewportWidth,
+                            });
+                            inspector.setWidthFraction(width / viewportWidth);
+                          }}
+                        />
+                      </View>
                     </View>
-                  </View>
-                </SafeAreaView>
-              </GestureHandlerRootView>
-            ) : null}
-          </View>
-        </ColumnContent>
+                  </SafeAreaView>
+                </GestureHandlerRootView>
+              ) : null}
+            </View>
+          </ColumnContent>
+        ) : null}
       </Split.Inspector>
     </Split.Host>
   );
