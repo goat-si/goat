@@ -4654,6 +4654,39 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("rolls back an owned registration in a pre-existing empty destination", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const hook = path.join(cwd, ".git/hooks/post-checkout");
+        yield* writeTextFile(cwd, ".git/hooks/post-checkout", "#!/bin/sh\nexit 1\n");
+        yield* fs.chmod(hook, 0o755);
+        const destination = yield* makeTmpDir("git-worktrees-");
+        const help = yield* driver.execute({
+          cwd,
+          args: ["worktree", "add", "-h"],
+          operation: "test.git",
+          allowNonZeroExit: true,
+        });
+        if (!`${help.stdout}\n${help.stderr}`.includes("--reason")) return;
+
+        yield* Effect.flip(
+          driver.createWorktree({
+            cwd,
+            path: destination,
+            refName: initialBranch,
+            newRefName: "feature/owned-registration",
+          }),
+        );
+
+        assert.equal(yield* git(cwd, ["branch", "--list", "feature/owned-registration"]), "");
+        assert.notInclude(yield* git(cwd, ["worktree", "list", "--porcelain"]), destination);
+      }),
+    );
+
     it.effect("rolls back the branch and worktree when adding the worktree fails", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();

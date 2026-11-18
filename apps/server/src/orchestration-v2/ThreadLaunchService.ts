@@ -472,6 +472,7 @@ const make = Effect.gen(function* () {
                 onWorktreeClaimed: (path) =>
                   Effect.sync(() => {
                     createdWorktreePath = path;
+                    if (existingBranch === null) createdBranch = branch;
                   }),
                 onExistingBranch: (outcome) =>
                   Effect.sync(() => {
