@@ -4590,6 +4590,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const resolveWorktreeBaseRemote: GitVcsDriver.GitVcsDriver["Service"]["resolveWorktreeBaseRemote"] =
     Effect.fn("resolveWorktreeBaseRemote")(function* (input) {
+      const refName = input.refName.replace(/^refs\/heads\//, "");
       const remoteNames = (yield* listRemoteNames(input.cwd)).toSorted(
         (left, right) => right.length - left.length,
       );
@@ -4598,13 +4599,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const localBranch = yield* runGitStdout("GitVcsDriver.resolveWorktreeBaseRemote", input.cwd, [
         "for-each-ref",
         "--format=%(refname)\t%(upstream:remotename)\t%(upstream:remoteref)",
-        `refs/heads/${input.refName}`,
+        `refs/heads/${refName}`,
       ]).pipe(
         Effect.map((stdout) =>
           stdout
             .split("\n")
             .map((line) => line.split("\t"))
-            .find(([refName]) => refName === `refs/heads/${input.refName}`),
+            .find(([name]) => name === `refs/heads/${refName}`),
         ),
       );
       let target: { remoteName: string; branchName: string } | null;
@@ -4616,13 +4617,18 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             ? { remoteName, branchName: merge.slice("refs/heads/".length) }
             : null;
       } else {
-        target = parseRemoteRefWithRemoteNames(input.refName, remoteNames);
+        target = parseRemoteRefWithRemoteNames(refName, remoteNames);
       }
       const { remoteName, branchName } = target ?? {
         remoteName: "origin",
-        branchName: input.refName,
+        branchName: refName,
       };
-      return remoteNames.includes(remoteName) ? { remoteName, branchName } : null;
+      return remoteNames.includes(remoteName) &&
+        branchName !== "HEAD" &&
+        !branchName.startsWith("-") &&
+        !/[\x00-\x20\x7f~^:?*[\]\\]|\.\.|@\{/.test(branchName)
+        ? { remoteName, branchName }
+        : null;
     });
 
   /**

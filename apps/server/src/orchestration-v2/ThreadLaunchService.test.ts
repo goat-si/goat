@@ -642,6 +642,30 @@ it.effect("names the requested missing base when provisioning fails", () => {
   }).pipe(Effect.provide(harness.layer));
 });
 
+it.effect.each([
+  { configured: true, explicit: undefined, expected: "remote-main-sha" },
+  { configured: true, explicit: false, expected: "main" },
+  { configured: false, explicit: undefined, expected: "main" },
+])(
+  "honors the new-worktree setting $configured for startFromOrigin $explicit",
+  ({ configured, explicit, expected }) => {
+    const harness = makeHarness({ serverSettings: { newWorktreesStartFromOrigin: configured } });
+    return Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "command:launch:origin-setting",
+          thread: "thread:launch:origin-setting",
+          message: "Start work",
+          workspace: { type: "worktree", baseRef: "main", startFromOrigin: explicit },
+        }),
+      );
+      yield* preparationSettled(launched.threadId);
+      assert.equal(harness.createWorktree.mock.calls[0]?.[0].refName, expected);
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
 it.effect("shows the fetch diagnosis when preparing a worktree from origin fails", () => {
   const detail =
     "Git could not authenticate with the remote. Check Git credentials or SSH access on the server, then retry.";

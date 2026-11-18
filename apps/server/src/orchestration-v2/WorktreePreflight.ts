@@ -88,11 +88,13 @@ export function makeWorktreePreflight({
   git,
   receipts,
   managedFolders,
+  startWorktreesFromOrigin,
 }: {
   projects: ProjectService.ProjectService["Service"];
   git: GitWorkflow.GitWorkflowService["Service"];
   receipts: CommandReceiptStore.CommandReceiptStoreV2["Service"];
   managedFolders: ManagedProjectFolders.ManagedProjectFolders["Service"];
+  startWorktreesFromOrigin: (projectId: ProjectId) => Effect.Effect<boolean, unknown>;
 }) {
   const checkWorktreeBase: ThreadLaunchService["Service"]["checkWorktreeBase"] = Effect.fn(
     "ThreadLaunchService.checkWorktreeBase",
@@ -186,7 +188,7 @@ export function makeWorktreePreflight({
       if (yield* git.hasCommit({ cwd, refName: baseRef === "-" ? "@{-1}" : baseRef }))
         return undefined;
       if (
-        strategy.startFromOrigin === true &&
+        (strategy.startFromOrigin ?? (yield* startWorktreesFromOrigin(input.projectId))) &&
         (yield* git.resolveWorktreeBaseRemote({ cwd, refName: baseRef })) !== null
       )
         return undefined;
