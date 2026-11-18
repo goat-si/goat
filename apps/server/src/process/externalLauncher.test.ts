@@ -18,6 +18,7 @@ import { EDITORS } from "@goat/contracts";
 import { resolveEditorCommand } from "@goat/shared/editor";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as ExternalLauncher from "./externalLauncher.ts";
+import { WindowsVerbatimSpawn } from "./windowsVerbatimSpawn.ts";
 import {
   layerTest,
   makeMockDetachedHandle,
@@ -239,6 +240,68 @@ it.effect.skipIf(windowsHost)(
         "$ProgressPreference = 'SilentlyContinue'; $folderVerb = (Get-ItemProperty -LiteralPath 'Registry::HKEY_CLASSES_ROOT\\Directory\\shell' -ErrorAction SilentlyContinue).'(default)'; if ($folderVerb -and $folderVerb -ne 'none') { Invoke-Item -LiteralPath '\\\\wsl.localhost\\Ubuntu-24.04\\home\\t3\\workspace [draft]\\author''s $media' } else { Start-Process 'explorer.exe' -ArgumentList ('/select,\"' + '\\\\wsl.localhost\\Ubuntu-24.04\\home\\t3\\workspace [draft]\\author''s $media\\clip|draft.mp4' + '\"') }",
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each([
+  ["stock Windows", "", true],
+  ["a Folder replacement", "Folder", false],
+  ["a failed registry lookup", "error", false],
+] as const)("reveals a Windows file with %s", ([, replacement, direct]) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const binDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-editors-" });
+    yield* fs.writeFileString(path.join(binDir, "explorer.EXE"), "");
+    const verbatim: string[][] = [];
+    const spawnEnvironments: NodeJS.ProcessEnv[] = [];
+    const exit = yield* Effect.gen(function* () {
+      const launcher = yield* ExternalLauncher.ExternalLauncher;
+      return yield* launcher
+        .launchEditor({ editor: "file-manager", cwd: "C:/my project/a,b.ts", reveal: true })
+        .pipe(Effect.exit);
+    }).pipe(
+      Effect.provideService(
+        WindowsVerbatimSpawn,
+        (command, args, ...environment: NodeJS.ProcessEnv[]) =>
+          Effect.sync(() => {
+            verbatim.push([command, ...args]);
+            spawnEnvironments.push(...environment);
+          }),
+      ),
+      Effect.provide(
+        layerTest({
+          platform: "win32",
+          env: { PATH: binDir, PATHEXT: ".EXE" },
+          spawnResult: (command) => {
+            if (!command.command.endsWith("reg.exe")) return undefined;
+            if (replacement === "error") return { exitCode: 1 };
+            const verb = replacement && command.args[1]?.includes("\\Folder\\") ? "open" : "none";
+            return { stdout: `    (Default)    REG_SZ    ${verb}\r\n` };
+          },
+        }),
+      ),
+      Effect.provideService(HostProcess.Environment, {
+        PATH: binDir,
+        ELECTRON_RUN_AS_NODE: "1",
+      }),
+    );
+    if (direct) {
+      assert.isTrue(Exit.isSuccess(exit), Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "");
+      assert.deepEqual(verbatim, [
+        ["C:\\Windows\\explorer.exe", '/select,"C:\\my project\\a,b.ts"'],
+      ]);
+      assert.deepEqual(spawnEnvironments, [{ PATH: binDir }]);
+    } else {
+      assert.deepEqual(verbatim, []);
+      assert.isTrue(Exit.isFailure(exit));
+      if (Exit.isFailure(exit)) {
+        assert.instanceOf(
+          Cause.squash(exit.cause),
+          ExternalLauncher.ExternalLauncherCommandNotFoundError,
+        );
+      }
+    }
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 for (const wsl of [false, true]) {

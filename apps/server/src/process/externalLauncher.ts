@@ -32,6 +32,7 @@ import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
+import { WindowsVerbatimSpawn } from "./windowsVerbatimSpawn.ts";
 import { makeStaleWhileRevalidate } from "../environment/staleWhileRevalidate.ts";
 export {
   ExternalLauncherError,
@@ -122,6 +123,11 @@ const CommandLookupEnvConfig = Config.all({
 const readBrowserLaunchEnv = BrowserLaunchEnvConfig.pipe(Effect.orElseSucceed(() => ({})));
 const readCommandLookupEnv = CommandLookupEnvConfig.pipe(Effect.orElseSucceed(() => ({})));
 
+// External Electron apps must start as applications even when GOAT's server runs in Electron's Node mode.
+const readExternalLaunchEnv = HostProcess.Environment.pipe(
+  Effect.map(({ ELECTRON_RUN_AS_NODE: _runAsNode, ...env }) => env),
+);
+
 function parseTargetPathAndPosition(target: string): Option.Option<TargetPathAndPosition> {
   const match = TARGET_WITH_POSITION_PATTERN.exec(target);
   if (!match?.[1] || !match[2]) {
@@ -184,8 +190,12 @@ function escapePowerShellStringLiteral(input: string): string {
   return `'${input.replaceAll("'", "''")}'`;
 }
 
+function resolveWindowsRoot(env: NodeJS.ProcessEnv): string {
+  return env.SYSTEMROOT || env.windir || String.raw`C:\Windows`;
+}
+
 function resolvePowerShellPath(env: NodeJS.ProcessEnv = {}): string {
-  return `${env.SYSTEMROOT || env.windir || String.raw`C:\Windows`}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
+  return `${resolveWindowsRoot(env)}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
 }
 
 function resolveWslPowerShellPath(): string {
@@ -669,6 +679,78 @@ const tryRevealLinuxItem = Effect.fn("externalLauncher.tryRevealLinuxItem")(
   }),
 );
 
+function windowsFolderClass(parent: string): "Drive" | "Directory" {
+  return /^[a-z]:\\$/i.test(parent) ? "Drive" : "Directory";
+}
+
+// An unknown registry result must keep the shell-mediated reveal.
+const hasStockWindowsFolderVerb = Effect.fn("externalLauncher.hasStockWindowsFolderVerb")(
+  function* (windowsRoot: string, parent: string) {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const stock = yield* Effect.forEach(
+      [windowsFolderClass(parent), "Folder"],
+      (folderClass) =>
+        Effect.gen(function* () {
+          const handle = yield* spawner.spawn(
+            ChildProcess.make(
+              `${windowsRoot}\\System32\\reg.exe`,
+              ["query", `HKCR\\${folderClass}\\shell`, "/ve"],
+              { stdin: "ignore", stderr: "ignore" },
+            ),
+          );
+          const [stdout, status] = yield* Effect.all(
+            [
+              handle.stdout.pipe(
+                Stream.decodeText(),
+                Stream.runFold(
+                  () => "",
+                  (text, chunk) =>
+                    text.length + chunk.length <= 4096 ? text + chunk : "\0".repeat(4096),
+                ),
+              ),
+              handle.exitCode,
+            ],
+            { concurrency: "unbounded" },
+          );
+          return status === 0 && /REG_SZ[^\S\r\n]+(?:none|\(value not set\))\s*$/im.test(stdout);
+        }),
+      { concurrency: 2 },
+    );
+    return stock.every(Boolean);
+  },
+  Effect.scoped,
+  Effect.timeout("2 seconds"),
+  Effect.orElseSucceed(() => false),
+);
+
+const tryRevealWindowsItem = Effect.fn("externalLauncher.tryRevealWindowsItem")(function* (
+  target: string,
+) {
+  const path = yield* Path.Path.pipe(Effect.provide(NodePath.layerWin32));
+  const normalized = path.normalize(normalizeWindowsFileManagerPath(target));
+  if (!/^[a-z]:\\/i.test(normalized) || WINDOWS_SHIM_UNSAFE_ARG_PATTERN.test(normalized)) {
+    return false;
+  }
+  const windowsRoot = resolveWindowsRoot(yield* readBrowserLaunchEnv);
+  if (!(yield* hasStockWindowsFolderVerb(windowsRoot, path.dirname(normalized)))) return false;
+
+  const command = `${windowsRoot}\\explorer.exe`;
+  const args = [`/select,"${normalized}"`];
+  yield* (yield* WindowsVerbatimSpawn)(command, args, yield* readExternalLaunchEnv).pipe(
+    Effect.mapError(
+      (cause) =>
+        new ExternalLauncherEditorSpawnError({
+          editor: "file-manager",
+          target,
+          command,
+          args,
+          cause,
+        }),
+    ),
+  );
+  return true;
+});
+
 const launchEditor = Effect.fn("externalLauncher.launchEditor")(function* (
   input: LaunchEditorInput,
 ) {
@@ -679,6 +761,14 @@ const launchEditor = Effect.fn("externalLauncher.launchEditor")(function* (
     launch.command === "xdg-open" &&
     (yield* HostProcess.Platform) === "linux" &&
     (yield* tryRevealLinuxItem(launch.target))
+  ) {
+    return;
+  }
+  if (
+    input.editor === "file-manager" &&
+    input.reveal === true &&
+    (yield* HostProcess.Platform) === "win32" &&
+    (yield* tryRevealWindowsItem(launch.target))
   ) {
     return;
   }
@@ -740,8 +830,7 @@ const launchAndUnref = Effect.fn("externalLauncher.launchAndUnref")(function* (
   onError: (cause: unknown) => ExternalLauncherError,
 ): Effect.fn.Return<void, ExternalLauncherError, ChildProcessSpawner.ChildProcessSpawner> {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  // Inherited ELECTRON_RUN_AS_NODE would make Electron apps opened by this launcher run as Node and exit.
-  const { ELECTRON_RUN_AS_NODE: _runAsNode, ...env } = yield* HostProcess.Environment;
+  const env = yield* readExternalLaunchEnv;
   const command = ChildProcess.make(launch.command, launch.args, {
     ...launch.options,
     env: { ...env, ...launch.options.env },
