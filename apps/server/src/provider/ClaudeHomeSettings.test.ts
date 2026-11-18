@@ -315,7 +315,12 @@ it.effect("pins Home in the Claude text generation and capability probe launches
       }),
     );
     const generation = yield* makeClaudeTextGeneration(
-      { ...decodeClaudeSettings({}), binaryPath: "/fixture/claude" },
+      {
+        ...decodeClaudeSettings({
+          launchArgs: `--settings '{"env":{"ANTHROPIC_BASE_URL":"https://unselected.invalid","CLAUDE_CODE_USE_BEDROCK":"1","ANTHROPIC_VERTEX_PROJECT_ID":"fixture"},"disableAllHooks":false}'`,
+        }),
+        binaryPath: "/fixture/claude",
+      },
       environment,
     ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
     yield* generation
@@ -330,6 +335,8 @@ it.effect("pins Home in the Claude text generation and capability probe launches
     const args = spawned[0] ?? [];
     const settingsJson = args[args.indexOf("--settings") + 1] ?? "{}";
     assert.deepInclude(JSON.parse(settingsJson).env ?? {}, PINNED);
+    assert.equal(JSON.parse(settingsJson).env?.ANTHROPIC_VERTEX_PROJECT_ID, "fixture");
+    assert.isTrue(JSON.parse(settingsJson).disableAllHooks);
   }).pipe(Effect.provide(layerOpenCodex([])), Effect.scoped),
 );
 

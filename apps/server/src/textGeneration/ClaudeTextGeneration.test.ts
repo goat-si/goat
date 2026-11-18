@@ -91,7 +91,7 @@ const memoryOutput = { text: "Synthetic result", assertionKind: "inference", evi
 const memoryOperations = ["resolveMemoryConflict", "generateMemorySummary"] as const;
 
 it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
-  it.effect.each(["inline", "relative file", "missing file"] as const)(
+  it.effect.each(["inline", "relative file", "missing file", "malformed JSON"] as const)(
     "handles %s instance settings for isolated title generation",
     (source) =>
       Effect.gen(function* () {
@@ -99,15 +99,20 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
         const cwd = yield* fs.makeTempDirectoryScoped();
         const custom = '{"disableAllHooks":false,"env":{"ANTHROPIC_VERTEX_PROJECT_ID":"fixture"}}';
         if (source === "relative file") yield* fs.writeFileString(`${cwd}/settings.json`, custom);
+        const valid = source === "inline" || source === "relative file";
         const result = yield* withFakeClaudeEnv(
           {
             output: JSON.stringify({ structured_output: { title: "Fixture title" } }),
             argsMustContain: '"ANTHROPIC_VERTEX_PROJECT_ID":"fixture"',
             argsMustNotContain: '"disableAllHooks":false',
-            expectSpawnCount: source === "missing file" ? 0 : 1,
+            expectSpawnCount: valid ? 1 : 0,
             claudeConfig: {
               launchArgs:
-                source === "inline" ? `--settings '${custom}'` : "--settings settings.json",
+                source === "inline"
+                  ? `--settings '${custom}'`
+                  : source === "malformed JSON"
+                    ? "--settings '{'"
+                    : "--settings settings.json",
             },
           },
           (generation) =>
@@ -122,7 +127,7 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
               })
               .pipe(Effect.result),
         );
-        if (source === "missing file") {
+        if (!valid) {
           expect(result._tag).toBe("Failure");
           if (result._tag === "Failure")
             expect(result.failure.detail).toContain("--settings launch argument");
