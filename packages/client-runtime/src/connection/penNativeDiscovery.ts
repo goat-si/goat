@@ -25,6 +25,13 @@ export const nativePenCandidates = (state: Extract<DesktopPenMembersState, { kin
 
 const pinKey = (pin: DesktopPenPin) => `${pin.meshId}:${pin.nodeId}:${pin.noisePub}`;
 
+// A member Pen still lists, under any key: a new Noise key is not a departure.
+const memberListed = (state: PenMembersInput, pin: DesktopPenPin) =>
+  state.kind === "ready" &&
+  state.meshId === pin.meshId &&
+  state.selfNodeId !== pin.nodeId &&
+  state.members.some((member) => member.nodeId === pin.nodeId);
+
 export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(function* () {
   const membership = yield* PenMembership;
   const registry = yield* EnvironmentRegistry;
@@ -50,11 +57,11 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
       const { pin } = route;
       // Only a member Pen says left loses its route, and only where the viewer runs: removing an
       // environment's last route deletes it with its drafts. A closed gate, Pen machines turned
-      // off or a client without the gateway leave the route stored and unusable.
+      // off, a client without the gateway or a member's new key leave the route stored.
       const left =
         policy.enabled &&
         Option.isSome(gateway) &&
-        (state.kind === "not-member" || (state.kind === "ready" && !penPinIsCurrent(state, pin)));
+        (state.kind === "not-member" || (state.kind === "ready" && !memberListed(state, pin)));
       if (!left) continue;
       yield* registry.removeRoute(route.target.environmentId, route.target.connectionId).pipe(
         Effect.catch((error) =>
@@ -94,12 +101,9 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
         Effect.gen(function* () {
           const pin = { meshId: state.meshId, nodeId: member.nodeId, noisePub: member.noisePub };
           const connectionId = penConnectionId(pin.meshId, pin.nodeId);
-          const known = existing.find(
-            (route) =>
-              route.profile.connectionId === connectionId &&
-              route.profile.noisePub === pin.noisePub,
-          );
-          if (known !== undefined && verified.has(pinKey(pin))) return;
+          const known = existing.find((route) => route.profile.connectionId === connectionId);
+          const sameKey = known?.pin.noisePub === pin.noisePub;
+          if (sameKey && verified.has(pinKey(pin))) return;
           const latestBeforeOpen = yield* SubscriptionRef.get(membership.latest);
           if (Option.isNone(latestBeforeOpen) || !penPinIsCurrent(latestBeforeOpen.value, pin))
             return;
@@ -117,11 +121,13 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
           const latest = yield* SubscriptionRef.get(membership.latest);
           if (Option.isNone(latest) || !penPinIsCurrent(latest.value, pin)) return;
           if (known !== undefined) {
-            if (known.target.environmentId === descriptor.environmentId) {
+            if (known.target.environmentId === descriptor.environmentId && sameKey) {
               verified.add(pinKey(pin));
               return;
             }
-            yield* registry.removeRoute(known.target.environmentId, connectionId);
+            // The same environment under a new key is updated in place by register below.
+            if (known.target.environmentId !== descriptor.environmentId)
+              yield* registry.removeRoute(known.target.environmentId, connectionId);
           }
           const target = new PenConnectionTarget({
             connectionId,

@@ -572,3 +572,115 @@ it.effect("an open gate leaves a stored route whose profile names no Pen member"
     );
   }),
 );
+it.effect("a member's new Noise key keeps its stored route and updates the pin in place", () =>
+  Effect.gen(function* () {
+    const env = EnvironmentId.make("env");
+    const id = penConnectionId("mmmmmmmmmmmmmmmmmmmmmmmmmm", "nnnnnnnnnnnnnnnnnnnnnnnnnn");
+    const target = new PenConnectionTarget({ environmentId: env, label: "Node", connectionId: id });
+    const profile = new PenConnectionProfile({
+      meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
+      nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
+      noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+      environmentId: env,
+      label: "Node",
+      connectionId: id,
+    });
+    const entries = yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
+      new Map([
+        [env, { enabled: true, target, profile: Option.some(profile), alternateRoutes: [] }],
+      ]),
+    );
+    const removed: string[] = [];
+    const registered: string[] = [];
+    const unused = () => Effect.die("unexpected registry call");
+    const unusedStream = () => Stream.die("unexpected registry stream");
+    const registry = EnvironmentRegistry.of({
+      entries,
+      networkStatus: yield* SubscriptionRef.make<"unknown" | "online" | "offline">("online"),
+      start: Effect.void,
+      register: (value) =>
+        Effect.sync(() => {
+          registered.push(
+            value.profile._tag === "PenConnectionProfile" ? value.profile.noisePub : "",
+          );
+          return true;
+        }),
+      registerPlatform: unused,
+      assertKnownAddress: unused,
+      reconcilePlatform: unused,
+      remove: unused,
+      removeRoute: (_env, route) => Effect.sync(() => void removed.push(route)),
+      reorderRoutes: unused,
+      removeRelayEnvironments: unused,
+      retryNow: unused,
+      reconnect: unused,
+      setEnabled: unused,
+      setCompatibility: unused,
+      state: unused,
+      stateChanges: unusedStream,
+      run: unused,
+      runStream: unusedStream,
+      followStream: unusedStream,
+    });
+    const member = (online: boolean) => ({
+      nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
+      name: "Node",
+      online,
+      noisePub: "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
+      route: { kind: "refused" as const, reason: "not-pen-route" as const },
+    });
+    const ready = (online: boolean) => ({
+      kind: "ready" as const,
+      seq: 1,
+      meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
+      selfNodeId: "self",
+      members: [member(online)],
+    });
+    const latest = yield* SubscriptionRef.make<Option.Option<PenMembersInput>>(
+      Option.some(ready(false)),
+    );
+    yield* Effect.gen(function* () {
+      const discovery = yield* makePenNativeDiscovery();
+      // Still a member, under a new key: its environment and drafts stay.
+      yield* discovery.pass(ready(false));
+      expect(removed).toEqual([]);
+      yield* SubscriptionRef.set(latest, Option.some(ready(true)));
+      yield* discovery.pass(ready(true));
+      expect(removed).toEqual([]);
+      expect(registered).toEqual(["rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"]);
+    }).pipe(
+      Effect.provideService(EnvironmentRegistry, registry),
+      Effect.provideService(PenMembership, { latest, admit: () => Effect.void }),
+      Effect.provideService(PenViewerPolicy, { enabled: true }),
+      Effect.provideService(
+        PenRouteGateway,
+        Option.some({
+          open: () =>
+            Effect.succeed({
+              kind: "open" as const,
+              httpBaseUrl: `http://127.0.0.1/pen-route/${"a".repeat(43)}`,
+              socketUrl: "ws://127.0.0.1/ws",
+            }),
+          close: () => Effect.void,
+        }),
+      ),
+      Effect.provideService(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json({
+                environmentId: "env",
+                label: "Node",
+                platform: { os: "darwin", arch: "arm64" },
+                serverVersion: "1.0.0",
+                capabilities: { repositoryIdentity: true },
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  }),
+);
