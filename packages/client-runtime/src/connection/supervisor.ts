@@ -45,6 +45,7 @@ import {
   entryWithRoutes,
   insertRoute,
   type ReportedEndpoint,
+  shownRoutes,
 } from "./routes.ts";
 
 let supervisorInstanceSequence = 0;
@@ -922,7 +923,8 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       // each route that reaches synchronizing adds its own snapshot budget, so
       // a route that fails late does not eat the next route's time.
       Effect.gen(function* () {
-        const routeCount = connectionRoutes(yield* Ref.get(currentEntry)).length;
+        // A Pen route the closed gate hides is never tried, so it adds no setup time.
+        const routeCount = Math.max(1, shownRoutes(yield* Ref.get(currentEntry)).length);
         while (true) {
           const progress = yield* Ref.get(establishmentProgress);
           // Slow successes say nothing about an attempt whose host has not answered yet.
