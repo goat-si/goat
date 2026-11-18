@@ -17,7 +17,6 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as RuntimeIdentity from "../runtimeIdentity.ts";
 import { forkParked } from "../serverActivation.ts";
-import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
 import * as Settings from "../serverSettings.ts";
 import * as Generation from "../textGeneration/TextGeneration.ts";
 import * as Events from "../orchestration-v2/EventSink.ts";
@@ -114,7 +113,15 @@ const make = Effect.gen(function* () {
   // Memory runs on its own cheap model; the new-thread default may be unsupported here.
   const memoryModel = (snapshot: M.ServerSettings) =>
     snapshot.memoryEnabled
-      ? query(decodeSelection(resolveMemoryModelSelection(snapshot, undefined), strict))
+      ? query(
+          hold
+            .resolveModel(snapshot)
+            .pipe(
+              Effect.flatMap((model) =>
+                model === null ? Effect.succeed(null) : decodeSelection(model, strict),
+              ),
+            ),
+        )
       : Effect.succeed(null);
   const readSource = Effect.fn("MemoryWorker.readSource")(function* (work: Store.MemoryWork) {
     if (
@@ -521,10 +528,8 @@ const make = Effect.gen(function* () {
       // Work keeps the model it was queued with. When that model changed, retry on the
       // current one so rows queued with an unusable model recover.
       const currentModel = yield* memoryModel(yield* query(settings.getSettings));
-      if (
-        currentModel !== null &&
-        encodeSelection(currentModel) !== encodeSelection(work.metadata.modelSelection)
-      ) {
+      if (currentModel === null) return yield* new MemoryWorkerError({ code: "route_unavailable" });
+      if (encodeSelection(currentModel) !== encodeSelection(work.metadata.modelSelection)) {
         const rebound = yield* query(store.rebindWorkModel(owned, currentModel));
         if (!rebound) return yield* new MemoryWorkerError({ code: "attempt_expired" });
         work = rebound;
@@ -615,7 +620,6 @@ const make = Effect.gen(function* () {
       const generated = yield* Effect.scoped(
         Effect.gen(function* () {
           const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "memory-generation-" });
-          const generate = generation.generateMemorySummary;
           const holdKey = yield* hold.keyFor(meta.modelSelection);
           return yield* generateSummaryChunks({
             first: source,
@@ -642,17 +646,15 @@ const make = Effect.gen(function* () {
               readSource({ ...work, metadata: { ...meta, fromSequence } }),
             renewClaim,
             generate: (input) =>
-              generate
-                ? hold
-                    .guard(holdKey, redacted(generate(input)))
-                    .pipe(
-                      Effect.mapError((cause) =>
-                        cause._tag === "MemoryGenerationHeld"
-                          ? new MemoryWorkerError({ code: "unavailable", cause })
-                          : new MemoryWorkerError({ code: safeCode(cause), cause }),
-                      ),
-                    )
-                : Effect.fail(new MemoryWorkerError({ code: "unsupported_operation" })),
+              hold
+                .guard(holdKey, redacted(generation.generateMemorySummary(input)))
+                .pipe(
+                  Effect.mapError((cause) =>
+                    cause._tag === "MemoryGenerationHeld"
+                      ? new MemoryWorkerError({ code: "unavailable", cause })
+                      : new MemoryWorkerError({ code: safeCode(cause), cause }),
+                  ),
+                ),
             sameExecution: (execution) =>
               execution.environmentId === environmentId &&
               execution.providerInstanceId === meta.modelSelection.instanceId &&
@@ -891,7 +893,6 @@ const make = Effect.gen(function* () {
       yield* sweepStage("deferred", deferred());
       const now = yield* Clock.currentTimeMillis;
       const snapshot = yield* sweepStage("due-work", settings.getSettings);
-      const enabled = snapshot.memoryEnabled;
       const selection = yield* sweepStage("due-work", memoryModel(snapshot));
       const holdKey = selection === null ? undefined : yield* hold.keyFor(selection);
       // A new model or provider version starts clean, and work held under the old one is due now.
@@ -903,9 +904,8 @@ const make = Effect.gen(function* () {
         yield* sweepStage("due-work", store.rearmGenerationWork(now));
       lastHoldKey = holdKey;
       const held = () => (holdKey === undefined ? Effect.succeed(false) : hold.isHeld(holdKey));
-      // Off leaves queued summaries untouched so they resume when memory is turned back on; a
-      // held model leaves them unclaimed so they spend no attempts and fill no page.
-      const kinds = !enabled || (yield* held()) ? (["rebuild"] as const) : undefined;
+      // Leave summaries unclaimed until memory has a usable model.
+      const kinds = selection === null || (yield* held()) ? (["rebuild"] as const) : undefined;
       for (const candidate of yield* sweepStage("due-work", store.dueWork(now, 100, kinds))) {
         if (!["summary", "consolidate", "rebuild"].includes(candidate.kind)) continue;
         if (candidate.kind !== "rebuild" && (yield* held())) continue;

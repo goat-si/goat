@@ -1,3 +1,4 @@
+import { fromRunner } from "@goat/provider-core/server/textGenerationOperations";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -321,7 +322,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ModelManifest.layerTest, ProviderLat
           },
           snapshotForCwd: () => Ref.get(scanResult),
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-          textGeneration: {} as ProviderInstance["textGeneration"],
+          textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
         };
         const layerInstanceRegistry = Layer.succeed(
           ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -560,7 +561,7 @@ const makeWorkspaceCatalogRegistry = Effect.fn("makeWorkspaceCatalogRegistry")(f
     },
     snapshotForCwd: () => Ref.get(scan).pipe(Effect.flatten),
     orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-    textGeneration: {} as ProviderInstance["textGeneration"],
+    textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
   };
   const services = yield* Layer.build(
     ProviderRegistry.layer.pipe(

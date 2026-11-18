@@ -333,7 +333,10 @@ const proxyRead = Effect.fn("HubProxyHttp.proxyRead")(function* (
         headers["access-control-expose-headers"] = HUB_PROXY_VCS_BRANCH_HEADER;
       }
       const stream =
-        path === SHELL_PATH && request.method === "GET" && response.status === 200
+        path === SHELL_PATH &&
+        request.method === "GET" &&
+        response.status === 200 &&
+        !url.searchParams.has("resumeFrom")
           ? Stream.suspend(() => {
               const buffer = makeSnapshotBuffer(SNAPSHOT_MAX_BYTES);
               return response.stream.pipe(

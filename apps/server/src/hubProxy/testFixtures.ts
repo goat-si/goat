@@ -323,6 +323,8 @@ export const startNode = Effect.fnUntraced(function* (
             yield* Queue.offer(shellRequests, shellCount);
             if (shellBody !== undefined)
               return HttpServerResponse.stream(shellBody, { contentType: "application/json" });
+            if (new URLSearchParams(request.url.split("?")[1]).has("resumeFrom"))
+              return HttpServerResponse.jsonUnsafe({ resumable: true });
             return HttpServerResponse.jsonUnsafe(
               { snapshotSequence: shellCount, projects: [], threads: [] },
               {

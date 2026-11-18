@@ -30,8 +30,6 @@ import * as DateTime from "effect/DateTime";
 
 import { accountRefOfSourceId, quotaPoolAccountName } from "./quotaAccountName.ts";
 
-import { isPrivateNetworkHost, isTailnetHost, isWildcardHost } from "./hostClassification.ts";
-
 const MINUTE = 60_000;
 
 export const CHATGPT_USAGE_URL = "https://chatgpt.com/#settings/Usage";
@@ -197,15 +195,6 @@ function unionOrigins(left: readonly LimitOrigin[] = [], right: readonly LimitOr
   const seen = new Map(left.map((origin) => [originKey(origin), origin]));
   for (const origin of right) if (!seen.has(originKey(origin))) seen.set(originKey(origin), origin);
   return [...seen.values()];
-}
-
-function sharedHubEndpoint(source: UsageLimitSourceSnapshots[number]): string | undefined {
-  // Native URL polyfills can misparse IPv6; the server already canonicalized the endpoint.
-  const host = /^https?:\/\/(\[[\da-f:.]+\]|[\w.-]+)(?::\d+)?(?:\/[^?#]*)?$/.exec(
-    source.endpoint ?? "",
-  )?.[1];
-  if (source.kind !== "cliproxy" || !host || isWildcardHost(host)) return undefined;
-  return !isPrivateNetworkHost(host) || isTailnetHost(host) ? source.endpoint : undefined;
 }
 
 const hubAccountName = (account: { readonly id: string }) => account.id.replace(/\.json$/i, "");
@@ -385,11 +374,9 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
         : source.label;
       for (const account of source.accounts) {
         if (limitsNotice(account.usageLimits) !== null) continue;
-        const resolved = resolveKey(account);
-        const localHub = source.kind === "opencodex" ? source.id : `${environmentId}:${source.id}`;
-        const hub = resolved === null ? (sharedHubEndpoint(source) ?? localHub) : localHub;
-        const key = `${hub}:${account.id}${account.workspaceId ? `:${account.workspaceId}` : ""}`;
-        merge(resolved ?? key, {
+        const sourceKey = source.kind === "cliproxy" ? `${environmentId}:${source.id}` : source.id;
+        const key = `${sourceKey}:${account.id}${account.workspaceId ? `:${account.workspaceId}` : ""}`;
+        merge(resolveKey(account) ?? key, {
           key,
           driver: account.driver,
           displayName: account.label ?? (account.email ? null : hubAccountName(account)),
@@ -656,7 +643,7 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
     return members.length === 0 ? [] : [[key, members, all] as const];
   });
   const pools = byKey.map(([key, members, all]): LimitPoolWindow => {
-    const memberByAccount = new Map(all.map((member) => [member.account.key, member]));
+    const memberByAccount = new Map(all.map((member) => [member.account, member]));
     const first = members[0]!.window;
     const id = members[0]!.account.driver === "codex" ? key : first.id;
     // One unknown plan makes the pool incomparable by plan, so every member then counts once.
@@ -697,9 +684,7 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
       kind: first.kind,
       label: first.label,
       members,
-      columns: accounts.map(
-        (account) => memberByAccount.get(account.key) ?? { account, window: null },
-      ),
+      columns: accounts.map((account) => memberByAccount.get(account) ?? { account, window: null }),
       usedPercent: Math.round(usedPercent),
       remainingPercent: Math.round(100 - usedPercent),
       pace: meanElapsed === null ? null : paceOfShares(timedUsed, meanElapsed),

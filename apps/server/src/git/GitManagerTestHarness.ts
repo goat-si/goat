@@ -1,3 +1,4 @@
+import { noMemoryGeneration } from "@goat/provider-core/server/memoryGenerationRunner";
 // @effect-diagnostics effectFnOpportunity:off - test fixture factories and mock services.
 import { makeTempDir } from "./testkit/fileFixtures.ts";
 import { GitFixtureTemplates, layerGitFixtureTemplates, runGit } from "./testkit/gitRepository.ts";
@@ -156,6 +157,7 @@ function createTextGeneration(
   overrides: Partial<FakeGitTextGeneration> = {},
 ): TextGeneration.TextGeneration["Service"] {
   const implementation: FakeGitTextGeneration = {
+    ...noMemoryGeneration,
     generateCommitMessage: (input) =>
       Effect.succeed({
         subject: "Implement stacked git actions",
@@ -180,6 +182,7 @@ function createTextGeneration(
   };
 
   return {
+    ...noMemoryGeneration,
     generateCommitMessage: (input) =>
       implementation.generateCommitMessage(input).pipe(
         Effect.mapError(

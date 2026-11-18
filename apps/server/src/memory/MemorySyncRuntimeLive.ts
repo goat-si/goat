@@ -154,17 +154,19 @@ const make = Effect.gen(function* () {
       store.readLocalProcessingStatus({ environmentId, memorySpaceId, hubEnvironmentId }),
     readUnboundStorage: quota.readUnboundStorageStatus({ environmentId }),
     available: (selection) =>
-      registry
-        .getInstance(selection.instanceId)
-        .pipe(
-          Effect.flatMap((instance) =>
-            instance === undefined || !instance.enabled
-              ? Effect.fail(new M.MemoryHubError({ code: "route_unavailable" }))
-              : instance.textGeneration.resolveMemoryConflict === undefined
-                ? Effect.fail(new M.MemoryHubError({ code: "unsupported_operation" }))
-                : Effect.void,
-          ),
-        ),
+      registry.getInstance(selection.instanceId).pipe(
+        Effect.flatMap((instance) => {
+          if (instance === undefined || !instance.enabled)
+            return Effect.fail(new M.MemoryHubError({ code: "route_unavailable" }));
+          return instance.textGeneration.memoryCapabilities.pipe(
+            Effect.flatMap(({ conflict }) =>
+              conflict
+                ? Effect.void
+                : Effect.fail(new M.MemoryHubError({ code: "unsupported_operation" })),
+            ),
+          );
+        }),
+      ),
     ...(owner.policy ? { ownerPolicy: owner.policy } : {}),
     ownerPermit: owner.permit,
     ownerReader: owner.reader,

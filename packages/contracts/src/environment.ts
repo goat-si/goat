@@ -121,6 +121,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       asideImport: Schema.optionalKey(Schema.Boolean),
     }),
   ),
+  shellThreadFamilies: Schema.optionalKey(Schema.Boolean),
+  shellOlderSettled: Schema.optionalKey(Schema.Boolean),
   repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   connectionProbe: Schema.optionalKey(Schema.Boolean),
   attachmentUploads: Schema.optionalKey(Schema.Boolean),
@@ -339,6 +341,7 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
   protocol: Schema.optionalKey(RuntimeProtocolRanges),
   /** New for every server start. A replacement request names it so it never hits a successor. */
   instanceId: Schema.optionalKey(TrimmedNonEmptyString),
+  databaseMigration: Schema.optionalKey(Schema.Int),
   /**
    * The same for every GOAT server on one machine, whatever its base directory, so clients
    * draw them as one machine. A hash of the OS machine identifier, absent when the OS hides it

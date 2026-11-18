@@ -543,13 +543,41 @@ describe("pools", () => {
     ]);
   });
 
+  it("keeps a hub account without a verified login separate per environment", () => {
+    const seat = {
+      id: "claude-team-seat.json",
+      driver: claude,
+      usageLimits: { checkedAt, windows: [window] },
+    };
+    const hub = { ...source, accounts: [seat] };
+    const input = new Map([
+      [
+        EnvironmentId.make("env-a"),
+        { ...laptop, serverConfig: { providers: [], usageLimitSources: [hub] } },
+      ],
+      [
+        EnvironmentId.make("env-b"),
+        {
+          entry: { target: { label: "Desktop" } },
+          serverConfig: { providers: [], usageLimitSources: [hub] },
+        },
+      ],
+    ]);
+    const accounts = collectLimitAccounts(input);
+    expect(accounts.map((account) => account.key)).toEqual([
+      "env-a:hub:claude-team-seat.json",
+      "env-b:hub:claude-team-seat.json",
+    ]);
+    expect(accounts[0]?.displayName).toBe("claude-team-seat");
+  });
+
   it.each([
     [
       "one remote hub under environment-local ids",
       "http://hub.example:8317",
       "laptop-hub",
       "http://hub.example:8317",
-      1,
+      2,
     ],
     [
       "two remote hubs under one id",
@@ -570,7 +598,7 @@ describe("pools", () => {
       "http://[fd7a:115c:a1e0::1]:8317",
       "hub",
       "http://[fd7a:115c:a1e0::1]:8317",
-      1,
+      2,
     ],
     [
       "each machine's own localhost hub",
@@ -606,7 +634,7 @@ describe("pools", () => {
     ["private addresses can overlap", "http://192.168.1.3", "hub", "http://192.168.1.3", 2],
     ["hubs that report no endpoint", undefined, "hub", undefined, 2],
   ] as const)(
-    "keeps email-less hub identity across environments: %s",
+    "keeps anonymous accounts separate regardless of hub endpoint: %s",
     (_, firstEndpoint, secondId, secondEndpoint, count) => {
       const seat = {
         id: "claude-team-seat.json",

@@ -3,6 +3,8 @@ import * as NodeUtil from "node:util";
 import { readPiEntries, piSessionListing, walkPiBranch } from "./entries.ts";
 import { piExtensionDisplayName } from "./extensionDisplayName.ts";
 import { contentText } from "./piContentText.ts";
+import { piSubagentOutput } from "./subagentOutput.ts";
+import { awaitPromptAcknowledgment } from "./promptAcknowledgment.ts";
 import { piForkBoundary, piForkEntry, type PiForkBoundary } from "./forkBoundary.ts";
 import { piQuestion, piUiResponse } from "./extensionDialog.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -35,6 +37,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
+import * as FiberMap from "effect/FiberMap";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -94,11 +97,7 @@ export interface PiAdapterV2Options {
   readonly settings: PiSettings;
   readonly environment: NodeJS.ProcessEnv;
   readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
-  readonly continuationRequests?: {
-    readonly offer: (
-      request: ProviderContinuationRequests.ProviderContinuationRequest,
-    ) => Effect.Effect<void>;
-  };
+  readonly continuationRequests?: ProviderContinuationRequests.ProviderContinuationOffer;
 }
 const PI_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 interface PiStreamItemState {
@@ -340,6 +339,19 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         ProviderAdapter.ProviderAdapterV2Error | Cause.Done
       >();
       const pendingPrompts = new Map<string, PendingPiPrompt>();
+      const awaitPromptAck = (
+        drained: Deferred.Deferred<void, ProviderAdapter.ProviderAdapterProtocolError>,
+      ) =>
+        awaitPromptAcknowledgment(
+          drained,
+          () => pendingPrompts.size > 0,
+          (cause) =>
+            new ProviderAdapter.ProviderAdapterProtocolError({
+              driver,
+              detail: cause.message,
+              cause,
+            }),
+        );
       const sessionApprovals = new Set<string>();
       // Pi can settle immediately after dialog response; serialize so terminal cannot overtake request resolution.
       const sessionEventPermit = yield* Semaphore.make(1);
@@ -350,6 +362,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       let unsolicitedActivityDetected = false;
       // Turn failures can leave Pi alive; pump termination retires the runtime.
       let runtimeRetired = false;
+      const deferredWake = yield* FiberMap.make<"wake">();
       let pendingWake: PiWake | null = null;
       let extensionStatusReset: {
         previous: NonNullable<OrchestrationV2ProviderSession["extensionStatuses"]>;
@@ -1748,27 +1761,30 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 return;
               }
               yield* updateProviderSession("running", null);
-              yield* continuationRequests
-                .offer({
-                  threadId: state.providerThread.appThreadId,
-                  providerThreadId: state.providerThread.id,
-                  driver,
-                  detail: null,
-                  delivery: "adapter_buffered",
-                  dispatchIfCurrent: (dispatch) =>
-                    sessionEventPermit.withPermits(1)(
-                      Effect.suspend(() =>
-                        pendingWake === wake && threadState === state && !closed
-                          ? dispatch.pipe(
-                              Effect.asSome,
-                              Effect.tapError(() => stopPendingWake(wake)),
-                            )
-                          : Effect.succeedNone,
-                      ),
+              const request = {
+                threadId: state.providerThread.appThreadId,
+                providerThreadId: state.providerThread.id,
+                driver,
+                detail: null,
+                delivery: "adapter_buffered",
+                dispatchIfCurrent: (dispatch) =>
+                  sessionEventPermit.withPermits(1)(
+                    Effect.suspend(() =>
+                      pendingWake === wake && threadState === state && !closed
+                        ? dispatch.pipe(
+                            Effect.asSome,
+                            Effect.tapError(() => stopPendingWake(wake)),
+                          )
+                        : Effect.succeedNone,
                     ),
-                  clearIfCurrent: () => sessionEventPermit.withPermits(1)(stopPendingWake(wake)),
-                })
-                .pipe(Effect.tapError(() => stopPendingWake(wake)));
+                  ),
+                clearIfCurrent: () => sessionEventPermit.withPermits(1)(stopPendingWake(wake)),
+              } satisfies ProviderContinuationRequests.ProviderContinuationRequest;
+              if ((yield* continuationRequests.offer(request)) === "overflow")
+                yield* ProviderContinuationRequests.offerWithBackpressure(
+                  continuationRequests,
+                  request,
+                ).pipe(FiberMap.run(deferredWake, "wake"));
               return;
             }
             if (turn === null) {
@@ -2662,7 +2678,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               if (closed || stopRequested)
                 return yield* protocolError("Cannot start a Pi turn after session closure");
               if (pendingPromptResponsesDrained === null) break;
-              yield* Deferred.await(pendingPromptResponsesDrained);
+              yield* awaitPromptAck(pendingPromptResponsesDrained);
             }
             if (
               state.providerThread.nativeThreadRef?.nativeId !==
@@ -2823,7 +2839,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               );
               if (pendingAck === null) break;
               // The native event pump needs the permit to consume the actual ACK.
-              yield* Deferred.await(pendingAck);
+              yield* awaitPromptAck(pendingAck);
             }
             // Pi acks `prompt` only after slash-command expansion completes,
             // and extension commands may block on user dialogs indefinitely.
@@ -3388,27 +3404,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
   });
 });
 
-function piSubagentOutput(result: unknown): string {
-  const stopReason = recordString(result, "stopReason");
-  const failed =
-    (recordNumber(result, "exitCode") ?? 0) !== 0 ||
-    stopReason === "error" ||
-    stopReason === "aborted";
-  if (failed) {
-    const failure = recordString(result, "errorMessage") || recordString(result, "stderr");
-    if (failure !== undefined && failure.length > 0) return failure;
-  }
-  const messages = recordField(result, "messages");
-  if (!Array.isArray(messages)) return "";
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (recordString(message, "role") !== "assistant") continue;
-    const text = contentText(recordField(message, "content"));
-    if (text.length > 0) return text;
-  }
-  return "";
-}
-
 function piThreadSnapshot(
   providerThread: OrchestrationV2ProviderThread,
 ): ProviderAdapter.ProviderAdapterV2ThreadSnapshot {
@@ -3460,5 +3455,4 @@ export const makePiAdapterV2Driver = (
       ),
   ),
 });
-
 export const PiAdapterV2Driver = makePiAdapterV2Driver(PI_PROFILE, PiSettings);

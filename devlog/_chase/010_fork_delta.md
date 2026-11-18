@@ -56,6 +56,11 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/server/src/cli`, `apps/server/src/cloud`, `apps/desktop/src/wsl`, `scripts/install.sh`, `scripts/build-npm-launcher.ts`, `scripts/npm-launcher`
 - 정책: upstream 로직을 받고 실행 파일 `goat`, `runtime/goat/versions`, SSH 호스트 `~/.goat`를 유지한다. npm 배포는 upstream 단일 launcher(`scripts/build-npm-launcher.ts`, `scripts/npm-launcher/goat.mjs`) 위에 패키지 `goat`, bin `goat`·`t3`, 릴리스 저장소 `goat-si/goat-releases`를 얹는다 (사이클 261019).
 
+### `fff-node-teardown` 워크스페이스 검색 인덱스 종료
+
+- 경로: `patches/@ff-labs__fff-node@0.11.0.patch`, `apps/server/src/workspace/{WorkspaceSearchIndex,workspaceSearchFinderCache}.ts`
+- 정책: 기존 `destroy()` 호출 형태를 유지한다. GOAT 서버는 진행 중인 네이티브 호출과 `fff_destroy` 및 watcher 정리가 끝나는 `destroyAsync()`를 기다린 뒤 finder 슬롯을 돌려준다. FFF 업데이트 때 같은 종료 보장을 확인하고 패치를 유지하거나 upstream의 동등한 API로 옮긴다.
+
 ### `code-budgets` 파일 크기와 단언 ratchet
 
 - 커밋: #812
@@ -85,6 +90,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 
 - 경로: `apps/server/src/cua/ComputerUseAttachment.ts`, `apps/server/src/cua/ComputerUseRequests.ts`, `apps/server/src/cua/ComputerUseLeases.ts`, `packages/client-runtime/src/computerUse/readinessSteps.ts`, `docs/user/computer-use.md`, `structure/decisions/ADR-0022-cua-driver-computer-use.md`
 - 정책: 사람이 키보드·마우스를 사용핮에 따라 승인된 에이전트를 자동으로 일시정지하지 않는다. 무인 작업은 기존 grant 또는 full-access 자동 승인과 private-mode 감지를 요구하고, 사람 입력과 무관하게 Stop·Stop all·Hand back·승인 만료로 끝낼 수 있다. 비밀번호·OTP·passkey 필드는 계속 자동 일시정지한다. upstream 동작을 받을 때 이 GOAT 정책 차이를 유지하고, 사람 입력 차단이나 승인 없는 실행으로 되돌리지 않는다.
+
+### `cursor-command-output` Cursor 명령 출력
+
+- 커밋: #3700 (사이클 261114 next3, SF3)
+- 경로: `packages/provider-cursor/src/server/adapter.ts`, `packages/provider-cursor/src/server/{commandOutputGate,shellOutputCoalescer}.ts`
+- 정책: SF3가 upstream `6be1bd6472` (#26934)를 미리 옮겼다. 다음 사이클에서는 반영 여부만 확인한다. Cursor 출력 경로를 바꿀 때는 대기 중인 출력의 상한과, 명령 완료 후 그 명령의 대기 출력이 전달되지 않는 순서를 지킨다.
 
 ### `decision-routing` 자식 결정의 부모 우선 라우팅
 

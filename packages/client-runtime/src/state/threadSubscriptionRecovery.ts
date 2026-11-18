@@ -4,7 +4,9 @@ import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
-import { subscriptionRetryDelay } from "../rpc/client.ts";
+import { isAuthorizationFailure, subscriptionRetryDelay } from "../rpc/client.ts";
+
+import { threadStreamFailureMessage } from "./threadTextAppends.ts";
 
 const THREAD_SUBSCRIPTION_RETRY_DELAY: Duration.Input = "250 millis";
 const SYNC_ERROR = "Could not synchronize the thread.";
@@ -15,12 +17,16 @@ const SYNC_ERROR = "Could not synchronize the thread.";
  * Each wait doubles from 250 ms to the 30 s cap; applied items reset the defect backoff.
  */
 export const makeThreadSubscriptionRecovery = Effect.fnUntraced(function* (input: {
-  readonly setStreamError: (message: string) => Effect.Effect<void>;
+  readonly isCold: () => boolean;
+  readonly setStreamError: (message: string | null) => Effect.Effect<void>;
   readonly logAttributes: Record<string, unknown>;
 }) {
   const resubscribes = yield* Queue.unbounded<void>();
   let httpMisses = 0;
   let defectRetries = 0;
+  let triedColdSocket = false;
+  let openingOverSocket = false;
+  const failedColdOpen = () => openingOverSocket && input.isCold();
   // The cursor moved before the batch that failed to apply, so resuming from it would skip it.
   let needsFreshSnapshot = false;
   const resubscribe = Queue.offer(resubscribes, undefined);
@@ -34,6 +40,15 @@ export const makeThreadSubscriptionRecovery = Effect.fnUntraced(function* (input
       ),
   );
   return {
+    openColdOverSocket: (supported: boolean) => {
+      openingOverSocket = supported && !triedColdSocket;
+      triedColdSocket ||= openingOverSocket;
+      return openingOverSocket;
+    },
+    onExpectedFailure: (cause: Cause.Cause<unknown>) =>
+      !isAuthorizationFailure(cause) && failedColdOpen()
+        ? Effect.void
+        : input.setStreamError(threadStreamFailureMessage(cause)),
     retryExpectedFailureAfter: THREAD_SUBSCRIPTION_RETRY_DELAY,
     resubscriptions: Stream.fromQueue(resubscribes),
     /** A delete event parks the subscription; a miss while mounted keeps asking. */
@@ -48,9 +63,15 @@ export const makeThreadSubscriptionRecovery = Effect.fnUntraced(function* (input
       defectRetries = 0;
     }),
     onDefect: (cause: Cause.Cause<unknown>) =>
-      Cause.hasDies(cause)
-        ? backOffAfterDefect.pipe(Effect.andThen(resubscribe))
-        : input.setStreamError(SYNC_ERROR),
+      Effect.suspend(() => {
+        if (failedColdOpen()) {
+          openingOverSocket = false;
+          return resubscribe;
+        }
+        return Cause.hasDies(cause)
+          ? backOffAfterDefect.pipe(Effect.andThen(resubscribe))
+          : input.setStreamError(SYNC_ERROR);
+      }),
     needsFreshSnapshot: Effect.sync(() => needsFreshSnapshot),
     snapshotApplied: Effect.sync(() => {
       needsFreshSnapshot = false;

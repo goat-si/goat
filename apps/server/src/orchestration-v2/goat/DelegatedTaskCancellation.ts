@@ -14,7 +14,7 @@ import * as Effect from "effect/Effect";
 import type { ThreadManagementServiceShape } from "../ThreadManagementService.ts";
 import type { ProjectionStoreV2Shape } from "../ProjectionStore.ts";
 import {
-  delegatedTaskAwaitsSubagents,
+  delegatedTaskAwaitsWork,
   delegatedTaskResultRun,
   delegatedTaskRuns,
   runOutcome,
@@ -85,7 +85,7 @@ export const cancelDelegatedTaskWork = Effect.fn("Orchestrator.cancelDelegatedTa
         : undefined;
   const waitingForWork =
     taskRuns.length > 0
-      ? run?.status === "waiting" || delegatedTaskAwaitsSubagents(taskRuns, child.subagents)
+      ? run?.status === "waiting" || delegatedTaskAwaitsWork(taskRuns, child, run)
       : afterTurn.state === "waiting_for_children";
   yield* cancellation.stopDescendants;
   if (run === undefined || !waitingForWork) return;

@@ -1,3 +1,4 @@
+import { fromRunner } from "@goat/provider-core/server/textGenerationOperations";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, expect } from "@effect/vitest";
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@goat/contracts";
@@ -18,9 +19,118 @@ import * as ServerConfig from "../config.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
 
+const registryLayer = (
+  instances: Ref.Ref<ReadonlyArray<ProviderInstance>>,
+  changes: PubSub.PubSub<void>,
+) =>
+  ProviderRegistry.layer.pipe(
+    Layer.provide(
+      Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
+        getInstance: (id) =>
+          Ref.get(instances).pipe(
+            Effect.map((current) => current.find((entry) => entry.instanceId === id)),
+          ),
+        listInstances: Ref.get(instances),
+        listUnavailable: Effect.succeed([]),
+        streamChanges: Stream.empty,
+        subscribeChanges: PubSub.subscribe(changes),
+      }),
+    ),
+    Layer.provide(
+      ServerConfig.layerTest(process.cwd(), { prefix: "goat-provider-registry-retired-refresh-" }),
+    ),
+  );
+
 it.layer(Layer.mergeAll(NodeServices.layer, ProviderLatestVersions.layer, ModelManifest.layerTest))(
   "retired provider probes",
   (it) => {
+    it.effect("removes the Cursor watcher before a sandbox refusal can resurrect its row", () =>
+      Effect.gen(function* () {
+        const driver = ProviderDriverKind.make("cursor");
+        const instanceId = ProviderInstanceId.make("cursor");
+        const snapshot: ServerProvider = {
+          instanceId,
+          driver,
+          status: "ready",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          checkedAt: "2026-06-10T00:00:00.000Z",
+          version: null,
+          models: [],
+          slashCommands: [],
+          skills: [],
+        };
+        const refusals = yield* PubSub.sliding<void>(1);
+        const subscribed = yield* Deferred.make<void>();
+        const watcherStopped = yield* Deferred.make<void>();
+        const revoked = yield* Ref.make(false);
+        const cursor = {
+          instanceId,
+          driverKind: driver,
+          continuationIdentity: { driverKind: driver, continuationKey: "cursor" },
+          displayName: undefined,
+          enabled: true,
+          snapshot: {
+            resolveMaintenance: () =>
+              Effect.succeed(
+                makeManualOnlyProviderMaintenanceCapabilities({
+                  provider: driver,
+                  packageName: null,
+                }),
+              ),
+            getSnapshot: Effect.succeed(snapshot),
+            refresh: Effect.succeed(snapshot),
+            streamChanges: Stream.empty,
+            applyUsageLimits: () => Effect.void,
+          },
+          orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+          textGeneration: {
+            ...fromRunner("fixture", () => Effect.die("Unexpected generation.")),
+            memoryCapabilities: Effect.succeed({ summary: true, conflict: true }),
+            memoryRevocation: {
+              isRevoked: () => Ref.getUnsafe(revoked),
+              changes: Stream.unwrap(
+                PubSub.subscribe(refusals).pipe(
+                  Effect.tap(() => Deferred.succeed(subscribed, undefined)),
+                  Effect.map(Stream.fromSubscription),
+                ),
+              ).pipe(Stream.ensuring(Deferred.succeed(watcherStopped, undefined))),
+            },
+          },
+        } satisfies ProviderInstance;
+        const instances = yield* Ref.make<ReadonlyArray<ProviderInstance>>([cursor]);
+        const changes = yield* PubSub.sliding<void>(1);
+
+        yield* Effect.gen(function* () {
+          const registry = yield* ProviderRegistry.ProviderRegistry;
+          const removed = yield* Stream.toPull(
+            registry.streamChanges.pipe(Stream.filter((providers) => providers.length === 0)),
+          );
+          const republished = yield* Stream.toPull(
+            registry.streamChanges.pipe(
+              Stream.filter((providers) =>
+                providers.some((provider) => provider.instanceId === instanceId),
+              ),
+            ),
+          );
+          yield* Deferred.await(subscribed);
+          yield* Ref.set(instances, []);
+          yield* PubSub.publish(changes, undefined);
+          yield* removed;
+          yield* Ref.set(revoked, true);
+          yield* PubSub.publish(refusals, undefined);
+
+          const resurrected = yield* Effect.raceFirst(
+            Effect.as(republished, true),
+            Effect.as(Deferred.await(watcherStopped), false),
+          );
+          expect(resurrected).toBe(false);
+          expect(yield* registry.getProviders).toEqual([]);
+        }).pipe(Effect.provide(registryLayer(instances, changes)));
+      }),
+    );
+
     it.effect("ignores a probe from an instance that settings replaced mid-refresh", () =>
       Effect.gen(function* () {
         const scenario = Effect.fn(function* (
@@ -74,7 +184,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ProviderLatestVersions.layer, ModelM
                 applyUsageLimits: () => Effect.void,
               },
               orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-              textGeneration: {} as ProviderInstance["textGeneration"],
+              textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
             }) satisfies ProviderInstance;
           const retiredInstance = makeInstance(
             retiredProbe,
@@ -86,34 +196,11 @@ it.layer(Layer.mergeAll(NodeServices.layer, ProviderLatestVersions.layer, ModelM
           const rebuiltInstance = makeInstance(provider, Effect.void);
           const instances = yield* Ref.make<ReadonlyArray<ProviderInstance>>([retiredInstance]);
           const changes = yield* PubSub.sliding<void>(1);
-          const instanceRegistryLayer = Layer.succeed(
-            ProviderInstanceRegistry.ProviderInstanceRegistry,
-            {
-              getInstance: (requestedId) =>
-                Ref.get(instances).pipe(
-                  Effect.map((current) =>
-                    current.find((instance) => instance.instanceId === requestedId),
-                  ),
-                ),
-              listInstances: Ref.get(instances),
-              listUnavailable: Effect.succeed([]),
-              streamChanges: Stream.empty,
-              subscribeChanges: PubSub.subscribe(changes),
-            },
-          );
           const scope = yield* Scope.make();
           yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
-          const runtimeServices = yield* Layer.build(
-            ProviderRegistry.layer.pipe(
-              Layer.provideMerge(instanceRegistryLayer),
-              Layer.provideMerge(
-                ServerConfig.layerTest(process.cwd(), {
-                  prefix: "goat-provider-registry-retired-refresh-",
-                }),
-              ),
-              Layer.provideMerge(NodeServices.layer),
-            ),
-          ).pipe(Scope.provide(scope));
+          const runtimeServices = yield* Layer.build(registryLayer(instances, changes)).pipe(
+            Scope.provide(scope),
+          );
 
           return yield* Effect.gen(function* () {
             const registry = yield* ProviderRegistry.ProviderRegistry;
