@@ -1,11 +1,19 @@
+import type { PermissionRuleset } from "@opencode-ai/sdk/v2";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
-import { asyncEventStream, makeOpenCodeRuntimeHarness } from "./adapter.harness.testkit.ts";
+import { openCodePermissionRules } from "./permissionRules.ts";
+import {
+  asyncEventStream,
+  makeOpenCodeRuntimeHarness,
+  permissionAction,
+  runtimePolicy,
+} from "./adapter.harness.testkit.ts";
 
 describe("OpenCode resumed task subagents", () => {
   // After a restart the adapter no longer holds the child, so its earlier turns come from OpenCode.
@@ -128,3 +136,128 @@ describe("OpenCode resumed task subagents", () => {
     ),
   );
 });
+
+it.effect.each(["in-memory", "in-memory-reattached", "persisted", "legacy", "refused"] as const)(
+  "replaces the %s child permission base before submitting a downgraded prompt",
+  (previous) =>
+    Effect.gen(function* () {
+      const root = "permission-root";
+      const child = "permission-child";
+      const full = runtimePolicy("full-access");
+      const restricted = runtimePolicy("approval-required");
+      const fullBase = openCodePermissionRules(full);
+      const knownChild = previous === "in-memory" || previous === "in-memory-reattached";
+      const nativeDeny = { permission: "bash", pattern: "git push *", action: "deny" } as const;
+      const childSession: {
+        id: string;
+        parentID: string;
+        permission: PermissionRuleset;
+        metadata: Record<string, unknown>;
+        time: { created: number; updated: number };
+      } = {
+        id: child,
+        parentID: root,
+        permission: knownChild ? [nativeDeny] : [...fullBase, nativeDeny],
+        metadata: {
+          owner: "native",
+          ...(previous === "persisted" ? { goatPermissionBase: fullBase } : {}),
+        },
+        time: { created: 2, updated: 2 },
+      };
+      const nativeEvents = asyncEventStream();
+      const push = (event: unknown) => Effect.promise(() => nativeEvents.push(event));
+      const rootSession = { id: root, time: { created: 1, updated: 1 } };
+      const submitted: PermissionRuleset[] = [];
+      let childWrites = 0;
+      let listedChild: typeof childSession | undefined;
+      let promptId = "";
+      const harness = yield* makeOpenCodeRuntimeHarness("child-policy", root, {
+        event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+        session: {
+          create: async () => ({ data: rootSession }),
+          get: async ({ sessionID }: { sessionID: string }) => ({
+            data: sessionID === child ? childSession : rootSession,
+          }),
+          update: async (input: {
+            sessionID: string;
+            permission: PermissionRuleset;
+            metadata?: Record<string, unknown>;
+          }) => {
+            if (input.sessionID === child) {
+              if (previous === "refused") throw new Error("OpenCode refused child permissions");
+              childWrites++;
+              childSession.permission = input.permission;
+              if (input.metadata !== undefined) childSession.metadata = input.metadata;
+            }
+            return { data: input.sessionID === child ? childSession : rootSession };
+          },
+          promptAsync: async ({ messageID }: { messageID: string }) => {
+            promptId = messageID;
+            submitted.push(childSession.permission);
+            return { data: true };
+          },
+          abort: async () => ({ data: true }),
+          children: async ({ sessionID }: { sessionID: string }) => ({
+            data: sessionID === root ? [listedChild ?? childSession] : [],
+          }),
+        },
+      });
+      if (knownChild) {
+        yield* harness.startTurn();
+        yield* push({
+          type: "message.updated",
+          properties: { sessionID: root, info: { id: promptId, role: "user" } },
+        });
+        yield* push({
+          type: "message.part.updated",
+          properties: {
+            part: {
+              id: "task-launch",
+              sessionID: root,
+              messageID: "task-parent",
+              type: "tool",
+              tool: "task",
+              callID: "call-launch",
+              state: {
+                status: "running",
+                input: { prompt: "Explore" },
+                metadata: { sessionId: child },
+                time: { start: 2 },
+              },
+            },
+          },
+        });
+        assert.equal(permissionAction(childSession.permission, "external_directory"), "allow");
+        yield* push({ type: "session.idle", properties: { sessionID: root } });
+      }
+      if (previous === "in-memory-reattached") listedChild = { ...childSession };
+
+      const providerThread =
+        previous === "in-memory"
+          ? harness.providerThread
+          : yield* harness.runtime.resumeThread({
+              providerThread: harness.providerThread,
+              threadId: harness.threadId,
+              runtimePolicy: restricted,
+            });
+      const started = harness.startTurn("Resume the task", providerThread, restricted);
+      if (previous === "refused") {
+        assert.isTrue(Exit.isFailure(yield* Effect.exit(started)));
+        assert.isEmpty(submitted, "a failed permission write must block the native prompt");
+        return;
+      }
+      yield* started;
+      assert.equal(childWrites, knownChild ? 2 : 1);
+      const atPrompt = submitted.at(-1) ?? [];
+      assert.equal(permissionAction(atPrompt, "external_directory"), "ask");
+      assert.deepEqual(atPrompt, [...openCodePermissionRules(restricted), nativeDeny]);
+      assert.deepEqual(
+        childSession.metadata.goatPermissionBase,
+        openCodePermissionRules(restricted),
+      );
+      assert.equal(childSession.metadata.owner, "native");
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+);

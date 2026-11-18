@@ -1,11 +1,12 @@
-import type { PermissionRuleset } from "@opencode-ai/sdk/v2";
+import type { PermissionRuleset, Session } from "@opencode-ai/sdk/v2";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Effect from "effect/Effect";
 
-import type { OpenCodeRuntimeError } from "./OpenCodeRuntime.ts";
+import { OpenCodeRuntimeError } from "./OpenCodeRuntime.ts";
 import {
   OPENCODE_GOAT_SUBAGENT_DENY_KEY,
   mergeOpenCodeResumePermission,
+  openCodeInstalledChildPermission,
   openCodeOwnsSubagentDeny,
   openCodeResumePermissionDiffers,
   withOpenCodeSubagentDeny,
@@ -46,23 +47,95 @@ export const syncOpenCodeSubagentDeny = Effect.fn("OpenCodeAdapter.syncSubagentR
   }
   // Children launch subagents too, so a new deny reaches each child session before the prompt.
   for (const child of children) {
-    let owner = child.parentSubagent?.parentState;
-    while (owner !== undefined && owner !== state) owner = owner.parentSubagent?.parentState;
-    if (owner === undefined || child.subagentsDenied === subagentsOff) continue;
+    if (!isDescendant(child, state) || child.subagentsDenied === subagentsOff) continue;
     const permission = withOpenCodeSubagentDeny(
       child.permission,
       child.subagentsDenied,
       subagentsOff,
     );
-    const write = update(child.nativeSessionId, { permission }).pipe(
+    const metadata = { ...child.metadata, [OPENCODE_GOAT_SUBAGENT_DENY_KEY]: subagentsOff };
+    const write = update(child.nativeSessionId, { permission, metadata }).pipe(
       Effect.tap(() =>
-        Effect.sync(() => Object.assign(child, { permission, subagentsDenied: subagentsOff })),
+        Effect.sync(() =>
+          Object.assign(child, { permission, metadata, subagentsDenied: subagentsOff }),
+        ),
       ),
     );
     // A failed relaxation keeps the child denied; the next turn tries again.
     yield* subagentsOff ? write : write.pipe(Effect.ignore({ log: true }));
   }
 });
+
+function isDescendant(child: OpenCodeDenyThread, parent: OpenCodeDenyThread): boolean {
+  let owner = child.parentSubagent?.parentState;
+  while (owner !== undefined && owner !== parent) owner = owner.parentSubagent?.parentState;
+  return owner !== undefined;
+}
+
+export const refreshOpenCodeChildPermissions = Effect.fn("OpenCode.refreshChildPermissions")(
+  function* (input: {
+    readonly root: OpenCodeDenyThread;
+    readonly children: Iterable<OpenCodeDenyThread>;
+    readonly policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
+    readonly subagentsOff: boolean;
+    readonly listNativeChildren?: (
+      id: string,
+    ) => Effect.Effect<ReadonlyArray<Session>, OpenCodeRuntimeError>;
+    readonly update: (
+      id: string,
+      body: OpenCodePermissionUpdate,
+    ) => Effect.Effect<unknown, OpenCodeRuntimeError>;
+  }) {
+    const known = new Set([input.root.nativeSessionId]);
+    for (const child of input.children) {
+      if (!isDescendant(child, input.root)) continue;
+      known.add(child.nativeSessionId);
+      const merged = openCodeInstalledChildPermission(
+        child,
+        input.policy,
+        child.subagentsDenied,
+        true,
+      );
+      if (openCodeResumePermissionDiffers(child, merged)) {
+        yield* input.update(child.nativeSessionId, {
+          permission: merged.permission,
+          metadata: merged.metadata,
+        });
+        Object.assign(child, merged);
+      }
+    }
+    const list = input.listNativeChildren;
+    if (list === undefined) return;
+    const seen = new Set([input.root.nativeSessionId]);
+    const pending = [input.root.nativeSessionId];
+    for (let id = pending.pop(); id !== undefined; id = pending.pop()) {
+      for (const child of yield* list(id)) {
+        if (seen.has(child.id)) continue;
+        if (seen.size >= 1024) {
+          return yield* new OpenCodeRuntimeError({
+            operation: "session.children",
+            detail: "OpenCode has too many descendants to refresh their permissions.",
+          });
+        }
+        seen.add(child.id);
+        pending.push(child.id);
+        if (known.has(child.id)) continue;
+        const merged = openCodeInstalledChildPermission(
+          child,
+          input.policy,
+          input.subagentsOff,
+          true,
+        );
+        if (openCodeResumePermissionDiffers(child, merged)) {
+          yield* input.update(child.id, {
+            permission: merged.permission,
+            metadata: merged.metadata,
+          });
+        }
+      }
+    }
+  },
+);
 
 export const installResumedOpenCodePermission = Effect.fn(
   "OpenCodeAdapter.installResumePermission",

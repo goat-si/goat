@@ -35,12 +35,18 @@ import type {
 } from "@opencode-ai/sdk/v2";
 import * as HostProcess from "@goat/shared/HostProcess";
 import {
-  openCodeChildPermissionRules,
+  openCodeInstalledChildPermission,
   openCodeOwnsSubagentDeny,
   openCodeInstalledPermission,
+  openCodePermissionRules,
+  openCodePermissionRulesEqual,
   openCodePermissionRequestKind,
 } from "./permissionRules.ts";
-import { installResumedOpenCodePermission, syncOpenCodeSubagentDeny } from "./permissionSync.ts";
+import {
+  installResumedOpenCodePermission,
+  refreshOpenCodeChildPermissions,
+  syncOpenCodeSubagentDeny,
+} from "./permissionSync.ts";
 import { recordString, recordValue } from "./records.ts";
 import { openCodeLiveWork } from "./liveWork.ts";
 export {
@@ -909,20 +915,16 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               () => client.session.get({ sessionID: childSessionId }),
             );
             const nativeChildSession = unwrapData("session.get", childSessionResponse);
-            const childPermission = openCodeChildPermissionRules(
+            const installed = openCodeInstalledChildPermission(
+              nativeChildSession,
               turn.runtimePolicy,
-              nativeChildSession.permission ?? [],
               state.subagentsDenied,
+              recordString(input, "task_id") === childSessionId || threads.has(childSessionId),
             );
-            yield* sdkCall(
-              "session.update",
-              { sessionID: childSessionId, permission: childPermission },
-              () =>
-                client.session.update({
-                  sessionID: childSessionId,
-                  permission: childPermission,
-                }),
-            );
+            yield* updatePermission(childSessionId, {
+              permission: installed.permission,
+              metadata: installed.metadata,
+            });
             // A Task call with task_id resumes the child, whose earlier turns already hold ordinals.
             const knownChild = threads.get(childSessionId);
             const resumedChild = knownChild?.parentSubagent == null ? undefined : knownChild;
@@ -944,9 +946,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               parentSubagent: context,
               nextChildTurnOrdinal,
               nextAdmissionGeneration: 1,
-              permission: childPermission,
-              metadata: undefined,
-              subagentsDenied: state.subagentsDenied,
+              ...installed,
             });
             yield* emitProviderEvent({
               type: "app_thread.created",
@@ -2560,6 +2560,15 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         const syncSubagentRules = (state: OpenCodeThreadState, subagentsOff: boolean) =>
           syncOpenCodeSubagentDeny(state, subagentsOff, threads.values(), updatePermission);
 
+        const resumedChildPolicies = new WeakMap<
+          OpenCodeThreadState,
+          { base: PermissionRuleset; subagentsOff: boolean } | null
+        >();
+        const listNativeChildren = (id: string) =>
+          sdkCall("session.children", { sessionID: id }, (signal) =>
+            client.session.children({ sessionID: id }, { signal }),
+          ).pipe(Effect.map((response) => unwrapData("session.children", response)));
+
         // OpenCode runs a command as a subtask without checking `task`: an explicit flag wins, or
         // else a subagent-mode agent makes it one. Anything GOAT cannot read counts as a subtask.
         const commandRunsAsSubtask = Effect.fn("OpenCodeAdapter.commandRunsAsSubtask")(
@@ -2598,6 +2607,22 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             });
           }
           yield* syncSubagentRules(state, subagentsOff);
+          const previous = resumedChildPolicies.get(state);
+          const base = openCodePermissionRules(runtimePolicy);
+          const scan =
+            previous === null ||
+            (previous !== undefined &&
+              (previous.subagentsOff !== subagentsOff ||
+                !openCodePermissionRulesEqual(previous.base, base)));
+          yield* refreshOpenCodeChildPermissions({
+            root: state,
+            children: threads.values(),
+            policy: runtimePolicy,
+            subagentsOff,
+            ...(scan ? { listNativeChildren } : {}),
+            update: updatePermission,
+          });
+          if (scan) resumedChildPolicies.set(state, { base, subagentsOff });
           return subagentsOff;
         });
 
@@ -2885,6 +2910,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 failure: "pending",
                 update: updatePermission,
               });
+              resumedChildPolicies.set(state, null);
               return providerThread;
             },
             (effect, threadInput) =>

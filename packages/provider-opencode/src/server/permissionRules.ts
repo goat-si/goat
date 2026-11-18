@@ -239,7 +239,7 @@ const isPermissionRule = (value: unknown): value is PermissionRuleset[number] =>
   );
 };
 
-const rulesEqual = (left: PermissionRuleset, right: PermissionRuleset) => {
+export const openCodePermissionRulesEqual = (left: PermissionRuleset, right: PermissionRuleset) => {
   if (left.length !== right.length) return false;
   for (let index = 0; index < left.length; index += 1) {
     const rule = left[index];
@@ -252,7 +252,8 @@ const rulesEqual = (left: PermissionRuleset, right: PermissionRuleset) => {
 };
 
 const startsWithRules = (rules: PermissionRuleset, prefix: PermissionRuleset) =>
-  prefix.length <= rules.length && rulesEqual(rules.slice(0, prefix.length), prefix);
+  prefix.length <= rules.length &&
+  openCodePermissionRulesEqual(rules.slice(0, prefix.length), prefix);
 
 const storedPermissionBase = (metadata: { readonly [key: string]: unknown } | undefined) => {
   const value = metadata?.[OPENCODE_GOAT_PERMISSION_BASE_KEY];
@@ -338,6 +339,40 @@ export function openCodeInstalledPermission(
   };
 }
 
+export function openCodeInstalledChildPermission(
+  session: Parameters<typeof mergeOpenCodeResumePermission>[0],
+  runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+  subagentsOff: boolean,
+  resumed: boolean,
+): OpenCodeResumePermission {
+  const installed = openCodeInstalledPermission(runtimePolicy, session.metadata);
+  const previous = session.permission ?? [];
+  const recorded = storedPermissionBase(session.metadata);
+  if (recorded !== undefined && startsWithRules(previous, recorded)) {
+    return mergeOpenCodeResumePermission(session, runtimePolicy, subagentsOff);
+  }
+  const full = { permission: "*", pattern: "*", action: "allow" } as const;
+  const external = { ...full, permission: "external_directory" };
+  const legacyBaseLength =
+    !resumed || !startsWithRules(previous, [full])
+      ? 0
+      : startsWithRules(previous, [full, external])
+        ? 2
+        : 1;
+  return {
+    permission:
+      legacyBaseLength > 0
+        ? withOpenCodeSubagentDeny(
+            [...installed.permission, ...previous.slice(legacyBaseLength)],
+            false,
+            subagentsOff,
+          )
+        : openCodeChildPermissionRules(runtimePolicy, previous, subagentsOff),
+    metadata: { ...installed.metadata, [OPENCODE_GOAT_SUBAGENT_DENY_KEY]: subagentsOff },
+    subagentsDenied: subagentsOff,
+  };
+}
+
 /** Replace GOAT's base and trailing deny. Rules between them, native or user, stay. */
 export function mergeOpenCodeResumePermission(
   session: {
@@ -382,10 +417,14 @@ export function openCodeResumePermissionDiffers(
   },
   merged: OpenCodeResumePermission,
 ): boolean {
-  if (!rulesEqual(session.permission ?? [], merged.permission)) return true;
+  if (!openCodePermissionRulesEqual(session.permission ?? [], merged.permission)) return true;
   const recorded = storedPermissionBase(session.metadata);
   const nextBase = storedPermissionBase(merged.metadata);
-  if (recorded === undefined || nextBase === undefined || !rulesEqual(recorded, nextBase)) {
+  if (
+    recorded === undefined ||
+    nextBase === undefined ||
+    !openCodePermissionRulesEqual(recorded, nextBase)
+  ) {
     return true;
   }
   return (session.metadata?.[OPENCODE_GOAT_SUBAGENT_DENY_KEY] === true) !== merged.subagentsDenied;
