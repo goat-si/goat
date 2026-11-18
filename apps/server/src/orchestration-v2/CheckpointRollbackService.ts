@@ -367,6 +367,7 @@ export const layer: Layer.Layer<
           (turn.runAttemptId === null || !rolledBackAttemptIds.has(turn.runAttemptId)),
       );
 
+      if (restoreFiles && runsToRollback.length > 0) yield* verifyRecreation;
       const snapshot =
         runsToRollback.length === 0
           ? { providerThread }

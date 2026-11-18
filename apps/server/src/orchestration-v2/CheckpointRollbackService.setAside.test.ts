@@ -40,6 +40,7 @@ interface Row {
   readonly createFails?: boolean;
   readonly lateCreateFails?: boolean;
   readonly wrongBranchHook?: boolean;
+  readonly nativeTurns?: boolean;
   readonly malformedMarker?: boolean;
   readonly shared?: boolean;
   readonly unmanaged?: boolean;
@@ -57,6 +58,7 @@ const rollBackOverLeftover = (row: Row) =>
       createFails,
       lateCreateFails,
       wrongBranchHook,
+      nativeTurns,
       malformedMarker,
       shared,
       unmanaged,
@@ -142,7 +144,7 @@ const rollBackOverLeftover = (row: Row) =>
       providerSession: undefined,
       checkpoint: { id: checkpointId, scopeId, status: "ready", appRunOrdinal: 0 },
       scope: { id: scopeId, cwd: worktreePath },
-      runsToRollback: [],
+      runsToRollback: nativeTurns ? [{ id: "fixture-run" }] : [],
       targetAttempt: undefined,
       rolledBackAttemptIds: [],
       staleCheckpoints: [],
@@ -275,7 +277,17 @@ const rollBackOverLeftover = (row: Row) =>
             getThreadProviderContext: () => Effect.succeed({ providerSessions: [] } as never),
           }),
           Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
-            open: () => Effect.sync(() => (calls.push("session"), {} as never)),
+            open: () =>
+              Effect.sync(() => {
+                calls.push("session");
+                return {
+                  rollbackThread: () =>
+                    Effect.sync(() => {
+                      calls.push("native rollback");
+                      return { providerThread: projection.providerThread };
+                    }),
+                } as never;
+              }),
           }),
           Layer.mock(RuntimePolicy.RuntimePolicyV2)({
             resolve: ({ thread }) => Effect.succeed({ cwd: thread.worktreePath } as never),
@@ -470,5 +482,15 @@ it.effect("Edit from here refuses a linked checkout with a malformed restore mar
     assert.equal(result.exit._tag, "Failure");
     assert.notInclude(result.calls, "files");
     assert.isTrue(result.pending);
+  }),
+);
+
+it.effect("rejects a wrong-branch checkpoint before rewinding any native provider turns", () =>
+  Effect.gen(function* () {
+    const result = yield* rollBackOverLeftover({ wrongBranchHook: true, nativeTurns: true });
+    assert.equal(result.exit._tag, "Failure");
+    assert.notInclude(result.calls, "native rollback");
+    assert.notInclude(result.calls, "files");
+    assert.equal(result.lateContents, "keep");
   }),
 );
