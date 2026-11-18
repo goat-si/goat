@@ -160,5 +160,6 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
   return TextGenerationOperations.fromRunner(
     "PiTextGeneration",
     TextGenerationOperations.withoutInvestigation(profile.displayName, runPiJson),
+    { memory: false },
   );
 });

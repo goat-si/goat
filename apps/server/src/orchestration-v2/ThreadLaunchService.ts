@@ -42,7 +42,6 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import {
   buildTemporaryWorktreeBranchName,
@@ -60,6 +59,7 @@ import * as ProviderAdapters from "./ProviderAdapterRegistry.ts";
 import { isCloudExecution } from "@goat/provider-core/server/cloudTask";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
+import { ThreadLaunchWorkspaceMissingError } from "./threadLaunchWorkspaceMissing.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as EventSink from "./EventSink.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
@@ -171,28 +171,7 @@ export interface ThreadLaunchResult {
   readonly sequence?: number;
 }
 
-/**
- * An agent or server launch named a folder that is gone from this machine, such as a
- * project whose checkout was deleted or never cloned here. Refused before any thread exists.
- */
-export class ThreadLaunchWorkspaceMissingError extends Schema.TaggedError<ThreadLaunchWorkspaceMissingError>()(
-  "ThreadLaunchWorkspaceMissingError",
-  {
-    projectId: ProjectId,
-    projectTitle: Schema.String,
-    /** `project` is the project's own folder; `worktree` an existing worktree the launch named. */
-    kind: Schema.Literals(["project", "worktree"]),
-    path: Schema.String,
-    /** The project's remote, when GOAT still knows it, so a caller can clone it back. */
-    remoteUrl: Schema.NullOr(Schema.String),
-  },
-) {
-  override get message(): string {
-    return this.kind === "project"
-      ? `Project "${this.projectTitle}" points at ${this.path}, which does not exist on this machine. No thread was created.`
-      : `Worktree ${this.path} of project "${this.projectTitle}" does not exist on this machine. No thread was created.`;
-  }
-}
+export { ThreadLaunchWorkspaceMissingError };
 
 export class ThreadLaunchService extends Context.Service<
   ThreadLaunchService,
@@ -435,6 +414,7 @@ const make = Effect.gen(function* () {
               modelSelection,
             })
             .pipe(
+              Effect.provideService(TextGeneration.TextGenerationProject, input.projectId),
               Effect.map((result) => ({
                 branch: result.branch,
                 exactName: settings.branchNamingMode === "custom",

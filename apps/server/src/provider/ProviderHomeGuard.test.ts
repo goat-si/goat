@@ -17,6 +17,10 @@ import * as Stream from "effect/Stream";
 import * as Routes from "./CodexRouteService.ts";
 import { guardProviderHomeInstance } from "./ProviderHomeGuard.ts";
 import type { ProviderHomeRuntime } from "./ProviderHomeRuntime.ts";
+import {
+  readProviderGenerationSnapshot,
+  streamProviderGenerationSnapshots,
+} from "./providerGenerationSnapshot.ts";
 
 const HOME_MODEL = "opencodex/provider/model";
 const home: ProviderHomeRuntime = {
@@ -89,7 +93,10 @@ const fakeInstance = (
       openSession: (input: Selected) =>
         record(`open:${input.modelSelection.model}`).pipe(Effect.as(runtime)),
     },
-    textGeneration: text,
+    textGeneration: {
+      ...text,
+      memoryCapabilities: Effect.succeed({ summary: true, conflict: true }),
+    },
   } as unknown as ProviderInstance;
   return { instance, seen };
 };
@@ -198,6 +205,13 @@ it.effect("refuses foreign models for every text operation and routed OpenCode m
         const result = yield* operations[operation]!(selected(HOME_MODEL)).pipe(Effect.result);
         assert.equal(result._tag, driver === "opencode" ? "Failure" : "Success");
       }
+      const flags = { summary: driver !== "opencode", conflict: driver !== "opencode" };
+      assert.deepEqual((yield* readProviderGenerationSnapshot(guarded)).memoryGeneration, flags);
+      const snapshots = yield* Stream.runCollect(streamProviderGenerationSnapshots(guarded));
+      assert.deepEqual(
+        Array.from(snapshots, (snapshot) => snapshot.memoryGeneration),
+        [flags],
+      );
       assert.deepEqual(
         seen,
         driver === "opencode"
