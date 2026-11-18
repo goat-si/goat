@@ -68,18 +68,20 @@ export function environmentTransportLabel(
         : `via ${connectionRouteLabel(active)}`;
   }
   if (environment.relayManaged && isGoatConnectEnabled()) return "GOAT Connect";
+  // The one route shown: a stored Pen route the closed gate hides does not name the machine.
+  const { target, profile } = shownRoutes(entry)[0] ?? entry;
   // Already reads "via <hub>".
-  if (entry.target._tag === "HubProxyConnectionTarget" && routes[0] !== undefined)
+  if (target._tag === "HubProxyConnectionTarget" && routes[0] !== undefined)
     return connectionRouteLabel(routes[0]);
-  if (isDesktopLocalConnectionTarget(entry.target))
-    return isWslConnectionTarget(entry.target) ? "WSL" : "Local device";
+  if (isDesktopLocalConnectionTarget(target))
+    return isWslConnectionTarget(target) ? "WSL" : "Local device";
   if (
-    entry.target._tag === "SshConnectionTarget" &&
-    Option.isSome(entry.profile) &&
-    entry.profile.value._tag === "SshConnectionProfile"
+    target._tag === "SshConnectionTarget" &&
+    Option.isSome(profile) &&
+    profile.value._tag === "SshConnectionProfile"
   ) {
-    return penRouteOwner(entry.target.connectionId) === null
-      ? `SSH ${formatDesktopSshTarget(entry.profile.value.target)}`
+    return penRouteOwner(target.connectionId) === null
+      ? `SSH ${formatDesktopSshTarget(profile.value.target)}`
       : "Pen";
   }
   return environment.displayUrl ?? "Remote link";

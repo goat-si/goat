@@ -1,7 +1,11 @@
 import {
   BearerConnectionProfile,
   BearerConnectionTarget,
+  PenConnectionProfile,
+  PenConnectionTarget,
   RelayConnectionTarget,
+  SshConnectionProfile,
+  SshConnectionTarget,
   type ConnectionCatalogEntry,
   type ConnectionRoute,
 } from "@goat/client-runtime/connection";
@@ -52,6 +56,46 @@ function present(entry: ConnectionCatalogEntry): EnvironmentPresentation {
 const comingSoon = `${GOAT_CONNECT_COMING_SOON.title} · ${GOAT_CONNECT_COMING_SOON.status}`;
 
 describe("saved Connect routes while disabled", () => {
+  it("labels a machine by the route it shows when a hidden Pen route is stored first", () => {
+    const penId = `pen:mmmmmmmmmmmmmmmmmmmmmmmmmm:nnnnnnnnnnnnnnnnnnnnnnnnnn`;
+    const sshId = "ssh:saved:box";
+    const entry: ConnectionCatalogEntry = {
+      enabled: true,
+      target: new PenConnectionTarget({
+        environmentId,
+        label: "Saved machine",
+        connectionId: penId,
+      }),
+      profile: Option.some(
+        new PenConnectionProfile({
+          environmentId,
+          label: "Saved machine",
+          connectionId: penId,
+          meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
+          nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
+          noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+        }),
+      ),
+      alternateRoutes: [
+        {
+          target: new SshConnectionTarget({
+            environmentId,
+            label: "Saved machine",
+            connectionId: sshId,
+          }),
+          profile: Option.some(
+            new SshConnectionProfile({
+              environmentId,
+              label: "Saved machine",
+              connectionId: sshId,
+              target: { alias: "box", hostname: "box", username: "me", port: null },
+            }),
+          ),
+        },
+      ],
+    };
+    expect(environmentTransportLabel(present(entry))).toBe("SSH me@box");
+  });
   it("retains relay-only entries with coming-soon labels and excludes them from onboarding", () => {
     const entry = { ...relay, enabled: true };
     const before = structuredClone(entry);
