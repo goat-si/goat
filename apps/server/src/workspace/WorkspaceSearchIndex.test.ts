@@ -652,3 +652,53 @@ it.live("finds Git-ignored files re-included by .ignore during and after content
     }
   }).pipe(Effect.scoped, Effect.provide(testLayer)),
 );
+
+it.live.each(["grep.column", "grep.fullName"])(
+  "keeps cold content paths and ranges stable under local %s",
+  (config) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const vcs = yield* VcsProcess.VcsProcess;
+      const repo = yield* fs.makeTempDirectoryScoped();
+      const cwd = path.join(repo, "workspace");
+      const git = (args: string[]) =>
+        vcs.run({
+          operation: "test.gitConfigureGrep",
+          command: "git",
+          args,
+          cwd: repo,
+        });
+      yield* git(["init"]);
+      yield* git(["config", config, "true"]);
+      yield* fs.makeDirectory(cwd);
+      yield* fs.writeFileString(path.join(cwd, "note.txt"), "a needle\n");
+
+      const finder = {
+        destroy: vi.fn(),
+        getScanProgressAsync: async () => ({
+          ok: true as const,
+          value: { isScanning: true, isWarmupComplete: false },
+        }),
+      } as unknown as FileFinder;
+      vi.spyOn(FileFinder, "create").mockReturnValueOnce({ ok: true, value: finder });
+      const index = yield* WorkspaceSearchIndex.make(cwd, "content");
+      for (const useRegex of [false, true]) {
+        const result = yield* index.searchContents({
+          query: useRegex ? "ne+dle" : "needle",
+          limit: 20,
+          caseSensitive: true,
+          wholeWord: false,
+          useRegex,
+        });
+        expect(result.matches).toEqual([
+          {
+            path: "note.txt",
+            lineNumber: 1,
+            lineContent: "a needle",
+            matchRanges: [{ start: 2, end: 8 }],
+          },
+        ]);
+      }
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+);
