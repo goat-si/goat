@@ -198,7 +198,7 @@ function returnUnsentAnswersToThreadDraft(
     const draft = store.getComposerDraft(draftId);
     if (!draft || draft.images.length + draft.files.length === 0) continue;
     // Moving replaces the thread's prompt; the combined prompt is written below.
-    store.moveComposerPromptAndImages(draftId, target, { deduplicateImages: true });
+    store.moveComposerPromptAndImages(draftId, target);
     movedAttachments = true;
   }
   if (prompt === currentPrompt && !movedAttachments) return;
