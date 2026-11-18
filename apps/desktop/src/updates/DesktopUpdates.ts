@@ -4,7 +4,9 @@ import {
   checkDesktopUpdateFeed,
   hasDownloadOffer,
   isPersistedDownload,
+  makeUpdateDownloadAttempts,
   makeUpdateFeedCapture,
+  persistUpdateDownload,
   waitForPersistedDownload,
 } from "./updateTransfer.ts";
 import { makeUpdateRestartMarkers } from "./updateRestartMarkers.ts";
@@ -278,6 +280,7 @@ export const make = Effect.gen(function* () {
 
   const activeUpdateAction = Ref.get(activeUpdateActionRef);
   const feedCapture = makeUpdateFeedCapture();
+  const downloadAttempts = makeUpdateDownloadAttempts();
 
   const tryStartUpdateAction = (action: UpdateAction): Effect.Effect<boolean> =>
     Ref.modify(activeUpdateActionRef, (activeAction) =>
@@ -469,11 +472,18 @@ export const make = Effect.gen(function* () {
     return yield* Effect.gen(function* () {
       const subscription = yield* PubSub.subscribe(stateChanges);
       yield* Ref.set(attemptedGeneration, yield* Ref.get(availabilityGeneration));
-      yield* updateState(reduceDesktopUpdateStateOnDownloadStart);
+      yield* updateState((current) =>
+        reduceDesktopUpdateStateOnDownloadStart({
+          ...current,
+          downloadedVersion: null,
+        }),
+      );
       yield* electronUpdater.setDisableDifferentialDownload(
         isArm64HostRunningIntelBuild(environment.runtimeInfo),
       );
       yield* logUpdaterInfo("downloading update");
+      const attempt = downloadAttempts.start(channel, version);
+      yield* Effect.addFinalizer(() => Effect.sync(() => downloadAttempts.finish(attempt)));
       yield* electronUpdater.downloadUpdate;
       const settled = yield* waitForPersistedDownload(
         channel,
@@ -481,11 +491,13 @@ export const make = Effect.gen(function* () {
         yield* Ref.get(updateStateRef),
         Stream.fromSubscription(subscription),
       );
-      if (Option.isNone(settled))
+      if (Option.isNone(settled)) {
+        downloadAttempts.finish(attempt);
         yield* recordDownloadFailure(
           "Could not confirm the downloaded update. Retry the download.",
           "error",
         );
+      }
       return {
         accepted: true,
         completed: Option.isSome(settled) && isPersistedDownload(settled.value, channel, version),
@@ -1153,6 +1165,7 @@ export const make = Effect.gen(function* () {
 
   const handleUpdateDownloaded = Effect.fn("desktop.updates.handleUpdateDownloaded")(function* (
     raw: unknown,
+    attempt: ReturnType<typeof downloadAttempts.capture>,
   ) {
     yield* decodeUpdateInfo(raw).pipe(
       Effect.flatMap(
@@ -1160,7 +1173,8 @@ export const make = Effect.gen(function* () {
           const state = yield* Ref.get(updateStateRef);
           if (
             resolveDefaultDesktopUpdateChannel(info.version) !== state.channel ||
-            (state.availableVersion !== null && state.availableVersion !== info.version)
+            (state.availableVersion !== null && state.availableVersion !== info.version) ||
+            !downloadAttempts.claim(attempt, state.channel, info.version)
           )
             return;
           const pendingUpdate = {
@@ -1168,32 +1182,28 @@ export const make = Effect.gen(function* () {
             channel: state.channel,
             downloadedAt: yield* currentIsoTimestamp,
           };
-          const persisted = yield* desktopSettings
-            .setPendingUpdate(pendingUpdate)
-            .pipe(Effect.exit);
-          if (Exit.isSuccess(persisted) && persisted.value.settings.pendingUpdate !== pendingUpdate)
-            return;
-          if (Exit.isFailure(persisted)) {
-            yield* updateState((current) => ({
-              ...current,
-              status: "available",
-              downloadedVersion: null,
-              message: "Could not persist the downloaded update. Retry the download.",
-              errorContext: "download",
-              canRetry: true,
-            }));
-            return;
-          }
-          yield* updateState((current) =>
-            current.channel !== pendingUpdate.channel
-              ? current
-              : {
+          const isCurrent = () => downloadAttempts.isCurrent(attempt);
+          const published = yield* persistUpdateDownload(
+            desktopSettings,
+            pendingUpdate,
+            isCurrent,
+            (saved) =>
+              updateState((current) => {
+                if (!isCurrent() || current.channel !== pendingUpdate.channel) return current;
+                if (!saved)
+                  return reduceDesktopUpdateStateOnDownloadFailure(
+                    current,
+                    "Could not persist the downloaded update. Retry the download.",
+                  );
+                return {
                   ...reduceDesktopUpdateStateOnDownloadComplete(current, info.version),
                   pendingUpdate,
                   recoveryStatus: null,
                   pendingRestartReason: current.installPolicy === "paused" ? "paused" : null,
-                },
+                };
+              }).pipe(Effect.map((next) => next.pendingUpdate === pendingUpdate)),
           );
+          if (!published) return;
           yield* Ref.set(automaticInstallAttempt, null);
           yield* wakeAutomaticUpdateCoordinator;
           yield* logUpdaterInfo("update downloaded", { version: info.version });
@@ -1331,7 +1341,7 @@ export const make = Effect.gen(function* () {
         runEffect(handleDownloadProgress(progress));
       });
       yield* electronUpdater.on("update-downloaded", (info: unknown) => {
-        runEffect(handleUpdateDownloaded(info));
+        runEffect(handleUpdateDownloaded(info, downloadAttempts.capture()));
       });
 
       yield* startUpdatePollers;

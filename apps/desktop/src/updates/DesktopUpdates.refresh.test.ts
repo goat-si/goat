@@ -327,3 +327,75 @@ it.effect(
       }).pipe(Effect.provide(harness.layer), Effect.scoped);
     }),
 );
+
+it.effect.each(["second completion", "missing second completion"] as const)(
+  "does not let a late save authorize the old payload during a replacement: %s",
+  (completion) =>
+    Effect.gen(function* () {
+      const firstSaveStarted = yield* Deferred.make<void>();
+      const releaseFirstSave = yield* Deferred.make<void>();
+      const secondNativeFinished = yield* Deferred.make<void>();
+      let offered: string | null = "1.2.4";
+      let nativePayload: string | null = null;
+      let installedPayload: string | null = null;
+      let saving = 0;
+      const harness = makeHarness({
+        checkForUpdates: Effect.sync(() => {
+          if (offered === null) harness.emit("update-not-available");
+          else harness.emit("update-available", { version: offered });
+        }),
+        beforeSetPendingUpdate: Effect.suspend(() =>
+          ++saving === 1
+            ? Deferred.succeed(firstSaveStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseFirstSave)),
+              )
+            : Effect.void,
+        ),
+        downloadUpdate: Effect.gen(function* () {
+          nativePayload = offered;
+          if (nativePayload === "1.2.4") {
+            harness.emit("update-downloaded", { version: nativePayload });
+            return;
+          }
+          yield* Deferred.succeed(secondNativeFinished, undefined);
+        }),
+        quitAndInstall: Effect.sync(() => {
+          installedPayload = nativePayload;
+        }),
+      });
+
+      yield* Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        yield* updates.check("manual");
+        const first = yield* updates.download.pipe(Effect.forkScoped);
+        yield* Deferred.await(firstSaveStarted);
+        yield* TestClock.adjust("91 seconds");
+        assert.isFalse((yield* Fiber.join(first)).completed);
+        offered = "1.2.5";
+        yield* updates.check("manual");
+        const second = yield* updates.download.pipe(Effect.forkScoped);
+        yield* Deferred.await(secondNativeFinished);
+
+        yield* Deferred.succeed(releaseFirstSave, undefined);
+        yield* TestClock.adjust("1 second");
+        if (completion === "second completion") {
+          harness.emit("update-downloaded", { version: "1.2.5" });
+        }
+        yield* TestClock.adjust("91 seconds");
+        const replacement = yield* Fiber.join(second);
+
+        offered = null;
+        yield* updates.check("manual");
+        assert.isFalse((yield* updates.installPrepared("1.2.4")).accepted);
+        assert.isNull(installedPayload);
+        assert.equal(harness.installRecords.size, 0);
+        assert.equal(replacement.completed, completion === "second completion");
+        if (completion === "second completion") {
+          assert.equal(harness.settings().pendingUpdate?.version, "1.2.5");
+          assert.isTrue((yield* updates.installPrepared("1.2.5")).accepted);
+          assert.equal(installedPayload, "1.2.5");
+        } else assert.isNull(harness.settings().pendingUpdate);
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+);

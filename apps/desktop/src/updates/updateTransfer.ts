@@ -1,9 +1,11 @@
 import type { DesktopUpdateChannel, DesktopUpdateState } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import type * as ElectronUpdater from "../electron/ElectronUpdater.ts";
+import type * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import { DesktopUpdateCheckTimeoutError, UPDATE_CHECK_TIMEOUT } from "./updateFailures.ts";
 
 export const checkDesktopUpdateFeed = (
@@ -80,3 +82,56 @@ export function waitForPersistedDownload(
     Effect.map((result) => Option.flatten(result)),
   );
 }
+
+type DownloadAttempt = {
+  readonly channel: DesktopUpdateChannel;
+  readonly version: string;
+  claimed: boolean;
+};
+
+export function makeUpdateDownloadAttempts() {
+  let current: DownloadAttempt | null = null;
+  let started = false;
+  return {
+    start(channel: DesktopUpdateChannel, version: string) {
+      started = true;
+      current = { channel, version, claimed: false };
+      return current;
+    },
+    finish(attempt: DownloadAttempt) {
+      if (current === attempt) current = null;
+    },
+    capture: () => current,
+    claim(attempt: DownloadAttempt | null, channel: DesktopUpdateChannel, version: string) {
+      if (attempt === null) return !started;
+      if (
+        current !== attempt ||
+        attempt.claimed ||
+        attempt.channel !== channel ||
+        attempt.version !== version
+      )
+        return false;
+      attempt.claimed = true;
+      return true;
+    },
+    isCurrent: (attempt: DownloadAttempt | null) =>
+      attempt === null ? !started : current === attempt,
+  };
+}
+
+export const persistUpdateDownload = Effect.fn("desktop.updates.persistDownload")(function* (
+  settings: DesktopAppSettings.DesktopAppSettings["Service"],
+  record: NonNullable<DesktopUpdateState["pendingUpdate"]>,
+  isCurrent: () => boolean,
+  publish: (saved: boolean) => Effect.Effect<boolean>,
+) {
+  if (!isCurrent()) return false;
+  const saved = yield* settings.setPendingUpdate(record, isCurrent).pipe(Effect.exit);
+  if (Exit.isFailure(saved)) return yield* publish(false);
+  if (saved.value.settings.pendingUpdate !== record) return false;
+  if (yield* publish(true)) return true;
+  yield* settings
+    .setPendingUpdate(null, (current) => current === record)
+    .pipe(Effect.ignore({ log: true }));
+  return false;
+});
