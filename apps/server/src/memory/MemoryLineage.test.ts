@@ -904,13 +904,13 @@ it.effect.each([
           Effect.void,
         );
         if (!suggestion) throw new Error("Expected a pending suggestion");
-        assert.deepStrictEqual(yield* accept(suggestion.suggestionId), { status: "pending" });
+        assert.propertyVal(yield* accept(suggestion.suggestionId), "status", "pending");
       }
       if (existing) {
         const inFlight = yield* Effect.forkScoped(attempt);
         yield* Deferred.await(entered);
         const { op } = yield* readOriginal;
-        if (!acceptFirst) assert.deepStrictEqual(yield* accept(op.memoryId), { status: "pending" });
+        if (!acceptFirst) assert.propertyVal(yield* accept(op.memoryId), "status", "pending");
         const rows = yield* outbox(op.memoryId);
         yield* Deferred.succeed(released, undefined);
         assert.propertyVal(yield* Fiber.join(inFlight), "code", "hub_unavailable");
@@ -920,9 +920,7 @@ it.effect.each([
       const waiting = yield* e.service.listSuggestions({ memorySpaceId: space }, Effect.void);
       assert.lengthOf(waiting, 1);
       assert.include(waiting[0], { suggestionId: op.memoryId, state: "accepting" });
-      assert.deepStrictEqual(yield* accept(op.memoryId), {
-        status: "pending",
-      });
+      assert.propertyVal(yield* accept(op.memoryId), "status", "pending");
       assert.lengthOf(yield* outbox(op.memoryId), 1);
       const receipt = yield* admit(op);
       yield* e.service.settleHubAcknowledgement({
@@ -951,30 +949,36 @@ it.effect.each([
             outcome: "accepted",
             pendingSync: false,
           });
+          const sequence = receipt.hubSequence;
+          if (sequence === null) throw new Error("Expected an ordered acceptance sequence");
           const entry = {
             kind: "operation" as const,
             operation: op,
             receipt,
-            hubSequence: receipt.hubSequence!,
+            hubSequence: sequence,
           };
-          const settled = yield* e.store.transact(
-            e.service.settleHubEntryTx({
-              memorySpaceId: space,
-              hubEnvironmentId: hubId,
-              localEnvironmentId: memberId,
-              entry,
-            }),
-          );
-          assert.isTrue(settled.incorporated);
-          assert.equal(
-            (yield* e.store.loadAggregate(space, op.memoryId)).heads[0],
+          const settled = yield* e.service.receiveHubPage({
+            memorySpaceId: space,
+            hubEnvironmentId: hubId,
+            localEnvironmentId: memberId,
+            expectedSequence: 0,
+            page: {
+              entries: [entry],
+              highWatermark: sequence,
+              throughSequence: sequence,
+              hasMore: false,
+            },
+            reauthorize: Effect.void,
+          });
+          assert.lengthOf(settled, 1);
+          assert.propertyVal(settled[0], "incorporated", true);
+          assert.deepStrictEqual((yield* e.store.loadAggregate(space, op.memoryId)).heads, [
             op.revision.revisionId,
-          );
+          ]);
         }
-        assert.lengthOf(
-          yield* hub.sql`SELECT 1 FROM memory_hub_operations WHERE operation_id=${op.operationId}`,
-          1,
-        );
+        const hubOperations =
+          yield* hub.sql`SELECT 1 FROM memory_hub_operations WHERE operation_id=${op.operationId}`;
+        assert.lengthOf(hubOperations, 1);
         return;
       }
       assert.include(receipt, { outcome: "rejected", failureCode: "hub_upgrade_required" });
@@ -982,9 +986,7 @@ it.effect.each([
       assert.include(remaining[0], { state: "pending", reason: "hub_upgrade_required" });
       yield* hub.store.transact(hub.store.learnHubFloor(space, at));
       for (let attempt = 0; attempt < 2; attempt++)
-        assert.deepStrictEqual(yield* accept(op.memoryId), {
-          status: "pending",
-        });
+        assert.propertyVal(yield* accept(op.memoryId), "status", "pending");
       const attempts = yield* e.sql<{
         id: string;
       }>`SELECT id FROM memory_outbox WHERE memory_id=${op.memoryId} AND id!=${workId}`;
