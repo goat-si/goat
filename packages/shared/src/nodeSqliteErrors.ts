@@ -66,6 +66,8 @@ const transactionControls = <R>(acquire: Effect.Effect<Connection, SqlError, R>)
     acquirer,
     transactionAcquirer: Effect.map(acquirer, withRollbackCleanup),
     rollback: TRANSACTION_ROLLBACK,
+    onCommitFailure: (connection: Connection) =>
+      Effect.asVoid(connection.executeUnprepared(TRANSACTION_ROLLBACK, [], undefined)),
   };
 };
 
