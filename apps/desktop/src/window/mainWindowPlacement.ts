@@ -116,3 +116,45 @@ export function normalBoundsOnWindowDisplay(
     height,
   };
 }
+
+function selectRecoveryDisplay(
+  windowBounds: DesktopAppSettings.DesktopWindowBounds,
+  [first, ...remaining]: readonly [DisplayBounds, ...DisplayBounds[]],
+): DisplayBounds {
+  let selected = first;
+  let bestOverlapArea = getOverlapArea(windowBounds, selected);
+  let bestDistanceSquared = getDisplayDistanceSquared(windowBounds, selected);
+
+  for (const candidate of remaining) {
+    const overlapArea = getOverlapArea(windowBounds, candidate);
+    const distanceSquared = getDisplayDistanceSquared(windowBounds, candidate);
+    if (
+      overlapArea > bestOverlapArea ||
+      (overlapArea === bestOverlapArea && distanceSquared < bestDistanceSquared)
+    ) {
+      selected = candidate;
+      bestOverlapArea = overlapArea;
+      bestDistanceSquared = distanceSquared;
+    }
+  }
+
+  return selected;
+}
+
+export function resolveInitialMainWindowBounds(
+  persistedBounds: DesktopAppSettings.DesktopWindowBounds | null,
+  displays: readonly DisplayBounds[],
+): DesktopAppSettings.DesktopWindowBounds | typeof DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE {
+  const validDisplays = displays.filter((display) => display.width > 0 && display.height > 0);
+  const [first, ...remaining] = validDisplays;
+  if (persistedBounds === null || first === undefined) {
+    return DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE;
+  }
+  if (DesktopWindowBounds.fitsWithinDisplays(persistedBounds, validDisplays)) {
+    return persistedBounds;
+  }
+  return clampWindowBoundsToDisplay(
+    persistedBounds,
+    selectRecoveryDisplay(persistedBounds, [first, ...remaining]),
+  );
+}
