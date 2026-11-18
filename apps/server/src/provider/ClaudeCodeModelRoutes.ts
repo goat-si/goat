@@ -4,6 +4,10 @@ import {
   type SettingSource,
   type Settings as ClaudeSdkSettings,
 } from "@anthropic-ai/claude-agent-sdk";
+import { fromLenientJson } from "@goat/shared/schemaJson";
+import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
@@ -23,11 +27,18 @@ const MODEL_SETTINGS_ENV_PREFIXES = [
 ];
 
 /** Equal keys mean Claude Code resolves model ids the same way under both settings. */
+const ClaudeModelSettings = Schema.Struct({
+  availableModels: Schema.optionalKey(Schema.Unknown),
+  modelOverrides: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+  env: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+});
+const decodeClaudeModelSettings = Schema.decodeUnknownEffect(fromLenientJson(ClaudeModelSettings));
+
 function claudeModelSettingsKey(
-  settings: ClaudeSdkSettings,
+  settings: typeof ClaudeModelSettings.Type,
   environment?: NodeJS.ProcessEnv,
 ): string {
-  const sortedEntries = (record: Readonly<Record<string, string | undefined>> | undefined) =>
+  const sortedEntries = (record: Readonly<Record<string, unknown>> | undefined) =>
     Object.entries(record ?? {}).toSorted(([a], [b]) => a.localeCompare(b));
   return JSON.stringify([
     settings.availableModels ?? null,
@@ -63,7 +74,7 @@ export const resolveClaudeModelSettingsKey = Effect.fn("resolveClaudeModelSettin
     );
     if (claudeModelSettingsKey(rootLocal ?? {}) !== NO_MODEL_SETTINGS_KEY) return undefined;
   }
-  return yield* Effect.tryPromise({
+  const effective = yield* Effect.tryPromise({
     try: () =>
       resolveClaudeSettings({
         ...(cwd === null ? {} : { cwd }),
@@ -74,6 +85,22 @@ export const resolveClaudeModelSettingsKey = Effect.fn("resolveClaudeModelSettin
     Effect.map(({ effective }) => claudeModelSettingsKey(effective, environment)),
     Effect.orElseSucceed(() => undefined),
   );
+  const configDir = environment?.CLAUDE_CONFIG_DIR?.trim();
+  if (effective === undefined || !configDir) return effective;
+
+  // The SDK resolves the host's user source; the subprocess can load an instance-scoped home.
+  const path = yield* Path.Path;
+  if (cwd === null && !path.isAbsolute(configDir)) return undefined;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const settingsPath = path.resolve(cwd ?? ".", configDir, "settings.json");
+  const userSettings = yield* fileSystem.readFileString(settingsPath).pipe(
+    Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed("{}")),
+    Effect.flatMap(decodeClaudeModelSettings),
+    Effect.option,
+  );
+  return Option.isNone(userSettings)
+    ? undefined
+    : JSON.stringify([effective, settingsPath, claudeModelSettingsKey(userSettings.value)]);
 });
 
 export type RouteClaudeModelCatalog = (

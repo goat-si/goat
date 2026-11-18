@@ -1,3 +1,7 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import { vi } from "vite-plus/test";
 import { assert, describe, it } from "@effect/vitest";
 import { type ModelSelection, ProviderInstanceId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -5,13 +9,49 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 
-import { makeClaudeCodeModelRoutes } from "./ClaudeCodeModelRoutes.ts";
+import {
+  makeClaudeCodeModelRoutes,
+  resolveClaudeModelSettingsKey,
+} from "./ClaudeCodeModelRoutes.ts";
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,
   resolveClaudeCatalogApiModelId,
 } from "./ClaudeModelCatalog.ts";
 
+vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@anthropic-ai/claude-agent-sdk")>()),
+  resolveSettings: () => Promise.resolve({ effective: {}, provenance: {}, sources: [] }),
+}));
+
 describe("Claude Code model routes", () => {
+  it.effect("keeps reported routes scoped to the custom Claude home's model settings", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fs.makeTempDirectoryScoped();
+      const file = path.join(home, "settings.json");
+      const environment = { CLAUDE_CONFIG_DIR: home };
+      const catalog = BUNDLED_CLAUDE_MODEL_CATALOG;
+      const routes = yield* makeClaudeCodeModelRoutes(
+        (cwd, env) =>
+          resolveClaudeModelSettingsKey([], cwd, env).pipe(
+            Effect.provideService(Path.Path, path),
+            Effect.provideService(FileSystem.FileSystem, fs),
+          ),
+        home,
+      );
+      yield* fs.writeFileString(file, '{"env":{"ANTHROPIC_DEFAULT_HAIKU_MODEL":"backend-a"}}');
+      yield* routes.record(
+        [{ value: "haiku", resolvedModel: "us.anthropic.claude-haiku-4-5-20251001-v1:0" }],
+        environment,
+      );
+      yield* routes.settle;
+      assert.notStrictEqual(yield* routes.route(catalog, null, undefined, environment), catalog);
+      yield* fs.writeFileString(file, '{"env":{"ANTHROPIC_DEFAULT_HAIKU_MODEL":"backend-b"}}');
+      assert.strictEqual(yield* routes.route(catalog, null, undefined, environment), catalog);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("uses reported routes only under the probe's workspace and environment settings", () =>
     Effect.gen(function* () {
       const routes = yield* makeClaudeCodeModelRoutes(

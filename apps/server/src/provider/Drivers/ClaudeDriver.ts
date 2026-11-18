@@ -239,7 +239,17 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
     const capabilitiesProbeCache = yield* Cache.makeWith(
       (key: string) =>
         Ref.get(probeEnvironment).pipe(
-          Effect.flatMap((env) => probeClaudeCapabilities(effectiveConfig, env, stateDir)),
+          Effect.flatMap((env) =>
+            probeClaudeCapabilities(effectiveConfig, env, stateDir).pipe(
+              Effect.tap(({ models }) =>
+                makeClaudeEnvironment(effectiveConfig, env).pipe(
+                  Effect.flatMap((claudeEnvironment) =>
+                    modelRoutes.record(models ?? [], claudeEnvironment),
+                  ),
+                ),
+              ),
+            ),
+          ),
           Effect.flatMap((capabilities) =>
             ClaudeResetCredits.readClaudeOrganizationId(accountConfigPath).pipe(
               Effect.map((workspaceId) => ({
@@ -249,16 +259,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
               })),
             ),
           ),
-          Effect.tap(({ capabilities }) =>
-            Ref.set(lastGoodCapabilities, { key, capabilities }).pipe(
-              Effect.andThen(
-                Ref.get(probeEnvironment).pipe(
-                  Effect.flatMap((env) => makeClaudeEnvironment(effectiveConfig, env)),
-                  Effect.flatMap((env) => modelRoutes.record(capabilities.models ?? [], env)),
-                ),
-              ),
-            ),
-          ),
+          Effect.tap(({ capabilities }) => Ref.set(lastGoodCapabilities, { key, capabilities })),
           Effect.catch((error) =>
             Ref.getAndSet(lastGoodCapabilities, undefined).pipe(
               Effect.flatMap((lastGood) =>
