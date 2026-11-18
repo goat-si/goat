@@ -236,6 +236,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   replyToResponse: Schema.optionalKey(Schema.Boolean),
   /** Server browser viewers' stopLoading input cancels a loading page; older servers ignore it. */
   serverBrowserStopLoading: Schema.optionalKey(Schema.Boolean),
+  nativeServerBrowserStopLoading: Schema.optionalKey(Schema.Boolean),
   /** Server exposes the bounded SSH runtime activity probe. */
   sshActivity: Schema.optionalKey(Schema.Boolean),
   /** Server proxies its nodes' APIs below `/hub/nodes` for clients holding `hub:proxy`. */

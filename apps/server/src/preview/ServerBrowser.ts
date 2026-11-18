@@ -104,6 +104,7 @@ import {
   tabOwner,
   type ServerBrowserSessionView,
 } from "./ServerBrowserSessions.ts";
+import { makeServerBrowserControls, type ServerBrowserControls } from "./ServerBrowserControls.ts";
 import { pointBefore, sleepUntil, tabKey } from "./ServerBrowserPointer.ts";
 import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
 import * as LoadError from "./serverBrowserLoadError.ts";
@@ -247,15 +248,8 @@ export class ServerBrowser extends Context.Service<
     readonly sessions: Effect.Effect<ReadonlyArray<ServerBrowserSessionView>>;
     /** Wakes after a tab opens, closes or changes owner, privacy or stop. */
     readonly sessionChanges: Stream.Stream<void>;
-    /** The kill switch for browser tabs: stops agents on every tab now, reading nothing first. */
-    readonly stopAllAgents: Effect.Effect<void>;
-    /** A person's stop or hand back of agent control on one tab; false when it is gone. */
-    readonly controlSession: (input: {
-      readonly threadId: string;
-      readonly tabId: string;
-      readonly control: "stop" | "handBack";
-    }) => Effect.Effect<boolean>;
-  } & ServerBrowserScreen.SurfaceService
+  } & ServerBrowserScreen.SurfaceService &
+    ServerBrowserControls
 >()("goat/preview/ServerBrowser") {}
 
 const make = Effect.gen(function* () {
@@ -2640,17 +2634,7 @@ const make = Effect.gen(function* () {
     sessions: Effect.promise(() => Promise.all([...tabs.values()].map(browserSessionView))),
     sessionChanges: Stream.fromPubSub(sessionChanges),
     ...screen.service,
-    stopAllAgents: Effect.sync(() => {
-      for (const tab of tabs.values()) tab.control.stopAgents();
-    }),
-    controlSession: (input) =>
-      Effect.sync(() => {
-        const tab = tabs.get(tabKey(input.threadId, input.tabId));
-        if (!tab) return false;
-        if (input.control === "stop") tab.control.stopAgents();
-        else tab.control.resumeAgents();
-        return true;
-      }),
+    ...makeServerBrowserControls(tabs, manager, stopLoading.stop),
   });
 });
 

@@ -143,7 +143,7 @@ export function PreviewView({
   const environmentLabel = useEnvironment(threadRef.environmentId)?.label ?? "the environment";
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const serverBrowser = useEnvironmentSupportsServerBrowser(threadRef.environmentId);
-  const serverBrowserStop = useEnvironmentSupportsServerBrowserStop(threadRef.environmentId);
+  const stopSupport = useEnvironmentSupportsServerBrowserStop(threadRef.environmentId);
   const adjust = useAtomCommand(previewEnvironment.adjust, "preview appearance or zoom");
 
   usePreviewSession(threadRef);
@@ -268,16 +268,18 @@ export function PreviewView({
       reportPreviewAddressError(error);
     }
   };
-
   const handleRefresh = () => {
     if (isServerTab) serverSurfaceRef.current?.reload();
     else if (previewBridge && runtimeTabId) void previewBridge.refresh(runtimeTabId);
   };
   const handleStopLoading = () => {
     if (isServerTab) serverSurfaceRef.current?.stopLoading();
+    else if (nativeServerTab && stopSupport.native) void adjustServerTab({ stopLoading: true });
     else if (runtimeTabId) void previewBridge?.stopLoading?.(runtimeTabId);
   };
-  const canStopLoading = isServerTab ? serverBrowserStop : Boolean(previewBridge?.stopLoading);
+  const canStopLoading = isServerTab
+    ? stopSupport.stream
+    : Boolean((nativeServerTab && stopSupport.native) || previewBridge?.stopLoading);
 
   const adjustServerTab = async (change: Omit<PreviewAdjustInput, "threadId" | "tabId">) => {
     if (!tabId) return;
@@ -294,7 +296,7 @@ export function PreviewView({
       });
       return;
     }
-    updatePreviewServerSnapshot(threadRef, result.value);
+    if (!change.stopLoading) updatePreviewServerSnapshot(threadRef, result.value);
   };
 
   const serverZoomFactor = snapshot?.zoomFactor ?? DEFAULT_PREVIEW_ZOOM_FACTOR;

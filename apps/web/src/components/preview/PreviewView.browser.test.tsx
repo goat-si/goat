@@ -17,6 +17,9 @@ import { act, render } from "../../../test/render";
 import type { PreviewableServer } from "./useDiscoveredLocalServers";
 
 const mocks = vi.hoisted(() => ({
+  nativeServerStop: false,
+  adjust: vi.fn(),
+  stopLoading: vi.fn(async (_tabId: string) => undefined),
   zoomIn: vi.fn(async () => undefined),
   navigate: vi.fn(async (_tabId: string, _url: string): Promise<void> => undefined),
   rememberPreviewUrl: vi.fn(),
@@ -66,6 +69,7 @@ vi.mock(import("./previewBridge"), async (original) => ({
     setAnnotationSendEnabled: mocks.setAnnotationSendEnabled,
     cancelPickElement: mocks.cancelPickElement,
     refresh: vi.fn(async () => undefined),
+    stopLoading: mocks.stopLoading,
     goBack: vi.fn(async () => undefined),
     goForward: vi.fn(async () => undefined),
     hardReload: vi.fn(async () => undefined),
@@ -89,6 +93,26 @@ vi.mock(import("~/browserHistoryStore"), async (original) => ({
   ...(await original()),
   recordVisitForThread: mocks.recordVisitForThread,
 }));
+vi.mock(import("~/state/entities"), async (original) => ({
+  ...(await original()),
+  useEnvironmentSupportsServerBrowserStop: () => ({
+    stream: false,
+    native: mocks.nativeServerStop,
+  }),
+}));
+vi.mock(import("~/state/use-atom-command"), async (original) => {
+  const actual = await original();
+  return {
+    ...actual,
+    useAtomCommand: ((
+      command: Parameters<typeof actual.useAtomCommand>[0],
+      options: Parameters<typeof actual.useAtomCommand>[1],
+    ) =>
+      command === previewEnvironment.adjust
+        ? mocks.adjust
+        : actual.useAtomCommand(command, options)) as typeof actual.useAtomCommand,
+  };
+});
 vi.mock(import("~/state/session"), async (original) => ({
   ...(await original()),
   readPreparedConnection: mocks.readPreparedConnection as never,
@@ -192,6 +216,7 @@ import { useBrowserPointerStore } from "~/browser/browserPointerStore";
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
 import { usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
 import { useRightPanelStore } from "~/rightPanelStore";
+import { previewEnvironment } from "~/state/preview";
 import { PreviewView } from "./PreviewView";
 import { ToastProvider } from "~/components/ui/toast";
 
@@ -254,6 +279,8 @@ function setup() {
   mocks.idleServerTab = false;
   mocks.loading = false;
   mocks.nativeServerTab = false;
+  mocks.nativeServerStop = false;
+  mocks.adjust.mockReset();
   mocks.serverTab = false;
   mocks.url = "http://example.com/";
   mocks.serverEpoch = null;
@@ -538,3 +565,37 @@ describe("PreviewView", () => {
     expect(mocks.addImage).not.toHaveBeenCalled();
   });
 });
+
+it.each([true, false])(
+  "stops a native-rendered server tab with capability %s",
+  async (supported) => {
+    setup();
+    mocks.nativeServerTab = true;
+    mocks.nativeServerStop = supported;
+    mocks.loading = true;
+    mocks.adjust.mockResolvedValue({
+      _tag: "Success",
+      value: {
+        threadId: TEST_THREAD_REF.threadId,
+        tabId: "tab-1",
+        runtime: "server",
+        navStatus: { _tag: "Idle" },
+        canGoBack: false,
+        canGoForward: false,
+        updatedAt: "2026-07-13T00:00:00.000Z",
+      },
+    });
+    await using screen = await render(view());
+    await userEvent.click(screen.getByRole("button", { name: "Stop", exact: true }));
+    if (supported) {
+      expect(mocks.adjust).toHaveBeenCalledWith({
+        environmentId: TEST_THREAD_REF.environmentId,
+        input: { threadId: TEST_THREAD_REF.threadId, tabId: "tab-1", stopLoading: true },
+      });
+      expect(mocks.stopLoading).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.stopLoading).toHaveBeenCalledWith(TEST_RUNTIME_TAB_ID);
+      expect(mocks.adjust).not.toHaveBeenCalled();
+    }
+  },
+);
